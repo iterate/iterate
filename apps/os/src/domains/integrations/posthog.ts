@@ -8,7 +8,6 @@ import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import { truncateJsonToBytes } from "../../lib/truncate-json.ts";
 
 export const POSTHOG_STREAM_EVENT_MAX_JSON_BYTES = 100 * 1_024;
-const POSTHOG_STREAM_FEED_WORKER_NAME = "os-prd";
 
 const StreamEventTimestamp = z.iso.datetime({ offset: true });
 const ProjectGroupBirthPayload = z.object({
@@ -24,9 +23,9 @@ export function posthogSubscriptionEvent() {
     // Bump when the subscription payload changes so new stream births land
     // the revised config. Existing streams still rely on capture-side filtering
     // until they are recreated or reconfigured.
-    idempotencyKey: "iterate-platform-posthog-subscription-v3",
+    idempotencyKey: "iterate-platform-posthog-subscription-v4",
     payload: {
-      subscriptionKey: "iterate-platform-posthog",
+      name: "iterate-platform-posthog",
       description: "Iterate's first-party durable-event PostHog feed",
       receiver: {
         action: "itx-call",
@@ -221,11 +220,6 @@ export async function capturePosthogStreamEventBatch(
   },
   deps: { fetch?: typeof fetch } = {},
 ): Promise<void> {
-  // The complete durable feed is a production observability surface. Preview
-  // and local deployments generate synthetic projects and streams at CI scale;
-  // exporting those facts adds no production signal and can dominate PostHog
-  // usage. WORKER_SELF is the reviewed deployment identity from envs.ts.
-  if (args.workerName !== POSTHOG_STREAM_FEED_WORKER_NAME) return;
   if (args.batch.events.length === 0) {
     throw new Error("PostHog stream delivery batch must contain an event");
   }

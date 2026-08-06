@@ -47,7 +47,7 @@ function relayOver(
   waitUntil: (promise: Promise<unknown>) => void = () => undefined,
 ) {
   return new CapabilityProviderPagerRelay({
-    env: { CAPABILITY_HOST: { getByName: () => durableObject } } as never,
+    env: { STREAM: { getByName: () => durableObject } } as never,
     scope: { path: "/", projectId: "project" },
     waitUntil,
   });
@@ -136,6 +136,20 @@ describe("CapabilityProviderPagerRelay", () => {
     expect(first.isActive()).toBe(false);
     expect(second.isActive()).toBe(true);
     expect(pager.closed).toEqual([]);
+  });
+
+  it("closes the shared Pager when its final mount retires", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    const relay = relayOver(makeDurableObject());
+    const first = await relay.provide({ capability: {}, path: ["first"], type: "live" });
+    const second = await relay.provide({ capability: {}, path: ["second"], type: "live" });
+
+    await first.revoke({ path: first.path, providedAtOffset: first.providedAtOffset });
+    expect(pager.closed).toEqual([]);
+
+    await second.revoke({ path: second.path, providedAtOffset: second.providedAtOffset });
+    expect(pager.closed).toEqual([{ code: 1000, reason: "no live capability mounts" }]);
   });
 
   it("retires every mount when the shared Pager disconnects", async () => {

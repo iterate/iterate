@@ -1,6 +1,6 @@
 # Performance tooling policy
 
-Prefer the repository's existing Playwright fixtures, `agent-browser`, PostHog
+Prefer the repository's existing Playwright fixtures, `Playwriter`, PostHog
 CLI, build output, and Cloudflare trace skills. They cover the full field → lab
 → source → preview loop without another dependency.
 

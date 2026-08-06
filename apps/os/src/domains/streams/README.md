@@ -21,7 +21,7 @@ const agentStream = project.streams.get("/agents/reviewer");
 
 await agentStream.subscribeToEventsFrom({
   sourceStreamPath: "/integrations/github/main",
-  subscriptionKey: "github-for-reviewer",
+  name: "github-for-reviewer",
   filter: {
     eventTypes: ["events.iterate.com/github/webhook-received"],
     jsonataCondition: 'payload.body.repository.full_name = "acme/widgets"',
@@ -29,19 +29,25 @@ await agentStream.subscribeToEventsFrom({
 });
 ```
 
+Subscription names are opaque, caller-chosen, per-stream-unique strings —
+the same string is the catalog key at the stream, the itx address segment,
+the facet name under facet placement, and the progress-key component under
+own-DO placement. Omitting the name generates the reserved
+`subscription:<offset>` form from the committed configure event.
+
 The source stores the subscription and product-event cursor. The receiver
 stores nothing at configure time: it keeps one passive record per
-`(source path, subscription key)`, reduced from the stamps on its own
+`(source path, subscription name)`, reduced from the stamps on its own
 committed copies, and uses it to fence batches from a stale source lifetime
 or a superseded config generation.
 Every copied event is a normal append with its immediate source
-path, stream lifetime ID, creation time, offset, type, timestamp, and subscription
-key in `source.copiedFrom`.
+path, stream lifetime ID, creation time, offset, type, timestamp, and
+subscription name in `source.copiedFrom`.
 That record proves the event travelled through that configured stream
 delivery; it is not proof of who originally appended the source event.
 
 An idempotency key based on the source stream's random lifetime ID, path,
-subscription key, source offset, and the configure-or-cursor-change event makes
+subscription name, source offset, and the configure-or-cursor-change event makes
 network retries within one send run a no-op on the receiver. Recreating the
 source, replacing the subscription, or explicitly moving its read position starts a new
 run, so replaying an old source offset deliberately appends it again.
@@ -92,7 +98,7 @@ subscriptions: {
   inbound: {
     bySourcePath: {
       [sourcePath]: {
-        [subscriptionKey]: {
+        [name]: {
           streamId,
           streamCreatedAt,
           cursorChangedAtSourceOffset,
@@ -103,21 +109,22 @@ subscriptions: {
     },
   },
   outbound: {
-    byKey: {
-      [subscriptionKey]: {
+    byName: {
+      [name]: {
         configuration,
         configuredAtOffset,
         configuredAt,
         cursorSet?: { afterOffset, setAtSourceOffset },
         deliveryHalted?,
+        deliveryParked?,
       },
     },
   },
 }
 ```
 
-Acknowledged offsets, retry times, live callbacks, and measurements live in runtime
-state. They do not repeat durable configuration.
+Delivered/confirmed offsets, retry times, live callbacks, and measurements
+live in runtime state. They do not repeat durable configuration.
 
 ## Session callback connections
 
@@ -166,9 +173,19 @@ receiver: {
     "processor",
     "wakeStreamProcessor",
   ],
-  processorSlug: "agent",
 }
 ```
+
+The subscription NAME selects which registered contract runs (name ==
+registered slug — one identity; two instances of one contract is deliberately
+future work). Nothing enforces that at configure time: a name matching no
+registered processor fails loudly at wake with the registry's unknown-name
+error. Instead of an expression, `placement: "facet"` hosts
+the processor as a facet of the stream's own Durable Object: the subscription
+name is the facet name, delivery is an in-process parent→facet dial through
+the same wake protocol, and the facet's alarms are proxied to the parent's
+real platform alarm (`proxySetAlarm`/`proxyDeleteAlarm`/`proxyGetAlarm` on
+the Stream DO).
 
 The source calls the named wake method with the source stream's random lifetime
 ID. The host durably binds its checkpoint to that ID and returns the ID,
@@ -224,8 +241,8 @@ receiver: {
 ```
 
 The source POSTs one event at a time through the project's attributed egress.
-A 2xx response accepts that event. This is the lane for remotely-hosted
-processors driven by webhooks; webhook delivery is at-least-once, so a remote
+The 2xx response alone is the acknowledgement (`confirmed_offset`); the
+response body is discarded. Webhook delivery is at-least-once, so a remote
 processor must deduplicate by `(streamId, offset)`. A `jsonataTransform`
 reshapes the POSTed event body while the envelope keeps the real source
 coordinates.
@@ -274,7 +291,13 @@ Rebuilding core state counts durable events instead of assuming
 ## Product-event retries and cursors
 
 `stream-event-sender.ts` reads after each durable cursor, applies the filter,
-sends a bounded batch, and advances the cursor only after the receiver call returns.
+sends a bounded batch, and records progress in ONE column whose meaning never
+varies by receiver kind: `confirmed_offset` (the far side durably claims
+through here). Push kinds write it with the awaited acknowledgement; a hosted
+processor's reported checkpoints write it, while its live batch acks only
+settle the in-flight watchdog. The one scheduling rule, for every kind:
+delivery RESUMES after `confirmed_offset` — anything sent but never confirmed
+redelivers (at-least-once; receivers dedupe by `(streamId, offset)`).
 
 Guarantees:
 
@@ -290,13 +313,17 @@ Guarantees:
   After any batch failure the next read uses batch size 1, so a poison event
   cannot strand its healthy prefix.
 - A Durable Object alarm starts due retries even when the source is quiet.
+- `waitUntilProcessed(name, { offset, timeoutMs? })` on the Stream DO is the
+  uniform barrier for every kind. Processor-wake rows delegate to the hosted
+  runner's own barrier (precise even mid-connection); every other kind
+  resolves off `confirmed_offset` — the awaited push acknowledgement.
 
 Operator commands are literal:
 
 ```ts
-await source.setSubscriptionCursor({ subscriptionKey, afterOffset });
-await source.resumeSubscription({ subscriptionKey });
-await source.setSubscriptionCursorAndResume({ subscriptionKey, afterOffset });
+await source.setSubscriptionCursor({ name, afterOffset });
+await source.resumeSubscription({ name });
+await source.setSubscriptionCursorAndResume({ name, afterOffset });
 ```
 
 ## The receiver's passive fence
@@ -320,7 +347,14 @@ If a copy would complete a cycle (the receiving stream already appears in
 acknowledges the event as dropped, the cursor advances past it, and the
 receiver appends one idempotent `stream/error-occurred` line describing the
 drop. That audit line is withheld from onward copy delivery so a reciprocal
-wildcard pair cannot manufacture audit events forever.
+wildcard pair cannot manufacture audit events forever. Incarnation and
+connection lifecycle facts (`stream/woken`, `stream/connection-opened`,
+`stream/connection-closed`) are withheld from copy delivery for the same
+reason: every boot appends a fresh unkeyed `woken`, a copy delivery can
+itself boot the hibernated peer, and the circuit breaker deliberately ignores
+control events — so a reciprocal pair would otherwise manufacture wake events
+forever. A foreign incarnation's lifecycle is not product data; local readers
+of the source stream see those events unchanged.
 
 Public `append()` cannot author `source.copiedFrom`. Only trusted Stream
 Durable Object calls can.

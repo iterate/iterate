@@ -83,6 +83,8 @@ routing lookup.
 
 The archive intentionally omits ordinary streams, agents, tasks, schedules,
 workspaces, sandboxes, files outside the config repository, historical
-messages, additional repositories, and derived state. Capture fails rather
-than silently ignoring a connected built-in integration other than Slack,
-GitHub, or Google.
+messages, additional repositories, and derived state. A generic secret path
+that carries no material (for example a device push-token cell provisioned
+before its first value) is omitted too — there is nothing to restore. Capture
+fails rather than silently ignoring a connected built-in integration other than
+Slack, GitHub, or Google.

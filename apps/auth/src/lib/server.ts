@@ -717,7 +717,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
 
   // One-URL sign-in for minted/programmatic tokens: validates an access+id
   // token pair against the trusted JWKS and writes the normal session cookie.
-  // Used by Playwright/agent-browser/humans via `pnpm auth:mint --browser-url`.
+  // Used by Playwright/Playwriter/humans via `pnpm auth:mint --browser-url`.
   // No new trust is introduced — only tokens signed by a key in this
   // deployment's JWKS are accepted, the same check every request performs.
   app.get("/session-from-token", async (c) => {

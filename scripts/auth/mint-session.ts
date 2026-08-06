@@ -28,7 +28,7 @@ import { forgedSubjectForEmail, mintForgedAccessToken, mintForgedIdToken } from 
 //
 // The minted tokens work three ways:
 //   1. `Authorization: Bearer <accessToken>` against the OS API
-//   2. browserSignInUrl — navigate any browser (Playwright/agent-browser) to
+//   2. browserSignInUrl — navigate any browser (Playwright/Playwriter) to
 //      it once; it sets the normal session cookie and redirects
 //   3. as a cookie session via /api/iterate-auth/session-from-token directly
 //

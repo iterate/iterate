@@ -137,7 +137,7 @@ const JsonataTransformResult = z.strictObject({
  */
 export function applyJsonataTransform(
   receiverWord: string,
-  subscriptionKey: string,
+  subscriptionName: string,
   transformSource: string | undefined,
   event: StreamEvent,
 ): StreamEvent {
@@ -154,7 +154,7 @@ export function applyJsonataTransform(
     };
   } catch (error) {
     throw new Error(
-      `${receiverWord} transform for subscription "${subscriptionKey}" failed on ${event.path}@${event.offset}: ${errorMessage(error)}`,
+      `${receiverWord} transform for subscription "${subscriptionName}" failed on ${event.path}@${event.offset}: ${errorMessage(error)}`,
       { cause: error },
     );
   }

@@ -188,10 +188,11 @@ function makeHarness(
       boot();
     },
     async wake(slug: string, streamId = STREAM_ID) {
+      // Registration without an explicit name registers under the slug, so the
+      // subscription name and the contract slug coincide here.
       return await registry.wakeStreamProcessor({
         stream: { projectId: null, path: HOME, streamId, streamMaxOffset: head() },
-        subscriptionKey: `wake:${slug}`,
-        processorSlug: slug,
+        name: slug,
       });
     },
     /** Wake `slug` and push everything past its acknowledged cursor as one
@@ -438,13 +439,14 @@ describe("recovery revival", () => {
 describe("wakeStreamProcessor", () => {
   it("answers the runner's cursor, processEventBatch, announcement, and runtime capabilities", async () => {
     const h = makeHarness();
-    // A multi-processor registry cannot guess which runner a wake is for.
+    // Name-only resolution: an unregistered name is a loud error — there is no
+    // slug-based fallback, even when the slug names a registered processor.
     await expect(
       h.registry.wakeStreamProcessor({
         stream: { projectId: null, path: HOME, streamId: STREAM_ID, streamMaxOffset: 0 },
-        subscriptionKey: "wake:unspecified",
+        name: "wake:unspecified",
       }),
-    ).rejects.toThrow(/processorSlug/);
+    ).rejects.toThrow(/unknown name "wake:unspecified"/);
 
     // Pre-load everything so the commit-time observer assertion below is
     // synchronous (all runners loaded = assembleLive publishes inline).
@@ -582,8 +584,7 @@ describe("wakeStreamProcessor", () => {
           streamId: STREAM_ID,
           streamMaxOffset: 5,
         },
-        subscriptionKey: "wake:alpha-proc",
-        processorSlug: "alpha-proc",
+        name: "alpha-proc",
       }),
     ).rejects.toThrow(/coordinate mismatch/);
 
@@ -596,13 +597,12 @@ describe("wakeStreamProcessor", () => {
           streamId: STREAM_ID,
           streamMaxOffset: 5,
         },
-        subscriptionKey: "wake:alpha-proc",
-        processorSlug: "alpha-proc",
+        name: "alpha-proc",
       }),
     ).rejects.toThrow(/coordinate mismatch/);
 
-    // The fence runs BEFORE slug resolution: a mismatched coordinate is
-    // rejected as a mismatch, never as a missing/unknown slug.
+    // The fence runs BEFORE name/slug resolution: a mismatched coordinate is
+    // rejected as a mismatch, never as an unknown name or contract.
     await expect(
       h.registry.wakeStreamProcessor({
         stream: {
@@ -611,15 +611,14 @@ describe("wakeStreamProcessor", () => {
           streamId: STREAM_ID,
           streamMaxOffset: 5,
         },
-        subscriptionKey: "wake:unspecified",
+        name: "wake:unspecified",
       }),
     ).rejects.toThrow(/coordinate mismatch/);
 
     // The matching coordinate still works (control).
     const woken = await h.registry.wakeStreamProcessor({
       stream: { projectId: null, path: HOME, streamId: STREAM_ID, streamMaxOffset: 0 },
-      subscriptionKey: "wake:alpha-proc",
-      processorSlug: "alpha-proc",
+      name: "alpha-proc",
     });
     expect(woken.checkpointOffset).toBe(0);
   });

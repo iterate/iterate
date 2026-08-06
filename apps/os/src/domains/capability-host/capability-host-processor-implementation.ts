@@ -6,12 +6,20 @@ import type { CapabilityDescription } from "../itx/describe.ts";
 import type { Project } from "../../itx-api.generated.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
 import type { StreamContext } from "../projects/stream-context.ts";
+import type { JsonValue } from "../workers/schemas.ts";
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
   ProvideCapabilityInput,
   RevokeCapabilityInput,
+  SetPreambleInput,
 } from "./types.ts";
+import {
+  assemblePreamble,
+  retainedScriptResult,
+  RETAINED_SCRIPT_RESULTS_LIMIT,
+  type AssembledPreamble,
+} from "./capability-host-preamble.ts";
 import { assertCapabilityPath, sameCapabilityPath } from "./capability-path.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
@@ -186,8 +194,15 @@ export class CapabilityHostProcessor extends StreamProcessor<
         // The head state handed to this pass, NOT an instance read: the
         // typecheck gate must see capabilities provided in the same delivery
         // as the request or it would judge the script against a stale scope.
+        // The preamble is assembled from the same head state for the same
+        // reason — a result settled or an entry set in this delivery must be
+        // visible to the script this delivery starts.
         const capabilities = args.state.capabilities;
         const fallback = args.state.birthCertificate?.fallback ?? null;
+        const preamble = assemblePreamble({
+          entries: args.state.preamble,
+          results: args.state.settledScriptResults,
+        });
         args.runInBackground(() =>
           this.#executeScript({
             capabilities,
@@ -195,6 +210,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
             executionId,
             expiresAt: execution.expiresAt,
             fallback,
+            preamble,
             requestedAtOffset: execution.requestedAtOffset,
           }),
         );
@@ -321,8 +337,44 @@ export class CapabilityHostProcessor extends StreamProcessor<
       case "events.iterate.com/capability-host/script-run-settled": {
         const scriptExecutions = { ...state.scriptExecutions };
         delete scriptExecutions[event.payload.executionId];
-        return { ...state, scriptExecutions };
+        // Retain the outcome for the preamble's derived `results` array —
+        // classification (inline JSON vs inferred-type-plus-loader vs error)
+        // is pure and deterministic, so replays reduce identically. The
+        // settlement event stays the only durable storage of full payloads.
+        const retained = retainedScriptResult({
+          executionId: event.payload.executionId,
+          settledAtOffset: event.offset,
+          settlement: event.payload.settlement,
+        });
+        return {
+          ...state,
+          scriptExecutions,
+          ...(retained === null
+            ? {}
+            : {
+                settledScriptResults: [...state.settledScriptResults, retained].slice(
+                  -RETAINED_SCRIPT_RESULTS_LIMIT,
+                ),
+              }),
+        };
       }
+      case "events.iterate.com/capability-host/preamble-set": {
+        const { key, code } = event.payload;
+        const exists = state.preamble.some((entry) => entry.key === key);
+        return {
+          ...state,
+          preamble: exists
+            ? // A re-set updates code in place: injection order is first-set
+              // order, so entries that reference each other stay stable.
+              state.preamble.map((entry) => (entry.key === key ? { ...entry, code } : entry))
+            : [...state.preamble, { key, code, setAtOffset: event.offset }],
+        };
+      }
+      case "events.iterate.com/capability-host/preamble-removed":
+        return {
+          ...state,
+          preamble: state.preamble.filter((entry) => entry.key !== event.payload.key),
+        };
       default:
         return state;
     }
@@ -432,6 +484,141 @@ export class CapabilityHostProcessor extends StreamProcessor<
     });
   }
 
+  /**
+   * Upsert one preamble entry — TypeScript injected above every later script
+   * in this scope. Mirrors provideCapability's shape: validate cheaply, gate
+   * expensively (the set-time compile), append the fact, then wait for its
+   * own delivery (read-your-writes). The compile gate compares the scope's
+   * assembled preamble WITH and WITHOUT the candidate and rejects only
+   * problems the candidate introduces — a stale older entry (or a prior
+   * result whose inferred type stopped compiling) must not veto an unrelated
+   * set, just as it never blocks a script.
+   */
+  async setPreamble(input: SetPreambleInput): Promise<void> {
+    await this.#assertCreated();
+    if (typeof input.key !== "string" || input.key.length === 0) {
+      throw new Error('setPreamble requires a non-empty string "key"');
+    }
+    if (typeof input.code !== "string") {
+      throw new Error('setPreamble requires string "code" — TypeScript statements to inject');
+    }
+    const checkPreamble = this.deps.checkPreamble;
+    if (checkPreamble !== undefined) {
+      const { state } = await this.deps.reads.snapshot();
+      const withCandidate = assemblePreamble({
+        entries: upsertPreambleEntry(state.preamble, input),
+        results: state.settledScriptResults,
+      });
+      if (withCandidate !== null) {
+        const capabilities = await this.#describeCapabilitiesFrom(
+          state.capabilities,
+          state.birthCertificate?.fallback ?? null,
+        );
+        const problems = await checkPreamble({ capabilities, preamble: withCandidate.ts });
+        if (problems.length > 0) {
+          const without = assemblePreamble({
+            entries: state.preamble.filter((entry) => entry.key !== input.key),
+            results: state.settledScriptResults,
+          });
+          // The with/without diff keys on the problem MINUS its position: a
+          // re-set that changes an earlier entry's line count shifts every
+          // stale error's `preamble:N`, and a position-sensitive diff would
+          // read those same old problems as newly introduced. Counted as a
+          // MULTISET, not a set: a candidate adding a second occurrence of an
+          // already-stale message is still introducing a problem.
+          const preexisting = new Map<string, number>();
+          for (const problem of without === null
+            ? []
+            : await checkPreamble({ capabilities, preamble: without.ts }).catch(() => [])) {
+            const key = positionlessProblem(problem);
+            preexisting.set(key, (preexisting.get(key) || 0) + 1);
+          }
+          const introduced = problems.filter((problem) => {
+            const key = positionlessProblem(problem);
+            const remaining = preexisting.get(key) || 0;
+            if (remaining === 0) return true;
+            preexisting.set(key, remaining - 1);
+            return false;
+          });
+          if (introduced.length > 0) {
+            throw new Error(
+              `preamble entry "${input.key}" does not compile:\n${introduced.join("\n")}`,
+            );
+          }
+        }
+      }
+    }
+    const [committed] = await this.append({
+      type: "events.iterate.com/capability-host/preamble-set",
+      payload: { key: input.key, code: input.code },
+    });
+    await this.deps.reads.waitUntilEvent({
+      offset: committed.offset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
+  }
+
+  /** Remove one preamble entry by key; unknown keys are a durable no-op. */
+  async removePreamble(input: { key: string }): Promise<void> {
+    await this.#assertCreated();
+    if (typeof input.key !== "string" || input.key.length === 0) {
+      throw new Error('removePreamble requires a non-empty string "key"');
+    }
+    const [committed] = await this.append({
+      type: "events.iterate.com/capability-host/preamble-removed",
+      payload: { key: input.key },
+    });
+    await this.deps.reads.waitUntilEvent({
+      offset: committed.offset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
+  }
+
+  /**
+   * The scope's current assembled preamble — the exact text injected above
+   * the next script (the derived `results` array plus user entries) and the
+   * raw entry table. Null when there is nothing to inject. Deliberately no
+   * #assertCreated, matching describeCapabilities: reading an unborn scope
+   * reports empty rather than erroring discovery paths.
+   */
+  async describePreamble(): Promise<{
+    text: string;
+    entries: { key: string; code: string }[];
+  } | null> {
+    const { state } = await this.deps.reads.snapshot();
+    const assembled = assemblePreamble({
+      entries: state.preamble,
+      results: state.settledScriptResults,
+    });
+    if (assembled === null) return null;
+    return {
+      text: assembled.ts,
+      entries: state.preamble.map(({ key, code }) => ({ key, code })),
+    };
+  }
+
+  /**
+   * Read one settled script result back from the scope stream — the durable
+   * storage behind every `results[N].load(itx)` loader in the preamble (large
+   * results retain only their inferred type in state). Point read by the
+   * settle idempotency key, so it works for any retained-or-not execution
+   * that ever settled in this scope.
+   */
+  async getScriptResult(executionId: string): Promise<{ executionId: string; data: JsonValue }> {
+    await this.#assertCreated();
+    const event = await this.stream.getEvent({
+      idempotencyKey: `capability-host/script-run-settled@${executionId}`,
+    });
+    const settlement = settlementFromSettledEvent(event, executionId);
+    if (settlement === undefined) {
+      throw new Error(`no settled script execution "${executionId}" in scope ${this.#scopePath}`);
+    }
+    if (settlement.status === "failed") {
+      throw new Error(`script execution "${executionId}" failed: ${settlement.error}`);
+    }
+    return { executionId, data: settlement.result ?? null };
+  }
+
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
     // A trailing __describe is a valid INVOCATION (answered from the mount's
     // durable metadata below) — the reserved-name rule is for MOUNT names, so
@@ -470,6 +657,11 @@ export class CapabilityHostProcessor extends StreamProcessor<
       return await invokeNormalizedCapability(provider, hit.rest, args);
     }
     if (this.deps.invokeLiveCapability === undefined) {
+      // Live mounts are Pager-bound: the durable record outlives the
+      // provider's Pager, and a call while it is away fails plainly. (A
+      // dedicated receiver-absent signal that PARKS a stream delivery
+      // instead of failing it is future work — see
+      // docs/stream-subscription-model-redesign.md.)
       throw new Error(`capability "${hit.record.path.join(".")}" is offline`);
     }
     return await this.deps.invokeLiveCapability(hit.record, hit.rest, args);
@@ -698,12 +890,13 @@ export class CapabilityHostProcessor extends StreamProcessor<
     code: string,
     records: CapabilityRecord[],
     fallback: ItxExpression | null,
+    preamble: AssembledPreamble | null,
   ): Promise<{ rejection: string | null; emittedJs?: string }> {
     const typecheckScript = this.deps.typecheckScript;
     if (typecheckScript === undefined) return { rejection: null };
     try {
       const capabilities = await this.#describeCapabilitiesFrom(records, fallback);
-      const checked = await typecheckScript({ capabilities, code });
+      const checked = await typecheckScript({ capabilities, code, preamble: preamble?.ts });
       if (checked.verdict === "clean") {
         // Check and emit are one compile: what runs IS the compiler's
         // type-stripped output, so scripts are genuinely TypeScript.
@@ -737,6 +930,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     executionId: string;
     expiresAt: number;
     fallback: ItxExpression | null;
+    preamble: AssembledPreamble | null;
     requestedAtOffset: number;
   }) {
     const now = () => this.#now();
@@ -746,7 +940,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       // effects, so a rejected script provably never ran (requested →
       // settled, no started event) and the orphan policy is untouched.
       const checkedOutcome = await settleByDeadline(
-        this.#typecheckScriptForRun(input.code, input.capabilities, input.fallback),
+        this.#typecheckScriptForRun(input.code, input.capabilities, input.fallback, input.preamble),
         executionExpiresAt,
         now,
       );
@@ -830,6 +1024,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       const runPromise = this.deps.scriptExecutionEntrypoint.run(input.code, {
         emittedJs: checked.emittedJs,
         expiresAt: executionExpiresAt,
+        preambleJs: input.preamble?.js,
         streamContext: {
           kind: "script-execution",
           streamPath: this.#scopePath,
@@ -990,6 +1185,7 @@ type ScriptExecutionEntrypoint = {
     options: {
       emittedJs?: string;
       expiresAt: number;
+      preambleJs?: string;
       streamContext: Extract<StreamContext, { kind: "script-execution" }>;
     },
   ): Promise<unknown>;
@@ -1058,7 +1254,17 @@ export type CapabilityHostProcessorDeps = {
   typecheckScript?: (input: {
     capabilities: CapabilityDescription[];
     code: string;
+    preamble?: string;
   }) => Promise<ScriptExecutionCheck>;
+  /**
+   * Set-time compile of a would-be assembled preamble (checkPreamble in
+   * production; absent in the node test harness, which skips the gate).
+   * Returns problems attributable to the preamble's own lines.
+   */
+  checkPreamble?: (input: {
+    capabilities: CapabilityDescription[];
+    preamble: string;
+  }) => Promise<string[]>;
 };
 
 // -----------------------------------------------------------------------------
@@ -1103,6 +1309,27 @@ function truncatedTypes(types: string, mountPoint: string): string {
     (openComment ? " */" : "") +
     `\n// … truncated — read slices with itx.docs.get({ name: ${JSON.stringify(mountPoint)}, maxTokens: 4000 })`
   );
+}
+
+/** A checkPreamble problem string with its `label:line:col` position
+ * stripped — the set-time gate's diff identity, so stale problems whose
+ * lines merely SHIFTED when an entry above them changed length still match
+ * their preexisting selves. */
+function positionlessProblem(problem: string): string {
+  return problem.replace(/^([a-z]+)(:\d+)+(?= —)/, "$1");
+}
+
+/** The reduce's upsert, reused by the set-time gate to preview the entry
+ * table a candidate preamble-set would produce (offset unknown → 0; the gate
+ * only needs order and code, and a NEW entry always sorts last either way). */
+function upsertPreambleEntry(
+  entries: { key: string; code: string; setAtOffset: number }[],
+  input: SetPreambleInput,
+): { key: string; code: string; setAtOffset: number }[] {
+  const exists = entries.some((entry) => entry.key === input.key);
+  return exists
+    ? entries.map((entry) => (entry.key === input.key ? { ...entry, code: input.code } : entry))
+    : [...entries, { key: input.key, code: input.code, setAtOffset: 0 }];
 }
 
 function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
