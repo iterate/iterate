@@ -139,7 +139,6 @@ function harness(args: {
     deliverToWebhook: args.deliverToWebhook ?? (async () => undefined),
   };
   const eventSender = new StreamEventSender({
-    idleTeardownMs: 60_000,
     hooks: {
       readEvents: ({ afterOffset, beforeOffset, limit }) =>
         args.events
@@ -401,7 +400,7 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(processEventBatch[Symbol.dispose]).toHaveBeenCalledOnce();
   });
 
-  it("keeps an idle hosted callback closed until the source appends another event", async () => {
+  it("closes a hosted callback on its one idle alarm and stays quiet until a real append", async () => {
     const events = [event(2, "b", { keep: true })];
     const h = harness({
       events,
@@ -419,8 +418,17 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(h.wakeCalls).toHaveLength(1);
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
 
-    h.eventSender.runIdleTeardownNow();
-    h.eventSender.sendDue();
+    h.setNow(15_000);
+    h.eventSender.onAlarm();
+    await h.settle();
+    expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(false);
+    expect(h.wakeCalls).toHaveLength(1);
+    expect(h.alarmClears.length).toBeGreaterThan(0);
+
+    // Even an impossible stray alarm turn cannot turn the close fact into a
+    // hosted close -> wake -> open -> close loop.
+    h.setNow(60_000);
+    h.eventSender.onAlarm();
     await h.settle();
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(false);
     expect(h.wakeCalls).toHaveLength(1);
@@ -1880,7 +1888,6 @@ function connectionsHarness(
   });
   let connections!: StreamConnections;
   connections = new StreamConnections({
-    idleTeardownMs: 60_000,
     hooks: {
       // Force several batches so the test can observe the one-at-a-time gate.
       readBatch:
@@ -2566,7 +2573,7 @@ describe("StreamConnections hosted delivery watchdog", () => {
     // deadline: the old now+window reset slid it forward on the idle alarm's
     // own turn, so a fire landing just before the pushed deadline missed it
     // and real-clock teardown took up to two windows.
-    h.setNow(40_000);
+    h.setNow(4_000);
     h.connections.armOrClearIdleAlarm();
     expect(h.alarmTimes.at(-1)).toBe(firstDeadline);
 

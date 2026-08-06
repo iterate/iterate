@@ -2094,13 +2094,15 @@ test("a hosted processor returns its callback, idles cleanly, and wakes again af
     async () =>
       runtimeState(await stream.runtimeState()).runtime.connections[subscriptionKey]
         ?.hasPendingDelivery === false,
-    { description: "the hosted callback to settle before forced idle teardown" },
+    { description: "the hosted callback to settle before its idle alarm" },
   );
-  await forceStreamIdleTeardown(stream);
   await waitForCondition(
     async () =>
       runtimeState(await stream.runtimeState()).runtime.connections[subscriptionKey] === undefined,
-    { description: "idle teardown to release the hosted callback" },
+    {
+      description: "the bounded idle alarm to release the hosted callback",
+      timeoutMs: 15_000,
+    },
   );
   expect(
     (

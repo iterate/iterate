@@ -431,7 +431,6 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
       deliverToWebhook: async () => undefined,
     };
     const eventSender = new StreamEventSender({
-      idleTeardownMs: 60_000,
       hooks: {
         readEvents: ({ afterOffset, beforeOffset, limit }) =>
           sourceEvents

@@ -151,6 +151,8 @@ const DELIVERY_BATCH_LIMIT = 1000;
  */
 const HOSTED_CALLBACK_EVENT_LIMIT = 1;
 const HOSTED_SCAN_EVENT_LIMIT = 100;
+/** Briefly coalesce active bursts, then release every callback that can be re-paged or re-woken. */
+const IDLE_CONNECTION_TEARDOWN_MS = 5_000;
 
 /** Soft cap on a delivery batch's payload bytes (large events shrink the batch). */
 const DELIVERY_BATCH_BYTE_LIMIT = 1024 * 1024;
@@ -366,10 +368,9 @@ export class StreamEventSender {
     string,
     { completionLatency: LatencyRing; deliveryDuration: LatencyRing; bytesSent: number }
   >();
-  constructor(args: { idleTeardownMs: number; hooks: StreamEventSenderHooks }) {
+  constructor(args: { hooks: StreamEventSenderHooks }) {
     this.#hooks = args.hooks;
     this.connections = new StreamConnections({
-      idleTeardownMs: args.idleTeardownMs,
       hooks: {
         ...args.hooks,
         readBatch: (afterOffset, beforeOffset, limit) =>
@@ -1684,14 +1685,12 @@ function deliveryErrorDiagnostics(error: unknown): {
  */
 export class StreamConnections {
   readonly #hooks: StreamConnectionsHooks;
-  readonly #idleTeardownMs: number;
   readonly #connections = new Map<string, StreamConnection>();
   #idleTeardownAtMs: number | null = null;
   #tearingDown = false;
   #lastPingRoundAtMs: number | null = null;
 
-  constructor(args: { idleTeardownMs: number; hooks: StreamConnectionsHooks }) {
-    this.#idleTeardownMs = args.idleTeardownMs;
+  constructor(args: { hooks: StreamConnectionsHooks }) {
     this.#hooks = args.hooks;
   }
 
@@ -1983,7 +1982,7 @@ export class StreamConnections {
       if (Number.isFinite(activityMs) && activityMs > lastActivityMs) lastActivityMs = activityMs;
     }
     this.#idleTeardownAtMs =
-      (lastActivityMs === 0 ? this.#hooks.now() : lastActivityMs) + this.#idleTeardownMs;
+      (lastActivityMs === 0 ? this.#hooks.now() : lastActivityMs) + IDLE_CONNECTION_TEARDOWN_MS;
     this.#hooks.armAlarm(Math.max(this.#hooks.now(), this.#idleTeardownAtMs));
   }
 
