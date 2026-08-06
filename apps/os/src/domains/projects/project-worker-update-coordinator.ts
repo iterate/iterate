@@ -36,7 +36,7 @@ const QueuedWorkerUpdate = ProjectWorkerUpdateHandoff.extend({
 });
 const WorkerUpdateQueue = z.array(QueuedWorkerUpdate);
 
-export type ProjectWorkerUpdateHandoff = z.infer<typeof ProjectWorkerUpdateHandoff>;
+type ProjectWorkerUpdateHandoff = z.infer<typeof ProjectWorkerUpdateHandoff>;
 type WorkerUpdateOutcome = z.infer<typeof WorkerUpdateOutcome>;
 type QueuedWorkerUpdate = z.infer<typeof QueuedWorkerUpdate>;
 
