@@ -2011,6 +2011,29 @@ function connectionsHarness(
 }
 
 describe("StreamConnections hosted delivery watchdog", () => {
+  it("bounds an unresponsive hosted processor runtime-state callback", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = connectionsHarness();
+      h.connections.openHosted({
+        connectionKey: "processor",
+        expectedHostedDelivery: h.expectedDelivery,
+        processEventBatch: recordingProcessEventBatch([], () => undefined),
+        replayAfterOffset: 0,
+        getRuntimeState: () => new Promise(() => undefined),
+      });
+
+      const runtimeState = h.connections.getProcessorRuntimeState("processor");
+      const rejection = expect(runtimeState).rejects.toThrow(
+        "hosted processor runtime-state callback processor timed out after 5000ms",
+      );
+      await vi.runAllTimersAsync();
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("probes a pending hosted batch and recovers before its watchdog when the processor resets", async () => {
     const calls: DeliveryCall[] = [];
     const reset = Object.assign(new Error("processor incarnation reset"), {

@@ -53,13 +53,17 @@ binding repo handle omitted the assumed REST-only `lastPushAt` metadata, so
 `undefined !== null` skipped the seed. Recovery now verifies the actual
 default-branch head through the binding's server-side `log()` call inside the
 same eight-second budget; missing heads seed, while existing heads avoid a
-potentially unbounded clone. That deployment and the next two canonical
-candidates were retry-free. The third candidate reset the streak: approvals
+potentially unbounded clone. Four exact-head canonical candidates were retry-
+free. The fifth candidate reset the streak: approvals
 hit Better Auth's IP-wide 3/minute email-OTP limit while seven signup flows
 shared one CI runner, and the recreated-source lifecycle proof also retried.
 Fixed-test-OTP stages now allow the fully parallel signup lane while production
-retains 3/minute. Stream recovery still needs exact-head verification; the
-gate is zero.
+retains 3/minute. Cloudflare traces show the lifecycle proof's stream reset,
+append, and wake completed before its observational processor-state callback
+stayed pending until Vitest's outer timeout. That callback now has a five-
+second receiver-unavailable boundary, and the proof polls through only that
+named transient inside its unchanged restoration deadline. Both fixes need
+exact-head verification; the gate is zero.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -465,8 +469,15 @@ Test these in order; do not treat the first plausible one as the conclusion.
   Added the missing wire-safe `retryable` flag to both named repo-readiness
   errors. The expanded four-suite set passes 105 tests and OS typecheck is
   green; no test wait or assertion changed.
-- 2026-08-06: The corrected Artifacts head passed deployment plus two strict
-  gate candidates. Candidate three reset the streak for an auth 429 and one
+- 2026-08-06: Candidate `2lhj7j115w` reset a four-run clean streak. Besides
+  the fixed-test-OTP rate limit, its recreated-source proof exposed an
+  unbounded retained processor-state callback after the stream reset and wake
+  had completed. A red/green unit spec now enforces a five-second
+  receiver-unavailable boundary; the deployed proof retries only that named
+  observation inside its existing 30-second restoration budget. The full
+  sender suite passes 59 tests, and OS typecheck, lint, and format checks pass.
+- 2026-08-06: The corrected Artifacts head passed four strict gate candidates.
+  Candidate five reset the streak for an auth 429 and one
   recreated-source lifecycle retry. Trace evidence showed the OTP request was
   the fourth-or-later same-IP send inside Better Auth's 60-second window, not
   a slow locator. Added red/green policy coverage and raised only fixed-test-

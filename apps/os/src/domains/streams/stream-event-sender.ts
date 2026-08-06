@@ -1660,6 +1660,7 @@ type StreamConnectionsHooks = Pick<
 
 const PING_ROUND_MIN_INTERVAL_MS = 5_000;
 const PING_TIMEOUT_MS = 10_000;
+export const PROCESSOR_RUNTIME_STATE_TIMEOUT_MS = 5_000;
 const HOSTED_PENDING_PROBE_INTERVAL_MS = 1_000;
 const HOSTED_PENDING_PROBE_TIMEOUT_MS = 1_000;
 const HOSTED_PENDING_PROBE_TIMEOUT_LIMIT = 3;
@@ -1908,7 +1909,13 @@ export class StreamConnections {
 
   async getProcessorRuntimeState(connectionKey: string): Promise<ProcessorRuntimeState | null> {
     const connection = this.#connections.get(connectionKey);
-    return (await connection?.getProcessorRuntimeState?.()) ?? null;
+    const getRuntimeState = connection?.getProcessorRuntimeState;
+    if (getRuntimeState === undefined) return null;
+    return await withDeliveryTimeout(
+      Promise.resolve().then(() => getRuntimeState()),
+      `hosted processor runtime-state callback ${connectionKey}`,
+      { timeoutMs: PROCESSOR_RUNTIME_STATE_TIMEOUT_MS },
+    );
   }
 
   /** Back off a failing hosted callback before closing and activating it again. */

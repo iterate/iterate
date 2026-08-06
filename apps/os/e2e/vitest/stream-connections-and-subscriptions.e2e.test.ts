@@ -10,6 +10,7 @@
 
 import { expect, test } from "vitest";
 import {
+  isStreamReceiverUnavailableError,
   MAX_COPIED_FROM_HOPS,
   type StreamDeliveryBatch,
   type StreamEvent,
@@ -22,7 +23,10 @@ import type {
   Stream,
   StreamRuntimeDebugState,
 } from "../../src/itx-api.generated.ts";
-import { deliveryId as streamDeliveryId } from "../../src/domains/streams/stream-event-sender.ts";
+import {
+  deliveryId as streamDeliveryId,
+  PROCESSOR_RUNTIME_STATE_TIMEOUT_MS,
+} from "../../src/domains/streams/stream-event-sender.ts";
 import { subscriptionConfigurationForDelivery } from "../../src/domains/streams/core-processor-contract.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
@@ -2451,7 +2455,7 @@ test.skipIf(deployedBaseUrl() === null)(
     );
     await waitForCondition(
       async () => {
-        const snapshot = (await stream.getProcessorRuntimeState({ subscriptionKey }))?.snapshot;
+        const snapshot = (await readProcessorRuntimeState(stream, subscriptionKey))?.snapshot;
         return (
           (snapshot?.offset ?? 0) >= oldRoute!.offset &&
           (snapshot?.state as { routes?: Record<string, string> } | undefined)?.routes?.[
@@ -2475,7 +2479,7 @@ test.skipIf(deployedBaseUrl() === null)(
     const [newConfiguration] = await stream.append(configuredEvent());
     await waitForCondition(
       async () => {
-        const runtime = await stream.getProcessorRuntimeState({ subscriptionKey });
+        const runtime = await readProcessorRuntimeState(stream, subscriptionKey);
         const state = runtime?.snapshot.state as
           | {
               birthCertificate?: unknown;
@@ -2510,7 +2514,7 @@ test.skipIf(deployedBaseUrl() === null)(
     );
     await waitForCondition(
       async () => {
-        const snapshot = (await stream.getProcessorRuntimeState({ subscriptionKey }))?.snapshot;
+        const snapshot = (await readProcessorRuntimeState(stream, subscriptionKey))?.snapshot;
         const state = snapshot?.state as
           | {
               birthCertificate?: { config?: { connection?: string } };
@@ -3488,6 +3492,25 @@ async function forceStreamReset(stream: Stream): Promise<void> {
       testReset(): Promise<void>;
     }
   ).testReset();
+}
+
+async function readProcessorRuntimeState(stream: Stream, subscriptionKey: string) {
+  try {
+    return await stream.getProcessorRuntimeState({ subscriptionKey });
+  } catch (error) {
+    // Runtime state is an observational callback into the hosted processor.
+    // A wedged incarnation is bounded by the product and is safe to poll
+    // through while the durable wake/recovery path replaces it.
+    if (
+      isStreamReceiverUnavailableError(error) &&
+      error instanceof Error &&
+      error.message ===
+        `hosted processor runtime-state callback ${subscriptionKey} timed out after ${PROCESSOR_RUNTIME_STATE_TIMEOUT_MS}ms`
+    ) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function appendTrustedCoreEvents(
