@@ -123,6 +123,14 @@ function makeDocsWorkspace(): WorkspaceConfig {
   };
 }
 
+function makeBrowserExtensionWorkspace(): WorkspaceConfig {
+  return {
+    entry: ["vite.config.ts", "src/background.ts", "src/main.tsx"],
+    project: ["src/**/*.{ts,tsx}", "vite.config.ts"],
+    vite: false,
+  };
+}
+
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     entry: ["vite.config.ts", "scripts/router.ts", "scripts/**/*.ts", "src/worker.ts!"],
@@ -224,6 +232,7 @@ const config: KnipConfig = {
     "!apps/tanstack",
     "!apps/kit",
     "!apps/docs",
+    "!apps/browser-extension",
     "packages/*",
     "!packages/shared",
     "!packages/ui",
@@ -252,6 +261,7 @@ const config: KnipConfig = {
     "apps/tanstack": makeTanstackTodoWorkspace(),
     "apps/kit": makeKitWorkspace(),
     "apps/docs": makeDocsWorkspace(),
+    "apps/browser-extension": makeBrowserExtensionWorkspace(),
     "packages/shared": makeSharedWorkspace(),
     "packages/ui": makeUiWorkspace(),
     "packages/iterate": makeIterateCliWorkspace(),
