@@ -1302,9 +1302,7 @@ async function renderScriptSettlement(input: {
   // inline `data` row (no `.load`); a recipe naming the wrong member fails
   // typecheck in the very next script.
   const resultsAccess =
-    JSON.stringify(settlement.result).length <= INLINE_RESULT_PREAMBLE_LIMIT
-      ? ("data" as const)
-      : ("load" as const);
+    JSON.stringify(settlement.result).length <= INLINE_RESULT_PREAMBLE_LIMIT ? "data" : "load";
   const preambleNote =
     resultsAccess === "data"
       ? "\nThis result is available to your next script as `results[0].data` (the preamble `results` array, newest first)."

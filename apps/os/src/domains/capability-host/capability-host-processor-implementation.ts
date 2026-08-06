@@ -525,16 +525,23 @@ export class CapabilityHostProcessor extends StreamProcessor<
           // The with/without diff keys on the problem MINUS its position: a
           // re-set that changes an earlier entry's line count shifts every
           // stale error's `preamble:N`, and a position-sensitive diff would
-          // read those same old problems as newly introduced.
-          const preexisting = new Set(
-            (without === null
-              ? []
-              : await checkPreamble({ capabilities, preamble: without.ts }).catch(() => [])
-            ).map(positionlessProblem),
-          );
-          const introduced = problems.filter(
-            (problem) => !preexisting.has(positionlessProblem(problem)),
-          );
+          // read those same old problems as newly introduced. Counted as a
+          // MULTISET, not a set: a candidate adding a second occurrence of an
+          // already-stale message is still introducing a problem.
+          const preexisting = new Map<string, number>();
+          for (const problem of without === null
+            ? []
+            : await checkPreamble({ capabilities, preamble: without.ts }).catch(() => [])) {
+            const key = positionlessProblem(problem);
+            preexisting.set(key, (preexisting.get(key) || 0) + 1);
+          }
+          const introduced = problems.filter((problem) => {
+            const key = positionlessProblem(problem);
+            const remaining = preexisting.get(key) || 0;
+            if (remaining === 0) return true;
+            preexisting.set(key, remaining - 1);
+            return false;
+          });
           if (introduced.length > 0) {
             throw new Error(
               `preamble entry "${input.key}" does not compile:\n${introduced.join("\n")}`,
