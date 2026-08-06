@@ -29,8 +29,10 @@
 // sent, lag from cursor), durable sends record commit→acknowledgement
 // latency on the stream's own clock (hosted: the processor reports its result;
 // copy/ITX/webhook: the receiver call returns), and callback owners that hand over a ping capability
-// get NTP-style RTT sampled when runtime observation begins, throttled, and
-// purely observational (a failed ping drops the sample, nothing else).
+// get NTP-style RTT sampled when runtime observation begins, throttled. While
+// a hosted batch is pending, the same pure ping is also its fast lifecycle
+// probe: a dead processor callback is retried without waiting for the longer
+// application-work watchdog.
 // Session-callback consumption is deliberately NOT measured here: those results stay
 // unread (zero returned event batches), and the receiving processor reports through
 // its getRuntimeState capability instead (see event-consumption-metrics.ts).
@@ -111,10 +113,12 @@ import {
 // =============================================================================
 
 /**
- * Consecutive failures after which a subscription halts. With the backoff
- * below this tolerates roughly 2–2.5 hours of continuous receiver outage before
- * giving up loudly (an `subscription-delivery-halted` event + a red row in the
- * UI); `subscription-delivery-resumed` is one itx call away.
+ * Consecutive failures after which a subscription halts. Application failures
+ * use the exponential backoff below (roughly 2–2.5 hours through the whole
+ * ladder). Explicit Durable Object availability failures retry after one
+ * second so a routine incarnation reset cannot inherit a minutes-long delay;
+ * the same attempt bound still makes a sustained outage halt loudly. An
+ * `subscription-delivery-resumed` event is the operator's way back.
  */
 const MAX_DELIVERY_ATTEMPTS = 15;
 
