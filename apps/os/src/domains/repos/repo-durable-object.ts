@@ -439,18 +439,29 @@ export class RepoDurableObject extends DurableObject<Env> {
       for (let attempt = 1; ; attempt++) {
         // Pinned commits need history: a shallow clone only contains the
         // branch tip. Project repos are small; correctness beats depth tuning.
-        const filesystem = new InMemoryFs();
-        const git = createGit(filesystem, REPO_DIR);
-        let branchHead: { oid: string } | undefined;
+        let cloned: {
+          branchHead: { oid: string } | undefined;
+          filesystem: InMemoryFs;
+          git: ReturnType<typeof createGit>;
+        };
         try {
-          await retryArtifactsInfrastructureOperation({
+          cloned = await retryArtifactsInfrastructureOperation({
             description: `clone ${this.#name.path}:${branch}`,
-            operation: () => git.clone({ branch, url: repo.remote, ...credentials }),
+            operation: async () => {
+              // A failed clone can leave a partial .git directory. Each retry
+              // must rebuild the complete local checkout, not continue writing
+              // into state whose remote transaction did not finish.
+              const filesystem = new InMemoryFs();
+              const git = createGit(filesystem, REPO_DIR);
+              await git.clone({ branch, url: repo.remote, ...credentials });
+              const [branchHead] = await git.log({ depth: 1, ref: branch });
+              return { branchHead, filesystem, git };
+            },
           });
-          [branchHead] = await git.log({ depth: 1, ref: branch });
         } catch (error) {
           throw classifyRepoAccessError(error, branch);
         }
+        const { branchHead, filesystem, git } = cloned;
         if (!branchHead) throw new RepoNotSeededError("Repo has no commits.");
         try {
           await git.checkout({ ref: input.commitOid, force: true });
@@ -480,27 +491,29 @@ export class RepoDurableObject extends DurableObject<Env> {
     }
 
     const clone = async () => {
-      const filesystem = new InMemoryFs();
-      const git = createGit(filesystem, REPO_DIR);
-      let head: { oid: string } | undefined;
       try {
-        await retryArtifactsInfrastructureOperation({
+        return await retryArtifactsInfrastructureOperation({
           description: `clone ${this.#name.path}:${branch}`,
-          operation: () =>
-            git.clone({
+          operation: async () => {
+            // Treat each remote attempt as a transaction over a fresh local
+            // checkout; a 503 may arrive after git wrote partial clone state.
+            const filesystem = new InMemoryFs();
+            const git = createGit(filesystem, REPO_DIR);
+            await git.clone({
               branch,
               ...(input.historyDepth === "full" ? {} : { depth: input.historyDepth || 1 }),
               singleBranch: true,
               url: repo.remote,
               ...credentials,
-            }),
+            });
+            const [head] = await git.log({ depth: 1, ref: branch });
+            if (!head) throw new RepoNotSeededError("Repo has no commits.");
+            return { filesystem, git, head };
+          },
         });
-        [head] = await git.log({ depth: 1, ref: branch });
       } catch (error) {
         throw classifyRepoAccessError(error, branch);
       }
-      if (!head) throw new RepoNotSeededError("Repo has no commits.");
-      return { filesystem, git, head };
     };
 
     let { filesystem, git, head } = await clone();
