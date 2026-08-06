@@ -424,16 +424,16 @@ export type SubscriptionCursorStore = {
 export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   static db = defineConfig({
     // The desired schema now (`sqlfu draft` diffs new migrations against it).
-    // v2 (subscription-model redesign, CORE_STATE_VERSION 30): `name` primary
-    // key, ONE `confirmed_offset` cursor, and the mirrored delivery status.
-    // FRESH schema — the redesign ships as a clean break with no data
-    // migration (deploy-time storage reset).
+    // Subscription-model redesign (CORE_STATE_VERSION 30): `name` primary key,
+    // ONE cursor, and the mirrored delivery status. The cursor column is
+    // `processed_through_offset` (v2/v3 named it `confirmed_offset`; the v4
+    // migration renames it — the domain field stays `confirmedOffset`).
     definitions: sql`
       create table subscription_cursors (
         name text primary key,
         configured_at_offset integer not null,
         cursor_changed_at_offset integer not null,
-        confirmed_offset integer not null,
+        processed_through_offset integer not null,
         status text not null default 'active',
         attempt integer not null default 0,
         next_attempt_at integer,
@@ -501,13 +501,25 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
           );
         `,
       },
+      {
+        // The internal cursor column is named for what it stores: the offset
+        // the receiver has processed through. The domain field stays
+        // `confirmedOffset` (the delivery contract's word). RENAME COLUMN is
+        // valid from the v3 state and preserves the live rows, so it is safe
+        // to add after the flag-day deploy already applied v2 + v3.
+        name: "20260807000001_rename_confirmed_offset_to_processed_through_offset",
+        content: sql`
+          alter table subscription_cursors
+          rename column confirmed_offset to processed_through_offset;
+        `,
+      },
     ],
     queries: {
       get: sql.nullableOne<{
         parameters: { name: string };
         result: SubscriptionCursorRowRecord;
       }>`
-        select name, confirmed_offset, status, configured_at_offset,
+        select name, processed_through_offset, status, configured_at_offset,
                attempt, next_attempt_at, in_flight_deadline_at,
                in_flight_connection_generation, last_error,
                failing_event_offset, failing_event_attempt,
@@ -516,7 +528,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         where name = :name
       `,
       list: sql.many<{ result: SubscriptionCursorRowRecord }>`
-        select name, confirmed_offset, status, configured_at_offset,
+        select name, processed_through_offset, status, configured_at_offset,
                attempt, next_attempt_at, in_flight_deadline_at,
                in_flight_connection_generation, last_error,
                failing_event_offset, failing_event_attempt,
@@ -533,14 +545,14 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         };
       }>`
         insert into subscription_cursors (
-          name, confirmed_offset, configured_at_offset,
+          name, processed_through_offset, configured_at_offset,
           cursor_changed_at_offset, updated_at
         ) values (
           :name, :initialOffset, :configuredAtOffset,
           :cursorChangedAtOffset, :updatedAt
         )
         on conflict (name) do update set
-          confirmed_offset = excluded.confirmed_offset,
+          processed_through_offset = excluded.processed_through_offset,
           status = 'active',
           configured_at_offset = excluded.configured_at_offset,
           attempt = 0,
@@ -564,7 +576,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         };
       }>`
         update subscription_cursors
-        set confirmed_offset = max(confirmed_offset, :offset),
+        set processed_through_offset = max(processed_through_offset, :offset),
             attempt = 0, next_attempt_at = null, in_flight_deadline_at = null,
             in_flight_connection_generation = null,
             last_error = null,
@@ -584,7 +596,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         };
       }>`
         update subscription_cursors
-        set confirmed_offset = max(confirmed_offset, :offset),
+        set processed_through_offset = max(processed_through_offset, :offset),
             attempt = 0, next_attempt_at = null, in_flight_deadline_at = null,
             in_flight_connection_generation = null,
             last_error = null,
@@ -604,7 +616,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         };
       }>`
         update subscription_cursors
-        set confirmed_offset = max(confirmed_offset, :offset),
+        set processed_through_offset = max(processed_through_offset, :offset),
             attempt = 0, next_attempt_at = null, in_flight_deadline_at = null,
             in_flight_connection_generation = null,
             last_error = null,
@@ -621,16 +633,16 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         parameters: { name: string; offset: number; updatedAt: string };
       }>`
         update subscription_cursors
-        set attempt = case when :offset > confirmed_offset then 0 else attempt end,
-            last_error = case when :offset > confirmed_offset then null else last_error end,
-            failing_event_offset = case when :offset > confirmed_offset then null else failing_event_offset end,
-            failing_event_attempt = case when :offset > confirmed_offset then 0 else failing_event_attempt end,
+        set attempt = case when :offset > processed_through_offset then 0 else attempt end,
+            last_error = case when :offset > processed_through_offset then null else last_error end,
+            failing_event_offset = case when :offset > processed_through_offset then null else failing_event_offset end,
+            failing_event_attempt = case when :offset > processed_through_offset then 0 else failing_event_attempt end,
             failing_event_skips_since_last_success = case
-              when :offset > confirmed_offset then 0 else failing_event_skips_since_last_success end,
+              when :offset > processed_through_offset then 0 else failing_event_skips_since_last_success end,
             next_attempt_at = null,
             in_flight_deadline_at = null,
             in_flight_connection_generation = null,
-            confirmed_offset = max(confirmed_offset, :offset),
+            processed_through_offset = max(processed_through_offset, :offset),
             updated_at = :updatedAt
         where name = :name
       `,
@@ -643,16 +655,16 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         };
       }>`
         update subscription_cursors
-        set attempt = case when :offset > confirmed_offset then 0 else attempt end,
-            last_error = case when :offset > confirmed_offset then null else last_error end,
-            failing_event_offset = case when :offset > confirmed_offset then null else failing_event_offset end,
-            failing_event_attempt = case when :offset > confirmed_offset then 0 else failing_event_attempt end,
+        set attempt = case when :offset > processed_through_offset then 0 else attempt end,
+            last_error = case when :offset > processed_through_offset then null else last_error end,
+            failing_event_offset = case when :offset > processed_through_offset then null else failing_event_offset end,
+            failing_event_attempt = case when :offset > processed_through_offset then 0 else failing_event_attempt end,
             failing_event_skips_since_last_success = case
-              when :offset > confirmed_offset then 0 else failing_event_skips_since_last_success end,
+              when :offset > processed_through_offset then 0 else failing_event_skips_since_last_success end,
             next_attempt_at = null,
             in_flight_deadline_at = null,
             in_flight_connection_generation = null,
-            confirmed_offset = max(confirmed_offset, :offset),
+            processed_through_offset = max(processed_through_offset, :offset),
             updated_at = :updatedAt
         where name = :name
           and cursor_changed_at_offset = :cursorChangedAtOffset
@@ -719,7 +731,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         };
       }>`
         update subscription_cursors
-        set confirmed_offset = :offset,
+        set processed_through_offset = :offset,
             attempt = 0, next_attempt_at = null, last_error = null,
             in_flight_deadline_at = null,
             in_flight_connection_generation = null,
@@ -952,7 +964,7 @@ export function pruneOrphanedSubscriptionCursorRows(
 
 type SubscriptionCursorRowRecord = {
   name: string;
-  confirmed_offset: number;
+  processed_through_offset: number;
   status: string;
   configured_at_offset: number;
   attempt: number;
@@ -969,7 +981,7 @@ type SubscriptionCursorRowRecord = {
 function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorRow {
   return {
     name: record.name,
-    confirmedOffset: record.confirmed_offset,
+    confirmedOffset: record.processed_through_offset,
     // Safe: the TEXT column is written exclusively by this store from typed
     // SubscriptionCursorRow values, so it only ever holds
     // SubscriptionCursorStatus members; SQLite just can't express the union.
