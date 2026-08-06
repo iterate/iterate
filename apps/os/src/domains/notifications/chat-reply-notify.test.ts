@@ -76,6 +76,20 @@ describe("ChatReplyNotifyProcessor", () => {
     ]);
   });
 
+  it("markdown in the reply is flattened — push bodies can only render plain text", async () => {
+    const h = makeChatReplyHarness();
+    await h.play([
+      "append",
+      CREATED,
+      userMessage({ content: "Answer geography question" }),
+      agentReply("The capital of Germany is **[Berlin](https://en.wikipedia.org/wiki/Berlin)**"),
+    ]);
+
+    expect(h.rootEvents()).toMatchObject([
+      { type: INTENT, payload: { body: "The capital of Germany is Berlin" } },
+    ]);
+  });
+
   it("a multi-message agent turn yields ONE push: only the reply that closes the turn notifies", async () => {
     const h = makeChatReplyHarness();
     await h.play([
