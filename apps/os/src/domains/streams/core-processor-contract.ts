@@ -310,6 +310,19 @@ export const ConnectionOpenerDescriptor = z.object({
       announcement: ProcessorContractAnnouncement,
     })
     .optional(),
+  /**
+   * Present when this connection is a project CLIENT presence — opened by
+   * `projects.connect` on the client's own stream. The marker is what lets the
+   * client roster distinguish a client connection from an ordinary stream
+   * watcher opening the same stream. Presence metadata like everything else
+   * here, not authorization input.
+   */
+  client: z
+    .object({
+      /** True when the connection carries a live capabilities target. */
+      capabilities: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 /** Serializable identity of the caller that opened a connection. */
@@ -347,6 +360,12 @@ export const ConnectionCloseReason = z.enum([
    * that `"idle"` deliberately is not.
    */
   "departed",
+  /**
+   * An itx caller closed this CLIENT connection from the platform side
+   * (`clients.get(path).getConnection(key).close()`). Distinct from
+   * `"closed-by-owner"` — the owner did not ask; it observes its leg break.
+   */
+  "kicked",
 ]);
 
 export type ConnectionCloseReason = z.infer<typeof ConnectionCloseReason>;

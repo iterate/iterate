@@ -92,8 +92,11 @@ import {
 import type { SizedStreamEvent, SubscriptionCursorStore } from "./stream-storage.ts";
 import {
   retainGetProcessorRuntimeState,
+  retainInvokeClientCapability,
   retainProcessEventBatch,
   retainConnectionPing,
+  type InvokeClientCapability,
+  type RetainedInvokeClientCapability,
   type RetainedProcessEventBatch,
   type RetainedConnectionPing,
   type RetainedProcessorWakeResponse,
@@ -1548,6 +1551,7 @@ type StreamConnection = {
   readonly completionLatency: LatencyRing;
   readonly pingRtt: LatencyRing;
   ping?: RetainedConnectionPing;
+  invokeClientCapability?: RetainedInvokeClientCapability;
   getProcessorRuntimeState?: GetProcessorRuntimeState & Disposable;
   sendQueued(): void;
   isLive(): boolean;
@@ -1601,6 +1605,10 @@ type OpenConnectionArgs<Batch extends StreamEventBatch> = {
   openedBy?: ConnectionOpenerDescriptor;
   getRuntimeState?: GetProcessorRuntimeState;
   ping?: StreamConnectionPing;
+  /** A client connection's capability dispatch door (see retained-event-callbacks.ts). */
+  invokeClientCapability?: InvokeClientCapability;
+  /** Cap on simultaneously open CLIENT connections (null/absent = unlimited). */
+  maxConnections?: number | null;
   sendOnOpen?: boolean;
 };
 
@@ -1773,6 +1781,8 @@ export class StreamConnections {
     openedBy?: ConnectionOpenerDescriptor;
     getRuntimeState?: GetProcessorRuntimeState;
     ping?: StreamConnectionPing;
+    invokeClientCapability?: InvokeClientCapability;
+    maxConnections?: number | null;
   }): StreamConnection {
     return this.#open({
       ...args,
@@ -1789,6 +1799,51 @@ export class StreamConnections {
 
   close(connectionKey: string, reason: ConnectionCloseReason): void {
     this.#connections.get(connectionKey)?.close(reason);
+  }
+
+  /**
+   * Fan one client-capability call out over every open session connection
+   * that carries a dispatch door (`projects.connect` with `capabilities`), in
+   * table order. Zero doors resolves to `[]` — callers see the count
+   * honestly. Plain `Promise.all` semantics on purpose (the spelled-out
+   * fan-out contract of `itx.clients`): one failing connection rejects the
+   * whole call.
+   */
+  invokeClientCapabilities(input: { path: string[]; args: unknown[] }): Promise<unknown[]> {
+    const doors = [...this.#connections.values()].filter(
+      (connection) => connection.kind === "session" && connection.invokeClientCapability,
+    );
+    return Promise.all(doors.map((connection) => connection.invokeClientCapability!(input)));
+  }
+
+  /** One connection's capability call, by key: the door must exist and be open. */
+  invokeClientCapability(input: {
+    connectionKey: string;
+    path: string[];
+    args: unknown[];
+  }): unknown {
+    const connection = this.#connections.get(input.connectionKey);
+    const door = connection?.kind === "session" ? connection.invokeClientCapability : undefined;
+    if (door === undefined) {
+      throw new Error(`no open client connection "${input.connectionKey}" carries capabilities`);
+    }
+    return door({ path: input.path, args: input.args });
+  }
+
+  /**
+   * Kick one CLIENT connection from the platform side. Returns false when no
+   * live entry exists (the caller may still close a dormant subscriber's wake
+   * socket); throws when the key names a viewer or hosted callback — those
+   * are not kickable through the client surface.
+   */
+  kickClientConnection(connectionKey: string): boolean {
+    const connection = this.#connections.get(connectionKey);
+    if (connection === undefined) return false;
+    if (connection.kind !== "session" || connection.openedBy?.client === undefined) {
+      throw new Error(`connection "${connectionKey}" is not a client connection`);
+    }
+    connection.close("kicked");
+    return true;
   }
 
   has(connectionKey: string): boolean {
@@ -2323,6 +2378,7 @@ export class StreamConnections {
       ...(args.openedBy === undefined ? {} : { openedBy: args.openedBy }),
       getProcessorRuntimeState: retainGetProcessorRuntimeState(args.getRuntimeState),
       ping: retainConnectionPing(args.ping),
+      invokeClientCapability: retainInvokeClientCapability(args.invokeClientCapability),
       get deliveredThroughOffset() {
         return deliveredThroughOffset;
       },
@@ -2348,6 +2404,7 @@ export class StreamConnections {
           this.#hooks.runtimeChanged();
         }
         connection.ping?.[Symbol.dispose]();
+        connection.invokeClientCapability?.[Symbol.dispose]();
         processEventBatch[Symbol.dispose]();
         connection.getProcessorRuntimeState?.[Symbol.dispose]();
         // Best-effort by design. A lifecycle-interrupted append loses this
@@ -2372,6 +2429,21 @@ export class StreamConnections {
     // wake path records the processor's reported checkpoint.
     this.#connections.set(connectionKey, connection);
     this.#hooks.runtimeChanged();
+    // Client-cap enforcement: a client connection's `maxConnections` bounds
+    // the simultaneously open CLIENT connections on this stream (viewers and
+    // hosted callbacks never count; `null` means unlimited). Oldest-first
+    // eviction as "replaced", atomic with this open under the DO's
+    // single-threaded execution — the closed facts land right after the new
+    // connection's opened fact.
+    if (kind === "session" && args.maxConnections != null && args.openedBy?.client !== undefined) {
+      const clientConnections = [...this.#connections.values()].filter(
+        (candidate) => candidate.kind === "session" && candidate.openedBy?.client !== undefined,
+      );
+      const excess = clientConnections.length - args.maxConnections;
+      for (const oldest of clientConnections.slice(0, Math.max(0, excess))) {
+        oldest.close("replaced");
+      }
+    }
     // Idle eligibility changed exactly here, so (re)derive the deadline here.
     // The connection-opened append's nested reconcile ran BEFORE this
     // publication and could not see the connection; on main the stray

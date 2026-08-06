@@ -42,6 +42,7 @@ import { STREAM_CONTEXT_HEADER } from "./domains/projects/stream-context.ts";
 // (`ctx.exports`) shared by the itx runtime.
 export { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
 export { AgentCollectionDurableObject } from "./domains/agents/agent-collection-durable-object.ts";
+export { ClientCollectionDurableObject } from "./domains/clients/client-collection-durable-object.ts";
 export { CapabilityHostDurableObject } from "./domains/capability-host/capability-host-durable-object.ts";
 export { DeviceDurableObject } from "./domains/devices/device-durable-object.ts";
 // One sandbox container class per instance type — see src/domains/sandboxes/instance-types.ts.

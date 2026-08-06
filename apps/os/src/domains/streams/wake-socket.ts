@@ -230,6 +230,24 @@ export class WakeSocketRegistry {
   }
 
   /** connectionKeys that currently have a live wake socket — one scan per call. */
+  /**
+   * Close every wake socket bound to one connection (a platform-side kick):
+   * the owner's relay breaks instead of re-dialing on the next append, so a
+   * kicked dormant subscriber cannot resurrect. Returns how many sockets
+   * closed.
+   */
+  closeForConnection(connectionKey: string, reason: string): number {
+    const bound = this.#sockets(connectionKey);
+    for (const { ws } of bound) {
+      try {
+        ws.close(1000, reason);
+      } catch {
+        // Already closed.
+      }
+    }
+    return bound.length;
+  }
+
   channelKeys(): ReadonlySet<string> {
     return new Set(this.#sockets().map(({ attachment }) => attachment.connectionKey));
   }

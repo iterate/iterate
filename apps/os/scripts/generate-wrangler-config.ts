@@ -182,6 +182,7 @@ const DO_CLASSES = {
   AGENT: "AgentDurableObject",
   AGENT_COLLECTION: "AgentCollectionDurableObject",
   CAPABILITY_HOST: "CapabilityHostDurableObject",
+  CLIENT_COLLECTION: "ClientCollectionDurableObject",
   DEVICE: "DeviceDurableObject",
   PROJECT: "ProjectDurableObject",
   REPO: "RepoDurableObject",
