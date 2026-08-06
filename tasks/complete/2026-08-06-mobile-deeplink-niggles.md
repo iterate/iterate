@@ -45,3 +45,7 @@ Implementation complete; all local checks green (typecheck, lint, knip, format; 
 ## Implementation notes
 
 (log kept while implementing)
+
+## Late addition
+
+- [x] Remove the floating build-timestamp overlay (bottom of every screen, `_layout.tsx`) — redundant now that Build info is reachable from everywhere via the drawer; `BUILD_TIMESTAMP` export dropped (build-info screen reads `buildInfo.builtAt` directly)
