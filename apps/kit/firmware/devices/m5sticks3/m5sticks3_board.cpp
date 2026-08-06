@@ -148,6 +148,40 @@ iterate_kit_conversation_visual_state face_status(void) {
   return status;
 }
 
+/*
+ * The twelve lights, hard against the left edge of the panel.
+ *
+ * Drawn straight to the display rather than into the face, because the face
+ * card is centred on a wider screen and anything inside it is part of the
+ * picture. Status belongs to the device, so it sits at the device's edge. The
+ * COLOURS still come from the one shared renderer — only the placement is a
+ * fact about this board.
+ */
+void draw_edge_lights(
+    const iterate_kit_conversation_visual_state &status, uint32_t sample_clock) {
+  constexpr int32_t WIDTH = 6;
+  constexpr int32_t MARGIN = 1;
+  iterate_kit_rgb8 lights[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+  iterate_kit_conversation_lights_for_screen(&status, sample_clock, lights);
+  const int32_t panel_h = M5.Display.height();
+  const int32_t pitch = panel_h / int{ITERATE_KIT_CONVERSATION_LIGHT_COUNT};
+  const int32_t dot = pitch > 2 ? pitch - 2 : 1;
+  const int32_t top =
+      (panel_h - pitch * int{ITERATE_KIT_CONVERSATION_LIGHT_COUNT} + pitch -
+       dot) /
+      2;
+  for (int32_t index = 0; index < int{ITERATE_KIT_CONVERSATION_LIGHT_COUNT};
+       ++index) {
+    const iterate_kit_rgb8 light = lights[index];
+    M5.Display.fillRect(
+        MARGIN,
+        top + index * pitch,
+        WIDTH,
+        dot,
+        M5.Display.color565(light.red, light.green, light.blue));
+  }
+}
+
 /* Draw one animated frame. Returns false if the face cannot be drawn at all,
  * which is the caller's cue to fall back to the text status screen. */
 bool face_draw(void) {
@@ -185,8 +219,13 @@ bool face_draw(void) {
   iterate_kit_conversation_overlay_render(
       &status,
       sample_clock,
-      /* No LEDs on this board, so the face carries them. */
-      ITERATE_KIT_OVERLAY_LIGHTS_RAIL,
+      /*
+       * The lights are drawn to the PANEL EDGE below, not into the face. The
+       * face card is centred, so a rail inside it landed forty pixels in —
+       * "just left of the face" rather than at the side of the screen, which
+       * reads as part of the picture instead of as the device's own status.
+       */
+      ITERATE_KIT_OVERLAY_LIGHTS_NONE,
       face.frame,
       static_cast<uint32_t>(int{FACE_RENDER_WIDTH}),
       static_cast<uint32_t>(int{FACE_RENDER_HEIGHT}));
@@ -207,6 +246,7 @@ bool face_draw(void) {
       int{FACE_RENDER_WIDTH},
       int{FACE_RENDER_HEIGHT},
       face.frame);
+  draw_edge_lights(status, sample_clock);
   M5.Display.endWrite();
   ++face.rendered;
   return true;

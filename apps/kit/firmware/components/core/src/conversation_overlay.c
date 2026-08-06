@@ -300,25 +300,11 @@ static void draw_rail(
   const uint32_t top = (height -
       pitch * (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT + pitch -
       dot_height) / 2U;
-  const uint8_t scale = iterate_kit_conversation_attention_scale(state, now_ms);
 
-  iterate_kit_conversation_lights_animate(state, now_ms, pixels);
+  iterate_kit_conversation_lights_for_screen(state, now_ms, pixels);
   for (uint32_t index = 0U;
        index < (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
        ++index) {
-    /*
-     * A DARK LIGHT IS STILL A LIGHT. The renderer leaves whole sectors black
-     * to mean "nothing here", and twelve positions with three of them lit is
-     * only readable if the unlit ones have a visible socket to be unlit in.
-     */
-    const struct iterate_kit_rgb8 light = pixels[index];
-    const bool lit = light.red != 0U || light.green != 0U || light.blue != 0U;
-    const struct iterate_kit_rgb8 shown = lit
-        ? (struct iterate_kit_rgb8){
-              scale_channel(light.red, scale),
-              scale_channel(light.green, scale),
-              scale_channel(light.blue, scale)}
-        : (struct iterate_kit_rgb8){20U, 20U, 24U};
     fill_rectangle(
         rgb565,
         width,
@@ -327,7 +313,34 @@ static void draw_rail(
         top + index * pitch,
         (uint32_t)RAIL_DOT_WIDTH,
         dot_height,
-        to_rgb565(shown));
+        to_rgb565(pixels[index]));
+  }
+}
+
+void iterate_kit_conversation_lights_for_screen(
+    const struct iterate_kit_conversation_visual_state *state,
+    uint32_t now_ms,
+    struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]) {
+  enum { SCREEN_GAIN_PERCENT = 260 };
+  iterate_kit_conversation_lights_animate(state, now_ms, pixels);
+  for (uint32_t index = 0U;
+       index < (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
+       ++index) {
+    struct iterate_kit_rgb8 *const light = &pixels[index];
+    if (light->red == 0U && light->green == 0U && light->blue == 0U) {
+      /* The socket: an unlit light must still hold its place. */
+      *light = (struct iterate_kit_rgb8){28U, 28U, 34U};
+      continue;
+    }
+    {
+      const uint32_t red = ((uint32_t)light->red * SCREEN_GAIN_PERCENT) / 100U;
+      const uint32_t green =
+          ((uint32_t)light->green * SCREEN_GAIN_PERCENT) / 100U;
+      const uint32_t blue = ((uint32_t)light->blue * SCREEN_GAIN_PERCENT) / 100U;
+      light->red = (uint8_t)(red > 255U ? 255U : red);
+      light->green = (uint8_t)(green > 255U ? 255U : green);
+      light->blue = (uint8_t)(blue > 255U ? 255U : blue);
+    }
   }
 }
 
@@ -349,22 +362,13 @@ static void draw_strip(
       height - (uint32_t)ITERATE_KIT_OVERLAY_STRIP_HEIGHT +
       ((uint32_t)ITERATE_KIT_OVERLAY_STRIP_HEIGHT - dot) / 2U;
 
-  iterate_kit_conversation_lights_animate(state, now_ms, pixels);
+  iterate_kit_conversation_lights_for_screen(state, now_ms, pixels);
   for (uint32_t index = 0U;
        index < (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
        ++index) {
-    /* Same socket rule as the rail: an unlit light still holds its place. */
-    const struct iterate_kit_rgb8 light = pixels[index];
-    const bool lit = light.red != 0U || light.green != 0U || light.blue != 0U;
     fill_rectangle(
-        rgb565,
-        width,
-        height,
-        left + index * pitch,
-        top,
-        dot,
-        dot,
-        to_rgb565(lit ? light : (struct iterate_kit_rgb8){20U, 20U, 24U}));
+        rgb565, width, height, left + index * pitch, top, dot, dot,
+        to_rgb565(pixels[index]));
   }
 }
 

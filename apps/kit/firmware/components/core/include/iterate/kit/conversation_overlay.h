@@ -145,6 +145,19 @@ enum iterate_kit_overlay_lights {
 };
 
 /**
+ * The twelve lights as a SCREEN should show them.
+ *
+ * `conversation_lights` is tuned for exposed WS2812s, where 30 of 255 is
+ * plainly lit. Behind glass, next to a backlit face, the same numbers read as
+ * muddy — so a screen brightens them and gives an unlit light a visible
+ * socket. The meaning is untouched: same sectors, same colours, same comet.
+ */
+void iterate_kit_conversation_lights_for_screen(
+    const struct iterate_kit_conversation_visual_state *state,
+    uint32_t now_ms,
+    struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]);
+
+/**
  * Draws the lights in the requested layout, and the banner when one is
  * needed, into an RGB565 frame.
  *

@@ -58,7 +58,6 @@ static struct {
   bool fault;
 } ui;
 
-static lv_obj_t *status_label;
 static lv_obj_t *face_canvas;
 static uint16_t *face_pixels;
 static uint16_t *face_frame;
@@ -169,14 +168,14 @@ static struct iterate_kit_conversation_visual_state face_status(void) {
   return status;
 }
 
-static void refresh_ui(void) {
-  char status[STATUS_CAPACITY];
-  xSemaphoreTake(ui.lock, portMAX_DELAY);
-  memcpy(status, ui.status, sizeof(status));
-  xSemaphoreGive(ui.lock);
-
-}
-
+/*
+ * NOTHING LEFT TO WRITE. The lights say connected or not, the banner says it
+ * in words when it matters, and the face says whether a conversation is
+ * happening. A status line under all three was a third copy of one fact —
+ * "connecting" appearing in three places at once, none of which a person read
+ * as more trustworthy than the others. Status strings still reach the console
+ * log, where somebody debugging actually reads them.
+ */
 static void refresh_face(void) {
   int32_t source_y;
   static struct iterate_kit_face_wake wake;
@@ -226,7 +225,6 @@ static void refresh_face(void) {
 
 static void refresh_timer(lv_timer_t *timer) {
   (void)timer;
-  refresh_ui();
   refresh_face();
 }
 
@@ -291,14 +289,14 @@ static void build_ui(void) {
     lv_canvas_set_buffer(
         face_canvas, face_pixels, FACE_WIDTH, FACE_HEIGHT,
         LV_COLOR_FORMAT_RGB565);
-    lv_obj_align(face_canvas, LV_ALIGN_TOP_MID, 0, 54);
+    /*
+     * Centred, now that nothing sits under it. The 54-pixel top offset was
+     * making room for two text labels that no longer exist — the lights and
+     * the banner say what they said, inside the card itself.
+     */
+    lv_obj_align(face_canvas, LV_ALIGN_CENTER, 0, 0);
   }
 
-  status_label = lv_label_create(screen);
-  lv_obj_set_width(status_label, DISPLAY_WIDTH - 40);
-  lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_color(status_label, lv_color_hex(0x8a8f98U), 0);
-  lv_obj_align(status_label, LV_ALIGN_BOTTOM_MID, 0, -30);
 }
 
 bool waveshare_display_init(void) {
@@ -334,7 +332,6 @@ bool waveshare_display_init(void) {
 
   if (!bsp_display_lock(0)) return false;
   build_ui();
-  refresh_ui();
   (void)lv_timer_create(refresh_timer, REFRESH_PERIOD_MS, NULL);
   bsp_display_unlock();
   ESP_LOGI(tag, "minimal Iterate UI ready");
