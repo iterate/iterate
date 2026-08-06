@@ -1,7 +1,7 @@
 import { StreamProcessor, type ReduceArgs, type StreamEvent } from "iterate/processors";
 import { AgentPath, foldAgentSummaryUpdated } from "./agent-presence.ts";
 import {
-  AGENT_COLLECTION_SUBSCRIPTION_KEY,
+  AGENT_COLLECTION_SUBSCRIPTION_NAME,
   AgentCollectionProcessorContract,
 } from "./agent-collection-processor-contract.ts";
 
@@ -131,9 +131,9 @@ function receivedAgentSource(event: Pick<StreamEvent, "type" | "source">): {
     console.error(`agent collection skipped ${event.type}: missing source-stream coordinates`);
     return null;
   }
-  if (source.subscriptionKey !== AGENT_COLLECTION_SUBSCRIPTION_KEY) {
+  if (source.name !== AGENT_COLLECTION_SUBSCRIPTION_NAME) {
     console.error(
-      `agent collection skipped ${event.type}: unexpected subscription "${source.subscriptionKey}"`,
+      `agent collection skipped ${event.type}: unexpected subscription "${source.name}"`,
     );
     return null;
   }

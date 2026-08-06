@@ -12,8 +12,7 @@
 // which sends every later config-repo event to `/`.
 
 import type { z } from "zod";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 
 /** Every creation mode targets this branch — commit and task facts, worker
@@ -48,21 +47,15 @@ export function repoCreationEvents(input: {
   projectId: string | null;
 }) {
   const { path, projectId } = input;
-  const durableObjectName = DurableObjectNameCodec.stringify(
-    { projectId, path },
-    { allowNullProjectId: true },
-  );
   return [
     RepoProcessorContract.buildEvent({
       type: "events.iterate.com/repos/create-requested",
       idempotencyKey: `repo-create-requested:${projectId}:${path}`,
       payload: input.payload ?? { type: "empty" },
     }),
-    buildHostedProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${RepoProcessorContract.slug}`,
-      processor: ["repos", ["get", path], "processor"],
-      processorSlug: RepoProcessorContract.slug,
+    buildFacetProcessorSubscriptionConfiguredEvent({
+      idempotencyKey: `stream/subscription-configured:${RepoProcessorContract.slug}`,
+      name: RepoProcessorContract.slug,
     }),
   ];
 }

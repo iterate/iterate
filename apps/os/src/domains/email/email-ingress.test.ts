@@ -8,9 +8,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../env.ts", () => ({
   itxEnv: {
-    PROJECT: {
+    STREAM: {
       getByName: () => ({
-        emailProcessor: {
+        // The email router is facet-hosted on its stream; ingress reads the
+        // allowlist through the stream's per-subscription processor facade.
+        processorFacade: async (_args: { name: string }) => ({
           snapshot: async () => ({
             offset: 0,
             state: {
@@ -18,7 +20,7 @@ vi.mock("../../env.ts", () => ({
               birthCertificate: mocks.birthCertificate,
             },
           }),
-        },
+        }),
       }),
     },
     PROJECT_DIRECTORY: {},

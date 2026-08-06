@@ -657,6 +657,11 @@ export class CapabilityHostProcessor extends StreamProcessor<
       return await invokeNormalizedCapability(provider, hit.rest, args);
     }
     if (this.deps.invokeLiveCapability === undefined) {
+      // Live mounts are Pager-bound: the durable record outlives the
+      // provider's Pager, and a call while it is away fails plainly. (A
+      // dedicated receiver-absent signal that PARKS a stream delivery
+      // instead of failing it is future work — see
+      // docs/stream-subscription-model-redesign.md.)
       throw new Error(`capability "${hit.record.path.join(".")}" is offline`);
     }
     return await this.deps.invokeLiveCapability(hit.record, hit.rest, args);

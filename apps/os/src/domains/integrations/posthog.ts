@@ -24,9 +24,9 @@ export function posthogSubscriptionEvent() {
     // Bump when the subscription payload changes so new stream births land
     // the revised config. Existing streams still rely on capture-side filtering
     // until they are recreated or reconfigured.
-    idempotencyKey: "iterate-platform-posthog-subscription-v3",
+    idempotencyKey: "iterate-platform-posthog-subscription-v4",
     payload: {
-      subscriptionKey: "iterate-platform-posthog",
+      name: "iterate-platform-posthog",
       description: "Iterate's first-party durable-event PostHog feed",
       receiver: {
         action: "itx-call",

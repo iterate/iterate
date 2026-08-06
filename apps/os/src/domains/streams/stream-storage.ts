@@ -283,20 +283,28 @@ export class StreamEventLog {
   }
 }
 
+/** Delivery status of one cursor row, mirrored level-triggered from reduced state. */
+export type SubscriptionCursorStatus = "active" | "halted";
+
 /**
- * One stored subscription's delivery cursor row. `acknowledgedOffset` is exclusive
- * (delivery resumes at +1). For copy, ITX-call, and webhook subscriptions
- * it is the authoritative cursor: it advances only when the awaited call resolves. For
- * hosted processors it is the checkpoint reported by the processor on its
- * hosted processor reported on the last successful wake, used only to decide
- * whether another wake is needed and to display lag — the processor's
- * own `{offset, state}` snapshot is the truth, and a lost or stale row costs one
- * redundant wake call, nothing
- * more.
+ * One stored subscription's delivery cursor row. The polymorphic single offset
+ * is gone: ONE column whose meaning never varies by receiver kind.
+ *
+ * `confirmedOffset` (exclusive): the far side durably claims through here —
+ * the awaited push acknowledgement (copy/itx/webhook), or the reported
+ * checkpoint for hosted processors.
+ *
+ * The one scheduling rule, for every kind: delivery RESUMES after
+ * `confirmedOffset`. Redelivery of anything sent-but-unconfirmed is the
+ * at-least-once contract; receivers dedupe by (streamId, offset).
  */
 export type SubscriptionCursorRow = {
-  subscriptionKey: string;
-  acknowledgedOffset: number;
+  /** The subscription's opaque per-stream name (the row's primary key). */
+  name: string;
+  /** Exclusive: the receiver durably claims through this offset. */
+  confirmedOffset: number;
+  /** `active` delivers; `halted` = delivery gave up after the retry ladder. */
+  status: SubscriptionCursorStatus;
   /** Offset of the source configuration this row belongs to. */
   configuredAtOffset: number;
   /** Consecutive delivery or hosted-processor wake failures since the last success. */
@@ -335,21 +343,24 @@ export type SubscriptionCursorRow = {
  * transaction boundary as the event log above.
  */
 export type SubscriptionCursorStore = {
-  get(subscriptionKey: string): SubscriptionCursorRow | undefined;
+  get(name: string): SubscriptionCursorRow | undefined;
   list(): SubscriptionCursorRow[];
   /**
    * Create the row, or move it to a newly appended source configuration at
-   * that configuration's declared initial cursor, resetting its counters.
+   * that configuration's declared initial cursor, resetting its counters
+   * (`confirmedOffset = initialOffset`, status `active`).
    */
-  ensure(subscriptionKey: string, acknowledgedOffset: number, configuredAtOffset: number): void;
+  ensure(name: string, initialOffset: number, configuredAtOffset: number): void;
   /**
-   * Successful delivery: advance the cursor (monotonic), clear failure state.
-   * When `cursorChangedAtOffset` is supplied, the acknowledgement is ignored
-   * unless the row still names that exact configuration or cursor-set event.
+   * Full push acknowledgement: the awaited receiver call resolved, so the far
+   * side durably has the batch. Advances `confirmedOffset` (monotonic) and
+   * clears failure state. When `cursorChangedAtOffset` is supplied, the
+   * acknowledgement is ignored unless the row still names that exact
+   * configuration or cursor-set event.
    */
   ack(
-    subscriptionKey: string,
-    acknowledgedOffset: number,
+    name: string,
+    offset: number,
     options?: {
       cursorChangedAtOffset?: number;
       preserveFailingEventSkips?: boolean;
@@ -360,37 +371,41 @@ export type SubscriptionCursorStore = {
    * durable consecutive-skip fuse. The configuration/cursor-set event offset
    * must still match, so replacement or seek wins over an in-flight failure.
    */
-  ackFailingEventSkipped(
-    subscriptionKey: string,
-    acknowledgedOffset: number,
-    cursorChangedAtOffset: number,
-  ): void;
+  ackFailingEventSkipped(name: string, offset: number, cursorChangedAtOffset: number): void;
   /**
-   * Record a hosted processor's reported checkpoint after a wake response
-   * whose checkpoint did NOT progress. Clears the retry schedule (the wake call
-   * consumed it; a live connection has no pending retry to arm) but KEEPS the
-   * failure streak — a successful wake proves the host is reachable, not
-   * that deliveries succeed, and resetting the counter here is what let a
-   * deterministically failing processor spin forever without ever halting.
+   * The receiver's durable claim through `offset`: a hosted processor's
+   * reported checkpoint. Advances `confirmedOffset` (monotonic) and always
+   * clears the retry schedule and watchdog — the report proves the receiver
+   * is reachable. The failure streak clears ONLY on confirmed progress: a
+   * reachable receiver whose deliveries keep failing must still exhaust the
+   * ladder instead of spinning forever.
    */
-  recordReportedCheckpoint(subscriptionKey: string, acknowledgedOffset: number): void;
+  confirm(name: string, offset: number, options?: { cursorChangedAtOffset?: number }): void;
   /** Persist one hosted batch's watchdog before invoking its remote callback. */
   markInFlight(
-    subscriptionKey: string,
+    name: string,
     args: {
       deadlineAt: number;
       connectionGeneration: number;
       cursorChangedAtOffset: number;
     },
   ): void;
-  /** Clear a successful hosted batch's watchdog and consecutive failure state. */
+  /**
+   * Clear a successful hosted batch's watchdog and consecutive failure state.
+   * The cursor is deliberately untouched: confirmation advances only on
+   * reported checkpoints, so an eviction redelivers anything unconfirmed
+   * (at-least-once).
+   */
   clearInFlight(
-    subscriptionKey: string,
-    args: { connectionGeneration: number; cursorChangedAtOffset: number },
+    name: string,
+    args: {
+      connectionGeneration: number;
+      cursorChangedAtOffset: number;
+    },
   ): void;
   /** Failed delivery: record the consecutive attempt count and when to retry. */
   nack(
-    subscriptionKey: string,
+    name: string,
     args: {
       attempt: number;
       nextAttemptAt: number;
@@ -399,52 +414,89 @@ export type SubscriptionCursorStore = {
     },
   ): void;
   /** Apply an explicit cursor-set event and clear delivery failure state. */
-  setCursor(
-    subscriptionKey: string,
-    acknowledgedOffset: number,
-    cursorSetEventOffset: number,
-  ): void;
-  delete(subscriptionKey: string): void;
+  setCursor(name: string, offset: number, cursorSetEventOffset: number): void;
+  /** Mirror the reduced-state delivery status (active/halted) onto the row. */
+  setStatus(name: string, status: SubscriptionCursorStatus): void;
+  delete(name: string): void;
 };
 
 /** SQLite-backed {@link SubscriptionCursorStore}, sharing the stream's own database. */
 export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   static db = defineConfig({
     // The desired schema now (`sqlfu draft` diffs new migrations against it).
+    // v2 (subscription-model redesign, CORE_STATE_VERSION 30): `name` primary
+    // key, ONE `confirmed_offset` cursor, and the mirrored delivery status.
+    // FRESH schema — the redesign ships as a clean break with no data
+    // migration (deploy-time storage reset).
     definitions: sql`
       create table subscription_cursors (
-        subscription_key text primary key,
-        acknowledged_offset integer not null,
+        name text primary key,
+        configured_at_offset integer not null,
+        cursor_changed_at_offset integer not null,
+        confirmed_offset integer not null,
+        status text not null default 'active',
         attempt integer not null default 0,
         next_attempt_at integer,
-        in_flight_deadline_at integer,
-        in_flight_connection_generation integer,
-        last_error text,
         failing_event_offset integer,
         failing_event_attempt integer not null default 0,
         failing_event_skips_since_last_success integer not null default 0,
-        cursor_changed_at_offset integer not null,
-        configured_at_offset integer not null,
+        last_error text,
+        in_flight_deadline_at integer,
+        in_flight_connection_generation integer,
         updated_at text not null
       );
     `,
     migrations: [
       {
-        name: "20260721000001_create_subscription_cursors",
+        // Byte-identical to the text preview/dev Stream DOs already applied —
+        // sqlfu checksums applied migrations, so this entry may never change.
+        // The diet's shape changes land in _v3 below (drop + recreate), which
+        // is correct from ANY prior state; prd is erased at deploy regardless.
+        name: "20260803000001_create_subscription_cursors_v2",
         content: sql`
           create table subscription_cursors (
-            subscription_key text primary key,
-            acknowledged_offset integer not null,
+            name text primary key,
+            configured_at_offset integer not null,
+            cursor_changed_at_offset integer not null,
+            delivered_offset integer not null,
+            confirmed_offset integer not null,
+            state text not null default 'active',
             attempt integer not null default 0,
             next_attempt_at integer,
-            in_flight_deadline_at integer,
-            in_flight_connection_generation integer,
-            last_error text,
             failing_event_offset integer,
             failing_event_attempt integer not null default 0,
             failing_event_skips_since_last_success integer not null default 0,
-            cursor_changed_at_offset integer not null,
+            last_error text,
+            in_flight_deadline_at integer,
+            in_flight_connection_generation integer,
+            updated_at text not null
+          );
+        `,
+      },
+      {
+        // The diet's final shape: one confirmed cursor, status vocabulary.
+        // Drop + recreate rather than alter: cursor rows are resumable
+        // bookkeeping (processor checkpoints are authoritative; source-owned
+        // kinds redeliver from their configured start), so rebuilding from
+        // empty on already-deployed preview/dev streams is safe and keeps
+        // this migration valid from any prior state.
+        name: "20260806000001_create_subscription_cursors_v3",
+        content: sql`
+          drop table if exists subscription_cursors;
+          create table subscription_cursors (
+            name text primary key,
             configured_at_offset integer not null,
+            cursor_changed_at_offset integer not null,
+            confirmed_offset integer not null,
+            status text not null default 'active',
+            attempt integer not null default 0,
+            next_attempt_at integer,
+            failing_event_offset integer,
+            failing_event_attempt integer not null default 0,
+            failing_event_skips_since_last_success integer not null default 0,
+            last_error text,
+            in_flight_deadline_at integer,
+            in_flight_connection_generation integer,
             updated_at text not null
           );
         `,
@@ -452,19 +504,19 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     ],
     queries: {
       get: sql.nullableOne<{
-        parameters: { subscriptionKey: string };
+        parameters: { name: string };
         result: SubscriptionCursorRowRecord;
       }>`
-        select subscription_key, acknowledged_offset, configured_at_offset,
+        select name, confirmed_offset, status, configured_at_offset,
                attempt, next_attempt_at, in_flight_deadline_at,
                in_flight_connection_generation, last_error,
                failing_event_offset, failing_event_attempt,
                failing_event_skips_since_last_success, cursor_changed_at_offset
         from subscription_cursors
-        where subscription_key = :subscriptionKey
+        where name = :name
       `,
       list: sql.many<{ result: SubscriptionCursorRowRecord }>`
-        select subscription_key, acknowledged_offset, configured_at_offset,
+        select name, confirmed_offset, status, configured_at_offset,
                attempt, next_attempt_at, in_flight_deadline_at,
                in_flight_connection_generation, last_error,
                failing_event_offset, failing_event_attempt,
@@ -473,22 +525,23 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       `,
       ensure: sql.run<{
         parameters: {
-          subscriptionKey: string;
-          acknowledgedOffset: number;
+          name: string;
+          initialOffset: number;
           configuredAtOffset: number;
           cursorChangedAtOffset: number;
           updatedAt: string;
         };
       }>`
         insert into subscription_cursors (
-          subscription_key, acknowledged_offset, configured_at_offset,
+          name, confirmed_offset, configured_at_offset,
           cursor_changed_at_offset, updated_at
         ) values (
-          :subscriptionKey, :acknowledgedOffset, :configuredAtOffset,
+          :name, :initialOffset, :configuredAtOffset,
           :cursorChangedAtOffset, :updatedAt
         )
-        on conflict (subscription_key) do update set
-          acknowledged_offset = excluded.acknowledged_offset,
+        on conflict (name) do update set
+          confirmed_offset = excluded.confirmed_offset,
+          status = 'active',
           configured_at_offset = excluded.configured_at_offset,
           attempt = 0,
           next_attempt_at = null,
@@ -504,14 +557,14 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       `,
       ack: sql.run<{
         parameters: {
-          subscriptionKey: string;
-          acknowledgedOffset: number;
+          name: string;
+          offset: number;
           preserveFailingEventSkips: number;
           updatedAt: string;
         };
       }>`
         update subscription_cursors
-        set acknowledged_offset = max(acknowledged_offset, :acknowledgedOffset),
+        set confirmed_offset = max(confirmed_offset, :offset),
             attempt = 0, next_attempt_at = null, in_flight_deadline_at = null,
             in_flight_connection_generation = null,
             last_error = null,
@@ -519,19 +572,19 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
             failing_event_skips_since_last_success = case
               when :preserveFailingEventSkips = 1 then failing_event_skips_since_last_success else 0 end,
             updated_at = :updatedAt
-        where subscription_key = :subscriptionKey
+        where name = :name
       `,
       ackIfCursorUnchanged: sql.run<{
         parameters: {
-          subscriptionKey: string;
-          acknowledgedOffset: number;
+          name: string;
+          offset: number;
           preserveFailingEventSkips: number;
           cursorChangedAtOffset: number;
           updatedAt: string;
         };
       }>`
         update subscription_cursors
-        set acknowledged_offset = max(acknowledged_offset, :acknowledgedOffset),
+        set confirmed_offset = max(confirmed_offset, :offset),
             attempt = 0, next_attempt_at = null, in_flight_deadline_at = null,
             in_flight_connection_generation = null,
             last_error = null,
@@ -539,40 +592,74 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
             failing_event_skips_since_last_success = case
               when :preserveFailingEventSkips = 1 then failing_event_skips_since_last_success else 0 end,
             updated_at = :updatedAt
-        where subscription_key = :subscriptionKey
+        where name = :name
           and cursor_changed_at_offset = :cursorChangedAtOffset
       `,
       ackFailingEventSkipped: sql.run<{
         parameters: {
-          subscriptionKey: string;
-          acknowledgedOffset: number;
+          name: string;
+          offset: number;
           cursorChangedAtOffset: number;
           updatedAt: string;
         };
       }>`
         update subscription_cursors
-        set acknowledged_offset = max(acknowledged_offset, :acknowledgedOffset),
+        set confirmed_offset = max(confirmed_offset, :offset),
             attempt = 0, next_attempt_at = null, in_flight_deadline_at = null,
             in_flight_connection_generation = null,
             last_error = null,
             failing_event_offset = null, failing_event_attempt = 0,
             failing_event_skips_since_last_success = failing_event_skips_since_last_success + 1,
             updated_at = :updatedAt
-        where subscription_key = :subscriptionKey
+        where name = :name
           and cursor_changed_at_offset = :cursorChangedAtOffset
       `,
-      recordReportedCheckpoint: sql.run<{
-        parameters: { subscriptionKey: string; acknowledgedOffset: number; updatedAt: string };
+      // Every column reference on the right-hand side reads the PRE-update
+      // row, so the progress comparisons and the monotonic max are all
+      // against the same consistent snapshot.
+      confirm: sql.run<{
+        parameters: { name: string; offset: number; updatedAt: string };
       }>`
         update subscription_cursors
-        set acknowledged_offset = max(acknowledged_offset, :acknowledgedOffset), next_attempt_at = null,
-            in_flight_deadline_at = null, in_flight_connection_generation = null,
+        set attempt = case when :offset > confirmed_offset then 0 else attempt end,
+            last_error = case when :offset > confirmed_offset then null else last_error end,
+            failing_event_offset = case when :offset > confirmed_offset then null else failing_event_offset end,
+            failing_event_attempt = case when :offset > confirmed_offset then 0 else failing_event_attempt end,
+            failing_event_skips_since_last_success = case
+              when :offset > confirmed_offset then 0 else failing_event_skips_since_last_success end,
+            next_attempt_at = null,
+            in_flight_deadline_at = null,
+            in_flight_connection_generation = null,
+            confirmed_offset = max(confirmed_offset, :offset),
             updated_at = :updatedAt
-        where subscription_key = :subscriptionKey
+        where name = :name
+      `,
+      confirmIfCursorUnchanged: sql.run<{
+        parameters: {
+          name: string;
+          offset: number;
+          cursorChangedAtOffset: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscription_cursors
+        set attempt = case when :offset > confirmed_offset then 0 else attempt end,
+            last_error = case when :offset > confirmed_offset then null else last_error end,
+            failing_event_offset = case when :offset > confirmed_offset then null else failing_event_offset end,
+            failing_event_attempt = case when :offset > confirmed_offset then 0 else failing_event_attempt end,
+            failing_event_skips_since_last_success = case
+              when :offset > confirmed_offset then 0 else failing_event_skips_since_last_success end,
+            next_attempt_at = null,
+            in_flight_deadline_at = null,
+            in_flight_connection_generation = null,
+            confirmed_offset = max(confirmed_offset, :offset),
+            updated_at = :updatedAt
+        where name = :name
+          and cursor_changed_at_offset = :cursorChangedAtOffset
       `,
       markInFlight: sql.run<{
         parameters: {
-          subscriptionKey: string;
+          name: string;
           deadlineAt: number;
           connectionGeneration: number;
           cursorChangedAtOffset: number;
@@ -583,12 +670,12 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         set in_flight_deadline_at = :deadlineAt,
             in_flight_connection_generation = :connectionGeneration,
             updated_at = :updatedAt
-        where subscription_key = :subscriptionKey
+        where name = :name
           and cursor_changed_at_offset = :cursorChangedAtOffset
       `,
       clearInFlight: sql.run<{
         parameters: {
-          subscriptionKey: string;
+          name: string;
           connectionGeneration: number;
           cursorChangedAtOffset: number;
           updatedAt: string;
@@ -600,13 +687,13 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
             failing_event_offset = null, failing_event_attempt = 0,
             failing_event_skips_since_last_success = 0,
             updated_at = :updatedAt
-        where subscription_key = :subscriptionKey
+        where name = :name
           and cursor_changed_at_offset = :cursorChangedAtOffset
           and in_flight_connection_generation = :connectionGeneration
       `,
       nack: sql.run<{
         parameters: {
-          subscriptionKey: string;
+          name: string;
           attempt: number;
           nextAttemptAt: number;
           error: string;
@@ -621,26 +708,34 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
             in_flight_connection_generation = null,
             failing_event_offset = :failingEventOffset, failing_event_attempt = :failingEventAttempt,
             updated_at = :updatedAt
-        where subscription_key = :subscriptionKey
+        where name = :name
       `,
       setCursor: sql.run<{
         parameters: {
-          subscriptionKey: string;
-          acknowledgedOffset: number;
+          name: string;
+          offset: number;
           cursorChangedAtOffset: number;
           updatedAt: string;
         };
       }>`
         update subscription_cursors
-        set acknowledged_offset = :acknowledgedOffset, attempt = 0, next_attempt_at = null, last_error = null,
+        set confirmed_offset = :offset,
+            attempt = 0, next_attempt_at = null, last_error = null,
             in_flight_deadline_at = null,
             in_flight_connection_generation = null,
             failing_event_offset = null, failing_event_attempt = 0, failing_event_skips_since_last_success = 0,
             cursor_changed_at_offset = :cursorChangedAtOffset, updated_at = :updatedAt
-        where subscription_key = :subscriptionKey
+        where name = :name
       `,
-      delete: sql.run<{ parameters: { subscriptionKey: string } }>`
-        delete from subscription_cursors where subscription_key = :subscriptionKey
+      setStatus: sql.run<{
+        parameters: { name: string; status: string; updatedAt: string };
+      }>`
+        update subscription_cursors
+        set status = :status, updated_at = :updatedAt
+        where name = :name
+      `,
+      delete: sql.run<{ parameters: { name: string } }>`
+        delete from subscription_cursors where name = :name
       `,
     },
   });
@@ -661,8 +756,8 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     this.#db.migrate();
   }
 
-  get(subscriptionKey: string): SubscriptionCursorRow | undefined {
-    const record = this.#db.get({ subscriptionKey });
+  get(name: string): SubscriptionCursorRow | undefined {
+    const record = this.#db.get({ name });
     return record ? rowFromRecord(record) : undefined;
   }
 
@@ -670,13 +765,13 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     return this.#db.list().map(rowFromRecord);
   }
 
-  ensure(subscriptionKey: string, acknowledgedOffset: number, configuredAtOffset: number): void {
+  ensure(name: string, initialOffset: number, configuredAtOffset: number): void {
     this.#db.ensure({
-      subscriptionKey,
-      acknowledgedOffset,
+      name,
+      initialOffset,
       configuredAtOffset,
       // The immutable configuration event offset also distinguishes a
-      // remove+recreate using the same key.
+      // remove+recreate using the same name.
       cursorChangedAtOffset: configuredAtOffset,
       updatedAt: new Date().toISOString(),
     });
@@ -684,16 +779,16 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   }
 
   ack(
-    subscriptionKey: string,
-    acknowledgedOffset: number,
+    name: string,
+    offset: number,
     options: {
       cursorChangedAtOffset?: number;
       preserveFailingEventSkips?: boolean;
     } = {},
   ): void {
     const params = {
-      subscriptionKey,
-      acknowledgedOffset,
+      name,
+      offset,
       preserveFailingEventSkips: options.preserveFailingEventSkips === true ? 1 : 0,
       updatedAt: new Date().toISOString(),
     };
@@ -708,31 +803,31 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     this.#onMutation();
   }
 
-  ackFailingEventSkipped(
-    subscriptionKey: string,
-    acknowledgedOffset: number,
-    cursorChangedAtOffset: number,
-  ): void {
+  ackFailingEventSkipped(name: string, offset: number, cursorChangedAtOffset: number): void {
     this.#db.ackFailingEventSkipped({
-      subscriptionKey,
-      acknowledgedOffset,
+      name,
+      offset,
       cursorChangedAtOffset,
       updatedAt: new Date().toISOString(),
     });
     this.#onMutation();
   }
 
-  recordReportedCheckpoint(subscriptionKey: string, acknowledgedOffset: number): void {
-    this.#db.recordReportedCheckpoint({
-      subscriptionKey,
-      acknowledgedOffset,
-      updatedAt: new Date().toISOString(),
-    });
+  confirm(name: string, offset: number, options: { cursorChangedAtOffset?: number } = {}): void {
+    const params = { name, offset, updatedAt: new Date().toISOString() };
+    if (options.cursorChangedAtOffset === undefined) {
+      this.#db.confirm(params);
+    } else {
+      this.#db.confirmIfCursorUnchanged({
+        ...params,
+        cursorChangedAtOffset: options.cursorChangedAtOffset,
+      });
+    }
     this.#onMutation();
   }
 
   markInFlight(
-    subscriptionKey: string,
+    name: string,
     args: {
       deadlineAt: number;
       connectionGeneration: number;
@@ -740,7 +835,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     },
   ): void {
     this.#db.markInFlight({
-      subscriptionKey,
+      name,
       ...args,
       updatedAt: new Date().toISOString(),
     });
@@ -748,11 +843,14 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   }
 
   clearInFlight(
-    subscriptionKey: string,
-    args: { connectionGeneration: number; cursorChangedAtOffset: number },
+    name: string,
+    args: {
+      connectionGeneration: number;
+      cursorChangedAtOffset: number;
+    },
   ): void {
     this.#db.clearInFlight({
-      subscriptionKey,
+      name,
       ...args,
       updatedAt: new Date().toISOString(),
     });
@@ -760,7 +858,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   }
 
   nack(
-    subscriptionKey: string,
+    name: string,
     args: {
       attempt: number;
       nextAttemptAt: number;
@@ -769,7 +867,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     },
   ): void {
     this.#db.nack({
-      subscriptionKey,
+      name,
       attempt: args.attempt,
       nextAttemptAt: args.nextAttemptAt,
       // Bound the stored error so a pathological message cannot bloat the row.
@@ -781,22 +879,23 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     this.#onMutation();
   }
 
-  setCursor(
-    subscriptionKey: string,
-    acknowledgedOffset: number,
-    cursorSetEventOffset: number,
-  ): void {
+  setCursor(name: string, offset: number, cursorSetEventOffset: number): void {
     this.#db.setCursor({
-      subscriptionKey,
-      acknowledgedOffset,
+      name,
+      offset,
       cursorChangedAtOffset: cursorSetEventOffset,
       updatedAt: new Date().toISOString(),
     });
     this.#onMutation();
   }
 
-  delete(subscriptionKey: string): void {
-    this.#db.delete({ subscriptionKey });
+  setStatus(name: string, status: SubscriptionCursorStatus): void {
+    this.#db.setStatus({ name, status, updatedAt: new Date().toISOString() });
+    this.#onMutation();
+  }
+
+  delete(name: string): void {
+    this.#db.delete({ name });
     this.#onMutation();
   }
 }
@@ -807,20 +906,20 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
  * so after a rebuild they can describe a world the new fold no longer
  * derives: a row whose config event no longer parses is orphaned (its
  * `next_attempt_at` would arm alarms forever), and a surviving row's backoff
- * may blame code the new version replaced. Progress is kept — `acknowledgedOffset`
- * is monotonic truth about the same immutable log — while failure state is
- * cleared so every survivor gets an immediate fresh try under the new fold.
- * Delivery-halted subscriptions keep their failure evidence in the durable
- * halt event, so their mutable cursor rows can be cleaned in the same way as
- * active subscriptions.
+ * may blame code the new version replaced. Progress is kept — the confirmed
+ * offset is monotonic truth about the same immutable log — while failure
+ * state is cleared so every survivor gets an immediate fresh try under the
+ * new fold. Delivery-halted subscriptions keep their failure evidence in the
+ * durable halt event, so their mutable cursor rows can be cleaned in the same
+ * way as active subscriptions.
  */
 export function clearSubscriptionCursorFailuresAfterStateRebuild(
   store: SubscriptionCursorStore,
-  configuredSubscriptionKeys: ReadonlySet<string>,
+  configuredSubscriptionNames: ReadonlySet<string>,
 ): void {
   for (const row of store.list()) {
     if (
-      configuredSubscriptionKeys.has(row.subscriptionKey) &&
+      configuredSubscriptionNames.has(row.name) &&
       (row.attempt !== 0 ||
         row.nextAttemptAt !== null ||
         row.inFlightDeadlineAt !== null ||
@@ -829,8 +928,10 @@ export function clearSubscriptionCursorFailuresAfterStateRebuild(
         row.failingEventAttempt !== 0 ||
         row.failingEventSkipsSinceLastSuccess !== 0)
     ) {
-      // ack at the row's own offset: keeps the cursor, clears attempt/backoff.
-      store.ack(row.subscriptionKey, row.acknowledgedOffset);
+      // Acknowledge at the row's own confirmed position: keeps the cursor,
+      // clears attempt/backoff without inventing a confirmation the receiver
+      // never made (the monotonic max makes an equal-offset ack a no-move).
+      store.ack(row.name, row.confirmedOffset);
     }
   }
 }
@@ -842,16 +943,17 @@ export function clearSubscriptionCursorFailuresAfterStateRebuild(
  */
 export function pruneOrphanedSubscriptionCursorRows(
   store: SubscriptionCursorStore,
-  configuredSubscriptionKeys: ReadonlySet<string>,
+  configuredSubscriptionNames: ReadonlySet<string>,
 ): void {
   for (const row of store.list()) {
-    if (!configuredSubscriptionKeys.has(row.subscriptionKey)) store.delete(row.subscriptionKey);
+    if (!configuredSubscriptionNames.has(row.name)) store.delete(row.name);
   }
 }
 
 type SubscriptionCursorRowRecord = {
-  subscription_key: string;
-  acknowledged_offset: number;
+  name: string;
+  confirmed_offset: number;
+  status: string;
   configured_at_offset: number;
   attempt: number;
   next_attempt_at: number | null;
@@ -866,8 +968,12 @@ type SubscriptionCursorRowRecord = {
 
 function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorRow {
   return {
-    subscriptionKey: record.subscription_key,
-    acknowledgedOffset: record.acknowledged_offset,
+    name: record.name,
+    confirmedOffset: record.confirmed_offset,
+    // Safe: the TEXT column is written exclusively by this store from typed
+    // SubscriptionCursorRow values, so it only ever holds
+    // SubscriptionCursorStatus members; SQLite just can't express the union.
+    status: record.status as SubscriptionCursorStatus,
     configuredAtOffset: record.configured_at_offset,
     attempt: record.attempt,
     nextAttemptAt: record.next_attempt_at,

@@ -146,7 +146,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
             type: "events.iterate.com/stream/subscription-removed",
             idempotencyKey: this.idempotencyKey("notification-intent-subscription-removed", event),
             payload: {
-              subscriptionKey: `notification-intent:${this.path}`,
+              name: `notification-intent:${this.path}`,
               reason: "requested",
             },
           }),
@@ -841,7 +841,7 @@ function notificationIntentSubscriptionEvent(input: { idempotencyKey: string; pa
     type: "events.iterate.com/stream/subscription-configured" as const,
     idempotencyKey: input.idempotencyKey,
     payload: {
-      subscriptionKey: `notification-intent:${input.path}`,
+      name: `notification-intent:${input.path}`,
       description: `Delivers project notification intents to ${input.path} for device-owned delivery.`,
       filter: {
         eventTypes: [

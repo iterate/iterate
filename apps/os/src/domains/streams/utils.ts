@@ -1,54 +1,62 @@
-import type { ItxExpression } from "../../itx/expression.ts";
-import { CoreProcessorContract } from "./core-processor-contract.ts";
+import {
+  CoreProcessorContract,
+  type SubscriptionConfiguredPayload,
+} from "./core-processor-contract.ts";
 
 export { resolveStreamPath } from "iterate/processors";
 
+// The `${durableObjectName}#${slug}` subscription-key convention builder died
+// with the subscription-model redesign
+// (docs/stream-subscription-model-redesign.md): names are opaque, and the
+// subscription NAME alone selects which registered contract a hosted
+// processor subscription runs — nothing else is encoded anywhere.
+
 /**
  * Builds the public `events.iterate.com/stream/subscription-configured` event
- * for a processor hosted by one of this app's Durable Objects.
+ * for a first-party processor hosted as a FACET of the stream's own Durable
+ * Object (docs/stream-subscription-model-redesign.md +
+ * tasks/stream-processors-as-facets.md).
  *
- * `processor` is the itx expression naming the host's processor NODE on the
- * ordinary domain surface — `["agents", ["get", path], "processor"]`,
- * `["repos", ["get", path], "processor"]`, the project root's own
- * `["processor"]`, `["email", "processor"]`, … — and the built delivery
- * appends the method name (`"wakeStreamProcessor"`) to it. Each call site
- * states its own domain address; this helper only owns the shared payload
- * shape. The event itself remains the public interface: callers may append it
- * directly.
+ * `name` is the contract slug — the stream's catalog key, the facet name, and
+ * the wake route are all this exact string (one identity; a name matching no
+ * registered processor fails loudly at wake). Names never carry a hostname or
+ * Durable Object name — placement must not leak into identity.
  *
- * Note what the expression does NOT carry: a projectId. Persisted config is a
- * NAME; the delivering stream re-derives authority from its own itx root at
- * call time, so the host is always resolved in the stream's own project (or
- * the deployment-global scope for `projectId: null` streams) — persisted
- * config cannot smuggle cross-project reach, structurally.
- *
- * The default `subscriptionKey` is `${durableObjectName}#${processorSlug}` and
- * should be treated as opaque. Birth-batch call sites pass a stable
- * `idempotencyKey`, so an ambiguous create retry reuses the same configuration
- * event. Omit it only when a caller deliberately wants every reconfiguration
- * attempt to remain visible as a new event.
+ * Birth-batch call sites pass a stable `idempotencyKey`, so an ambiguous
+ * create retry reuses the same configuration event. Facet placement is
+ * PLATFORM-INTERNAL: the stream's core processor rejects it on the public
+ * append lane (core-processor.ts validate), so this event only commits
+ * through a platform (core-event) append — the trusted creation doors'
+ * platform lane, the facet composition's processor stream, or the Durable
+ * Object's own core-event verbs.
  */
-export function buildHostedProcessorSubscriptionConfiguredEvent(input: {
-  durableObjectName: string;
+export function buildFacetProcessorSubscriptionConfiguredEvent(input: {
   idempotencyKey?: string;
-  /** Itx expression to the host's processor node (the wake door is appended). */
-  processor: ItxExpression;
-  processorSlug: string;
-  subscriptionKey?: string;
+  /** The subscription name == the registered contract slug. */
+  name: string;
 }) {
   return CoreProcessorContract.buildEvent({
     type: "events.iterate.com/stream/subscription-configured",
     ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
     payload: {
-      subscriptionKey: input.subscriptionKey ?? `${input.durableObjectName}#${input.processorSlug}`,
+      name: input.name,
       receiver: {
         action: "processor-wake",
-        expression: [...input.processor, "wakeStreamProcessor"],
-        // processorSlug rides the delivery explicitly; the wake request
-        // carries it so multi-processor hosts resolve without parsing
-        // anything out of the opaque subscription key.
-        processorSlug: input.processorSlug,
+        placement: "facet",
       },
-    },
+    } satisfies SubscriptionConfiguredPayload,
   });
+}
+
+/**
+ * The Stream DO's processor doors refuse a name the committed catalog does not
+ * configure — a read must never MATERIALIZE a facet (`ctx.facets.get` creates
+ * one on first dial). Domain doors that read a fold BEFORE its birth batch
+ * commits (a secret's create-time offset probe, a device's pre-enrollment
+ * read, an unborn project's catalog) use this to substitute the unborn shape
+ * the facade used to fabricate. Matched on the message because this crosses a
+ * Workers RPC hop, which does not carry error classes.
+ */
+export function isUnconfiguredSubscriptionError(error: unknown): boolean {
+  return error instanceof Error && /^subscription ".*" does not exist$/.test(error.message);
 }

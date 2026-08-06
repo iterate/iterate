@@ -202,12 +202,18 @@ export async function capture(options: CaptureOptions) {
       (path) => path !== "/secrets/project-api-key" && !path.startsWith("/secrets/integrations/"),
     )
     .sort();
-  const secrets = await Promise.all(
-    genericSecretPaths.map(async (path) => ({
-      path,
-      ...(await captureSecret(project, identity.projectId, path)),
-    })),
-  );
+  const secrets = (
+    await Promise.all(
+      genericSecretPaths.map(async (path) => {
+        // A generic secret path can exist without material — e.g. a device
+        // push-token cell provisioned before its first value ever arrives.
+        // There is nothing to back up, so omit it rather than failing the
+        // whole capture on `exportForProjectSeed`'s no-material guard.
+        if (!(await project.secrets.get(path).__describe()).hasMaterial) return null;
+        return { path, ...(await captureSecret(project, identity.projectId, path)) };
+      }),
+    )
+  ).filter((entry): entry is NonNullable<typeof entry> => entry !== null);
   const integrations = await Promise.all(
     connected.map(async (entry): Promise<SeedIntegration> => {
       const externalId = entry.status.externalId?.trim();

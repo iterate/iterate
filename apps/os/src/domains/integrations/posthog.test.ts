@@ -10,7 +10,7 @@ import {
 } from "./posthog.ts";
 
 const POSTHOG_STREAM_APPEND_EVENT = "stream:append";
-const POSTHOG_SUBSCRIPTION_KEY = "iterate-platform-posthog";
+const POSTHOG_SUBSCRIPTION_NAME = "iterate-platform-posthog";
 const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
 
 function streamEvent(overrides: Partial<StreamEvent> = {}): StreamEvent {
@@ -34,7 +34,7 @@ function streamEvent(overrides: Partial<StreamEvent> = {}): StreamEvent {
       },
       copiedFrom: [
         {
-          subscriptionKey: "mirror",
+          name: "mirror",
           streamId: "11111111-1111-4111-8111-111111111111",
           streamCreatedAt: "2026-07-16T09:00:00.000Z",
           cursorChangedAtSourceOffset: 1,
@@ -59,9 +59,9 @@ function batch(events: StreamEvent[]): StreamDeliveryBatch {
     streamCreatedAt: "2026-07-16T09:00:00.000Z",
     events,
     streamMaxOffset: 99,
-    subscriptionKey: POSTHOG_SUBSCRIPTION_KEY,
+    name: POSTHOG_SUBSCRIPTION_NAME,
     cursorChangedAtSourceOffset: 4,
-    deliveryId: `${POSTHOG_SUBSCRIPTION_KEY}:7-8`,
+    deliveryId: `${POSTHOG_SUBSCRIPTION_NAME}:7-8`,
     attempt: 2,
     configuredEvent: {
       type: "events.iterate.com/stream/subscription-configured",
@@ -99,9 +99,9 @@ describe("first-party PostHog stream integration", () => {
     const event = posthogSubscriptionEvent();
     expect(event).toEqual({
       type: "events.iterate.com/stream/subscription-configured",
-      idempotencyKey: "iterate-platform-posthog-subscription-v3",
+      idempotencyKey: "iterate-platform-posthog-subscription-v4",
       payload: {
-        subscriptionKey: POSTHOG_SUBSCRIPTION_KEY,
+        name: POSTHOG_SUBSCRIPTION_NAME,
         description: "Iterate's first-party durable-event PostHog feed",
         receiver: {
           action: "itx-call",

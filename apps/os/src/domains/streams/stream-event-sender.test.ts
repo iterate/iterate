@@ -77,13 +77,12 @@ function hostedConfig(
   filter?: SubscriptionConfiguredPayload["filter"],
 ): SubscriptionConfiguredPayload {
   return {
-    subscriptionKey: PROCESSOR_KEY,
+    name: PROCESSOR_KEY,
     description: "Focused hosted processor test",
     ...(filter === undefined ? {} : { filter }),
     receiver: {
       action: "processor-wake",
       expression: ["agents", ["get", "/source"], "processor", "wakeStreamProcessor"],
-      processorSlug: "test-processor",
     },
   };
 }
@@ -112,9 +111,9 @@ function harness(args: {
     maxOffset: Math.max(1, ...args.events.map((entry) => entry.offset)),
     subscriptions: {
       outbound: {
-        byKey: {
+        byName: {
           [PROCESSOR_KEY]: {
-            configuration: { ...configuration, subscriptionKey: PROCESSOR_KEY },
+            configuration: { ...configuration, name: PROCESSOR_KEY },
             configuredAtOffset: 1,
             configuredAt: new Date(1).toISOString(),
           },
@@ -139,7 +138,6 @@ function harness(args: {
     deliverToWebhook: args.deliverToWebhook ?? (async () => undefined),
   };
   const eventSender = new StreamEventSender({
-    idleTeardownMs: 60_000,
     hooks: {
       readEvents: ({ afterOffset, beforeOffset, limit }) =>
         args.events
@@ -223,9 +221,9 @@ describe("StreamEventSender hosted processor delivery", () => {
         throw new Error("a copy must not wake a hosted processor");
       },
     });
-    h.state.subscriptions.outbound.byKey[PROCESSOR_KEY] = {
+    h.state.subscriptions.outbound.byName[PROCESSOR_KEY] = {
       configuration: {
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: "/receiver",
@@ -252,7 +250,7 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(h.eventSender.sendDue()).toBe(false);
     expect(h.alarms).toContain(11_000);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 0,
+      confirmedOffset: 0,
       cursorChangedAtOffset: 1,
       attempt: 3,
     });
@@ -260,7 +258,7 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(h.eventSender.sendDue()).toBe(true);
 
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 2,
+      confirmedOffset: 2,
       cursorChangedAtOffset: 4,
       attempt: 0,
       nextAttemptAt: null,
@@ -312,11 +310,15 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(delivered[0]).toMatchObject({ scannedAfterOffset: 1, scannedThroughOffset: 5 });
   });
 
-  it("reopens from a lower processor checkpoint and retries from an alarm on a quiet stream", async () => {
+  it("reopens from a lower processor checkpoint on new work and retries on a quiet alarm", async () => {
     const attemptedOffsets: number[][] = [];
     let wakeNumber = 0;
     const h = harness({
-      events: [event(2, "b", { keep: true }), event(3, "b", { keep: true })],
+      events: [
+        event(2, "b", { keep: true }),
+        event(3, "b", { keep: true }),
+        event(4, "b", { keep: true }),
+      ],
       filter: { eventTypes: ["b"] },
       wakeProcessor: async () => {
         wakeNumber += 1;
@@ -331,7 +333,10 @@ describe("StreamEventSender hosted processor delivery", () => {
         };
       },
     });
-    h.store.ack(PROCESSOR_KEY, h.state.maxOffset);
+    // The stored cursor was caught up before offset 4 arrived. Waking for that
+    // real append still trusts the processor's lower checkpoint and replays
+    // from it; only lifecycle-only suffixes are suppressed.
+    h.store.ack(PROCESSOR_KEY, 3);
 
     h.eventSender.sendDue();
     await h.settle();
@@ -339,7 +344,7 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(h.wakeCalls).toHaveLength(1);
     expect(attemptedOffsets).toEqual([[2]]);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 3,
+      confirmedOffset: 3,
       attempt: 1,
       nextAttemptAt: 11_000,
       lastError: "processor callback failed",
@@ -350,8 +355,12 @@ describe("StreamEventSender hosted processor delivery", () => {
     await h.settle();
 
     expect(h.wakeCalls).toHaveLength(2);
+    expect(attemptedOffsets).toEqual([[2], [4]]);
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
-    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({ nextAttemptAt: null });
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      confirmedOffset: 3,
+      nextAttemptAt: null,
+    });
   });
 
   it("rejects a hosted processor checkpoint beyond the current source head", async () => {
@@ -370,7 +379,7 @@ describe("StreamEventSender hosted processor delivery", () => {
 
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(false);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 0,
+      confirmedOffset: 0,
       attempt: 1,
       lastError: "hosted processor checkpoint 3 is beyond this stream's current maximum offset 2",
     });
@@ -394,14 +403,14 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(h.wakeCalls[0]?.[1].stream.streamId).toBe(SOURCE_STREAM_ID);
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(false);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 0,
+      confirmedOffset: 0,
       attempt: 1,
       lastError: `hosted processor checkpoint belongs to stream ID ${RECREATED_STREAM_ID}, expected ${SOURCE_STREAM_ID}`,
     });
     expect(processEventBatch[Symbol.dispose]).toHaveBeenCalledOnce();
   });
 
-  it("keeps an idle hosted callback closed until the source appends another event", async () => {
+  it("keeps an idle-closed hosted processor dormant across Stream incarnations", async () => {
     const events = [event(2, "b", { keep: true })];
     const h = harness({
       events,
@@ -419,17 +428,58 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(h.wakeCalls).toHaveLength(1);
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
 
-    h.eventSender.runIdleTeardownNow();
-    h.eventSender.sendDue();
+    h.setNow(15_000);
+    h.eventSender.onAlarm();
     await h.settle();
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(false);
     expect(h.wakeCalls).toHaveLength(1);
+    expect(h.alarmClears.length).toBeGreaterThan(0);
 
-    events.push(event(3, "b", { keep: true }));
-    h.state.maxOffset = 3;
+    // A cold Stream boot appends `woken`. The new sender has none of the old
+    // sender's memory, so the durable cursor must be sufficient to classify
+    // that lifecycle-only suffix as non-waking and advance through it.
+    events.push(event(3, "events.iterate.com/stream/woken", { incarnationId: "fresh" }));
+    const rebuilt = harness({
+      events,
+      store: h.store,
+      wakeProcessor: async () => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: 4,
+        processEventBatch: retainedProcessEventBatch((batch) => {
+          batch.reportDeliveryResult({ outcome: "ok" });
+        }),
+      }),
+    });
+    rebuilt.eventSender.sendDue();
+    await rebuilt.settle();
+    expect(rebuilt.wakeCalls).toHaveLength(0);
+    expect(rebuilt.store.get(PROCESSOR_KEY)).toMatchObject({ confirmedOffset: 3 });
+    expect(rebuilt.alarmClears.length).toBeGreaterThan(0);
+
+    events.push(event(4, "b", { keep: true }));
+    rebuilt.state.maxOffset = 4;
+    rebuilt.eventSender.sendDue();
+    await rebuilt.settle();
+    expect(rebuilt.wakeCalls).toHaveLength(1);
+    expect(rebuilt.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
+  });
+
+  it("wakes a hosted processor whose filter explicitly names a lifecycle event", async () => {
+    const h = harness({
+      events: [event(2, "events.iterate.com/stream/woken", { incarnationId: "fresh" })],
+      filter: { eventTypes: ["events.iterate.com/stream/woken"] },
+      wakeProcessor: async () => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: 2,
+        processEventBatch: retainedProcessEventBatch(() => undefined),
+      }),
+    });
+    h.store.ack(PROCESSOR_KEY, 1);
+
     h.eventSender.sendDue();
     await h.settle();
-    expect(h.wakeCalls).toHaveLength(2);
+
+    expect(h.wakeCalls).toHaveLength(1);
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
   });
 
@@ -492,7 +542,7 @@ describe("StreamEventSender hosted processor delivery", () => {
     await rebuilt.settle();
     expect(rebuilt.wakeCalls).toHaveLength(1);
     expect(rebuilt.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 2,
+      confirmedOffset: 2,
       attempt: 0,
       nextAttemptAt: null,
       inFlightDeadlineAt: null,
@@ -521,8 +571,8 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
 
     h.state.maxOffset = 4;
-    h.state.subscriptions.outbound.byKey[PROCESSOR_KEY] = {
-      configuration: { ...hostedConfig(), subscriptionKey: PROCESSOR_KEY },
+    h.state.subscriptions.outbound.byName[PROCESSOR_KEY] = {
+      configuration: { ...hostedConfig(), name: PROCESSOR_KEY },
       configuredAtOffset: 4,
       configuredAt: new Date(4).toISOString(),
     };
@@ -553,7 +603,7 @@ describe("StreamEventSender stream delivery", () => {
         event(4, "example.com/issue-created", { issue: 3 }),
       ],
       configuration: {
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
@@ -573,7 +623,7 @@ describe("StreamEventSender stream delivery", () => {
     await h.settle();
     expect(attemptedOffsets).toEqual([[2, 3, 4]]);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 0,
+      confirmedOffset: 0,
       attempt: 1,
       nextAttemptAt: 11_000,
     });
@@ -585,7 +635,7 @@ describe("StreamEventSender stream delivery", () => {
     await h.settle();
     expect(attemptedOffsets).toEqual([[2, 3, 4], [2], [3, 4]]);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 2,
+      confirmedOffset: 2,
       attempt: 1,
       nextAttemptAt: 12_000,
     });
@@ -595,7 +645,7 @@ describe("StreamEventSender stream delivery", () => {
     await h.settle();
     expect(attemptedOffsets).toEqual([[2, 3, 4], [2], [3, 4], [3]]);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 2,
+      confirmedOffset: 2,
       attempt: 2,
       failingEventOffset: null,
     });
@@ -612,7 +662,7 @@ describe("StreamEventSender stream delivery", () => {
         event(3, "example.com/issue-created", { issue: 2 }),
       ],
       configuration: {
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         receiver: {
           action: "itx-call",
           expression: ["worker", "processEventBatch"],
@@ -633,7 +683,7 @@ describe("StreamEventSender stream delivery", () => {
 
     expect(deliverToItx).toHaveBeenCalledOnce();
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 0,
+      confirmedOffset: 0,
       attempt: 1,
       nextAttemptAt: 11_000,
       failingEventOffset: null,
@@ -643,7 +693,7 @@ describe("StreamEventSender stream delivery", () => {
 
   it("deletes the alarm once the last send settles with nothing due, and never while a retry is pending", async () => {
     const itxConfig = {
-      subscriptionKey: PROCESSOR_KEY,
+      name: PROCESSOR_KEY,
       receiver: {
         action: "itx-call",
         expression: ["worker", "processEventBatch"],
@@ -664,7 +714,7 @@ describe("StreamEventSender stream delivery", () => {
     });
     ok.eventSender.sendDue();
     await ok.settle();
-    expect(ok.store.get(PROCESSOR_KEY)?.acknowledgedOffset).toBe(2);
+    expect(ok.store.get(PROCESSOR_KEY)?.confirmedOffset).toBe(2);
     expect(ok.alarmClears.length).toBeGreaterThan(0);
 
     // Failure: a pending retry row must keep the alarm armed — the quiet
@@ -693,7 +743,7 @@ describe("StreamEventSender stream delivery", () => {
     const h = harness({
       events: [event(2, "example.com/issue-created", { issue: 1 })],
       configuration: {
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         filter: { jsonataCondition: "$notAFunction(payload)" },
         receiver: {
           action: "itx-call",
@@ -714,7 +764,7 @@ describe("StreamEventSender stream delivery", () => {
     await h.settle();
 
     const row = h.store.get(PROCESSOR_KEY)!;
-    expect(row.acknowledgedOffset).toBeLessThan(h.state.maxOffset);
+    expect(row.confirmedOffset).toBeLessThan(h.state.maxOffset);
     expect(row.nextAttemptAt).toBeNull();
     // The bare lifecycle retry was armed and, critically, never cleared.
     expect(h.alarmClears).toEqual([]);
@@ -733,7 +783,7 @@ describe("StreamEventSender stream delivery", () => {
         event(3, "example.com/issue-created", { issue: 40 }),
       ],
       configuration: {
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         receiver: {
           action: "itx-call",
           expression: ["worker", "processEventBatch"],
@@ -769,7 +819,7 @@ describe("StreamEventSender stream delivery", () => {
     ]);
     expect(batches[0]!.events[0]!.payload).not.toHaveProperty("internal");
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 3,
+      confirmedOffset: 3,
       attempt: 0,
       nextAttemptAt: null,
     });
@@ -790,7 +840,7 @@ describe("StreamEventSender stream delivery", () => {
         event(4, "example.com/issue-created", { issue: 3 }),
       ],
       configuration: {
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         receiver: {
           action: "itx-call",
           expression: ["worker", "processEventBatch"],
@@ -833,7 +883,7 @@ describe("StreamEventSender stream delivery", () => {
       `itx transform for subscription "${PROCESSOR_KEY}" failed on /source@3`,
     );
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 4,
+      confirmedOffset: 4,
       attempt: 0,
       nextAttemptAt: null,
     });
@@ -869,7 +919,7 @@ describe("StreamEventSender stream delivery", () => {
     expect(appended[0]).toMatchObject({
       type: "events.iterate.com/stream/subscription-delivery-halted",
       payload: {
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         reason: "delivery-failed",
         attempts: 1,
         error: 'Entry point "github-ai-linter-worker.ts" was not found in files.',
@@ -891,7 +941,7 @@ describe("StreamEventSender stream delivery", () => {
       const h = harness({
         events: [event(2, "example.com/issue-created", { issue: 42 })],
         configuration: {
-          subscriptionKey: PROCESSOR_KEY,
+          name: PROCESSOR_KEY,
           receiver: {
             action: "itx-call",
             expression: ["worker", "processEventBatch"],
@@ -931,7 +981,7 @@ describe("StreamEventSender stream delivery", () => {
       expect(appended[0]).toMatchObject({
         type: "events.iterate.com/stream/subscription-delivery-halted",
         payload: {
-          subscriptionKey: PROCESSOR_KEY,
+          name: PROCESSOR_KEY,
           attempts: 15,
         },
       });
@@ -952,7 +1002,7 @@ describe("StreamEventSender stream delivery", () => {
     const h = harness({
       events: [event(2, "example.com/issue-created", { issue: 42 })],
       configuration: {
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
@@ -987,7 +1037,7 @@ describe("StreamEventSender stream delivery", () => {
     const h = harness({
       events: [event(2, "example.com/issue-created", { issue: 42 })],
       configuration: {
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
@@ -1015,7 +1065,7 @@ describe("StreamEventSender stream delivery", () => {
 
     expect(copyToStream).toHaveBeenCalledOnce();
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 0,
+      confirmedOffset: 0,
       attempt: 1,
       nextAttemptAt: 11_000,
       lastError: "simulated source cursor commit failure",
@@ -1028,7 +1078,7 @@ describe("StreamEventSender stream delivery", () => {
 
     expect(copyToStream).toHaveBeenCalledTimes(2);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 2,
+      confirmedOffset: 2,
       attempt: 0,
       nextAttemptAt: null,
       lastError: null,
@@ -1054,7 +1104,7 @@ describe("StreamEventSender stream delivery", () => {
         event(3, "example.com/issue-created", { issue: 42 }),
       ],
       configuration: {
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
@@ -1075,7 +1125,56 @@ describe("StreamEventSender stream delivery", () => {
 
     expect(delivered.map((batch) => batch.map(({ offset }) => offset))).toEqual([[3]]);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 3,
+      confirmedOffset: 3,
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+    });
+  });
+
+  it("withholds incarnation/connection lifecycle facts from stream copies", async () => {
+    const delivered: StreamEvent[][] = [];
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => {
+      delivered.push(batch.events);
+      return { acknowledged: batch.events.length };
+    });
+    const h = harness({
+      events: [
+        event(2, "events.iterate.com/stream/woken", { incarnationId: "incarnation-a" }),
+        event(3, "events.iterate.com/stream/connection-opened", { connectionKey: "session" }),
+        event(4, "example.com/issue-created", { issue: 42 }),
+        event(5, "events.iterate.com/stream/connection-closed", {
+          connectionKey: "session",
+          reason: "idle",
+        }),
+      ],
+      configuration: {
+        name: PROCESSOR_KEY,
+        receiver: {
+          action: "copy-to-stream",
+          receivingStreamPath: "/agents/b",
+          delivery: {
+            start: "beginning",
+            onFailingEvent: "halt",
+          },
+        },
+      },
+      copyToStream,
+      wakeProcessor: async () => {
+        throw new Error("a copy must not wake a hosted processor");
+      },
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    // Only the product event crosses. The cursor still advances over the
+    // withheld lifecycle rows, so a reciprocal copy pair runs out of fuel
+    // instead of manufacturing wake events forever (every boot appends a
+    // fresh unkeyed `woken`, and the circuit breaker ignores control events).
+    expect(delivered.map((batch) => batch.map(({ offset }) => offset))).toEqual([[4]]);
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      confirmedOffset: 5,
       attempt: 0,
       nextAttemptAt: null,
       lastError: null,
@@ -1090,7 +1189,7 @@ describe("StreamEventSender stream delivery", () => {
     const h = harness({
       events: [event(2, "example.com/issue-created", { issue: 42 })],
       configuration: {
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: "/agents/b",
@@ -1119,7 +1218,7 @@ describe("StreamEventSender stream delivery", () => {
     expect(appendDeliveryEvent).toHaveBeenCalledWith({
       type: "events.iterate.com/stream/subscription-delivery-halted",
       payload: {
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         reason: "delivery-failed",
         afterOffset: 0,
         attempts: 15,
@@ -1127,7 +1226,7 @@ describe("StreamEventSender stream delivery", () => {
       },
     });
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 0,
+      confirmedOffset: 0,
       attempt: 0,
       nextAttemptAt: null,
       failingEventOffset: null,
@@ -1143,7 +1242,7 @@ describe("StreamEventSender stream delivery", () => {
       batch.cursorChangedAtSourceOffset === 1 ? receipt.promise : new Promise(() => {}),
     );
     const configuration: SubscriptionConfiguredPayload = {
-      subscriptionKey: PROCESSOR_KEY,
+      name: PROCESSOR_KEY,
       receiver: {
         action: "copy-to-stream",
         receivingStreamPath: "/agents/b",
@@ -1166,10 +1265,10 @@ describe("StreamEventSender stream delivery", () => {
     expect(copyToStream).toHaveBeenCalledOnce();
 
     h.state.maxOffset = 3;
-    h.state.subscriptions.outbound.byKey[PROCESSOR_KEY] = {
+    h.state.subscriptions.outbound.byName[PROCESSOR_KEY] = {
       configuration: {
         ...configuration,
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: "/agents/c",
@@ -1185,7 +1284,7 @@ describe("StreamEventSender stream delivery", () => {
     h.eventSender.sendDue();
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       configuredAtOffset: 3,
-      acknowledgedOffset: 0,
+      confirmedOffset: 0,
     });
 
     receipt.resolve({ acknowledged: 1 });
@@ -1197,7 +1296,7 @@ describe("StreamEventSender stream delivery", () => {
     // from its own cursor and its still-open delivery owns future progress.
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       configuredAtOffset: 3,
-      acknowledgedOffset: 0,
+      confirmedOffset: 0,
     });
     expect(copyToStream).toHaveBeenCalledTimes(2);
     expect(copyToStream.mock.calls[1]![1].cursorChangedAtSourceOffset).toBe(3);
@@ -1212,7 +1311,7 @@ describe("StreamEventSender stream delivery", () => {
       batch.cursorChangedAtSourceOffset === 1 ? rejection.promise : new Promise(() => {}),
     );
     const configuration: SubscriptionConfiguredPayload = {
-      subscriptionKey: PROCESSOR_KEY,
+      name: PROCESSOR_KEY,
       receiver: {
         action: "copy-to-stream",
         receivingStreamPath: "/agents/b",
@@ -1242,10 +1341,10 @@ describe("StreamEventSender stream delivery", () => {
     expect(copyToStream).toHaveBeenCalledOnce();
 
     h.state.maxOffset = 4;
-    h.state.subscriptions.outbound.byKey[PROCESSOR_KEY] = {
+    h.state.subscriptions.outbound.byName[PROCESSOR_KEY] = {
       configuration: {
         ...configuration,
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: "/agents/c",
@@ -1261,7 +1360,7 @@ describe("StreamEventSender stream delivery", () => {
     h.eventSender.sendDue();
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       configuredAtOffset: 4,
-      acknowledgedOffset: 0,
+      confirmedOffset: 0,
       attempt: 0,
     });
 
@@ -1307,7 +1406,7 @@ describe("StreamEventSender stream delivery", () => {
         event(4, "example.com/issue-created", { issue: 3 }),
       ],
       configuration: {
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
         receiver: {
           action: "itx-call",
           expression: ["worker", "processEventBatch"],
@@ -1358,7 +1457,7 @@ describe("StreamEventSender stream delivery", () => {
     ).toEqual([
       expect.objectContaining({
         payload: expect.objectContaining({
-          subscriptionKey: PROCESSOR_KEY,
+          name: PROCESSOR_KEY,
           reason: "delivery-failed",
           afterOffset: 3,
           attempts: 3,
@@ -1367,7 +1466,7 @@ describe("StreamEventSender stream delivery", () => {
     ]);
     // Durably halted: the failed row keeps its cursor but stops arming alarms.
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 3,
+      confirmedOffset: 3,
       attempt: 0,
       nextAttemptAt: null,
     });
@@ -1381,7 +1480,7 @@ describe("StreamEventSender webhook delivery", () => {
     > = {},
   ): SubscriptionConfiguredPayload {
     return {
-      subscriptionKey: PROCESSOR_KEY,
+      name: PROCESSOR_KEY,
       receiver: {
         action: "webhook-post",
         url: "https://receiver.example/events",
@@ -1428,7 +1527,7 @@ describe("StreamEventSender webhook delivery", () => {
       path: "/source",
       streamId: SOURCE_STREAM_ID,
       streamCreatedAt: "2026-07-21T10:00:00.000Z",
-      subscriptionKey: PROCESSOR_KEY,
+      name: PROCESSOR_KEY,
       cursorChangedAtSourceOffset: 1,
       attempt: 1,
       configuredEvent: { type: "events.iterate.com/stream/subscription-configured" },
@@ -1438,7 +1537,7 @@ describe("StreamEventSender webhook delivery", () => {
     expect(deliveries[0]).not.toHaveProperty("state");
     expect(new Set(deliveries.map((delivery) => delivery.deliveryId)).size).toBe(3);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 4,
+      confirmedOffset: 4,
       attempt: 0,
       nextAttemptAt: null,
       lastError: null,
@@ -1474,7 +1573,7 @@ describe("StreamEventSender webhook delivery", () => {
     // The healthy prefix committed per event; the failing event owns the ladder.
     expect(delivered).toEqual([2]);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 2,
+      confirmedOffset: 2,
       attempt: 1,
       nextAttemptAt: 11_000,
       lastError: "webhook responded 503 Service Unavailable",
@@ -1488,7 +1587,7 @@ describe("StreamEventSender webhook delivery", () => {
 
     expect(delivered).toEqual([2, 3]);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 3,
+      confirmedOffset: 3,
       attempt: 0,
       nextAttemptAt: null,
       lastError: null,
@@ -1526,7 +1625,7 @@ describe("StreamEventSender webhook delivery", () => {
       {
         type: "events.iterate.com/stream/subscription-delivery-halted",
         payload: {
-          subscriptionKey: PROCESSOR_KEY,
+          name: PROCESSOR_KEY,
           reason: "delivery-failed",
           afterOffset: 0,
           attempts: 15,
@@ -1595,7 +1694,7 @@ describe("StreamEventSender webhook delivery", () => {
       }),
     ]);
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 4,
+      confirmedOffset: 4,
       attempt: 0,
       nextAttemptAt: null,
     });
@@ -1621,10 +1720,10 @@ describe("StreamEventSender webhook delivery", () => {
     expect(deliverToWebhook).toHaveBeenCalledOnce();
 
     h.state.maxOffset = 3;
-    h.state.subscriptions.outbound.byKey[PROCESSOR_KEY] = {
+    h.state.subscriptions.outbound.byName[PROCESSOR_KEY] = {
       configuration: {
         ...webhookConfig({ url: "https://replacement.example/events" }),
-        subscriptionKey: PROCESSOR_KEY,
+        name: PROCESSOR_KEY,
       },
       configuredAtOffset: 3,
       configuredAt: new Date(3).toISOString(),
@@ -1632,7 +1731,7 @@ describe("StreamEventSender webhook delivery", () => {
     h.eventSender.sendDue();
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       configuredAtOffset: 3,
-      acknowledgedOffset: 0,
+      confirmedOffset: 0,
     });
 
     staleAck.resolve();
@@ -1645,7 +1744,7 @@ describe("StreamEventSender webhook delivery", () => {
     // another event.
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
       configuredAtOffset: 3,
-      acknowledgedOffset: 0,
+      confirmedOffset: 0,
     });
     expect(deliverToWebhook).toHaveBeenCalledTimes(2);
     expect(deliverToWebhook.mock.calls.map(([url]) => url)).toEqual([
@@ -1680,7 +1779,7 @@ describe("StreamEventSender webhook delivery", () => {
 
     h.eventSender.sendDue();
     await firstPostStarted.promise;
-    delete h.state.subscriptions.outbound.byKey[PROCESSOR_KEY];
+    delete h.state.subscriptions.outbound.byName[PROCESSOR_KEY];
     release.resolve();
     await h.settle();
 
@@ -1722,7 +1821,7 @@ describe("StreamEventSender webhook delivery", () => {
     });
     expect(deliveries[0]!.event.payload).not.toHaveProperty("internal");
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 2,
+      confirmedOffset: 2,
       attempt: 0,
     });
   });
@@ -1779,7 +1878,7 @@ describe("StreamEventSender webhook delivery", () => {
       `webhook transform for subscription "${PROCESSOR_KEY}" failed on /source@3`,
     );
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      acknowledgedOffset: 4,
+      confirmedOffset: 4,
       attempt: 0,
       nextAttemptAt: null,
     });
@@ -1880,7 +1979,6 @@ function connectionsHarness(
   });
   let connections!: StreamConnections;
   connections = new StreamConnections({
-    idleTeardownMs: 60_000,
     hooks: {
       // Force several batches so the test can observe the one-at-a-time gate.
       readBatch:
@@ -1907,7 +2005,7 @@ function connectionsHarness(
         options.onSessionsIdleClosed?.(keys);
       },
       reconcileAlarm: () => undefined,
-      hostedDeliveryStillMatches: (_subscriptionKey, candidate) =>
+      hostedDeliveryStillMatches: (_name, candidate) =>
         candidate.configuredAtOffset === expectedDelivery.configuredAtOffset &&
         candidate.cursorChangedAtOffset === expectedDelivery.cursorChangedAtOffset &&
         candidate.connectionGeneration === expectedDelivery.connectionGeneration,
@@ -1952,7 +2050,7 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(calls).toHaveLength(0);
     expect(h.connections.runtimeState().processor).toMatchObject({
       kind: "hosted",
-      subscriptionKey: "processor",
+      name: "processor",
     });
 
     // The wake path records the reported checkpoint after openHosted returns,
@@ -2322,7 +2420,10 @@ describe("StreamConnections hosted delivery watchdog", () => {
     await flushMicrotasks();
     expect(calls).toHaveLength(2);
     expect(calls[1]!.batch.events.map((event) => event.offset)).toEqual([2]);
+    // The batch ack cleared the failure state but not the cursor: confirmed
+    // advances only on reported checkpoints, never on batch acknowledgements.
     expect(h.store.get("processor")).toMatchObject({
+      confirmedOffset: 0,
       attempt: 0,
       nextAttemptAt: null,
       lastError: null,
@@ -2484,28 +2585,43 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(connection.isLive()).toBe(false);
   });
 
-  it("idle teardown never acknowledges a batch that has not completed", () => {
+  it("idle teardown closes a quiet sibling without interrupting a pending hosted batch", async () => {
     const h = connectionsHarness();
-    const calls: DeliveryCall[] = [];
-    const disposed = vi.fn();
-    const connection = h.connections.openHosted({
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    h.store.ensure("settled", 0, 12);
+    const pending = h.connections.openHosted({
       connectionKey: "processor",
       expectedHostedDelivery: h.expectedDelivery,
-      processEventBatch: recordingProcessEventBatch(calls, disposed),
+      processEventBatch: recordingProcessEventBatch([], () => undefined),
       replayAfterOffset: 0,
     });
-    connection.sendQueued();
-    const before = h.store.get("processor")!;
-
-    h.connections.runIdleTeardownNow();
-
-    expect(connection.isLive()).toBe(false);
-    expect(disposed).toHaveBeenCalledTimes(1);
-    expect(h.store.get("processor")).toMatchObject({
-      acknowledgedOffset: before.acknowledgedOffset,
-      inFlightDeadlineAt: before.inFlightDeadlineAt,
-      inFlightConnectionGeneration: before.inFlightConnectionGeneration,
+    const settledCalls: DeliveryCall[] = [];
+    h.connections.openHosted({
+      connectionKey: "settled",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(settledCalls, () => undefined),
+      replayAfterOffset: 2,
     });
+
+    h.connections.sendQueued();
+    settledCalls[0]!.report("ok");
+    await flushMicrotasks();
+    const pendingDeadline = h.store.get("processor")!.inFlightDeadlineAt!;
+
+    h.setNow(6_000);
+    h.connections.armOrClearIdleAlarm();
+    expect(h.connections.onAlarm()).toEqual(["settled"]);
+    expect(h.connections.has("settled")).toBe(false);
+    expect(pending.isLive()).toBe(true);
+    expect(h.store.get("processor")?.inFlightDeadlineAt).toBe(pendingDeadline);
+
+    // Exemption from idle teardown is bounded by the existing delivery
+    // watchdog, so a genuinely wedged callback still cannot pin forever.
+    h.setNow(pendingDeadline);
+    expect(h.connections.onAlarm()).toEqual([]);
+    expect(pending.isLive()).toBe(false);
+    expect(h.deliveryFailures).toHaveBeenCalledOnce();
+    errorLog.mockRestore();
   });
 
   it("idle-tears a session connection only when it has a Pager, stamping after the close fact", () => {
@@ -2566,7 +2682,7 @@ describe("StreamConnections hosted delivery watchdog", () => {
     // deadline: the old now+window reset slid it forward on the idle alarm's
     // own turn, so a fire landing just before the pushed deadline missed it
     // and real-clock teardown took up to two windows.
-    h.setNow(40_000);
+    h.setNow(4_000);
     h.connections.armOrClearIdleAlarm();
     expect(h.alarmTimes.at(-1)).toBe(firstDeadline);
 
@@ -2598,6 +2714,10 @@ describe("StreamConnections hosted delivery watchdog", () => {
 
     expect(disposed).toHaveBeenCalledOnce();
     expect(h.state.maxOffset).toBe(5);
-    expect(h.store.get("processor")).toMatchObject({ acknowledgedOffset: 5 });
+    // The cursor advances through the close facts on purpose: the row is only
+    // the source stream's wake/delivery position, and the runner's OWN durable
+    // checkpoint — which never advanced over the close facts — is what its
+    // next real wake replays from.
+    expect(h.store.get("processor")).toMatchObject({ confirmedOffset: 5 });
   });
 });

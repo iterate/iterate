@@ -152,7 +152,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
           state.defaultBranch === null ||
           origin?.path !== `/integrations/github/${state.github.connection}` ||
           origin.projectId !== this.projectId ||
-          origin.subscriptionKey !== `github-repo:${this.path}` ||
+          origin.name !== `github-repo:${this.path}` ||
           origin.type !== event.type ||
           push.installationId !== state.github.installationId ||
           push.repositoryId !== state.github.repositoryId ||

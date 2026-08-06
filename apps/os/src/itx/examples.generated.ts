@@ -1361,7 +1361,7 @@ return { skillFiles, instructions };
     id: "stream-receive-events-from",
     title: "Receive matching events from another stream",
     description:
-      "receiver.subscribeToEventsFrom({ sourceStreamPath: source, subscriptionKey, filter?, jsonataTransform?, description? }) starts durable copying from the named source into this receiving stream. filter.eventTypes selects event types and filter.jsonataCondition is a JSONata expression over the whole event that must evaluate to exactly true. jsonataTransform is a JSONata constructor shaping what this stream commits ({ type?, payload?, metadata? }; omitted fields copy verbatim) while provenance and dedupe stay keyed to the source event. Each received event records every stream hop in source.copiedFrom; self-receive is rejected and multi-hop cycles stop before appending to a stream already in that list.",
+      "receiver.subscribeToEventsFrom({ sourceStreamPath: source, name, filter?, jsonataTransform?, description? }) starts durable copying from the named source into this receiving stream. filter.eventTypes selects event types and filter.jsonataCondition is a JSONata expression over the whole event that must evaluate to exactly true. jsonataTransform is a JSONata constructor shaping what this stream commits ({ type?, payload?, metadata? }; omitted fields copy verbatim) while provenance and dedupe stay keyed to the source event. Each received event records every stream hop in source.copiedFrom; self-receive is rejected and multi-hop cycles stop before appending to a stream already in that list.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
@@ -1370,7 +1370,7 @@ const target = itx.streams.get(vars.target ?? "/examples/receive-events/target")
 
 await target.subscribeToEventsFrom({
   sourceStreamPath: vars.source ?? "/examples/receive-events/source",
-  subscriptionKey: "example/high-importance-notes",
+  name: "example/high-importance-notes",
   description: "Demo: high-importance notes land on the target stream.",
   filter: {
     eventTypes: ["events.iterate.example/note"],
