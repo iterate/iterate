@@ -5158,7 +5158,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     return itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
-      streamContext: { kind: "scope", scopePath: "/" },
+      streamContext: streamContextForAuth(this.props.auth),
       path: "/",
       projectId,
     });
@@ -5750,7 +5750,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           projectId: registered.projectId,
         }),
         ctx: prospective.ctx,
-        streamContext: { kind: "scope", scopePath: "/" },
+        streamContext: streamContextForAuth(prospective.auth),
         projectId: registered.projectId,
       };
       existing.auth.assertCanAccessProject(existing.projectId);
@@ -6642,6 +6642,19 @@ export function itxForScope(props: {
  */
 export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutionContext }) {
   return new SessionRpcTarget(props);
+}
+
+/**
+ * The stream context a project-root itx vends for this authority. External
+ * origin (a credential presented over the wire — CLI, REPL, dashboard,
+ * harness) journals server-derived client-session provenance, so approval
+ * surfaces can show WHO asked; internal mints keep the plain root scope.
+ * Never client-declared — both fields come from what auth verified.
+ */
+function streamContextForAuth(auth: ItxAuth): StreamContext {
+  return auth.origin === "external"
+    ? { kind: "client-session", principal: auth.principal, admin: auth.isAdmin() }
+    : { kind: "scope", scopePath: "/" };
 }
 
 /** The project stream's reduced state (repo catalog, worker builds, …) — also
