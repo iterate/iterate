@@ -57,6 +57,17 @@ static struct {
   struct iterate_kit_rgb8 shown[LED_COUNT];
 } ui;
 
+/*
+ * Written by the capture task, read by the app task. A single aligned word,
+ * so a torn read is impossible here and the worst case is one stale frame of
+ * a meter that redraws twenty times a second.
+ */
+static volatile uint32_t microphone_peak;
+
+void havpe_ui_set_microphone_peak(uint32_t peak) {
+  microphone_peak = peak;
+}
+
 static struct {
   bool level_pressed;
   bool debounced_pressed;
@@ -138,7 +149,7 @@ static struct iterate_kit_conversation_visual_state ring_state(void) {
     .media_ready = ui.link_ready,
     .media_failed = ui.fault,
     .microphone_listening = ui.state == HAVPE_UI_LISTENING,
-    .microphone_peak = 0U,
+    .microphone_peak = microphone_peak,
     /*
      * This board has no physical playout tap to sample, so speaking is taken
      * from the state the app loop settles. It is one frame early rather than
@@ -210,16 +221,13 @@ void havpe_ui_tick(void) {
   if (now_us - ui.last_refresh_us < RING_REFRESH_MIN_US) return;
   {
     struct iterate_kit_rgb8 pixels[LED_COUNT];
-    const uint8_t scale = iterate_kit_conversation_attention_scale(
-        &state, (uint32_t)(now_us / 1000));
-    iterate_kit_conversation_lights_render(&state, pixels);
-    for (int index = 0; index < LED_COUNT; ++index) {
-      pixels[index].red = (uint8_t)(((uint32_t)pixels[index].red * scale) / 255U);
-      pixels[index].green =
-          (uint8_t)(((uint32_t)pixels[index].green * scale) / 255U);
-      pixels[index].blue =
-          (uint8_t)(((uint32_t)pixels[index].blue * scale) / 255U);
-    }
+    /*
+     * ONE CALL, and it is the same one the screens make for their status
+     * rail. Everything this ring knows about what device state looks like
+     * lives on the other side of it.
+     */
+    iterate_kit_conversation_lights_animate(
+        &state, (uint32_t)(now_us / 1000), pixels);
     /*
      * `shown` starts black, so "equal to what is shown" is a lie until the
      * first successful refresh — and any state whose colour happened to be

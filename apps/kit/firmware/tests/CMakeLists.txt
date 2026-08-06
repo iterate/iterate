@@ -33,6 +33,7 @@ function(iterate_kit_add_core_test NAME SOURCE)
 endfunction()
 
 iterate_kit_add_core_test(iterate-kit-atomic-test atomic_test.c)
+iterate_kit_add_core_test(iterate-kit-barge-in-test barge_in_test.c)
 iterate_kit_add_core_test(iterate-kit-audio-playout-test audio_playout_test.c)
 iterate_kit_add_core_test(iterate-kit-configuration-test configuration_test.c)
 iterate_kit_add_core_test(

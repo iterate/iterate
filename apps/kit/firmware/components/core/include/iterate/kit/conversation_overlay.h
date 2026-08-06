@@ -97,6 +97,29 @@ bool iterate_kit_conversation_overlay_equal(
     const struct iterate_kit_conversation_visual_state *right);
 
 /**
+ * THE ONE PLACE DEVICE STATE BECOMES LIGHTS.
+ *
+ * `conversation_lights_render` gives the twelve static colours; this adds the
+ * only thing a still picture cannot say, which is that the device is BUSY
+ * TRYING. Every surface calls this — the HA Voice PE's physical ring and the
+ * status rail on all three screens — so there is exactly one answer to "what
+ * does connecting look like", and changing it changes every device at once.
+ *
+ * While the device is ready, this is `conversation_lights_render` and nothing
+ * more: a working device does not move.
+ *
+ * While it is not, one lit pixel walks around all twelve positions, about
+ * three quarters of a lap a second. A chase reads as "working on it" from
+ * across a room in a way that a colour cannot — three static amber dots were
+ * read as a fault, and one dim blue one was read as "still connecting" when
+ * it meant the call was live. Motion says trying; stillness says settled.
+ */
+void iterate_kit_conversation_lights_animate(
+    const struct iterate_kit_conversation_visual_state *state,
+    uint32_t now_ms,
+    struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]);
+
+/**
  * Draws the rail, and the banner when one is needed, into an RGB565 frame.
  *
  * The frame is the caller's — typically a rendered avatar — and is modified

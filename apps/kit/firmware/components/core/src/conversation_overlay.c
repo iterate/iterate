@@ -135,6 +135,48 @@ uint8_t iterate_kit_conversation_attention_scale(
   }
 }
 
+enum {
+  /* One lap of the twelve positions, in milliseconds. */
+  CONNECTING_CHASE_PERIOD_MS = 1400,
+};
+
+static struct iterate_kit_rgb8 attention_colour(
+    const struct iterate_kit_conversation_visual_state *state);
+
+void iterate_kit_conversation_lights_animate(
+    const struct iterate_kit_conversation_visual_state *state,
+    uint32_t now_ms,
+    struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]) {
+  iterate_kit_conversation_lights_render(state, pixels);
+  if (!iterate_kit_conversation_needs_attention(state)) return;
+  {
+    /*
+     * The chase overwrites the whole ring rather than decorating a sector,
+     * because "not connected" is not a detail about the network sector — it
+     * is the only thing about this device worth saying, and the sectors it
+     * would otherwise show are all meaningless until it is fixed.
+     */
+    const struct iterate_kit_rgb8 colour = attention_colour(state);
+    const uint32_t position =
+        ((now_ms % (uint32_t)CONNECTING_CHASE_PERIOD_MS) *
+         (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT) /
+        (uint32_t)CONNECTING_CHASE_PERIOD_MS;
+    for (uint32_t index = 0U;
+         index < (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
+         ++index) {
+      /* The head is full brightness, the one behind it a quarter: a comet,
+       * so the DIRECTION reads too and a stalled chase is obvious. */
+      const uint32_t behind =
+          (index + (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT - position) %
+          (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
+      const uint8_t level = behind == 0U ? 255U : (behind == 1U ? 64U : 0U);
+      pixels[index].red = scale_channel(colour.red, level);
+      pixels[index].green = scale_channel(colour.green, level);
+      pixels[index].blue = scale_channel(colour.blue, level);
+    }
+  }
+}
+
 /* The banner's own colour: red when something is broken or gone, amber while
  * the device is still working on it. Deliberately the same two meanings the
  * network sector of the light renderer already uses. */
@@ -257,7 +299,7 @@ static void draw_rail(
       dot_height) / 2U;
   const uint8_t scale = iterate_kit_conversation_attention_scale(state, now_ms);
 
-  iterate_kit_conversation_lights_render(state, pixels);
+  iterate_kit_conversation_lights_animate(state, now_ms, pixels);
   for (uint32_t index = 0U;
        index < (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
        ++index) {

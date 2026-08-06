@@ -45,9 +45,10 @@ interface Board {
   /**
    * Whether the microphone has to be held open around the prompt.
    *
-   * StackChan carries its own tuned AEC and runs open-mic on the provider's
-   * server VAD; the boards without echo cancellation are push-to-talk, and
-   * speaking at one of those without holding the button proves nothing.
+   * The two boards with echo cancellation — StackChan in software, the HA
+   * Voice PE in its XMOS DSP — run open-mic on the provider's server VAD.
+   * The two without it are push-to-talk, and speaking at one of those
+   * without holding the button proves nothing.
    */
   pushToTalk: boolean;
 }
@@ -55,7 +56,7 @@ interface Board {
 const BOARDS: readonly Board[] = [
   { label: "StackChan CoreS3", name: "stackchan", pushToTalk: false },
   { label: "M5StickS3", name: "m5sticks3", pushToTalk: true },
-  { label: "HA Voice PE", name: "homeAssistantVoicePreviewEdition", pushToTalk: true },
+  { label: "HA Voice PE", name: "homeAssistantVoicePreviewEdition", pushToTalk: false },
   { label: "Waveshare AMOLED", name: "waveshare", pushToTalk: true },
 ];
 

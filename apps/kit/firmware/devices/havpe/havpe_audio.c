@@ -47,6 +47,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
+#include "iterate/kit/barge_in.h"
 #include "voice_pe_hardware_config.h"
 #include "voice_pe_pcm_format.h"
 
@@ -63,6 +64,33 @@ enum {
    * clip counter so an abnormal level stays observable; never adaptive.
    */
   CAPTURE_MAKEUP_GAIN = 16,
+  /*
+   * ...AND ONE WHILE THE SPEAKER IS PLAYING, WHICH IS THE WHOLE POINT.
+   *
+   * The x16 above was validated with this board in PUSH-TO-TALK, where the
+   * microphone is shut while the assistant speaks, so the gain only ever
+   * multiplied a person's voice. With the microphone open for the whole call
+   * it also multiplies what the XMOS did NOT cancel — and sixteen is +24 dB
+   * against a measured residual of about -15 dB, which hands the provider an
+   * echo LOUDER than the microphone heard. Its VAD then reports the device
+   * interrupting itself, the barge-in flush empties the speaker, and the
+   * answer stops mid-word. "The AEC is not working" is what that sounds
+   * like; the AEC was working and this was undoing it.
+   *
+   * Ducking is immediate and recovery is gradual, the ordinary asymmetry: an
+   * answer must not be preceded by one loud frame of echo, while a person
+   * starting to speak just after one can wait a few frames for full
+   * sensitivity. Neither value is adaptive — they are two constants and a
+   * hardware fact about whether the speaker is running.
+   */
+  CAPTURE_MAKEUP_GAIN_WHILE_PLAYING = 1,
+  CAPTURE_GAIN_RECOVERY_FRAMES = 16,
+  /*
+   * How long after the last queued audio the speaker still counts as active.
+   * Longer than the pause between two counted numbers and far shorter than
+   * the gap before somebody replies.
+   */
+  SPEAKER_ACTIVITY_HOLD_MS = 1500,
   /*
    * DMA geometry from Espressif's standard-mode sizing formula:
    *
@@ -137,6 +165,18 @@ static volatile uint32_t playback_driver_failures;
 static volatile uint32_t capture_queue_overflow_count;
 static volatile uint32_t playback_queue_overflow_count;
 static volatile uint32_t capture_gain_clipped_samples;
+/* Capture-task owned; read for telemetry, so single aligned words. */
+static volatile int32_t capture_gain = CAPTURE_MAKEUP_GAIN;
+static volatile uint32_t capture_raw_peak;
+static volatile uint32_t capture_clean_peak;
+/* Maxima seen WHILE THE SPEAKER WAS RUNNING: the echo, before and after. */
+static volatile uint32_t capture_echo_raw_peak;
+static volatile uint32_t capture_echo_clean_peak;
+/* What each XMOS output tap is currently selecting; 0..4, see the stage enum. */
+static uint8_t pipeline_stage[2];
+/* Capture-task owned: is a person talking, and how much echo was withheld. */
+static struct iterate_kit_barge_in capture_gate;
+static volatile uint32_t capture_echo_frames_muted;
 
 /* --- the shared codec seam ------------------------------------------------ */
 
@@ -289,6 +329,31 @@ uint32_t havpe_audio_written_ms(void) {
   return ledger_written_ms;
 }
 
+bool havpe_audio_speaker_is_playing(void) {
+  bool playing;
+  const int64_t now_us = esp_timer_get_time();
+  portENTER_CRITICAL(&ledger_lock);
+  /*
+   * The ledger already knows the wall-clock instant the hardware ring runs
+   * dry, because that is how starvation is measured. "Sound is coming out of
+   * the speaker right now" is the same fact read forwards.
+   *
+   * THE HOLD IS THE POINT. An answer is not one continuous noise: "One. Two.
+   * Three." is three short bursts with real silence between them, and the
+   * ring genuinely empties in those gaps. Read instant by instant, this said
+   * "not playing" during every pause, the uplink opened, the provider heard
+   * the room through the gap and cancelled its own answer — which is why a
+   * request to count to twelve came back as "One. Two." and was marked
+   * complete. The hold spans the pauses inside an answer without spanning the
+   * silence after one, and it costs nothing when the room is quiet because
+   * the caller still asks whether a PERSON is talking before muting anything.
+   */
+  playing = ledger_watch &&
+      ledger_empty_at_us + (int64_t)SPEAKER_ACTIVITY_HOLD_MS * 1000 > now_us;
+  portEXIT_CRITICAL(&ledger_lock);
+  return playing;
+}
+
 void havpe_audio_inject_starvation(uint32_t ms) {
   atomic_store_explicit(&inject_starvation_ms, ms, memory_order_relaxed);
 }
@@ -350,9 +415,99 @@ static void capture_hardware_task(void *argument) {
       ++capture_driver_failures;
       continue;
     }
+    /*
+     * THE AEC ORACLE, AND IT COSTS TWO COMPARISONS PER SAMPLE. Channel one is
+     * the microphone before any DSP and channel zero is after cancellation,
+     * captured at the same instant; the ratio between their peaks while the
+     * speaker is running IS this board's echo cancellation, measured live
+     * rather than argued about. The raw plane used to be extracted and thrown
+     * away with a comment saying no harness needed it.
+     */
+    {
+      int32_t raw_peak = 0;
+      int32_t clean_peak = 0;
+      for (size_t index = 0U; index < HAVPE_AUDIO_FRAME_SAMPLES; ++index) {
+        const int32_t raw = raw_plane[index] < 0
+            ? -(int32_t)raw_plane[index]
+            : (int32_t)raw_plane[index];
+        const int32_t clean = frame.samples[index] < 0
+            ? -(int32_t)frame.samples[index]
+            : (int32_t)frame.samples[index];
+        if (raw > raw_peak) raw_peak = raw;
+        if (clean > clean_peak) clean_peak = clean;
+      }
+      capture_raw_peak = (uint32_t)raw_peak;
+      capture_clean_peak = (uint32_t)clean_peak;
+      /*
+       * ACCUMULATED ON THE DEVICE, because the interesting window is the one
+       * where the speaker is running and it is a few hundred milliseconds
+       * long. Sampling these over RPC catches almost none of it — a first
+       * attempt collected thirteen samples across a thirty-second answer and
+       * could say nothing at all. One health() read now answers the question.
+       */
+      /* The gate's evidence, from the cancelled plane, before any gain. */
+      iterate_kit_barge_in_observe(
+          &capture_gate,
+          (uint32_t)clean_peak,
+          (uint64_t)(esp_timer_get_time() / 1000));
+      if (havpe_audio_speaker_is_playing()) {
+        if ((uint32_t)raw_peak > capture_echo_raw_peak) {
+          capture_echo_raw_peak = (uint32_t)raw_peak;
+        }
+        if ((uint32_t)clean_peak > capture_echo_clean_peak) {
+          capture_echo_clean_peak = (uint32_t)clean_peak;
+        }
+      }
+    }
+    /*
+     * DO NOT SEND THE PROVIDER YOUR OWN VOICE.
+     *
+     * Its VAD listens to what arrives and cannot tell this device's echo from
+     * a person interrupting; when it decides it has been interrupted it
+     * CANCELS the answer it is generating. Measured: every reply came back
+     * two words long and marked complete — "One. Two." for a request to count
+     * to twelve — with nobody in the room speaking.
+     *
+     * So while the speaker is running, the uplink carries silence unless this
+     * device's own microphone says somebody is actually talking, on the same
+     * measured floor the barge-in gate uses. Real speech opens it inside one
+     * 20 ms frame and holds it open; the echo never does. This is not a
+     * half-duplex fence — the microphone keeps running and a person can still
+     * interrupt at any moment — it is a refusal to testify about a voice this
+     * device knows is its own.
+     */
+    {
+      /* On the edge into playback, the room's history stops counting. */
+      static bool was_playing;
+      const bool playing_now = havpe_audio_speaker_is_playing();
+      if (playing_now && !was_playing) {
+        iterate_kit_barge_in_forget(&capture_gate);
+      }
+      was_playing = playing_now;
+    }
+    if (havpe_audio_speaker_is_playing() &&
+        !iterate_kit_barge_in_person_present(
+            &capture_gate, (uint64_t)(esp_timer_get_time() / 1000))) {
+      memset(frame.samples, 0, sizeof(frame.samples));
+      ++capture_echo_frames_muted;
+    }
+    {
+      const bool playing = havpe_audio_speaker_is_playing();
+      if (playing) {
+        capture_gain = CAPTURE_MAKEUP_GAIN_WHILE_PLAYING;
+      } else if (capture_gain < CAPTURE_MAKEUP_GAIN) {
+        /* One step per 20 ms frame back to full sensitivity. */
+        capture_gain += (CAPTURE_MAKEUP_GAIN -
+                         CAPTURE_MAKEUP_GAIN_WHILE_PLAYING +
+                         CAPTURE_GAIN_RECOVERY_FRAMES - 1) /
+            CAPTURE_GAIN_RECOVERY_FRAMES;
+        if (capture_gain > CAPTURE_MAKEUP_GAIN) {
+          capture_gain = CAPTURE_MAKEUP_GAIN;
+        }
+      }
+    }
     for (size_t index = 0U; index < HAVPE_AUDIO_FRAME_SAMPLES; ++index) {
-      const int32_t amplified =
-          (int32_t)frame.samples[index] * CAPTURE_MAKEUP_GAIN;
+      const int32_t amplified = (int32_t)frame.samples[index] * capture_gain;
       if (amplified > INT16_MAX) {
         frame.samples[index] = INT16_MAX;
         ++capture_gain_clipped_samples;
@@ -770,9 +925,13 @@ bool havpe_audio_init(void) {
         xmos_version.minor,
         xmos_version.patch);
   }
+  pipeline_stage[0] = (uint8_t)iterate_kit_voice_pe_xmos_uplink_stage();
+  pipeline_stage[1] = (uint8_t)ITERATE_KIT_VOICE_PE_XMOS_STAGE_NONE;
   if (configure_xmos_pipeline(
-          0U, iterate_kit_voice_pe_xmos_uplink_stage()) != ESP_OK ||
-      configure_xmos_pipeline(1U, ITERATE_KIT_VOICE_PE_XMOS_STAGE_NONE) !=
+          0U, (enum iterate_kit_voice_pe_xmos_stage)pipeline_stage[0]) !=
+          ESP_OK ||
+      configure_xmos_pipeline(
+          1U, (enum iterate_kit_voice_pe_xmos_stage)pipeline_stage[1]) !=
           ESP_OK) {
     ESP_LOGE(tag, "XMOS pipeline configuration failed — failing closed");
     return false;
@@ -877,4 +1036,60 @@ uint32_t havpe_audio_playback_queue_overflows(void) {
 
 uint32_t havpe_audio_capture_gain_clipped(void) {
   return capture_gain_clipped_samples;
+}
+
+uint32_t havpe_audio_capture_gain(void) {
+  return (uint32_t)capture_gain;
+}
+
+uint32_t havpe_audio_capture_raw_peak(void) {
+  return capture_raw_peak;
+}
+
+uint32_t havpe_audio_capture_clean_peak(void) {
+  return capture_clean_peak;
+}
+
+uint32_t havpe_audio_capture_echo_raw_peak(void) {
+  return capture_echo_raw_peak;
+}
+
+uint32_t havpe_audio_capture_echo_clean_peak(void) {
+  return capture_echo_clean_peak;
+}
+
+void havpe_audio_reset_echo_peaks(void) {
+  capture_echo_raw_peak = 0U;
+  capture_echo_clean_peak = 0U;
+}
+
+enum iterate_kit_status havpe_audio_set_pipeline_stage(
+    uint8_t channel, uint8_t stage) {
+  /*
+   * THE ONLY WAY TO ARGUE ABOUT AN ECHO CANCELLER IS TO MOVE IT AND WATCH.
+   *
+   * Both XMOS output taps are selectable at runtime, so a person can put the
+   * SAME microphone on both channels — one raw, one cancelled — and read the
+   * ratio out of health() without reflashing. Comparing the shipped taps
+   * (channel 0 processed, channel 1 raw) compares two different microphones,
+   * which cannot settle the question either way.
+   */
+  if (channel > 1U || stage >= (uint8_t)ITERATE_KIT_VOICE_PE_XMOS_STAGE_COUNT) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  if (configure_xmos_pipeline(
+          channel, (enum iterate_kit_voice_pe_xmos_stage)stage) != ESP_OK) {
+    return ITERATE_KIT_IO_ERROR;
+  }
+  pipeline_stage[channel] = stage;
+  havpe_audio_reset_echo_peaks();
+  return ITERATE_KIT_OK;
+}
+
+uint8_t havpe_audio_pipeline_stage(uint8_t channel) {
+  return channel > 1U ? 0xffU : pipeline_stage[channel];
+}
+
+uint32_t havpe_audio_echo_frames_muted(void) {
+  return capture_echo_frames_muted;
 }

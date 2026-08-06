@@ -190,7 +190,50 @@ static void a_momentary_drop_does_not_close_the_eyes(void) {
   assert(iterate_kit_face_awake(&wake, false, 12000U));
 }
 
+/*
+ * The complaint this exists for: three static amber dots read as a fault and
+ * a single dim blue one read as "still connecting". A device that is trying
+ * has to MOVE, and one that is ready has to hold still.
+ */
+static void connecting_walks_and_ready_holds_still(void) {
+  struct iterate_kit_rgb8 a[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+  struct iterate_kit_rgb8 b[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+  struct iterate_kit_conversation_visual_state state = ready_state();
+
+  iterate_kit_conversation_lights_animate(&state, 0U, a);
+  iterate_kit_conversation_lights_animate(&state, 700U, b);
+  assert(memcmp(a, b, sizeof(a)) == 0);
+
+  state.network = ITERATE_KIT_NETWORK_CONNECTING;
+  iterate_kit_conversation_lights_animate(&state, 0U, a);
+  iterate_kit_conversation_lights_animate(&state, 700U, b);
+  assert(memcmp(a, b, sizeof(a)) != 0);
+  {
+    /* Exactly one head, and it visits every position over a lap. */
+    bool visited[ITERATE_KIT_CONVERSATION_LIGHT_COUNT] = {false};
+    for (uint32_t now_ms = 0U; now_ms < 1400U; now_ms += 20U) {
+      unsigned lit = 0U;
+      iterate_kit_conversation_lights_animate(&state, now_ms, a);
+      for (uint32_t index = 0U;
+           index < (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
+           ++index) {
+        if (a[index].red > 200U) {
+          ++lit;
+          visited[index] = true;
+        }
+      }
+      assert(lit == 1U);
+    }
+    for (uint32_t index = 0U;
+         index < (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
+         ++index) {
+      assert(visited[index]);
+    }
+  }
+}
+
 int main(void) {
+  connecting_walks_and_ready_holds_still();
   rail_stays_inside_the_left_margin();
   every_light_has_a_socket();
   ready_leaves_the_face_alone();

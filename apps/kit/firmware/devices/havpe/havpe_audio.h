@@ -82,6 +82,49 @@ void havpe_audio_rollback_write(uint32_t ms);
 uint32_t havpe_audio_starved_ms(void);
 uint32_t havpe_audio_starve_events(void);
 uint32_t havpe_audio_written_ms(void);
+
+/** Whether the hardware ring still holds audio due out of the speaker. */
+bool havpe_audio_speaker_is_playing(void);
+
+/**
+ * The echo-cancellation oracle, sampled every 20 ms frame.
+ *
+ * `raw` is the microphone before any XMOS processing and `clean` is the same
+ * instant after AEC/IC/NS, both BEFORE the make-up gain. While the speaker is
+ * running, clean/raw is this board's cancellation, and it can be watched
+ * during a real conversation rather than reconstructed from files.
+ * `capture_gain` is the make-up factor in force, which drops to one for as
+ * long as the speaker is playing.
+ */
+uint32_t havpe_audio_capture_gain(void);
+uint32_t havpe_audio_capture_raw_peak(void);
+uint32_t havpe_audio_capture_clean_peak(void);
+
+/**
+ * The same two peaks, but only ever sampled while the speaker was running.
+ *
+ * These are the echo: what the microphone heard of this device's own voice
+ * before the XMOS and after it. Their ratio is the cancellation, and it is
+ * accumulated here rather than polled because the window is short.
+ */
+uint32_t havpe_audio_capture_echo_raw_peak(void);
+uint32_t havpe_audio_capture_echo_clean_peak(void);
+
+/**
+ * Moves an XMOS output tap, and forgets the echo measured through the old one.
+ *
+ * `stage` is the first-party pipeline enum: 0 none (the raw microphone), 1
+ * AEC, 2 AEC+IC, 3 AEC+IC+NS, 4 and AGC on top. Channel 0 is the uplink and
+ * channel 1 is the diagnostic lane. Putting the SAME stage-1 and stage-0 taps
+ * on the two channels is how the cancellation is measured honestly.
+ */
+enum iterate_kit_status havpe_audio_set_pipeline_stage(
+    uint8_t channel, uint8_t stage);
+uint8_t havpe_audio_pipeline_stage(uint8_t channel);
+void havpe_audio_reset_echo_peaks(void);
+
+/** Frames of this device's own echo that were withheld from the uplink. */
+uint32_t havpe_audio_echo_frames_muted(void);
 void havpe_audio_inject_starvation(uint32_t ms);
 bool havpe_audio_starvation_pending(void);
 uint32_t havpe_audio_take_injected_starvation(void);

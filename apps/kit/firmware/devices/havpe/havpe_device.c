@@ -10,12 +10,16 @@
  * (decoded to the speaker) plus grok-events (speech_started = barge-in
  * flush, response.done = end of answer).
  *
- * Turn taking is MANUAL: no VAD on the device. The one physical button
- * carries both intents — a short tap toggles the call, a longer hold is
- * push-to-talk. This board is genuinely full duplex with hardware AEC in
- * the XMOS DSP, so unlike the amp-gated boards the speaker path never
- * powers down; PTT here is the shared product grammar (decision A2), not
- * the echo story.
+ * Turn taking is the PROVIDER'S: this board is genuinely full duplex, with
+ * hardware echo cancellation in its XMOS DSP, so its microphone stays open
+ * for the whole call and server VAD decides where turns end. The one
+ * physical button therefore has one job — a tap starts or ends the call.
+ *
+ * It was push-to-talk until somebody tried to talk to it: the call came up,
+ * the ring showed a call with nobody listening, and speaking did nothing,
+ * because the microphone only opened while a finger held the button. PTT's
+ * rationale (decision A2) is the echo story on boards WITHOUT echo
+ * cancellation, and this is the one board that has it in silicon.
  *
  * Structure and supervision deliberately rhyme with
  * devices/waveshare_s3_amoled/waveshare_device.c and the M5StickS3 port —
@@ -47,7 +51,8 @@
 #include "iterate/kit/audio_codec.h"
 #include "iterate/kit/capabilities/conversation.h"
 #include "iterate/kit/capabilities/health.h"
-#include "iterate/kit/capabilities/push_to_talk.h"
+#include "iterate/kit/barge_in.h"
+#include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/capabilities/speaker.h"
 #include "iterate/kit/device_events.h"
 #include "iterate/kit/audio_playout.h"
@@ -112,8 +117,6 @@ enum {
   SPEAKER_HIGH_WATER_MS = ITERATE_KIT_VOICE_SPEAKER_HIGH_WATER_MS,
   SPEAKER_CATCHUP_EVERY = ITERATE_KIT_VOICE_SPEAKER_CATCHUP_EVERY,
   SPEAKER_IDLE_POWERDOWN_MS = ITERATE_KIT_VOICE_SPEAKER_IDLE_POWERDOWN_MS,
-  TURN_FLUSH_TIMEOUT_MS = ITERATE_KIT_VOICE_TURN_FLUSH_TIMEOUT_MS,
-  TURN_MAX_MS = ITERATE_KIT_VOICE_TURN_MAX_MS,
   BUTTON_POLL_MS = ITERATE_KIT_VOICE_CONTROL_POLL_MS,
   STATS_INTERVAL_MS = ITERATE_KIT_VOICE_STATS_INTERVAL_MS,
   UNHEALTHY_RESTART_MS = ITERATE_KIT_VOICE_UNHEALTHY_RESTART_MS,
@@ -204,9 +207,7 @@ static struct {
   struct iterate_kit_device_event device_event_storage
       [ITERATE_KIT_VOICE_DEVICE_EVENT_CAPACITY];
   struct iterate_kit_device_event_queue device_events;
-  struct iterate_kit_push_to_talk push_to_talk;
   struct iterate_kit_conversation_control conversation_control;
-  bool remote_talk;
   struct iterate_kit_voicelab voicelab;
   struct iterate_kit_playout playout;
   uint32_t voicelab_generation;
@@ -230,6 +231,11 @@ static struct {
   uint32_t mic_process_failures;
   /** Captured with no turn open: room noise, never sent, never queued. */
   uint32_t mic_frames_idle;
+  /* Loudest sample in the newest frame, and the loudest ever seen. */
+  atomic_uint mic_peak;
+  atomic_uint mic_peak_max;
+  struct iterate_kit_barge_in barge_in;
+  uint32_t barge_in_rejected;
   uint32_t speaker_frames_played;
   /* Written by both the app producer and playback consumer. */
   atomic_uint speaker_overflow_drops;
@@ -268,7 +274,6 @@ static struct {
   uint64_t last_pulse_ms;
   bool talking;
   /* Release pressed, but the capture queue is not yet on the wire. */
-  bool flushing_turn;
   atomic_bool speaker_reprime;
   /*
    * When the current answer's playout began, and how much of it has played.
@@ -286,9 +291,6 @@ static struct {
    */
   atomic_bool answer_declared_done;
   uint32_t turn_marker_failures;
-  uint32_t flush_frames_left;
-  uint64_t flush_deadline_ms;
-  uint64_t turn_started_ms;
 } runtime;
 
 static uint32_t speaker_queued_bytes(void) {
@@ -316,8 +318,13 @@ static const char peer_description[] =
     "screen: its LED ring is the only local feedback. Hold the centre button "
     "to talk; a short tap starts and ends the call. "
     "conversation.start() / conversation.end() begin and end a call. "
-    "pushToTalk.start() / pushToTalk.stop() hold the microphone open, "
-    "joining the physical button as a wired-OR. "
+    "aec.setStage({channel,stage}) moves an XMOS output tap — stage 0 is the "
+    "raw microphone, 1 AEC, 2 AEC+IC, 3 AEC+IC+NS, 4 with AGC — and health() "
+    "reports echoRawPeak and echoCleanPeak accumulated while the speaker was "
+    "running, which is how this board's cancellation is measured. "
+    "There is no push-to-talk: this board has hardware echo cancellation in "
+    "its XMOS DSP, so its microphone is open for the whole call and the "
+    "provider's server VAD decides when you have finished speaking. "
     "speaker.setVolume({percent}) sets how loud it plays, 0-100; it clamps "
     "to a ceiling this board has a measured reason for and answers with "
     "{percent,ceiling}, which speaker.volume() also returns. "
@@ -340,28 +347,6 @@ static void on_session_ended(void *context) {
 static uint64_t now_ms(void *context) {
   (void)context;
   return (uint64_t)(esp_timer_get_time() / 1000);
-}
-
-static bool publish_turn_marker(enum iterate_kit_voicelab_turn turn) {
-  const enum capnweb_status status =
-      iterate_kit_voicelab_mark_turn(&runtime.voicelab, turn);
-  if (status == CAPNWEB_OK) return true;
-
-  ++runtime.turn_marker_failures;
-  ESP_LOGE(
-      tag,
-      "turn %s publication failed: capnweb=%d; replacing transport",
-      turn == ITERATE_KIT_VOICELAB_TURN_START ? "start" : "commit",
-      (int)status);
-  /*
-   * The bridge cannot infer a missing edge. Invalidate the producer gate
-   * now, then remount on a fresh session rather than sending audio whose
-   * turn state is ambiguous or pretending a commit succeeded.
-   */
-  runtime.voicelab_generation = 0U;
-  iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
-  havpe_ui_set_status("reconnecting");
-  return false;
 }
 
 /* --- speaker path (voicelab callbacks run on the app task) ---------------- */
@@ -461,7 +446,17 @@ static void on_control(
     void *context, enum iterate_kit_voicelab_control control) {
   (void)context;
   if (control == ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED) {
-    /* Barge-in: atomically invalidate and reset every queued frame. */
+    /*
+     * THE PROVIDER IS NOT THE ONLY WITNESS. Its VAD hears what this device
+     * sends, which during an answer is the echo the canceller missed; six
+     * barge-ins arrived across four answers with nobody in the room, and
+     * more of the answer was thrown away than was ever played. The device
+     * corroborates with its own microphone before flushing anything.
+     */
+    if (!iterate_kit_barge_in_admit(&runtime.barge_in, now_ms(NULL))) {
+      ++runtime.barge_in_rejected;
+      return;
+    }
     (void)abandon_speaker_audio();
     iterate_kit_playout_interrupt(&runtime.playout);
     ++runtime.barge_in_flushes;
@@ -829,6 +824,42 @@ static void capture_task(void *argument) {
     }
     ++runtime.mic_frames_captured;
     /*
+     * WHAT THE RING SHOWS WHILE SOMEBODY IS TALKING. Without this the
+     * microphone sector could only say "open", never "hearing you", and a
+     * board with no screen then looks identical whether it is listening or
+     * deaf — which is exactly how it was reported. One pass over a 20 ms
+     * frame, on the task that already owns these samples.
+     */
+    {
+      int32_t peak = 0;
+      for (size_t index = 0U; index < FRAME_SAMPLES; ++index) {
+        const int32_t sample = processed_frame.samples[index];
+        const int32_t magnitude = sample < 0 ? -sample : sample;
+        if (magnitude > peak) peak = magnitude;
+      }
+      havpe_ui_set_microphone_peak((uint32_t)peak);
+      /*
+       * The same peak, kept as the evidence a barge-in has to point at. Taken
+       * BEFORE the make-up gain: amplifying the residual first is exactly how
+       * an echo gets mistaken for a voice.
+       */
+      iterate_kit_barge_in_observe(
+          &runtime.barge_in, (uint32_t)peak, now_ms(NULL));
+      /*
+       * ...and keep it where health() can be asked, because the barge-in
+       * threshold below has to be chosen from measured numbers rather than
+       * from a plausible-looking constant.
+       */
+      atomic_store_explicit(
+          &runtime.mic_peak, (unsigned int)peak, memory_order_relaxed);
+      if ((unsigned int)peak > atomic_load_explicit(
+                                   &runtime.mic_peak_max,
+                                   memory_order_relaxed)) {
+        atomic_store_explicit(
+            &runtime.mic_peak_max, (unsigned int)peak, memory_order_relaxed);
+      }
+    }
+    /*
      * NOBODY IS LISTENING, SO DO NOT QUEUE. Capture runs continuously on
      * this full-duplex board; frames outside an open turn are counted and
      * discarded here so the drop counter keeps meaning "speech somebody
@@ -870,11 +901,13 @@ static enum iterate_kit_status handle_device_event(
   (void)context;
   switch ((enum iterate_kit_device_event_type)event->type) {
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
-      runtime.remote_talk = true;
-      return ITERATE_KIT_OK;
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
-      runtime.remote_talk = false;
-      return ITERATE_KIT_OK;
+      /*
+       * Unreachable: this board does not mount push-to-talk, because its
+       * microphone is open for the whole call. Answering "invalid" rather
+       * than "ok" keeps that true if the module is ever mounted by mistake.
+       */
+      break;
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
       havpe_ui_request_call(true);
       return ITERATE_KIT_OK;
@@ -903,9 +936,65 @@ static uint8_t speaker_volume(void *context) {
   return havpe_audio_volume();
 }
 
+
+/* --- the XMOS pipeline, as something a person can move and then measure ---- */
+
+/*
+ * BOARD-LOCAL ON PURPOSE. Every other device here mounts portable capability
+ * modules, and this one is not portable: it is a handle on the XMOS taps that
+ * only this board has. It exists because an echo canceller cannot be argued
+ * about, only measured, and measuring it means putting the SAME microphone on
+ * both output channels — one raw, one cancelled — which needs a knob rather
+ * than a rebuild.
+ */
+static const char *const aec_set_stage_path[] = {"aec", "setStage"};
+
+static enum capnweb_status aec_set_stage(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct capnweb_value object = {0};
+  int64_t channel = 0;
+  int64_t stage = 0;
+  (void)context;
+  if (!iterate_kit_read_object_argument(call, &object) ||
+      !iterate_kit_read_int_field(&object, "channel", &channel) ||
+      !iterate_kit_read_int_field(&object, "stage", &stage)) {
+    return capnweb_reply_set_error(
+        reply, "TypeError", "aec.setStage needs {channel, stage}");
+  }
+  if (channel < 0 || channel > 1 || stage < 0 || stage > 4) {
+    return capnweb_reply_set_error(
+        reply,
+        "RangeError",
+        "channel is 0 or 1; stage is 0 none, 1 aec, 2 ic, 3 ns, 4 agc");
+  }
+  if (havpe_audio_set_pipeline_stage((uint8_t)channel, (uint8_t)stage) !=
+      ITERATE_KIT_OK) {
+    return capnweb_reply_set_error(
+        reply, "Error", "the XMOS refused the pipeline change");
+  }
+  return capnweb_reply_set_boolean(reply, true);
+}
+
+static struct iterate_kit_module aec_module(void) {
+  static const struct iterate_kit_method methods[] = {
+    {aec_set_stage_path, 2U, aec_set_stage},
+  };
+  const struct iterate_kit_module module = {
+    .methods = methods,
+    .method_count = sizeof(methods) / sizeof(methods[0]),
+    .context = NULL,
+    .poll = NULL,
+    .close = NULL,
+    .session_ended = NULL,
+  };
+  return module;
+}
+
 static bool initialise_connection(void) {
   static const char *const mount_path[] = {"kit", "homeAssistantVoicePreviewEdition"};
-  static struct iterate_kit_module modules[4];
+  static struct iterate_kit_module modules[5];
   static struct iterate_kit_speaker speaker;
   static struct iterate_kit_health health;
   size_t module_count = 0U;
@@ -922,19 +1011,15 @@ static bool initialise_connection(void) {
     };
     if (iterate_kit_device_event_queue_init(
             &runtime.device_events, &event_options) != ITERATE_KIT_OK ||
-        iterate_kit_push_to_talk_init(
-            &runtime.push_to_talk, &runtime.device_events) !=
-            ITERATE_KIT_OK ||
         iterate_kit_conversation_control_init(
             &runtime.conversation_control, &runtime.device_events) !=
             ITERATE_KIT_OK) {
       return false;
     }
     modules[module_count++] =
-        iterate_kit_push_to_talk_module(&runtime.push_to_talk);
-    modules[module_count++] =
         iterate_kit_conversation_control_module(&runtime.conversation_control);
   }
+  modules[module_count++] = aec_module();
   /*
    * TURN IT UP. Every board here shipped at a volume somebody measured once
    * and nobody could change without a reflash, and all four were reported as
@@ -1059,6 +1144,11 @@ static size_t health_json(char *out, size_t capacity) {
     {"codecCaptureOverruns", havpe_audio_capture_overruns()},
     {"codecCaptureFailures", havpe_audio_capture_driver_failures()},
     {"micIdle", runtime.mic_frames_idle},
+    {"micPeak",
+     atomic_load_explicit(&runtime.mic_peak, memory_order_relaxed)},
+    {"micPeakMax",
+     atomic_load_explicit(&runtime.mic_peak_max, memory_order_relaxed)},
+
     {"spkFrames", runtime.voicelab.spk_frames_received},
     {"spkPlayed", runtime.speaker_frames_played},
     {"spkOverflow",
@@ -1080,6 +1170,15 @@ static size_t health_json(char *out, size_t capacity) {
     {"spkWriteFailures", runtime.speaker_write_failures},
     {"codecPlaybackFailures", havpe_audio_playback_driver_failures()},
     {"captureGainClipped", havpe_audio_capture_gain_clipped()},
+    /* The AEC oracle: cleanPeak/rawPeak while speaking IS the cancellation. */
+    {"captureGain", havpe_audio_capture_gain()},
+    {"micRawPeak", havpe_audio_capture_raw_peak()},
+    {"micCleanPeak", havpe_audio_capture_clean_peak()},
+    {"speakerPlaying", havpe_audio_speaker_is_playing() ? 1U : 0U},
+    {"aecUplinkStage", havpe_audio_pipeline_stage(0U)},
+    {"aecDiagnosticStage", havpe_audio_pipeline_stage(1U)},
+    {"echoRawPeak", havpe_audio_capture_echo_raw_peak()},
+    {"echoCleanPeak", havpe_audio_capture_echo_clean_peak()},
     /* Driver-level DMA overflows: the slave buses' own loss signals. */
     {"captureQueueOverflows", havpe_audio_capture_queue_overflows()},
     {"playbackQueueOverflows", havpe_audio_playback_queue_overflows()},
@@ -1106,6 +1205,10 @@ static size_t health_json(char *out, size_t capacity) {
     {"spkWaitPriming", runtime.speaker_waits_priming},
     {"spkAnswerDrains", runtime.speaker_waits_dry},
     {"bargeIns", runtime.barge_in_flushes},
+    /* Refused for want of evidence: high here means the room, not a person. */
+    {"bargeInsRejected", runtime.barge_in_rejected},
+    /* Echo this device declined to send the provider; the self-cancel fix. */
+    {"echoFramesMuted", havpe_audio_echo_frames_muted()},
     {"turnMarkerFailures", runtime.turn_marker_failures},
     {"batches", runtime.voicelab.batches_on_connection},
     {"connGeneration", runtime.voicelab.connection_generation},
@@ -1486,14 +1589,12 @@ void iterate_kit_havpe_run(void) {
       havpe_ui_request_call(wanted);
       ESP_LOGI(tag, "tap: %s call", wanted ? "starting" : "ending");
     }
-    {
-      static bool talk_logged;
-      const bool talk = havpe_button_talk_held();
-      if (talk != talk_logged) {
-        talk_logged = talk;
-        ESP_LOGI(tag, "hold %s", talk ? "down (talking)" : "up (commit)");
-      }
-    }
+    /*
+     * The hold gesture is retained by the button poller but no longer means
+     * anything: with the microphone open for the whole call there is no turn
+     * to hold. Holding is therefore harmless, and — importantly — a long
+     * press is still NOT a tap, so leaning on the button cannot hang up.
+     */
 
     if (runtime.transport.state != runtime.last_transport_state) {
       ESP_LOGI(
@@ -1667,6 +1768,12 @@ void iterate_kit_havpe_run(void) {
         .project_api_key = runtime.configuration.project_api_key,
         .stream_path = stream_path,
         .call_id = CALL_ID,
+        /*
+         * The provider segments turns, because nothing on this device does
+         * any more. Requesting the default manual turns with no turn machine
+         * produces an accepted call and a deaf assistant.
+         */
+        .turns = "vad",
         .now_ms = now_ms,
         .clock_context = NULL,
         .on_speaker = on_speaker_pcm,
@@ -1729,13 +1836,11 @@ void iterate_kit_havpe_run(void) {
      * user's intent and what the screen says must never depend on the
      * network being up — only the appends do.
      */
-    if (runtime.talking && !runtime.flushing_turn &&
+    if (runtime.talking &&
         (runtime.voicelab.state != ITERATE_KIT_VOICELAB_READY ||
          !runtime.voicelab.call_active)) {
-      ESP_LOGW(tag, "turn abandoned: session or call went away");
+      ESP_LOGW(tag, "microphone closed: session or call went away");
       runtime.talking = false;
-      runtime.flushing_turn = false;
-      runtime.remote_talk = false;
       havpe_ui_set_state(HAVPE_UI_IDLE);
       havpe_ui_set_status("connection lost — press side to call");
     }
@@ -1772,8 +1877,6 @@ void iterate_kit_havpe_run(void) {
         if (wants_call && !wanted_previously) runtime.voicelab.last_batch_ms = now;
         wanted_previously = wants_call;
       }
-      const bool wants_talk =
-          wants_call && (havpe_button_talk_held() || runtime.remote_talk);
 
       /*
        * The bridge holds the call in a Durable Object this device cannot
@@ -1792,8 +1895,6 @@ void iterate_kit_havpe_run(void) {
             (unsigned int)(BRIDGE_SILENCE_MS / 1000U));
         iterate_kit_voicelab_forget_call(&runtime.voicelab);
         runtime.talking = false;
-        runtime.flushing_turn = false;
-        runtime.remote_talk = false;
         havpe_ui_set_state(HAVPE_UI_CONNECTING);
         havpe_ui_set_status(
             wants_call ? "call dropped — reconnecting" : "call dropped");
@@ -1943,65 +2044,39 @@ void iterate_kit_havpe_run(void) {
        * A turn is bounded no matter what: a wedged turn is worse than a
        * truncated one because nothing is ever sent for an answer.
        */
-      if (runtime.talking && !runtime.flushing_turn &&
-          iterate_kit_voice_elapsed_ms(now, runtime.turn_started_ms) >
-              TURN_MAX_MS) {
-        ESP_LOGW(tag, "turn exceeded %ums — ending it", (unsigned)TURN_MAX_MS);
-        runtime.flushing_turn = true;
-        runtime.flush_frames_left = 0U;
-        runtime.flush_deadline_ms = now;
-      }
-      if (wants_talk && !runtime.talking && runtime.voicelab.call_active &&
-          outbox_free >= 3U) {
-        /*
-         * Pressing to talk abandons whatever is still playing — an
-         * intentional flush like any other. The funnel also reprimes, so the
-         * next answer's first frame does not play with zero cushion.
-         */
-        (void)abandon_speaker_audio();
-        iterate_kit_playout_interrupt(&runtime.playout);
-        (void)xQueueReset(runtime.mic_queue); /* drop pre-press room noise */
-        runtime.frame_sequence = 0U;
-        if (publish_turn_marker(ITERATE_KIT_VOICELAB_TURN_START)) {
-          runtime.talking = true;
-          runtime.turn_started_ms = now;
-          runtime.flushing_turn = false;
-          ESP_LOGI(tag, "turn start");
-          havpe_ui_set_state(HAVPE_UI_LISTENING);
-          havpe_ui_set_status("listening — release to send");
-        }
-      }
       /*
-       * Releasing does NOT commit immediately: flush exactly what was
-       * captured UP TO the release, and no more, against a bounded deadline
-       * so a stalled uplink cannot hang the turn forever.
+       * NO TURN MACHINE ON THIS BOARD, AND THIS IS THE BOARD THAT DESERVES IT
+       * LEAST OF ALL. It carries a dedicated XMOS DSP doing hardware echo
+       * cancellation — `capture_is_echo_cancelled` is true here and false on
+       * every other board — and it was nevertheless the one gated behind a
+       * held button, while the StackChan, whose AEC is software, ran open-mic
+       * on the provider's server VAD.
+       *
+       * That was backwards, and it presented as a broken device: tapping the
+       * button opened a call, the ring showed one dim blue pixel meaning "call
+       * up, nobody listening", and speaking into it did nothing at all,
+       * because the microphone only opened while a finger was on the button.
+       *
+       * So the microphone rides the open call, exactly as it does on the
+       * StackChan: the provider's server VAD segments turns and barge-in
+       * arrives as speech_started. PTT's rationale was always the echo story
+       * on boards WITHOUT echo cancellation, which is now the Stick and the
+       * Waveshare and never this one.
        */
-      if (!wants_talk && runtime.talking && !runtime.flushing_turn) {
-        runtime.flushing_turn = true;
-        runtime.flush_frames_left =
-            (uint32_t)uxQueueMessagesWaiting(runtime.mic_queue);
-        runtime.flush_deadline_ms = now + TURN_FLUSH_TIMEOUT_MS;
-        havpe_ui_set_status("sending");
-      }
-      if (runtime.flushing_turn &&
-          (runtime.flush_frames_left == 0U ||
-           now >= runtime.flush_deadline_ms)) {
-        const bool timed_out = runtime.flush_frames_left > 0U;
-        runtime.talking = false;
-        runtime.flushing_turn = false;
-        ESP_LOGI(tag, "turn commit%s", timed_out ? " (tail dropped)" : "");
-        if (publish_turn_marker(ITERATE_KIT_VOICELAB_TURN_COMMIT)) {
-          havpe_ui_set_state(HAVPE_UI_SPEAKING);
-          havpe_ui_set_status("thinking");
+      if (runtime.talking != runtime.voicelab.call_active) {
+        runtime.talking = runtime.voicelab.call_active;
+        if (runtime.talking) {
+          (void)xQueueReset(runtime.mic_queue); /* drop pre-call room noise */
+          runtime.frame_sequence = 0U;
+          havpe_ui_set_state(HAVPE_UI_LISTENING);
+          havpe_ui_set_status("listening");
         }
       }
 
-      /* The microphone is only on the wire while the talk button is down. */
+      /* The microphone is only on the wire while a call is open. */
       {
         const size_t queued = uxQueueMessagesWaiting(runtime.mic_queue);
-        /* A partial batch is only worth sending at the end of a turn. */
-        const size_t needed =
-            runtime.flushing_turn ? 1U : (size_t)MIC_FRAMES_PER_APPEND;
+        const size_t needed = (size_t)MIC_FRAMES_PER_APPEND;
         /*
          * The window paces the uplink at exactly capture rate, so any
          * backlog is permanent: when one exists, send immediately instead
@@ -2035,9 +2110,6 @@ void iterate_kit_havpe_run(void) {
               runtime.frame_sequence,
               now);
           runtime.frame_sequence += (uint32_t)take;
-          runtime.flush_frames_left = runtime.flush_frames_left > take
-              ? runtime.flush_frames_left - (uint32_t)take
-              : 0U;
         }
       }
       /*

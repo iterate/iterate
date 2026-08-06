@@ -28,6 +28,16 @@ void havpe_ui_set_state(enum havpe_ui_state state);
 void havpe_ui_set_status(const char *status);
 void havpe_ui_set_call_active(bool active);
 void havpe_ui_set_link_ready(bool ready);
+
+/**
+ * The loudest sample in the most recent captured frame.
+ *
+ * Called from the CAPTURE task, which is why it stores a single aligned word
+ * and nothing else. Presentation only: the microphone sector of the ring
+ * meters it so a person can SEE the device hearing them, and nothing in AEC,
+ * VAD or flow control reads it.
+ */
+void havpe_ui_set_microphone_peak(uint32_t peak);
 /**
  * Latches an unrecoverable start-up fault onto this device's status surface.
  *
