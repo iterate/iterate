@@ -1397,6 +1397,10 @@ export class StreamEventSender {
       }
       if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
     }
+    const pendingProbeAt = this.connections.nextPendingDeliveryProbeAtMs();
+    if (pendingProbeAt !== null && (next === null || pendingProbeAt < next)) {
+      next = pendingProbeAt;
+    }
     if (next !== null) this.#hooks.armAlarm(next);
     this.connections.rearmIdleAlarm();
     // Nothing durable needs a future turn and no idle deadline is pending:
@@ -1574,6 +1578,7 @@ type StreamConnection = {
   hasPendingDelivery(): boolean;
   pendingDeliveryStartedAtMs(): number | null;
   pendingDeliveryDeadlineAtMs(): number | null;
+  pendingDeliveryProbeAtMs(): number | null;
   takeDuePendingDeliveryProbe(nowMs: number): boolean;
   schedulePendingDeliveryProbe(atMs: number): void;
   notePendingDeliveryProbeReachedOwner(): void;
@@ -1844,6 +1849,16 @@ export class StreamConnections {
 
   rearmIdleAlarm(): void {
     if (this.#idleTeardownAtMs !== null) this.#hooks.armAlarm(this.#idleTeardownAtMs);
+  }
+
+  /** The earliest live callback probe that the shared native alarm must preserve. */
+  nextPendingDeliveryProbeAtMs(): number | null {
+    let next: number | null = null;
+    for (const connection of this.#connections.values()) {
+      const atMs = connection.pendingDeliveryProbeAtMs();
+      if (atMs !== null && (next === null || atMs < next)) next = atMs;
+    }
+    return next;
   }
 
   /** Whether an idle-teardown deadline is pending (the alarm must stay armed for it). */
@@ -2439,6 +2454,7 @@ export class StreamConnections {
       hasPendingDelivery: () => (kind === "hosted" ? hostedBatchPending : false),
       pendingDeliveryStartedAtMs: () => hostedBatchStartedAtMs,
       pendingDeliveryDeadlineAtMs: () => hostedBatchDeadlineAtMs,
+      pendingDeliveryProbeAtMs: () => hostedBatchProbeAtMs,
       takeDuePendingDeliveryProbe: (nowMs) => {
         if (hostedBatchProbeAtMs === null || hostedBatchProbeAtMs > nowMs) return false;
         hostedBatchProbeAtMs = null;

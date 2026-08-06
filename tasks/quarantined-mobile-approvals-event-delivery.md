@@ -33,8 +33,12 @@ gate candidates made both restored cases first-try green with no durable
 callback failures. Candidate nine exposed a race in the new stream-incarnation
 regression: Cloudflare can return from the deliberate kill just before the
 relay observes its broken RPC leg. The test now requires that public ping to
-transition to false inside the owner's existing 15-second liveness window; the
-product contract is unchanged, and the exact-head gate restarts from zero.
+transition to false inside the owner's existing 15-second liveness window. The
+next head's first candidate exposed a separate product defect: final hosted-
+wake alarm reconciliation re-derived only the 20-second durable watchdog, not
+the live callback's one-second owner probe. A red/green unit regression now
+makes the probe part of every alarm recomputation. The exact-head gate restarts
+from zero after preview deployment.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -189,6 +193,16 @@ notification journal.
   the same combined state. The retry passed in 45.2 seconds. The two waits are
   now one exact catalog-state condition under the test's existing 30-second
   budget; assertions and product timeouts are unchanged.
+- The first canonical workflow on `ddcdcf2` passed both restored mobile cases
+  and the stream-incarnation regression first try, but the forced Project
+  restart case retried after its first 12-second public wait expired. Exact
+  Stream telemetry showed the pending hosted batch start at 02:03:21.748Z but
+  no one-second probe alarm; the first alarm fired at 02:03:37.520Z and only
+  then classified the killed callbacks. A focused unit regression reproduced
+  the final reconciliation arming the 20-second watchdog (`30000`) after the
+  one-second probe (`11000`). Alarm recomputation now includes the earliest
+  live pending-delivery probe, and the regression plus both adjacent stream
+  suites pass.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 

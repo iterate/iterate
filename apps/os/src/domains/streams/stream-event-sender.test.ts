@@ -5,6 +5,7 @@ import {
   type StreamEvent,
   type StreamEventBatch,
   type StreamEventInput,
+  type StreamPingInput,
   type StreamWakeEventBatch,
   type StreamWebhookDelivery,
 } from "iterate/processors";
@@ -551,6 +552,28 @@ describe("StreamEventSender hosted processor delivery", () => {
       nextAttemptAt: null,
       inFlightDeadlineAt: null,
     });
+  });
+
+  it("keeps the pending hosted probe as the earliest alarm after wake settlement", async () => {
+    const h = harness({
+      events: [event(2, "b", { keep: true })],
+      wakeProcessor: async () => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: 0,
+        processEventBatch: retainedProcessEventBatch(() => undefined),
+        ping: Object.assign(async ({ t0 }: StreamPingInput) => ({ t0, t1: t0, t2: t0 }), {
+          [Symbol.dispose]: () => undefined,
+        }),
+      }),
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    // The wake's final reconciliation must still derive the one-second live
+    // callback probe. Re-arming only the durable 20-second watchdog can replace
+    // the probe in native alarm state and strand a reset callback until timeout.
+    expect(h.alarms.at(-1)).toBe(11_000);
   });
 
   it("closes a hosted callback whose durable configuration was replaced", async () => {
