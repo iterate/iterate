@@ -53,7 +53,13 @@ binding repo handle omitted the assumed REST-only `lastPushAt` metadata, so
 `undefined !== null` skipped the seed. Recovery now verifies the actual
 default-branch head through the binding's server-side `log()` call inside the
 same eight-second budget; missing heads seed, while existing heads avoid a
-potentially unbounded clone. The gate remains at zero pending that deployment.
+potentially unbounded clone. That deployment and the next two canonical
+candidates were retry-free. The third candidate reset the streak: approvals
+hit Better Auth's IP-wide 3/minute email-OTP limit while seven signup flows
+shared one CI runner, and the recreated-source lifecycle proof also retried.
+Fixed-test-OTP stages now allow the fully parallel signup lane while production
+retains 3/minute. Stream recovery still needs exact-head verification; the
+gate is zero.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -249,6 +255,15 @@ notification journal.
   property as proof of a push. Red/green tests now cover a handle with no
   branch, a missing default-branch error, a valid existing head, and a stalled
   head check sharing the original deadline.
+- Exact-head workflow `2lhj7j115w` rejected the next streak after two clean
+  candidates. The approvals trace captured a 429 from
+  `/api/auth/email-otp/send-verification-otp` with `x-retry-after: 46` while
+  the popup still showed its email form. Better Auth keys that plugin limit by
+  runner IP and endpoint, so seven unique test emails still contend for its
+  default three requests per minute. Fixed-test-OTP stages now use 100/minute;
+  production keeps 3/minute, with red/green policy coverage. The same workflow
+  retried the recreated-source hosted-processor proof; its stream recovery
+  remains separate from this auth fix.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -450,3 +465,9 @@ Test these in order; do not treat the first plausible one as the conclusion.
   Added the missing wire-safe `retryable` flag to both named repo-readiness
   errors. The expanded four-suite set passes 105 tests and OS typecheck is
   green; no test wait or assertion changed.
+- 2026-08-06: The corrected Artifacts head passed deployment plus two strict
+  gate candidates. Candidate three reset the streak for an auth 429 and one
+  recreated-source lifecycle retry. Trace evidence showed the OTP request was
+  the fourth-or-later same-IP send inside Better Auth's 60-second window, not
+  a slow locator. Added red/green policy coverage and raised only fixed-test-
+  OTP stages to 100/minute; production remains at 3/minute.

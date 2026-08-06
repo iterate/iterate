@@ -48,6 +48,14 @@ export function shouldUseTestOtp(input: { email: string; fixedTestOtpEnabled: bo
   return localPart.endsWith("+test") && domain === "nustom.com";
 }
 
+export function getEmailOtpRateLimit(fixedTestOtpEnabled: boolean) {
+  // Better Auth keys this limit by client IP + endpoint. Canonical preview CI
+  // runs seven real signup flows in parallel from one runner, so its default
+  // three-per-minute policy deterministically rejects a healthy test. Fixed
+  // OTP is forbidden in production; keep the conservative default there.
+  return { max: fixedTestOtpEnabled ? 100 : 3, window: 60 };
+}
+
 export function getEmailOtpSenderAddress(senderDomain: string) {
   return getAuthEmailSenderAddress(senderDomain, "Email OTP");
 }

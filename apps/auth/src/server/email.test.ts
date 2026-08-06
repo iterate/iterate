@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  getEmailOtpRateLimit,
   getEmailOtpSenderAddress,
   sendEmailOtp,
   sendOrganizationInvitationEmail,
@@ -33,6 +34,11 @@ describe("email OTP", () => {
       shouldUseTestOtp({ email: "alice+test@nustom.com", fixedTestOtpEnabled: false }),
       false,
     );
+  });
+
+  it("allows the fully parallel preview signup lane only on fixed-test-OTP stages", () => {
+    assert.deepEqual(getEmailOtpRateLimit(true), { max: 100, window: 60 });
+    assert.deepEqual(getEmailOtpRateLimit(false), { max: 3, window: 60 });
   });
 
   it("builds the auth sender from the configured sender domain", () => {
