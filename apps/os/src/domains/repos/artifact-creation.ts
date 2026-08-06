@@ -57,20 +57,17 @@ export async function getOrCreateArtifact(
   },
   name: string,
   input: {
-    createTimeoutMs: number | null;
+    createTimeoutMs: number;
     defaultBranch: string;
     recoveryTimeoutMs: number;
   },
 ): Promise<GetOrCreateArtifactResult> {
-  const createTimeoutMs = input.createTimeoutMs;
   try {
-    const create = () => artifacts.create(name, { setDefaultBranch: input.defaultBranch });
-    const created =
-      createTimeoutMs === null
-        ? await create()
-        : await beforeArtifactCreationDeadline(create, Date.now() + createTimeoutMs, () =>
-            artifactCreationTimeout(name, createTimeoutMs, undefined),
-          );
+    const created = await beforeArtifactCreationDeadline(
+      () => artifacts.create(name, { setDefaultBranch: input.defaultBranch }),
+      Date.now() + input.createTimeoutMs,
+      () => artifactCreationTimeout(name, input.createTimeoutMs, undefined),
+    );
     return {
       branchState: "empty",
       created: true,

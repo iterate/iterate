@@ -23,6 +23,7 @@ import {
 const CREATION_HANDOFF_DELAY_MS = 1_000;
 const CREATION_RETRY_DELAY_MS = 10_000;
 const MAX_CREATION_ATTEMPTS = 5;
+const COORDINATED_ARTIFACT_CREATE_TIMEOUT_MS = 180_000;
 const COORDINATED_ARTIFACT_RECOVERY_TIMEOUT_MS = 75_000;
 
 const RepoBirthHandoffInput = z.strictObject({
@@ -271,10 +272,10 @@ export class RepoBirthCoordinatorDurableObject extends DurableObject<Env> {
     const artifact = await timedStep("create-timing", timing, "artifact-get-or-create", () =>
       getOrCreateArtifact(this.env.ARTIFACTS, artifactName, {
         // This alarm owns the operation independently of the retained stream
-        // callback. Await create() itself: abandoning its successful response
-        // would discard the one-time initial write token. Only an ambiguous
-        // ALREADY_EXISTS readback is bounded.
-        createTimeoutMs: null,
+        // callback, so preserve the live-observed 160.5-second response and
+        // its one-time token. The 180-second ceiling still guarantees a hung
+        // vendor call returns to the explicit five-attempt recovery ladder.
+        createTimeoutMs: COORDINATED_ARTIFACT_CREATE_TIMEOUT_MS,
         defaultBranch,
         recoveryTimeoutMs: COORDINATED_ARTIFACT_RECOVERY_TIMEOUT_MS,
       }),

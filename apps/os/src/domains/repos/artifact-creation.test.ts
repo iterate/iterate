@@ -49,7 +49,7 @@ test("a new repo preserves create's initial write token without reading it back"
   expect(artifacts.get).not.toHaveBeenCalled();
 });
 
-test("coordinator-owned creation awaits the one-time initial token instead of abandoning it", async () => {
+test("coordinator-owned creation preserves the observed 160-second initial token", async () => {
   vi.useFakeTimers();
   try {
     const create = Promise.withResolvers<{ token: string }>();
@@ -59,14 +59,14 @@ test("coordinator-owned creation awaits the one-time initial token instead of ab
     };
 
     const result = getOrCreateArtifact(artifacts, "project-repo", {
-      createTimeoutMs: null,
+      createTimeoutMs: 180_000,
       defaultBranch: "main",
       recoveryTimeoutMs: 8_000,
     });
     const settled = vi.fn();
     void result.then(settled, settled);
 
-    await vi.advanceTimersByTimeAsync(180_000);
+    await vi.advanceTimersByTimeAsync(160_512);
     expect(settled).not.toHaveBeenCalled();
 
     create.resolve({ token: "art_v1_initial?expires=1760000000" });
@@ -75,6 +75,32 @@ test("coordinator-owned creation awaits the one-time initial token instead of ab
       initialWriteToken: "art_v1_initial",
     });
     expect(artifacts.get).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("coordinator-owned creation has a finite outer deadline", async () => {
+  vi.useFakeTimers();
+  try {
+    const artifacts = {
+      create: vi.fn(() => new Promise<never>(() => {})),
+      get: vi.fn(),
+    };
+
+    const result = getOrCreateArtifact(artifacts, "project-repo", {
+      createTimeoutMs: 180_000,
+      defaultBranch: "main",
+      recoveryTimeoutMs: 8_000,
+    });
+    const rejection = expect(result).rejects.toMatchObject({
+      message: "Artifact project-repo did not finish creating within 180000ms.",
+      name: "RetryableRepoCreationError",
+      retryable: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(180_000);
+    await rejection;
   } finally {
     vi.useRealTimers();
   }

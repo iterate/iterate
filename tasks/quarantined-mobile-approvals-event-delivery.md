@@ -530,7 +530,13 @@ Test these in order; do not treat the first plausible one as the conclusion.
   readback, checkpoints the seeded Artifact before the terminal append, and
   publishes `repos/created` through `appendIfStreamId`. Repo adopts the exact
   seeded head before acknowledging birth. Classified vendor outages use a
-  bounded explicit alarm retry; invariant failures remain error-visible. The
-  red/green no-abandon, handoff, checkpoint, append-recovery, stale-lifetime,
-  and wire-stripped-503 cases pass with all 246 repo tests (two expected
-  failures), OS typecheck, root lint, and formatting.
+  bounded explicit alarm retry; invariant failures remain error-visible. A
+  180-second outer create deadline preserves the live-observed 160.5-second
+  response while guaranteeing that a hung vendor call returns to the
+  five-attempt ladder; the fifth classified failure appends one durable
+  `repos/create-failed`. The red/green no-abandon, deadline, handoff,
+  checkpoint, append-recovery, stale-lifetime, and wire-stripped-503 cases
+  pass with all 246 repo tests (two expected failures), OS typecheck, root
+  lint, and formatting. The generated itx API was refreshed for the new
+  optional seeded-head certificate field after its freshness check caught the
+  omission.

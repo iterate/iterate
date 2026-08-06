@@ -97,6 +97,25 @@ test("a classified outage re-arms explicitly without emitting error telemetry", 
   expect(h.append).not.toHaveBeenCalled();
 });
 
+test("five classified outages append one durable terminal failure", async () => {
+  const h = coordinator();
+  await h.value.enqueue(HANDOFF);
+  h.materialize.mockRejectedValue(Object.assign(new Error("Artifacts 503"), { retryable: true }));
+
+  for (let attempt = 0; attempt < 5; attempt += 1) await h.value.alarm();
+
+  expect(h.setAlarm).toHaveBeenCalledTimes(5);
+  expect(h.append).toHaveBeenCalledExactlyOnceWith(HANDOFF.streamId, {
+    type: "events.iterate.com/repos/create-failed",
+    idempotencyKey: "repo/create-failed",
+    payload: {
+      error: "Empty repo creation failed after 5 attempts: Artifacts 503",
+      request: REQUEST,
+    },
+  });
+  expect(h.queued()).toBeUndefined();
+});
+
 test("the property-stripped hosted Artifacts 503 remains a classified retry", () => {
   expect(isRetryableRepoBirthError(new Error("HTTP Error: 503 Service Unavailable"))).toBe(true);
 });
