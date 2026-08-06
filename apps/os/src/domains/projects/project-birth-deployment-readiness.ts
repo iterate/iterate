@@ -3,6 +3,7 @@ import { settleByDeadline } from "../capability-host/execution-deadline.ts";
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
 
 const deploymentWaitTimeoutMs = 30_000;
+const deploymentProbeTimeoutMs = 5_000;
 // A code-update reset needs an invocation-free window before Cloudflare can
 // replace the old incarnation. Short probing kept that incarnation alive, but
 // longer exponential sleeps consumed the recovery budget without improving
@@ -15,6 +16,7 @@ type ProjectBirthDeploymentReadinessOptions = {
   maxPollIntervalMs?: number;
   now?: () => number;
   pollIntervalMs?: number;
+  probeTimeoutMs?: number;
   sleep?: (durationMs: number) => Promise<void>;
   timeoutMs?: number;
 };
@@ -57,6 +59,8 @@ export async function waitForProjectBirthDeploymentVersion<
     startedAt + (options.timeoutMs === undefined ? deploymentWaitTimeoutMs : options.timeoutMs);
   const pollIntervalMs =
     options.pollIntervalMs === undefined ? deploymentPollIntervalMs : options.pollIntervalMs;
+  const probeTimeoutMs =
+    options.probeTimeoutMs === undefined ? deploymentProbeTimeoutMs : options.probeTimeoutMs;
   const maxPollIntervalMs =
     options.maxPollIntervalMs === undefined
       ? deploymentMaxPollIntervalMs
@@ -74,7 +78,7 @@ export async function waitForProjectBirthDeploymentVersion<
     const target = input.getTarget();
     const outcome = await settleByDeadline(
       Promise.resolve().then(() => target.deploymentVersion()),
-      deadline,
+      Math.min(deadline, now() + probeTimeoutMs),
       now,
     );
     if (outcome.status === "fulfilled" && outcome.value === input.expectedVersion) {
@@ -103,10 +107,11 @@ export async function waitForProjectBirthDeploymentVersion<
       lastObservedVersion = outcome.value;
       mismatches += 1;
     } else if (outcome.status === "deadline") {
-      // Native RPC calls cannot be cancelled. Starting another probe here
-      // would overlap this still-running invocation and pin the old object.
+      // A canceled native RPC can leave its caller-side thenable unsettled.
+      // Disposing the stub disconnects that RPC session; the normal poll gap
+      // then gives the incarnation an invocation-free handoff before a fresh
+      // stub starts another read-only probe.
       probeTimeouts += 1;
-      break;
     } else if (isRetryableDurableObjectAvailabilityError(outcome.error)) {
       lifecycleFailures += 1;
     } else if (

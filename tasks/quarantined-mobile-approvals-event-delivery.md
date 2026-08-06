@@ -127,6 +127,20 @@ three failed turns each preserve a native alarm and the fourth succeeds; all
 29 copy-recovery/background-work tests pass. The streak remains zero for the
 next exact head.
 
+That ancestor-repair head's first cold candidate passed all six app groups,
+both mobile flows, and both recovery proofs first try in 343 seconds. Candidate
+two kept both mobile flows first try but retried two unrelated keyed appends
+after 10-second no-response bounds and retried one project create after its
+root-Stream version probe consumed the full 30-second birth deadline. Exact
+trace `6a8259d3eb218f033ce38abdc7a08c27` shows Cloudflare canceled the Stream DO
+invocation after 4.38 seconds while its parent subrequest remained unsettled
+until the caller's 30-second bound. Each readiness probe now has its own
+five-second bound: a timed-out stub is disposed, the existing five-second
+invocation-free handoff is preserved, and a fresh read-only probe can recover
+inside the original overall deadline. The red/green regression proves that a
+hung first probe is released and the second reaches the current version. The
+strict 25-run streak remains zero for this new exact head.
+
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
 model and routing; the mobile bundle does not import its route helper. The

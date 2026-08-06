@@ -150,12 +150,21 @@ test("retries after each invocation-free handoff during a short platform failure
   expect(getTarget).toHaveBeenCalledTimes(4);
 });
 
-test("never overlaps a probe that has not settled", async () => {
+test("releases a hung version probe and retries after an invocation-free handoff", async () => {
   vi.useFakeTimers();
   try {
-    const getTarget = vi.fn(() =>
-      disposableTarget({ deploymentVersion: () => new Promise<string>(() => undefined) }),
-    );
+    const disposals: number[] = [];
+    let acquisition = 0;
+    const getTarget = vi.fn(() => {
+      acquisition += 1;
+      if (acquisition === 2) {
+        return disposableTarget({ deploymentVersion: async () => "version-new" });
+      }
+      return disposableTarget({
+        dispose: () => disposals.push(acquisition),
+        deploymentVersion: () => new Promise<string>(() => undefined),
+      });
+    });
     const readiness = waitForProjectBirthDeploymentVersion(
       {
         expectedVersion: "version-new",
@@ -163,15 +172,15 @@ test("never overlaps a probe that has not settled", async () => {
         projectId: "prj_test",
         targetKind: "Stream Durable Object",
       },
-      { timeoutMs: 10_000 },
-    );
-    const rejected = expect(readiness).rejects.toThrow(
-      "probe timeouts=1, version mismatches=0 across 1 read-only probe",
+      { pollIntervalMs: 1_000, probeTimeoutMs: 2_000, timeoutMs: 10_000 },
     );
 
-    await vi.advanceTimersByTimeAsync(10_000);
-    await rejected;
-    expect(getTarget).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await expect(readiness).resolves.toMatchObject({
+      readiness: { probeTimeouts: 1, probes: 2, waitedMs: 3_000 },
+    });
+    expect(disposals).toEqual([1]);
+    expect(getTarget).toHaveBeenCalledTimes(2);
   } finally {
     vi.useRealTimers();
   }
