@@ -57,6 +57,12 @@ function myHelper(input: string) { /* ... */ }
 
 ## Implementation notes
 
+### Post-review round (2026-08-06)
+
+- Misha: ts/js dual render → single marked source (`tsOnly()` spans, `toTs`/`toJs` derivations); getScriptResult-over-workspace rationale documented in the PR thread; line-number attribution confirmed (prelude offset absorbs the preamble).
+- Preview-5 field test: the model followed the spill render's fenced `JSON.parse(readFile)` recipe instead of the loader footnote — the recipe IS the prompt, so spill renders now lead with the `results[0]` recipe and the workspace path is a parenthetical.
+- Bugbot (all three confirmed real): syntax-cascade preamble errors could brick a scope (fixed: set-time gate counts any script.ts error; run gate re-checks the bare script before blocking); set-gate line-shift false rejects (fixed: position-stripped diff); spill recipe named `.load` for rows that only have `.data` (fixed: recipes key on the host's compact-JSON threshold).
+
 - The `results` array is assembled at the **at-head pass** from the same head state as capabilities, so a result settled in the same delivery as the next request is visible to it.
 - Slack/Telegram system prompts were deliberately NOT updated (their own budgets); their scripts still GET the preamble — the scope is the stream — they just aren't taught it. Possible follow-up.
 - `getScriptResult` reads the settlement event back by `capability-host/script-run-settled@<executionId>`, so loaders work for any execution that ever settled in the scope, retained or not, and for every script door (no workspace coupling).
