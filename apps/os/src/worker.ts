@@ -63,7 +63,6 @@ export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts"
 export { WorkspaceV2DurableObject } from "./domains/workspaces/workspace-durable-object.ts";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
-export { LiveCapabilityRelayEntrypoint } from "./domains/capability-host/live-capability-relay-entrypoint.ts";
 export { ScriptExecutionEntrypoint } from "./domains/capability-host/script-execution-entrypoint.ts";
 // The container-outbound gateway. The container runtime dials it through
 // `ctx.exports.ContainerProxy` to route intercepted sandbox egress; every

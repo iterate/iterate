@@ -236,6 +236,26 @@ export class CapabilityHostProcessor extends StreamProcessor<
         // reducer would only wedge the frame).
         if (state.birthCertificate !== null) return state;
         return { ...state, birthCertificate: event.payload };
+      case "events.iterate.com/capability-host/capability-provider-pager-connected":
+        return {
+          ...state,
+          capabilityProviderPagers: [
+            ...state.capabilityProviderPagers,
+            { connectedAtOffset: event.offset },
+          ],
+        };
+      case "events.iterate.com/capability-host/capability-provider-pager-disconnected":
+        return {
+          ...state,
+          capabilityProviderPagers: state.capabilityProviderPagers.filter(
+            (pager) => pager.connectedAtOffset !== event.payload.connectedAtOffset,
+          ),
+          capabilities: state.capabilities.filter(
+            (capability) =>
+              capability.type !== "live" ||
+              capability.providerPager.connectedAtOffset !== event.payload.connectedAtOffset,
+          ),
+        };
       case "events.iterate.com/capability-host/capability-provided": {
         const row: CapabilityRecord = {
           ...event.payload,
@@ -312,6 +332,40 @@ export class CapabilityHostProcessor extends StreamProcessor<
   // The scope's public capability surface, called via the hosting durable
   // object (never by the delivery loop).
 
+  async connectCapabilityProviderPager(options: {
+    afterAppend(connectedAtOffset: number): void | Promise<void>;
+  }): Promise<number> {
+    await this.#assertCreated();
+    const [committed] = await this.append({
+      type: "events.iterate.com/capability-host/capability-provider-pager-connected",
+      payload: {},
+    });
+    await options.afterAppend(committed.offset);
+    await this.deps.reads.waitUntilEvent({
+      offset: committed.offset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
+    return committed.offset;
+  }
+
+  async disconnectCapabilityProviderPager(connectedAtOffset: number): Promise<void> {
+    await this.#assertCreated();
+    const { state } = await this.deps.reads.snapshot();
+    if (
+      !state.capabilityProviderPagers.some((pager) => pager.connectedAtOffset === connectedAtOffset)
+    ) {
+      return;
+    }
+    const [committed] = await this.append({
+      type: "events.iterate.com/capability-host/capability-provider-pager-disconnected",
+      payload: { connectedAtOffset },
+    });
+    await this.deps.reads.waitUntilEvent({
+      offset: committed.offset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
+  }
+
   async provideCapability(
     input: CapabilityProvidedPayload,
     options: {
@@ -386,7 +440,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     // especially: forwarding ["...","__describe"] to a flattenNestedPaths
     // target would hand a discovery probe to a dispatcher that treats every
     // path as a method route. This is what makes discovery work on
-    // session-bound live mounts whose provider is offline, and it is the first
+    // Pager-backed live mounts whose provider is offline, and it is the first
     // rung of the transitive-description ladder.
     if (path[path.length - 1] === "__describe") {
       return this.#describeMount(hit.record, path.slice(0, -1));
@@ -440,7 +494,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
         flattenNestedPaths: flattenNestedPath ? true : undefined,
         instructions: input.instructions,
         path,
-        providerBinding: input.providerBinding,
+        providerPager: input.providerPager,
         type: "live",
         types: input.types,
       };
@@ -549,7 +603,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       record.flattenNestedPaths === true
         ? `This is a FLATTENED dispatch target: any dotted call under the mount compiles to one invokeCapability call with the remaining path — \`${mountPoint}.a.b(x)\` reaches the provider as \`invokeCapability({ path: ["a","b"], args: [x] })\`. There is no object graph to walk; \`children\` is empty because sub-paths are routes the provider interprets, not members this host can list.`
         : record.type === "live"
-          ? `Dotted calls under the mount replay onto the provider's value by property traversal (\`${mountPoint}.a.b(x)\` calls \`a.b(x)\` on it). Live mounts are session-bound: the mount record is durable, but calls travel over the provider's connection and fail with "offline" when it disconnects. \`children\` is empty because the host only stores this record, never the provider's shape.`
+          ? `Dotted calls under the mount replay onto the provider's value by property traversal (\`${mountPoint}.a.b(x)\` calls \`a.b(x)\` on it). Live mounts are Pager-backed: the client gives the host a hibernatable return channel so it can Page the provider relay after releasing ordinary RPC references. The mount record is durable, but calls fail with "offline" when that Pager disconnects. \`children\` is empty because the host only stores this record, never the provider's shape.`
           : `A durable itx-expression: on every call the recorded expression is re-evaluated against this scope's own itx and the remaining path is invoked on the result — no live connection is held. \`children\` is empty because the host only stores the recipe, not the evaluated value's shape.`;
     return {
       instructions: [
@@ -957,9 +1011,9 @@ export type CapabilityHostProcessorDeps = {
   /** Runner-backed committed-state reads — see {@link CapabilityHostProcessorReads}. */
   reads: CapabilityHostProcessorReads;
   /**
-   * Ephemeral live-provider acquisition owned by the hosting Durable Object.
+   * Ephemeral capability-provider acquisition owned by the hosting Durable Object.
    * The processor owns only durable mount facts; production wires this to the
-   * hibernatable provider lease, while pure reduction tests omit it.
+   * client-given hibernatable Capability Provider Pager, while pure reduction tests omit it.
    */
   invokeLiveCapability?: (
     record: Extract<CapabilityRecord, { type: "live" }>,

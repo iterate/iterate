@@ -72,10 +72,11 @@ const myComputer = {
 
   /**
    * A liveness probe, deliberately absent from the declared types so agents
-   * never see it. The provider calls it only after the stateless provision
-   * lease reports that it ended, to distinguish a broken lane from a different
-   * process taking the same name. It is not a periodic keepalive: idle sharing
-   * must leave the CapabilityHost Durable Object eligible for hibernation.
+   * never see it. The provider calls it only after its relay-local
+   * Capability Provider Pager check fails, to distinguish a broken return channel
+   * from a different process taking the same name. It is not a periodic
+   * keepalive: idle sharing must leave the CapabilityHost Durable Object
+   * eligible for hibernation.
    */
   async ["__ping"]() {
     return MOUNT_ID;
@@ -216,8 +217,8 @@ type MountedSession = {
   provision: Awaited<ReturnType<RpcStub<Project>["provideCapability"]>>;
 };
 
-const LEASE_CHECK_INTERVAL_MS = 8_000;
-const LEASE_CHECK_TIMEOUT_MS = 5_000;
+const PAGER_CHECK_INTERVAL_MS = 8_000;
+const PAGER_CHECK_TIMEOUT_MS = 5_000;
 // The provide await includes connectItx's ~15s handshake, so its bound sits well
 // above that — a handshake that would have succeeded must not be abandoned.
 const PROVIDE_TIMEOUT_MS = 25_000;
@@ -263,33 +264,38 @@ function disposeMountedSession(session: MountedSession): void {
 }
 
 /** Probe the stateless ownership handle; this call never reaches the CapabilityHost DO. */
-function pingProvision(provision: MountedSession["provision"]): Promise<boolean> {
+function capabilityProviderPagerActive(provision: MountedSession["provision"]): Promise<boolean> {
   // This watchdog-only method is deliberately omitted from the generated public ITX API.
   // CapabilityProvision supplies it on every returned provision; the assertion exposes
   // only that internal method because code generation intentionally hides it from agents.
-  const lease = provision as unknown as { __leaseActive(): Promise<boolean> };
-  return withTimeout(lease.__leaseActive(), LEASE_CHECK_TIMEOUT_MS, "provision lease ping");
+  const pager = provision as unknown as { __capabilityProviderPagerActive(): Promise<boolean> };
+  return withTimeout(
+    pager.__capabilityProviderPagerActive(),
+    PAGER_CHECK_TIMEOUT_MS,
+    "Capability Provider Pager check",
+  );
 }
 
-/** Diagnose an ended lease over the full path; returns the provider process's mount id. */
+/** Diagnose an ended Pager-backed mount over the full path; returns the provider's mount id. */
 function pingMount(itx: RpcStub<Project>, name: string): Promise<string> {
   // `myComputer` above always supplies __ping, but the mount name is runtime-selected and
   // the method is intentionally absent from the public generated API agents receive.
   const ping = (itx as unknown as Record<string, { __ping(): Promise<string> }>)[name].__ping();
-  return withTimeout(ping, LEASE_CHECK_TIMEOUT_MS, "mount ownership check");
+  return withTimeout(ping, PAGER_CHECK_TIMEOUT_MS, "mount ownership check");
 }
 
 /**
  * Keep the live mount routable for as long as we run. A live capability's
- * provider ref lives in a stateless relay, whose internal ownership probe is
- * the logical lease's cheap health check. It never touches the
+ * client gave the CapabilityHost DO one hibernatable Capability Provider Pager:
+ * "if you need my provider after releasing it, Page me here." The relay's
+ * local ownership probe is the Pager-backed mount's cheap health check. It never touches the
  * CapabilityHost DO, so an idle shared computer no longer defeats DO
- * hibernation. Only after the lease reports that it ended do we make one full
+ * hibernation. Only after the Pager-backed mount reports that it ended do we make one full
  * path call to learn whether another provider took the name.
  *
  * States, reported via the callbacks (transitions only, not every retry):
  * - provision is active  → live (`onLive`).
- * - lease call fails      → dispose the suspect session and reconnect fresh (with
+ * - Pager check fails     → dispose the suspect session and reconnect fresh (with
  *   re-resolved auth, so a reconnect past the token TTL still authenticates);
  *   `onDegraded` fires once until we're live again. This never throws out of the
  *   loop — a failed round backs off and retries.
@@ -331,15 +337,15 @@ async function keepMountAlive(input: {
         await sleep(RECOVERY_BACKOFF_MS);
         continue;
       }
-      // provideCapability returns only after this exact stateless lease owns the
+      // provideCapability returns only after this exact Pager-backed relay owns the
       // durable mount, so no DO round trip is needed to declare it live.
       goLive();
     }
 
-    await sleep(LEASE_CHECK_INTERVAL_MS);
+    await sleep(PAGER_CHECK_INTERVAL_MS);
     let active: boolean;
     try {
-      active = await pingProvision(session.provision);
+      active = await capabilityProviderPagerActive(session.provision);
     } catch {
       disposeMountedSession(session);
       session = undefined;
@@ -363,7 +369,7 @@ async function keepMountAlive(input: {
       return; // yield the name; the caller (process/menu bar) decides what's next
     }
 
-    // The logical lease ended but the mount still momentarily routes to us.
+    // This Pager-backed mount ended but the durable route still momentarily reaches us.
     // Replace it on a fresh relay instead of leaving a healthy-looking zombie.
     disposeMountedSession(session);
     session = undefined;
@@ -373,7 +379,7 @@ async function keepMountAlive(input: {
 
 /**
  * Ask for a name, provide `itx.<name>`, and hold the line until Ctrl-C (or until
- * another session takes the name over). The lease watchdog owns the connection.
+ * another provider takes the name over). The Pager watchdog owns the connection.
  */
 export async function shareMyComputer(
   input: ConnectInput & { log?: (message: string) => void },

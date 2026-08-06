@@ -1,15 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import {
-  HibernatableRpcLeaseSockets,
-  parseHibernatableRpcLeaseFrame,
-} from "./hibernatable-rpc-lease.ts";
+import { HibernatablePagers, parseHibernatablePage } from "./hibernatable-pager.ts";
 
 const Attachment = z.object({
-  leaseKey: z.string(),
-  socketId: z.string(),
+  pagerId: z.string(),
+  pagerKey: z.string(),
   state: z.string(),
 });
+
+const ControlPage = z.union([
+  z.object({ type: z.literal("idle") }),
+  z.object({ type: z.literal("page") }),
+]);
 
 type FakeSocket = WebSocket & {
   attachment: unknown;
@@ -46,66 +48,66 @@ function fakeSocket(attachment: unknown): FakeSocket {
 }
 
 function socketsOver(sockets: FakeSocket[]) {
-  return new HibernatableRpcLeaseSockets({
+  return new HibernatablePagers({
     attachmentSchema: Attachment,
-    bindingOf: ({ leaseKey, socketId }) => ({ leaseKey, socketId }),
-    createAttachment: ({ leaseKey, socketId }) => ({ leaseKey, socketId, state: "new" }),
-    headerName: "x-test-lease",
+    bindingOf: ({ pagerId, pagerKey }) => ({ pagerId, pagerKey }),
+    createAttachment: ({ pagerId, pagerKey }) => ({ pagerId, pagerKey, state: "new" }),
+    headerName: "x-test-pager",
     hooks: {
       acceptWebSocket: () => undefined,
       getWebSockets: () => sockets.filter((socket) => socket.closed.length === 0),
     },
     lane: "test",
-    socketTag: "test-lease",
-    upgradeSchema: z.object({ leaseKey: z.string(), socketId: z.string() }),
+    pagerTag: "test-pager",
+    upgradeSchema: z.object({ pagerId: z.string(), pagerKey: z.string() }),
   });
 }
 
-describe("hibernatable RPC lease transport", () => {
-  it("parses only complete lifecycle frames", () => {
-    expect(parseHibernatableRpcLeaseFrame('{"type":"wake"}')).toEqual({ type: "wake" });
-    expect(parseHibernatableRpcLeaseFrame('{"type":"idle"}')).toEqual({ type: "idle" });
-    expect(parseHibernatableRpcLeaseFrame('{"type":"unknown"}')).toBeUndefined();
-    expect(parseHibernatableRpcLeaseFrame("not json")).toBeUndefined();
-    expect(parseHibernatableRpcLeaseFrame(new ArrayBuffer(0))).toBeUndefined();
+describe("Hibernatable Pager transport", () => {
+  it("parses only complete lane-owned Pages", () => {
+    expect(parseHibernatablePage('{"type":"page"}', ControlPage)).toEqual({ type: "page" });
+    expect(parseHibernatablePage('{"type":"idle"}', ControlPage)).toEqual({ type: "idle" });
+    expect(parseHibernatablePage('{"type":"unknown"}', ControlPage)).toBeUndefined();
+    expect(parseHibernatablePage("not json", ControlPage)).toBeUndefined();
+    expect(parseHibernatablePage(new ArrayBuffer(0), ControlPage)).toBeUndefined();
   });
 
   it("claims the exact socket, closes same-key losers, and ignores invalid attachments", () => {
-    const expected = fakeSocket({ leaseKey: "lease", socketId: "expected", state: "new" });
-    const loser = fakeSocket({ leaseKey: "lease", socketId: "loser", state: "new" });
-    const invalid = fakeSocket({ leaseKey: "lease", socketId: 42, state: "new" });
-    const leases = socketsOver([expected, loser, invalid]);
+    const expected = fakeSocket({ pagerId: "expected", pagerKey: "pager", state: "new" });
+    const loser = fakeSocket({ pagerId: "loser", pagerKey: "pager", state: "new" });
+    const invalid = fakeSocket({ pagerId: 42, pagerKey: "pager", state: "new" });
+    const pagers = socketsOver([expected, loser, invalid]);
 
-    expect(leases.claim({ leaseKey: "lease", socketId: "expected" })?.ws).toBe(expected);
+    expect(pagers.claim({ pagerId: "expected", pagerKey: "pager" })?.ws).toBe(expected);
     expect(loser.closed).toEqual([{ code: 1000, reason: "superseded" }]);
     expect(invalid.closed).toEqual([]);
   });
 
   it("keeps only the newest duplicate of the exact binding", () => {
-    const first = fakeSocket({ leaseKey: "lease", socketId: "same", state: "new" });
-    const second = fakeSocket({ leaseKey: "lease", socketId: "same", state: "new" });
-    const leases = socketsOver([first, second]);
+    const first = fakeSocket({ pagerId: "same", pagerKey: "pager", state: "new" });
+    const second = fakeSocket({ pagerId: "same", pagerKey: "pager", state: "new" });
+    const pagers = socketsOver([first, second]);
 
-    expect(leases.claim({ leaseKey: "lease", socketId: "same" })?.ws).toBe(second);
+    expect(pagers.claim({ pagerId: "same", pagerKey: "pager" })?.ws).toBe(second);
     expect(first.closed).toEqual([{ code: 1000, reason: "superseded" }]);
     expect(second.closed).toEqual([]);
   });
 
   it("turns attachment and frame failures into terminal channel failures", () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const stampFailure = fakeSocket({ leaseKey: "one", socketId: "one", state: "new" });
+    const stampFailure = fakeSocket({ pagerId: "one", pagerKey: "one", state: "new" });
     stampFailure.failStamp = true;
-    const sendFailure = fakeSocket({ leaseKey: "two", socketId: "two", state: "new" });
+    const sendFailure = fakeSocket({ pagerId: "two", pagerKey: "two", state: "new" });
     sendFailure.failSend = true;
-    const leases = socketsOver([stampFailure, sendFailure]);
+    const pagers = socketsOver([stampFailure, sendFailure]);
 
-    expect(leases.stamp(stampFailure, { leaseKey: "one", socketId: "one", state: "bound" })).toBe(
+    expect(pagers.stamp(stampFailure, { pagerId: "one", pagerKey: "one", state: "bound" })).toBe(
       false,
     );
     expect(stampFailure.closed).toEqual([{ code: 1011, reason: "attachment stamp failed" }]);
 
-    expect(leases.send(sendFailure, { type: "wake" })).toBe(false);
-    expect(sendFailure.closed).toEqual([{ code: 1011, reason: "wake frame failed" }]);
+    expect(pagers.page(sendFailure, { type: "page" })).toBe(false);
+    expect(sendFailure.closed).toEqual([{ code: 1011, reason: "Page failed" }]);
     expect(warning).toHaveBeenCalledTimes(2);
     warning.mockRestore();
   });
@@ -124,10 +126,10 @@ describe("hibernatable RPC lease transport", () => {
     );
     try {
       const response = socketsOver([]).acceptUpgrade(
-        new Request("https://lease.internal/", {
+        new Request("https://pager.internal/", {
           headers: {
             Upgrade: "websocket",
-            "x-test-lease": JSON.stringify({ leaseKey: "lease", socketId: "socket" }),
+            "x-test-pager": JSON.stringify({ pagerId: "pager", pagerKey: "pager" }),
           },
         }),
       );

@@ -107,8 +107,8 @@ test("itx.liveState indexes stream activity as a peer slice", async () => {
   expect(await subscription.ping()).toBe(true);
 });
 
-// Stream liveState rides the hibernatable liveState socket
-// (domains/live-state-socket.ts): the worker relay seeds itself from the
+// Stream liveState rides the client-given hibernatable Live State Pager
+// (domains/live-state-pager.ts): the worker relay seeds itself from the
 // socket's first frame and then receives `{"type":"state"}` frames — no
 // retained subscription pins the Stream DO. Same public LiveStateRpc
 // contract; this proves updates flow end-to-end through the socket-fed
@@ -150,7 +150,7 @@ test("stream.liveState pushes updates through the state socket without a DO-side
 // Secret liveState now rides the same socket lane as streams (the generic
 // host wiring): pushed DESCRIPTION updates — never material — flow without a
 // DO-side retained subscription.
-test("secret.liveState pushes description updates through the liveState socket", async () => {
+test("secret.liveState pushes description updates through the Live State Pager", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });

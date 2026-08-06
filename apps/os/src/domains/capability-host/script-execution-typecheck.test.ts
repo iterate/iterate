@@ -251,7 +251,7 @@ describe("script execution typecheck gate", () => {
       type: T.provided,
       payload: {
         path: ["local"],
-        providerBinding: { socketId: "test-socket" },
+        providerPager: { connectedAtOffset: 1 },
         type: "live",
         types: "export type Local = { ping(): void };",
       },

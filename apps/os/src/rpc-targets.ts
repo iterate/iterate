@@ -206,7 +206,7 @@ import type {
   StatefulDynamicWorkerRef,
 } from "./domains/workers/schemas.ts";
 import { openRelayedStreamConnection } from "./domains/streams/stream-connection-relay.ts";
-import { dialLiveStateSocket, openRelayedLiveState } from "./domains/live-state-socket.ts";
+import { dialLiveStatePager, openRelayedLiveState } from "./domains/live-state-pager.ts";
 import {
   isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
@@ -244,10 +244,7 @@ import type {
   Description,
   ProjectDescription,
 } from "./domains/itx/describe.ts";
-import {
-  LiveCapabilityProviderRelay,
-  type LiveProvideInput,
-} from "./domains/capability-host/live-capability-relay.ts";
+import { CapabilityProviderPagerRelay } from "./domains/capability-host/capability-provider-pager-relay.ts";
 import type { CfExecutionContext } from "./domains/itx/utils.ts";
 import type { SandboxCreateInput } from "./domains/sandboxes/utils.ts";
 import type {
@@ -907,7 +904,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /**
    * Push-driven stream runtime state for polling-free debug surfaces.
    *
-   * Rides the hibernatable liveState socket (domains/live-state-socket.ts) —
+   * Rides the client-given hibernatable Live State Pager —
    * a watched idle stream hibernates at zero duration and pushes frames only
    * when something actually changes. Snapshot-only degrade on purpose, never
    * the pinning fallback the generic hosts use: the DO's `liveState` property
@@ -917,9 +914,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   get liveState(): LiveStateRpc<StreamRuntimeDebugState> {
     return new RelayedLiveStateRpcTarget<StreamRuntimeDebugState>(
       openRelayedLiveState({
-        dialSocket: () => dialLiveStateSocket(this[STREAM_DURABLE_OBJECT_STUB]),
+        dialPager: () => dialLiveStatePager(this[STREAM_DURABLE_OBJECT_STUB]),
         readSnapshot: () => this.runtimeState(),
-        socketFailureDegrade: "snapshot-only",
+        pagerFailureDegrade: "snapshot-only",
         label: `stream ${this.props.path}`,
       }),
     );
@@ -1015,11 +1012,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
      */
     ping?: StreamConnectionPing;
   }): Promise<StreamConnectionHandle> {
-    // The relay (stream-connection-relay.ts) terminates the callback leg at
-    // this worker and pairs the RPC leg with a hibernatable wake socket so an
-    // idle connection stops pinning the Stream DO. The stub argument is a
-    // thunk on purpose: the getter mints a fresh stub per access, and a wake
-    // re-dial may happen hours later, across DO resets.
+    // The relay (stream-connection-relay.ts) gives the Stream DO a
+    // hibernatable Stream Subscriber Pager, then lends it an ordinary RPC leg
+    // only while delivery is active. When the subscriber goes dormant, the DO
+    // can release that pinning leg and Page the relay to re-dial it later. The
+    // stub argument is a thunk on purpose: the getter mints a fresh stub per
+    // access, and a Page may arrive hours later, across DO resets.
     return new StreamConnectionRpcTarget(
       await openRelayedStreamConnection({ stub: () => this[STREAM_DURABLE_OBJECT_STUB], args }),
     );
@@ -5287,6 +5285,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   // and ITX_SURFACE_MEMBER_NAMES bans mounts from shadowing members). A public
   // `props` field would burn that name for internals.
   readonly #props: CapabilityHostRpcTargetProps;
+  #capabilityProviderPagerRelay: CapabilityProviderPagerRelay | undefined;
 
   constructor(props: CapabilityHostRpcTargetProps) {
     super();
@@ -5361,44 +5360,15 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       if (!Object.hasOwn(input, "capability")) {
         throw new Error('live capabilities require "capability"');
       }
-      if ("acceptWebSocket" in this.#props.ctx) {
-        // An itx can be constructed inside a Durable Object for scripts and
-        // delivery. Only that wall-clock-billed lane needs a ctx.exports hop
-        // into the stateless relay. Kenton's capnweb#36 proposal has Cap'n Web
-        // terminate in that ordinary Worker, then reconstruct a short
-        // demand-driven Workers RPC leg into the DO:
-        // https://github.com/cloudflare/capnweb/issues/36#issuecomment-3334955335
-        // This branch retains a stub for a provider object created in the
-        // origin DO's isolate, which currently prevents that origin DO from
-        // hibernating; merely caching an ordinary DO stub would not. See
-        // https://github.com/cloudflare/capnweb/issues/36#issuecomment-3572361727
-        // rpc-targets.ts is also compiled without OS's worker-env.d.ts, so use
-        // the one shallow loopback signature consumed here.
-        const exports = this.#props.ctx.exports as unknown as {
-          LiveCapabilityRelayEntrypoint(input: { props: { path: string; projectId: string } }): {
-            provide(input: LiveProvideInput): Promise<unknown>;
-          };
-        };
-        const relay = await exports
-          .LiveCapabilityRelayEntrypoint({
-            props: { path: this.#props.path, projectId: this.#props.projectId },
-          })
-          .provide(input);
-        // `ctx.exports` correctly types a returned RpcTarget as its remote
-        // `RpcStub` projection (async properties, no private fields). This
-        // method immediately relays that object capability across Cap'n Web,
-        // whose public contract is the same target; it never treats the stub
-        // as a locally constructed class instance.
-        return relay as unknown as CapabilityProvisionRpcTarget;
-      }
-
-      // `/api` and env.ITX already run in the desired stateless context.
-      const relay = new LiveCapabilityProviderRelay({
+      // The client leaves one hibernatable Capability Provider Pager with the
+      // CapabilityHost DO. The relay retains the provider only while a Page
+      // asks it to lend the DO a short ordinary RPC call leg.
+      this.#capabilityProviderPagerRelay ??= new CapabilityProviderPagerRelay({
         env,
         scope: { path: this.#props.path, projectId: this.#props.projectId },
         waitUntil: (promise) => this.#props.ctx.waitUntil(promise),
       });
-      const provision = await relay.provide(input);
+      const provision = await this.#capabilityProviderPagerRelay.provide(input);
       return new CapabilityProvisionRpcTarget({
         ctx: this.#props.ctx,
         isActive: provision.isActive,
@@ -6943,8 +6913,8 @@ export class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityPr
     return this.#providedAtOffset;
   }
 
-  /** @internal Advisory relay-local liveness for the use-my-computer watchdog. */
-  __leaseActive(): boolean {
+  /** @internal Whether this relay still owns the mount behind its Capability Provider Pager. */
+  __capabilityProviderPagerActive(): boolean {
     return this.#revokePromise === undefined && this.#isActive();
   }
 
@@ -7768,8 +7738,8 @@ type LiveStateDurableObjectStub<State> = {
  * Isolate-side relay for a DO-hosted `.liveState` node. `get()` is a
  * transient forward that releases every stub it materialized — a one-shot
  * read must never leave a capability pinning the DO for the session's life.
- * `subscribe()` rides the hibernatable liveState socket
- * (domains/live-state-socket.ts) when the host declares the lane, so a
+ * `subscribe()` rides the client-given hibernatable Live State Pager
+ * (domains/live-state-pager.ts) when the host declares the lane, so a
  * watched idle DO leaves memory; a host without the lane — and any socket
  * failure — falls back to forwarding the subscription into the DO, which
  * retains the callback there and pins it (exactly the pre-socket behavior,
@@ -7796,9 +7766,9 @@ class LiveStateRelayRpcTarget<State extends object>
       socketLane === undefined
         ? undefined
         : openRelayedLiveState<State>({
-            dialSocket: async () => dialLiveStateSocket(await this.#stub()),
+            dialPager: async () => dialLiveStatePager(await this.#stub()),
             readSnapshot: () => this.#transientGet(),
-            socketFailureDegrade: "reject",
+            pagerFailureDegrade: "reject",
             label: socketLane.label,
           });
   }
@@ -7844,7 +7814,7 @@ class LiveStateRelayRpcTarget<State extends object>
         return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
       } catch (error) {
         console.warn(
-          "liveState socket relay unavailable; subscription falls back to pinning the durable object",
+          "Live State Pager unavailable; subscription falls back to pinning the durable object",
           { label: this.#label, error },
         );
       }

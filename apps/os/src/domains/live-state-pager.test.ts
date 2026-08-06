@@ -1,15 +1,15 @@
-// The liveState-socket lane against fake sockets: the token gate, the
+// The Live State Pager lane against fake sockets: the token gate, the
 // read-at-flush-time flusher, the skipped-assembly reload, and the worker
 // relay's seed/degrade/release races — unit-tested without a Durable Object.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LiveUpdate } from "iterate/sdk/capnweb";
 import {
-  LiveStateSockets,
+  LiveStatePagers,
   openRelayedLiveState,
-  parseLiveStateSocketFrame,
-  LIVE_STATE_SOCKET_HEADER,
-} from "./live-state-socket.ts";
+  parseLiveStatePage,
+  LIVE_STATE_PAGER_HEADER,
+} from "./live-state-pager.ts";
 
 type FakeSocket = WebSocket & {
   sent: string[];
@@ -44,7 +44,7 @@ function socketsOver(input: {
   refresh?: () => void | PromiseLike<void>;
 }) {
   const waits: Promise<unknown>[] = [];
-  const host = new LiveStateSockets({
+  const host = new LiveStatePagers({
     getWebSockets: () => input.sockets.filter((socket) => socket.closed.length === 0),
     acceptWebSocket: () => undefined,
     readState: input.readState ?? (() => ({})),
@@ -56,7 +56,7 @@ function socketsOver(input: {
   return { host, waits };
 }
 
-describe("LiveStateSockets", () => {
+describe("LiveStatePagers", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -74,7 +74,7 @@ describe("LiveStateSockets", () => {
     const { host } = socketsOver({ sockets: [] });
     const response = await host.acceptUpgrade(
       new Request("https://x.internal/", {
-        headers: { [LIVE_STATE_SOCKET_HEADER]: "watch" },
+        headers: { [LIVE_STATE_PAGER_HEADER]: "watch" },
       }),
     );
     expect(response?.status).toBe(400);
@@ -91,7 +91,7 @@ describe("LiveStateSockets", () => {
     vi.runAllTimers();
 
     expect(watcher.sent).toHaveLength(1); // burst coalesced into one frame
-    expect(parseLiveStateSocketFrame(watcher.sent[0])).toEqual({ state: { n: 2 } });
+    expect(parseLiveStatePage(watcher.sent[0])).toEqual({ state: { n: 2 } });
 
     host.scheduleFlush();
     vi.runAllTimers();
@@ -171,7 +171,7 @@ describe("LiveStateSockets", () => {
     await host
       .acceptUpgrade(
         new Request("https://x.internal/", {
-          headers: { Upgrade: "websocket", [LIVE_STATE_SOCKET_HEADER]: "watch" },
+          headers: { Upgrade: "websocket", [LIVE_STATE_PAGER_HEADER]: "watch" },
         }),
       )
       .catch(() => undefined);
@@ -195,7 +195,7 @@ describe("LiveStateSockets", () => {
 
     expect(healthy.sent).toHaveLength(1);
     expect(healthy.closed).toEqual([]);
-    expect(broken.closed).toEqual([{ code: 1011, reason: "frame send failed" }]);
+    expect(broken.closed).toEqual([{ code: 1011, reason: "Page send failed" }]);
   });
 
   it("drops watchers when the state cannot be serialized", () => {
@@ -257,12 +257,12 @@ describe("openRelayedLiveState", () => {
   it("get() is a transient read that never dials", async () => {
     let dials = 0;
     const relay = openRelayedLiveState<{ n: number }>({
-      dialSocket: async () => {
+      dialPager: async () => {
         dials += 1;
         return { status: 101, webSocket: fakeRelaySocket() };
       },
       readSnapshot: async () => ({ n: 7 }),
-      socketFailureDegrade: "reject",
+      pagerFailureDegrade: "reject",
       label: "test",
     });
     expect(await relay.get()).toEqual({ n: 7 });
@@ -272,11 +272,11 @@ describe("openRelayedLiveState", () => {
   it("subscribe seeds from the first frame and pushes later frames", async () => {
     const socket = fakeRelaySocket();
     const relay = openRelayedLiveState<{ n: number }>({
-      dialSocket: async () => ({ status: 101, webSocket: socket }),
+      dialPager: async () => ({ status: 101, webSocket: socket }),
       readSnapshot: async () => {
         throw new Error("must not read a snapshot on the socket path");
       },
-      socketFailureDegrade: "reject",
+      pagerFailureDegrade: "reject",
       label: "test",
     });
 
@@ -305,12 +305,12 @@ describe("openRelayedLiveState", () => {
     let dials = 0;
     const socket = fakeRelaySocket();
     const relay = openRelayedLiveState<{ n: number }>({
-      dialSocket: async () => {
+      dialPager: async () => {
         dials += 1;
         return { status: 101, webSocket: socket };
       },
       readSnapshot: async () => ({ n: 0 }),
-      socketFailureDegrade: "reject",
+      pagerFailureDegrade: "reject",
       label: "test",
     });
     const a = relay.subscribe(collectUpdates().sink);
@@ -325,9 +325,9 @@ describe("openRelayedLiveState", () => {
     const sockets = [fakeRelaySocket(), fakeRelaySocket()];
     let dials = 0;
     const relay = openRelayedLiveState<{ n: number }>({
-      dialSocket: async () => ({ status: 101, webSocket: sockets[dials++]! }),
+      dialPager: async () => ({ status: 101, webSocket: sockets[dials++]! }),
       readSnapshot: async () => ({ n: 0 }),
-      socketFailureDegrade: "reject",
+      pagerFailureDegrade: "reject",
       label: "test",
     });
 
@@ -349,9 +349,9 @@ describe("openRelayedLiveState", () => {
   it("fails pings once the socket dies, so the client watchdog re-subscribes", async () => {
     const socket = fakeRelaySocket();
     const relay = openRelayedLiveState<{ n: number }>({
-      dialSocket: async () => ({ status: 101, webSocket: socket }),
+      dialPager: async () => ({ status: 101, webSocket: socket }),
       readSnapshot: async () => ({ n: 0 }),
-      socketFailureDegrade: "reject",
+      pagerFailureDegrade: "reject",
       label: "test",
     });
     const pending = relay.subscribe(collectUpdates().sink);
@@ -365,13 +365,13 @@ describe("openRelayedLiveState", () => {
 
   it("rejects on dial failure in reject mode", async () => {
     const relay = openRelayedLiveState<{ n: number }>({
-      dialSocket: async () => ({ status: 400, webSocket: null }),
+      dialPager: async () => ({ status: 400, webSocket: null }),
       readSnapshot: async () => ({ n: 0 }),
-      socketFailureDegrade: "reject",
+      pagerFailureDegrade: "reject",
       label: "test",
     });
     await expect(relay.subscribe(collectUpdates().sink)).rejects.toThrow(
-      "liveState socket upgrade refused with status 400",
+      "Live State Pager upgrade refused with status 400",
     );
     // A later subscribe retries the dial instead of memoizing the rejection.
     await expect(relay.subscribe(collectUpdates().sink)).rejects.toThrow("400");
@@ -379,9 +379,9 @@ describe("openRelayedLiveState", () => {
 
   it("degrades to a snapshot-only subscription in snapshot-only mode", async () => {
     const relay = openRelayedLiveState<{ n: number }>({
-      dialSocket: async () => ({ status: 400, webSocket: null }),
+      dialPager: async () => ({ status: 400, webSocket: null }),
       readSnapshot: async () => ({ n: 5 }),
-      socketFailureDegrade: "snapshot-only",
+      pagerFailureDegrade: "snapshot-only",
       label: "test",
     });
     const { updates, sink } = collectUpdates();
@@ -397,9 +397,9 @@ describe("openRelayedLiveState", () => {
     const sockets = [fakeRelaySocket(), fakeRelaySocket()];
     let dials = 0;
     const relay = openRelayedLiveState<{ n: number }>({
-      dialSocket: async () => ({ status: 101, webSocket: sockets[dials++]! }),
+      dialPager: async () => ({ status: 101, webSocket: sockets[dials++]! }),
       readSnapshot: async () => ({ n: 0 }),
-      socketFailureDegrade: "reject",
+      pagerFailureDegrade: "reject",
       label: "test",
     });
 
@@ -434,9 +434,9 @@ describe("openRelayedLiveState", () => {
       const good = fakeRelaySocket();
       let dials = 0;
       const relay = openRelayedLiveState<{ n: number }>({
-        dialSocket: async () => ({ status: 101, webSocket: dials++ === 0 ? slow : good }),
+        dialPager: async () => ({ status: 101, webSocket: dials++ === 0 ? slow : good }),
         readSnapshot: async () => ({ n: 0 }),
-        socketFailureDegrade: "reject",
+        pagerFailureDegrade: "reject",
         label: "test",
       });
 
@@ -444,8 +444,8 @@ describe("openRelayedLiveState", () => {
       first.catch(() => undefined); // asserted below; never unhandled
       await Promise.resolve();
       vi.runAllTimers(); // seed-frame timeout fires
-      await expect(first).rejects.toThrow("seed frame timed out");
-      expect(slow.closed).toEqual([{ code: 1000, reason: "seed frame timed out" }]);
+      await expect(first).rejects.toThrow("seed Page timed out");
+      expect(slow.closed).toEqual([{ code: 1000, reason: "seed Page timed out" }]);
 
       const { updates, sink } = collectUpdates();
       const second = relay.subscribe(sink);

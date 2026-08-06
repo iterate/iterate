@@ -32,7 +32,7 @@ import {
 } from "../../rpc-targets.ts";
 import { canonicalizeStreamPath, DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
-import { LiveStateSockets } from "../live-state-socket.ts";
+import { LiveStatePagers } from "../live-state-pager.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
 import {
@@ -42,7 +42,7 @@ import {
 } from "./core-processor.ts";
 import { compileEventFilter, type EventFilter } from "./event-filter.ts";
 import { EphemeralEventBuffer } from "./ephemeral-event-buffer.ts";
-import { WakeSocketRegistry } from "./wake-socket.ts";
+import { StreamSubscriberPagerRegistry } from "./stream-subscriber-pager.ts";
 import {
   internalStreamId,
   isInternalStreamIdempotencyKey,
@@ -516,21 +516,22 @@ export class StreamDurableObject extends DurableObject<Env> {
       },
       runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
       keepAlive: (promise) => this.#runInBackground(() => promise),
-      wakeChannelKeys: () => this.#wakeSockets.channelKeys(),
-      onSessionsIdleClosed: (connectionKeys) => this.#wakeSockets.recordIdleClosed(connectionKeys),
-      wakeDormantSubscribers: (justCommitted) =>
-        this.#wakeSockets.wakeDormant(justCommitted.map((entry) => entry.event)),
+      subscriberPagerConnectionKeys: () => this.#subscriberPagers.connectionKeys(),
+      onSessionsIdleClosed: (connectionKeys) =>
+        this.#subscriberPagers.recordIdleClosed(connectionKeys),
+      pageDormantSubscribers: (justCommitted) =>
+        this.#subscriberPagers.pageDormant(justCommitted.map((entry) => entry.event)),
     },
   });
-  /** DO-side wake-socket mechanics (wake-socket.ts); the attachment is the durable state. */
-  readonly #wakeSockets = new WakeSocketRegistry({
+  /** The client-given Stream Subscriber Pager; its attachment is the durable state. */
+  readonly #subscriberPagers = new StreamSubscriberPagerRegistry({
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     maxOffset: () => this.#coreProcessorState.maxOffset,
     hasConnection: (connectionKey) => this.#eventSender.connections.has(connectionKey),
   });
-  /** liveState watcher sockets (live-state-socket.ts) — push-driven runtime debug state at zero pin. */
-  readonly #liveStateSockets = new LiveStateSockets({
+  /** Client-given Live State Pagers — push-driven runtime debug state at zero pin. */
+  readonly #liveStatePagers = new LiveStatePagers({
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     readState: () => this.#readRuntimeState(),
@@ -1542,12 +1543,12 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   openConnection(
     args: Parameters<Stream["openConnection"]>[0],
-    // Internal relay plumbing (which wake socket this open binds) rides a
+    // Internal relay plumbing (which client-given Pager this open binds) rides a
     // separate parameter, never the public arg bag: the relay spreads the
     // caller's args through, so anything merged into their shape would be
     // client-spoofable by default. Public callers cannot reach this DO
     // directly; the relay generates the id.
-    relay?: { wakeSocketId: string },
+    relay?: { subscriberPagerId: string },
   ): StreamConnectionHandle {
     const connectionKey = args.connectionKey?.trim() || crypto.randomUUID();
     if (this.#coreProcessorState.subscriptions.outbound.byKey[connectionKey] !== undefined) {
@@ -1629,9 +1630,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       ping: args.ping,
     });
 
-    this.#wakeSockets.bind({
+    this.#subscriberPagers.bind({
       connectionKey,
-      wakeSocketId: relay?.wakeSocketId,
+      subscriberPagerId: relay?.subscriberPagerId,
       filter: filterSpec,
       events: args.events,
     });
@@ -1762,7 +1763,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // point — is complete coverage; the flusher reads state at flush time.
     // Cursor cleanup can reach this before the constructor assigns the
     // fields; the optional reads are therefore intentional.
-    this.#liveStateSockets?.scheduleFlush();
+    this.#liveStatePagers?.scheduleFlush();
     const liveState = this.#liveState;
     if (liveState?.observed !== true || this.#liveStateRefreshScheduled) return;
     this.#liveStateRefreshScheduled = true;
@@ -1777,7 +1778,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
         connections: this.#eventSender.connections.runtimeState(),
-        dormantSubscribers: this.#wakeSockets.dormantRuntimeState(),
+        dormantSubscribers: this.#subscriberPagers.dormantRuntimeState(),
         subscriptions: this.#eventSender.subscriptionRuntimeState(),
         metrics: this.#metrics.report(Date.now()),
         ephemeralEvents: this.#ephemeralEvents.runtimeState(),
@@ -1787,20 +1788,20 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   // ===========================================================================
-  // Wake sockets: the hibernatable channel behind idle-closed session
-  // connections. All mechanics live in WakeSocketRegistry (wake-socket.ts);
+  // Stream Subscriber Pagers: client-given hibernatable return channels for
+  // idle-closed session connections. All mechanics live in the registry;
   // this class only routes the platform entry points to it.
   // ===========================================================================
 
-  /** The Stream DO's fetch surface: the liveState-socket and wake-socket upgrades, nothing else. */
+  /** The Stream DO's fetch surface: the liveState-socket and stream-subscriber-pager upgrades, nothing else. */
   async fetch(request: Request): Promise<Response> {
     return (
-      (await this.#liveStateSockets.acceptUpgrade(request)) ??
-      this.#wakeSockets.acceptUpgrade(request)
+      (await this.#liveStatePagers.acceptUpgrade(request)) ??
+      this.#subscriberPagers.acceptUpgrade(request)
     );
   }
 
-  /** Wake sockets are one-way (this DO → relay); inbound frames are ignored. */
+  /** Pagers are one-way (this DO → relay); inbound frames are ignored. */
   webSocketMessage(): void {}
 
   /**
@@ -1813,13 +1814,13 @@ export class StreamDurableObject extends DurableObject<Env> {
    * per socket; best-effort like every connection-close observation.
    */
   webSocketClose(ws: WebSocket): void {
-    const departed = this.#wakeSockets.departedOnClose(ws);
+    const departed = this.#subscriberPagers.departedOnClose(ws);
     if (departed === undefined) return;
     try {
       this.#append({ authority: "core-event" }, [
         {
           type: "events.iterate.com/stream/connection-closed",
-          idempotencyKey: internalStreamId("wake-socket-departed", departed.socketId),
+          idempotencyKey: internalStreamId("stream-subscriber-pager-departed", departed.pagerId),
           payload: { connectionKey: departed.connectionKey, reason: "departed" },
         },
       ]);
@@ -1830,7 +1831,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Shared by both socket lanes; a fault is only ever explicable after the fact. */
   webSocketError(_ws: WebSocket, error: unknown): void {
-    this.#liveStateSockets.socketError(error);
+    this.#liveStatePagers.pagerError(error);
   }
 
   // ===========================================================================

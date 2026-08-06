@@ -14,9 +14,9 @@ import type { ItxExpression } from "../../itx/expression.ts";
 
 export type { ItxExpression } from "../../itx/expression.ts";
 
-/** Durable address of one session-owned provider's hibernatable socket. */
-export type LiveCapabilityProviderBinding = {
-  socketId: string;
+/** Durable reference to the event that connected the provider's client-given Pager. */
+export type CapabilityProviderPagerReference = {
+  connectedAtOffset: number;
 };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
@@ -80,7 +80,7 @@ export type CapabilityProvidedPayload =
       flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];
-      providerBinding: LiveCapabilityProviderBinding;
+      providerPager: CapabilityProviderPagerReference;
       type: "live";
       types?: string;
     }

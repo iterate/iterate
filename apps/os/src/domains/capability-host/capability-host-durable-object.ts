@@ -16,18 +16,15 @@ import {
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import type { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
 import {
-  LiveCapabilityLegRpcTarget,
-  LiveCapabilityLeaseServer,
-  type LiveCapabilityLeaseActivation,
-} from "./live-capability-lease.ts";
+  CapabilityProviderCallLegRpcTarget,
+  CapabilityProviderPagers,
+  type CapabilityProviderPagerActivation,
+} from "./capability-provider-pager.ts";
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
-  LiveCapabilityProviderBinding,
   RevokeCapabilityInput,
 } from "./types.ts";
-
-type LiveCapabilityRecord = Extract<CapabilityRecord, { type: "live" }>;
 
 type ScriptExecutionEntrypoint = {
   run(
@@ -70,14 +67,12 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
   });
-  readonly #liveCapabilityLeases = new LiveCapabilityLeaseServer({
+  readonly #capabilityProviderPagers = new CapabilityProviderPagers({
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
   });
   #capabilityMutationTail = Promise.resolve();
-  #liveLeaseReconciliation: Promise<void> | undefined;
-  #liveLeasesReconciled = false;
-  #liveLeaseRevision = 0;
+  #capabilityProviderPagerStartup: Promise<void> | undefined;
   // The DO constructs the processor — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive.
   // Registered WITH recovery: script executions are consequential
@@ -100,7 +95,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
       }),
       reads: this.#processorReads(),
       invokeLiveCapability: (record, path, args) =>
-        this.#liveCapabilityLeases.invoke(record, path, args),
+        this.#capabilityProviderPagers.invoke(record, path, args),
       scriptExecutionEntrypoint: this.#scriptExecutionEntrypoint(),
       validateCapabilityTypes: (types) =>
         checkCapabilityTypes({ types, typechecker: this.env.TYPECHECKER }),
@@ -164,36 +159,47 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   // Return types are pinned shallow so `DurableObjectStub<CapabilityHostDurableObject>`
   // doesn't deep-instantiate the processor's inferred signatures (TS2589).
   async invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
-    await this.#reconcileLiveCapabilityLeases();
+    await this.#ensureCapabilityProviderPagersReconciled();
     return await this.#capabilityHostProcessor.invokeCapability(input);
+  }
+
+  async connectCapabilityProviderPager(input: { pagerDialId: string }): Promise<number> {
+    await this.#ensureCapabilityProviderPagersReconciled();
+    try {
+      return await this.#serializeMutation(() =>
+        this.#capabilityHostProcessor.connectCapabilityProviderPager({
+          afterAppend: (connectedAtOffset) => {
+            if (!this.#capabilityProviderPagers.connect(input.pagerDialId, connectedAtOffset)) {
+              throw new Error("Capability Provider Pager disappeared while connecting");
+            }
+          },
+        }),
+      );
+    } catch (error) {
+      // The connected event may have committed before its opening Pager
+      // vanished. Re-run the cold-start sweep to journal that exact drop.
+      this.#capabilityProviderPagerStartup = undefined;
+      this.ctx.waitUntil(this.#ensureCapabilityProviderPagersReconciled());
+      throw error;
+    }
   }
 
   async provideCapability(
     input: CapabilityProvidedPayload,
-    liveLease?: LiveCapabilityProviderBinding,
   ): Promise<{ path: string[]; providedAtOffset: number }> {
-    await this.#reconcileLiveCapabilityLeases();
-    if (input.type === "live" && liveLease === undefined) {
-      throw new Error("live capability provision requires a hibernatable provider lease");
-    }
-    if (
-      input.type === "live" &&
-      liveLease !== undefined &&
-      input.providerBinding.socketId !== liveLease.socketId
-    ) {
-      throw new Error("live capability provision does not belong to its hibernatable socket");
-    }
+    await this.#ensureCapabilityProviderPagersReconciled();
     return await this.#serializeMutation(async () => {
       const { state } = await this.#reads.snapshot();
-      if (
-        input.type === "live" &&
-        state.capabilities.some(
-          (record) =>
-            record.type === "live" &&
-            record.providerBinding.socketId === input.providerBinding.socketId,
-        )
-      ) {
-        throw new Error("a live capability socket can mount only one provision");
+      if (input.type === "live") {
+        const connectedAtOffset = input.providerPager.connectedAtOffset;
+        if (
+          !state.capabilityProviderPagers.some(
+            (pager) => pager.connectedAtOffset === connectedAtOffset,
+          ) ||
+          !this.#capabilityProviderPagers.hasPager(connectedAtOffset)
+        ) {
+          throw new Error("live capability provision's Capability Provider Pager is disconnected");
+        }
       }
       const replaced = state.capabilities.find((record) =>
         sameCapabilityPath(record.path, input.path),
@@ -203,18 +209,17 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
           // The append has already displaced this row. Retire its relay even
           // if binding the replacement fails; otherwise the old ownership
           // handle would remain active for a mount the table no longer holds.
-          if (replaced?.type === "live") this.#liveCapabilityLeases.remove(replaced);
+          if (replaced?.type === "live") this.#capabilityProviderPagers.removeMount(replaced);
           if (input.type === "live") {
-            if (liveLease === undefined) {
-              throw new Error("live capability provision lost its validated provider lease");
-            }
             if (record.type !== "live") {
               throw new Error("live capability provision committed a non-live record");
             }
-            if (!this.#liveCapabilityLeases.bindProvision(record, liveLease.socketId)) {
-              this.#invalidateLiveLeaseReconciliation();
-              this.ctx.waitUntil(this.#reconcileLiveCapabilityLeases());
-              throw new Error(`live capability "${input.path.join(".")}" lease socket disappeared`);
+            if (!this.#capabilityProviderPagers.hasPager(input.providerPager.connectedAtOffset)) {
+              this.#capabilityProviderPagerStartup = undefined;
+              this.ctx.waitUntil(this.#ensureCapabilityProviderPagersReconciled());
+              throw new Error(
+                `live capability "${input.path.join(".")}" Provider Pager disappeared`,
+              );
             }
           }
         },
@@ -223,7 +228,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   }
 
   async revokeCapability(input: RevokeCapabilityInput): Promise<void> {
-    await this.#reconcileLiveCapabilityLeases();
+    await this.#ensureCapabilityProviderPagersReconciled();
     await this.#serializeMutation(async () => {
       const { state } = await this.#reads.snapshot();
       const record = state.capabilities.find((candidate) =>
@@ -234,116 +239,105 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         record?.type === "live" &&
         (input.providedAtOffset === undefined || input.providedAtOffset === record.providedAtOffset)
       ) {
-        this.#liveCapabilityLeases.remove(record);
+        this.#capabilityProviderPagers.removeMount(record);
       }
     });
   }
 
   async activateLiveCapability(
-    input: LiveCapabilityLeaseActivation,
-  ): Promise<LiveCapabilityLegRpcTarget | undefined> {
-    await this.#reconcileLiveCapabilityLeases();
+    input: CapabilityProviderPagerActivation,
+  ): Promise<CapabilityProviderCallLegRpcTarget | undefined> {
+    await this.#ensureCapabilityProviderPagersReconciled();
     const { state } = await this.#reads.snapshot();
     const record = state.capabilities.find(
-      (candidate): candidate is LiveCapabilityRecord =>
-        candidate.type === "live" &&
-        candidate.providedAtOffset === input.providedAtOffset &&
-        sameCapabilityPath(candidate.path, input.path),
+      (candidate): candidate is Extract<CapabilityRecord, { type: "live" }> =>
+        candidate.type === "live" && candidate.providedAtOffset === input.providedAtOffset,
     );
     if (record === undefined) return undefined;
-    return this.#liveCapabilityLeases.activate(input, record);
+    return this.#capabilityProviderPagers.activate(input, record);
   }
 
   async describeCapabilities(): Promise<CapabilityDescription[]> {
-    await this.#reconcileLiveCapabilityLeases();
+    await this.#ensureCapabilityProviderPagersReconciled();
     return await this.#capabilityHostProcessor.describeCapabilities();
   }
 
-  /** Internal hibernatable provider-lease upgrade; no ingress route addresses this DO. */
+  /** Accept a client-given Capability Provider Pager; no ingress route addresses this DO. */
   fetch(request: Request): Response {
-    return this.#liveCapabilityLeases.acceptUpgrade(request);
+    return this.#capabilityProviderPagers.acceptUpgrade(request);
   }
 
   webSocketMessage(_ws: WebSocket, _message: string | ArrayBuffer): void {
-    // Lifecycle frames are DO -> relay only.
+    // Pages are DO -> relay only.
   }
 
   async webSocketClose(
-    _ws: WebSocket,
+    ws: WebSocket,
     _code: number,
     _reason: string,
     _wasClean: boolean,
   ): Promise<void> {
-    this.#invalidateLiveLeaseReconciliation();
-    await this.#reconcileLiveCapabilityLeases();
+    const connectedAtOffset = this.#capabilityProviderPagers.connectedAtOffset(ws);
+    if (connectedAtOffset === undefined) return;
+    await this.#ensureCapabilityProviderPagersReconciled();
+    await this.#disconnectCapabilityProviderPager(connectedAtOffset);
   }
 
   webSocketError(ws: WebSocket, error: unknown): void {
-    this.#liveCapabilityLeases.handleError(ws, error);
+    this.#capabilityProviderPagers.handleError(ws, error);
   }
 
   /**
-   * Sweep records whose owner socket did not survive a deployment/restart.
+   * Record each connected Pager whose physical WebSocket did not survive a
+   * deployment/restart. One disconnected event atomically retires every live
+   * mount that references the Pager's connected offset.
    * Cloudflare terminates WebSockets during shutdown but does not promise the
    * dying incarnation enough time to journal every close callback. A fresh
    * incarnation can decide from durable bindings plus runtime-owned sockets,
    * so its first capability operation repairs that state in one exact event.
    */
-  async #reconcileLiveCapabilityLeases(): Promise<void> {
-    while (!this.#liveLeasesReconciled) {
-      const active = this.#liveLeaseReconciliation;
-      if (active !== undefined) {
-        await active;
-        continue;
-      }
-      const revision = this.#liveLeaseRevision;
-      const reconciliation = this.#serializeMutation(async () => {
-        await this.#registry.catchUp(CapabilityHostProcessorContract.slug);
-        const { state } = await this.#reads.snapshot();
-        const live = state.capabilities.filter(
-          (record): record is LiveCapabilityRecord => record.type === "live",
-        );
-        const stale = live.filter(
-          (record): record is LiveCapabilityRecord => !this.#liveCapabilityLeases.hasLease(record),
-        );
-        for (const record of stale) {
-          await this.#capabilityHostProcessor.revokeCapability({
-            path: record.path,
-            providedAtOffset: record.providedAtOffset,
-          });
-          this.#liveCapabilityLeases.remove(record, { notifyRelay: false });
-        }
-        if (this.#liveLeaseRevision === revision) this.#liveLeasesReconciled = true;
-      });
-      this.#liveLeaseReconciliation = reconciliation;
-      try {
-        await reconciliation;
-      } finally {
-        if (this.#liveLeaseReconciliation === reconciliation) {
-          this.#liveLeaseReconciliation = undefined;
-        }
-      }
+  async #ensureCapabilityProviderPagersReconciled(): Promise<void> {
+    const active = this.#capabilityProviderPagerStartup;
+    if (active !== undefined) return await active;
+    const startup = this.#reconcileMissingCapabilityProviderPagers();
+    this.#capabilityProviderPagerStartup = startup;
+    try {
+      await startup;
+    } catch (error) {
+      if (this.#capabilityProviderPagerStartup === startup)
+        this.#capabilityProviderPagerStartup = undefined;
+      throw error;
     }
   }
 
-  /** Invalidate any in-flight sweep whose socket view predates a close event. */
-  #invalidateLiveLeaseReconciliation(): void {
-    this.#liveLeaseRevision += 1;
-    this.#liveLeasesReconciled = false;
+  async #reconcileMissingCapabilityProviderPagers(): Promise<void> {
+    await this.#serializeMutation(async () => {
+      await this.#registry.catchUp(CapabilityHostProcessorContract.slug);
+      const { state } = await this.#reads.snapshot();
+      for (const pager of state.capabilityProviderPagers) {
+        if (this.#capabilityProviderPagers.hasPager(pager.connectedAtOffset)) continue;
+        await this.#capabilityHostProcessor.disconnectCapabilityProviderPager(
+          pager.connectedAtOffset,
+        );
+        this.#capabilityProviderPagers.removePager(pager.connectedAtOffset);
+      }
+    });
+  }
+
+  async #disconnectCapabilityProviderPager(connectedAtOffset: number): Promise<void> {
+    await this.#serializeMutation(async () => {
+      await this.#capabilityHostProcessor.disconnectCapabilityProviderPager(connectedAtOffset);
+      this.#capabilityProviderPagers.removePager(connectedAtOffset);
+    });
   }
 
   /** Serialize this scope's low-volume capability control-plane mutations. */
-  async #serializeMutation<T>(mutation: () => Promise<T>): Promise<T> {
-    const predecessor = this.#capabilityMutationTail;
-    const { promise: gate, resolve: release } = Promise.withResolvers<void>();
-    const tail = predecessor.then(() => gate);
-    this.#capabilityMutationTail = tail;
-    await predecessor;
-    try {
-      return await mutation();
-    } finally {
-      release();
-      if (this.#capabilityMutationTail === tail) this.#capabilityMutationTail = Promise.resolve();
-    }
+  #serializeMutation<T>(mutation: () => Promise<T>): Promise<T> {
+    const result = this.#capabilityMutationTail.then(mutation);
+    this.#capabilityMutationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 }

@@ -12,22 +12,14 @@ import {
  * exported only so domain hosts can inject project/agent capability targets
  * without importing the full worker module.
  */
-export type CfExecutionContext =
-  | {
-      exports: ExecutionContext["exports"];
-      /** Required, not optional: budget-expired dynamic worker builds are handed
-       * to it (worker-loader.ts withBuildBudget) — a silent no-op here would
-       * strand every cold build the caller gave up on. Hosts without a real
-       * runtime hook must still supply an explicit function. */
-      waitUntil: ExecutionContext["waitUntil"];
-    }
-  | {
-      /** Durable Objects expose this hibernation-only method; it also provides
-       * the runtime discriminator for work which must escape wall-clock billing. */
-      acceptWebSocket: DurableObjectState["acceptWebSocket"];
-      exports: DurableObjectState["exports"];
-      waitUntil: DurableObjectState["waitUntil"];
-    };
+export type CfExecutionContext = {
+  exports: ExecutionContext["exports"];
+  /** Required, not optional: budget-expired dynamic worker builds are handed
+   * to it (worker-loader.ts withBuildBudget) — a silent no-op here would
+   * strand every cold build the caller gave up on. Hosts without a real
+   * runtime hook must still supply an explicit function. */
+  waitUntil: ExecutionContext["waitUntil"];
+};
 
 type InvokeCapabilityTarget = {
   invokeCapability(call: { args: unknown[]; path: string[] }): unknown;

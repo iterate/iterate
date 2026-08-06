@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CapabilityProvisionRpcTarget } from "../../rpc-targets.ts";
 
 describe("CapabilityProvisionRpcTarget", () => {
-  it("probes the internal lease locally and turns inactive before revoke awaits I/O", async () => {
+  it("checks Pager-backed ownership locally and turns inactive before revoke awaits I/O", async () => {
     let active = true;
     let finishRevoke!: () => void;
     const revoke = vi.fn(
@@ -18,14 +18,14 @@ describe("CapabilityProvisionRpcTarget", () => {
       revoke,
     });
 
-    expect(provision.__leaseActive()).toBe(true);
+    expect(provision.__capabilityProviderPagerActive()).toBe(true);
     active = false;
-    expect(provision.__leaseActive()).toBe(false);
+    expect(provision.__capabilityProviderPagerActive()).toBe(false);
     active = true;
-    expect(provision.__leaseActive()).toBe(true);
+    expect(provision.__capabilityProviderPagerActive()).toBe(true);
 
     const revoking = provision.revoke();
-    expect(provision.__leaseActive()).toBe(false);
+    expect(provision.__capabilityProviderPagerActive()).toBe(false);
     expect(revoke).toHaveBeenCalledExactlyOnceWith({
       path: ["tools"],
       providedAtOffset: 7,

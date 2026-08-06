@@ -1,10 +1,10 @@
-// WakeSocketRegistry against fake sockets: the wake-matching predicate,
+// StreamSubscriberPagerRegistry against fake sockets: the Page-matching predicate,
 // dormancy stamping, same-key supersede, and departure detection — the
-// subtlest wake-socket logic, unit-tested without a Durable Object.
+// subtlest stream-subscriber-pager logic, unit-tested without a Durable Object.
 
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "iterate/processors";
-import { WakeSocketRegistry } from "./wake-socket.ts";
+import { StreamSubscriberPagerRegistry } from "./stream-subscriber-pager.ts";
 
 type FakeSocket = WebSocket & {
   attachment: unknown;
@@ -37,7 +37,7 @@ function fakeSocket(attachment: unknown): FakeSocket {
 }
 
 function registryOver(sockets: FakeSocket[], liveKeys: string[] = []) {
-  return new WakeSocketRegistry({
+  return new StreamSubscriberPagerRegistry({
     getWebSockets: () => sockets.filter((socket) => socket.closed.length === 0),
     acceptWebSocket: () => undefined,
     maxOffset: () => 100,
@@ -58,73 +58,73 @@ function event(offset: number, type = "example.com/tick", ephemeral?: boolean): 
 const dormant = (overrides: Record<string, unknown> = {}) => ({
   v: 1,
   connectionKey: "sub",
-  socketId: "sock-1",
+  pagerId: "pager-1",
   idleDeliveredThrough: 10,
   ...overrides,
 });
 
-describe("WakeSocketRegistry", () => {
-  it("wakes a dormant subscriber once per dormancy period, offset-gated", () => {
+describe("StreamSubscriberPagerRegistry", () => {
+  it("Pages a dormant subscriber once per dormancy period, offset-gated", () => {
     const socket = fakeSocket(dormant());
     const registry = registryOver([socket]);
 
-    registry.wakeDormant([event(10)]);
+    registry.pageDormant([event(10)]);
     expect(socket.sent).toEqual([]); // at or below the stamped cursor
 
-    registry.wakeDormant([event(11)]);
-    expect(socket.sent).toEqual(['{"type":"wake"}']);
+    registry.pageDormant([event(11)]);
+    expect(socket.sent).toEqual(['{"type":"page"}']);
 
-    registry.wakeDormant([event(12)]);
-    expect(socket.sent).toHaveLength(1); // wakeSentAtOffset dedupes until re-bind
+    registry.pageDormant([event(12)]);
+    expect(socket.sent).toHaveLength(1); // pageSentAtOffset dedupes until re-bind
   });
 
-  it("wakes for matching ephemeral events but not unnamed lifecycle facts", () => {
+  it("Pages for matching ephemeral events but not unnamed lifecycle facts", () => {
     const plain = fakeSocket(dormant());
     const lifecycleNamed = fakeSocket(
       dormant({
-        socketId: "sock-2",
+        pagerId: "pager-2",
         connectionKey: "presence",
         filter: { eventTypes: ["events.iterate.com/stream/connection-closed"] },
       }),
     );
     const registry = registryOver([plain, lifecycleNamed]);
 
-    registry.wakeDormant([event(11, "events.iterate.com/stream/woken")]);
-    registry.wakeDormant([event(12, "example.com/tick", true)]);
-    expect(plain.sent).toEqual(['{"type":"wake"}']);
+    registry.pageDormant([event(11, "events.iterate.com/stream/woken")]);
+    registry.pageDormant([event(12, "example.com/tick", true)]);
+    expect(plain.sent).toEqual(['{"type":"page"}']);
     expect(lifecycleNamed.sent).toEqual([]);
 
-    registry.wakeDormant([event(13, "events.iterate.com/stream/connection-closed")]);
-    expect(plain.sent).toEqual(['{"type":"wake"}']); // no second wake for the lifecycle fact
-    expect(lifecycleNamed.sent).toEqual(['{"type":"wake"}']); // explicit naming opts in
+    registry.pageDormant([event(13, "events.iterate.com/stream/connection-closed")]);
+    expect(plain.sent).toEqual(['{"type":"page"}']); // no second Page for the lifecycle fact
+    expect(lifecycleNamed.sent).toEqual(['{"type":"page"}']); // explicit naming opts in
   });
 
   it("treats an unstamped, connection-absent socket as eviction recovery", () => {
     const socket = fakeSocket(dormant({ idleDeliveredThrough: undefined }));
     const registry = registryOver([socket]);
-    registry.wakeDormant([event(1)]);
-    expect(socket.sent).toEqual(['{"type":"wake"}']);
+    registry.pageDormant([event(1)]);
+    expect(socket.sent).toEqual(['{"type":"page"}']);
   });
 
-  it("never wakes a socket whose connection is live", () => {
+  it("never Pages a subscriber whose connection is live", () => {
     const socket = fakeSocket(dormant());
     const registry = registryOver([socket], ["sub"]);
-    registry.wakeDormant([event(99)]);
+    registry.pageDormant([event(99)]);
     expect(socket.sent).toEqual([]);
   });
 
   it("bind keeps its own socket, supersedes same-key strays, and clears dormancy", () => {
-    const mine = fakeSocket(dormant({ wakeSentAtOffset: 9 }));
-    const stray = fakeSocket(dormant({ socketId: "sock-stale" }));
+    const mine = fakeSocket(dormant({ pageSentAtOffset: 9 }));
+    const stray = fakeSocket(dormant({ pagerId: "pager-stale" }));
     const registry = registryOver([mine, stray]);
 
-    registry.bind({ connectionKey: "sub", wakeSocketId: "sock-1", filter: {} });
+    registry.bind({ connectionKey: "sub", subscriberPagerId: "pager-1", filter: {} });
 
     expect(stray.closed).toEqual([{ code: 1000, reason: "superseded" }]);
     expect(mine.closed).toEqual([]);
     const attachment = mine.attachment as Record<string, unknown>;
     expect(attachment.idleDeliveredThrough).toBeUndefined();
-    expect(attachment.wakeSentAtOffset).toBeUndefined();
+    expect(attachment.pageSentAtOffset).toBeUndefined();
   });
 
   it("recordIdleClosed stamps the current head and sends one idle frame", () => {
@@ -141,7 +141,7 @@ describe("WakeSocketRegistry", () => {
     const registry = registryOver([]);
     expect(registry.departedOnClose(fakeSocket(dormant()))).toEqual({
       connectionKey: "sub",
-      socketId: "sock-1",
+      pagerId: "pager-1",
     });
     // Live connection: its own close path owns the fact.
     expect(registryOver([], ["sub"]).departedOnClose(fakeSocket(dormant()))).toBeUndefined();

@@ -450,9 +450,9 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
         clearAlarm: () => undefined,
         runDurable: (work) => kept.push(work()),
         keepAlive: (promise) => kept.push(promise),
-        wakeChannelKeys: () => new Set<string>(),
+        subscriberPagerConnectionKeys: () => new Set<string>(),
         onSessionsIdleClosed: () => undefined,
-        wakeDormantSubscribers: () => undefined,
+        pageDormantSubscribers: () => undefined,
       },
     });
     async function settle() {
