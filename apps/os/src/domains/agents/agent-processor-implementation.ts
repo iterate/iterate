@@ -1,35 +1,41 @@
-import { isIdempotencyConflict, StreamProcessor } from "iterate/processors";
+import { StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs, StreamEvent } from "iterate/processors";
 import { inferJsonType } from "../../lib/infer-json-type.ts";
 import { previewJson } from "../../lib/truncate-json.ts";
 import {
-  AgentProcessorContract,
-  type AgentFileAttachment,
-  type AgentProcessorState,
-} from "./agent-processor-contract.ts";
-import {
-  AGENT_COMPACTION_PROMPT,
-  buildAgentLlmRequestBody,
-  contextClearsWaitingFor,
-  flattenMessageToText,
-  reduceAgentEvent,
-  type AgentChatMessage,
-} from "./agent-prompt-fold.ts";
+  AgentLlmRequest,
+  appendUnlessLostIdempotencyRace,
+  buildAgentCompactionRequestBody,
+  prepareAgentLlmMessages,
+  stringifyError,
+  type AgentLlmDeps,
+} from "./agent-llm-request.ts";
+import { AgentProcessorContract, type AgentProcessorState } from "./agent-processor-contract.ts";
+import { contextClearsWaitingFor, reduceAgentEvent } from "./agent-prompt-fold.ts";
+import { fencedTsResponseFormat, type AgentResponseFormat } from "./agent-response-format.ts";
 import { resolveSlashCommand, SLASH_COMMAND_EXECUTION_PREFIX } from "./slash-commands.ts";
-import {
-  extractChunkText,
-  jsonCompatible,
-  normalizeLlmUsage,
-  runWorkersAiAttempt,
-  type CloudflareAiGatewayTransport,
-  type WorkersAiBinding,
-  type WorkersAiMessage,
-} from "./workers-ai-transport.ts";
+
+// The LLM request component moved to agent-llm-request.ts; these re-exports
+// keep the established import site for the pieces tests and hosts reach for.
+export {
+  buildAgentCompactionRequestBody,
+  contextWindowTokens,
+  prepareAgentLlmMessages,
+} from "./agent-llm-request.ts";
+
+/** The format that decides what assistant output MEANS. One hardcoded choice
+ * today; the planned follow-up selects from a registry keyed by
+ * `state.config`, which is why the processor only ever touches the strategy
+ * interface here. */
+const responseFormat: AgentResponseFormat = fencedTsResponseFormat;
 
 /**
  * The agent processor. Design: tasks/simplify-stream-processor-contract.md;
  * in-place replacement of the previous processor:
- * tasks/agent-processor-replacement.md.
+ * tasks/agent-processor-replacement.md. Split into three components
+ * (tasks/agent-processor-split-codemode.md): orchestration lives HERE, the
+ * LLM call in agent-llm-request.ts, and response interpretation behind the
+ * swappable strategy in agent-response-format.ts.
  *
  * HOW IT WORKS, end to end:
  *
@@ -119,19 +125,19 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   readonly contract = AgentProcessorContract;
 
   /**
-   * RUNTIME state: in-memory, dies with the isolate, never persisted. The one
-   * LLM call THIS incarnation is executing (mirroring the single
-   * `state.openRequest` slot), with its abort handle and the text streamed so
-   * far (preserved into the cancelled settlement when an interrupt aborts
-   * mid-response). The stream never knows about incarnations — a fresh one
-   * reduces the stream, finds the open request absent here, and runs it again
-   * (adopt-based recovery).
+   * The LLM REQUEST component (agent-llm-request.ts): prompt assembly,
+   * transport attempts, chunk streaming, the in-flight abort slot, and the
+   * atomic settle appends. This class stays the orchestrator — it decides
+   * WHEN a request runs (debounce, adopt, expire, interrupt) and what an
+   * accepted response means; the component owns the call itself. Compaction
+   * travels the same seam via `attempt()`.
    */
-  #inFlightLlmCall: {
-    requestOffset: number;
-    controller: AbortController;
-    partialText: string;
-  } | null = null;
+  readonly #llmRequest = new AgentLlmRequest({
+    deps: this.deps,
+    idempotencyKey: (suffix) => this.idempotencyKey(suffix),
+    readConsumedEvents: () => this.#readConsumedEvents(),
+    now: () => this.#now(),
+  });
 
   // ------------------------------------------------------------ processEvent
   // Synchronous. The two side-effect lanes are chosen HERE, at the dispatch
@@ -159,7 +165,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // mirror would silently drop the agent's own words from its memory.
         const files = event.payload.files;
         blockProcessorWhile(() =>
-          this.#appendUnlessLostIdempotencyRace(append, [
+          appendUnlessLostIdempotencyRace(append, [
             {
               type: "events.iterate.com/agents/context-added",
               payload: {
@@ -184,7 +190,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // consequence, delivered once.
         if (state.summary.waitingFor !== undefined && contextClearsWaitingFor(payload)) {
           blockProcessorWhile(() =>
-            this.#appendUnlessLostIdempotencyRace(append, [
+            appendUnlessLostIdempotencyRace(append, [
               {
                 type: "events.iterate.com/agent/summary-updated",
                 payload: { waitingFor: null, clearWaitingForThroughOffset: event.offset },
@@ -209,7 +215,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           const slashCommand = resolveSlashCommand(payload.content);
           if (slashCommand !== null) {
             blockProcessorWhile(() =>
-              this.#appendUnlessLostIdempotencyRace(append, [
+              appendUnlessLostIdempotencyRace(append, [
                 {
                   type: "events.iterate.com/capability-host/script-run-requested",
                   payload: {
@@ -235,12 +241,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           state.openRequest !== null
         ) {
           const open = state.openRequest;
-          this.#inFlightLlmCall?.controller.abort();
-          const partialText =
-            this.#inFlightLlmCall?.requestOffset === open.requestedAtOffset &&
-            this.#inFlightLlmCall.partialText !== ""
-              ? this.#inFlightLlmCall.partialText
-              : undefined;
+          const partialText = this.#llmRequest.abortInFlight(open.requestedAtOffset);
           const appends: EmittedInput<AgentProcessorContract>[] = [];
           if (partialText !== undefined) {
             appends.push({
@@ -276,7 +277,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           // after the cursor passed this event would leave the open request
           // uncancelled — and the next at-head pass would ADOPT and run the
           // very request the user tried to stop.
-          blockProcessorWhile(() => this.#appendUnlessLostIdempotencyRace(append, appends));
+          blockProcessorWhile(() => appendUnlessLostIdempotencyRace(append, appends));
           // STOP: nothing below may act this frame. The at-head code would
           // otherwise re-run the very request the queued settlement is about
           // to cancel (it reads the pre-cancel reduced state — the eviction-window
@@ -287,48 +288,40 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         }
         // RESPONSE PARSING — an accepted assistant output may carry ONE
         // codemode script; extraction rides the same delivery that reduced the
-        // text. Only output linked to THE open request is executable: a
-        // caller may raw-append assistant-role history, and may even supply a
-        // numeric llmRequestOffset, without thereby gaining a path to
-        // capability execution. Blocked for the same per-event reason as
-        // above: this event is delivered once, and both the script request
+        // text. WHAT the response means is the response format's decision
+        // (agent-response-format.ts); mapping the outcome to appends stays
+        // here so every side effect keeps this processor's idempotency and
+        // blocking discipline. Only output linked to THE open request is
+        // executable: a caller may raw-append assistant-role history, and may
+        // even supply a numeric llmRequestOffset, without thereby gaining a
+        // path to capability execution. Blocked for the same per-event reason
+        // as above: this event is delivered once, and both the script request
         // and the corrective feedback would be lost forever with it.
         if (
           payload.role === "assistant" &&
           payload.llmRequestOffset !== undefined &&
           payload.llmRequestOffset === state.openRequest?.requestedAtOffset
         ) {
-          const extraction = extractAsyncTypescriptSnippet(payload.content);
-          if (extraction.kind === "malformed") {
+          const outcome = responseFormat.parse(payload.content);
+          if (outcome.kind === "malformed" || outcome.kind === "multiple") {
+            const idempotencyKeySuffix =
+              outcome.kind === "malformed"
+                ? `malformed-snippet-rejected@${event.offset}`
+                : `multi-snippet-rejected@${event.offset}`;
             blockProcessorWhile(() =>
-              this.#appendUnlessLostIdempotencyRace(append, [
+              appendUnlessLostIdempotencyRace(append, [
                 {
                   type: "events.iterate.com/agents/context-added",
                   payload: {
                     role: "developer",
-                    content:
-                      "Your code block did NOT run. Use a ```ts fence whose content STARTS with `async` — a single `async (itx) => { ... }`, TypeScript only, no comments or statements before the function. Resend it as one such block (move any leading comments inside the function body).",
+                    content: outcome.feedback,
                     llmRequestPolicy: { behaviour: "after-current-request" },
                   },
-                  idempotencyKey: this.idempotencyKey(`malformed-snippet-rejected@${event.offset}`),
+                  idempotencyKey: this.idempotencyKey(idempotencyKeySuffix),
                 },
               ]),
             );
-          } else if (extraction.kind === "multiple") {
-            blockProcessorWhile(() =>
-              this.#appendUnlessLostIdempotencyRace(append, [
-                {
-                  type: "events.iterate.com/agents/context-added",
-                  payload: {
-                    role: "developer",
-                    content: `Your response contained ${extraction.count} fenced code blocks, so NOTHING was executed. Respond with exactly ONE fenced code block per turn. Do not queue future steps as extra blocks — your script's return value arrives as your next input and you write the next step then. Resend just the FIRST step as a single \`\`\`ts block.`,
-                    llmRequestPolicy: { behaviour: "after-current-request" },
-                  },
-                  idempotencyKey: this.idempotencyKey(`multi-snippet-rejected@${event.offset}`),
-                },
-              ]),
-            );
-          } else if (extraction.kind === "script") {
+          } else if (outcome.kind === "script") {
             blockProcessorWhile(() =>
               // Deterministic body (expiresAt anchors to the assistant event,
               // never `now`): an at-least-once redelivery of this event
@@ -336,11 +329,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
               // a `now`-stamped expiry would make the re-append a same-key
               // CONFLICT and wedge the frame forever. The race-tolerant
               // append covers a config change between deliveries.
-              this.#appendUnlessLostIdempotencyRace(append, [
+              appendUnlessLostIdempotencyRace(append, [
                 {
                   type: "events.iterate.com/capability-host/script-run-requested",
                   payload: {
-                    code: extraction.code,
+                    code: outcome.code,
                     executionId: `agent-output:${event.offset}`,
                     expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
                   },
@@ -376,7 +369,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             writeWorkspaceFile: this.deps.writeWorkspaceFile,
           });
           if (content === null) return;
-          await this.#appendUnlessLostIdempotencyRace(append, [
+          await appendUnlessLostIdempotencyRace(append, [
             {
               type: "events.iterate.com/agents/context-added",
               payload: {
@@ -553,7 +546,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       };
       runInBackground(async () => {
         if (windowClosesInMs > 0) await this.#sleep(windowClosesInMs);
-        await this.#appendUnlessLostIdempotencyRace(append, [intent]);
+        await appendUnlessLostIdempotencyRace(append, [intent]);
       });
       return;
     }
@@ -566,10 +559,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     // with the error transcribed for the next turn: answering a stale trigger
     // with a stale context snapshot is worse than admitting the miss.
     const open = state.openRequest;
-    if (open !== null && this.#inFlightLlmCall?.requestOffset !== open.requestedAtOffset) {
+    if (open !== null && !this.#llmRequest.isExecuting(open.requestedAtOffset)) {
       if (this.#now() >= open.expiresAt) {
         runInBackground(() =>
-          this.#appendUnlessLostIdempotencyRace(append, [
+          appendUnlessLostIdempotencyRace(append, [
             {
               type: "events.iterate.com/agent/llm-request-settled",
               payload: {
@@ -588,212 +581,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           ]),
         );
       } else {
-        this.#runLlmRequest(args, open);
+        this.#llmRequest.run(args, open);
       }
     }
-  }
-
-  /**
-   * Execute the LLM call for a recorded intent — background work: it can run
-   * for minutes, and the stream (not this closure) is what survives an
-   * eviction. The prompt is rebuilt from committed history pinned to the
-   * request's offset, so an adopting incarnation reproduces the covered
-   * context exactly. Success lands as ONE atomic append: the assistant
-   * context item, the settlement, and the normalized token-usage report, all
-   * idempotency-keyed on the request's offset, so a zombie racing a fresh
-   * incarnation collapses to one stream story.
-   */
-  #runLlmRequest(
-    args: ProcessEventArgs<AgentProcessorContract>,
-    open: NonNullable<AgentProcessorState["openRequest"]>,
-  ) {
-    const requestOffset = open.requestedAtOffset;
-    const inFlight = { requestOffset, controller: new AbortController(), partialText: "" };
-    this.#inFlightLlmCall = inFlight;
-    const startedAtMs = this.#now();
-    let chunkSequence = 0;
-    args.runInBackground(async () => {
-      try {
-        const events = await this.#readConsumedEvents();
-        const body = buildAgentLlmRequestBody({ events, llmRequestOffset: requestOffset });
-        const completion = await this.#attemptLlm({
-          model: open.model,
-          messages: await prepareAgentLlmMessages(body.messages, this.deps.resolveModelFileUrl),
-          signal: inFlight.controller.signal,
-          // The attempt can never outlive its intent: dial + stream drain
-          // self-cap at whatever validity the request has left.
-          deadlineMs: Math.max(1, open.expiresAt - this.#now()),
-          onChunk: async (chunk) => {
-            if (inFlight.controller.signal.aborted) return;
-            inFlight.partialText += extractChunkText(chunk);
-            const sequence = chunkSequence;
-            chunkSequence += 1;
-            // Each append obtains a fresh Durable Object stub, so await the
-            // commit to preserve provider order across those RPCs.
-            await args.append({
-              type: "events.iterate.com/agent/llm-response-chunk",
-              payload: {
-                chunk: jsonCompatible(chunk),
-                llmRequestOffset: requestOffset,
-                sequence,
-              },
-            });
-          },
-        });
-        // A non-streaming transport reports no chunks, so its text exists
-        // only in this closure until the success batch commits. Record it as
-        // the in-flight partial BEFORE awaiting that append: an interrupt
-        // racing the append settles cancelled with whatever partial is
-        // recorded, and must not drop a response already delivered whole.
-        if (!inFlight.controller.signal.aborted) {
-          inFlight.partialText = completion.text;
-        }
-        const usage = completion.usage;
-        await this.#appendUnlessLostIdempotencyRace(args.append, [
-          {
-            type: "events.iterate.com/agents/context-added",
-            payload: {
-              role: "assistant",
-              content: completion.text,
-              llmRequestOffset: requestOffset,
-            },
-            idempotencyKey: this.idempotencyKey(`assistant-context@${requestOffset}`),
-          },
-          {
-            type: "events.iterate.com/agent/llm-request-settled",
-            payload: {
-              requestOffset,
-              durationMs: Math.max(0, this.#now() - startedAtMs),
-              result: {
-                status: "succeeded",
-                text: completion.text,
-                ...(usage === undefined ? {} : { usage }),
-                ...(completion.rawResponse === undefined
-                  ? {}
-                  : { rawResponse: completion.rawResponse }),
-              },
-            },
-            idempotencyKey: this.idempotencyKey(`settle/${requestOffset}`),
-          },
-          // The normalized token report rides the same atomic append: same
-          // information, one commit. Skipped (not failed) when the vendor
-          // reported no parseable usage.
-          ...(usage === undefined
-            ? []
-            : ([
-                {
-                  type: "events.iterate.com/agent/token-usage-reported",
-                  payload: {
-                    llmRequestOffset: requestOffset,
-                    model: open.model,
-                    maxContextTokens: contextWindowTokens(open.model),
-                    ...usage,
-                  },
-                  idempotencyKey: this.idempotencyKey(`token-usage@${requestOffset}`),
-                },
-              ] satisfies EmittedInput<AgentProcessorContract>[])),
-        ]);
-      } catch (error) {
-        // An aborted call is the interrupt path's story — it already settled
-        // the request as cancelled.
-        if (inFlight.controller.signal.aborted) return;
-        const errorMessage = stringifyError(error);
-        // Attempt arithmetic from the dispatch-time reduced state: this failure is
-        // attempt (consecutiveLlmFailures + 1). The settled event's reduce
-        // schedules the retry; the error-occurred event gets transcribed into
-        // context so the next turn sees what happened.
-        const attempt = args.state.consecutiveLlmFailures + 1;
-        const { maxAttempts } = args.state.config.llmRequestRetryPolicy;
-        await this.#appendUnlessLostIdempotencyRace(args.append, [
-          {
-            type: "events.iterate.com/agent/llm-request-settled",
-            payload: {
-              requestOffset,
-              durationMs: Math.max(0, this.#now() - startedAtMs),
-              result: { status: "failed", errorMessage },
-            },
-            idempotencyKey: this.idempotencyKey(`settle/${requestOffset}`),
-          },
-          {
-            type: "events.iterate.com/stream/error-occurred",
-            payload: {
-              message:
-                attempt < maxAttempts
-                  ? `LLM request @${requestOffset} failed (attempt ${attempt} of ${maxAttempts}): ${errorMessage}. Retrying.`
-                  : `LLM request @${requestOffset} failed (attempt ${attempt} of ${maxAttempts}): ${errorMessage}. Giving up; a new user message starts fresh.`,
-            },
-            idempotencyKey: this.idempotencyKey(`failure-error/${requestOffset}`),
-          },
-        ]);
-      } finally {
-        if (this.#inFlightLlmCall?.requestOffset === requestOffset) {
-          this.#inFlightLlmCall = null;
-        }
-      }
-    });
-  }
-
-  /**
-   * One LLM attempt through the vendor seam. `deps.callLlm` (tests, custom
-   * hosts) takes the whole attempt when provided; otherwise the attempt dials
-   * Workers AI (unified billing or the BYOK gateway lane) via
-   * workers-ai-transport. Returns normalized usage either way, and raw chunk
-   * objects flow through `onChunk` (the scripted test transport hands text
-   * chunks — `extractChunkText` treats a bare string as its own text).
-   *
-   * `runWorkersAiAttempt` has no abort signal (an interrupt's outcome is
-   * decided by the settle key, not by tearing down the socket), so the abort
-   * is raced OUTSIDE it: the attempt promise loses to the abort, the caller's
-   * catch sees `signal.aborted`, and the orphaned drain finishes into the
-   * void with `onChunk` gated on the same signal.
-   */
-  async #attemptLlm(input: {
-    model: string;
-    messages: WorkersAiMessage[];
-    signal: AbortSignal;
-    deadlineMs: number;
-    onChunk: (chunk: unknown) => Promise<void>;
-  }): Promise<{
-    text: string;
-    usage?: {
-      inputTokens: number;
-      outputTokens: number;
-      cachedInputTokens?: number;
-      reasoningOutputTokens?: number;
-    };
-    rawResponse?: unknown;
-  }> {
-    if (this.deps.callLlm !== undefined) {
-      return await this.deps.callLlm({
-        model: input.model,
-        messages: input.messages,
-        signal: input.signal,
-        onChunk: (text) => input.onChunk(text),
-      });
-    }
-    const ai = this.deps.ai;
-    if (ai === undefined) {
-      throw new Error("Agent processor has no AI binding configured.");
-    }
-    const completion = await raceAbort(
-      input.signal,
-      runWorkersAiAttempt({
-        ai,
-        transport: this.deps.cloudflareAiGatewayTransport?.(),
-        deadlineMs: input.deadlineMs,
-        // This chat-completions transport is text-only: file attachments use
-        // just-in-time signed hint URLs, not OpenAI Files or provider file IDs.
-        messages: input.messages,
-        model: input.model,
-        onChunk: async (chunk) => input.onChunk(chunk),
-      }),
-    );
-    const usage = normalizeLlmUsage(completion.usage);
-    return {
-      text: completion.text,
-      ...(usage === undefined ? {} : { usage }),
-      rawResponse: completion.rawResponse,
-    };
   }
 
   /**
@@ -835,7 +625,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       // The usage report names the model that saw the exact measured request;
       // a later configuration event may already have selected another model,
       // but switching here would forfeit that cache.
-      const summary = await this.#attemptLlm({
+      const summary = await this.#llmRequest.attempt({
         model,
         messages: await prepareAgentLlmMessages(
           buildAgentCompactionRequestBody({ events, llmRequestOffset }).messages,
@@ -970,26 +760,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     }
   }
 
-  /**
-   * Append a batch whose idempotency keys may race concurrent writers: every
-   * writer of `settle/<offset>` (success, failure, interrupt, expiry) races
-   * every other, and two debounce schedulings of one trigger race on
-   * `request/<offset>` when config changed between them. The stream rejects
-   * a same-key append with a different body; the FIRST writer's story stands
-   * and losing the race is success — the obligation is settled/recorded, and
-   * the reduce sorts out whose fact counts.
-   */
-  async #appendUnlessLostIdempotencyRace(
-    append: ProcessEventArgs<AgentProcessorContract>["append"],
-    events: EmittedInput<AgentProcessorContract>[],
-  ): Promise<void> {
-    try {
-      await append(...events);
-    } catch (error) {
-      if (!isIdempotencyConflict(error)) throw error;
-    }
-  }
-
   // ------------------------------------------------------------------ reduce
   // Pure reduce. The one switch lives in the module-level `reduceAgentEvent`
   // below (not inline here) because two OFF-RUNTIME readers run the exact
@@ -1016,29 +786,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 // Injected dependencies.
 // -----------------------------------------------------------------------------
 
-/** The test/custom-host LLM seam: when provided it REPLACES the Workers AI
- * path entirely, so suites drive turns with a scripted transport and the
- * processor never knows. `onChunk` receives text deltas. Usage comes back
- * already normalized. */
-export type AgentLlmTransport = (args: {
-  model: string;
-  messages: WorkersAiMessage[];
-  signal: AbortSignal;
-  /** The transport awaits each result before delivering the next chunk. */
-  onChunk?: (text: string) => Promise<void>;
-}) => Promise<{
-  text: string;
-  usage?: {
-    inputTokens: number;
-    outputTokens: number;
-    cachedInputTokens?: number;
-    reasoningOutputTokens?: number;
-  };
-  rawResponse?: unknown;
-}>;
-
 /**
- * Host-provided deps beyond the stream plumbing.
+ * Host-provided deps beyond the stream plumbing. The transport half
+ * (`AgentLlmDeps`: `ai`, `cloudflareAiGatewayTransport`, `resolveModelFileUrl`,
+ * `callLlm`) is documented in agent-llm-request.ts and flows straight into the
+ * LLM request component:
  *
  * - `ai` is the Workers AI binding (`env.AI`) used for every LLM turn.
  *   Optional so a host without one fails requests with a recorded error
@@ -1051,44 +803,31 @@ export type AgentLlmTransport = (args: {
  * - `resolveModelFileUrl` remints a short-lived, immutable URL for a project
  *   file immediately before a model request. Production hosts provide it;
  *   bare tests without it retain the stored attachment URL.
+ * - `callLlm` overrides the whole Workers AI path when provided — the test
+ *   seam (see AgentLlmTransport).
+ *
+ * The processor's own additions:
+ *
  * - `writeWorkspaceFile` writes one file into THIS agent's own workspace
  *   directory (the filesystem `itx.workspace` resolves to; the given path is
  *   relative to that directory) so oversized script results can spill to a
  *   file the model pages through with plain TypeScript. Returns the
  *   fully-qualified workspace path it wrote. Optional: without it, oversized
  *   results fall back to inline truncation.
- * - `callLlm` overrides the whole Workers AI path when provided — the test
- *   seam (see AgentLlmTransport).
  * - `now`/`sleep`: injectable clock — virtual time in tests, real time in
  *   production.
  */
-export type AgentProcessorDeps = {
-  ai?: WorkersAiBinding;
-  cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
-  resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
+export type AgentProcessorDeps = AgentLlmDeps & {
   writeWorkspaceFile?: (input: {
     content: string;
     path: string;
   }) => Promise<{ absolutePath: string }>;
-  callLlm?: AgentLlmTransport;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 };
 
 /** Page size for full-stream reads (prompt building, compaction guards). */
 const CONSUMED_EVENTS_PAGE_SIZE = 500;
-
-/** Race an un-abortable attempt promise against its abort signal: the caller
- * regains control immediately on interrupt while the orphaned work finishes
- * into the void (its settle append loses the shared idempotency key). */
-function raceAbort<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
-  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("aborted"));
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason ?? new Error("aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
-  });
-}
 
 /** Exponential failure backoff reduced into the debounce window: doubling from
  * the policy's base, capped at its ceiling. */
@@ -1100,133 +839,9 @@ function retryBackoffMs(
   return Math.min(2 ** (state.consecutiveLlmFailures - 1) * backoffBaseMs, backoffMaxMs);
 }
 
-/** Resolve attachment URLs immediately before provider dispatch. The URLs in
- * recorded events remain deterministic UI/share links; model requests get a
- * separate short-lived capability bound to the current object version. */
-export async function prepareAgentLlmMessages(
-  messages: AgentChatMessage[],
-  resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>,
-): Promise<WorkersAiMessage[]> {
-  return await Promise.all(
-    messages.map(async (message) => {
-      const files = message.files ?? [];
-      if (files.length === 0) return { role: message.role, content: message.content };
-      const resolvedFiles =
-        resolveModelFileUrl === undefined
-          ? files
-          : await Promise.all(
-              files.map(async (file) => ({ ...file, url: await resolveModelFileUrl(file) })),
-            );
-      return {
-        role: message.role,
-        content: flattenMessageToText({ ...message, files: resolvedFiles }),
-        containsFiles: true,
-      };
-    }),
-  );
-}
-
-/**
- * The compaction request: the conversation EXACTLY as `buildAgentLlmRequestBody`
- * sends it — same system prompt, same history messages — with the summarize
- * instruction appended as the trailing message. Byte-identity with the normal
- * turn's prefix is the point (guarded by a test): the provider's prompt cache
- * matches on exact prefixes, so any re-rendering of the transcript would turn
- * the most expensive request in an agent's life into a full cache miss.
- */
-export function buildAgentCompactionRequestBody(input: {
-  events: readonly StreamEvent[];
-  llmRequestOffset: number;
-}): {
-  messages: AgentChatMessage[];
-} {
-  return {
-    messages: [
-      ...buildAgentLlmRequestBody(input).messages,
-      { role: "developer" as const, content: AGENT_COMPACTION_PROMPT },
-    ],
-  };
-}
-
-// -----------------------------------------------------------------------------
-// Context windows: model → the window the token-usage-reported payload claims.
-// -----------------------------------------------------------------------------
-
-/**
- * Context windows per model family, longest-prefix matched so dated variants
- * inherit their family's window. The OpenAI figures are our OPERATING window,
- * not the documented one: GPT-5.6 Sol and GPT-5.5 have 1.05M-token windows,
- * but 272k is where OpenAI's pricing doubles, so compaction should treat that
- * as full. Model facts, not tuning — the tunable half of the trigger is
- * `config.compactionTriggerFraction`.
- */
-const MODEL_CONTEXT_WINDOW_TOKENS: Record<string, number> = {
-  "openai/gpt-5.6": 272_000,
-  "openai/gpt-5.5": 272_000,
-  "openai/gpt-5": 272_000,
-};
-
-/** Conservative floor for models not in the map. */
-const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
-
-export function contextWindowTokens(model: string): number {
-  let best: { prefixLength: number; tokens: number } | undefined;
-  for (const [prefix, tokens] of Object.entries(MODEL_CONTEXT_WINDOW_TOKENS)) {
-    if (!model.startsWith(prefix)) continue;
-    if (best === undefined || prefix.length > best.prefixLength) {
-      best = { prefixLength: prefix.length, tokens };
-    }
-  }
-  return best?.tokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
-}
-
 // -----------------------------------------------------------------------------
 // Codemode: scripts out of outputs, script results back into inputs.
 // -----------------------------------------------------------------------------
-
-const FENCED_SNIPPET_RE = /^[ \t]*```(?:ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im;
-const ANY_FENCED_BLOCK_RE = /^[ \t]*```[^\n]*\n[\s\S]*?\n[ \t]*```[ \t]*$/gim;
-
-type SnippetExtraction =
-  | { kind: "script"; code: string }
-  // The model queued several scripts in one response (planning ahead).
-  // Executing only the first and dropping the rest silently is the worst
-  // option — the model believes everything it wrote will run — so the caller
-  // rejects the whole output with corrective feedback instead.
-  | { kind: "multiple"; count: number }
-  // A fenced block exists but nothing runnable came out of it: leading
-  // comments or statements before the arrow function, or a non-TypeScript
-  // language tag the extraction regex refuses. Nothing can run; the caller
-  // sends corrective feedback (models habitually open code with a comment
-  // line, and silence here reads as the platform hanging).
-  | { kind: "malformed" }
-  | { kind: "none" };
-
-function extractAsyncTypescriptSnippet(content: string): SnippetExtraction {
-  // Fences count only at line starts: scripts legitimately carry ``` inside
-  // string literals (chat messages formatted as markdown), and in valid
-  // TypeScript those always sit mid-line — a raw newline cannot appear in a
-  // string literal, and an unescaped ``` would terminate a template literal.
-  // A fence match anywhere used to cut the script at the first embedded ```
-  // and execute an unparseable prefix (unclosed string literal). Count every
-  // fenced block before validating its language tag: a mixed response (one
-  // runnable TypeScript block plus another fenced block) must reject the
-  // whole output instead of executing the first and silently dropping the
-  // rest.
-  const blocks = content.match(ANY_FENCED_BLOCK_RE) ?? [];
-  if (blocks.length > 1) return { kind: "multiple", count: blocks.length };
-  const fenced = content.match(FENCED_SNIPPET_RE);
-  const code = (fenced?.[1] ?? content).trim();
-  if (/^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code)) {
-    return { kind: "script", code };
-  }
-  // Any response carrying a line-start fence that did not yield a runnable
-  // script is a malformed attempt — including fences with a non-TypeScript
-  // language tag, which FENCED_SNIPPET_RE refuses to match. Only a fence-free
-  // non-script response is a deliberate no-op turn; the system prompt
-  // promises rejection-with-feedback for everything else.
-  return fenced !== null || /^[ \t]*```/m.test(content) ? { kind: "malformed" } : { kind: "none" };
-}
 
 // The "tool result" half of the codemode loop: a finished script execution
 // renders back into model-visible history so the next turn can look at the
@@ -1429,13 +1044,4 @@ function rawTextSpillNotice(input: {
     "}",
     "```",
   ].join("\n");
-}
-
-function stringifyError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
 }

@@ -27,7 +27,7 @@ export interface Typechecker {
 const MAX_SCRIPT_CHARS = 200_000;
 
 /** What the agent runtime's extractor accepts — keep in lockstep with
- * extractAsyncJsSnippet (agent-processor-implementation.ts): `async (…)`,
+ * the fenced-ts response format (agents/agent-response-format.ts): `async (…)`,
  * `async function`, or the parenthesized `(async (…)` form. The checker
  * enforces the same rule, or a pre-flighted green script would bounce at
  * run time. */
