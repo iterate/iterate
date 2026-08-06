@@ -580,25 +580,26 @@ export async function checkItxScriptForExecution(input: {
   // Blockers found with a preamble present: a broken preamble can report
   // NOTHING inside its own range (an unclosed brace cascades every error onto
   // script lines or EOF), which would blame — and block — an innocent script
-  // forever. Re-check WITHOUT the preamble before blocking: if the bare
-  // script is blocker-free, the preamble is the culprit and the script runs
-  // unchecked; if the bare script still blocks, the blame is proven and the
-  // bare check's problems (whose line numbers match the code the model sent)
-  // are the report. One extra compile, only on this rare double condition.
-  if (range !== null) {
-    const bare = await checkItxScriptForExecution({
+  // forever. Probe the PREAMBLE ALONE (checkPreamble compiles it against a
+  // trivial script) before blocking: probe-dirty means the preamble is the
+  // culprit and the script runs unchecked; probe-clean proves the blockers
+  // are the script's own — reported from THIS check, where preamble names
+  // were in scope, so a typo near-missing `results` keeps its did-you-mean
+  // (a bare re-check would see plain cannot-find-name and let it run). One
+  // extra compile, only on this rare double condition.
+  if (range !== null && input.preamble !== undefined) {
+    const probe = await checkPreamble({
       capabilities: input.capabilities,
-      code: input.code,
+      preamble: input.preamble,
       typechecker: input.typechecker,
       deadlineMs: input.deadlineMs,
     });
-    if (bare.verdict !== "problems") {
+    if (probe.length > 0) {
       return {
         verdict: "unchecked",
         reason: "the scope's preamble does not compile (its errors spill past its own lines)",
       };
     }
-    return bare;
   }
   const problems = formatProblems(blocking, {
     label: "script",

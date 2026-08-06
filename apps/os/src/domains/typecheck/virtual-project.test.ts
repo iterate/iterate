@@ -994,3 +994,18 @@ test("checkPreamble catches syntax errors that report outside the preamble's own
   });
   expect(problems.length).toBeGreaterThan(0);
 });
+
+test("a typo near-missing a preamble name still blocks with its did-you-mean", async () => {
+  // The blame probe compiles the preamble ALONE: a clean probe proves the
+  // blockers are the script's, and they report from the WITH-preamble check —
+  // a bare re-check would demote this TS2552 to a non-blocking TS2304 and
+  // run the script into a ReferenceError instead.
+  const checked = await checkItxScriptForExecution({
+    capabilities: [],
+    code: "async (itx) => resultz[0]",
+    preamble: "const results = [{ data: 1 }];",
+    typechecker,
+  });
+  expect(checked.verdict).toBe("problems");
+  expect((checked as { problems: string[] }).problems[0]).toContain("Did you mean 'results'");
+});

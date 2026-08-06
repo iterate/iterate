@@ -347,7 +347,11 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   }
 
   setPreamble(input: { key: string; code: string }): Promise<void> {
-    return this.#capabilityHostProcessor.setPreamble(input);
+    // Serialized like every capability mutation: the set-time compile
+    // snapshots state, awaits an expensive check, then appends — two
+    // concurrent sets validating against the same snapshot could each pass
+    // in isolation and commit a combined preamble that no longer compiles.
+    return this.#serializeMutation(() => this.#capabilityHostProcessor.setPreamble(input));
   }
 
   describePreamble(): Promise<{ text: string; entries: { key: string; code: string }[] } | null> {
@@ -355,7 +359,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   }
 
   removePreamble(input: { key: string }): Promise<void> {
-    return this.#capabilityHostProcessor.removePreamble(input);
+    return this.#serializeMutation(() => this.#capabilityHostProcessor.removePreamble(input));
   }
 
   getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }> {
