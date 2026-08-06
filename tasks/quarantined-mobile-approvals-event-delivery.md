@@ -42,7 +42,11 @@ from the public-RPC-normalized name. After that fix passed its exact-head
 baseline, the first cold candidate found one unflagged local SQLite reset in
 subscription `nack`; a narrow referenced-reset classifier is locally green.
 The 25-run streak remains at zero until the new exact head passes preview and
-trace audit.
+trace audit. Its first baseline passed cleanly; the next completed candidate
+was rejected by a short account-wide Cloudflare internal-error burst across
+unrelated Durable Object calls, and the following attempt failed before tests
+on a Cloudflare D1 API internal error. No product retry or telemetry
+classification was weakened to admit either run.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -600,3 +604,20 @@ Test these in order; do not treat the first plausible one as the conclusion.
   regression now proves the exact referenced reset is classified outside error
   telemetry while a lookalike application message remains visible. Both
   focused suites pass (32 tests); the streak remains zero for the new head.
+- 2026-08-06: Baseline `rxmld9w48m` on `9c28874a0` passed all six groups,
+  including 190 OS tests, approvals in 55.3 seconds, and notifications in 63.3
+  seconds with no retry. PostHog recorded both restored cases as passed with
+  `retry_count = 0` and `error_count = 0`. The exact Worker version's test
+  window contained only known deliberate test noise; rollout lifecycle logs
+  ended before readiness and were excluded. This established a one-run streak.
+- 2026-08-06: Candidate `j52phnjsrw` reset that streak. Within 33 seconds,
+  Cloudflare returned 33 distinct opaque Durable Object internal-error
+  references across unrelated projects, triggers, and RPC methods. Ten OS
+  tests retried and dashboard settings still failed; both restored mobile
+  flows nevertheless passed first try. The same errors caused 27 hosted
+  callback backoffs and 46 processor-blocked failures, so the run is rejected
+  rather than relabelled. The immediately following workflow `qs26kq809p`
+  never reached tests: Semaphore's remote D1 migration API returned Cloudflare
+  code 7500 with its own internal reference while OS smoke checks initially
+  returned 503. That deployment-only infrastructure failure is not a gate
+  candidate. The streak remains zero.
