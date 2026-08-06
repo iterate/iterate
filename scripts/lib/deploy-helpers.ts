@@ -22,7 +22,7 @@ const SecretBindings = z.array(z.object({ name: z.string(), type: z.string() }))
 // Wrangler does not expose Retry-After, but a direct API call in the same live
 // incident returned 120s. The final attempt therefore lands just beyond that
 // observed window instead of exhausting the budget at 110s.
-const CLOUDFLARE_COMMAND_429_BACKOFF_MS = [5_000, 15_000, 30_000, 75_000] as const;
+const CLOUDFLARE_COMMAND_RETRY_BACKOFF_MS = [5_000, 15_000, 30_000, 75_000] as const;
 const CAPTURED_COMMAND_OUTPUT_LIMIT = 64 * 1024;
 
 /**
@@ -79,15 +79,15 @@ export function runAsync(
 
 /**
  * Run one Cloudflare CLI command with a bounded retry for an explicit HTTP
- * 429. Wrangler retries some API calls itself, but not the Worker service and
- * version lookups performed by `wrangler deploy`; a shared-account rate-limit
- * window otherwise makes parallel preview deploys fail at random.
+ * 429 or API code 7009 (upstream unavailable). Wrangler retries some API calls
+ * itself, but not every Worker or D1 operation used by parallel previews.
  *
  * Output remains live and only a bounded tail is retained for classification.
- * Every non-429 failure surfaces immediately, and the final 429 still fails
- * after the same 5-attempt schedule used by our direct Cloudflare fetches.
+ * Every other failure surfaces immediately, and a persistent classified
+ * failure still fails after the same five-attempt schedule used by our direct
+ * Cloudflare fetches.
  */
-export async function runCloudflareCommandWith429Retry(
+export async function runCloudflareCommandWithRetry(
   command: string,
   args: string[],
   opts: { cwd: string; env?: Record<string, string> },
@@ -96,7 +96,7 @@ export async function runCloudflareCommandWith429Retry(
     sleep?: (ms: number) => Promise<void>;
   } = {},
 ): Promise<void> {
-  const backoffMs = retryOpts.backoffMs ?? CLOUDFLARE_COMMAND_429_BACKOFF_MS;
+  const backoffMs = retryOpts.backoffMs ?? CLOUDFLARE_COMMAND_RETRY_BACKOFF_MS;
   const sleep =
     retryOpts.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
 
@@ -110,16 +110,22 @@ export async function runCloudflareCommandWith429Retry(
       `${command} ${args.join(" ")} exited with ${result.code ?? `signal ${result.signal ?? "unknown"}`}`,
     );
     const rateLimitIndex = result.output.lastIndexOf("429 Too Many Requests");
+    const upstreamUnavailableIndex = result.output.lastIndexOf(
+      "Upstream service unavailable [code: 7009]",
+    );
+    const transientFailureIndex = Math.max(rateLimitIndex, upstreamUnavailableIndex);
     const terminalErrorIndex = result.output.lastIndexOf("ERROR");
-    const isRateLimited =
-      rateLimitIndex >= 0 && (terminalErrorIndex < 0 || rateLimitIndex > terminalErrorIndex);
-    if (!isRateLimited || attempt > backoffMs.length) {
+    const isTransientFailure =
+      transientFailureIndex >= 0 &&
+      (terminalErrorIndex < 0 || transientFailureIndex > terminalErrorIndex);
+    if (!isTransientFailure || attempt > backoffMs.length) {
       throw failure;
     }
 
     const delayMs = backoffMs[attempt - 1];
+    const reason = upstreamUnavailableIndex > rateLimitIndex ? "code 7009" : "HTTP 429";
     console.warn(
-      `Cloudflare API rate limited (429) during ${command} ${args.join(" ")} ` +
+      `Cloudflare API transient failure (${reason}) during ${command} ${args.join(" ")} ` +
         `(attempt ${attempt}/${backoffMs.length + 1}); retrying command in ${Math.round(delayMs / 1000)}s...`,
     );
     await sleep(delayMs);
@@ -228,7 +234,7 @@ export async function deployWithSecrets(input: {
   try {
     const secretsFile = join(secretsDir, "secrets.json");
     writeFileSync(secretsFile, JSON.stringify(input.secretValues), { mode: 0o600 });
-    await runCloudflareCommandWith429Retry("pnpm", [...deployArgs, "--secrets-file", secretsFile], {
+    await runCloudflareCommandWithRetry("pnpm", [...deployArgs, "--secrets-file", secretsFile], {
       cwd: input.cwd,
       env: input.credentials,
     });

@@ -13,12 +13,13 @@ Implementation is about 98% complete. Both mobile skips are removed and the
 reported delivery defects plus each recovery failure found by the strict gate
 have regression coverage. The latest exact-head baseline was clean.
 
-Gate candidate one then caught Auth's post-deploy OAuth seed before the newly
-written bootstrap admin was visible to the Worker. The server now reports
-that exact state as a bounded 503; the seed retries 503 and Cloudflare edge
-propagation statuses while still rejecting unclassified 500s. Auth's 86 tests,
-both package typechecks, lint, and formatting are green. The 25-run streak
-remains at zero until this fix passes a fresh preview.
+Gate candidate one then caught two classified Auth deployment gaps: the
+post-deploy OAuth seed could race bootstrap-admin visibility, and Wrangler did
+not recover Cloudflare D1 code 7009. The server now reports the first as 503;
+the seed and captured-output command wrapper bound retries to explicit
+availability outcomes while still rejecting unclassified failures. Auth's 86
+tests, the 18-test deploy-helper suite, typechecks, lint, and formatting are
+green. The 25-run streak remains at zero until this fix passes a fresh preview.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -484,3 +485,11 @@ Test these in order; do not treat the first plausible one as the conclusion.
   seed test and an explicit server precondition: only that missing-admin state
   becomes `SERVICE_UNAVAILABLE`; arbitrary 500s remain terminal. Auth's 86
   tests, Auth and contract typechecks, lint, and formatting pass.
+- 2026-08-06: The next exact-head preview `3nnr6dn0pw` reached Auth's D1 admin
+  seed but Wrangler's import API returned Cloudflare code 7009, “Upstream
+  service unavailable.” Added a red/green captured-output command spec and
+  routed Auth migrations and seed imports through the deploy helper's bounded
+  retry schedule. Only exact 429/7009 outcomes retry; recovered markers before
+  a later unrelated error and all unclassified failures remain terminal. The
+  18 deploy-helper tests and Auth's 86 tests pass with typecheck, lint, and
+  formatting green.
