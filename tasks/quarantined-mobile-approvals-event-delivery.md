@@ -141,6 +141,17 @@ inside the original overall deadline. The red/green regression proves that a
 hung first probe is released and the second reaches the current version. The
 strict 25-run streak remains zero for this new exact head.
 
+That probe-timeout head produced one fully accepted 395-second candidate with
+all six app groups and both mobile flows first try. The next candidate broke
+the streak before OS testing when Semaphore timed out in deployment health.
+Exact Cloudflare telemetry showed its new Worker version answer successfully
+once, then later version-pinned requests ran the old Worker for another 40
+seconds while its `ResourceCoordinator` reset for the code update. Semaphore
+was the only preview suite that calls a Durable Object without the shared
+90-second deployment-age gate. It now waits at that same bounded before-suite
+boundary; the preview-policy regression failed before the change and all 139
+tests pass after it. The strict streak is zero pending a new exact head.
+
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
 model and routing; the mobile bundle does not import its route helper. The
