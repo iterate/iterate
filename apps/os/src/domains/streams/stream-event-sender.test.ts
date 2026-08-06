@@ -614,6 +614,60 @@ describe("StreamEventSender hosted processor delivery", () => {
 });
 
 describe("StreamEventSender stream delivery", () => {
+  it("reports a nested lifecycle reset outside error telemetry and retries from its durable cursor", async () => {
+    const lifecycleReset = Object.assign(new Error("cursor storage reset"), {
+      durableObjectReset: true,
+      retryable: true,
+    });
+    const cursorUpdate = new Error("subscription cursor update failed", { cause: lifecycleReset });
+    const h = harness({
+      events: [event(2, "a", { keep: true })],
+      configuration: {
+        subscriptionKey: PROCESSOR_KEY,
+        receiver: {
+          action: "copy-to-stream",
+          receivingStreamPath: "/receiver",
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      wakeProcessor: async () => {
+        throw new Error("a copy must not wake a hosted processor");
+      },
+      copyToStream: async () => ({ acknowledged: 1 }),
+    });
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(h.store, "ack").mockImplementationOnce(() => {
+      throw cursorUpdate;
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(warnLog).toHaveBeenCalledWith(
+      "durable subscription send loop interrupted by lifecycle availability",
+      { subscriptionKey: PROCESSOR_KEY, error: cursorUpdate },
+    );
+    expect(errorLog).not.toHaveBeenCalled();
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 0,
+      attempt: 1,
+      nextAttemptAt: 11_000,
+      lastError: "subscription cursor update failed",
+    });
+
+    h.setNow(11_000);
+    h.eventSender.onAlarm();
+    await h.settle();
+
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 2,
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+    });
+  });
+
   it("pins the next read to one event after a batch failure so a poison event cannot strand its healthy prefix", async () => {
     const attemptedOffsets: number[][] = [];
     const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => {

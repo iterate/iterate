@@ -1004,7 +1004,14 @@ export class StreamEventSender {
           this.#limitNextReadToOne.delete(subscriptionKey);
         }
       } catch (error) {
-        console.error("durable subscription send loop failed", { subscriptionKey, error });
+        if (isRetryableDurableObjectAvailabilityError(error)) {
+          console.warn("durable subscription send loop interrupted by lifecycle availability", {
+            subscriptionKey,
+            error,
+          });
+        } else {
+          console.error("durable subscription send loop failed", { subscriptionKey, error });
+        }
         // An unexpected local delivery-loop failure is still a bounded, observable
         // delivery failure. Without this transition a quiet stream could keep
         // an active row forever with neither an alarm nor a halted event.

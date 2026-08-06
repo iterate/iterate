@@ -80,12 +80,18 @@ conflicted with `main`, preventing GitHub from publishing the exact-sha preview
 packages. Current `main` is now merged; its chat-reply suppression and this
 branch's approval claim-before-intent state are combined under Device processor
 version 0.7.0 so existing 0.6.0 caches refold. The merged-head baseline then
-failed both attempts of the approvals spec: the
-new chat-reply feature correctly added two `Agent replied` notification rows,
-and the spec's broad notification-row locator clicked one of those rows instead
-of an approval batch. The locator now selects `Approvals needed` rows and
-inspects them one at a time; the exact spec passes against preview with no
-timeout increase. A new exact-head baseline is next.
+failed both attempts of the approvals spec because the new chat-reply feature
+correctly added two `Agent replied` notification rows, and the spec's broad
+notification-row locator clicked one of those rows instead of an approval
+batch. The locator now selects `Approvals needed` rows and inspects them one at
+a time; the exact spec passes against preview with no timeout increase. The
+corrected head then passed its canonical preflight and two formal candidates
+with all app retry fields null. Candidate two's exact trace audit still found a
+nested retryable SQLite reset reported by the source-owned subscription loop as
+an application error. The loop now keeps that already-bounded lifecycle retry
+outside error telemetry; its red/green regression proves the cursor stays
+durable and advances on the one-second retry. A new exact-head baseline is next
+and the strict streak is zero.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -766,3 +772,16 @@ Test these in order; do not treat the first plausible one as the conclusion.
   `Approvals needed` rows and expands/collapses them one at a time for FlatList
   stability; the same preview-backed spec passes in 1.1 minutes without any
   timeout increase. The strict streak remains zero for the next exact head.
+- 2026-08-06: Corrected-head preflight `mfl1wv1rbt` and clean-slate candidates
+  `zrn9kl630j` and `k2jm610wbw` passed all six groups, both restored mobile
+  specs, and both restart/resume proofs first try with every app retry field
+  null. The exact-version audit for candidate two caught one
+  `durable subscription send loop failed` row: cursor `ack` threw a nested
+  `SqlfuError` whose cause was explicitly marked `durableObjectReset` and
+  `retryable`. Existing behavior retained the cursor and retried after one
+  second, but the outer catch mislabeled that expected lifecycle outcome as an
+  application error. A red/green regression now proves the nested classifier,
+  non-error telemetry, durable cursor, and successful alarm retry. All 60
+  stream-sender tests, OS typecheck, targeted lint, formatting, and diff checks
+  pass. The two candidates are discarded; the streak restarts at zero on the
+  new head.
