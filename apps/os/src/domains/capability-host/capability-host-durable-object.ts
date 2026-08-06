@@ -7,7 +7,11 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
-import { checkCapabilityTypes, checkItxScriptForExecution } from "../typecheck/virtual-project.ts";
+import {
+  checkCapabilityTypes,
+  checkItxScriptForExecution,
+  checkPreamble,
+} from "../typecheck/virtual-project.ts";
 import {
   CapabilityHostProcessor,
   type CapabilityHostProcessorReads,
@@ -19,7 +23,7 @@ import type { ProvideCapabilityInput } from "./types.ts";
 type ScriptExecutionEntrypoint = {
   run(
     code: string,
-    options: { emittedJs?: string; expiresAt: number },
+    options: { emittedJs?: string; expiresAt: number; preambleJs?: string },
   ): Promise<ScriptExecutionSettlement>;
 };
 
@@ -83,6 +87,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         checkCapabilityTypes({ types, typechecker: this.env.TYPECHECKER }),
       typecheckScript: (input) =>
         checkItxScriptForExecution({ ...input, typechecker: this.env.TYPECHECKER }),
+      checkPreamble: (input) => checkPreamble({ ...input, typechecker: this.env.TYPECHECKER }),
     }),
     { recovery: true },
   );
@@ -156,5 +161,21 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
 
   describeCapabilities(): Promise<CapabilityDescription[]> {
     return this.#capabilityHostProcessor.describeCapabilities();
+  }
+
+  setPreamble(input: { key: string; code: string }): Promise<void> {
+    return this.#capabilityHostProcessor.setPreamble(input);
+  }
+
+  describePreamble(): Promise<{ text: string; entries: { key: string; code: string }[] } | null> {
+    return this.#capabilityHostProcessor.describePreamble();
+  }
+
+  removePreamble(input: { key: string }): Promise<void> {
+    return this.#capabilityHostProcessor.removePreamble(input);
+  }
+
+  getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }> {
+    return this.#capabilityHostProcessor.getScriptResult(executionId);
   }
 }

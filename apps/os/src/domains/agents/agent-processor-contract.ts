@@ -569,6 +569,10 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/resumed",
     "events.iterate.com/capability-host/script-run-requested",
     "events.iterate.com/capability-host/script-run-settled",
+    // Preamble changes on the agent's own scope transcribe into model-visible
+    // context (the model must know which symbols its scripts can reference).
+    "events.iterate.com/capability-host/preamble-set",
+    "events.iterate.com/capability-host/preamble-removed",
     // Every error on the stream — the processor's own emissions, the runner's
     // repeatedly failing events that were skipped, anything else — is transcribed into model-visible context.
     "events.iterate.com/stream/error-occurred",

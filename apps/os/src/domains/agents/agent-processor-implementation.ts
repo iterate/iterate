@@ -2,6 +2,7 @@ import { isIdempotencyConflict, StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs, StreamEvent } from "iterate/processors";
 import { inferJsonType } from "../../lib/infer-json-type.ts";
 import { previewJson } from "../../lib/truncate-json.ts";
+import { INLINE_RESULT_PREAMBLE_LIMIT } from "../capability-host/capability-host-preamble.ts";
 import {
   AgentProcessorContract,
   type AgentFileAttachment,
@@ -350,6 +351,33 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             );
           }
         }
+        break;
+      }
+      case "events.iterate.com/capability-host/preamble-set":
+      case "events.iterate.com/capability-host/preamble-removed": {
+        // Preamble changes on this agent's scope transcribe into developer
+        // context — the model can only use symbols it knows exist. Never a
+        // turn trigger: when the agent's own script set the entry, the
+        // script's settlement drives the next turn; an external set is
+        // configuration, not conversation. Blocked: per-event consequence,
+        // delivered once.
+        const isSet = event.type === "events.iterate.com/capability-host/preamble-set";
+        const content = isSet
+          ? `Preamble entry ${JSON.stringify(event.payload.key)} was set. This TypeScript is now injected above your scripts — its symbols are in scope:\n\`\`\`ts\n${event.payload.code}\n\`\`\``
+          : `Preamble entry ${JSON.stringify(event.payload.key)} was removed; its symbols are no longer available to your scripts.`;
+        blockProcessorWhile(() =>
+          this.#appendUnlessLostIdempotencyRace(append, [
+            {
+              type: "events.iterate.com/agents/context-added",
+              payload: {
+                role: "developer",
+                content,
+                llmRequestPolicy: { behaviour: "dont-trigger-request" },
+              },
+              idempotencyKey: this.idempotencyKey(`render-preamble-change@${event.offset}`),
+            },
+          ]),
+        );
         break;
       }
       case "events.iterate.com/capability-host/script-run-settled": {
@@ -1267,6 +1295,13 @@ async function renderScriptSettlement(input: {
   }
   if (settlement.result === undefined) return null;
   const text = stringifyScriptResult(settlement.result);
+  // The same small-vs-large split the capability host applies when deriving
+  // the preamble `results` array (compact JSON vs typed loader) — so this
+  // note names the binding the next script will actually have.
+  const preambleNote =
+    JSON.stringify(settlement.result).length <= INLINE_RESULT_PREAMBLE_LIMIT
+      ? "\nThis result is available to your next script as `results[0].data` (the preamble `results` array, newest first)."
+      : "\nThe full result is available to your next script via `await results[0].load(itx)` (the preamble `results` array, newest first).";
   // String results are raw text, not JSON — the fence label, the spill
   // file's extension, and the read-it-back recipe all say so honestly.
   const isRawText = typeof settlement.result === "string";
@@ -1289,15 +1324,18 @@ async function renderScriptSettlement(input: {
           "```",
           text.slice(0, shownChars),
           "```",
-          rawTextSpillNotice({ path: spilledPath, shownChars, totalChars: text.length }),
+          rawTextSpillNotice({ path: spilledPath, shownChars, totalChars: text.length }) +
+            preambleNote,
         ].join("\n");
       }
-      return renderOversizedJsonResult({
-        historyLimit,
-        path: spilledPath,
-        result: settlement.result,
-        text,
-      });
+      return (
+        renderOversizedJsonResult({
+          historyLimit,
+          path: spilledPath,
+          result: settlement.result,
+          text,
+        }) + preambleNote
+      );
     } catch (error) {
       // Spilling is best effort: a workspace that cannot clone or write must
       // not lose the result entirely — fall through to inline truncation.
@@ -1307,7 +1345,7 @@ async function renderScriptSettlement(input: {
       });
     }
   }
-  return `Your script returned:\n${fence}\n${truncateScriptResult(text, historyLimit)}\n\`\`\``;
+  return `Your script returned:\n${fence}\n${truncateScriptResult(text, historyLimit)}\n\`\`\`${preambleNote}`;
 }
 
 function stringifyScriptResult(result: unknown): string {

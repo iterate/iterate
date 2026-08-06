@@ -340,6 +340,7 @@ import type {
 import type {
   ProvideCapabilityInput,
   RevokeCapabilityInput,
+  SetPreambleInput,
 } from "./domains/capability-host/types.ts";
 import type {
   CollectSecretInput,
@@ -5367,6 +5368,45 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     await this.#durableObject.revokeCapability(input);
   }
 
+  /**
+   * Upsert one keyed preamble entry: TypeScript injected above every later
+   * script in this scope, at typecheck and at execution — constants, helper
+   * functions, anything scripts should see as in-scope typed symbols. Example:
+   * `await itx.capabilityHost.setPreamble({ key: "channels", code: 'const TECH_CHANNEL_ID = "C1234";' })`.
+   * Compiled at set time against the scope's assembled preamble; an entry
+   * that would break later scripts' checks rejects here instead.
+   */
+  async setPreamble(input: SetPreambleInput): Promise<void> {
+    await this.#durableObject.setPreamble(input);
+  }
+
+  /** Remove one preamble entry by key (platform-derived `results` is not an entry and cannot be removed). */
+  async removePreamble(input: { key: string }): Promise<void> {
+    await this.#durableObject.removePreamble(input);
+  }
+
+  /**
+   * The scope's current assembled preamble — the exact TypeScript injected
+   * above the next script (the derived `results` array plus user entries) —
+   * and the raw user entry table. Null when there is nothing to inject.
+   */
+  async getPreamble(): Promise<{
+    text: string;
+    entries: { key: string; code: string }[];
+  } | null> {
+    return await this.#durableObject.describePreamble();
+  }
+
+  /**
+   * One settled script result, read back from the scope's stream by
+   * executionId — the durable storage behind the preamble `results` array's
+   * async `load(itx)` helpers for results too large to embed inline. Throws
+   * for unknown executions and for scripts that failed.
+   */
+  async getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }> {
+    return await this.#durableObject.getScriptResult(executionId);
+  }
+
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   async invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown> {
     const { args = [], path } = call;
@@ -5391,6 +5431,12 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         provideCapability: "Mount a capability on THIS scope; returns a revoke handle.",
         revokeCapability: "Remove a mount from THIS scope.",
         runScript: "Run an async (itx) => {...} script in this scope.",
+        setPreamble:
+          "Upsert a keyed preamble entry — TypeScript injected above every later script in this scope.",
+        removePreamble: "Remove a preamble entry by key.",
+        getPreamble: "The assembled preamble text the next script will see, plus the entry table.",
+        getScriptResult:
+          "Read one settled script result back by executionId (what results[N].load(itx) calls).",
       },
       parent: `project ${this.#props.projectId}; sibling scopes via capabilityHosts.get(path)`,
       capabilities,
@@ -7400,10 +7446,17 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
    * did-you-mean instead of costing a failed run.
    */
   async typecheck(input: { code: string }): Promise<{ ok: boolean; problems: string[] }> {
-    const { capabilities } = await this.#capabilityHost.__describe();
+    // The scope's preamble is part of the checked surface, exactly as at the
+    // execution gate — a script leaning on `results[0].data` or a setPreamble
+    // constant must pre-flight the same way it runs.
+    const [{ capabilities }, preamble] = await Promise.all([
+      this.#capabilityHost.__describe(),
+      this.#capabilityHost.getPreamble(),
+    ]);
     const problems = await checkItxScript({
       capabilities,
       code: input.code,
+      preamble: preamble?.text,
       typechecker: env.TYPECHECKER,
     });
     return { ok: problems.length === 0, problems };
