@@ -21,7 +21,7 @@ const TokenResponse = z.object({
 });
 
 export async function isSignedIn() {
-  return (await readTokens()) !== undefined;
+  return Boolean(await readTokens());
 }
 
 export async function requestSignIn() {
