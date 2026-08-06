@@ -99,6 +99,41 @@ async function ensureOsUnderTest(): Promise<void> {
 }
 
 /**
+ * Recycle the local dev server between e2e files when its workerd RSS has grown
+ * past the limit. Local workerd never evicts worker-loader isolates, so a long
+ * suite that creates many projects climbs toward the ~4GB V8 pointer cage and
+ * SIGABRTs mid-run (tasks/miniflare-oom-investigation.md); this turns that
+ * monotonic climb into a sawtooth. STRICT no-op unless this run is actually
+ * driving a LOCAL dev server (`readLive()` is null in CI and against a deployed
+ * target) AND it is over the RSS limit — so normal small local runs and every
+ * CI lane are untouched. The e2e `setupFiles` register this as an `afterAll`.
+ */
+export async function recycleLocalDevServerIfPressured(): Promise<void> {
+  if (process.env.CI) return;
+  const live = localOsDevServer.readLive();
+  if (!live) return;
+  const target = await resolveLocalOsDevTargetOnce();
+  const normalize = (url: string) => url.replace(/\/+$/, "");
+  // Only recycle the exact server this run resolved — never a stray local
+  // server a developer happens to have up while testing a deployed URL.
+  if (normalize(live.baseUrl) !== normalize(target.baseUrl)) return;
+  if (!(await localOsDevServer.killIfMemoryPressured(live))) return;
+  // It was over the limit and got killed; start a fresh, low-RSS server on the
+  // same port so the next file runs against the URL setup.ts already resolved.
+  const started = await startDevServer({ detach: true, port: live.port });
+  if (started.baseUrl && started.pid && started.startedAt) {
+    await waitForHealth({
+      baseUrl: started.baseUrl,
+      pid: started.pid,
+      startedAt: started.startedAt,
+    });
+    console.log(
+      `[e2e] recycled bloated dev server; fresh pid ${started.pid} at ${started.baseUrl}.`,
+    );
+  }
+}
+
+/**
  * Poll `${baseUrl}/api/health` until it answers 200, on the same budget as
  * the Playwright webServer timeout in playwright.config.ts: at least 10s,
  * and up to 180s measured from the server's own startedAt — a freshly
