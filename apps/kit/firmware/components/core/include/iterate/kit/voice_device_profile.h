@@ -194,14 +194,21 @@ enum {
    * seven of them in twenty-six minutes. From across the room that is a device
    * that "just randomly disconnects and reconnects", because it is.
    *
-   * Fifteen minutes keeps the safety net for the failure it was built for — a
-   * capability that has gone offline server-side under a healthy socket — while
-   * making the flap rare enough not to be the thing people notice about the
-   * device. The real fix is a re-registration that does not drop the socket,
-   * or an inbound page that moves this counter honestly; both are larger than
-   * a constant.
+   * BACK TO THREE MINUTES, having tried fifteen and measured the cost.
+   *
+   * Lengthening it stopped the flap and revealed what the flap had been hiding:
+   * this is the ONLY thing that re-establishes a mount the platform has
+   * dropped. Measured the same night — all four boards mounted, ran ~11
+   * minutes, and lost their mounts together. Four independent devices failing
+   * simultaneously is one shared cause and it is server-side; with a fifteen
+   * minute interval they simply stayed dead for longer.
+   *
+   * So the flap is real and this constant is not the fix for it. Until the
+   * server-side mount loss is understood, a device that recovers in three
+   * minutes beats a tidier one that does not recover for fifteen. The proper
+   * answer remains a re-registration that does not drop the socket.
    */
-  ITERATE_KIT_VOICE_IDLE_REMOUNT_MS = 900000,
+  ITERATE_KIT_VOICE_IDLE_REMOUNT_MS = 180000,
 };
 
 /**
