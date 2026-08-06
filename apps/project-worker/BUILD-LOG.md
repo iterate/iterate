@@ -257,7 +257,20 @@ DataCloneError`; `Reflect.apply` → `NATIVE_OK`. (The `__HostedActor`/`stateful
   `"hello from counter v2, value=10"`; native **survives a parent redeploy** on the same ctx (value 10 →
   `increment(5)` → 15); and the stateless pair `itx.greet("world")` still returns its repo-fn result.
   Full writeup: `apps/project-worker/FACET-RPC-INVESTIGATION.md`.
-- **Deferred:** a facet reaching BACK into its host via `itx`; alarms for facets (workerd#6810 — apps/os keeps
+- **DONE — every dynamic worker now gets `env.ITX` (Jonas: "all dynamic workers must have env.ITX binding just
+  like apps/os").** The stateless `code` cap and the confined `load` agent already got `env: { ITX: self }`;
+  the stateful **facet** runner passed `env: {}`. Fixed: `StatefulWorkerDurableObject#facet` now mints a stub to
+  the OWNING capability host (`ITX_HOST.getByName(stringifyName({projectId, path}))`, reconstructed from the
+  runner's own `{projectId}::{path}::{callPath}` name) and passes `env: { ITX: host }` + `globalOutbound: host`
+  - injects `itx.js`. So a hosted `DurableObject` class calls sibling capabilities with
+    `this.env.ITX.invokeCapability("itx.x", [..])` (or `itxFromStub(this.env.ITX).x.y(..)`), and a plain `fetch()`
+    egresses through the host. Mirrors apps/os (`env.ITX = ctx.exports.ItxEntrypoint({props})`).
+  * **Proven** (deployed, `itxbind-1`, ctx `prj_itxbind`): `Counter.whoAmI()` (via `env.ITX`) → `{projectId:
+"prj_itxbind"}`; `whoDotted()` (via injected `itx.js`) → same; `bumpKv("hits")` ×2 round-trips through
+    `itx.kv` → 1 then 2, and the HOST reads the SAME key → `"2"` (facet + host share the project-prefixed KV);
+    a SECOND project's facet `whoAmI()` → `{projectId: "prj_other"}` (isolation — each facet reaches ITS OWN
+    host, never a sibling's).
+- **Deferred:** alarms for facets (workerd#6810 — apps/os keeps
   them on the outer DO); the runner reads its source from the repo KV, so `list`-style eventual consistency
   doesn't bite (get is immediate). Added a `/version` smoke marker (workers.dev propagation lags ~1-2min;
   **DO code lags the worker code by a further ~minute** — poll a behavioral probe, not just `/version`).

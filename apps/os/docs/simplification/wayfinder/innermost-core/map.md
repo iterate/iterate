@@ -460,8 +460,14 @@ args)` — invokes `[[Call]]` directly, runs inside the owning DO, returns plain
   `fetch` (a Response passes by value). Loader cacheKey now folds in `CF_VERSION_METADATA.id` (`version_metadata`
   binding), mirroring apps/os so a redeploy mints a fresh loaded isolate (prevents a stale-isolate transfer
   error across rollouts — a real latent bug, not the native cause). Writeup:
-  `apps/project-worker/FACET-RPC-INVESTIGATION.md`. (Deferred: a facet reaching BACK into its host via `itx`;
-  facet alarms — workerd#6810.)
+  `apps/project-worker/FACET-RPC-INVESTIGATION.md`. **Follow-up DONE (2026-08-06): every dynamic worker gets
+  `env.ITX`.** The stateful facet now gets `env.ITX` + `globalOutbound` = a stub to its OWNING capability host
+  (reconstructed from the runner's `{projectId}::{path}::{callPath}` name) + an injected `itx.js`, exactly like
+  the stateless `code` cap and the confined `load` agent — so a hosted `DurableObject` reaches sibling
+  capabilities via `this.env.ITX.invokeCapability(..)`/`itxFromStub`. Mirrors apps/os (`env.ITX =
+  ctx.exports.ItxEntrypoint({props})`). Proven (`itxbind-1`): `Counter.whoAmI()`→ correct `projectId`, a
+  round-trip through `itx.kv` shows facet + host share the project store, and a second project's facet reaches
+  its OWN host (isolation). (Deferred: facet alarms — workerd#6810.)
 - **D14 — Cost/billing is USERSPACE, not a control-plane primitive.** Budgets/spend limits are a key PRODUCT
   concern but implemented in userspace: a **stream processor that consumes cost-bearing events** across
   streams and computes spend/budget. Can live on the product shell (for now), or the project shell (as a core

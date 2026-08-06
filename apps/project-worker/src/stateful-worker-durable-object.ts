@@ -14,9 +14,20 @@
 //   2. Deploy-scoped loader cacheKey (see #facet): loader isolates are cached across deployments but this DO is
 //      durable, so a facet built from a prior deployment's isolate is cross-Worker to the new parent — and thus
 //      un-transferable. Folding CF_VERSION_METADATA.id into the key mints a fresh isolate each rollout.
+//
+// Every hosted DO class gets `env.ITX` = a stub to its OWNING capability host (the ItxDurableObject for this
+// runner's {projectId, path}), plus `globalOutbound` = that same host — IDENTICAL to what a stateless `code`
+// cap gets. So a stateful worker calls sibling capabilities with `this.env.ITX.invokeCapability("itx.x", [..])`
+// (or imports `itxFromStub` from the injected `itx.js` for the dotted `itx.x.y(..)` surface), and a plain
+// `fetch()` inside the class routes out through the host's egress. Mirrors apps/os, whose loaded stateful
+// worker gets `env.ITX = ctx.exports.ItxEntrypoint({props})` — same "reach your own host" binding.
+//
 // The `fetch` lane (WS/streaming, where a 101 can't ride RPC) forwards to the facet's own `fetch`.
 
 import { DurableObject } from "cloudflare:workers";
+import { ITX_SURFACE_MODULE } from "./core/agent-runtime.ts";
+import { stringifyName } from "./core/names.ts";
+import type { ItxDurableObject } from "./itx-durable-object.ts";
 
 const FACET_NAME = "target";
 const VERSION_KEY = "stateful:version";
@@ -24,6 +35,9 @@ const VERSION_KEY = "stateful:version";
 interface Env {
   LOADER: WorkerLoader;
   ITX_KV?: KVNamespace; // the repo store (project-prefixed) this runner reads its source from
+  // The capability host namespace (same worker). A stub to the owning context is minted into each facet's
+  // env.ITX + globalOutbound, so a hosted DO class reaches its own host exactly like a stateless code cap.
+  ITX_HOST: DurableObjectNamespace<ItxDurableObject>;
   // Deploy identity (wrangler `version_metadata`). Folded into the loader cacheKey so a redeploy
   // mints a FRESH loaded isolate — a facet built from a prior deployment's isolate cannot be
   // called from the new parent. Mirrors apps/os workerVersion(env). Absent locally → "unversioned".
@@ -59,6 +73,16 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     return source;
   }
 
+  /** A stub to the OWNING capability host — the `env.ITX` every hosted DO class gets (like a stateless code
+   *  cap). Reconstructed from this runner's name `{projectId}::{path}::{callPath}`, which the host sets in
+   *  ItxDurableObject#statefulRunner; the first two `::`-segments are the context {projectId, path}. */
+  #hostStub(): DurableObjectStub<ItxDurableObject> {
+    const [projectId, path] = (this.ctx.id.name ?? "").split("::");
+    return this.env.ITX_HOST.getByName(
+      stringifyName({ projectId: projectId ?? "", path: path ?? "/" }),
+    );
+  }
+
   /** Construct (or restart on a source change) the facet hosting the user's `className`, keeping its storage
    *  across restarts. The user source is loaded DIRECTLY (no host wrapper) — the class it exports IS the facet. */
   #facet(source: string, className: string): Fetcher {
@@ -69,13 +93,17 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // cross-Worker to the new parent and thus un-transferable (same DataCloneError family). Mirrors
     // apps/os's cacheKey (WORKER_SELF + workerVersion(env)). CF_VERSION_METADATA.id changes every deploy.
     const deployVersion = this.env.CF_VERSION_METADATA?.id ?? "unversioned";
+    // env.ITX (+ globalOutbound) = a stub to the OWNING capability host, so the hosted DO class calls sibling
+    // capabilities and egresses exactly like a stateless code cap; `itx.js` lets it import the dotted surface.
+    const host = this.#hostStub();
     const worker = this.env.LOADER.get(
       `stateful:${deployVersion}:${this.ctx.id.name}:${version}`,
       () => ({
         compatibilityDate: "2026-07-01",
         mainModule: "cap.js",
-        modules: { "cap.js": source },
-        env: {},
+        modules: { "cap.js": source, "itx.js": ITX_SURFACE_MODULE },
+        env: { ITX: host },
+        globalOutbound: host,
       }),
     );
     const klass = worker.getDurableObjectClass(className);
