@@ -6077,8 +6077,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     const createRequest = ProjectProcessorContract.events[
       "events.iterate.com/project/create-requested"
     ].payloadSchema.parse(request.payload);
-    const waitForTerminalMs = deadline - Date.now();
-    if (waitForTerminalMs <= 0) throw timeoutError();
+    if (deadline - Date.now() <= 0) throw timeoutError();
 
     // snapshot() pulls the journal through the registry's catch-up, so this
     // wait drives a stalled saga instead of just watching it. Post-response
@@ -6090,24 +6089,32 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         () => undefined,
       ),
     );
-    const terminal = await stream.waitForEvent({
-      afterOffset: request.offset,
-      eventTypes: [
-        "events.iterate.com/project/created",
-        "events.iterate.com/project/create-failed",
-      ],
-      predicate: (event) =>
-        parseProjectCreationTerminal({
-          event,
-          projectId: this.#projectId,
-          request: createRequest,
-          requestOffset: request.offset,
-        }) !== null,
-      // The default covers the complete project birth saga, including the
-      // config repository's bounded Artifacts tail. Healthy calls still
-      // resolve in seconds; tasks/os-cold-create-latency.md tracks reducing
-      // the tail without making this correctness boundary dishonest.
-      timeoutMs: waitForTerminalMs,
+    const terminal = await retryLoggedIdempotentOperation({
+      context: { projectId: this.#projectId },
+      message: "project creation terminal wait retrying after Stream lifecycle reset",
+      operation: () => {
+        const waitForTerminalMs = deadline - Date.now();
+        if (waitForTerminalMs <= 0) return Promise.reject(timeoutError());
+        return stream.waitForEvent({
+          afterOffset: request.offset,
+          eventTypes: [
+            "events.iterate.com/project/created",
+            "events.iterate.com/project/create-failed",
+          ],
+          predicate: (event) =>
+            parseProjectCreationTerminal({
+              event,
+              projectId: this.#projectId,
+              request: createRequest,
+              requestOffset: request.offset,
+            }) !== null,
+          // The default covers the complete project birth saga, including the
+          // config repository's bounded Artifacts tail. Healthy calls still
+          // resolve in seconds; tasks/os-cold-create-latency.md tracks reducing
+          // the tail without making this correctness boundary dishonest.
+          timeoutMs: waitForTerminalMs,
+        });
+      },
     });
 
     const remainingMs = deadline - Date.now();

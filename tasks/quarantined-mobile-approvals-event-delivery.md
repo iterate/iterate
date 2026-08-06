@@ -9,7 +9,7 @@ tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 
 ## Status
 
-Implementation is about 97% complete. Both skips are removed, failures name
+Implementation is about 98% complete. Both skips are removed, failures name
 the first missing durable transition, and the dynamic-worker ownership leaks,
 foreground-approval ordering race, accepted-message UI gap, and orphaned live
 stream callback now have regression coverage. Exact-head preview `16c29a0`
@@ -18,7 +18,10 @@ Cloudflare storage reset orphaned the project and notification callbacks. A
 new deployed red E2E reproduces the 20-second recovery delay. Pending hosted
 callbacks now probe their owner after one second, and infrastructure resets
 retry after one second without inheriting an inflated exponential backoff.
-The corrected head still needs a clean preview and 25-run gate.
+The corrected head passed one clean exact-head preview. The first 25-run gate
+attempt was correctly rejected for a separate Project-create lifecycle reset;
+that bounded recovery fix now has red/green coverage and needs a fresh preview
+before the gate restarts from zero.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -140,6 +143,14 @@ notification journal.
   processor; three consecutive misses now classify that callback as
   unavailable and use the bounded one-second lifecycle retry before the 20s
   application-work watchdog can report a false application failure.
+- The first strict-gate workflow on `df641ef` passed both mobile cases first
+  try, but the gate rejected the whole run because the worker-bundler case
+  retried. Cloudflare trace `0f1fb6230b48c7b95031e366154cc27b`
+  (`vit5vef1jngi9mh659bpbflk`) showed the actual failure happened earlier in
+  `Project.create()`: an internal storage reset rejected the root Stream DO's
+  terminal `waitForEvent`. Project creation now reacquires that idempotent
+  terminal wait exactly once, with the second attempt consuming only the
+  original deadline's remainder; a second lifecycle failure still propagates.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -303,3 +314,9 @@ Test these in order; do not treat the first plausible one as the conclusion.
   deadline, while a callback whose owner cannot answer three pure pings moves
   onto the one-second availability path. The restoration streak remains zero
   until the next exact-head audit is clean.
+- 2026-08-06: The first `df641ef` gate workflow passed both restored mobile
+  specs but retried worker-bundler after a Cloudflare Stream DO storage reset.
+  Trace reconstruction proved the reset interrupted `Project.create()` before
+  worker-bundler ran. Added red/green project-create coverage and a one-retry
+  terminal-wait recovery under the existing 100-second creation deadline; the
+  focused project/stream suites pass 35 tests, and OS typecheck is green.
