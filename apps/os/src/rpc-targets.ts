@@ -5527,7 +5527,10 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     return itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
-      streamContext: { kind: "scope", scopePath: "/" },
+      // Same provenance as get(): a direct /api session's client-session
+      // principal must ride the stream context of everything done through
+      // the returned handle.
+      streamContext: streamContextForAuth(this.props.auth),
       path: "/",
       projectId,
     });
