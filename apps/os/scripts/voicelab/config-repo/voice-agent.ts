@@ -102,6 +102,17 @@ const MAX_CALL_MS = 3_900_000;
  */
 const HANDSHAKE_TIMEOUT_MS = 15_000;
 /**
+ * How long a starting call will wait to find out what its device can do.
+ *
+ * The answer decides which direct tools the model is offered, and it is asked
+ * for on the path to `session.update` — so it is time somebody is standing
+ * there for. A healthy `__describe` is a single round trip inside the
+ * deployment; this is the bound past which a call goes ahead with fewer tools
+ * rather than going up late, and it is deliberately a small fraction of the
+ * fifteen seconds the whole handshake gets.
+ */
+const DEVICE_DISCOVERY_TIMEOUT_MS = 3_000;
+/**
  * The agent that does the actual thinking. Grok is a mouth and a pair of
  * ears with a ~200ms budget; anything that needs reading a repo, calling a
  * tool, or being RIGHT belongs to a text model with no clock on it.
@@ -147,12 +158,19 @@ const CALL_REQUEST_FRESHNESS_MS = 30_000;
 /**
  * What the voice model is told it is.
  *
- * Two paragraphs are load-bearing. Without an explicit instruction to keep
+ * Three paragraphs are load-bearing. Without an explicit instruction to keep
  * talking, a voice model handed an asynchronous tool goes silent waiting for
- * it, which sounds exactly like a dropped call. And without being told that
+ * it, which sounds exactly like a dropped call. Without being told that
  * the back office is a colleague rather than a function — free to reply out
  * of order, several times, or not at all — it treats the first message that
  * arrives as the answer to whatever it asked last, and says so out loud.
+ *
+ * And without being told it is not the judge of its own limits, it declines.
+ * A voice model knows what a voice model can usually do, which is nothing, so
+ * it refuses on its own authority — and the half that could actually have done
+ * the thing is never asked. The refusal paragraph exists because the honest
+ * default is not "no", it is "let me see": only a RESULT line settles what
+ * cannot be done, and only the careful half writes those.
  */
 const VOICE_INSTRUCTIONS = [
   "You are a capable assistant talking to a customer out loud. You can look things",
@@ -173,6 +191,34 @@ const VOICE_INSTRUCTIONS = [
   "customer just said, or to note that a plan changed. It returns immediately —",
   "the thinking has only started — so do NOT go quiet waiting. Say you are on it",
   "in your own words, and keep the conversation going.",
+  "",
+  "YOU ARE NOT THE JUDGE OF WHAT YOU CAN DO. The careful part of you reads systems",
+  "you never see and writes code you never see it write, so when YOU say 'I can't",
+  "do that' you are almost always wrong. You do not know what you can do. You find",
+  "out. So when a request is unfamiliar, or sounds like too much, or sounds like",
+  "something an assistant would not have access to, say some version of 'let me see",
+  "if I can do that' and send a note_to_self. Never decline, never apologise for a",
+  "limit, never explain what you are not able to do:",
+  "",
+  "  WRONG  'can you book us a table for eight?'  ->  'Sorry, I can't make",
+  "         bookings.'",
+  "  WRONG  'turn the heating up before I'm home'  ->  'I don't have access to",
+  "         your heating.'",
+  "  WRONG  'what did we spend on this in March?'  ->  'I'm not able to see your",
+  "         accounts.'",
+  "",
+  "  RIGHT  'can you book us a table for eight?'  ->  'Let me see if I can do that",
+  "         — eight o'clock, and how many of you?' then note_to_self.",
+  "  RIGHT  'turn the heating up before I'm home'  ->  'Give me a moment and I'll",
+  "         find out.' then note_to_self.",
+  "  RIGHT  'what did we spend on this in March?'  ->  'Let me have a look.' then",
+  "         note_to_self.",
+  "",
+  "THE ONLY THING THAT SETTLES WHAT YOU CANNOT DO IS A RESULT LINE SAYING SO. Until",
+  "one arrives you have not found out yet, so 'let me see' is the whole answer —",
+  "and once one arrives, say what it says, plainly and without apologising twice.",
+  "Anything you were handed an actual tool for is different again: that is simply",
+  "you doing it. Do it, and say what you did as though you had hands.",
   "",
   "NOTES ARE NUMBERED so you can keep threads apart. Sending returns 'noted as",
   "#n'. When a conclusion comes back about one of them it starts with that number.",
@@ -238,7 +284,10 @@ const VOICE_INSTRUCTIONS = [
   "RESULT line has already answered.",
   "",
   "Speak plainly and briefly — one or two sentences unless asked for more. Never",
-  "read out URLs, code, or long lists.",
+  "read out a URL, a block of code, or a long list of DATA — nobody can hold thirty",
+  "rows in their head, so say what the rows mean instead. That is about sparing",
+  "them, not about refusing: if they ask you to count to twelve, count to twelve,",
+  "all the way, and if they ask for the seven things on the list, say all seven.",
 ].join(" ");
 const BACK_OFFICE_BRIEF = [
   "You are the careful, thinking half of ONE assistant. The other half is a",
@@ -325,6 +374,379 @@ const briefContext = (content: string) =>
 const briefKey = (context: ReturnType<typeof briefContext>) =>
   `voice-agent/brief:${contentHash(context)}`;
 
+/* ===========================================================================
+ * DIRECT TOOLS — what the voice half does ITSELF.
+ *
+ * The voice model is a mouth, a pair of ears and about 200ms of judgement.
+ * Nearly everything asked of it belongs to the slower half through
+ * `note_to_self`, and this table is the exception: the things that are INSTANT
+ * AND LOCAL, where a round trip through a thinking model would be the only slow
+ * part of them. Hanging up. Turning the head. Changing the face.
+ *
+ * ADDING ONE IS ONE ENTRY HERE, and nothing else in this file learns its name.
+ * The entry carries the lot: what the model is told the tool is, what arguments
+ * it may pass, which device methods it needs, and what happens when it is
+ * called.
+ *
+ * WHAT IS OFFERED IS DERIVED, NEVER LISTED. `needs` names device methods, and a
+ * tool reaches a call only if that call's device ADVERTISES them in its own
+ * mount `instructions` — the same string the prompt quotes, written in the
+ * firmware next to the dispatch table it describes. So a board with no servos
+ * is never handed a nod tool, a board that grows one is handed it on the next
+ * call, and no list of board names appears anywhere in this file.
+ * ======================================================================== */
+
+/**
+ * One frame of a head gesture.
+ *
+ * `speed` is the device's name for the fourth argument of
+ * `iterate_kit_stackchan_body_move_head`, and that argument is `duration_ms` —
+ * the on-servo move time. So a step is not finished until `speed` milliseconds
+ * have passed, and issuing the next one early overrides a move in progress
+ * instead of following it.
+ */
+export interface HeadGestureStep {
+  /** -128..128; 0 is forward (servo raw 460). */
+  yawDegrees: number;
+  /** 0..90; 0 is level (servo raw 620). */
+  pitchDegrees: number;
+  /** Milliseconds the servos are given for this move; the device caps it at 1000. */
+  speed: number;
+}
+
+/**
+ * Nod and shake, as the servo moves they are actually made of.
+ *
+ * DELIBERATELY NOT FIRMWARE. There is no `servos.nod()` and there should not
+ * be: the device exposes one primitive — `servos.move({yawDegrees, pitchDegrees,
+ * speed})` — and a gesture is a sequence of those with the timing that makes it
+ * read as a gesture. That timing is a thing to tune by watching a robot, which
+ * is a thing to do here rather than behind a reflash.
+ *
+ * Every gesture starts and ends at home (yaw 0, pitch 0) because nothing else
+ * in the firmware ever moves the head: this capability is the only caller of
+ * `move_head`, so home is where the head is unless a gesture left it elsewhere.
+ * Which way pitch leans is the board's own convention and both readings of it
+ * are a nod.
+ */
+export const HEAD_GESTURES = {
+  nod: [
+    { yawDegrees: 0, pitchDegrees: 24, speed: 260 },
+    { yawDegrees: 0, pitchDegrees: 0, speed: 260 },
+    { yawDegrees: 0, pitchDegrees: 24, speed: 260 },
+    { yawDegrees: 0, pitchDegrees: 0, speed: 260 },
+  ],
+  shake: [
+    { yawDegrees: -26, pitchDegrees: 0, speed: 240 },
+    { yawDegrees: 26, pitchDegrees: 0, speed: 240 },
+    { yawDegrees: -26, pitchDegrees: 0, speed: 240 },
+    { yawDegrees: 0, pitchDegrees: 0, speed: 240 },
+  ],
+} as const satisfies Record<string, readonly HeadGestureStep[]>;
+
+/**
+ * Does a device's own mount `instructions` advertise this method?
+ *
+ * THE DEVICE'S WORD, NOT OURS. `instructions` is the one description of a board
+ * that ever leaves it (`options.instructions` at the bottom of each
+ * `*_device.c`, straight into `provideCapability`), it is what the prompt
+ * already quotes, and it is written beside the dispatch table it describes. So
+ * "does this board have servos" is asked of the board rather than answered from
+ * a table of board names here, which would be wrong the first time somebody
+ * added a servo to a board.
+ *
+ * Matches the method NAME followed by an open bracket, which is how every one
+ * of them is written — `servos.move({yawDegrees,…})`, `health()`. The leading
+ * guard stops `speaker.volume(` from satisfying a need for `volume(`.
+ */
+export function advertisesMethod(instructions: string, method: string): boolean {
+  const escaped = method.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^\\w.])${escaped}\\s*\\(`).test(instructions);
+}
+
+/**
+ * What a direct tool may do when the model calls it.
+ *
+ * EVERY VERB HERE RETURNS IMMEDIATELY. This is the realtime lane: a tool that
+ * waits on a device call is a voice model saying nothing, and thirty seconds of
+ * nothing is a dropped call as far as anyone listening can tell. The work is
+ * handed to the call's own background lane and the tool answers the model in
+ * the same tick.
+ */
+export interface DirectToolCall {
+  /** Whatever the model sent, already parsed. Untrusted: a tool checks its own. */
+  args: Record<string, unknown>;
+  /** One method on the device this tool was derived from. Fire and forget. */
+  device(method: string, argument?: unknown): void;
+  /** A sequence of head moves, paced so each one finishes before the next. */
+  gesture(steps: readonly HeadGestureStep[]): void;
+  /** End the call once whatever is being said has finished PLAYING — see settleHangUp. */
+  hangUp(reason: string): void;
+}
+
+/** One direct tool, as the table declares it. */
+export interface DirectTool {
+  /** The name the model calls, and part of the prompt: read it out in your head. */
+  name: string;
+  /** What the model is told this is for. The only place that explains it. */
+  description: string;
+  /** JSON Schema for the arguments, as the provider's `tools` entry carries it. */
+  parameters: { properties: Record<string, unknown>; required?: string[]; type: "object" };
+  /**
+   * Device methods this tool cannot work without, exactly as the firmware
+   * advertises them. Empty means it needs no device at all.
+   */
+  needs: readonly string[];
+  /** Do it, and return the line handed back to the model as the tool's output. */
+  run(call: DirectToolCall): string;
+}
+
+/** The 11 held expressions `face_stage_apply_held_expression` takes, lowercased. */
+const FACE_EXPRESSIONS = [
+  "neutral",
+  "warm",
+  "joy",
+  "concern",
+  "surprise",
+  "thoughtful",
+  "skeptical",
+  "determined",
+  "sleepy",
+  "excited",
+  "embarrassed",
+] as const;
+
+/** THE TABLE. Everything a direct tool is, in one entry each. */
+export const DIRECT_TOOLS: readonly DirectTool[] = [
+  {
+    /*
+     * ONE WAY TO END A CALL, and this is not a second one. The bridge's own
+     * teardown appends `events.iterate.com/voice-agent/conversation-ended`, which
+     * is the same event the device appends when somebody touches the screen and
+     * the same one `endCall` appends — so hanging up here joins the existing
+     * lifecycle path rather than inventing a parallel one.
+     *
+     * `needs` is empty on purpose. Ending a call is a property of the CALL, not
+     * of the hardware: a bridge with no device mounted at all can still be hung
+     * up, and every board can be.
+     */
+    name: "hang_up",
+    description:
+      "End the call. Say your goodbye FIRST, in the same breath — this hangs up as soon as " +
+      "you stop speaking, and the person hears everything you said before it. Use it when " +
+      "they say goodbye, when the conversation is plainly finished, or when they ask you to " +
+      "hang up. Not to escape a question you would rather not answer.",
+    needs: [],
+    parameters: { properties: {}, type: "object" },
+    run: (call) => {
+      call.hangUp("the assistant hung up");
+      return "hanging up as soon as you stop talking — finish your goodbye, then say nothing more";
+    },
+  },
+  {
+    name: "nod",
+    description:
+      "Nod your head, physically. A real robot head moves. Use it the way a person nods: " +
+      "agreeing, saying yes, or showing you are listening while they talk. It makes no sound " +
+      "and does not interrupt you, so you can nod in the middle of a sentence.",
+    needs: ["servos.move"],
+    parameters: { properties: {}, type: "object" },
+    run: (call) => {
+      call.gesture(HEAD_GESTURES.nod);
+      return "nodding";
+    },
+  },
+  {
+    name: "shake_head",
+    description:
+      "Shake your head, physically. Use it the way a person does: disagreeing, saying no, or " +
+      "showing something is not right. It makes no sound and does not interrupt you.",
+    needs: ["servos.move"],
+    parameters: { properties: {}, type: "object" },
+    run: (call) => {
+      call.gesture(HEAD_GESTURES.shake);
+      return "shaking your head";
+    },
+  },
+  {
+    /*
+     * NO BOARD ADVERTISES `face.set(` TODAY, so nothing is offered this tool and
+     * that is the correct answer rather than a gap.
+     *
+     * The mechanism is all there in firmware and none of it is reachable:
+     * `face_stage_apply_held_expression` takes the eleven expressions below and
+     * its only caller is the doze animation, hardcoded to SLEEPY, so ten of them
+     * have never been seen. Its own header says the shape is "suitable for AI
+     * tool calls". What is missing is the RPC: a `face.set` method in the
+     * dispatch table, and the method named in that board's `instructions[]`.
+     * The day both exist, this entry lights up on every board that has them and
+     * on no board that does not, with no edit here.
+     */
+    name: "set_face",
+    description:
+      "Change the expression on your face. You have a face and people watch it, so let it " +
+      "follow what you are saying — warm when you greet someone, thoughtful while you work " +
+      "something out, concern when the news is bad. It makes no sound and does not interrupt " +
+      "you.",
+    needs: ["face.set"],
+    parameters: {
+      properties: {
+        expression: { enum: [...FACE_EXPRESSIONS], type: "string" },
+      },
+      required: ["expression"],
+      type: "object",
+    },
+    run: (call) => {
+      const expression = String(call.args.expression ?? "");
+      if (!FACE_EXPRESSIONS.includes(expression as (typeof FACE_EXPRESSIONS)[number])) {
+        return `there is no expression called "${expression}"; the ones you have are ${FACE_EXPRESSIONS.join(", ")}`;
+      }
+      call.device("face.set", { expression });
+      return `your face is now ${expression}`;
+    },
+  },
+];
+
+/**
+ * The one SLOW tool, and deliberately not in the table above.
+ *
+ * Everything in DIRECT_TOOLS is a reflex the voice half performs itself. This
+ * is the opposite: it reaches the thinking half, it is offered only when a call
+ * has one (`colleague=1`), and it needs no device at all — so deriving it from
+ * a device's mount instructions would be deriving it from the wrong thing.
+ *
+ * NAMED FOR THE FICTION, because the tool name is part of the prompt. It was
+ * `message_back_office`, and a model holding a tool by that name says "let me
+ * message the back office" out loud however firmly the instructions forbid it.
+ * `note_to_self` describes the same call in the frame the customer is meant to
+ * hear: one assistant, thinking something over properly.
+ */
+const NOTE_TO_SELF_TOOL = {
+  description:
+    "Put something to the careful, slower part of yourself — the part " +
+    "that reads the customer's systems, works things out properly, and " +
+    "acts in the world. Use it to think something through, to answer a " +
+    "question it put to you, or to pass anything along. It returns " +
+    "immediately: the thinking has only started. Keep talking to the " +
+    "customer meanwhile. Conclusions come back to you as your own " +
+    "thoughts, whenever they are ready, in any number.",
+  name: "note_to_self",
+  parameters: {
+    properties: {
+      text: {
+        description:
+          "What to think about. The conversation is already known, but " +
+          "write it so it stands on its own.",
+        type: "string",
+      },
+    },
+    required: ["text"],
+    type: "object",
+  },
+  type: "function" as const,
+};
+
+/** One live capability mount, as both the prompt and the tool table read it. */
+export interface LiveCapability {
+  /** Dotted mount path, e.g. `["kit", "stackchan"]`. */
+  path: string[];
+  /** The device's own description of itself — see advertisesMethod. */
+  instructions: string;
+}
+
+/** Everything the project's live mounts add up to, or why they could not be read. */
+export interface ProvidedCapabilities {
+  live: LiveCapability[];
+  /** Set when `__describe` failed; `live` is then empty and nothing is claimed. */
+  error?: string;
+}
+
+/**
+ * A direct tool, bound to the mount that earned it.
+ *
+ * `mountPath` is null exactly when the tool needs no device (`needs: []`). When
+ * two mounted devices both advertise what a tool needs, the FIRST wins: a call
+ * runs on one stream with one device on it, and there is nothing in a
+ * capability inventory that says which. A second board with servos would get a
+ * nod tool aimed at the first, which is a reason to look here — not a reason to
+ * offer the model two tools called `nod`.
+ */
+export interface DerivedTool {
+  tool: DirectTool;
+  mountPath: string[] | null;
+}
+
+/**
+ * Which direct tools this project's live mounts earn, and what each acts on.
+ *
+ * Pure, exported and separate from the call path, because "a board with no
+ * servos must never be offered a nod" is the whole design and is exactly the
+ * kind of claim that is true until somebody edits the table.
+ */
+export function directToolsFor(provided: ProvidedCapabilities): DerivedTool[] {
+  const derived: DerivedTool[] = [];
+  for (const tool of DIRECT_TOOLS) {
+    if (tool.needs.length === 0) {
+      derived.push({ tool, mountPath: null });
+      continue;
+    }
+    const mount = provided.live.find((entry) =>
+      tool.needs.every((method) => advertisesMethod(entry.instructions, method)),
+    );
+    if (mount !== undefined) derived.push({ tool, mountPath: mount.path });
+  }
+  return derived;
+}
+
+/** The derived tools as the provider's `session.update` carries them. */
+export function directToolDefinitions(derived: readonly DerivedTool[]) {
+  return derived.map(({ tool }) => ({
+    description: tool.description,
+    name: tool.name,
+    parameters: tool.parameters,
+    type: "function" as const,
+  }));
+}
+
+/** One speaker frame is 640 bytes of PCM16 at 16 kHz. */
+const SPK_FRAME_MS = 20;
+/**
+ * The most a hang-up will ever wait for audio to finish.
+ *
+ * The device's playout ring holds thirty seconds, so nothing it is still
+ * holding can be older than that — and a wait computed longer than this is
+ * arithmetic that has gone wrong, not a very long goodbye.
+ */
+const MAX_PLAYOUT_WAIT_MS = 30_000;
+/** A little for the wire, so the last frame is played and not merely sent. */
+const PLAYOUT_MARGIN_MS = 400;
+
+/**
+ * How much of the answer the device has still to play, in milliseconds.
+ *
+ * HANGING UP IS DESTRUCTIVE, and this is what stops it cutting a goodbye in
+ * half. `conversation-ended` reaching a device calls `abandon_speaker_audio()`
+ * — its own comment: "a call that ends mid-answer would otherwise play the dead
+ * conversation out" — so everything still in the ring is thrown away. And the
+ * ring is usually full: frames leave this bridge as fast as the wire takes them
+ * while the device plays them at realtime (see THE SERVER DOES NOT PACE), so at
+ * the moment `response.done` arrives the device may be holding almost the whole
+ * answer.
+ *
+ * The bound is computable rather than guessed: an answer is `frames` × 20ms of
+ * speech, it started playing no earlier than its first frame went out, so what
+ * is left is the difference. Never negative, never past the size of the ring.
+ */
+export function playoutRemainingMs(
+  answer: { frames: number; firstFrameAtMs: number },
+  nowMs: number,
+): number {
+  if (answer.frames <= 0 || answer.firstFrameAtMs <= 0) return 0;
+  const spoken = nowMs - answer.firstFrameAtMs;
+  const total = answer.frames * SPK_FRAME_MS;
+  return Math.max(0, Math.min(MAX_PLAYOUT_WAIT_MS, total - spoken));
+}
+
 /**
  * Every live capability this project provides, as the model should be told
  * about it — read from the capabilities themselves.
@@ -337,30 +759,64 @@ const briefKey = (context: ReturnType<typeof briefContext>) =>
  * therefore cannot be mentioned, and one that is added arrives on the next
  * setup without anybody editing this file.
  */
-async function describeProvidedCapabilities(project: Awaited<IterateWorkerEntrypoint["itx"]>) {
-  let description: Awaited<ReturnType<typeof project.__describe>> | undefined;
-  try {
-    description = await project.__describe();
-    const live = description.capabilities.filter(
-      (entry) => entry.type === "live" && (entry.instructions ?? "").trim().length > 0,
-    );
-    if (live.length === 0) {
-      return [
-        "No device is mounted on this project right now. Do not claim to have",
-        "read anything from one; say it is not connected.",
-      ].join("\n");
-    }
-    return live
+export function capabilityBrief(provided: ProvidedCapabilities): string {
+  if (provided.error !== undefined) {
+    return `The device description could not be read (${provided.error}). Do not guess at what hardware can do.`;
+  }
+  /*
+   * WHAT THE VOICE CAN ALREADY DO WITHOUT YOU.
+   *
+   * The thinking half is the one that decides whether something is possible, so
+   * it has to know the short list of things the voice does NOT need it for —
+   * otherwise it plans a way to hang up a call the voice can simply hang up.
+   * Names only: the full descriptions are written at the voice, in the second
+   * person, and read as nonsense addressed to anybody else. Derived from the
+   * same table as the tools themselves, so the two halves cannot come to
+   * disagree about which is which.
+   */
+  const itself = [
+    "",
+    "## What the voice half can already do on its own",
+    "",
+    `It does these itself, this instant, without asking you: ${directToolsFor(provided)
+      .map(({ tool }) => tool.name)
+      .join(", ")}. Never plan a way to do one of them for it, and never say`,
+    "one of them cannot be done.",
+  ].join("\n");
+  if (provided.live.length === 0) {
+    return [
+      "No device is mounted on this project right now. Do not claim to have",
+      "read anything from one; say it is not connected.",
+      itself,
+    ].join("\n");
+  }
+  return [
+    provided.live
       .map((entry) =>
         [
-          `Capability \`itx.${(entry.path ?? []).join(".")}\` — call it with dotted paths.`,
+          `Capability \`itx.${entry.path.join(".")}\` — call it with dotted paths.`,
           entry.instructions,
         ].join("\n"),
       )
-      .join("\n\n");
+      .join("\n\n"),
+    itself,
+  ].join("\n");
+}
+
+/** Read the project's live mounts. Never throws: an honest gap beats a wrong claim. */
+async function readProvidedCapabilities(
+  project: Awaited<IterateWorkerEntrypoint["itx"]>,
+): Promise<ProvidedCapabilities> {
+  let description: Awaited<ReturnType<typeof project.__describe>> | undefined;
+  try {
+    description = await project.__describe();
+    return {
+      live: description.capabilities
+        .filter((entry) => entry.type === "live" && (entry.instructions ?? "").trim().length > 0)
+        .map((entry) => ({ path: entry.path ?? [], instructions: entry.instructions ?? "" })),
+    };
   } catch (error) {
-    /* Never fail setup over the prompt: an honest gap beats a wrong claim. */
-    return `The device description could not be read (${String(error)}). Do not guess at what hardware can do.`;
+    return { live: [], error: String(error) };
   } finally {
     disposeRpcStub(description, "project description result");
   }
@@ -1075,6 +1531,12 @@ export class VoiceBridge extends IterateDurableObject {
      */
     let answerSeq = 0;
     let answerFrames = 0;
+    /**
+     * When this answer's first frame went out, so how much of it the device has
+     * left to play can be worked out — see playoutRemainingMs. 0 until it has
+     * one.
+     */
+    let answerStartedAt = 0;
     /*
      * Audio left over from the previous provider chunk, waiting for enough of
      * the next one to make a whole 20ms frame.
@@ -1279,6 +1741,8 @@ export class VoiceBridge extends IterateDurableObject {
       const whole = pending - (pending % 640);
       spkRemainder = joined.subarray(whole);
       const events = [];
+      /* The clock a hang-up waits on starts with this answer's first frame. */
+      if (whole > 0 && answerFrames === 0) answerStartedAt = Date.now();
       for (let offset = 0; offset < whole; offset += 640) {
         events.push({
           type: "events.iterate.com/voice-agent/spk-frame",
@@ -1329,6 +1793,24 @@ export class VoiceBridge extends IterateDurableObject {
      * back office is a bonus, and a bonus must never be able to stall a voice.
      */
     const backOffice = url.searchParams.get("colleague") === "1";
+    /**
+     * What this project has mounted, read ONCE for the whole call.
+     *
+     * Two things want it and they must not disagree: the brief the back office
+     * is given, and the direct tools the voice half is handed. It is also a
+     * round trip on the path to session.update, so paying for it twice would be
+     * paying twice on the one part of a call somebody is waiting through.
+     */
+    let providedCapabilities: Promise<ProvidedCapabilities> | null = null;
+    const capabilitiesOnce = () => (providedCapabilities ??= readProvidedCapabilities(project));
+    /*
+     * STARTED HERE, AWAITED MUCH LATER. The tool list is not needed until just
+     * before the provider handler goes on, and everything between here and
+     * there — the pair, the stubs, the redial machinery — is work this round
+     * trip can happen underneath. Waiting for it at the point of use instead
+     * would put its whole latency on the front of every call.
+     */
+    void capabilitiesOnce();
     /* The same agent as this conversation: see the note where COLLEAGUE_PATH used to be. */
     const backOfficeAgent = project.agents.get(streamPath);
     let backOfficeConnection: StreamConnectionHandle | null = null;
@@ -1350,10 +1832,14 @@ export class VoiceBridge extends IterateDurableObject {
      */
     let backOfficeReady: Promise<boolean> | null = null;
     const ensureBackOfficeOnce = () => {
-      backOfficeReady ??= describeProvidedCapabilities(project)
-        .then((brief) =>
+      backOfficeReady ??= capabilitiesOnce()
+        .then((provided) =>
           /* No setup ran, so this call IS the occasion: its own identity. */
-          ensureVoiceAgent(backOfficeAgent, brief, `call:${crypto.randomUUID()}`),
+          ensureVoiceAgent(
+            backOfficeAgent,
+            capabilityBrief(provided),
+            `call:${crypto.randomUUID()}`,
+          ),
         )
         .then(
           (installed) => {
@@ -1741,17 +2227,170 @@ export class VoiceBridge extends IterateDurableObject {
       return number;
     };
 
+    /*
+     * THE DIRECT LANE — the tools the voice half runs itself.
+     *
+     * Everything below is deliberately unable to make the model wait. A device
+     * call is a round trip to a microcontroller over a domestic Wi-Fi link, and
+     * a head gesture is a whole second of servo travel; both are handed to the
+     * call's background lane and the tool answers in the same tick. See the
+     * note over `handleToolCall` for what waiting sounds like.
+     */
+    /** Which direct tools this call's device earned. Resolved before the session opens. */
+    let directTools: DerivedTool[] = [];
+    /** Device methods asked for, and the ones that came back with an error. */
+    let deviceCalls = 0;
+    let deviceCallFailures = 0;
+    /**
+     * The scope the mounts were read from, so a call goes back to the same
+     * place the tool was derived from. One stub for the call, released with the
+     * rest of them in teardown.
+     */
+    let capabilityHost: (typeof project)["capabilityHost"] | null = null;
+    /** One method on one mount. Awaited by its caller, never by the voice lane. */
+    const invokeDevice = async (
+      mountPath: readonly string[],
+      method: string,
+      argument?: unknown,
+    ) => {
+      capabilityHost ??= project.capabilityHost;
+      deviceCalls++;
+      try {
+        /* The mount is flattened, so the whole dotted path is one invocation. */
+        const invoked = await capabilityHost.invokeCapability({
+          args: argument === undefined ? [] : [argument],
+          path: [...mountPath, ...method.split(".")],
+        });
+        disposeRpcStub(invoked, `device ${method} result`);
+        return true;
+      } catch (error) {
+        deviceCallFailures++;
+        console.log(`device ${method} failed: ${String(error)}`);
+        return false;
+      }
+    };
+    /**
+     * A gesture, paced so each move finishes before the next one starts.
+     *
+     * `speed` is the servos' move DURATION, so issuing the next step early
+     * overrides a move in progress instead of following it — a nod sent as four
+     * immediate calls is one twitch. A step that errors ends the gesture rather
+     * than flailing through the rest of it against a bus that is not answering.
+     */
+    const performGesture = async (
+      mountPath: readonly string[],
+      steps: readonly HeadGestureStep[],
+    ) => {
+      for (const step of steps) {
+        if (closedDown) return;
+        if (!(await invokeDevice(mountPath, "servos.move", { ...step }))) return;
+        await new Promise((resolve) => setTimeout(resolve, step.speed));
+      }
+    };
+    /**
+     * A hang-up the model has asked for, waiting on its own goodbye.
+     *
+     * Held rather than done, because `conversation-ended` reaching the device
+     * throws away everything still in its playout ring — see playoutRemainingMs
+     * for why that ring is usually nearly full at the moment an answer ends.
+     */
+    let pendingHangUp: string | null = null;
+    const settleHangUp = () => {
+      if (pendingHangUp === null || closedDown) return;
+      /* Still speaking, or being spoken to. Either way the goodbye is not over. */
+      if (responseActive || liveResponses.size > 0 || micOpen) return;
+      const reason = pendingHangUp;
+      pendingHangUp = null;
+      const waitMs =
+        playoutRemainingMs({ frames: answerFrames, firstFrameAtMs: answerStartedAt }, Date.now()) +
+        PLAYOUT_MARGIN_MS;
+      setTimeout(
+        () => teardown(`${reason} (${String(waitMs)}ms for the answer to play out)`),
+        waitMs,
+      );
+    };
+    /** Run one direct tool and answer the model, both without waiting for anything. */
+    const runDirectTool = (id: string, derived: DerivedTool, args: Record<string, unknown>) => {
+      const { mountPath, tool } = derived;
+      let told: string;
+      try {
+        told = tool.run({
+          args,
+          device: (method, argument) => {
+            if (mountPath === null) return;
+            this.ctx.waitUntil(invokeDevice(mountPath, method, argument));
+          },
+          gesture: (steps) => {
+            if (mountPath === null) return;
+            this.ctx.waitUntil(performGesture(mountPath, steps));
+          },
+          hangUp: (reason) => {
+            pendingHangUp = reason;
+            settleHangUp();
+          },
+        });
+      } catch (error) {
+        /* A tool that throws must not take the provider's message handler with
+         * it: the model is told, and the call carries on. */
+        told = `that did not work: ${String(error)}`;
+      }
+      /*
+       * KEPT, like the back-office rows beside it. "It said it would hang up
+       * and the call stayed open" and "the call dropped and nobody knows why"
+       * are different questions with the same symptom, and this is the row that
+       * tells them apart after the fact.
+       */
+      fireAppend({
+        payload: {
+          args,
+          conversationId,
+          mount: mountPath === null ? null : mountPath.join("."),
+          result: told,
+          tool: tool.name,
+        },
+        type: "events.iterate.com/voice-agent/direct-tool",
+      });
+      sendUpstream({
+        item: {
+          call_id: id,
+          output: JSON.stringify({ result: told, status: "done" }),
+          type: "function_call_output",
+        },
+        type: "conversation.item.create",
+      });
+      /*
+       * NO `response.create`. A direct tool is something the assistant DID, not
+       * something it now has to talk about, and these arrive from
+       * `response.function_call_arguments.done` — while the answer that called
+       * the tool is still being spoken. Taking the floor here would make it say
+       * a second thing about the first: a nod that announces itself, and a
+       * goodbye followed by another goodbye.
+       */
+    };
+
     /** Function calls arrive twice on some paths; answer each exactly once. */
     const answeredToolCalls = new Set<string>();
     const handleToolCall = (id: string, name: string, argumentsJson: string) => {
-      if (name !== "note_to_self" || answeredToolCalls.has(id)) return;
-      answeredToolCalls.add(id);
-      let text = "";
+      if (answeredToolCalls.has(id)) return;
+      let args: Record<string, unknown> = {};
+      let unparseable = false;
       try {
-        text = String((JSON.parse(argumentsJson || "{}") as { text?: unknown }).text ?? "");
+        const parsed: unknown = JSON.parse(argumentsJson || "{}");
+        if (typeof parsed === "object" && parsed !== null) args = parsed as Record<string, unknown>;
       } catch {
-        text = argumentsJson;
+        /* The model sent something that is not JSON. Each tool decides what
+         * that means for it; nothing here guesses. */
+        unparseable = true;
       }
+      const direct = directTools.find((entry) => entry.tool.name === name);
+      if (direct !== undefined) {
+        answeredToolCalls.add(id);
+        runDirectTool(id, direct, args);
+        return;
+      }
+      if (name !== "note_to_self" || !backOffice) return;
+      answeredToolCalls.add(id);
+      const text = unparseable ? argumentsJson : String(args.text ?? "");
       /*
        * Answer the TOOL immediately, before the back office has read anything.
        * A voice model waiting on a function output is a voice model saying
@@ -1997,57 +2636,32 @@ export class VoiceBridge extends IterateDurableObject {
       lastInboundType = grokEvent.type;
       if (grokEvent.type === "session.created") {
         phases.providerReadyMs ??= Date.now() - phases.bridgeEnteredAt;
+        /* Read here rather than latched, so a redial re-declares what this call
+         * resolved rather than what it happened to hold when it first dialled. */
+        const sessionTools = [
+          ...(backOffice ? [NOTE_TO_SELF_TOOL] : []),
+          ...directToolDefinitions(directTools),
+        ];
         sendUpstream({
           type: "session.update",
           session: {
             voice,
             instructions,
             /*
-             * ONE tool, on purpose. A voice model choosing between many
-             * tools is a voice model pausing, and every pause is audible;
-             * choosing whether to ask a colleague is a judgement it can
-             * make in the time it takes to say "let me check".
+             * ONE SLOW TOOL AND A FEW INSTANT ONES.
+             *
+             * `note_to_self` is the only one that is a JUDGEMENT — is this
+             * worth being right about? — and a voice model choosing between
+             * many of those is a voice model pausing, audibly. The rest are
+             * reflexes: hanging up, nodding, changing its face. They cost the
+             * model nothing to decide and they are the whole reason this list
+             * is allowed to be longer than one.
+             *
+             * The direct half is DERIVED from what this call's device
+             * advertises (see DIRECT_TOOLS), so a board with no servos does not
+             * see a nod here and nothing in this file names a board.
              */
-            ...(backOffice
-              ? {
-                  tool_choice: "auto",
-                  tools: [
-                    {
-                      /*
-                       * NAMED FOR THE FICTION, because the tool name is part of
-                       * the prompt. It was `message_back_office`, and a model
-                       * holding a tool by that name says "let me message the
-                       * back office" out loud however firmly the instructions
-                       * forbid it. `note_to_self` describes the same call in
-                       * the frame the customer is meant to hear: one assistant,
-                       * thinking something over properly.
-                       */
-                      description:
-                        "Put something to the careful, slower part of yourself — the part " +
-                        "that reads the customer's systems, works things out properly, and " +
-                        "acts in the world. Use it to think something through, to answer a " +
-                        "question it put to you, or to pass anything along. It returns " +
-                        "immediately: the thinking has only started. Keep talking to the " +
-                        "customer meanwhile. Conclusions come back to you as your own " +
-                        "thoughts, whenever they are ready, in any number.",
-                      name: "note_to_self",
-                      parameters: {
-                        properties: {
-                          text: {
-                            description:
-                              "What to think about. The conversation is already known, but " +
-                              "write it so it stands on its own.",
-                            type: "string",
-                          },
-                        },
-                        required: ["text"],
-                        type: "object",
-                      },
-                      type: "function",
-                    },
-                  ],
-                }
-              : {}),
+            ...(sessionTools.length > 0 ? { tool_choice: "auto", tools: sessionTools } : {}),
             reasoning: { effort },
             /*
              * Manual turns mean no VAD anywhere: the device decides when a
@@ -2152,44 +2766,52 @@ export class VoiceBridge extends IterateDurableObject {
        * half-spoken sentences.
        */
       if (backOffice) {
-        const full = grokEvent as {
-          type: string;
-          transcript?: string;
-          item?: { content?: { transcript?: string; text?: string }[] };
-          call_id?: string;
-          name?: string;
-          arguments?: string;
-        };
+        const full = grokEvent as { type: string; transcript?: string };
         if (full.type === "response.output_audio_transcript.done") {
           overhear("voice", full.transcript ?? "");
         }
         if (full.type === "conversation.item.input_audio_transcription.completed") {
           overhear("customer", full.transcript ?? "");
         }
-        if (full.type === "response.function_call_arguments.done") {
-          handleToolCall(full.call_id ?? "", full.name ?? "", full.arguments ?? "{}");
+      }
+      /*
+       * TOOL CALLS, WHETHER OR NOT THERE IS A BACK OFFICE. This dispatch used
+       * to sit inside the branch above, which was true for as long as
+       * `note_to_self` was the only tool there was. A call with `colleague=0`
+       * still has hands: the direct tools are derived from the DEVICE, and a
+       * plain voice call on a robot can still hang up and nod.
+       */
+      {
+        const call = grokEvent as {
+          type: string;
+          call_id?: string;
+          name?: string;
+          arguments?: string;
+        };
+        if (call.type === "response.function_call_arguments.done") {
+          handleToolCall(call.call_id ?? "", call.name ?? "", call.arguments ?? "{}");
         }
         /*
          * Belt and braces: some realtime implementations only surface the
          * finished call in the response, and a tool that silently never fires
          * is indistinguishable from a model that chose not to use it.
          */
-        if (full.type === "response.done") {
+        if (call.type === "response.done") {
           const output = (grokEvent as unknown as { response?: { output?: unknown[] } }).response
             ?.output;
           for (const item of Array.isArray(output) ? output : []) {
-            const call = item as {
+            const finished = item as {
               type?: string;
               name?: string;
               call_id?: string;
               id?: string;
               arguments?: string;
             };
-            if (call.type === "function_call") {
+            if (finished.type === "function_call") {
               handleToolCall(
-                call.call_id ?? call.id ?? "",
-                call.name ?? "",
-                call.arguments ?? "{}",
+                finished.call_id ?? finished.id ?? "",
+                finished.name ?? "",
+                finished.arguments ?? "{}",
               );
             }
           }
@@ -2242,6 +2864,9 @@ export class VoiceBridge extends IterateDurableObject {
         if (closing.length > 0) fireAppend(...closing);
         /* The floor just came free: anything held back says itself now. */
         takeTheFloorIfFree();
+        /* …and if the model asked to hang up while it was speaking, the
+         * goodbye is now generated. What is left is playing it. */
+        settleHangUp();
       }
       if (FORWARDED_GROK_EVENTS.has(grokEvent.type)) {
         /*
@@ -2396,6 +3021,26 @@ export class VoiceBridge extends IterateDurableObject {
       upstream = next.socket;
       attachGrok({ listen: next.listen, socket: next.socket }, grokGeneration);
     };
+
+    /*
+     * WHAT THIS CALL'S DEVICE CAN DO, RESOLVED BEFORE THE MODEL IS TOLD ANYTHING.
+     *
+     * It has to be before `attachGrok`, because attaching is what releases the
+     * buffered `session.created` — and `session.created` is the one moment the
+     * tool list is declared. That is exactly the round trip the early-message
+     * buffer in `dialGrok` exists to make safe: nothing the provider said while
+     * this was in flight is lost, it is replayed the instant the handler goes on.
+     *
+     * Bounded, and never fatal. A project whose `__describe` is slow or broken
+     * gets a call with fewer tools; it does not get a call that fails to come
+     * up, and it must not eat into HANDSHAKE_TIMEOUT_MS while trying.
+     */
+    directTools = await Promise.race([
+      capabilitiesOnce().then(directToolsFor),
+      new Promise<DerivedTool[]>((resolve) =>
+        setTimeout(() => resolve(directToolsFor({ live: [] })), DEVICE_DISCOVERY_TIMEOUT_MS),
+      ),
+    ]);
 
     attachGrok({ listen: first.listen!, socket: upstream }, grokGeneration);
 
@@ -2808,7 +3453,7 @@ export class VoiceBridge extends IterateDurableObject {
           payload: {
             bridgeId,
             conversationId,
-            reason: `worker bridge: ${reason} (appendErrors=${appendErrors}, reconnects=${reconnects}, redials=${redials}, providerJunk=${providerJunk}, handlerErrors=${handlerErrors}, sendFailures=${sendFailures}, droppedSpk=${droppedSpk}, stray=${strayEvents})`,
+            reason: `worker bridge: ${reason} (appendErrors=${appendErrors}, reconnects=${reconnects}, redials=${redials}, providerJunk=${providerJunk}, handlerErrors=${handlerErrors}, sendFailures=${sendFailures}, droppedSpk=${droppedSpk}, stray=${strayEvents}, deviceCalls=${deviceCalls}, deviceCallFailures=${deviceCallFailures})`,
           },
         });
       }
@@ -2838,6 +3483,8 @@ export class VoiceBridge extends IterateDurableObject {
             await flushOutbound();
           } finally {
             disposeRpcStub(backOfficeAgent, "back-office agent");
+            disposeRpcStub(capabilityHost, "device capability host");
+            capabilityHost = null;
             disposeRpcStub(stream, "voice stream");
             disposeRpcStub(project, "ITX project");
             resolveFinished();
@@ -3672,7 +4319,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
        * written before it did. */
       agentEvents = await ensureVoiceAgent(
         backOffice,
-        await describeProvidedCapabilities(project),
+        capabilityBrief(await readProvidedCapabilities(project)),
         setupId,
       );
 
