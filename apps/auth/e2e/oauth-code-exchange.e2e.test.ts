@@ -412,14 +412,17 @@ describe("deployed auth OAuth2/OIDC provider", () => {
     // patches/@better-auth__oauth-provider@1.6.9.patch. If a rewrite drops
     // the patch, this test names exactly what must be reimplemented.
     const hint = "pr9999+test@nustom.com";
+    // No cookie: a fresh phone has no session. Like authorizeJson above, ask
+    // for the JSON envelope ({redirect: true, url}) — better-auth serves that
+    // to API clients where a browser would get the 302 with the same URL.
     const response = await authFetch(
       authorizeUrlFor(fx.armsClient, { login_hint: hint }).toString(),
-      { redirect: "manual" }, // no cookie: a fresh phone has no session
+      { headers: { accept: "application/json" }, redirect: "manual" },
     );
-    expect(response.status).toBe(302);
-    const location = response.headers.get("location");
-    expect(location).toBeTruthy();
-    const redirect = new URL(location!, baseUrl);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { redirect: boolean; url: string };
+    expect(body.redirect).toBe(true);
+    const redirect = new URL(body.url, baseUrl);
     expect(redirect.pathname).toBe("/login");
     expect(redirect.searchParams.get("login_hint")).toBe(hint);
     // Still the SIGNED redirect — the hint rides inside the signature, so the
