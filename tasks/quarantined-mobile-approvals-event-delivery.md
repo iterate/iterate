@@ -69,7 +69,12 @@ capability defect: after `ctx.abort()`, 276 rapid relay pings all returned the
 old handle's captured `true`. Relay liveness now asks a fresh Stream DO about
 the exact wake-socket identity; live and deliberately dormant sockets remain
 healthy, while an orphan absent from the current incarnation reports dead.
-The gate is zero pending deployment of that fix.
+Its first gate attempt exposed unrelated project-creation instability: one
+candidate had three retries, the next three were clean, then a repo-lazy 503
+and a second malformed Artifacts readback reset the streak. The binding
+contract says `get()` returns a repo handle with `log()`, so incomplete
+readbacks now remain inside the existing bounded readiness loop instead of
+escaping immediately. The gate is zero pending deployment of that fix.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -498,3 +503,9 @@ Test these in order; do not treat the first plausible one as the conclusion.
   preserves intentional dormancy, clears a stale handle when an idle frame was
   missed, and rejects orphaned old incarnations. The three focused suites pass
   69 tests; OS typecheck, lint, and formatting are green.
+- 2026-08-06: The first six relay-fix candidates yielded three clean runs and
+  four rejected outcomes across three candidates. Two rejected candidates
+  independently returned an Artifacts `get()` value without the documented
+  `log()` method; another repo-lazy attempt saw an opaque Artifacts HTTP 503.
+  Added red/green coverage that keeps the incomplete handle inside the same
+  eight-second readiness loop. Real binding errors still surface unchanged.

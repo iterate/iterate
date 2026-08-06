@@ -68,9 +68,7 @@ export async function getOrCreateArtifact(
     if ((error as { code?: string }).code !== "ALREADY_EXISTS") throw error;
   }
 
-  const existing = requireExistingArtifact(
-    await waitForExistingArtifact(artifacts, name, deadlineAt),
-  );
+  const existing = await waitForExistingArtifact(artifacts, name, deadlineAt);
   const hasCommits = await beforeArtifactCreationDeadline(
     async () => {
       try {
@@ -96,16 +94,18 @@ async function waitForExistingArtifact(
   artifacts: { get(name: string): Promise<unknown> },
   name: string,
   deadlineAt: number,
-): Promise<unknown> {
+): Promise<ExistingArtifact> {
   let lastError: unknown;
   let retryDelayMs = EXISTING_ARTIFACT_READY_INITIAL_RETRY_MS;
 
   for (;;) {
     try {
-      return await beforeArtifactCreationDeadline(
-        () => artifacts.get(name),
-        deadlineAt,
-        () => artifactReadTimeout(name, lastError),
+      return requireExistingArtifact(
+        await beforeArtifactCreationDeadline(
+          () => artifacts.get(name),
+          deadlineAt,
+          () => artifactReadTimeout(name, lastError),
+        ),
       );
     } catch (error) {
       if (error instanceof RetryableRepoCreationError) throw error;
@@ -132,7 +132,7 @@ function requireExistingArtifact(value: unknown): ExistingArtifact {
     !("log" in value) ||
     typeof value.log !== "function"
   ) {
-    throw new Error("Artifacts get() returned a repo handle without log().");
+    throw new RepoNotSeededError("Artifacts get() returned a repo handle without log().");
   }
   // The runtime check above supplies the content-read method missing from the
   // pinned workers-types release but present in the deployed binding.

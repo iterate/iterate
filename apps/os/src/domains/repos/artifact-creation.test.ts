@@ -143,6 +143,29 @@ test("an ambiguous create waits for the existing repo to become readable", async
   }
 });
 
+test("an ambiguous create waits for get to return a complete repo handle", async () => {
+  const artifacts = {
+    create: vi.fn(async () => {
+      throw artifactError("ALREADY_EXISTS");
+    }),
+    get: vi
+      .fn()
+      .mockResolvedValueOnce({ name: "project-repo" })
+      .mockResolvedValueOnce({ log: vi.fn(async () => []) }),
+  };
+
+  const result = await getOrCreateArtifact(artifacts, "project-repo", {
+    defaultBranch: "main",
+  });
+
+  expect(result).toEqual({
+    created: false,
+    hasCommits: false,
+    initialWriteToken: null,
+  });
+  expect(artifacts.get).toHaveBeenCalledTimes(2);
+});
+
 test("a stalled create returns to durable recovery before the hosted callback deadline", async () => {
   vi.useFakeTimers();
   try {
