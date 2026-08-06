@@ -69,7 +69,13 @@ proven Stream stub for that append. Its first preview caught the initial probe
 loop overlapping seven uncancellable RPC calls after a reset; the gate now
 leaves an invocation-free handoff window and never starts another probe after
 one times out. Focused regressions and OS typecheck pass; the 25-run streak
-remains zero pending an exact-head preview.
+remains zero. That exact head then passed the canonical baseline with every app,
+both restored mobile flows, and both recovery proofs first try. Cold candidate
+one was rejected for four background ancestor-append failures from one Stream
+alarm plus its downstream Project processor failure. Cloudflare discarded the
+remote error payload from the two-argument console call, so the next exact head
+adds bounded structured diagnostics before another preview identifies and
+classifies the cause.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -720,3 +726,14 @@ Test these in order; do not treat the first plausible one as the conclusion.
   explicitly and no overlapping probe starts. A fake-time regression requires
   exactly one acquisition for a hung target. The streak remains zero for the
   corrected head.
+- 2026-08-06: Canonical baseline `vxslkwj22t` on `956b48b1e` passed all six
+  groups, both restored mobile flows, and both recovery proofs first try with
+  no blocking exact-version telemetry. Cold candidate `z767p1p1p9` also passed
+  every test first try, but its audit rejected four alarm-driven
+  `stream core background work failed` events from one Stream object and the
+  downstream Project processor failure. Cloudflare's event retained the caller
+  stack but dropped the rejected ancestor append's name, message, and lifecycle
+  flags. A structured, bounded error record now preserves those fields so a
+  fresh exact-head preview can distinguish a missing lifecycle shape from an
+  application defect. The focused 12-test suite, OS typecheck, lint, and
+  formatting pass; the strict streak remains zero.

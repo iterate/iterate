@@ -72,7 +72,11 @@ describe("settleStreamCoreBackgroundWork", () => {
 
     expect(info).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledOnce();
-    expect(error).toHaveBeenCalledWith("stream core background work failed", failure);
+    expect(error).toHaveBeenCalledWith({
+      schema: "iterate.stream-core-background-work.v1",
+      message: "stream core background work failed",
+      error: { name: "Error", message: "ancestor append rejected" },
+    });
   });
 
   it("also observes a synchronous application failure", async () => {
@@ -86,7 +90,11 @@ describe("settleStreamCoreBackgroundWork", () => {
     ).resolves.toBeUndefined();
 
     expect(error).toHaveBeenCalledOnce();
-    expect(error).toHaveBeenCalledWith("stream core background work failed", failure);
+    expect(error).toHaveBeenCalledWith({
+      schema: "iterate.stream-core-background-work.v1",
+      message: "stream core background work failed",
+      error: { name: "Error", message: "background work did not start" },
+    });
   });
 
   it("classifies a paused-stream Durable Object rejection outside error telemetry", async () => {

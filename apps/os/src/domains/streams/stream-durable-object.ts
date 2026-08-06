@@ -119,8 +119,50 @@ export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown
       });
       return;
     }
-    console.error("stream core background work failed", error);
+    console.error({
+      schema: "iterate.stream-core-background-work.v1",
+      message: "stream core background work failed",
+      error: streamCoreBackgroundErrorDiagnostics(error),
+    });
   }
+}
+
+function streamCoreBackgroundErrorDiagnostics(error: unknown): {
+  name: string;
+  message: string;
+  code?: string;
+  durableObjectReset?: true;
+  overloaded?: true;
+  retryable?: true;
+  cloudflareErrorReference?: string;
+} {
+  const candidate =
+    typeof error === "object" && error !== null
+      ? (error as {
+          name?: unknown;
+          message?: unknown;
+          code?: unknown;
+          durableObjectReset?: unknown;
+          overloaded?: unknown;
+          retryable?: unknown;
+        })
+      : null;
+  const name =
+    typeof candidate?.name === "string" ? candidate.name.slice(0, 200) : "NonErrorThrowable";
+  const message =
+    typeof candidate?.message === "string"
+      ? candidate.message.slice(0, 2_000)
+      : String(error).slice(0, 2_000);
+  const cloudflareErrorReference = /\breference\s*=\s*([a-z0-9]{8,128})\b/iu.exec(message)?.[1];
+  return {
+    name,
+    message,
+    ...(typeof candidate?.code === "string" ? { code: candidate.code.slice(0, 200) } : {}),
+    ...(candidate?.durableObjectReset === true ? { durableObjectReset: true } : {}),
+    ...(candidate?.overloaded === true ? { overloaded: true } : {}),
+    ...(candidate?.retryable === true ? { retryable: true } : {}),
+    ...(cloudflareErrorReference === undefined ? {} : { cloudflareErrorReference }),
+  };
 }
 
 /**
