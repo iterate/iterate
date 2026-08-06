@@ -356,14 +356,22 @@ export class ItxDurableObject extends DurableObject<Env> {
         hasCapabilities: true,
       }));
   }
-  /** itx.clients.get(path).capabilities.* — FAN OUT over every connection at `path` (Promise.all; `[]` if none). */
-  invokeClientCapabilities(path: string, method: string[], args: unknown[]): Promise<unknown[]> {
-    return Promise.all(
+  /** itx.clients.get(path).capabilities.* — FAN OUT over every connection at `path`. One dead/unreachable
+   *  connection must NOT fail the whole call, so we settle each and return only the live results (`[]` if none). */
+  async invokeClientCapabilities(
+    path: string,
+    method: string[],
+    args: unknown[],
+  ): Promise<unknown[]> {
+    const settled = await Promise.allSettled(
       this.#stubs
         .all()
         .filter((s) => s.clientPath === path)
         .map((s) => this.#stubs.invoke(s.socketId, method, args)),
     );
+    return settled
+      .filter((r): r is PromiseFulfilledResult<unknown> => r.status === "fulfilled")
+      .map((r) => r.value);
   }
   /** Single-target (getConnection(key).capabilities.*). */
   invokeClientCapability(
