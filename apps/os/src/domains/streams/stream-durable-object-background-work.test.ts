@@ -27,6 +27,42 @@ describe("settleStreamCoreBackgroundWork", () => {
     expect(error).not.toHaveBeenCalled();
   });
 
+  it("settles a local Durable Object storage reset as an observed lifecycle interruption", async () => {
+    const reset = new Error(
+      "Internal error in Durable Object storage caused object to be reset; reference = rke8qila30vbnhapsf1qshri",
+    );
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await expect(
+      settleStreamCoreBackgroundWork(() => Promise.reject(reset)),
+    ).resolves.toBeUndefined();
+
+    expect(info).toHaveBeenCalledWith(
+      "stream core background work interrupted by durable object lifecycle",
+      { message: reset.message },
+    );
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("classifies an unflagged local Durable Object storage reset outside error telemetry", async () => {
+    const reset = new Error(
+      "Internal error in Durable Object storage caused object to be reset; reference = rke8qila30vbnhapsf1qshri",
+    );
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await expect(
+      settleStreamCoreBackgroundWork(() => Promise.reject(reset)),
+    ).resolves.toBeUndefined();
+
+    expect(info).toHaveBeenCalledWith(
+      "stream core background work interrupted by durable object lifecycle",
+      { message: reset.message },
+    );
+    expect(error).not.toHaveBeenCalled();
+  });
+
   it("reports an application failure exactly once while settling the waitUntil promise", async () => {
     const failure = new Error("ancestor append rejected");
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);

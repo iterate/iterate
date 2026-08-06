@@ -21,6 +21,18 @@ describe("isDurableObjectLifecycleError", () => {
     ["durableObjectReset flag", withFlag("durableObjectReset"), true],
     ["retryable flag", withFlag("retryable"), true],
     ["overloaded flag", withFlag("overloaded"), true],
+    [
+      "unflagged local storage reset with Cloudflare reference",
+      new Error(
+        "Internal error in Durable Object storage caused object to be reset; reference = rke8qila30vbnhapsf1qshri",
+      ),
+      true,
+    ],
+    [
+      "application error resembling a storage reset",
+      new Error("Internal error in Durable Object storage caused object to be reset"),
+      false,
+    ],
     ["flag present but not literally true", withFlag("retryable", "yes"), false],
     ["plain Error (app-level throw from the DO)", new Error("kill requested"), false],
     ["string rejection", "kill requested", false],

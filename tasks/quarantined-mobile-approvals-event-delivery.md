@@ -38,8 +38,10 @@ fence. Its exact-head baseline passed all six groups, including both restored
 mobile flows first try, and had no dynamic-worker concurrency failure. The
 strict audit then found three expected paused-ancestor rejections mislabeled as
 application errors because their direct Durable Object error name differed
-from the public-RPC-normalized name. That classifier fix is now locally green;
-the 25-run streak remains at zero until its new exact head passes preview and
+from the public-RPC-normalized name. After that fix passed its exact-head
+baseline, the first cold candidate found one unflagged local SQLite reset in
+subscription `nack`; a narrow referenced-reset classifier is locally green.
+The 25-run streak remains at zero until the new exact head passes preview and
 trace audit.
 
 The two end-to-end mobile approval and notification flows were quarantined on
@@ -589,3 +591,12 @@ Test these in order; do not treat the first plausible one as the conclusion.
   shapes and keeps only the exact `stream paused:` contract outside error
   telemetry. The focused 10-test suite passes; a new exact-head baseline is
   required before the 25-run gate starts.
+- 2026-08-06: Baseline `bnl8c233r4` on `03e0bda48` passed all groups and linked
+  targets first try with no retry marker or restoration-blocking telemetry.
+  Cold candidate `dd028cn0kp` also passed the workflow, but the strict audit
+  rejected one `stream core background work failed`: local subscription
+  `nack` hit Cloudflare storage reset reference `rke8qila30vbnhapsf1qshri`.
+  Unlike a rejected stub call, local SQLite throws no lifecycle flags. A red
+  regression now proves the exact referenced reset is classified outside error
+  telemetry while a lookalike application message remains visible. Both
+  focused suites pass (32 tests); the streak remains zero for the new head.
