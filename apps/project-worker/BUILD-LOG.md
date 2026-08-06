@@ -278,7 +278,7 @@ DataCloneError`; `Reflect.apply` → `NATIVE_OK`. (The `__HostedActor`/`stateful
 
 ## Increment 15 — a dynamic worker's SOURCE is an itx EXPRESSION (the loader is repo-agnostic)
 
-**Commit** `<pending>`. Jonas: "I want to build an interpreter — it's a simple two-way codec over a narrow
+**Commit** `0a6dc89a1`. Jonas: "I want to build an interpreter — it's a simple two-way codec over a narrow
 subset of JS," and "the dynamic worker loader shouldn't know about repos; the file reader is responsible."
 
 - **`core/itx-expression.ts` — the codec (~55 lines).** A capability call as DATA: `ItxExpression =
