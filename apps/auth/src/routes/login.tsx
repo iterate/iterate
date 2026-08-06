@@ -232,13 +232,18 @@ function LoginActions({
     },
   });
 
+  // Captured on first render: expanding rewrites `login_hint` to "email", so
+  // an address hint would otherwise be unrecoverable when the user presses
+  // Back. Restoring it on collapse keeps the "Continue as <email>" shortcut
+  // alive across an expand/Back round trip.
+  const initialHintedEmail = useRef(hintedEmail).current;
+
   const setEmailMode = (expanded: boolean) => {
-    const emailMode = expanded ? ("email" as const) : undefined;
     return navigate({
       search: (previous) =>
         emailModeSearchKey === "account_chooser_method"
-          ? { ...previous, account_chooser_method: emailMode }
-          : { ...previous, login_hint: emailMode },
+          ? { ...previous, account_chooser_method: expanded ? "email" : undefined }
+          : { ...previous, login_hint: expanded ? "email" : initialHintedEmail },
       replace: true,
     });
   };
