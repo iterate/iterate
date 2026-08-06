@@ -1525,7 +1525,7 @@ void iterate_kit_havpe_run(void) {
     havpe_ui_set_status("network start failed — retrying");
     for (int wait = 0; wait < 50; ++wait) {
       (void)esp_task_wdt_reset();
-    havpe_ui_tick();
+      havpe_ui_tick();
       vTaskDelay(pdMS_TO_TICKS(100));
     }
   }

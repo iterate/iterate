@@ -2135,7 +2135,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
     waveshare_display_set_status("network start failed — retrying");
     for (int wait = 0; wait < 50; ++wait) {
       (void)esp_task_wdt_reset();
-    /* LVGL's own timer owns this panel, so there is nothing to pump. */
+      /* LVGL's own timer owns this panel, so there is nothing to pump. */
       vTaskDelay(pdMS_TO_TICKS(100));
     }
   }

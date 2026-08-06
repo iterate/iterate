@@ -1440,7 +1440,7 @@ void iterate_kit_m5sticks3_run(void) {
     m5sticks3_ui_set_status("network start failed — retrying");
     for (int wait = 0; wait < 50; ++wait) {
       (void)esp_task_wdt_reset();
-    m5sticks3_ui_tick();
+      m5sticks3_ui_tick();
       vTaskDelay(pdMS_TO_TICKS(100));
     }
   }
