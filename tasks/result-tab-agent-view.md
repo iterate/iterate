@@ -9,11 +9,16 @@ Follow-up from `tasks/codemode-script-preamble-followups.md` (second checklist i
 
 ## Status summary
 
-Done, pending review. The feed's Result tab now defaults to the exact settlement
-text the agent was shown (rendered markdown from the stream's script-actor
-context-added event), with the old raw YAML view one toggle away and as the
-fallback. Component tests + live screenshots in the PR. Not done here: mobile's
-twin activity card still shows only the raw result (possible follow-up).
+Done, pending re-review. Per Misha's feedback on the first cut ("only show it
+this way when it's truncated"): the Result tab defaults to the agent-visible
+render ONLY when that render is a transformed/truncated representation
+(inline truncation, oversized spill with inferred type + preview). When the
+agent saw the full result, the raw YAML view stays the default and the agent
+view is one toggle away. Detection is structural (the untransformed render
+embeds the exact stringified settlement verbatim; containment check), no
+string-marker matching, degrades safely toward the agent view. Component
+tests + live screenshots in the PR. Not done here: mobile's twin activity
+card still shows only the raw result (possible follow-up).
 
 ## Problem
 
@@ -108,3 +113,13 @@ shown.** Keep the raw view reachable, but the agent's view is the default.
 - Note for jsdom tests: `SourceCodeBlock`/CodeMirror is a lazy client-only chunk that
   never paints in jsdom, so raw-view assertions target `script-result-raw` rather than
   highlighted YAML text.
+- Review feedback round (Misha): "I don't love either, let's only show it this way
+  when it's truncated." → conditional default via `renderIsTransformed`: containment
+  of the exact stringified settlement (string result as-is, else
+  `JSON.stringify(value, null, 2)`, failure error text) in the render content.
+  Chose structural containment over the marker strings emitted by
+  `truncateScriptResult`/`renderOversizedJsonResult`/`rawTextSpillNotice` — no
+  coupling to notice wording, and a server stringification change degrades toward
+  the agent view (never claims the agent saw everything when it didn't).
+- Tests updated: full-result render → raw default with agent view a toggle away;
+  truncated render → agent view default with raw a toggle away; fallbacks unchanged.
