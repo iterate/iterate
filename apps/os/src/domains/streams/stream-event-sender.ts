@@ -1233,6 +1233,16 @@ export class StreamEventSender {
       this.#halt(subscriptionKey, attempt, error);
       return;
     }
+    if (isRetryableDurableObjectAvailabilityError(error)) {
+      const nextAttemptAt = this.#hooks.now() + LIFECYCLE_RETRY_DELAY_MS;
+      this.#hooks.store.nack(subscriptionKey, {
+        attempt,
+        nextAttemptAt,
+        error: errorMessage(error),
+      });
+      this.#hooks.armAlarm(nextAttemptAt);
+      return;
+    }
     this.#backoff(subscriptionKey, attempt, error);
   }
 
@@ -1554,6 +1564,8 @@ type StreamConnection = {
   hasPendingDelivery(): boolean;
   pendingDeliveryStartedAtMs(): number | null;
   pendingDeliveryDeadlineAtMs(): number | null;
+  takeDuePendingDeliveryProbe(nowMs: number): boolean;
+  schedulePendingDeliveryProbe(atMs: number): void;
   close(reason: ConnectionCloseReason, error?: string): void;
 };
 
@@ -1631,6 +1643,8 @@ type StreamConnectionsHooks = Pick<
 
 const PING_ROUND_MIN_INTERVAL_MS = 5_000;
 const PING_TIMEOUT_MS = 10_000;
+const HOSTED_PENDING_PROBE_INTERVAL_MS = 1_000;
+const HOSTED_PENDING_PROBE_TIMEOUT_MS = 1_000;
 function connectionError(error: unknown): string {
   return boundedErrorMessage(error) ?? "unknown error";
 }
@@ -1688,6 +1702,7 @@ export class StreamConnections {
   #idleTeardownAtMs: number | null = null;
   #tearingDown = false;
   #lastPingRoundAtMs: number | null = null;
+  readonly #pendingDeliveryProbes = new Set<StreamConnection>();
 
   constructor(args: { idleTeardownMs: number; hooks: StreamConnectionsHooks }) {
     this.#idleTeardownMs = args.idleTeardownMs;
@@ -1734,6 +1749,13 @@ export class StreamConnections {
         deadlineAt > now ||
         connection.expectedHostedDelivery === undefined
       ) {
+        if (
+          connection.kind === "hosted" &&
+          connection.expectedHostedDelivery !== undefined &&
+          connection.takeDuePendingDeliveryProbe(now)
+        ) {
+          this.#probePendingHostedDelivery(connectionKey, connection);
+        }
         continue;
       }
       this.onHostedDeliveryError(
@@ -1748,6 +1770,57 @@ export class StreamConnections {
       return this.runIdleTeardownNow();
     }
     return [];
+  }
+
+  #probePendingHostedDelivery(connectionKey: string, connection: StreamConnection): void {
+    const ping = connection.ping;
+    const expectedDelivery = connection.expectedHostedDelivery;
+    if (
+      ping === undefined ||
+      expectedDelivery === undefined ||
+      this.#pendingDeliveryProbes.has(connection)
+    ) {
+      return;
+    }
+    this.#pendingDeliveryProbes.add(connection);
+    const t0 = this.#hooks.now();
+    const work = withDeliveryTimeout(
+      Promise.resolve().then(() => ping({ t0 })),
+      `pending hosted delivery probe ${connectionKey}`,
+      { timeoutMs: HOSTED_PENDING_PROBE_TIMEOUT_MS },
+    )
+      .catch((error: unknown) => {
+        // The timeout means only that this incarnation was busy for the probe
+        // slice; the batch watchdog still owns that verdict. Every other ping
+        // rejection is definitive: hostRuntimeCapabilities.ping has no
+        // application work that can fail, so its callback leg is unavailable
+        // even when an RPC hop stripped Cloudflare's lifecycle flags.
+        if (isStreamReceiverUnavailableError(error)) return;
+        const unavailable = isRetryableDurableObjectAvailabilityError(error)
+          ? error
+          : Object.assign(new Error(errorMessage(error), { cause: error }), { retryable: true });
+        this.onHostedDeliveryError(connectionKey, unavailable, expectedDelivery, "rpc-broken");
+      })
+      .finally(() => {
+        this.#pendingDeliveryProbes.delete(connection);
+        const deadlineAt = connection.pendingDeliveryDeadlineAtMs();
+        if (
+          !connection.isLive() ||
+          !connection.hasPendingDelivery() ||
+          this.#connections.get(connectionKey) !== connection ||
+          deadlineAt === null ||
+          deadlineAt <= this.#hooks.now()
+        ) {
+          return;
+        }
+        const nextProbeAt = Math.min(
+          this.#hooks.now() + HOSTED_PENDING_PROBE_INTERVAL_MS,
+          deadlineAt,
+        );
+        connection.schedulePendingDeliveryProbe(nextProbeAt);
+        this.#hooks.armAlarm(nextProbeAt);
+      });
+    this.#hooks.keepAlive(work);
   }
 
   rearmIdleAlarm(): void {
@@ -2132,6 +2205,7 @@ export class StreamConnections {
     let hostedBatchToken: symbol | null = null;
     let hostedBatchStartedAtMs: number | null = null;
     let hostedBatchDeadlineAtMs: number | null = null;
+    let hostedBatchProbeAtMs: number | null = null;
     let connection!: StreamConnection;
 
     const sendQueuedBatches = async () => {
@@ -2231,6 +2305,7 @@ export class StreamConnections {
             hostedBatchToken = deliveryToken;
             hostedBatchStartedAtMs = this.#hooks.now();
             hostedBatchDeadlineAtMs = hostedBatchStartedAtMs + DEFAULT_DELIVERY_TIMEOUT_MS;
+            hostedBatchProbeAtMs = hostedBatchStartedAtMs + HOSTED_PENDING_PROBE_INTERVAL_MS;
             // This SQLite write and the native alarm are both issued before
             // the callback leaves the source DO. The output gate therefore
             // makes a vanished isolate recover as an expired durable attempt,
@@ -2241,6 +2316,7 @@ export class StreamConnections {
               cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
             });
             this.#hooks.armAlarm(hostedBatchDeadlineAtMs);
+            this.#hooks.armAlarm(hostedBatchProbeAtMs);
             (processEventBatch as unknown as RetainedProcessEventBatch<StreamWakeEventBatch>)({
               ...batch,
               reportDeliveryResult: (deliveryResult) => {
@@ -2252,6 +2328,7 @@ export class StreamConnections {
                 hostedBatchToken = null;
                 hostedBatchStartedAtMs = null;
                 hostedBatchDeadlineAtMs = null;
+                hostedBatchProbeAtMs = null;
                 const parsed = parseWakeDeliveryResult(deliveryResult);
                 if (
                   parsed.outcome === "ok" &&
@@ -2336,6 +2413,14 @@ export class StreamConnections {
       hasPendingDelivery: () => (kind === "hosted" ? hostedBatchPending : false),
       pendingDeliveryStartedAtMs: () => hostedBatchStartedAtMs,
       pendingDeliveryDeadlineAtMs: () => hostedBatchDeadlineAtMs,
+      takeDuePendingDeliveryProbe: (nowMs) => {
+        if (hostedBatchProbeAtMs === null || hostedBatchProbeAtMs > nowMs) return false;
+        hostedBatchProbeAtMs = null;
+        return true;
+      },
+      schedulePendingDeliveryProbe: (atMs) => {
+        if (hostedBatchPending) hostedBatchProbeAtMs = atMs;
+      },
       close: (reason, error) => {
         if (!open) return;
         open = false;
@@ -2343,6 +2428,7 @@ export class StreamConnections {
         hostedBatchToken = null;
         hostedBatchStartedAtMs = null;
         hostedBatchDeadlineAtMs = null;
+        hostedBatchProbeAtMs = null;
         if (this.#connections.get(connectionKey) === connection) {
           this.#connections.delete(connectionKey);
           this.#hooks.runtimeChanged();

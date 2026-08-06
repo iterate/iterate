@@ -189,6 +189,34 @@ function harness(args: {
 }
 
 describe("StreamEventSender hosted processor delivery", () => {
+  it("retries a lifecycle-reset processor after one second even after earlier availability failures", async () => {
+    const reset = Object.assign(new Error("processor incarnation reset"), {
+      durableObjectReset: true,
+      retryable: true,
+    });
+    const h = harness({
+      events: [event(2, "a", { keep: true })],
+      wakeProcessor: async () => {
+        throw reset;
+      },
+    });
+    h.store.nack(PROCESSOR_KEY, {
+      attempt: 6,
+      nextAttemptAt: 10_000,
+      error: "earlier availability failure",
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      attempt: 7,
+      nextAttemptAt: 11_000,
+      lastError: "processor incarnation reset",
+    });
+    expect(h.alarms).toContain(11_000);
+  });
+
   it("backs off without publishing when recording the hosted open is interrupted", async () => {
     const disposed = vi.fn();
     const h = harness({
@@ -1868,6 +1896,7 @@ function connectionsHarness(
     maxOffset: events.length,
   }) satisfies CoreProcessorState;
   const alarmTimes: number[] = [];
+  const keptAlive: Promise<unknown>[] = [];
   const sessionsIdleClosed: string[][] = [];
   const durableDeliveryWakes = vi.fn();
   const deliveryFailures = vi.fn((connectionKey: string, error: unknown) => {
@@ -1899,7 +1928,9 @@ function connectionsHarness(
       runtimeChanged: () => undefined,
       now: () => now,
       armAlarm: (atMs) => alarmTimes.push(atMs),
-      keepAlive: () => undefined,
+      keepAlive: (work) => {
+        keptAlive.push(work);
+      },
       wakeChannelKeys: options.wakeChannelKeys ?? (() => new Set<string>()),
       onSessionsIdleClosed: (keys) => {
         sessionsIdleClosed.push([...keys]);
@@ -1920,6 +1951,7 @@ function connectionsHarness(
     store,
     expectedDelivery,
     alarmTimes,
+    keptAlive,
     sessionsIdleClosed,
     deliveryFailures,
     durableDeliveryWakes,
@@ -1930,6 +1962,45 @@ function connectionsHarness(
 }
 
 describe("StreamConnections hosted delivery watchdog", () => {
+  it("probes a pending hosted batch and recovers before its watchdog when the processor resets", async () => {
+    const calls: DeliveryCall[] = [];
+    const reset = Object.assign(new Error("processor incarnation reset"), {
+      durableObjectReset: true,
+      retryable: true,
+    });
+    const h = connectionsHarness();
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      ping: async () => {
+        throw reset;
+      },
+    });
+
+    connection.sendQueued();
+    expect(calls).toHaveLength(1);
+    expect(h.alarmTimes).toContain(2_000);
+
+    h.setNow(2_000);
+    h.connections.onAlarm();
+    await Promise.allSettled(h.keptAlive);
+
+    expect(h.deliveryFailures).toHaveBeenCalledWith("processor", reset);
+    expect(connection.isLive()).toBe(false);
+    expect(warnLog).toHaveBeenCalledWith(
+      "stream durable callback unavailable; backing off before waking it again",
+      expect.objectContaining({
+        connectionKey: "processor",
+        source: "rpc-broken",
+        errorMessage: "processor incarnation reset",
+      }),
+    );
+    warnLog.mockRestore();
+  });
+
   it("does not publish a hosted callback until its opened event finishes appending", () => {
     const calls: DeliveryCall[] = [];
     const h = connectionsHarness({

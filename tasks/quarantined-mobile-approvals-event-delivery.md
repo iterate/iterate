@@ -9,14 +9,16 @@ tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 
 ## Status
 
-Implementation is about 95% complete. Both skips are removed, failures name
+Implementation is about 97% complete. Both skips are removed, failures name
 the first missing durable transition, and the dynamic-worker ownership leaks,
 foreground-approval ordering race, accepted-message UI gap, and orphaned live
-stream callback now have regression coverage. Exact-head preview
-`4fbdd93` passed both restored mobile cases first try under the canonical
-16-worker load, then the new forced-stream-reset regression caught one final
-liveness defect before the restoration gate began. The corrected head still
-needs a clean preview and 25-run gate.
+stream callback now have regression coverage. Exact-head preview `16c29a0`
+passed its workflow, but approvals needed its test-level retry after a
+Cloudflare storage reset orphaned the project and notification callbacks. A
+new deployed red E2E reproduces the 20-second recovery delay. Pending hosted
+callbacks now probe their owner after one second, and infrastructure resets
+retry after one second without inheriting an inflated exponential backoff.
+The corrected head still needs a clean preview and 25-run gate.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -116,6 +118,20 @@ notification journal.
   the dead RPC leg was detected, but `ping()` incorrectly returned `true`, so
   the owner never reopened from its cursor. A focused run preserved the exact
   red assertion: expected the stale handle to report `false`, received `true`.
+- Exact-head preview workflow `wxczbq1zp3` on `16c29a0` was green overall, but
+  PostHog rejected it for the restoration gate: approvals failed after 60.4
+  seconds when the second notification row did not render, then passed its
+  retry in 49.4 seconds. Cloudflare recorded an internal storage reset on the
+  Project DO (`skeb35u7pdbcs1uscf038h2i`) at 00:03:58Z. Both live hosted
+  callbacks timed out at 00:04:18Z, then did not reopen until 00:05:15Z. The
+  source Stream had no intervening retry alarm; the 56.8-second delay matches
+  an attempt-7 exponential backoff, showing that lifecycle availability
+  failures could inherit an already-inflated retry delay.
+- A focused deployed E2E now restarts the Project DO while its notification
+  callback is live, appends an approval request to the surviving root Stream,
+  and requires the notification intent within 12 seconds. It failed against
+  `16c29a0` with the public wait timing out after 12 seconds; the old path took
+  about 20 seconds because only the batch watchdog detected the dead callback.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -260,3 +276,14 @@ Test these in order; do not treat the first plausible one as the conclusion.
   subscription, and the regression will prove cursor replay through the
   replacement connection on the next deployment. OS typecheck, the 36
   React/session tests, and focused formatting checks pass.
+- 2026-08-06: Exact-head preview `16c29a0` passed CI but approvals retried. The
+  root journal, PostHog result, and Cloudflare Worker logs tied the missing
+  second notification to an internal Project DO storage reset and a 56.8s
+  hosted-callback recovery gap. Added a deployed red Project-restart E2E plus
+  unit coverage. A pending callback now gets a one-second liveness probe; a
+  dead callback is closed and re-woken before the 20s work watchdog, while a
+  busy callback keeps that full deadline. Explicit DO-availability failures
+  retain the bounded attempt count but use a fixed one-second retry so prior
+  infrastructure resets cannot inflate recovery latency. The focused 54-test
+  sender suite, OS typecheck, lint, and formatting pass; preview validation is
+  next.
