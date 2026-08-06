@@ -346,7 +346,7 @@ provided capability is reachable only by RPC replay, and a 101 can't serialize a
 
 ## Increment 17 — clients & connections (the principal operation is `.connect`)
 
-**Commit** `<pending>`. Jonas handed a "Clients & connections" design (`clients-and-connections-design.md`) and
+**Commit** `7aac3db0b`. Jonas handed a "Clients & connections" design (`clients-and-connections-design.md`) and
 asked to bring it into the clean room with `.connect` as the principal operation. The design is apps/os-shaped
 (stream `openConnection`, processors, collections); the clean room has none of that delivery/processor spine —
 but it DOES have the substrate the design's "core move" needs (capnweb `/connect`, live-mount retention, wake
