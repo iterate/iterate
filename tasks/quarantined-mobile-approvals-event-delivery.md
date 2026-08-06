@@ -9,7 +9,7 @@ tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 
 ## Status
 
-Implementation is about 98% complete. Both mobile skips are removed and the
+Implementation is about 99% complete. Both mobile skips are removed and the
 reported delivery defects plus each recovery failure found by the strict gate
 have regression coverage. The latest exact-head baseline kept both restored
 mobile flows first-try green but was rejected for six OS retries sharing one
@@ -159,6 +159,16 @@ transport rather than restoring the retired module. All 38 Stream test files
 (481 passing, 7 expected failures), OS typecheck, and the 139 preview-policy
 tests pass on the merge result. The gate still starts from zero on its final
 merge head.
+
+That merge-head candidate was excluded for a broad Cloudflare D1 internal-error
+wave across Semaphore. It also exposed a deterministic selector regression from
+the merged mobile navigation: both restored specs matched the visible project
+menu and its hidden responsive duplicate. They now select the visible menu.
+The notifications spec passed its exact-version focused run in 1.3 minutes;
+the first approvals run was excluded because three Durable Objects on that
+exact OS version reported Cloudflare's `object has moved to a different
+machine` failure during delivery, and its fresh rerun passed in 54.8 seconds.
+The strict streak remains zero pending this corrected exact head.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree

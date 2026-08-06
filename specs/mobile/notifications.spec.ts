@@ -162,7 +162,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // obligation `suppressed` — the row says so, instead of a push having
     // interrupted whoever was reading the thread.
     await page.goBack();
-    await page.getByLabel("Open project menu").click();
+    await page.getByLabel("Open project menu").filter({ visible: true }).click();
     // The drawer slides in over ~180ms and the press works mid-slide — but
     // clicking then bakes a half-open drawer into the recording (video-mode
     // freezes the click-moment screenshot under its synthetic pointer, which

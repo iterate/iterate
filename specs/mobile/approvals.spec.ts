@@ -261,7 +261,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // IN FULL — so "what was this run even doing?" reads without opening the
     // thread.
     await page.goBack(); // chat → chat list: browser history IS the app's back stack on web
-    await page.getByLabel("Open project menu").click();
+    await page.getByLabel("Open project menu").filter({ visible: true }).click();
     await page.getByRole("button", { name: "Notifications" }).click();
     // Main also journals each scripted outcome message as an "Agent replied"
     // notification. Select only the approval-batch rows: newest first, the
