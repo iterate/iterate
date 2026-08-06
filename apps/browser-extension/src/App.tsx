@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Component, Suspense, useEffect, useState, type ReactNode } from "react";
 import {
   configureIterateSession,
   disconnectIterateSession,
@@ -97,13 +97,38 @@ export function App() {
         />
       </label>
       {projectSlug ? (
-        <>
-          <BrowserCapability key={projectSlug} projectSlug={projectSlug} />
-          <ProjectState projectSlug={projectSlug} />
-        </>
+        <ProjectBoundary key={projectSlug} onReset={logOut}>
+          <Suspense fallback={<p>Connecting to project…</p>}>
+            <BrowserCapability projectSlug={projectSlug} />
+            <ProjectState projectSlug={projectSlug} />
+          </Suspense>
+        </ProjectBoundary>
       ) : null}
     </main>
   );
+}
+
+class ProjectBoundary extends Component<
+  { children: ReactNode; onReset: () => Promise<void> },
+  { error?: Error }
+> {
+  state: { error?: Error } = {};
+
+  static getDerivedStateFromError(cause: unknown) {
+    return { error: cause instanceof Error ? cause : new Error(String(cause)) };
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <section>
+        <p className="error">{this.state.error.message}</p>
+        <button type="button" onClick={() => void this.props.onReset()}>
+          Sign in again
+        </button>
+      </section>
+    );
+  }
 }
 
 function BrowserCapability({ projectSlug }: { projectSlug: string }) {

@@ -48,7 +48,7 @@ export const auth = betterAuth({
     if (!allowedOrigin) return [];
     // The allowed requester plus this deployment's own origins — loopback
     // and extension clients must be listed explicitly.
-    const trusted: string[] = [allowedOrigin, config.authAppOrigin];
+    const trusted = [allowedOrigin, config.authAppOrigin];
     if (config.publicUrl) trusted.push(config.publicUrl);
     return trusted;
   },
