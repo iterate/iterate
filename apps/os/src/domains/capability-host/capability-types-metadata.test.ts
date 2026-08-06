@@ -221,6 +221,40 @@ describe("capability fallback resolution", () => {
 });
 
 describe("provide-time types validation", () => {
+  it("exact-revokes a committed mount when post-append settlement fails", async () => {
+    const stream = capabilityHostStream();
+    const harness = await makeProcessor({ stream });
+    const pending = harness.processor.provideCapability(
+      {
+        path: ["failedLive"],
+        providerPager: { connectedAtOffset: 2 },
+        type: "live",
+      },
+      {
+        afterAppend: () => {
+          throw new Error("Pager disappeared after append");
+        },
+      },
+    );
+    const rejection = expect(pending).rejects.toThrow("Pager disappeared after append");
+
+    await vi.waitFor(async () => {
+      await harness.runner.catchUp();
+      expect(harness.runner.currentState.capabilities).toEqual([]);
+    });
+    await rejection;
+    expect(stream.events.slice(-2)).toMatchObject([
+      {
+        type: "events.iterate.com/capability-host/capability-provided",
+        payload: { path: ["failedLive"], type: "live" },
+      },
+      {
+        type: "events.iterate.com/capability-host/capability-revoked",
+        payload: { path: ["failedLive"], providedAtOffset: 2 },
+      },
+    ]);
+  });
+
   it("rejects authored types that do not compile, appending nothing", async () => {
     const stream = capabilityHostStream();
     const { processor } = await makeProcessor({

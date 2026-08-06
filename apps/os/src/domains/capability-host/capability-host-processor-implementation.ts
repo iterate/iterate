@@ -381,15 +381,34 @@ export class CapabilityHostProcessor extends StreamProcessor<
     const provision = { path: prepared.path, providedAtOffset: committed.offset };
     const record = { ...prepared, providedAtOffset: committed.offset } satisfies CapabilityRecord;
 
-    // Live transport binds after append but before the record becomes visible
-    // through the runner. A failed relay closes its socket; reconciliation
-    // then removes the now-ownerless record.
-    await options.afterAppend?.(record);
-    await this.deps.reads.waitUntilEvent({
-      offset: committed.offset,
-      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
-    });
-    return provision;
+    try {
+      await options.afterAppend?.(record);
+      await this.deps.reads.waitUntilEvent({
+        offset: committed.offset,
+        timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+      });
+      return provision;
+    } catch (provideError) {
+      // The provide event is already durable. Roll back this exact offset so
+      // a failed call cannot leave an ownerless mount behind. Exact identity
+      // also prevents the cleanup from revoking a later replacement.
+      try {
+        const [rolledBack] = await this.append({
+          type: "events.iterate.com/capability-host/capability-revoked",
+          payload: provision,
+        });
+        await this.deps.reads.waitUntilEvent({
+          offset: rolledBack.offset,
+          timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+        });
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [provideError, rollbackError],
+          `capability "${prepared.path.join(".")}" provide and exact rollback failed`,
+        );
+      }
+      throw provideError;
+    }
   }
 
   async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {
