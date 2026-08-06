@@ -1991,9 +1991,12 @@ export class StreamConnections {
     const { hosted, session } = this.#idleEligibleConnectionKeys();
     // This alarm can be due because a quiet sibling armed it. Never let that
     // sibling's lease dispose a different callback whose batch is still live.
-    const isIdle = (key: string) => this.#connections.get(key)?.hasPendingDelivery() === false;
-    const idleHosted = hosted.filter(isIdle);
-    const idleSessions = session.filter(isIdle);
+    const idleHosted = hosted.filter(
+      (key) => this.#connections.get(key)?.hasPendingDelivery() === false,
+    );
+    const idleSessions = session.filter(
+      (key) => this.#connections.get(key)?.hasPendingDelivery() === false,
+    );
     const keys = [...idleHosted, ...idleSessions];
     this.#tearingDown = true;
     try {
