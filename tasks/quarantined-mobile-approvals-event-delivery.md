@@ -96,7 +96,11 @@ Semaphore retry and three processor blocked-work error rows. One row retained
 an explicit `stream-unavailable` timeout; two more lost their nested throwable
 fields at Cloudflare's two-argument console boundary. The runner now emits a
 bounded structured diagnostic before the next exact-head run classifies those
-outcomes. The strict streak remains zero.
+outcomes. That diagnostic-head candidate passed every app with no retry or
+blocked-work row, but its wider exact-version audit caught a flagged retryable
+processor-host revival reset still logged at error level. Keepalive now reports
+only its narrow lifecycle shapes outside error telemetry while preserving true
+application failures. The strict streak remains zero.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -801,3 +805,14 @@ Test these in order; do not treat the first plausible one as the conclusion.
   opaque reference without changing failure or retry behavior. Its focused 34
   tests, OS typecheck, lint, and formatting pass. The run is rejected and the
   streak remains zero.
+- 2026-08-06: Diagnostic-head workflow `5nk0q0n1bj` on `95b05db3b` passed all
+  six apps in 362 seconds with every retry field null. Both restored mobile
+  specs and both recovery proofs passed first try, and no structured
+  blocked-work error appeared. Its wider exact-version audit found one
+  `stream processor host revival failed; backing off` row whose embedded error
+  was explicitly `durableObjectReset: true` and `retryable: true`; the durable
+  backoff then recovered. A red/green keepalive regression now routes only
+  exact lifecycle flags, code-update/storage-reset messages, and the explicit
+  `stream-unavailable` contract to warning telemetry while an application
+  failure remains error-level. All 18 keepalive tests pass. The candidate and
+  its cancelled successor are discarded; the streak restarts at zero.

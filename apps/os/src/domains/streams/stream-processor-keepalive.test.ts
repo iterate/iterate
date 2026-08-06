@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { StreamEventInput } from "iterate/processors";
 import {
   KEEPALIVE_ALARM_LEAD_MS,
@@ -233,6 +233,58 @@ describe("revival", () => {
 });
 
 describe("the crash-loop breaker", () => {
+  test("reports a retryable lifecycle revival outside error telemetry", async () => {
+    const reset = Object.assign(new Error("processor host reset during revival"), {
+      durableObjectReset: true,
+      retryable: true,
+    });
+    const h = makeHarness({ revive: () => Promise.reject(reset) });
+    h.build().track(deferred().promise);
+    const fresh = h.build();
+    h.clock.now = fresh.armedAtMs!;
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await expect(fresh.onAlarm()).resolves.toBe("revival_failed");
+      expect(warnLog).toHaveBeenCalledWith(
+        "stream processor host revival interrupted by lifecycle availability; backing off",
+        {
+          revivals: 1,
+          nextAttemptAt: h.clock.now + revivalBackoffMs(1),
+          error: reset,
+        },
+      );
+      expect(errorLog).not.toHaveBeenCalled();
+    } finally {
+      warnLog.mockRestore();
+      errorLog.mockRestore();
+    }
+  });
+
+  test("keeps an application revival failure in error telemetry", async () => {
+    const failure = new Error("revival invariant failed");
+    const h = makeHarness({ revive: () => Promise.reject(failure) });
+    h.build().track(deferred().promise);
+    const fresh = h.build();
+    h.clock.now = fresh.armedAtMs!;
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await expect(fresh.onAlarm()).resolves.toBe("revival_failed");
+      expect(errorLog).toHaveBeenCalledWith("stream processor host revival failed; backing off", {
+        revivals: 1,
+        nextAttemptAt: h.clock.now + revivalBackoffMs(1),
+        error: failure,
+      });
+      expect(warnLog).not.toHaveBeenCalled();
+    } finally {
+      warnLog.mockRestore();
+      errorLog.mockRestore();
+    }
+  });
+
   test("failing revivals back off along the table to the plateau, forever", async () => {
     // Each round is a FRESH incarnation over the same durable record: the DO
     // died owing work, the alarm fired, and the revival pass itself fails

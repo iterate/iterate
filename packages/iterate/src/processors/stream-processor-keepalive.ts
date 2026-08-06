@@ -132,6 +132,29 @@ export function revivalBackoffMs(revivals: number): number {
   return REVIVAL_BACKOFF_MS[revivals - 1] ?? REVIVAL_BACKOFF_PLATEAU_MS;
 }
 
+function isProcessorHostLifecycleAvailabilityError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  // Workerd adds these boolean flags to native Durable Object rejections, but
+  // they are not part of the standard Error type. Read only the exact flags
+  // this recovery boundary owns; arbitrary throwable properties stay ignored.
+  const flags = error as {
+    durableObjectReset?: unknown;
+    overloaded?: unknown;
+    retryable?: unknown;
+  };
+  if (flags.durableObjectReset === true || flags.overloaded === true || flags.retryable === true) {
+    return true;
+  }
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message === "Durable Object reset because its code was updated." ||
+    /^Internal error in Durable Object storage caused object to be reset; reference = [a-z0-9]{8,128}$/u.test(
+      error.message,
+    ) ||
+    error.message.startsWith("stream-unavailable: ")
+  );
+}
+
 const FRESH_RECORD: Omit<KeepaliveRecord, "version"> = {
   revivals: 0,
   lastRevivalAt: 0,
@@ -296,11 +319,19 @@ export class ProcessorKeepalive {
         this.#sawCleanSettle = false;
         return "revival_discarded";
       }
-      console.error("stream processor host revival failed; backing off", {
+      const logContext = {
         revivals: record.revivals,
         nextAttemptAt: record.armedAtMs,
         error,
-      });
+      };
+      if (isProcessorHostLifecycleAvailabilityError(error)) {
+        console.warn(
+          "stream processor host revival interrupted by lifecycle availability; backing off",
+          logContext,
+        );
+      } else {
+        console.error("stream processor host revival failed; backing off", logContext);
+      }
       this.#sawFailure = true;
       // The safety-net alarm armed above owns the retry.
       return "revival_failed";
