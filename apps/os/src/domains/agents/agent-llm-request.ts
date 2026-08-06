@@ -1,18 +1,25 @@
-// The agent's LLM REQUEST component, split out of
-// agent-processor-implementation.ts: everything between "an open request
-// exists" and "the settlement batch committed" — prompt assembly from
-// committed history, the transport attempt (Workers AI or the injected
-// `callLlm` seam), chunk streaming, the in-flight abort slot, and the atomic
-// success/failure appends. Orchestration (when to request a turn, interrupts,
-// compaction policy) stays in the processor; compaction reuses `attempt()` so
-// both lanes travel the same transport seam.
+// The agent's LLM REQUEST component — one of the three parts composed into
+// the agent processor (see agent-processor-implementation.ts): everything
+// between "an open request exists" and "the settlement batch committed" —
+// prompt assembly from committed history, the transport attempt (Workers AI
+// or the injected `callLlm` seam), chunk streaming, the in-flight abort slot,
+// and the atomic success/failure appends. It also owns COMPACTION, which is
+// just an LLM request with the summarize instruction as its trailing message:
+// the token-usage handler here decides when, and `attempt()` carries both
+// lanes through the same transport seam. The turn loop (agent-turn-loop.ts)
+// decides WHEN a normal request runs and calls `run()`/`abortInFlight()`.
 
-import { isIdempotencyConflict } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
-import type {
-  AgentFileAttachment,
+import {
+  appendUnlessLostIdempotencyRace,
+  stringifyError,
+  type AgentHost,
+  type AgentComponent,
+} from "./agent-host.ts";
+import {
   AgentProcessorContract,
-  AgentProcessorState,
+  type AgentFileAttachment,
+  type AgentProcessorState,
 } from "./agent-processor-contract.ts";
 import {
   AGENT_COMPACTION_PROMPT,
@@ -25,56 +32,11 @@ import {
   jsonCompatible,
   normalizeLlmUsage,
   runWorkersAiAttempt,
-  type CloudflareAiGatewayTransport,
-  type WorkersAiBinding,
   type WorkersAiMessage,
 } from "./workers-ai-transport.ts";
 
-/** The test/custom-host LLM seam: when provided it REPLACES the Workers AI
- * path entirely, so suites drive turns with a scripted transport and the
- * component never knows. `onChunk` receives text deltas. Usage comes back
- * already normalized. */
-export type AgentLlmTransport = (args: {
-  model: string;
-  messages: WorkersAiMessage[];
-  signal: AbortSignal;
-  /** The transport awaits each result before delivering the next chunk. */
-  onChunk?: (text: string) => Promise<void>;
-}) => Promise<{
-  text: string;
-  usage?: {
-    inputTokens: number;
-    outputTokens: number;
-    cachedInputTokens?: number;
-    reasoningOutputTokens?: number;
-  };
-  rawResponse?: unknown;
-}>;
-
-/**
- * The transport-facing subset of the processor's deps (see
- * AgentProcessorDeps in agent-processor-implementation.ts for the full
- * documented set — the processor's deps type extends this one).
- */
-export type AgentLlmDeps = {
-  ai?: WorkersAiBinding;
-  cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
-  resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
-  callLlm?: AgentLlmTransport;
-};
-
-/** What the component borrows from its owning processor: deps, the
- * processor-scoped idempotency-key mint, the one full-stream read behind
- * prompt building, and the injectable clock. */
-type AgentLlmRequestHost = {
-  deps: AgentLlmDeps;
-  idempotencyKey: (suffix: string) => string;
-  readConsumedEvents: () => Promise<StreamEvent[]>;
-  now: () => number;
-};
-
-export class AgentLlmRequest {
-  readonly #host: AgentLlmRequestHost;
+export class AgentLlmRequest implements AgentComponent {
+  readonly #host: AgentHost;
 
   /**
    * RUNTIME state: in-memory, dies with the isolate, never persisted. The one
@@ -91,8 +53,53 @@ export class AgentLlmRequest {
     partialText: string;
   } | null = null;
 
-  constructor(host: AgentLlmRequestHost) {
+  constructor(host: AgentHost) {
     this.#host = host;
+  }
+
+  /**
+   * COMPACTION TRIGGER: the usage report says how full this turn's context
+   * ran. Past the configured fraction of the model's window, STOP THE WORLD
+   * and summarize the history prefix into one context item — blocked
+   * (per-event: the report is delivered once, and the summary must land
+   * before later context piles onto an already-too-big prompt). Blocking
+   * work is FIFO per event and settles before the next event reduces, so
+   * compactions run one at a time. The stream probe lets a newer committed
+   * report supersede this one.
+   */
+  processEvent(args: ProcessEventArgs<AgentProcessorContract>): undefined {
+    const { event, state, blockProcessorWhile } = args;
+    if (event?.type !== "events.iterate.com/agent/token-usage-reported") return;
+    const usage = event.payload;
+    const contextTokens = usage.inputTokens + usage.outputTokens;
+    const thresholdTokens = Math.floor(
+      usage.maxContextTokens * state.config.compactionTriggerFraction,
+    );
+    if (contextTokens < thresholdTokens) return;
+    const triggerFraction = state.config.compactionTriggerFraction;
+    const hasHistory = state.contextItems.some((item) => item.payload.role !== "system");
+    blockProcessorWhile(async () => {
+      // A later over-threshold report already in the stream supersedes this
+      // one: summarizing an older prefix now would be thrown away by the
+      // newer request's compaction, so defer to it.
+      if (
+        await this.#laterOverThresholdReportPending({
+          llmRequestOffset: usage.llmRequestOffset,
+          triggerFraction,
+        })
+      ) {
+        return;
+      }
+      await this.#compactHistory({
+        contextTokens,
+        deadlineMs: state.config.llmRequestExpiryMs,
+        hasHistory,
+        llmRequestOffset: usage.llmRequestOffset,
+        model: usage.model,
+        thresholdTokens,
+        triggerOffset: event.offset,
+      });
+    });
   }
 
   /** True when THIS incarnation is already executing the open request — the
@@ -136,7 +143,7 @@ export class AgentLlmRequest {
     let chunkSequence = 0;
     args.runInBackground(async () => {
       try {
-        const events = await this.#host.readConsumedEvents();
+        const events = await this.readConsumedEvents();
         const body = buildAgentLlmRequestBody({ events, llmRequestOffset: requestOffset });
         const completion = await this.attempt({
           model: open.model,
@@ -320,27 +327,184 @@ export class AgentLlmRequest {
       rawResponse: completion.rawResponse,
     };
   }
-}
 
-/**
- * Append a batch whose idempotency keys may race concurrent writers: every
- * writer of `settle/<offset>` (success, failure, interrupt, expiry) races
- * every other, and two debounce schedulings of one trigger race on
- * `request/<offset>` when config changed between them. The stream rejects
- * a same-key append with a different body; the FIRST writer's story stands
- * and losing the race is success — the obligation is settled/recorded, and
- * the reduce sorts out whose fact counts.
- */
-export async function appendUnlessLostIdempotencyRace(
-  append: ProcessEventArgs<AgentProcessorContract>["append"],
-  events: EmittedInput<AgentProcessorContract>[],
-): Promise<void> {
-  try {
-    await append(...events);
-  } catch (error) {
-    if (!isIdempotencyConflict(error)) throw error;
+  /**
+   * The whole stream's consumed subset, paged from offset 0 — the one read
+   * behind prompt building and the compaction guards. Filtering to `consumes`
+   * keeps bulk emitted-only types (response chunks) out of the transfer;
+   * paging (rather than one capped read) means long histories are never
+   * silently truncated.
+   */
+  async readConsumedEvents(): Promise<StreamEvent[]> {
+    const events: StreamEvent[] = [];
+    using pager = this.#host.readEvents({
+      afterOffset: 0,
+      eventTypes: AgentProcessorContract.consumes,
+      limit: CONSUMED_EVENTS_PAGE_SIZE,
+    });
+    for (;;) {
+      const page = await pager.next();
+      events.push(...page);
+      if (page.length < CONSUMED_EVENTS_PAGE_SIZE) return events;
+    }
+  }
+
+  /**
+   * One stop-the-world compaction: replay the exact request whose usage
+   * crossed the threshold, ask the agent's model to summarize that prefix,
+   * then replace history only through that request's offset. The assistant
+   * answer and every message that arrived while it ran are later stream
+   * facts and survive behind the summary. Best-effort: every early return
+   * leaves the stream untouched, and a later usage report may retry. A later
+   * compacting item is the durable redelivery guard.
+   */
+  async #compactHistory(input: {
+    contextTokens: number;
+    deadlineMs: number;
+    hasHistory: boolean;
+    llmRequestOffset: number;
+    model: string;
+    thresholdTokens: number;
+    triggerOffset: number;
+  }): Promise<void> {
+    const {
+      contextTokens,
+      deadlineMs,
+      hasHistory,
+      llmRequestOffset,
+      model,
+      thresholdTokens,
+      triggerOffset,
+    } = input;
+    if (!hasHistory) return;
+    try {
+      if (await this.#hasCompactionCovering(llmRequestOffset)) return;
+      const events = await this.readConsumedEvents();
+
+      // Same transport seam as normal turns: BYOK carries the per-agent
+      // prompt_cache_key, so this request lands on the shard that already
+      // holds the conversation's prefix (and the cache discount lands on our
+      // bill — the unified lane meters cached tokens at the uncached price).
+      // The usage report names the model that saw the exact measured request;
+      // a later configuration event may already have selected another model,
+      // but switching here would forfeit that cache.
+      const summary = await this.attempt({
+        model,
+        messages: await prepareAgentLlmMessages(
+          buildAgentCompactionRequestBody({ events, llmRequestOffset }).messages,
+          this.#host.deps.resolveModelFileUrl,
+        ),
+        signal: new AbortController().signal,
+        deadlineMs,
+        onChunk: async () => {},
+      });
+
+      await this.#host.append({
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: this.#host.idempotencyKey(`compact-context@${triggerOffset}`),
+        payload: {
+          role: "developer",
+          content:
+            `[Earlier conversation history was compacted through @${llmRequestOffset} ` +
+            `(~${contextTokens} tokens > ${thresholdTokens}). Summary:]\n\n${summary.text}`,
+          compaction: {
+            replacesHistoryThrough: llmRequestOffset,
+            ...(summary.usage === undefined ? {} : { usage: summary.usage }),
+          },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
+      });
+    } catch (error) {
+      // A throw here would fail the whole batch into redelivery and stall the
+      // agent behind delivery backoff — for a best-effort lane, releasing the
+      // world and letting the next over-threshold report retry is strictly
+      // better than blocking everything on a flaky summary.
+      console.error("[agent] context compaction failed", {
+        error: stringifyError(error),
+        llmRequestOffset,
+        triggerOffset,
+      });
+    }
+  }
+
+  /** Targeted durable guard for compaction redelivery. Long streams are
+   * exactly where this runs, so never reread their entire consumed history
+   * merely to discover a later summary. */
+  async #hasCompactionCovering(offset: number): Promise<boolean> {
+    const payloadSchema =
+      AgentProcessorContract.events["events.iterate.com/agents/context-added"].payloadSchema;
+    using pager = this.#host.readEvents({
+      afterOffset: offset,
+      eventTypes: ["events.iterate.com/agents/context-added"],
+      limit: CONSUMED_EVENTS_PAGE_SIZE,
+    });
+    for (;;) {
+      const page = await pager.next();
+      if (
+        page.some((candidate) => {
+          const parsed = payloadSchema.safeParse(candidate.payload);
+          return (
+            parsed.success &&
+            parsed.data.role === "developer" &&
+            parsed.data.compaction !== undefined &&
+            parsed.data.compaction.replacesHistoryThrough >= offset &&
+            parsed.data.compaction.replacesHistoryThrough < candidate.offset
+          );
+        })
+      ) {
+        return true;
+      }
+      if (page.length < CONSUMED_EVENTS_PAGE_SIZE) return false;
+    }
+  }
+
+  /**
+   * True when the stream already holds a usage report for a LATER request
+   * (higher llmRequestOffset) that is itself over its own threshold. Such a
+   * report will compact a superset prefix with a newer model, so summarizing
+   * this older request first would just be discarded.
+   */
+  async #laterOverThresholdReportPending(input: {
+    llmRequestOffset: number;
+    triggerFraction: number;
+  }): Promise<boolean> {
+    using pager = this.#host.readEvents({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/agent/token-usage-reported"],
+      limit: CONSUMED_EVENTS_PAGE_SIZE,
+    });
+    for (;;) {
+      const page = await pager.next();
+      if (
+        page.some((candidate) => {
+          const payload = candidate.payload as {
+            llmRequestOffset?: number;
+            maxContextTokens?: number;
+            inputTokens?: number;
+            outputTokens?: number;
+          };
+          if (
+            typeof payload.llmRequestOffset !== "number" ||
+            payload.llmRequestOffset <= input.llmRequestOffset ||
+            typeof payload.maxContextTokens !== "number" ||
+            typeof payload.inputTokens !== "number" ||
+            typeof payload.outputTokens !== "number"
+          ) {
+            return false;
+          }
+          const thresholdTokens = Math.floor(payload.maxContextTokens * input.triggerFraction);
+          return payload.inputTokens + payload.outputTokens >= thresholdTokens;
+        })
+      ) {
+        return true;
+      }
+      if (page.length < CONSUMED_EVENTS_PAGE_SIZE) return false;
+    }
   }
 }
+
+/** Page size for full-stream reads (prompt building, compaction guards). */
+const CONSUMED_EVENTS_PAGE_SIZE = 500;
 
 /** Race an un-abortable attempt promise against its abort signal: the caller
  * regains control immediately on interrupt while the orphaned work finishes
@@ -432,13 +596,4 @@ export function contextWindowTokens(model: string): number {
     }
   }
   return best?.tokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
-}
-
-export function stringifyError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
 }

@@ -5,9 +5,11 @@ size: large
 
 # Agent processor split + `<codemode>` response format experiment
 
-> **Status summary** (for skimmers): phase 1 (pure refactor) done on branch
-> `agent-processor-split` — nothing user-visible changed; all existing tests pass unmodified.
-> Phase 2 (codemode-tag format + config template) is a stacked PR on top.
+> **Status summary** (for skimmers): phase 1 done on branch `agent-processor-split` — the
+> processor is now a ~100-line composition of three components (turn loop, LLM request,
+> codemode); nothing user-visible changed and all existing tests pass unmodified. Phase 2
+> (stacked PR) adds a HEADLESS processor variant (no codemode component) plus the
+> `configs/codemode-tag` template that implements the tag format entirely in userland.
 
 ## Why
 
