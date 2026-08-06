@@ -220,6 +220,26 @@ enum iterate_kit_status codec_write(
       : ITERATE_KIT_BACKPRESSURE;
 }
 
+std::uint8_t speakerVolumePercent = 100U;
+
+/*
+ * Percent to ES8311 register 0x32, with the brownout ceiling as the TOP of
+ * the scale rather than a value somewhere along it.
+ *
+ * 100% here means es8311SafeDacVolume (-18 dB), which is as loud as this board
+ * has ever been proven to survive: copying M5Unified's 0 dB DAC while dropping
+ * its mixer attenuation made a 75%-scale tone trip the brownout detector. So
+ * this knob spans "silent" to "the loudest measured-safe setting", and asking
+ * for more than 100 is refused by the capability above rather than clamped
+ * quietly here. Raising the ceiling itself needs a new physical power proof,
+ * not a bigger number.
+ */
+std::uint8_t volumeRegisterFor(std::uint8_t percent) {
+  if (percent == 0U) return 0x00U;
+  const std::uint32_t span = es8311SafeDacVolume;
+  return static_cast<std::uint8_t>((span * percent) / 100U);
+}
+
 const struct iterate_kit_audio_codec_ops codec_ops = {
   codec_read,
   codec_write,
@@ -276,7 +296,7 @@ bool configure_codec_playback(void) {
     {0x0dU, 0x01U},
     {0x12U, 0x00U},
     {0x13U, 0x10U},
-    {0x32U, es8311SafeDacVolume},
+    {0x32U, es8311SafeDacVolume},  /* 100% of this board's safe range */
     {0x37U, 0x08U},
   };
   /*
@@ -732,5 +752,22 @@ bool m5sticks3_audio_starvation_pending(void) {
 uint32_t m5sticks3_audio_take_injected_starvation(void) {
   return inject_starvation_ms.exchange(0U, std::memory_order_relaxed);
 }
+
+enum iterate_kit_status m5sticks3_audio_set_volume(
+    uint8_t percent, uint8_t *applied) {
+  if (percent > 100U) percent = 100U;
+  if (!M5.In_I2C.writeRegister8(
+          es8311Address,
+          0x32U,
+          volumeRegisterFor(percent),
+          boardI2cFrequency)) {
+    return ITERATE_KIT_IO_ERROR;
+  }
+  speakerVolumePercent = percent;
+  if (applied != nullptr) *applied = percent;
+  return ITERATE_KIT_OK;
+}
+
+uint8_t m5sticks3_audio_volume(void) { return speakerVolumePercent; }
 
 }  // extern "C"

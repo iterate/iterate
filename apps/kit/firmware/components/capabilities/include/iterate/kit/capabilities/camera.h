@@ -3,6 +3,8 @@
 
 #include "iterate/kit/peer.h"
 #include "iterate/kit/status.h"
+/* For the outbox slot size a chunk has to fit inside; see the assert below. */
+#include "iterate/kit/voice_device_profile.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -15,16 +17,36 @@ extern "C" {
 /**
  * How much of one image each read returns.
  *
- * 6000 raw bytes become 8000 base64 characters, which still fits inside one
- * bounded control message with room for the surrounding JSON. The number is
- * MEASURED, not chosen for tidiness: at 2400 bytes an image cost 35 round
- * trips and dominated the time of anything that fetched one; at 6000 it costs
- * a quarter of that. Raising it further would charge every audio session a
- * larger permanent control slot for an occasional photograph.
+ * A CHUNK THAT DOES NOT FIT ITS CONTROL MESSAGE KILLS THE SESSION. Overflowing
+ * one outbox slot is terminal in this peer by design — the slot is reserved
+ * before Cap'n Web starts writing, and a message that runs past it cannot be
+ * un-written — so the very first readChunk() of the very first photograph took
+ * the whole WebSocket down with a 1006 and left a healthy board unreachable.
+ *
+ * The previous value was 6000, above a comment asserting it "still fits inside
+ * one bounded control message with room for the surrounding JSON". It did not:
+ * 6000 raw bytes are 8000 base64 characters against an 8192-byte slot, leaving
+ * 192 for the envelope. The sentence was reasoning, not arithmetic, and the
+ * arithmetic is now below where the compiler checks it.
+ *
+ * Round trips still matter — at 2400 bytes an image cost 35 of them and
+ * dominated the time of anything that fetched one — so this is as large as the
+ * budget honestly allows rather than as small as it could be.
  */
 enum {
-  ITERATE_KIT_CAMERA_CHUNK_BYTES = 6000,
+  ITERATE_KIT_CAMERA_CHUNK_BYTES = 4096,
+  /** Envelope around the base64: ids, quoting, the resolve wrapper. */
+  ITERATE_KIT_CAMERA_CHUNK_ENVELOPE_BYTES = 512,
+  ITERATE_KIT_CAMERA_CHUNK_ENCODED_BYTES =
+      ((ITERATE_KIT_CAMERA_CHUNK_BYTES + 2) / 3) * 4,
 };
+
+_Static_assert(
+    ITERATE_KIT_CAMERA_CHUNK_ENCODED_BYTES +
+            ITERATE_KIT_CAMERA_CHUNK_ENVELOPE_BYTES <=
+        ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOT_CAPACITY,
+    "a camera chunk must fit one control message: overflowing the outbox is "
+    "session-fatal, so this cannot be left to a comment");
 
 /**
  * The frame a driver hands over, and how to give it back.

@@ -456,6 +456,47 @@ static esp_err_t write_codec_registers(
  * defaults are ch0=AGC, ch1=NS, taps are volatile across the reset this boot
  * pulses, and a write ACK alone does not establish the live stage.
  */
+static uint8_t speaker_volume_percent = 100U;
+
+/*
+ * Percent to the AIC3204's two DAC channel-gain registers (0x41, 0x42), in
+ * half-decibel steps on page 0.
+ *
+ * 100 IS 0 dB, NOT THE CHIP'S +24 dB CEILING. Positive digital gain here made
+ * the provider transcribe this device's own speaker output almost verbatim on
+ * the XMOS processed channel — the gain exhausted acoustic and AEC headroom
+ * before the DSP could cancel anything. 0 dB is also the loudest setting that
+ * cannot electrically clip a full-scale provider sample, and PCM reaches this
+ * boundary unscaled. So the knob spans silence to 0 dB, which is the whole of
+ * the safe range; anything above it is a different measurement, not a setting.
+ *
+ * The scale is in dB rather than linear percent because the ear is: halfway
+ * along this control is -31.5 dB, which is quiet but not inaudible.
+ */
+static esp_err_t apply_dac_volume(uint8_t percent) {
+  enum { MINIMUM_HALF_DB = -126 };  /* -63 dB, the register's floor */
+  const int8_t half_db = percent == 0U
+      ? (int8_t)MINIMUM_HALF_DB
+      : (int8_t)(MINIMUM_HALF_DB + ((int)-MINIMUM_HALF_DB * (int)percent) / 100);
+  const struct iterate_kit_voice_pe_register_write writes[] = {
+    {0x00U, 0x00U},
+    {0x41U, (uint8_t)half_db},
+    {0x42U, (uint8_t)half_db},
+  };
+  return write_codec_registers(writes, sizeof(writes) / sizeof(writes[0]));
+}
+
+enum iterate_kit_status havpe_audio_set_volume(
+    uint8_t percent, uint8_t *applied) {
+  if (percent > 100U) percent = 100U;
+  if (apply_dac_volume(percent) != ESP_OK) return ITERATE_KIT_IO_ERROR;
+  speaker_volume_percent = percent;
+  if (applied != NULL) *applied = percent;
+  return ITERATE_KIT_OK;
+}
+
+uint8_t havpe_audio_volume(void) { return speaker_volume_percent; }
+
 static esp_err_t configure_xmos_pipeline(
     uint8_t channel, enum iterate_kit_voice_pe_xmos_stage stage) {
   uint8_t command[4];

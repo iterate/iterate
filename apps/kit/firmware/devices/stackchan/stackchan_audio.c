@@ -92,6 +92,7 @@ struct wire_frame {
 };
 
 static esp_codec_dev_handle_t speaker;
+static uint8_t speaker_volume_percent = SPEAKER_VOLUME_PERCENT;
 static esp_codec_dev_handle_t microphone;
 static struct iterate_kit_core_s3_capture_reserve capture_reserve;
 static QueueHandle_t playback_mailbox;
@@ -758,3 +759,28 @@ uint32_t stackchan_audio_playback_partial_chunks(void) {
 uint32_t stackchan_audio_epoch_resets(void) {
   return atomic_load_explicit(&epoch_resets_total, memory_order_relaxed);
 }
+
+/*
+ * THE SPEAKER LEVEL IS ALSO THE AEC REFERENCE LEVEL on this board, which is
+ * why the shipped default is 80 rather than 100: the donor measured ~1.5 dB
+ * of extra acoustic headroom there against 85/90, and echo cancellation is
+ * spent from the same budget as loudness. The ceiling below is not a physical
+ * limit — the amplifier will happily go to 100 — it is the point past which
+ * this board starts cancelling its own voice less well, so raising it is a
+ * trade a person should make deliberately and hear.
+ */
+enum iterate_kit_status stackchan_audio_set_volume(
+    uint8_t percent, uint8_t *applied) {
+  if (speaker == NULL) return ITERATE_KIT_UNAVAILABLE;
+  if (percent > STACKCHAN_AUDIO_VOLUME_CEILING) {
+    percent = STACKCHAN_AUDIO_VOLUME_CEILING;
+  }
+  if (esp_codec_dev_set_out_vol(speaker, (int)percent) != ESP_CODEC_DEV_OK) {
+    return ITERATE_KIT_IO_ERROR;
+  }
+  speaker_volume_percent = percent;
+  if (applied != NULL) *applied = percent;
+  return ITERATE_KIT_OK;
+}
+
+uint8_t stackchan_audio_volume(void) { return speaker_volume_percent; }

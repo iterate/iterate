@@ -2,7 +2,9 @@ set(ITERATE_KIT_CORE_SOURCES
   src/audio_playout.c
   src/configuration.c
   src/conversation_lights.c
+  src/conversation_overlay.c
   src/device_events.c
+  src/face_wake.c
   src/itx_connection.c
   src/itx_mount.c
   src/itx_outbox_sender.c

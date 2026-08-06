@@ -78,3 +78,16 @@ CONFIG_LWIP_TCP_WND_DEFAULT=32768
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=24
 CONFIG_LWIP_TCP_SACK_OUT=y
 CONFIG_LWIP_TCP_OOSEQ_MAX_PBUFS=12
+
+#
+# The camera's DMA buffer, held only while a photograph is being taken.
+#
+# 8192, the minimum this driver allows, rather than its 32768 default. With
+# the default the internal heap fell to 1,275 bytes while the sensor was up —
+# and every TLS write needs a few kilobytes of that same pool for an AES
+# context, so a stats push landing inside the ~500 ms shutter window dropped
+# the socket. Smaller buffers mean more frequent DMA interrupts; on a board
+# that takes an occasional diagnostic photograph and holds a continuous voice
+# call, that is the correct side to err on.
+#
+CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=8192

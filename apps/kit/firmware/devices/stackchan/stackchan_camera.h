@@ -18,15 +18,26 @@ extern "C" {
  * lives behind stackchan_body.h. The portable capability above it knows only
  * "capture returns bytes and a way to give them back".
  *
- * Returns false if the camera cannot be brought up, and that is not fatal: the
- * device then does not mount the capability at all, so a caller is told the
- * method does not exist rather than being handed a permanent runtime error
- * from a camera that was never there.
+ * THE SENSOR IS BROUGHT UP ON THE FIRST PHOTOGRAPH, NOT AT START-UP. Doing it
+ * at start-up took the DMA-capable internal memory Wi-Fi needs for its packet
+ * buffers, and the board spent its life rebooting instead of making calls.
+ * The capability is therefore always mounted and a board whose sensor cannot
+ * start answers `take()` with "unavailable" — a caller can read that, whereas
+ * it cannot read a device that is not on the network.
  */
-bool iterate_kit_stackchan_camera_init(void);
-
-/** The driver to hand iterate_kit_camera_init; valid only after a true init. */
 struct iterate_kit_camera_driver iterate_kit_stackchan_camera_driver(void);
+
+/**
+ * Photographs completed, and sensors that refused to shut down again.
+ *
+ * A non-zero shutdown-failure count is the thing to look at when the network
+ * starts dying after somebody took a picture: it means the driver is still
+ * holding the internal DMA memory TLS needs.
+ */
+uint32_t iterate_kit_stackchan_camera_photographs(void);
+uint32_t iterate_kit_stackchan_camera_shutdown_failures(void);
+/** Internal heap free while the sensor was last up. Small on purpose. */
+uint32_t iterate_kit_stackchan_camera_internal_free_with_sensor_up(void);
 
 /** Frames the sensor refused, and encodes that did not fit the JPEG buffer. */
 uint32_t iterate_kit_stackchan_camera_sensor_failures(void);

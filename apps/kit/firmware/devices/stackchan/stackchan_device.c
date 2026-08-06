@@ -57,8 +57,10 @@
 #include "iterate/kit/capabilities/conversation.h"
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/capabilities/servos.h"
+#include "iterate/kit/capabilities/speaker.h"
 #include "iterate/kit/device_events.h"
 #include "iterate/kit/conversation_lights.h"
+#include "iterate/kit/conversation_overlay.h"
 #include "stackchan_audio.h"
 #include "stackchan_camera.h"
 #include "stackchan_avatar.h"
@@ -146,6 +148,12 @@ static char pending_stream_path[96];
  */
 static bool stream_used = true;
 static bool awaiting_fresh_stream;
+/*
+ * True when the stream being prepared was NOT asked for by a person.
+ * See the eager prepare in the app loop: the adoption path must not
+ * turn a speculative preparation into a call nobody wanted.
+ */
+static bool preparing_ahead;
 #define CALL_ID "scdev"
 #define GREETING "Hi, I am your Iterate device. What can I do for you?"
 
@@ -320,14 +328,18 @@ static const char peer_description[] =
     "conversation.start() / conversation.end() begin and end a call. "
     "servos.move({yawDegrees,pitchDegrees,speed}) turns its head; yaw "
     "-128..128, pitch 0..90, speed up to 1000. "
+    "speaker.setVolume({percent}) sets how loud it plays, 0-100; it clamps "
+    "to a ceiling this board has a measured reason for and answers with "
+    "{percent,ceiling}, which speaker.volume() also returns. "
     "health() returns the same diagnostics document the device pushes as "
     "dev-stats, including whether its audio directions are alive. "
     "camera.take() photographs what it can see and returns "
     "{width,height,contentType,bytes,chunkSize,chunks}; then "
     "camera.readChunk({index}) returns each piece in order — the image is "
     "delivered in pieces because one is larger than a single message, and it "
-    "is released when the last chunk is read. camera.take() is absent if "
-    "this unit's sensor did not start.\",\"children\":{}}";
+    "is held until the next take(). The sensor is powered up by the first "
+    "take(), so that call is the slow one and it is the call that reports a "
+    "unit whose camera cannot start.\",\"children\":{}}";
 
 static void on_session_ended(void *context) {
   (void)context;
@@ -369,6 +381,8 @@ static struct {
   bool call_active;
   bool link_ready;
   bool call_requested;
+  /* A start-up fault this device cannot recover from; see park_with_fault. */
+  bool fault;
   bool dirty;
   uint64_t last_body_write_ms;
   struct iterate_kit_stackchan_body *body;
@@ -420,7 +434,7 @@ static void stackchan_ui_tick(void) {
     .wifi_rssi_dbm = 0,
     .conversation_active = ui.call_active,
     .media_ready = ui.link_ready,
-    .media_failed = false,
+    .media_failed = ui.fault,
     .microphone_listening = runtime.talking,
     .microphone_peak = 0U,
     /* The one hardware-owned "is it speaking" fact both surfaces share. */
@@ -431,9 +445,12 @@ static void stackchan_ui_tick(void) {
    * PUBLISH ONLY ON CHANGE — the equality helper exists for exactly this.
    * Republishing an equal snapshot every second forced the display path to
    * repaint at 1 Hz, which a person sees as the face cutting to black.
+   *
+   * The OVERLAY comparison, not the lights one: the screen also carries a
+   * word, and "connecting" and "ready" can render the same twelve pixels.
    */
   if (!shown_valid ||
-      !iterate_kit_conversation_lights_equal(&visual, &shown)) {
+      !iterate_kit_conversation_overlay_equal(&visual, &shown)) {
     (void)iterate_kit_stackchan_avatar_request_status(&visual);
     if (ui.body != NULL) {
       struct iterate_kit_rgb8 pixels[ITERATE_KIT_STACKCHAN_LED_COUNT];
@@ -453,6 +470,31 @@ static void stackchan_ui_tick(void) {
   }
   ui.last_body_write_ms = now;
   ui.dirty = false;
+}
+
+/*
+ * A START-UP FAULT MUST BE VISIBLE, NOT A REBOOT LOOP.
+ *
+ * Every failure path below this point used to `return`, and the task watchdog
+ * had already been subscribed by then — so the main task simply stopped
+ * feeding it and the board panicked twenty seconds later, over and over. From
+ * a chair that is indistinguishable from a dead screen, and it is exactly how
+ * a memory regression in the camera hid for a day.
+ *
+ * So park instead: keep the watchdog fed, keep the surface painting, and let
+ * the fault sit on the screen where somebody can read it.
+ */
+static void park_with_fault(const char *what) {
+  ESP_LOGE(tag, "fatal: %s", what);
+  ui.fault = true;
+  ui.link_ready = false;
+  ui.dirty = true;
+  stackchan_ui_set_status(what);
+  for (;;) {
+    (void)esp_task_wdt_reset();
+    stackchan_ui_tick();
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
 }
 
 /* --- speaker path (voicelab callbacks run on the app task) ---------------- */
@@ -1106,13 +1148,27 @@ static enum iterate_kit_status handle_device_event(
 /* Defined beside health_json, which it adapts; declared here for the mount. */
 static size_t render_health(void *context, char *out, size_t capacity);
 
+
+/* The one board-specific fact the portable speaker capability needs. */
+static enum iterate_kit_status speaker_set_volume(
+    void *context, uint8_t percent, uint8_t *applied) {
+  (void)context;
+  return stackchan_audio_set_volume(percent, applied);
+}
+
+static uint8_t speaker_volume(void *context) {
+  (void)context;
+  return stackchan_audio_volume();
+}
+
 static bool initialise_connection(void) {
   static const char *const mount_path[] = {"kit", "stackchan"};
   static struct iterate_kit_servos servos;
   static struct iterate_kit_health health;
   static struct iterate_kit_camera camera;
   /* servos, conversation, health, camera — the camera only if it comes up. */
-  static struct iterate_kit_module modules[4];
+  static struct iterate_kit_module modules[5];
+  static struct iterate_kit_speaker speaker;
   size_t module_count = 0U;
   struct iterate_kit_itx_connection_options options;
   struct iterate_kit_esp_idf_itx_transport_options transport_options;
@@ -1157,6 +1213,22 @@ static bool initialise_connection(void) {
         iterate_kit_conversation_control_module(&runtime.conversation_control);
   }
   /*
+   * TURN IT UP. Every board here shipped at a volume somebody measured once
+   * and nobody could change without a reflash, and all four were reported as
+   * too quiet. The driver keeps its ceiling; the knob is now a call away.
+   */
+  {
+    const struct iterate_kit_speaker_driver driver = {
+      .context = NULL,
+      .set_volume = speaker_set_volume,
+      .volume = speaker_volume,
+      .ceiling = STACKCHAN_AUDIO_VOLUME_CEILING,
+    };
+    if (iterate_kit_speaker_init(&speaker, &driver) == ITERATE_KIT_OK) {
+      modules[module_count++] = iterate_kit_speaker_module(&speaker);
+    }
+  }
+  /*
    * ASKABLE. The same document the device pushes as dev-stats, on demand —
    * which matters because the pushed copy only reaches whoever was already
    * listening, and the alternative way to interrogate a quiet board is its
@@ -1176,11 +1248,12 @@ static bool initialise_connection(void) {
     }
   }
   /*
-   * The camera is mounted only if the sensor actually came up. A method that
-   * exists and always fails is worse than one that is absent: the caller
-   * cannot tell "this device has no camera" from "this camera is broken".
+   * The camera is mounted here but its SENSOR is not started here — see
+   * stackchan_camera.h. Starting it before the radio took the internal DMA
+   * memory Wi-Fi needs and left this board reboot-looping, so the first
+   * take() brings it up and a board that cannot manage that says so.
    */
-  if (iterate_kit_stackchan_camera_init()) {
+  {
     const struct iterate_kit_camera_driver driver =
         iterate_kit_stackchan_camera_driver();
     if (iterate_kit_camera_init(&camera, &driver) == ITERATE_KIT_OK) {
@@ -1327,6 +1400,15 @@ static size_t health_json(char *out, size_t capacity) {
      * stops working, or a JPEG ceiling that is too tight, must be answerable
      * from off the device.
      */
+    /*
+     * The sensor is up only DURING a photograph, so what matters is how many
+     * were taken, whether any refused to shut down again, and what the
+     * internal heap looked like while one was open.
+     */
+    {"camPhotographs", iterate_kit_stackchan_camera_photographs()},
+    {"camShutdownFailures", iterate_kit_stackchan_camera_shutdown_failures()},
+    {"camInternalFreeWhileUp",
+     iterate_kit_stackchan_camera_internal_free_with_sensor_up()},
     {"camSensorFailures", iterate_kit_stackchan_camera_sensor_failures()},
     {"camEncodeFailures", iterate_kit_stackchan_camera_encode_failures()},
     {"camLargestJpegBytes", iterate_kit_stackchan_camera_largest_jpeg_bytes()},
@@ -1394,6 +1476,20 @@ static size_t health_json(char *out, size_t capacity) {
                now, runtime.voicelab.last_batch_ms)},
     {"resetReason", (uint32_t)esp_reset_reason()},
     {"heapFree", (uint32_t)esp_get_free_heap_size()},
+    /*
+     * INTERNAL, NOT TOTAL. `heapFree` counts PSRAM, and on a board with eight
+     * megabytes of it a number near six million looks like abundance while the
+     * internal heap — the only kind TLS, Wi-Fi and DMA can use — is down to
+     * scraps. That is not a hypothetical: a StackChan reading heapFree
+     * 5,800,196 dropped its socket mid-sentence with "esp-aes: Failed to
+     * allocate memory", and nothing in this document could say why.
+     */
+    {"internalFree",
+     (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL)},
+    {"internalMin",
+     (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)},
+    {"internalLargest",
+     (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)},
     {"heapMin", (uint32_t)esp_get_minimum_free_heap_size()},
     {"psramFree", (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM)},
     {"dmaLargest",
@@ -1421,12 +1517,19 @@ static size_t health_json(char *out, size_t capacity) {
       out,
       capacity,
       "{\"transport\":\"%s\",\"voicelab\":\"%s\",\"voicelabFailure\":\"%s\","
+      /*
+       * WHICH CONVERSATION. Every call gets its own stream and the path is
+       * chosen ON THE DEVICE, so without this the only way to find the
+       * transcript of the call you are looking at is to guess a UTC second.
+       */
+      "\"conversation\":\"%s\","
       "\"clock\":\"%s\","
       "\"callActive\":%s,\"callPending\":%s,\"wantsCall\":%s,\"talking\":%s,"
       "\"gateOpen\":%s,\"t\":%" PRIu64 ",\"uptimeMs\":%" PRIu64,
       iterate_kit_esp_idf_itx_transport_state_name(transport.state),
       iterate_kit_voicelab_state_name(runtime.voicelab.state),
       iterate_kit_voicelab_failure_name(runtime.voicelab.failure),
+      stream_path,
       clock,
       runtime.voicelab.call_active ? "true" : "false",
       runtime.voicelab.call_pending ? "true" : "false",
@@ -1588,7 +1691,7 @@ void iterate_kit_stackchan_run(void) {
   (void)esp_task_wdt_add(NULL);
   if (iterate_kit_stackchan_avatar_start() != ESP_OK) {
     ESP_LOGE(tag, "avatar/display bring-up failed");
-    return;
+    return; /* No screen to say it on, and nothing left to say it about. */
   }
   /*
    * The body MCU is optional at boot: a head without its body still holds a
@@ -1602,16 +1705,14 @@ void iterate_kit_stackchan_run(void) {
     ESP_LOGW(tag, "body MCU absent: LEDs and servos disabled");
   }
   if (!stackchan_audio_init()) {
-    ESP_LOGE(tag, "audio bring-up failed");
-    return;
+    park_with_fault("audio bring-up failed");
   }
   /*
    * The tuned VOIP AEC engine (PSRAM state) must exist before the capture
    * bridge accepts a chunk; failing closed here beats an uncancelled mic.
    */
   if (!stackchan_processor_init()) {
-    ESP_LOGE(tag, "AEC bring-up failed — failing closed");
-    return;
+    park_with_fault("AEC bring-up failed — failing closed");
   }
   /* The mouth animates audio the hardware actually played. */
   stackchan_audio_set_playout_observer(
@@ -1635,8 +1736,7 @@ void iterate_kit_stackchan_run(void) {
        !runtime.codec.properties->has_reference_channel) ||
       iterate_kit_audio_processor_reset(&runtime.processor) !=
           ITERATE_KIT_OK) {
-    ESP_LOGE(tag, "incompatible codec and audio processor");
-    return;
+    park_with_fault("incompatible codec and audio processor");
   }
   {
     static int16_t bridge_near[STACKCHAN_PROCESSOR_FRAME_SAMPLES];
@@ -1663,8 +1763,7 @@ void iterate_kit_stackchan_run(void) {
     };
     if (iterate_kit_aec_capture_bridge_init(
             &runtime.capture_bridge, &bridge_options) != ITERATE_KIT_OK) {
-      ESP_LOGE(tag, "capture bridge initialization failed");
-      return;
+      park_with_fault("capture bridge initialization failed");
     }
   }
   stackchan_ui_set_state(STACKCHAN_UI_CONNECTING);
@@ -1679,21 +1778,30 @@ void iterate_kit_stackchan_run(void) {
   runtime.speaker_queue = xQueueCreateWithCaps(
       SPEAKER_QUEUE_DEPTH, sizeof(struct speaker_frame), MALLOC_CAP_SPIRAM);
   if (runtime.mic_queue == NULL || runtime.speaker_queue == NULL) {
-    ESP_LOGE(tag, "audio buffer allocation failed");
-    return;
+    park_with_fault("audio buffer allocation failed");
   }
   if (!initialise_rings() || !initialise_connection()) {
-    ESP_LOGE(tag, "bounded runtime initialization failed");
-    return;
+    park_with_fault("bounded runtime initialization failed");
   }
   iterate_kit_playout_reset(&runtime.playout, 1U);
-  if (iterate_kit_esp_idf_itx_transport_start(&transport) !=
-      ITERATE_KIT_OK) {
+  /*
+   * A RADIO THAT WILL NOT START IS NOT A FATAL FAULT, IT IS AN OFFLINE
+   * DEVICE. This used to return, which — with the watchdog already
+   * subscribed — turned a transient Wi-Fi start failure into a permanent
+   * reboot loop. Keep trying, and keep the screen honest while trying.
+   */
+  while (iterate_kit_esp_idf_itx_transport_start(&transport) !=
+         ITERATE_KIT_OK) {
     ESP_LOGE(
         tag,
-        "transport start failed: platform=%ld",
+        "transport start failed: platform=%ld — retrying",
         (long)transport.last_platform_error);
-    return;
+    stackchan_ui_set_status("network start failed — retrying");
+    for (int wait = 0; wait < 50; ++wait) {
+      (void)esp_task_wdt_reset();
+      stackchan_ui_tick();
+      vTaskDelay(pdMS_TO_TICKS(100));
+    }
   }
   /*
    * The capture task runs the esp-sr AEC inline (bridge_process ->
@@ -1715,8 +1823,7 @@ void iterate_kit_stackchan_run(void) {
     if (capture_task_handle != NULL) {
       vTaskDelete(capture_task_handle);
     }
-    ESP_LOGE(tag, "portable audio task creation failed");
-    return;
+    park_with_fault("portable audio task creation failed");
   }
   ESP_LOGI(
       tag,
@@ -1892,12 +1999,21 @@ void iterate_kit_stackchan_run(void) {
         awaiting_fresh_stream = false;
         /* Remount: the mount is bound to the path it was made with. */
         runtime.voicelab_generation = 0U;
-        stackchan_ui_request_call(true);
+        /*
+         * A conversation prepared AHEAD of a tap must not place its
+         * own call — it exists so that the tap, when it comes, is
+         * cheap. Only a preparation somebody asked for starts one.
+         */
+        if (!preparing_ahead) {
+          stackchan_ui_request_call(true);
+        }
+        preparing_ahead = false;
       }
       if (runtime.voicelab.setup_failed) {
         runtime.voicelab.setup_failed = false;
         ESP_LOGE(tag, "could not prepare %s", pending_stream_path);
         awaiting_fresh_stream = false;
+        preparing_ahead = false;
         stackchan_ui_request_call(false);
         stackchan_ui_set_state(STACKCHAN_UI_IDLE);
         stackchan_ui_set_status("could not start a new conversation");
@@ -2014,10 +2130,24 @@ void iterate_kit_stackchan_run(void) {
       static struct mic_frame frame_storage[MIC_FRAMES_PER_APPEND];
       static uint64_t drain_window_at;
       static uint64_t next_call_attempt_at;
+      static uint64_t next_prepare_attempt_at;
       static uint64_t call_pending_since;
       static bool call_active_shown;
 
       const bool wants_call = stackchan_ui_call_requested();
+      /*
+       * SILENCE ONLY COUNTS ONCE SOMETHING IS EXPECTED. The downlink watchdog
+       * below measures time since the last delivered batch, and nothing is
+       * delivered before a call exists — so a device that had been idle for
+       * more than ten seconds recycled its connection the instant somebody
+       * asked for a call, adding a whole reconnection to the wait. Restart
+       * the clock at the moment the expectation starts.
+       */
+      {
+        static bool wanted_previously;
+        if (wants_call && !wanted_previously) runtime.voicelab.last_batch_ms = now;
+        wanted_previously = wants_call;
+      }
 
       /*
        * The bridge holds the call in a Durable Object this device cannot
@@ -2096,20 +2226,50 @@ void iterate_kit_stackchan_run(void) {
       }
       if (!runtime.voicelab.call_pending) call_pending_since = 0U;
 
+      /*
+       * PREPARE THE NEXT CONVERSATION BEFORE ANYBODY ASKS FOR IT.
+       *
+       * Every call gets its own stream, and creating one costs about seven
+       * seconds on the server. Paying that AFTER the tap is most of the wait
+       * between touching this device and being able to speak to it — so it is
+       * paid while the device is sitting there doing nothing instead. By the
+       * time a person taps, `stream_used` is already false and the only thing
+       * left to do is place the call.
+       */
+      if (!wants_call && stream_used && !awaiting_fresh_stream &&
+          !runtime.voicelab.call_active && !runtime.voicelab.call_pending &&
+          outbox_free >= 3U && now >= next_prepare_attempt_at) {
+        awaiting_fresh_stream = true;
+        preparing_ahead = true;
+        /* Slow retry: nobody is waiting on this one. */
+        next_prepare_attempt_at = now + 30000U;
+        ESP_LOGI(tag, "idle: preparing the next conversation in advance");
+        begin_new_conversation();
+      }
       if (wants_call && !runtime.voicelab.call_active &&
-          !runtime.voicelab.call_pending && outbox_free >= 3U &&
-          now >= next_call_attempt_at) {
+          !runtime.voicelab.call_pending && outbox_free >= 3U) {
+        /*
+         * TWO STEPS, TWO SEPARATE BACKOFFS. Starting a call from a tap means
+         * preparing a fresh stream and then placing the call on it, and a
+         * single shared timer made the second step serve the first one's
+         * eight-second retry deadline: the stream was ready in about a
+         * second and the call still sat waiting for a countdown that existed
+         * only in case the PREPARE went unanswered. That is most of what
+         * "tapping the screen and getting to mic takes ages" was.
+         */
         if (stream_used && !awaiting_fresh_stream) {
           /*
            * This stream has a past, so the call does not happen here:
            * carrying the last conversation into this one costs the person
            * an answer that makes no sense.
            */
-          awaiting_fresh_stream = true;
-          next_call_attempt_at = now + 8000U;
-          ESP_LOGI(tag, "call asked for: preparing a fresh conversation");
-          begin_new_conversation();
-        } else if (!awaiting_fresh_stream) {
+          if (now >= next_prepare_attempt_at) {
+            awaiting_fresh_stream = true;
+            next_prepare_attempt_at = now + 8000U;
+            ESP_LOGI(tag, "call asked for: preparing a fresh conversation");
+            begin_new_conversation();
+          }
+        } else if (!awaiting_fresh_stream && now >= next_call_attempt_at) {
           call_pending_since = now;
           next_call_attempt_at = now + 8000U; /* a start takes ~1-3s */
           if (iterate_kit_voicelab_start_call(&runtime.voicelab, GREETING) ==

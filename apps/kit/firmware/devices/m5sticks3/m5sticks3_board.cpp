@@ -2,8 +2,9 @@
  * M5Unified board bring-up, buttons, and the little status screen.
  *
  * The screen shows the shared avatar — the same 160x120 source frame and the
- * same compiled atlas the CoreS3 renders, scaled to this smaller panel — with
- * the four-line text status kept as the fallback when a face cannot be had.
+ * same compiled atlas the CoreS3 renders, carrying the same status rail and
+ * the same not-connected banner — with the four-line text status kept as the
+ * fallback when a face cannot be had.
  *
  * The earlier port deliberately showed only text, reasoning that 38.4 KiB
  * frames over this panel's SPI bus could crowd a HALF-DUPLEX audio path where
@@ -12,13 +13,23 @@
  * but "no face at all" was the wrong answer to it: this is the product's face,
  * and the audio counters (spkStarvedMs, micDropped) are the instrument that
  * says whether drawing it costs anything. They read zero with it on.
+ *
+ * THE FACE AND THE TEXT SCREEN ARE ALTERNATIVES, NEVER LAYERS. The first
+ * version of this drew the text screen at boot and then pushed a 160x120 face
+ * into the middle of the panel, which left the old headline and key hints
+ * framing the avatar forever — one surface superimposed on another, and it
+ * looked exactly as accidental as it was. Whichever surface owns the screen
+ * now owns all of it.
  */
 #include "m5sticks3_board.h"
 
 #include "esp_heap_caps.h"
 #include "iterate/kit/avatar/face_avatar_registry.h"
+#include "iterate/kit/avatar/face_doze.h"
 #include "iterate/kit/avatar/face_keyframe.h"
 #include "iterate/kit/avatar/face_render.h"
+#include "iterate/kit/conversation_overlay.h"
+#include "iterate/kit/face_wake.h"
 
 #include <cstdio>
 #include <cstring>
@@ -38,6 +49,8 @@ struct ui_model {
   bool call_active;
   bool link_ready;
   bool call_requested;
+  /* Unrecoverable start-up fault; see m5sticks3_ui_set_fault. */
+  bool fault;
   bool dirty;
   int64_t last_paint_us;
 };
@@ -79,6 +92,7 @@ struct FaceState {
   uint32_t rendered;    /* frames actually pushed; the liveness instrument */
   uint32_t render_failures;
   int64_t last_frame_us;
+  iterate_kit_face_wake wake;
 };
 
 FaceState face;
@@ -112,7 +126,26 @@ bool face_init(void) {
   face.x = (panel_w - face.width) / 2;
   face.y = (panel_h - face.height) / 2;
   face.ready = true;
+  /*
+   * The panel is wider than the face card, and those margins are painted
+   * exactly once here. Nothing else may ever draw outside the card: that is
+   * what keeps the two surfaces from layering.
+   */
+  M5.Display.fillScreen(TFT_BLACK);
   return true;
+}
+
+/* The same semantic snapshot every surface in this product renders from. */
+iterate_kit_conversation_visual_state face_status(void) {
+  iterate_kit_conversation_visual_state status = {};
+  status.network = ui.link_ready ? ITERATE_KIT_NETWORK_CONNECTED
+                                 : ITERATE_KIT_NETWORK_CONNECTING;
+  status.conversation_active = ui.call_active;
+  status.media_ready = ui.link_ready;
+  status.media_failed = ui.fault;
+  status.microphone_listening = ui.state == M5STICKS3_UI_LISTENING;
+  status.speaker_peak = ui.state == M5STICKS3_UI_SPEAKING ? 4096U : 0U;
+  return status;
 }
 
 /* Draw one animated frame. Returns false if the face cannot be drawn at all,
@@ -133,11 +166,28 @@ bool face_draw(void) {
   key.schema_version = FACE_RENDER_KEY_SCHEMA_VERSION;
   const uint32_t sample_clock = static_cast<uint32_t>(now_us / 1000);
   const size_t pixels = (size_t)FACE_RENDER_WIDTH * (size_t)FACE_RENDER_HEIGHT;
+  const iterate_kit_conversation_visual_state status = face_status();
+  const bool dozing = !iterate_kit_face_awake(
+      &face.wake, status.conversation_active,
+      static_cast<uint64_t>(now_us / 1000));
+  if (dozing) face_doze_prepare_render_key(&key);
   if (!face_avatar_registry_render(
           &face.registry, &key, sample_clock, face.frame, pixels)) {
     ++face.render_failures;
     return false;
   }
+  if (dozing && !face_doze_apply_overlay(face.frame, pixels, sample_clock)) {
+    /* The sleeping face is a promise about lifecycle; a half-applied one
+     * would say the device is awake. Fail to the text screen instead. */
+    ++face.render_failures;
+    return false;
+  }
+  iterate_kit_conversation_overlay_render(
+      &status,
+      sample_clock,
+      face.frame,
+      static_cast<uint32_t>(int{FACE_RENDER_WIDTH}),
+      static_cast<uint32_t>(int{FACE_RENDER_HEIGHT}));
 
   /* The atlas dimensions are enum constants; widen them once so none of the
    * arithmetic below mixes an enum with a float. */
@@ -238,14 +288,17 @@ bool m5sticks3_board_init(void) {
   ui.dirty = true;
   /*
    * The face is the product's surface, so it is tried first and its absence is
-   * said out loud rather than silently becoming a text screen forever.
+   * said out loud rather than silently becoming a text screen forever. The
+   * text screen is drawn HERE ONLY IF THERE IS NO FACE: painting it first and
+   * letting the avatar land on top is what left the old headline framing the
+   * face on every boot.
    */
   if (!face_init()) {
     ESP_LOGW(
         "m5sticks3-board",
         "no avatar (registry or PSRAM frame unavailable); status text only");
+    paint();
   }
-  paint();
   ui.last_paint_us = esp_timer_get_time();
   ui.dirty = false;
   return true;
@@ -289,6 +342,12 @@ void m5sticks3_ui_set_status(const char *status) {
 void m5sticks3_ui_set_call_active(bool active) {
   if (ui.call_active == active) return;
   ui.call_active = active;
+  ui.dirty = true;
+}
+
+void m5sticks3_ui_set_fault(void) {
+  if (ui.fault) return;
+  ui.fault = true;
   ui.dirty = true;
 }
 

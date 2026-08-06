@@ -11,6 +11,16 @@
 extern "C" {
 #endif
 
+/**
+ * Applies 0-100 of this board's safe range to the AIC3204 DAC.
+ *
+ * 100 is 0 dB, the loudest setting that neither clips a full-scale sample nor
+ * feeds the provider this device's own voice. See the note at the setter.
+ */
+enum iterate_kit_status havpe_audio_set_volume(
+    uint8_t percent, uint8_t *applied);
+uint8_t havpe_audio_volume(void);
+
 enum {
   HAVPE_AUDIO_SAMPLE_RATE_HZ = 16000,
   HAVPE_AUDIO_FRAME_SAMPLES = 320, /* 20 ms mono on the wire */

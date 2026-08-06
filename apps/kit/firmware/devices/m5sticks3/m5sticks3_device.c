@@ -47,6 +47,7 @@
 #include "iterate/kit/capabilities/conversation.h"
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/capabilities/push_to_talk.h"
+#include "iterate/kit/capabilities/speaker.h"
 #include "iterate/kit/device_events.h"
 #include "iterate/kit/audio_playout.h"
 #include "iterate/kit/audio_processor.h"
@@ -147,6 +148,12 @@ static char pending_stream_path[96];
  */
 static bool stream_used = true;
 static bool awaiting_fresh_stream;
+/*
+ * True when the stream being prepared was NOT asked for by a person.
+ * See the eager prepare in the app loop: the adoption path must not
+ * turn a speculative preparation into a call nobody wanted.
+ */
+static bool preparing_ahead;
 #define CALL_ID "stickdev"
 #define GREETING "Hi, I am your Iterate device. What can I do for you?"
 
@@ -314,6 +321,9 @@ static const char peer_description[] =
     "conversation.start() / conversation.end() begin and end a call. "
     "pushToTalk.start() / pushToTalk.stop() hold the microphone open, "
     "joining the physical button as a wired-OR. "
+    "speaker.setVolume({percent}) sets how loud it plays, 0-100; it clamps "
+    "to a ceiling this board has a measured reason for and answers with "
+    "{percent,ceiling}, which speaker.volume() also returns. "
     "health() returns the same diagnostics document the device pushes "
     "as dev-stats.\",\"children\":{}}";
 
@@ -901,9 +911,23 @@ static enum iterate_kit_status handle_device_event(
 /* Defined beside health_json, which it adapts; declared here for the mount. */
 static size_t render_health(void *context, char *out, size_t capacity);
 
+
+/* The one board-specific fact the portable speaker capability needs. */
+static enum iterate_kit_status speaker_set_volume(
+    void *context, uint8_t percent, uint8_t *applied) {
+  (void)context;
+  return m5sticks3_audio_set_volume(percent, applied);
+}
+
+static uint8_t speaker_volume(void *context) {
+  (void)context;
+  return m5sticks3_audio_volume();
+}
+
 static bool initialise_connection(void) {
   static const char *const mount_path[] = {"kit", "m5sticks3"};
-  static struct iterate_kit_module modules[3];
+  static struct iterate_kit_module modules[4];
+  static struct iterate_kit_speaker speaker;
   static struct iterate_kit_health health;
   size_t module_count = 0U;
   struct iterate_kit_itx_connection_options options;
@@ -931,6 +955,22 @@ static bool initialise_connection(void) {
         iterate_kit_push_to_talk_module(&runtime.push_to_talk);
     modules[module_count++] =
         iterate_kit_conversation_control_module(&runtime.conversation_control);
+  }
+  /*
+   * TURN IT UP. Every board here shipped at a volume somebody measured once
+   * and nobody could change without a reflash, and all four were reported as
+   * too quiet. The driver keeps its ceiling; the knob is now a call away.
+   */
+  {
+    const struct iterate_kit_speaker_driver driver = {
+      .context = NULL,
+      .set_volume = speaker_set_volume,
+      .volume = speaker_volume,
+      .ceiling = 100,
+    };
+    if (iterate_kit_speaker_init(&speaker, &driver) == ITERATE_KIT_OK) {
+      modules[module_count++] = iterate_kit_speaker_module(&speaker);
+    }
   }
   /*
    * ASKABLE. The same document this device pushes as dev-stats, on demand,
@@ -1111,6 +1151,20 @@ static size_t health_json(char *out, size_t capacity) {
                now, runtime.voicelab.last_batch_ms)},
     {"resetReason", (uint32_t)esp_reset_reason()},
     {"heapFree", (uint32_t)esp_get_free_heap_size()},
+    /*
+     * INTERNAL, NOT TOTAL. `heapFree` counts PSRAM, and on a board with eight
+     * megabytes of it a number near six million looks like abundance while the
+     * internal heap — the only kind TLS, Wi-Fi and DMA can use — is down to
+     * scraps. That is not a hypothetical: a StackChan reading heapFree
+     * 5,800,196 dropped its socket mid-sentence with "esp-aes: Failed to
+     * allocate memory", and nothing in this document could say why.
+     */
+    {"internalFree",
+     (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL)},
+    {"internalMin",
+     (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)},
+    {"internalLargest",
+     (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)},
     {"heapMin", (uint32_t)esp_get_minimum_free_heap_size()},
     {"psramFree", (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM)},
     {"dmaLargest",
@@ -1138,12 +1192,19 @@ static size_t health_json(char *out, size_t capacity) {
       out,
       capacity,
       "{\"transport\":\"%s\",\"voicelab\":\"%s\",\"voicelabFailure\":\"%s\","
+      /*
+       * WHICH CONVERSATION. Every call gets its own stream and the path is
+       * chosen ON THE DEVICE, so without this the only way to find the
+       * transcript of the call you are looking at is to guess a UTC second.
+       */
+      "\"conversation\":\"%s\","
       "\"clock\":\"%s\","
       "\"callActive\":%s,\"callPending\":%s,\"wantsCall\":%s,\"talking\":%s,"
       "\"gateOpen\":%s,\"t\":%" PRIu64 ",\"uptimeMs\":%" PRIu64,
       iterate_kit_esp_idf_itx_transport_state_name(runtime.transport.state),
       iterate_kit_voicelab_state_name(runtime.voicelab.state),
       iterate_kit_voicelab_failure_name(runtime.voicelab.failure),
+      stream_path,
       clock,
       runtime.voicelab.call_active ? "true" : "false",
       runtime.voicelab.call_pending ? "true" : "false",
@@ -1275,6 +1336,30 @@ static void begin_new_conversation(void) {
   m5sticks3_ui_set_status("preparing a new conversation...");
 }
 
+
+/*
+ * A START-UP FAULT MUST BE VISIBLE, NOT A REBOOT LOOP.
+ *
+ * Every failure path below this point used to `return`, and the task watchdog
+ * had already been subscribed by then — so the main task simply stopped
+ * feeding it and the board panicked twenty seconds later, over and over.
+ * From across a room that is indistinguishable from a dead device.
+ *
+ * So park instead: keep the watchdog fed, keep the screen alive,
+ * and let the fault sit where somebody can read it.
+ */
+static void park_with_fault(const char *what) {
+  ESP_LOGE(tag, "fatal: %s", what);
+  m5sticks3_ui_set_fault();
+  m5sticks3_ui_set_link_ready(false);
+  m5sticks3_ui_set_status(what);
+  for (;;) {
+    (void)esp_task_wdt_reset();
+    m5sticks3_ui_tick();
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+}
+
 void iterate_kit_m5sticks3_run(void) {
   TaskHandle_t capture_task_handle = NULL;
   /*
@@ -1321,8 +1406,7 @@ void iterate_kit_m5sticks3_run(void) {
        !runtime.codec.properties->has_reference_channel) ||
       iterate_kit_audio_processor_reset(&runtime.processor) !=
           ITERATE_KIT_OK) {
-    ESP_LOGE(tag, "incompatible codec and audio processor");
-    return;
+    park_with_fault("incompatible codec and audio processor");
   }
   m5sticks3_ui_set_state(M5STICKS3_UI_CONNECTING);
   m5sticks3_ui_set_status("connecting to iterate");
@@ -1335,21 +1419,30 @@ void iterate_kit_m5sticks3_run(void) {
   runtime.speaker_queue = xQueueCreateWithCaps(
       SPEAKER_QUEUE_DEPTH, sizeof(struct speaker_frame), MALLOC_CAP_SPIRAM);
   if (runtime.mic_queue == NULL || runtime.speaker_queue == NULL) {
-    ESP_LOGE(tag, "audio buffer allocation failed");
-    return;
+    park_with_fault("audio buffer allocation failed");
   }
   if (!initialise_rings() || !initialise_connection()) {
-    ESP_LOGE(tag, "bounded runtime initialization failed");
-    return;
+    park_with_fault("bounded runtime initialization failed");
   }
   iterate_kit_playout_reset(&runtime.playout, 1U);
-  if (iterate_kit_esp_idf_itx_transport_start(&runtime.transport) !=
-      ITERATE_KIT_OK) {
+  /*
+   * A RADIO THAT WILL NOT START IS NOT A FATAL FAULT, IT IS AN OFFLINE
+   * DEVICE. This used to return, which — with the watchdog already
+   * subscribed — turned a transient Wi-Fi start failure into a permanent
+   * reboot loop. Keep trying, and keep the surface honest while trying.
+   */
+  while (iterate_kit_esp_idf_itx_transport_start(&runtime.transport) !=
+         ITERATE_KIT_OK) {
     ESP_LOGE(
         tag,
-        "transport start failed: platform=%ld",
+        "transport start failed: platform=%ld — retrying",
         (long)runtime.transport.last_platform_error);
-    return;
+    m5sticks3_ui_set_status("network start failed — retrying");
+    for (int wait = 0; wait < 50; ++wait) {
+      (void)esp_task_wdt_reset();
+    m5sticks3_ui_tick();
+      vTaskDelay(pdMS_TO_TICKS(100));
+    }
   }
   if (xTaskCreatePinnedToCore(
           capture_task,
@@ -1364,8 +1457,7 @@ void iterate_kit_m5sticks3_run(void) {
     if (capture_task_handle != NULL) {
       vTaskDelete(capture_task_handle);
     }
-    ESP_LOGE(tag, "portable audio task creation failed");
-    return;
+    park_with_fault("portable audio task creation failed");
   }
   ESP_LOGI(
       tag,
@@ -1554,12 +1646,21 @@ void iterate_kit_m5sticks3_run(void) {
         awaiting_fresh_stream = false;
         /* Remount: the mount is bound to the path it was made with. */
         runtime.voicelab_generation = 0U;
-        m5sticks3_ui_request_call(true);
+        /*
+         * A conversation prepared AHEAD of a tap must not place its
+         * own call — it exists so that the tap, when it comes, is
+         * cheap. Only a preparation somebody asked for starts one.
+         */
+        if (!preparing_ahead) {
+          m5sticks3_ui_request_call(true);
+        }
+        preparing_ahead = false;
       }
       if (runtime.voicelab.setup_failed) {
         runtime.voicelab.setup_failed = false;
         ESP_LOGE(tag, "could not prepare %s", pending_stream_path);
         awaiting_fresh_stream = false;
+        preparing_ahead = false;
         m5sticks3_ui_request_call(false);
         m5sticks3_ui_set_state(M5STICKS3_UI_IDLE);
         m5sticks3_ui_set_status("could not start a new conversation");
@@ -1673,10 +1774,24 @@ void iterate_kit_m5sticks3_run(void) {
       static struct mic_frame frame_storage[MIC_FRAMES_PER_APPEND];
       static uint64_t drain_window_at;
       static uint64_t next_call_attempt_at;
+      static uint64_t next_prepare_attempt_at;
       static uint64_t call_pending_since;
       static bool call_active_shown;
 
       const bool wants_call = m5sticks3_ui_call_requested();
+      /*
+       * SILENCE ONLY COUNTS ONCE SOMETHING IS EXPECTED. The downlink watchdog
+       * below measures time since the last delivered batch, and nothing is
+       * delivered before a call exists — so a device that had been idle for
+       * more than ten seconds recycled its connection the instant somebody
+       * asked for a call, adding a whole reconnection to the wait. Restart
+       * the clock at the moment the expectation starts.
+       */
+      {
+        static bool wanted_previously;
+        if (wants_call && !wanted_previously) runtime.voicelab.last_batch_ms = now;
+        wanted_previously = wants_call;
+      }
       const bool wants_talk =
           wants_call && (m5sticks3_board_talk_held() || runtime.remote_talk);
 
@@ -1760,20 +1875,50 @@ void iterate_kit_m5sticks3_run(void) {
       }
       if (!runtime.voicelab.call_pending) call_pending_since = 0U;
 
+      /*
+       * PREPARE THE NEXT CONVERSATION BEFORE ANYBODY ASKS FOR IT.
+       *
+       * Every call gets its own stream, and creating one costs about seven
+       * seconds on the server. Paying that AFTER the tap is most of the wait
+       * between touching this device and being able to speak to it — so it is
+       * paid while the device is sitting there doing nothing instead. By the
+       * time a person taps, `stream_used` is already false and the only thing
+       * left to do is place the call.
+       */
+      if (!wants_call && stream_used && !awaiting_fresh_stream &&
+          !runtime.voicelab.call_active && !runtime.voicelab.call_pending &&
+          outbox_free >= 3U && now >= next_prepare_attempt_at) {
+        awaiting_fresh_stream = true;
+        preparing_ahead = true;
+        /* Slow retry: nobody is waiting on this one. */
+        next_prepare_attempt_at = now + 30000U;
+        ESP_LOGI(tag, "idle: preparing the next conversation in advance");
+        begin_new_conversation();
+      }
       if (wants_call && !runtime.voicelab.call_active &&
-          !runtime.voicelab.call_pending && outbox_free >= 3U &&
-          now >= next_call_attempt_at) {
+          !runtime.voicelab.call_pending && outbox_free >= 3U) {
+        /*
+         * TWO STEPS, TWO SEPARATE BACKOFFS. Starting a call from a tap means
+         * preparing a fresh stream and then placing the call on it, and a
+         * single shared timer made the second step serve the first one's
+         * eight-second retry deadline: the stream was ready in about a
+         * second and the call still sat waiting for a countdown that existed
+         * only in case the PREPARE went unanswered. That is most of what
+         * "tapping the screen and getting to mic takes ages" was.
+         */
         if (stream_used && !awaiting_fresh_stream) {
           /*
            * This stream has a past, so the call does not happen here:
            * carrying the last conversation into this one costs the person
            * an answer that makes no sense.
            */
-          awaiting_fresh_stream = true;
-          next_call_attempt_at = now + 8000U;
-          ESP_LOGI(tag, "call asked for: preparing a fresh conversation");
-          begin_new_conversation();
-        } else if (!awaiting_fresh_stream) {
+          if (now >= next_prepare_attempt_at) {
+            awaiting_fresh_stream = true;
+            next_prepare_attempt_at = now + 8000U;
+            ESP_LOGI(tag, "call asked for: preparing a fresh conversation");
+            begin_new_conversation();
+          }
+        } else if (!awaiting_fresh_stream && now >= next_call_attempt_at) {
           call_pending_since = now;
           next_call_attempt_at = now + 8000U; /* a start takes ~1-3s */
           if (iterate_kit_voicelab_start_call(&runtime.voicelab, GREETING) ==

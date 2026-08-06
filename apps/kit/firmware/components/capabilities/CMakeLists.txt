@@ -3,6 +3,7 @@ set(ITERATE_KIT_CAPABILITIES_SOURCES
   src/conversation.c
   src/servos.c
   src/health.c
+  src/speaker.c
   src/camera.c
   src/rpc_internal.c)
 

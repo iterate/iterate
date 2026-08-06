@@ -155,7 +155,16 @@ uint32_t waveshare_audio_dma_underrun_gap_us(void);
 /** Send index of the most recent counted underrun. Diagnostic. */
 uint32_t waveshare_audio_dma_underrun_last_send(void);
 
-void waveshare_audio_set_volume(int percent);
+/** Ceiling and shipped level; see the note at the setter for the measurement. */
+enum {
+  WAVESHARE_AUDIO_VOLUME_CEILING = 92,
+  WAVESHARE_AUDIO_VOLUME_DEFAULT = 92,
+};
+
+/** Applies 0-100 to the codec, clamped to the ceiling, reporting what it took. */
+enum iterate_kit_status waveshare_audio_set_volume(
+    uint8_t percent, uint8_t *applied);
+uint8_t waveshare_audio_volume(void);
 
 /** Microphone PGA in dB; the driver quantises to 6 dB steps. */
 void waveshare_audio_set_mic_gain(float db);

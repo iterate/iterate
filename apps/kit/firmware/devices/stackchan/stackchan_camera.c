@@ -47,6 +47,8 @@ enum {
 
 static struct {
   bool ready;
+  /* Latched so a board without a working sensor is asked exactly once. */
+  bool start_failed;
   uint8_t *jpeg;
   size_t jpeg_length;
   /* True while the portable capability holds `jpeg`; one frame at a time. */
@@ -55,6 +57,15 @@ static struct {
   uint32_t sensor_failures;
   uint32_t encode_failures;
   uint32_t largest_jpeg_bytes;
+  /* Completed photographs, and sensors that would not shut down again. */
+  uint32_t photographs;
+  uint32_t shutdown_failures;
+  /*
+   * What the internal heap looked like WHILE the sensor was up. The number
+   * that mattered all along and that nothing could see: 6,719 bytes, against
+   * 41,163 with the sensor down.
+   */
+  uint32_t internal_free_with_sensor_up;
 } camera;
 
 /*
@@ -95,12 +106,14 @@ static void release_photo(void *context) {
   camera.frame_out = false;
 }
 
+static bool start_sensor(void);
+static void stop_sensor(void);
+
 static enum iterate_kit_status capture(
     void *context, struct iterate_kit_photo *photo) {
   camera_fb_t *frame;
   bool encoded;
   (void)context;
-  if (!camera.ready) return ITERATE_KIT_UNAVAILABLE;
   if (camera.frame_out) {
     /*
      * One JPEG buffer, so one outstanding photograph. Backpressure rather
@@ -109,19 +122,22 @@ static enum iterate_kit_status capture(
      */
     return ITERATE_KIT_BACKPRESSURE;
   }
+  if (!start_sensor()) return ITERATE_KIT_UNAVAILABLE;
 
   frame = esp_camera_fb_get();
   if (frame == NULL) {
     ++camera.sensor_failures;
+    stop_sensor();
     return ITERATE_KIT_IO_ERROR;
   }
   encoded = frame2jpg_cb(frame, (uint8_t)JPEG_QUALITY, append_jpeg, NULL);
   /*
-   * RETURN THE SENSOR'S FRAME IMMEDIATELY. It is one of only two, and holding
-   * it across the whole read-out would stall the camera for as long as the
-   * caller took to fetch its chunks. The JPEG is ours and outlives it.
+   * RETURN THE SENSOR'S FRAME, then the whole driver. Everything below this
+   * line runs on the PSRAM JPEG, so the thirty-four kilobytes of internal DMA
+   * memory the driver holds go back to the radio before this call returns.
    */
   esp_camera_fb_return(frame);
+  stop_sensor();
 
   if (!encoded || camera.overflowed || camera.jpeg_length == 0U) {
     ++camera.encode_failures;
@@ -142,8 +158,32 @@ static enum iterate_kit_status capture(
   return ITERATE_KIT_OK;
 }
 
-bool iterate_kit_stackchan_camera_init(void) {
+/*
+ * THE SENSOR IS BORROWED FOR THE LENGTH OF ONE PHOTOGRAPH, AND THEN GIVEN
+ * BACK. This is the whole memory policy of this file, and it was learned
+ * twice at the cost of the board's network.
+ *
+ * MEASURED: with the sensor down this board has 41,163 bytes of internal heap.
+ * `esp_camera_init` takes about thirty-four kilobytes of it for the driver's
+ * DMA line buffers and leaves 6,719 — at which point mbedtls cannot allocate
+ * an AES context for the next TLS write ("esp-aes: Failed to allocate
+ * memory"), the socket dies, and the device spends its life reconnecting.
+ * Starting the sensor at BOOT was worse still: Wi-Fi then could not allocate
+ * its own packet buffers at all, and the start-up path returned with the task
+ * watchdog subscribed, which is a silent twenty-second reboot loop that looks
+ * from the outside exactly like a black screen.
+ *
+ * Making it lazy only moved that failure from boot to the first photograph.
+ * The fix is that the camera does not get to KEEP anything: it is initialised,
+ * read, encoded, and deinitialised inside one call, at a measured cost of
+ * about half a second per photograph. The encoded JPEG lives in PSRAM and
+ * outlives the sensor, so the chunk reads that follow need no hardware at all.
+ *
+ * A diagnostic photograph is never worth a device that cannot hold a call.
+ */
+static bool start_sensor(void) {
   if (camera.ready) return true;
+  if (camera.start_failed) return false;
 
   /*
    * ORDERING, NOT CONFIGURATION: this must run after the display is up, and
@@ -162,6 +202,7 @@ bool iterate_kit_stackchan_camera_init(void) {
   camera.jpeg = heap_caps_malloc((size_t)JPEG_CAPACITY, MALLOC_CAP_SPIRAM);
   if (camera.jpeg == NULL) {
     ESP_LOGW(tag, "no PSRAM for a JPEG buffer; no camera capability");
+    camera.start_failed = true;
     return false;
   }
 
@@ -180,19 +221,60 @@ bool iterate_kit_stackchan_camera_init(void) {
           esp_err_to_name(status));
       heap_caps_free(camera.jpeg);
       camera.jpeg = NULL;
+      camera.start_failed = true;
       return false;
     }
   }
 
   camera.ready = true;
+  camera.internal_free_with_sensor_up =
+      (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
   ESP_LOGI(
       tag,
-      "camera ready: GC0308 %dx%d rgb565 -> jpeg q%d, %u KiB PSRAM ceiling",
+      "camera up: GC0308 %dx%d rgb565 -> jpeg q%d, %u KiB PSRAM ceiling, "
+      "%u bytes internal heap left while it is",
       CAMERA_WIDTH,
       CAMERA_HEIGHT,
       JPEG_QUALITY,
-      (unsigned int)(JPEG_CAPACITY / 1024));
+      (unsigned int)(JPEG_CAPACITY / 1024),
+      (unsigned int)camera.internal_free_with_sensor_up);
   return true;
+}
+
+/*
+ * Give the driver's internal DMA memory back. The PSRAM JPEG deliberately
+ * survives: the chunk reads that follow a take() must not need the hardware.
+ */
+static void stop_sensor(void) {
+  if (!camera.ready) return;
+  const esp_err_t status = esp_camera_deinit();
+  if (status != ESP_OK) {
+    /*
+     * A sensor that will not shut down is holding the memory the radio needs,
+     * and pretending otherwise would make the next TLS write fail somewhere
+     * with no camera in the backtrace. Say it here instead.
+     */
+    ++camera.shutdown_failures;
+    ESP_LOGE(
+        tag,
+        "esp_camera_deinit failed (%s): internal memory stays borrowed",
+        esp_err_to_name(status));
+    return;
+  }
+  camera.ready = false;
+  ++camera.photographs;
+}
+
+uint32_t iterate_kit_stackchan_camera_photographs(void) {
+  return camera.photographs;
+}
+
+uint32_t iterate_kit_stackchan_camera_shutdown_failures(void) {
+  return camera.shutdown_failures;
+}
+
+uint32_t iterate_kit_stackchan_camera_internal_free_with_sensor_up(void) {
+  return camera.internal_free_with_sensor_up;
 }
 
 struct iterate_kit_camera_driver iterate_kit_stackchan_camera_driver(void) {

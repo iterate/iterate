@@ -11,6 +11,17 @@
 extern "C" {
 #endif
 
+/**
+ * Applies 0-100 of this board's SAFE range to the ES8311 DAC.
+ *
+ * 100 is -18 dB, not 0 dB: the ceiling is a brownout limit, not a taste, and
+ * this scale is stretched to fit inside it so the knob has usable travel. See
+ * the note at the setter for the tone that tripped the detector.
+ */
+enum iterate_kit_status m5sticks3_audio_set_volume(
+    uint8_t percent, uint8_t *applied);
+uint8_t m5sticks3_audio_volume(void);
+
 enum {
   M5STICKS3_AUDIO_SAMPLE_RATE_HZ = 16000,
   M5STICKS3_AUDIO_FRAME_SAMPLES = 320, /* 20 ms mono */

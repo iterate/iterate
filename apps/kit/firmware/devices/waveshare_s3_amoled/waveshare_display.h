@@ -28,6 +28,14 @@ bool waveshare_display_init(void);
 void waveshare_display_set_state(enum waveshare_ui_state state);
 void waveshare_display_set_status(const char *text);
 void waveshare_display_set_link_ready(bool ready);
+/**
+ * Latches an unrecoverable start-up fault onto this device's status surface.
+ *
+ * Distinct from "not connected": a device that is still trying looks like one
+ * that is trying, and a device that will never work must not. Nothing clears
+ * this — the only exit is a reboot, which is the truth.
+ */
+void waveshare_display_set_fault(void);
 void waveshare_display_set_call_active(bool active);
 
 /** Local call and push-to-talk intent shared with the application task. */

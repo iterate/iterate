@@ -19,6 +19,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "iterate/kit/conversation_overlay.h"
+#include "iterate/kit/face_wake.h"
 #include "lvgl.h"
 #include "waveshare_avatar.h"
 
@@ -32,7 +34,6 @@ enum {
   FACE_HEIGHT = FACE_RENDER_HEIGHT * FACE_SCALE,
   STATUS_CAPACITY = 64,
   REFRESH_PERIOD_MS = 100,
-  FACE_DOZE_DELAY_MS = 3U * 60U * 1000U,
 };
 
 _Static_assert(FACE_WIDTH <= DISPLAY_WIDTH, "face must fit panel width");
@@ -46,6 +47,8 @@ static struct {
   bool call_active;
   bool call_requested;
   bool talk_held;
+  /* Unrecoverable start-up fault; see waveshare_display_set_fault. */
+  bool fault;
 } ui;
 
 static lv_obj_t *state_label;
@@ -86,6 +89,15 @@ void waveshare_display_set_status(const char *text) {
 
 static void set_link_ready_locked(void *argument) {
   ui.link_ready = *(const bool *)argument;
+}
+
+static void set_fault_locked(void *argument) {
+  (void)argument;
+  ui.fault = true;
+}
+
+void waveshare_display_set_fault(void) {
+  publish(set_fault_locked, NULL);
 }
 
 void waveshare_display_set_link_ready(bool ready) {
@@ -134,61 +146,66 @@ bool waveshare_display_talk_held(void) {
   return held;
 }
 
-static const char *state_text(
-    enum waveshare_ui_state state,
-    bool link_ready,
-    bool call_active,
-    bool talk_held) {
-  if (!link_ready) return "offline";
-  if (!call_active) {
-    return state == WAVESHARE_UI_CONNECTING ? "connecting" : "ready";
-  }
-  if (talk_held || state == WAVESHARE_UI_LISTENING) return "listening";
-  return state == WAVESHARE_UI_SPEAKING ? "speaking" : "in call";
+/* The shared snapshot: this panel's labels and the twelve-light rail must
+ * agree, and both must agree with the ring on the other board. */
+static struct iterate_kit_conversation_visual_state face_status(void) {
+  struct iterate_kit_conversation_visual_state status = {0};
+  xSemaphoreTake(ui.lock, portMAX_DELAY);
+  status.network = ui.link_ready ? ITERATE_KIT_NETWORK_CONNECTED
+                                 : ITERATE_KIT_NETWORK_CONNECTING;
+  status.media_ready = ui.link_ready;
+  status.media_failed = ui.fault;
+  status.conversation_active = ui.call_active;
+  status.microphone_listening =
+      ui.talk_held || ui.state == WAVESHARE_UI_LISTENING;
+  status.speaker_peak = ui.state == WAVESHARE_UI_SPEAKING ? 4096U : 0U;
+  xSemaphoreGive(ui.lock);
+  return status;
 }
 
 static void refresh_ui(void) {
-  enum waveshare_ui_state state;
   char status[STATUS_CAPACITY];
-  bool link_ready;
-  bool call_active;
-  bool talk_held;
+  const struct iterate_kit_conversation_visual_state visual = face_status();
+  const bool needs_attention =
+      iterate_kit_conversation_needs_attention(&visual);
 
   xSemaphoreTake(ui.lock, portMAX_DELAY);
-  state = ui.state;
   memcpy(status, ui.status, sizeof(status));
-  link_ready = ui.link_ready;
-  call_active = ui.call_active;
-  talk_held = ui.talk_held;
   xSemaphoreGive(ui.lock);
 
-  lv_label_set_text(state_label, state_text(state, link_ready, call_active, talk_held));
+  /*
+   * The headline is the SHARED word, not this panel's own vocabulary. It used
+   * to say "offline" the moment the link dropped, where the ring on the next
+   * device was still amber for "connecting" — the same device state, two
+   * different stories, told to the same person.
+   */
+  lv_label_set_text(
+      state_label, iterate_kit_conversation_status_word(&visual));
   lv_label_set_text(status_label, status);
   lv_obj_set_style_text_color(
       state_label,
-      lv_color_hex(link_ready ? 0x4ade80U : 0xf87171U),
+      lv_color_hex(needs_attention ? 0xf87171U : 0x4ade80U),
       0);
 }
 
-static bool face_awake(bool call_active) {
-  static uint64_t last_call_ms;
-  if (call_active) last_call_ms = now_ms();
-  return call_active || now_ms() - last_call_ms < FACE_DOZE_DELAY_MS;
-}
-
 static void refresh_face(void) {
-  bool call_active;
   int32_t source_y;
+  static struct iterate_kit_face_wake wake;
+  const struct iterate_kit_conversation_visual_state status = face_status();
+  const uint64_t now = now_ms();
 
   if (face_pixels == NULL || face_frame == NULL || face_shown == NULL) return;
-  xSemaphoreTake(ui.lock, portMAX_DELAY);
-  call_active = ui.call_active;
-  xSemaphoreGive(ui.lock);
   if (!waveshare_avatar_render(
           face_frame, (size_t)FACE_RENDER_PIXEL_COUNT,
-          face_awake(call_active))) {
+          iterate_kit_face_awake(&wake, status.conversation_active, now))) {
     return;
   }
+  iterate_kit_conversation_overlay_render(
+      &status,
+      (uint32_t)now,
+      face_frame,
+      (uint32_t)FACE_RENDER_WIDTH,
+      (uint32_t)FACE_RENDER_HEIGHT);
   if (memcmp(face_frame, face_shown, (size_t)FACE_RENDER_FRAME_BYTES) == 0) {
     return;
   }

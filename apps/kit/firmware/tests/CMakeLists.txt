@@ -37,6 +37,8 @@ iterate_kit_add_core_test(iterate-kit-audio-playout-test audio_playout_test.c)
 iterate_kit_add_core_test(iterate-kit-configuration-test configuration_test.c)
 iterate_kit_add_core_test(
   iterate-kit-conversation-lights-test conversation_lights_test.c)
+iterate_kit_add_core_test(
+  iterate-kit-conversation-overlay-test conversation_overlay_test.c)
 iterate_kit_add_core_test(iterate-kit-device-events-test device_events_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-connection-test itx_connection_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-mount-test itx_mount_test.c)

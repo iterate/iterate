@@ -78,6 +78,7 @@ static i2c_master_bus_handle_t i2c_bus;
  * second open() reconfigured the channels the first had set up.
  */
 static esp_codec_dev_handle_t codec_dev;
+static uint8_t speaker_volume_percent = WAVESHARE_AUDIO_VOLUME_DEFAULT;
 /* Retained for the post-open register dump (bring-up diagnostics only). */
 static const audio_codec_ctrl_if_t *registers_ctrl_if;
 
@@ -791,7 +792,8 @@ bool waveshare_audio_init(void) {
      * making the speaker worse rather than louder. 85 keeps the headroom
      * while staying loud; `itx.kit.waveshare.setVolume(n)` tunes it live.
      */
-    (void)esp_codec_dev_set_out_vol(codec_dev, 85);
+    (void)esp_codec_dev_set_out_vol(codec_dev, WAVESHARE_AUDIO_VOLUME_DEFAULT);
+    speaker_volume_percent = WAVESHARE_AUDIO_VOLUME_DEFAULT;
   }
   capture_queue = xQueueCreate(1U, sizeof(struct audio_frame));
   playback_queue = xQueueCreate(1U, sizeof(struct audio_frame));
@@ -831,12 +833,29 @@ bool waveshare_audio_init(void) {
   return true;
 }
 
-void waveshare_audio_set_volume(int percent) {
-  if (codec_dev == NULL) return;
-  if (percent < 0) percent = 0;
-  if (percent > 100) percent = 100;
-  (void)esp_codec_dev_set_out_vol(codec_dev, percent);
+/*
+ * MEASURED DISTORTION IS THE CEILING HERE, not power or echo: a 1 kHz tone at
+ * volume 100 put the 2nd harmonic at -16.8 dB, and at 60 at -34.9 dB. 92 is
+ * where the harmonic is still below the noise a listener notices and the
+ * device is meaningfully louder than the old 85. Above that it gets louder by
+ * getting dirtier, which is not louder.
+ */
+enum iterate_kit_status waveshare_audio_set_volume(
+    uint8_t percent, uint8_t *applied) {
+  if (codec_dev == NULL) return ITERATE_KIT_UNAVAILABLE;
+  if (percent > WAVESHARE_AUDIO_VOLUME_CEILING) {
+    percent = WAVESHARE_AUDIO_VOLUME_CEILING;
+  }
+  if (esp_codec_dev_set_out_vol(codec_dev, (int)percent) !=
+      ESP_CODEC_DEV_OK) {
+    return ITERATE_KIT_IO_ERROR;
+  }
+  speaker_volume_percent = percent;
+  if (applied != NULL) *applied = percent;
+  return ITERATE_KIT_OK;
 }
+
+uint8_t waveshare_audio_volume(void) { return speaker_volume_percent; }
 
 void waveshare_audio_set_mic_gain(float db) {
   if (codec_dev == NULL) return;

@@ -53,6 +53,10 @@
 
 #include "capnweb/capnweb.h"
 #include "iterate/kit/audio_codec.h"
+#include "iterate/kit/capabilities/conversation.h"
+#include "iterate/kit/capabilities/health.h"
+#include "iterate/kit/capabilities/push_to_talk.h"
+#include "iterate/kit/capabilities/speaker.h"
 #include "iterate/kit/audio_playout.h"
 #include "iterate/kit/audio_processor.h"
 
@@ -370,6 +374,12 @@ static char pending_stream_path[96];
  */
 static bool stream_used = true;
 static bool awaiting_fresh_stream;
+/*
+ * True when the stream being prepared was NOT asked for by a person.
+ * See the eager prepare in the app loop: the adoption path must not
+ * turn a speculative preparation into a call nobody wanted.
+ */
+static bool preparing_ahead;
 #define CALL_ID "wsdev"
 #define GREETING "Hi, I am your Iterate device. What can I do for you?"
 
@@ -417,6 +427,19 @@ static struct {
   size_t outbox_lengths[CONTROL_OUTBOX_SLOTS];
   struct iterate_kit_esp_idf_itx_transport transport;
   struct iterate_kit_peer peer;
+  /*
+   * REMOTE HANDS. This board is the one that gets left on a shelf running a
+   * soak, and it was also the only one of the four with NO capabilities at
+   * all: it mounted at kit.waveshare and answered nothing, so the only way to
+   * ask it anything was its console, which reboots it. Same three as the
+   * others now — talk, conversation, health — reaching the same two intent
+   * flags the physical buttons set.
+   */
+  struct iterate_kit_device_event device_event_storage
+      [ITERATE_KIT_VOICE_DEVICE_EVENT_CAPACITY];
+  struct iterate_kit_device_event_queue device_events;
+  struct iterate_kit_push_to_talk push_to_talk;
+  struct iterate_kit_conversation_control conversation_control;
   struct iterate_kit_voicelab voicelab;
   struct iterate_kit_playout playout;
   uint32_t voicelab_generation;
@@ -560,7 +583,14 @@ static const char instructions[] =
     "Waveshare voice endpoint. Use the physical upper button for "
     "push-to-talk; audio and lifecycle events share this stream connection.";
 static const char peer_description[] =
-    "{\"instructions\":\"Waveshare voice endpoint\",\"children\":{}}";
+    "{\"instructions\":\"Waveshare voice endpoint. "
+    "conversation.start() / conversation.end() begin and end a call; "
+    "pushToTalk.start() / pushToTalk.stop() hold its microphone open the way "
+    "speaker.setVolume({percent}) sets how loud it plays, 0-100; it clamps "
+    "to a ceiling this board has a measured reason for and answers with "
+    "{percent,ceiling}, which speaker.volume() also returns. "
+    "the upper button does. health() returns the same diagnostics document "
+    "the device pushes as dev-stats.\",\"children\":{}}";
 
 static void on_session_ended(void *context) {
   (void)context;
@@ -1377,17 +1407,121 @@ static bool initialise_rings(void) {
              runtime.outbox_lengths) == ITERATE_KIT_OK;
 }
 
+/*
+ * One intent path for both sources, exactly as the app loop already assumes:
+ * an RPC lands on the same two display-owned flags a physical button sets, so
+ * remote and local control cannot disagree about what the device is doing.
+ */
+static enum iterate_kit_status handle_device_event(
+    void *context, const struct iterate_kit_device_event *event) {
+  (void)context;
+  switch ((enum iterate_kit_device_event_type)event->type) {
+    case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
+      waveshare_display_hold_talk(true);
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
+      waveshare_display_hold_talk(false);
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
+      waveshare_display_request_call(true);
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:
+      waveshare_display_request_call(false);
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_DEVICE_EVENT_TYPE_COUNT:
+      break;
+  }
+  return ITERATE_KIT_INVALID_ARGUMENT;
+}
+
+/* Defined beside waveshare_health_json, which it adapts. */
+static size_t render_health(void *context, char *out, size_t capacity);
+
+
+/* The one board-specific fact the portable speaker capability needs. */
+static enum iterate_kit_status speaker_set_volume(
+    void *context, uint8_t percent, uint8_t *applied) {
+  (void)context;
+  return waveshare_audio_set_volume(percent, applied);
+}
+
+static uint8_t speaker_volume(void *context) {
+  (void)context;
+  return waveshare_audio_volume();
+}
+
 static bool initialise_connection(void) {
   static const char *const mount_path[] = {"kit", "waveshare"};
+  static struct iterate_kit_module modules[4];
+  static struct iterate_kit_speaker speaker;
+  static struct iterate_kit_health health;
+  size_t module_count = 0U;
   struct iterate_kit_itx_connection_options options;
   struct iterate_kit_esp_idf_itx_transport_options transport_options;
   struct iterate_kit_peer_options peer_options;
 
+  {
+    const struct iterate_kit_device_event_queue_options event_options = {
+      .storage = runtime.device_event_storage,
+      .capacity = ITERATE_KIT_VOICE_DEVICE_EVENT_CAPACITY,
+      .handler = {.context = NULL, .handle = handle_device_event},
+      .observer = {.context = NULL, .observe = NULL},
+    };
+    if (iterate_kit_device_event_queue_init(
+            &runtime.device_events, &event_options) != ITERATE_KIT_OK ||
+        iterate_kit_push_to_talk_init(
+            &runtime.push_to_talk, &runtime.device_events) !=
+            ITERATE_KIT_OK ||
+        iterate_kit_conversation_control_init(
+            &runtime.conversation_control, &runtime.device_events) !=
+            ITERATE_KIT_OK) {
+      return false;
+    }
+    modules[module_count++] =
+        iterate_kit_push_to_talk_module(&runtime.push_to_talk);
+    modules[module_count++] =
+        iterate_kit_conversation_control_module(&runtime.conversation_control);
+  }
+  /*
+   * TURN IT UP. Every board here shipped at a volume somebody measured once
+   * and nobody could change without a reflash, and all four were reported as
+   * too quiet. The driver keeps its ceiling; the knob is now a call away.
+   */
+  {
+    const struct iterate_kit_speaker_driver driver = {
+      .context = NULL,
+      .set_volume = speaker_set_volume,
+      .volume = speaker_volume,
+      .ceiling = WAVESHARE_AUDIO_VOLUME_CEILING,
+    };
+    if (iterate_kit_speaker_init(&speaker, &driver) == ITERATE_KIT_OK) {
+      modules[module_count++] = iterate_kit_speaker_module(&speaker);
+    }
+  }
+  /*
+   * ASKABLE. The same document this device pushes as dev-stats, on demand,
+   * because the pushed copy only reaches whoever was already listening — and
+   * the other way to interrogate a quiet board is its console, which on this
+   * hardware REBOOTS it.
+   */
+  {
+    const struct iterate_kit_health_driver driver = {
+      .context = NULL,
+      .render = render_health,
+    };
+    if (iterate_kit_health_init(
+            &health,
+            &driver,
+            runtime.stats_buffer,
+            sizeof(runtime.stats_buffer)) == ITERATE_KIT_OK) {
+      modules[module_count++] = iterate_kit_health_module(&health);
+    }
+  }
   peer_options = (struct iterate_kit_peer_options){
     peer_description,
     sizeof(peer_description) - 1U,
-    NULL,
-    0U,
+    modules,
+    module_count,
   };
   if (iterate_kit_peer_init(&runtime.peer, &peer_options) != CAPNWEB_OK) {
     return false;
@@ -1636,6 +1770,20 @@ size_t waveshare_health_json(char *out, size_t capacity) {
                now, runtime.voicelab.last_batch_ms)},
     {"resetReason", (uint32_t)esp_reset_reason()},
     {"heapFree", (uint32_t)esp_get_free_heap_size()},
+    /*
+     * INTERNAL, NOT TOTAL. `heapFree` counts PSRAM, and on a board with eight
+     * megabytes of it a number near six million looks like abundance while the
+     * internal heap — the only kind TLS, Wi-Fi and DMA can use — is down to
+     * scraps. That is not a hypothetical: a StackChan reading heapFree
+     * 5,800,196 dropped its socket mid-sentence with "esp-aes: Failed to
+     * allocate memory", and nothing in this document could say why.
+     */
+    {"internalFree",
+     (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL)},
+    {"internalMin",
+     (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)},
+    {"internalLargest",
+     (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)},
     {"heapMin", (uint32_t)esp_get_minimum_free_heap_size()},
     /* Image buffers are PSRAM, so a leak there is invisible in heapFree. */
     {"psramFree", (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM)},
@@ -1672,12 +1820,19 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       out,
       capacity,
       "{\"transport\":\"%s\",\"voicelab\":\"%s\",\"voicelabFailure\":\"%s\","
+      /*
+       * WHICH CONVERSATION. Every call gets its own stream and the path is
+       * chosen ON THE DEVICE, so without this the only way to find the
+       * transcript of the call you are looking at is to guess a UTC second.
+       */
+      "\"conversation\":\"%s\","
       "\"clock\":\"%s\","
       "\"callActive\":%s,\"callPending\":%s,\"wantsCall\":%s,\"talking\":%s,"
       "\"gateOpen\":%s,\"t\":%" PRIu64 ",\"uptimeMs\":%" PRIu64,
       iterate_kit_esp_idf_itx_transport_state_name(runtime.transport.state),
       iterate_kit_voicelab_state_name(runtime.voicelab.state),
       iterate_kit_voicelab_failure_name(runtime.voicelab.failure),
+      stream_path,
       clock,
       runtime.voicelab.call_active ? "true" : "false",
       runtime.voicelab.call_pending ? "true" : "false",
@@ -1713,6 +1868,11 @@ size_t waveshare_health_json(char *out, size_t capacity) {
   out[used++] = '}';
   out[used] = '\0';
   return used;
+}
+
+static size_t render_health(void *context, char *out, size_t capacity) {
+  (void)context;
+  return waveshare_health_json(out, capacity);
 }
 
 static void append_stats(uint64_t now) {
@@ -1823,6 +1983,30 @@ static void begin_new_conversation(void) {
   waveshare_display_set_status("preparing a new conversation...");
 }
 
+
+/*
+ * A START-UP FAULT MUST BE VISIBLE, NOT A REBOOT LOOP.
+ *
+ * Every failure path below this point used to `return`, and the task watchdog
+ * had already been subscribed by then — so the main task simply stopped
+ * feeding it and the board panicked twenty seconds later, over and over.
+ * From across a room that is indistinguishable from a dead device.
+ *
+ * So park instead: keep the watchdog fed, keep the screen alive,
+ * and let the fault sit where somebody can read it.
+ */
+static void park_with_fault(const char *what) {
+  ESP_LOGE(tag, "fatal: %s", what);
+  waveshare_display_set_fault();
+  waveshare_display_set_link_ready(false);
+  waveshare_display_set_status(what);
+  for (;;) {
+    (void)esp_task_wdt_reset();
+    /* LVGL's own timer owns this panel, so there is nothing to pump. */
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+}
+
 void iterate_kit_waveshare_s3_amoled_run(void) {
   TaskHandle_t capture_task_handle = NULL;
   /*
@@ -1901,8 +2085,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
       (runtime.processor.properties->requires_reference_channel &&
        !runtime.codec.properties->has_reference_channel) ||
       iterate_kit_audio_processor_reset(&runtime.processor) != ITERATE_KIT_OK) {
-    ESP_LOGE(tag, "incompatible codec and audio processor");
-    return;
+    park_with_fault("incompatible codec and audio processor");
   }
   (void)waveshare_buttons_init();
   waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
@@ -1931,21 +2114,30 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
   runtime.speaker_queue = xQueueCreateWithCaps(
       SPEAKER_QUEUE_DEPTH, sizeof(struct speaker_frame), MALLOC_CAP_SPIRAM);
   if (runtime.mic_queue == NULL || runtime.speaker_queue == NULL) {
-    ESP_LOGE(tag, "audio buffer allocation failed");
-    return;
+    park_with_fault("audio buffer allocation failed");
   }
   if (!initialise_rings() || !initialise_connection()) {
-    ESP_LOGE(tag, "bounded runtime initialization failed");
-    return;
+    park_with_fault("bounded runtime initialization failed");
   }
   iterate_kit_playout_reset(&runtime.playout, 1U);
-  if (iterate_kit_esp_idf_itx_transport_start(&runtime.transport) !=
-      ITERATE_KIT_OK) {
+  /*
+   * A RADIO THAT WILL NOT START IS NOT A FATAL FAULT, IT IS AN OFFLINE
+   * DEVICE. This used to return, which — with the watchdog already
+   * subscribed — turned a transient Wi-Fi start failure into a permanent
+   * reboot loop. Keep trying, and keep the surface honest while trying.
+   */
+  while (iterate_kit_esp_idf_itx_transport_start(&runtime.transport) !=
+         ITERATE_KIT_OK) {
     ESP_LOGE(
         tag,
-        "transport start failed: platform=%ld",
+        "transport start failed: platform=%ld — retrying",
         (long)runtime.transport.last_platform_error);
-    return;
+    waveshare_display_set_status("network start failed — retrying");
+    for (int wait = 0; wait < 50; ++wait) {
+      (void)esp_task_wdt_reset();
+    /* LVGL's own timer owns this panel, so there is nothing to pump. */
+      vTaskDelay(pdMS_TO_TICKS(100));
+    }
   }
   if (xTaskCreatePinnedToCore(
           capture_task,
@@ -1960,8 +2152,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
     if (capture_task_handle != NULL) {
       vTaskDelete(capture_task_handle);
     }
-    ESP_LOGE(tag, "portable audio task creation failed");
-    return;
+    park_with_fault("portable audio task creation failed");
   }
   ESP_LOGI(
       tag,
@@ -1994,6 +2185,15 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
      * something will come back to it; this is the something.
      */
     (void)iterate_kit_peer_poll(&runtime.peer, now_ms(NULL));
+    /*
+     * ...and drain what those methods queued. A capability that accepts an
+     * intent and never delivers it is worse than one that is absent: the
+     * first proof run of this board's new conversation.start() returned
+     * success, and health() then reported wantsCall FALSE forever, because
+     * the event sat in a queue nothing was reading.
+     */
+    (void)iterate_kit_device_event_poll(
+        &runtime.device_events, ITERATE_KIT_VOICE_DEVICE_EVENT_POLL_BUDGET);
     /*
      * WHETHER THIS DEVICE CAN DO ANYTHING, published every time it changes.
      *
@@ -2202,7 +2402,15 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         awaiting_fresh_stream = false;
         /* Remount: the mount is bound to the path it was made with. */
         runtime.voicelab_generation = 0U;
-        waveshare_display_request_call(true);
+        /*
+         * A conversation prepared AHEAD of a tap must not place its
+         * own call — it exists so that the tap, when it comes, is
+         * cheap. Only a preparation somebody asked for starts one.
+         */
+        if (!preparing_ahead) {
+          waveshare_display_request_call(true);
+        }
+        preparing_ahead = false;
       }
       if (runtime.voicelab.setup_failed) {
         runtime.voicelab.setup_failed = false;
@@ -2210,6 +2418,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         /* The call it was for cannot happen; drop the intent rather than
          * leaving the device retrying a stream that was never made. */
         awaiting_fresh_stream = false;
+        preparing_ahead = false;
         waveshare_display_request_call(false);
         waveshare_display_set_state(WAVESHARE_UI_IDLE);
         waveshare_display_set_status("could not start a new conversation");
@@ -2351,6 +2560,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
       static struct mic_frame frame_storage[MIC_FRAMES_PER_APPEND];
       static uint64_t drain_window_at;
       static uint64_t next_call_attempt_at;
+      static uint64_t next_prepare_attempt_at;
       static uint64_t call_pending_since;
       static bool call_active_shown;
 
@@ -2361,6 +2571,19 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
        * through its device-event queue).
        */
       const bool wants_call = waveshare_display_call_requested();
+      /*
+       * SILENCE ONLY COUNTS ONCE SOMETHING IS EXPECTED. The downlink watchdog
+       * below measures time since the last delivered batch, and nothing is
+       * delivered before a call exists — so a device that had been idle for
+       * more than ten seconds recycled its connection the instant somebody
+       * asked for a call, adding a whole reconnection to the wait. Restart
+       * the clock at the moment the expectation starts.
+       */
+      {
+        static bool wanted_previously;
+        if (wants_call && !wanted_previously) runtime.voicelab.last_batch_ms = now;
+        wanted_previously = wants_call;
+      }
       const bool wants_talk = wants_call &&
           (waveshare_buttons_upper_held() || waveshare_display_talk_held());
 
@@ -2468,9 +2691,37 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
       }
       if (!runtime.voicelab.call_pending) call_pending_since = 0U;
 
+      /*
+       * PREPARE THE NEXT CONVERSATION BEFORE ANYBODY ASKS FOR IT.
+       *
+       * Every call gets its own stream, and creating one costs about seven
+       * seconds on the server. Paying that AFTER the tap is most of the wait
+       * between touching this device and being able to speak to it — so it is
+       * paid while the device is sitting there doing nothing instead. By the
+       * time a person taps, `stream_used` is already false and the only thing
+       * left to do is place the call.
+       */
+      if (!wants_call && stream_used && !awaiting_fresh_stream &&
+          !runtime.voicelab.call_active && !runtime.voicelab.call_pending &&
+          outbox_free >= 3U && now >= next_prepare_attempt_at) {
+        awaiting_fresh_stream = true;
+        preparing_ahead = true;
+        /* Slow retry: nobody is waiting on this one. */
+        next_prepare_attempt_at = now + 30000U;
+        ESP_LOGI(tag, "idle: preparing the next conversation in advance");
+        begin_new_conversation();
+      }
       if (wants_call && !runtime.voicelab.call_active &&
-          !runtime.voicelab.call_pending && outbox_free >= 3U &&
-          now >= next_call_attempt_at) {
+          !runtime.voicelab.call_pending && outbox_free >= 3U) {
+        /*
+         * TWO STEPS, TWO SEPARATE BACKOFFS. Starting a call from a tap means
+         * preparing a fresh stream and then placing the call on it, and a
+         * single shared timer made the second step serve the first one's
+         * eight-second retry deadline: the stream was ready in about a
+         * second and the call still sat waiting for a countdown that existed
+         * only in case the PREPARE went unanswered. That is most of what
+         * "tapping the screen and getting to mic takes ages" was.
+         */
         if (stream_used && !awaiting_fresh_stream) {
           /*
            * This stream has a past, so the call does not happen here. Preparing
@@ -2478,11 +2729,13 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
            * last conversation into this one costs the person an answer that
            * makes no sense.
            */
-          awaiting_fresh_stream = true;
-          next_call_attempt_at = now + 8000U;
-          ESP_LOGI(tag, "call asked for: preparing a fresh conversation first");
-          begin_new_conversation();
-        } else if (!awaiting_fresh_stream) {
+          if (now >= next_prepare_attempt_at) {
+            awaiting_fresh_stream = true;
+            next_prepare_attempt_at = now + 8000U;
+            ESP_LOGI(tag, "call asked for: preparing a fresh conversation first");
+            begin_new_conversation();
+          }
+        } else if (!awaiting_fresh_stream && now >= next_call_attempt_at) {
           call_pending_since = now;
           next_call_attempt_at = now + 8000U; /* a start takes ~1-3s; don't spam */
           if (iterate_kit_voicelab_start_call(&runtime.voicelab, GREETING) ==

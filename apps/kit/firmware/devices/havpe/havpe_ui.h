@@ -28,6 +28,14 @@ void havpe_ui_set_state(enum havpe_ui_state state);
 void havpe_ui_set_status(const char *status);
 void havpe_ui_set_call_active(bool active);
 void havpe_ui_set_link_ready(bool ready);
+/**
+ * Latches an unrecoverable start-up fault onto this device's status surface.
+ *
+ * Distinct from "not connected": a device that is still trying looks like one
+ * that is trying, and a device that will never work must not. Nothing clears
+ * this — the only exit is a reboot, which is the truth.
+ */
+void havpe_ui_set_fault(void);
 
 /** The user's call INTENT, owned locally (see the Waveshare port). */
 void havpe_ui_request_call(bool wanted);

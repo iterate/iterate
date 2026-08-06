@@ -7,6 +7,8 @@
 #include "iterate/kit/avatar/face_render.h"
 #include "iterate/kit/avatar/face_scale.h"
 #include "iterate/kit/conversation_lights.h"
+#include "iterate/kit/conversation_overlay.h"
+#include "iterate/kit/face_wake.h"
 #include "iterate/kit/touch_tap.h"
 
 #include "bsp/display.h"
@@ -94,6 +96,24 @@ _Static_assert(
 _Static_assert(
     (STACKCHAN_AVATAR_FRAMEBUFFER_CAPS & MALLOC_CAP_SPIRAM) == 0U,
     "StackChan's SPI framebuffer must not request PSRAM");
+/*
+ * THE SOURCE SURFACE IS NOT A DMA BUFFER, AND KEEPING IT IN DMA MEMORY NEARLY
+ * COST THIS BOARD ITS NETWORK.
+ *
+ * Only `scaled_strip` is ever handed to the SPI driver. The 38.4 KiB source
+ * frame is touched exclusively by the CPU — rendered into, byte-swapped,
+ * read by the scaler, copied by a screenshot — so it has no business in the
+ * one pool TLS, Wi-Fi and DMA all compete for. It sat there anyway, and the
+ * measurement that finally said so was internalFree: 4,603 bytes with a
+ * largest free block of 3,328, at which point mbedtls could not allocate an
+ * AES context and the socket died mid-conversation ("esp-aes: Failed to
+ * allocate memory"). heapFree read 5.8 MB throughout, because that is PSRAM.
+ *
+ * PSRAM costs this surface some read/write bandwidth, which the existing
+ * maximum_render_us instrument measures at 15 Hz on a low-priority core-1
+ * task. That is the right trade against a dropped call.
+ */
+#define STACKCHAN_AVATAR_SOURCE_CAPS (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
 #define STACKCHAN_AVATAR_SCALE 2U
 /*
  * Eight source rows make one 320x16 physical DMA strip. A naive full-screen
@@ -234,13 +254,12 @@ struct stackchan_avatar_owner {
 };
 
 /*
- * Every object touched by the I2S callback is forced into internal DRAM. The
- * source framebuffer and the bounded scale strip are also internal because
- * ESP32-S3 SPI cannot DMA directly from PSRAM; keeping them here prevents the
- * driver from doing hidden bounce-buffer allocations on every LCD transfer.
- * The tradeoff is an explicit 48.6 KiB startup cost which the resource proof
- * must measure and gate; it is still less than one third of a naive full-size
- * 320x240 RGB565 framebuffer.
+ * Every object touched by the I2S callback is forced into internal DRAM. Only
+ * the bounded 10 KiB scale strip is internal for DMA's sake — ESP32-S3 SPI
+ * cannot transfer from PSRAM, and keeping the strip here prevents the driver
+ * from doing a hidden bounce-buffer allocation on every LCD transfer. The
+ * 38.4 KiB source surface lives in PSRAM; see the note on
+ * STACKCHAN_AVATAR_SOURCE_CAPS for the socket it cost while it did not.
  */
 static DRAM_ATTR struct stackchan_avatar_owner owner
     __attribute__((aligned(16)));
@@ -408,102 +427,17 @@ static void swap_rgb565_bytes_for_panel(void) {
   }
 }
 
-static uint16_t rgb565(uint8_t red, uint8_t green, uint8_t blue) {
-  return (uint16_t)(
-      ((uint16_t)(red & 0xF8U) << 8U) |
-      ((uint16_t)(green & 0xFCU) << 3U) |
-      ((uint16_t)blue >> 3U));
-}
-
-static void fill_framebuffer_rectangle(
-    uint32_t x,
-    uint32_t y,
-    uint32_t width,
-    uint32_t height,
-    uint16_t colour) {
-  if (x >= FACE_RENDER_WIDTH || y >= FACE_RENDER_HEIGHT) return;
-  if (width > FACE_RENDER_WIDTH - x) width = FACE_RENDER_WIDTH - x;
-  if (height > FACE_RENDER_HEIGHT - y) height = FACE_RENDER_HEIGHT - y;
-  for (uint32_t row = 0U; row < height; ++row) {
-    uint16_t *const destination =
-        owner.framebuffer + (y + row) * FACE_RENDER_WIDTH + x;
-    for (uint32_t column = 0U; column < width; ++column) {
-      destination[column] = colour;
-    }
-  }
-}
-
-struct stackchan_status_glyph {
-  char character;
-  uint8_t rows[5];
-};
-
 /*
- * The rail needs sixteen uppercase glyphs, not a general text stack.  Keeping
- * this 3x5 alphabet beside the physical adapter avoids pulling a font engine,
- * canvas, or LVGL back into a target which recovered tens of KiB by removing
- * them.  Every displayed token is deliberately three characters or fewer so
- * the face loses only thirteen of its 160 columns.
+ * The status surface is no longer this file's invention. It used to be three
+ * hand-picked capital letters over the avatar's eye, drawn from a sixteen-
+ * glyph alphabet that lived here, meaning this board said "NET" where the
+ * ring on the next desk glowed white and the Stick printed prose. The shared
+ * overlay draws the same twelve lights and the same words on every screen;
+ * all this adapter still owns is the one fact only it can know.
  */
-static const struct stackchan_status_glyph STATUS_GLYPHS[] = {
-    {'A', {0x2U, 0x5U, 0x7U, 0x5U, 0x5U}},
-    {'C', {0x3U, 0x4U, 0x4U, 0x4U, 0x3U}},
-    {'D', {0x6U, 0x5U, 0x5U, 0x5U, 0x6U}},
-    {'E', {0x7U, 0x4U, 0x6U, 0x4U, 0x7U}},
-    {'F', {0x7U, 0x4U, 0x6U, 0x4U, 0x4U}},
-    {'G', {0x3U, 0x4U, 0x5U, 0x5U, 0x3U}},
-    {'I', {0x7U, 0x2U, 0x2U, 0x2U, 0x7U}},
-    {'M', {0x5U, 0x7U, 0x7U, 0x5U, 0x5U}},
-    {'N', {0x5U, 0x7U, 0x7U, 0x7U, 0x5U}},
-    {'O', {0x7U, 0x5U, 0x5U, 0x5U, 0x7U}},
-    {'P', {0x6U, 0x5U, 0x6U, 0x4U, 0x4U}},
-    {'R', {0x6U, 0x5U, 0x6U, 0x5U, 0x5U}},
-    {'T', {0x7U, 0x2U, 0x2U, 0x2U, 0x2U}},
-    {'W', {0x5U, 0x5U, 0x7U, 0x7U, 0x5U}},
-    {'X', {0x5U, 0x5U, 0x2U, 0x5U, 0x5U}},
-    {'Y', {0x5U, 0x5U, 0x2U, 0x2U, 0x2U}},
-};
-
-static const uint8_t *status_glyph_rows(char character) {
-  for (size_t index = 0U;
-       index < sizeof(STATUS_GLYPHS) / sizeof(STATUS_GLYPHS[0]);
-       ++index) {
-    if (STATUS_GLYPHS[index].character == character) {
-      return STATUS_GLYPHS[index].rows;
-    }
-  }
-  return NULL;
-}
-
-static void draw_status_word(
-    uint32_t x, uint32_t y, const char *word, uint16_t colour) {
-  if (word == NULL) return;
-  for (uint32_t character_index = 0U;
-       character_index < 3U && word[character_index] != '\0';
-       ++character_index) {
-    const uint8_t *const rows = status_glyph_rows(word[character_index]);
-    if (rows == NULL) continue;
-    for (uint32_t row = 0U; row < 5U; ++row) {
-      for (uint32_t column = 0U; column < 3U; ++column) {
-        if ((rows[row] & (uint8_t)(1U << (2U - column))) != 0U) {
-          fill_framebuffer_rectangle(
-              x + character_index * 4U + column,
-              y + row,
-              1U,
-              1U,
-              colour);
-        }
-      }
-    }
-  }
-}
-
-static void draw_status_rail(void) {
-  struct iterate_kit_conversation_visual_state status =
-      owner.latest_status;
-  const char *headline;
-  uint16_t headline_colour;
-
+static struct iterate_kit_conversation_visual_state status_with_physical_speaker(
+    void) {
+  struct iterate_kit_conversation_visual_state status = owner.latest_status;
   /*
    * Physical speaker completion owns mouth amplitude, so it also owns the
    * speaker sector.  The control loop intentionally publishes zero here: a
@@ -518,63 +452,16 @@ static void draw_status_rail(void) {
             ? 256U
             : owner.latest_pose.level)
       : 0U;
-  if (status.media_failed) {
-    headline = "ERR";
-    headline_colour = rgb565(255U, 72U, 64U);
-  } else if (status.network != ITERATE_KIT_NETWORK_CONNECTED) {
-    headline = "NET";
-    headline_colour = rgb565(56U, 40U, 16U);
-  } else if (!status.conversation_active) {
-    headline = "RDY";
-    headline_colour = rgb565(20U, 48U, 28U);
-  } else if (!status.media_ready) {
-    headline = "CON";
-    headline_colour = rgb565(56U, 40U, 16U);
-  } else if (status.speaker_peak >= 256U) {
-    headline = "AI";
-    headline_colour = rgb565(20U, 36U, 60U);
-  } else {
-    headline = "MIC";
-    headline_colour = rgb565(20U, 48U, 28U);
-  }
-  draw_status_word(1U, 1U, headline, headline_colour);
-
-  if (status.media_failed ||
-      status.network == ITERATE_KIT_NETWORK_DISCONNECTED) {
-    /*
-     * Ordinary status is deliberately low contrast over the face. A fault is
-     * different: the user asked for one unmistakable mark when the device is
-     * unusable, and fading that mark would make the subtle HUD actively
-     * misleading. Keep the exclamation hand-drawn so this tiny adapter does
-     * not grow a font dependency merely for one safety-critical glyph.
-     */
-    const uint16_t fault_red = rgb565(255U, 40U, 32U);
-    fill_framebuffer_rectangle(5U, 24U, 2U, 6U, fault_red);
-    fill_framebuffer_rectangle(5U, 32U, 2U, 2U, fault_red);
-  }
-
+  return status;
 }
-
-/*
- * How long the face stays awake-idle after boot or after the last
- * conversation before it dozes, in ms. Three deterministic minutes: the
- * ambient acting layer keeps breathing/glancing on the playout clock during
- * the countdown, so an ended call reads as a resting robot rather than a
- * crashed one, while an abandoned device still earns its closed eyes.
- */
-enum { STACKCHAN_FACE_DOZE_DELAY_MS = 3U * 60U * 1000U };
 
 /* Analyzer task only (prepare_avatar_frame_under_lock), so no lock. */
 static bool face_dozing_now(void) {
-  /* Zero means boot, and boot earns the same awake-idle grace as a call. */
-  static uint64_t last_conversation_us;
-
-  if (owner.latest_status.conversation_active) {
-    last_conversation_us = now_us_wide();
-    return false;
-  }
-  return now_us_wide() - last_conversation_us >=
-      (uint64_t)STACKCHAN_FACE_DOZE_DELAY_MS * 1000U;
+  static struct iterate_kit_face_wake wake;
+  return !iterate_kit_face_awake(
+      &wake,
+      owner.latest_status.conversation_active,
+      now_us_wide() / 1000U);
 }
 
 static bool prepare_avatar_frame_under_lock(
@@ -628,7 +515,16 @@ static bool prepare_avatar_frame_under_lock(
     atomic_saturating_increment(&owner.metrics.render_failures);
     return false;
   }
-  draw_status_rail();
+  {
+    const struct iterate_kit_conversation_visual_state status =
+        status_with_physical_speaker();
+    iterate_kit_conversation_overlay_render(
+        &status,
+        (uint32_t)(now_us_wide() / 1000U),
+        owner.framebuffer,
+        (uint32_t)FACE_RENDER_WIDTH,
+        (uint32_t)FACE_RENDER_HEIGHT);
+  }
   swap_rgb565_bytes_for_panel();
   *render_cpu_us = saturating_elapsed_us(now_us_wide(), started_at_us);
   return true;
@@ -1073,7 +969,7 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
   owner.framebuffer = heap_caps_aligned_alloc(
       64U,
       FACE_RENDER_FRAME_BYTES,
-      STACKCHAN_AVATAR_FRAMEBUFFER_CAPS);
+      STACKCHAN_AVATAR_SOURCE_CAPS);
   if (owner.framebuffer == NULL) {
     return ESP_ERR_NO_MEM;
   }

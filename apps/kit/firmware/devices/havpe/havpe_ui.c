@@ -1,11 +1,17 @@
 /*
  * The WS2812 status ring and the one physical button.
  *
- * The ring renders coarse conversation state as solid colours at a bounded
- * refresh rate; it is deliberately not the donor's animated three-sector
- * conversation-lights surface, which belonged to a metrics/capability layer
- * this consolidation does not port. Colours stay dim: these are exposed
- * physical LEDs, not a backlit panel.
+ * THIS RING HAS TWELVE LEDS AND THE SHARED LANGUAGE HAS TWELVE LIGHTS. That
+ * is not a coincidence — the grammar was designed around this ring — and yet
+ * this board spent the consolidation painting all twelve one flat colour,
+ * which is why it read as "a sort of white glowy ring" instead of three green
+ * for the network, three for the speaker and three for the microphone.
+ *
+ * So the ring now renders exactly what every screen's status rail renders,
+ * pixel for pixel and sector for sector: `conversation_lights` decides the
+ * colours, `conversation_overlay` decides whether the whole thing should be
+ * breathing because the device is not ready. A person who has learned the
+ * lights on the StackChan's screen can read this ring without being told.
  */
 #include "havpe_ui.h"
 
@@ -16,12 +22,14 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "iterate/kit/conversation_lights.h"
+#include "iterate/kit/conversation_overlay.h"
 #include "led_strip.h"
 
 static const char tag[] = "havpe-ui";
 
 enum {
-  LED_COUNT = 12,
+  LED_COUNT = ITERATE_KIT_CONVERSATION_LIGHT_COUNT,
   LED_GPIO = 21,
   LED_POWER_GPIO = 45,
   /* The rail needs to settle before the first RMT refresh is honest. */
@@ -34,23 +42,19 @@ enum {
   RING_REFRESH_MIN_US = 50000,
 };
 
-struct rgb {
-  uint8_t red;
-  uint8_t green;
-  uint8_t blue;
-};
-
 static struct {
   led_strip_handle_t strip;
   enum havpe_ui_state state;
   bool call_active;
   bool link_ready;
   bool call_requested;
+  /* Unrecoverable start-up fault; see havpe_ui_set_fault. */
+  bool fault;
   bool dirty;
   /* False until the ring has actually been written once; see the tick. */
   bool painted;
   int64_t last_refresh_us;
-  struct rgb shown;
+  struct iterate_kit_rgb8 shown[LED_COUNT];
 } ui;
 
 static struct {
@@ -119,37 +123,31 @@ bool havpe_ui_init(void) {
 }
 
 /*
- * THIS RING IS THE ONLY THING THIS BOARD CAN SAY. It has no screen, so every
- * one of these colours has to be legible across a room in daylight — and the
- * first version was not: idle was {0,0,2}, two parts in 255 of blue, which
- * reads as a dead device to anyone looking at it. "Barely on" was the intent
- * and invisible was the result, reported as "the LEDs aren't on when it's on".
- *
- * So these are floors, not tastes. Nothing that means "alive" goes below ~12
- * of 255, which is the level at which a WS2812 is unambiguously lit rather
- * than arguably lit; the states that mean something is HAPPENING sit near 72
- * so they are distinguishable from the resting glow at a glance rather than by
- * comparison. Twelve LEDs at these levels is a few tens of milliamps, which is
- * nothing next to the XMOS and the speaker this board already runs.
+ * THIS RING IS THE ONLY THING THIS BOARD CAN SAY, so the snapshot it renders
+ * has to be honest about the two states that matter most: whether the network
+ * is there, and whether the microphone is open. Everything else this board
+ * knows already reaches a person some other way.
  */
-static struct rgb state_colour(void) {
-  if (!ui.link_ready) {
-    return (struct rgb){72, 24, 0}; /* amber: offline or reconnecting */
-  }
-  switch (ui.state) {
-    case HAVPE_UI_LISTENING:
-      return (struct rgb){0, 72, 12}; /* green: microphone is live */
-    case HAVPE_UI_SPEAKING:
-      return (struct rgb){0, 24, 72}; /* blue: the agent is talking */
-    case HAVPE_UI_CONNECTING:
-      return (struct rgb){72, 24, 0};
-    case HAVPE_UI_IDLE:
-      break;
-  }
-  if (ui.call_active) {
-    return (struct rgb){24, 24, 40}; /* slate: call open, nobody talking */
-  }
-  return (struct rgb){12, 12, 16}; /* resting: powered and connected */
+static struct iterate_kit_conversation_visual_state ring_state(void) {
+  const struct iterate_kit_conversation_visual_state state = {
+    .network = ui.link_ready ? ITERATE_KIT_NETWORK_CONNECTED
+                             : ITERATE_KIT_NETWORK_CONNECTING,
+    .has_wifi_rssi = false,
+    .wifi_rssi_dbm = 0,
+    .conversation_active = ui.call_active,
+    .media_ready = ui.link_ready,
+    .media_failed = ui.fault,
+    .microphone_listening = ui.state == HAVPE_UI_LISTENING,
+    .microphone_peak = 0U,
+    /*
+     * This board has no physical playout tap to sample, so speaking is taken
+     * from the state the app loop settles. It is one frame early rather than
+     * wrong, and only the LED brightness depends on it.
+     */
+    .speaker_peak = ui.state == HAVPE_UI_SPEAKING ? 4096U : 0U,
+    .restart_armed = false,
+  };
+  return state;
 }
 
 void havpe_ui_set_state(enum havpe_ui_state state) {
@@ -176,6 +174,12 @@ void havpe_ui_set_call_active(bool active) {
   ui.dirty = true;
 }
 
+void havpe_ui_set_fault(void) {
+  if (ui.fault) return;
+  ui.fault = true;
+  ui.dirty = true;
+}
+
 void havpe_ui_set_link_ready(bool ready) {
   if (ui.link_ready == ready) return;
   ui.link_ready = ready;
@@ -191,29 +195,56 @@ bool havpe_ui_call_requested(void) {
 }
 
 void havpe_ui_tick(void) {
-  if (!ui.dirty || ui.strip == NULL) return;
+  if (ui.strip == NULL) return;
   const int64_t now_us = esp_timer_get_time();
-  if (now_us - ui.last_refresh_us < RING_REFRESH_MIN_US) return;
-  const struct rgb colour = state_colour();
+  const struct iterate_kit_conversation_visual_state state = ring_state();
   /*
-   * `shown` starts black, so "equal to what is shown" is a lie until the first
-   * successful refresh — and any state whose colour happened to be black would
-   * clear `dirty` and never light the ring at all, which is unfalsifiable from
-   * the outside on a board with no screen. Paint once, then compare.
+   * A DEVICE THAT IS NOT READY MUST NOT LOOK LIKE A STILL PHOTOGRAPH. While
+   * the link is down the ring breathes, so this tick has real work to do on
+   * every pass and cannot wait for a state change to be marked dirty. Once
+   * the device is ready the breath stops at full brightness and the change
+   * gate below goes quiet again.
    */
-  if (ui.painted && memcmp(&colour, &ui.shown, sizeof(colour)) == 0) {
-    ui.dirty = false;
-    return;
-  }
-  for (int index = 0; index < LED_COUNT; ++index) {
-    (void)led_strip_set_pixel(
-        ui.strip, index, colour.red, colour.green, colour.blue);
-  }
-  if (led_strip_refresh(ui.strip) == ESP_OK) {
-    ui.painted = true;
-    ui.shown = colour;
-    ui.last_refresh_us = now_us;
-    ui.dirty = false;
+  const bool breathing = iterate_kit_conversation_needs_attention(&state);
+  if (!ui.dirty && !breathing) return;
+  if (now_us - ui.last_refresh_us < RING_REFRESH_MIN_US) return;
+  {
+    struct iterate_kit_rgb8 pixels[LED_COUNT];
+    const uint8_t scale = iterate_kit_conversation_attention_scale(
+        &state, (uint32_t)(now_us / 1000));
+    iterate_kit_conversation_lights_render(&state, pixels);
+    for (int index = 0; index < LED_COUNT; ++index) {
+      pixels[index].red = (uint8_t)(((uint32_t)pixels[index].red * scale) / 255U);
+      pixels[index].green =
+          (uint8_t)(((uint32_t)pixels[index].green * scale) / 255U);
+      pixels[index].blue =
+          (uint8_t)(((uint32_t)pixels[index].blue * scale) / 255U);
+    }
+    /*
+     * `shown` starts black, so "equal to what is shown" is a lie until the
+     * first successful refresh — and any state whose colour happened to be
+     * black would clear `dirty` and never light the ring at all, which is
+     * unfalsifiable from the outside on a board with no screen. Paint once,
+     * then compare.
+     */
+    if (ui.painted && memcmp(pixels, ui.shown, sizeof(pixels)) == 0) {
+      ui.dirty = false;
+      return;
+    }
+    for (int index = 0; index < LED_COUNT; ++index) {
+      (void)led_strip_set_pixel(
+          ui.strip,
+          index,
+          pixels[index].red,
+          pixels[index].green,
+          pixels[index].blue);
+    }
+    if (led_strip_refresh(ui.strip) == ESP_OK) {
+      ui.painted = true;
+      memcpy(ui.shown, pixels, sizeof(pixels));
+      ui.last_refresh_us = now_us;
+      ui.dirty = false;
+    }
   }
 }
 
