@@ -7,12 +7,12 @@ Chrome profiles, tabs, cookies, or logins. Use the Playwriter Chrome extension
 access for that task. Load the Playwriter skill (`playwriter skill` once per
 session) before the first command.
 
-| Request                             | Browser mode                                      | Permission granted                    |
-| ----------------------------------- | ------------------------------------------------- | ------------------------------------- |
-| Normal local browser task           | Playwriter headless Chrome for Testing            | Isolated agent session                |
-| "No windows", "run headless", or CI | Playwriter headless                               | Isolated background agent session     |
-| "Use my actual Chrome"              | Extension-connected real Chrome                   | Exceptional, current-task-only        |
-| Direct CDP / remote debugging       | `playwriter session new --direct`                 | Exceptional / CI tooling              |
+| Request                             | Browser mode                           | Permission granted                |
+| ----------------------------------- | -------------------------------------- | --------------------------------- |
+| Normal local browser task           | Playwriter headless Chrome for Testing | Isolated agent session            |
+| "No windows", "run headless", or CI | Playwriter headless                    | Isolated background agent session |
+| "Use my actual Chrome"              | Extension-connected real Chrome        | Exceptional, current-task-only    |
+| Direct CDP / remote debugging       | `playwriter session new --direct`      | Exceptional / CI tooling          |
 
 `PLAYWRITER_AUTO_ENABLE` defaults on (leave unset). With multiple Chrome
 profiles, pick a key from `playwriter browser list` when using the extension
