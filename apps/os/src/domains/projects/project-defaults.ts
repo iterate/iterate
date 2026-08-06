@@ -28,7 +28,7 @@ export function projectCreationEvents(input: { payload: ProjectCreatePayload; pr
     ...notificationCreationEvents({ projectId }),
     buildFacetProcessorSubscriptionConfiguredEvent({
       idempotencyKey: `stream/subscription-configured:${ProjectProcessorContract.slug}`,
-      processorSlug: ProjectProcessorContract.slug,
+      name: ProjectProcessorContract.slug,
     }),
   ];
 }

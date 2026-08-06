@@ -283,7 +283,7 @@ function emailAgentCreationEvents(input: {
           },
         },
       }),
-      processorSlug: EmailAgentProcessorContract.slug,
+      name: EmailAgentProcessorContract.slug,
     },
   });
   return creation.events satisfies EmittedInput<EmailProcessorContract>[];

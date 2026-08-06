@@ -39,7 +39,7 @@ export function agentCollectionCreationEvents(input: { projectId: string }) {
     }),
     buildFacetProcessorSubscriptionConfiguredEvent({
       idempotencyKey: `stream/subscription-configured:${AgentCollectionProcessorContract.slug}`,
-      processorSlug: AgentCollectionProcessorContract.slug,
+      name: AgentCollectionProcessorContract.slug,
     }),
   ];
 }
@@ -464,7 +464,8 @@ export function agentCreationForPath<
   systemPromptPolicy?: AgentSystemPromptPolicy;
   sibling?: {
     birthCertificate: SiblingBirthCertificate;
-    processorSlug: string;
+    /** The sibling's subscription name — the sibling contract's slug. */
+    name: string;
   };
 }) {
   const { agentPath, projectId, project } = input;
@@ -560,7 +561,7 @@ export function agentCreationForPath<
   });
   const agentSubscription = buildFacetProcessorSubscriptionConfiguredEvent({
     idempotencyKey: `stream/subscription-configured:${AgentProcessorContract.slug}`,
-    processorSlug: AgentProcessorContract.slug,
+    name: AgentProcessorContract.slug,
   });
   const collectionSubscription = CoreProcessorContract.buildEvent({
     type: "events.iterate.com/stream/subscription-configured",
@@ -589,8 +590,8 @@ export function agentCreationForPath<
       ? []
       : [
           buildFacetProcessorSubscriptionConfiguredEvent({
-            idempotencyKey: `stream/subscription-configured:${input.sibling.processorSlug}`,
-            processorSlug: input.sibling.processorSlug,
+            idempotencyKey: `stream/subscription-configured:${input.sibling.name}`,
+            name: input.sibling.name,
           }),
         ];
 

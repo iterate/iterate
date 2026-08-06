@@ -725,7 +725,6 @@ describe("ProcessorRelayRpcTarget", () => {
 
       await expect(
         relay.wakeStreamProcessor({
-          processorSlug: "test",
           name: "test",
         } as never),
       ).rejects.toThrow("wakeStreamProcessor may be called only by trusted stream event sending");
@@ -748,7 +747,7 @@ describe("ProcessorRelayRpcTarget", () => {
     });
 
     await expect(relay.snapshot()).resolves.toEqual({ offset: 4, state: { running: true } });
-    const request = { processorSlug: "sandbox", name: "sandbox-test" } as never;
+    const request = { name: "sandbox-test" } as never;
     await expect(relay.wakeStreamProcessor(request)).resolves.toEqual({ accepted: true });
     expect(wakeStreamProcessor).toHaveBeenCalledWith(request);
   });

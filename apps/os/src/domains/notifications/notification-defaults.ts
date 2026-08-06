@@ -11,7 +11,7 @@ export function notificationCreationEvents(input: { projectId: string }) {
     }),
     buildFacetProcessorSubscriptionConfiguredEvent({
       idempotencyKey: `stream/subscription-configured:${NotificationProcessorContract.slug}`,
-      processorSlug: NotificationProcessorContract.slug,
+      name: NotificationProcessorContract.slug,
     }),
   ];
 }

@@ -598,9 +598,10 @@ async function recordConnection(input: {
   connectedEvent: { idempotencyKey?: string; payload: Record<string, unknown>; type: string };
   /** Arm a webhook-router processor on the connection stream (providers that
    * route inbound events). Connect time is THE arming point — connection
-   * streams are born here, not at project create. */
+   * streams are born here, not at project create. The name is the router
+   * processor contract's slug. */
   processorSubscription?: {
-    processorSlug: string;
+    name: string;
   };
   /** Claim this connection's external id in the deployment-wide directory
    * (providers with first-party webhook ingress). The generic door folds it to
@@ -636,7 +637,7 @@ async function recordConnection(input: {
           buildIntegrationRouterSubscriptionConfiguredEvent({
             connection: input.connection,
             projectId: input.projectId,
-            processorSlug: input.processorSubscription.processorSlug,
+            name: input.processorSubscription.name,
             slug: input.slug,
           }),
         ]
@@ -772,7 +773,7 @@ async function recordSlackConnection(input: {
       },
     },
     processorSubscription: {
-      processorSlug: SlackProcessorContract.slug,
+      name: SlackProcessorContract.slug,
     },
     directoryClaim: { externalId: input.teamId },
   });
@@ -1485,7 +1486,7 @@ export async function connectTelegram(input: {
       },
     },
     processorSubscription: {
-      processorSlug: TelegramProcessorContract.slug,
+      name: TelegramProcessorContract.slug,
     },
     directoryClaim: {
       externalId: bot.id,

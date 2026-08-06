@@ -3,7 +3,7 @@
 Status: **core model shipped** (CORE*STATE_VERSION 30; clean break, no data
 migration). The identity doctrine (`name`, `byName`, opaque names), the
 single-column confirmed cursor, facet placement, and the unified
-`waitUntilConfirmed` barrier are implemented. A few designed extensions were
+`waitUntilProcessed` barrier are implemented. A few designed extensions were
 deliberately **deferred** — each is marked "future work" inline below.
 Companion to
 [stream processors as facets](../tasks/stream-processors-as-facets.md) —
@@ -117,10 +117,13 @@ connection it opened), but registering makes its position visible.
 
 ### Barriers are verbs, not consumers
 
-`waitForEvent` (log predicate, one-shot, unchanged) and one unified
-`waitUntilConfirmed(name, {offset})` that works against **any**
-subscription — see the cursor rule below. Today's `waitUntilProcessed`
-becomes the processor-wake case of that one verb.
+Two verbs, two sides. `waitForEvent` (log predicate, one-shot, unchanged)
+is the LOG-side barrier; one unified `waitUntilProcessed(name, {offset})`
+is the CONSUMER-side barrier and works against **any** subscription.
+Processor-wake rows delegate to the hosted runner's own barrier; every
+other kind resolves off the confirmed cursor — see the cursor rule below.
+Under a filter the cursor is a watermark: non-matching events still
+advance it, so the barrier resolves for offsets the receiver never saw.
 
 ## Identity: names bind, epochs fence
 
@@ -150,14 +153,16 @@ Rules:
   and dies). One reserved prefix survives: auto-generated names are
   `subscription:<offset>` (birth-offset-derived, stable, doctrine-pure).
 - **Caller-chosen, per-stream unique, 1–500 chars, trimmed** — the
-  existing `SubscriptionKey` constraints (`core-processor-contract.ts:
+  existing `SubscriptionName` constraints (`core-processor-contract.ts:
 203-208`), applied to a better string.
-- **Slug names the contract.** `processorSlug` is _required_ on
-  `processor-wake` and says which contract runs. As shipped, the
-  subscription name must EQUAL the slug — one identity, enforced at
-  configure time — so the single-instance case reads as today
-  (`subscriptions.get("agent")`). Two instances of one contract (two
-  names, one slug) is designed but deferred; see "Future work".
+- **The name IS the contract selector.** On `processor-wake` the
+  subscription NAME says which registered contract runs (name ==
+  registered slug — one identity), so the single-instance case reads as
+  today (`subscriptions.get("agent")`). The receiver carries no slug
+  field and nothing is enforced at configure time: a name matching no
+  registered processor fails loudly at wake with the registry's
+  unknown-name error. Two instances of one contract (two names, one
+  slug) is designed but deferred; see "Future work".
 - **The field is renamed `subscriptionKey` → `name`** (event payload,
   state map, cursor table, wake request) under a `CORE_STATE_VERSION`
   bump. "Name" aligns with `ctx.facets.get(name, …)` and `getByName`;
@@ -206,11 +211,11 @@ protection:
 | webhook-post   | HTTP 2xx (response body discarded)                                                                                                   |
 | processor-wake | the wake response's reported checkpoint; live batch acks settle the in-flight watchdog only, so a stale row costs one redundant wake |
 
-The barrier verb `waitUntilConfirmed(name, {offset})` reads this column
-for every kind. Processor-wake caveat: during a live hosted connection
-the stored confirmation deliberately goes stale until the next wake
-report — callers that need the processor's own fold position use the
-processor facade's `waitUntilProcessed`.
+The barrier verb `waitUntilProcessed(name, {offset})` reads this column
+for push kinds; processor-wake rows delegate to the hosted runner's own
+barrier instead (the runner's acknowledged cursor — precise even while a
+live connection is streaming, where the stored confirmation deliberately
+goes stale until the next wake report).
 
 Lag is well-defined for every kind — `head − confirmed` — which directly
 feeds
@@ -255,7 +260,8 @@ ladder and halts loudly.
 
 Existing arms, adjusted:
 
-- **`processor-wake`** — `processorSlug` required; gains a placement
+- **`processor-wake`** — the subscription NAME selects the contract
+  (no receiver slug field); gains a placement
   field: `facet` (no expression needed — the subscription name _is_ the
   facet name, delivery is a parent→facet dial) or an itx expression as
   today (own-DO, userspace worker). `jsonataTransform` stays forbidden
@@ -312,7 +318,7 @@ project.streams.get(path)                  // exists (ProjectStreamCollectionRpc
                                            //   status, lag (head − confirmed), lastError
   .subscriptions.get(name)
      .describe()                           // config + confirmed cursor + retry state
-     .waitUntilConfirmed({offset})         // uniform barrier, every kind
+     .waitUntilProcessed({offset})         // uniform barrier, every kind
      .processor                            // present iff processor-wake:
         .snapshot() .getRuntimeState()     //   dialed by placement (facet | expression)
   .setSubscriptionCursor({name, afterOffset}) // repair verbs stay stream-level
@@ -384,7 +390,7 @@ last error) that the consumer-lag UI task needs.
 | browser mirror (+ mirror-hosted browser processors)                            | reader (registered), deliberately not a subscription; checkpoints stay client-side                                                                   |
 | session connections (tabs, TUI, mobile, state-only, ad-hoc React)              | caller-opened connections; outside the durable model; #2384 controls here                                                                            |
 | remote-app vessel relay                                                        | the vessel app was retired and removed (its stale `apps/tasks` build artifacts too); remote apps ride [remote apps](./remote-apps.md)                |
-| `waitForEvent` / `waitUntilProcessed`                                          | verbs: `waitForEvent` unchanged; `waitUntilConfirmed` replaces the processor-only barrier                                                            |
+| `waitForEvent` / `waitUntilProcessed`                                          | verbs: `waitForEvent` = log-side; `waitUntilProcessed` = consumer-side, one verb for every subscription kind                                         |
 | runner self-catch-up, fold rebuilds, agent prompt re-reads, ad-hoc `getEvents` | readers (unregistered), unchanged                                                                                                                    |
 | LiveState subscribers                                                          | not an event consumer (no cursor/replay) — but `liveState` is a **required surface on every processor instance** and on the stream; see "Live state" |
 | project DO `StreamDatabase` view                                               | downstream of the project-worker `itx-call` delivery; out of scope                                                                                   |

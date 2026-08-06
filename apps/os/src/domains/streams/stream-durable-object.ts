@@ -650,9 +650,10 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** Ephemeral event bodies scoped to this one Durable Object incarnation. */
   readonly #ephemeralEvents = new EphemeralEventBuffer();
   /**
-   * Waiters parked on `waitUntilConfirmed`, checked from every cursor-store
-   * mutation. One-shot and in-memory on purpose: the barrier dies with the RPC
-   * caller or this incarnation, exactly like `waitForEvent`.
+   * Waiters parked on `waitUntilProcessed`'s cursor-row lane, checked from
+   * every cursor-store mutation. One-shot and in-memory on purpose: the
+   * barrier dies with the RPC caller or this incarnation, exactly like
+   * `waitForEvent`.
    */
   readonly #confirmationWaiters = new Set<{ check(): void }>();
   /**
@@ -2256,38 +2257,65 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /**
    * The uniform barrier: resolve once the named subscription's receiver has
-   * durably confirmed through `offset` — the awaited push acknowledgement
-   * (copy/itx/webhook), or a hosted processor's reported checkpoint. Works
-   * for every receiver kind off `confirmed_offset`; today's
-   * `waitUntilProcessed` is the processor-wake case of this one verb.
+   * durably processed through `offset` — one verb for every receiver kind.
    *
-   * PROCESSOR-WAKE CAVEAT: confirmation advances only on wake reports (the
-   * wake response's checkpoint), never on live batch acks — so while a hosted
-   * connection is streaming, this barrier can lag events the processor has
-   * already durably processed until the next wake cycle re-reports. Callers
-   * that need the processor's own fold position should use the processor
-   * facade's `waitUntilProcessed`, which reads the runner's cursor directly.
+   * The delegation split: PROCESSOR-WAKE rows delegate to the hosted runner's
+   * own barrier, which reads the runner's acknowledged cursor directly — so a
+   * live connection's progress counts immediately instead of waiting for the
+   * next wake cycle's checkpoint report. Facet placement dials the facet
+   * facade; expression placement dials the same public `waitUntilProcessed`
+   * verb on the receiver expression's `processor` node. Every OTHER kind
+   * resolves off the durable cursor row (`confirmed_offset >= offset`): the
+   * awaited push acknowledgement (copy/itx/webhook).
    *
    * One-shot like `waitForEvent`: it dies with the RPC caller or this
-   * incarnation, and a timeout carries the modelled wait-timeout prefix.
+   * incarnation. A cursor-lane timeout carries the modelled wait-timeout
+   * prefix; delegated lanes reject with the runner's own timeout error.
    */
-  async waitUntilConfirmed(
+  async waitUntilProcessed(
     name: string,
     args: { offset: number; timeoutMs?: number },
   ): Promise<void> {
     const trimmedName = name.trim();
     if (trimmedName.length === 0) {
-      throw new Error("waitUntilConfirmed requires a subscription name");
+      throw new Error("waitUntilProcessed requires a subscription name");
     }
     if (!Number.isSafeInteger(args.offset) || args.offset < 0) {
-      throw new Error("waitUntilConfirmed offset must be a non-negative safe integer.");
+      throw new Error("waitUntilProcessed offset must be a non-negative safe integer.");
     }
     const timeoutMs = args.timeoutMs ?? 20_000;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-      throw new Error("waitUntilConfirmed timeoutMs must be a positive number.");
+      throw new Error("waitUntilProcessed timeoutMs must be a positive number.");
     }
-    if (this.#coreProcessorState.subscriptions.outbound.byName[trimmedName] === undefined) {
+    const configured = this.#coreProcessorState.subscriptions.outbound.byName[trimmedName];
+    if (configured === undefined) {
       throw new Error(`subscription "${trimmedName}" does not exist`);
+    }
+
+    const receiver = configured.configuration.receiver;
+    if (receiver.action === "processor-wake") {
+      if (receiver.placement === "facet") {
+        const facet = await this.#dialProcessorFacet(trimmedName);
+        await facet.waitUntilProcessed({ offset: args.offset, timeoutMs, name: trimmedName });
+        return;
+      }
+      if (receiver.expression === undefined) {
+        throw new Error(
+          `processor-wake subscription "${trimmedName}" has neither facet placement nor an expression`,
+        );
+      }
+      // Swap the expression's trailing `wakeStreamProcessor` property step for
+      // the public `waitUntilProcessed` verb on the same `processor` node.
+      const barrier: ItxExpression = [
+        ...receiver.expression.slice(0, -1),
+        ["waitUntilProcessed", { offset: args.offset, timeoutMs }],
+      ];
+      const { value } = await evaluateItxExpression(
+        this.#createEventDeliveryAuthorityRoot(),
+        barrier,
+      );
+      disposeAcknowledgedRpcResult(value, "wait-until-processed");
+      return;
     }
 
     const confirmed = Promise.withResolvers<void>();

@@ -173,9 +173,8 @@ describe("agentCreationForPath", () => {
     );
     expect(
       subscriptions.flatMap((event) =>
-        event.payload.receiver.action === "processor-wake"
-          ? [event.payload.receiver.processorSlug]
-          : [],
+        // The subscription NAME is the contract selector (name == registered slug).
+        event.payload.receiver.action === "processor-wake" ? [event.payload.name] : [],
       ),
     ).toEqual(["agent", "capability-host"]);
     expect(

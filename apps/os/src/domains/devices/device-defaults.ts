@@ -22,7 +22,7 @@ export function deviceCreationEvents(input: {
     }),
     buildFacetProcessorSubscriptionConfiguredEvent({
       idempotencyKey: `stream/subscription-configured:${DeviceProcessorContract.slug}`,
-      processorSlug: DeviceProcessorContract.slug,
+      name: DeviceProcessorContract.slug,
     }),
   ];
 }

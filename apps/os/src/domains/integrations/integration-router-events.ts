@@ -7,22 +7,23 @@ import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils
  * never configures that processor. This module deliberately has no
  * runtime bindings so setup and Node E2E fixtures build the same public facts.
  *
- * The idempotency key fingerprints the receiver itself. A future
- * processor-slug or placement change therefore appends one replacement
- * configuration per connection without a hand-written data migration.
+ * The idempotency key fingerprints the receiver itself. A future name or
+ * placement change therefore appends one replacement configuration per
+ * connection without a hand-written data migration.
  */
 export function buildIntegrationRouterSubscriptionConfiguredEvent(input: {
   connection: string;
-  processorSlug: string;
+  /** The router subscription's name — the router processor contract's slug. */
+  name: string;
   projectId: string;
   slug: string;
 }) {
   return buildFacetProcessorSubscriptionConfiguredEvent({
     idempotencyKey: `integration-router-subscription:${JSON.stringify({
+      name: input.name,
       placement: "facet",
-      processorSlug: input.processorSlug,
     })}`,
-    processorSlug: input.processorSlug,
+    name: input.name,
   });
 }
 

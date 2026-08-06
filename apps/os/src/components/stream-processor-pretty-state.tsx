@@ -140,7 +140,8 @@ export function CorePrettyState({
                   : kind === "webhook-post" && typeof receiver?.url === "string"
                     ? `POST ${receiver.url}`
                     : receiver?.placement === "facet"
-                      ? `facet · ${String(receiver?.processorSlug ?? "")}`
+                      ? // The subscription name IS the contract slug and facet name.
+                        `facet · ${name}`
                       : formatItxExpressionHint(receiver?.expression);
               return (
                 <div key={name} className="rounded-xl bg-muted/40 px-3 py-2">

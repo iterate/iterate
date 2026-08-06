@@ -173,13 +173,14 @@ receiver: {
     "processor",
     "wakeStreamProcessor",
   ],
-  processorSlug: "agent",
 }
 ```
 
-`processorSlug` is required and names which contract runs; the subscription
-NAME must equal it — one identity (two instances of one contract is
-deliberately future work). Instead of an expression, `placement: "facet"` hosts
+The subscription NAME selects which registered contract runs (name ==
+registered slug — one identity; two instances of one contract is deliberately
+future work). Nothing enforces that at configure time: a name matching no
+registered processor fails loudly at wake with the registry's unknown-name
+error. Instead of an expression, `placement: "facet"` hosts
 the processor as a facet of the stream's own Durable Object: the subscription
 name is the facet name, delivery is an in-process parent→facet dial through
 the same wake protocol, and the facet's alarms are proxied to the parent's
@@ -312,10 +313,10 @@ Guarantees:
   After any batch failure the next read uses batch size 1, so a poison event
   cannot strand its healthy prefix.
 - A Durable Object alarm starts due retries even when the source is quiet.
-- `waitUntilConfirmed(name, { offset, timeoutMs? })` on the Stream DO is the
-  uniform barrier for every kind, off `confirmed_offset`. For processor-wake
-  rows confirmation advances on wake reports, so during a live hosted
-  connection it can lag until the next wake cycle.
+- `waitUntilProcessed(name, { offset, timeoutMs? })` on the Stream DO is the
+  uniform barrier for every kind. Processor-wake rows delegate to the hosted
+  runner's own barrier (precise even mid-connection); every other kind
+  resolves off `confirmed_offset` — the awaited push acknowledgement.
 
 Operator commands are literal:
 

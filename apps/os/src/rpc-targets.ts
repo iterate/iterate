@@ -601,7 +601,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         setSubscriptionCursor:
           "On this source stream, change where a subscription reads next; an already-started receiver call may finish.",
         subscriptions:
-          "This source stream's subscription catalog: list() every durable subscription with its cursor and lag; get(name) one subscription's describe/waitUntilConfirmed/processor surface.",
+          "This source stream's subscription catalog: list() every durable subscription with its cursor and lag; get(name) one subscription's describe/waitUntilProcessed/processor surface.",
         unsubscribeFromEvents:
           "On this receiving stream, remove one named subscription from the explicitly named source stream.",
         liveState: "Watch the stream's reduced state and current send/callback measurements.",
@@ -1225,7 +1225,7 @@ class StreamSubscriptionCollectionRpcTarget extends IterateRpcTarget<"StreamSubs
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "The stream's durable subscription catalog: list() every subscription joined with its confirmed cursor (lag = head − confirmed); get(name) one subscription's describe/waitUntilConfirmed surface — and, for processor-wake subscriptions, its hosted processor facade. Cursor seeks and resumes are stream verbs: streams.get(path).setSubscriptionCursor / resumeSubscription.",
+        "The stream's durable subscription catalog: list() every subscription joined with its confirmed cursor (lag = head − confirmed); get(name) one subscription's describe/waitUntilProcessed surface — and, for processor-wake subscriptions, its hosted processor facade. Cursor seeks and resumes are stream verbs: streams.get(path).setSubscriptionCursor / resumeSubscription.",
       children: {
         get: "One subscription by its source-local name.",
         list: "Every configured subscription with cursor, status, and lag.",
@@ -1265,11 +1265,12 @@ class StreamSubscriptionCollectionRpcTarget extends IterateRpcTarget<"StreamSubs
 
 /**
  * One durable subscription on one source stream: its committed configuration
- * and cursor (`describe`), the uniform confirmation barrier
- * (`waitUntilConfirmed` — works for EVERY receiver kind off the confirmed
- * cursor), and — for processor-wake subscriptions — the hosted processor
- * instance's facade. Cursor seeks and resumes stay stream verbs
- * (`setSubscriptionCursor` / `resumeSubscription`).
+ * and cursor (`describe`), the uniform barrier (`waitUntilProcessed` — one
+ * verb for EVERY receiver kind: processor-wake rows delegate to the hosted
+ * runner's own barrier, push kinds resolve off the confirmed cursor), and —
+ * for processor-wake subscriptions — the hosted processor instance's facade.
+ * Cursor seeks and resumes stay stream verbs (`setSubscriptionCursor` /
+ * `resumeSubscription`).
  */
 class StreamSubscriptionRpcTarget extends IterateRpcTarget<"StreamSubscription"> {
   constructor(
@@ -1284,11 +1285,11 @@ class StreamSubscriptionRpcTarget extends IterateRpcTarget<"StreamSubscription">
 
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `Subscription "${this.props.name}" on stream "${this.props.path}": describe() for configuration + confirmed cursor + retry state, waitUntilConfirmed({ offset }) to block until the receiver durably confirmed through an offset, and processor (processor-wake subscriptions only) for the hosted instance's snapshot/getRuntimeState/waitUntilProcessed. Repair verbs live on the stream: streams.get(path).setSubscriptionCursor / resumeSubscription.`,
+      instructions: `Subscription "${this.props.name}" on stream "${this.props.path}": describe() for configuration + confirmed cursor + retry state, waitUntilProcessed({ offset }) to block until the receiver durably processed through an offset (processor-wake rows ask the hosted runner directly; push kinds resolve off the confirmed cursor), and processor (processor-wake subscriptions only) for the hosted instance's snapshot/getRuntimeState/waitUntilProcessed. Repair verbs live on the stream: streams.get(path).setSubscriptionCursor / resumeSubscription.`,
       children: {
         describe: "Configuration + confirmed cursor + retry state (null when absent).",
         processor: "The hosted processor instance behind a processor-wake subscription.",
-        waitUntilConfirmed: "Block until the receiver durably confirmed through the given offset.",
+        waitUntilProcessed: "Block until the receiver durably processed through the given offset.",
       },
       parent: "streams.get(path).subscriptions",
     });
@@ -1324,13 +1325,14 @@ class StreamSubscriptionRpcTarget extends IterateRpcTarget<"StreamSubscription">
 
   /**
    * The uniform barrier: resolve once this subscription's receiver has
-   * durably confirmed through `offset` — a push acknowledgement, a hosted
-   * processor's reported checkpoint, or an offset-acking webhook's response.
-   * One-shot: it dies with the caller, like waitForEvent.
+   * durably processed through `offset`. Processor-wake rows delegate to the
+   * hosted runner's own barrier (precise even mid-connection); every other
+   * kind resolves off the confirmed cursor — the awaited push
+   * acknowledgement. One-shot: it dies with the caller, like waitForEvent.
    */
-  async waitUntilConfirmed(args: { offset: number; timeoutMs?: number }): Promise<void> {
+  async waitUntilProcessed(args: { offset: number; timeoutMs?: number }): Promise<void> {
     await Promise.resolve(
-      this.#stream()[STREAM_DURABLE_OBJECT_STUB].waitUntilConfirmed(this.props.name, args),
+      this.#stream()[STREAM_DURABLE_OBJECT_STUB].waitUntilProcessed(this.props.name, args),
     ).catch(rethrowStreamUnavailable);
   }
 
@@ -3666,7 +3668,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // The connection's router processor: facet-hosted on this connection's
       // own stream. `processor` is a claimed child, not a Web API replay — it
       // is the inspection surface for the subscription the connect flow
-      // persists (placement: "facet", processorSlug "slack").
+      // persists (placement: "facet", name "slack").
       if (method[0] === "processor") {
         const relay = facetProcessorRelay({
           auth: this.props.auth,
@@ -4372,7 +4374,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
         routeEvent,
         buildFacetProcessorSubscriptionConfiguredEvent({
           idempotencyKey: `stream/subscription-configured:${EmailAgentProcessorContract.slug}`,
-          processorSlug: EmailAgentProcessorContract.slug,
+          name: EmailAgentProcessorContract.slug,
         }),
       ),
     ]);
@@ -4810,7 +4812,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
           idempotencyKey: `chat-reply-notify/created:${this.#props.projectId}:${this.#path}`,
           payload: { config: {} },
         }),
-        processorSlug: ChatReplyNotifyProcessorContract.slug,
+        name: ChatReplyNotifyProcessorContract.slug,
       },
     });
     // Ensure the singleton collection stream exists WITH its projection
@@ -4850,7 +4852,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         context: { path: this.#path },
         message: "agent collection confirmation restarting after Durable Object reset",
         operation: () =>
-          this.stream.subscriptions.get(AGENT_COLLECTION_SUBSCRIPTION_NAME).waitUntilConfirmed({
+          this.stream.subscriptions.get(AGENT_COLLECTION_SUBSCRIPTION_NAME).waitUntilProcessed({
             offset: birthOffset,
             timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
           }),

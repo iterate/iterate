@@ -32,7 +32,6 @@ export function schedulerCreationEvents(input: {
         receiver: {
           action: "processor-wake",
           expression: ["schedulers", ["get", path], "processor", "wakeStreamProcessor"],
-          processorSlug: SchedulerProcessorContract.slug,
         },
       } satisfies SubscriptionConfiguredPayload,
     }),

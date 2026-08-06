@@ -67,7 +67,6 @@ export async function reviewBotSubscriptionEvent(
           "processor",
           "wakeStreamProcessor",
         ],
-        processorSlug: "review-bot",
       },
     },
     idempotencyKey: `review-bot/subscription:${sourceEvent.path}:${sourceEvent.offset}`,
@@ -105,7 +104,6 @@ export async function pullRequestLinterSubscriptionEvent(
           "processor",
           "wakeStreamProcessor",
         ],
-        processorSlug: "github-ai-linter",
       },
     },
     // Every route coordinate which changes the worker ref is part of the key.

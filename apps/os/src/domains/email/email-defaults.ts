@@ -35,7 +35,7 @@ export function emailRouterCreationEvents(input: {
         ]),
     buildFacetProcessorSubscriptionConfiguredEvent({
       idempotencyKey: `stream/subscription-configured:${EmailProcessorContract.slug}`,
-      processorSlug: EmailProcessorContract.slug,
+      name: EmailProcessorContract.slug,
     }),
   ];
 }

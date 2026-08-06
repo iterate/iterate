@@ -56,7 +56,7 @@ export function secretCreationEvents(input: {
     } as StreamEventInput,
     buildFacetProcessorSubscriptionConfiguredEvent({
       idempotencyKey: `stream/subscription-configured:${SecretProcessorContract.slug}`,
-      processorSlug: SecretProcessorContract.slug,
+      name: SecretProcessorContract.slug,
     }),
   ];
 }

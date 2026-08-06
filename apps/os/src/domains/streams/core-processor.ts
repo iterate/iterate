@@ -224,18 +224,6 @@ export class StreamCoreProcessor {
       if (event.payload.receiver.action === "webhook-post" && this.#projectId === null) {
         throw new Error("webhook subscriptions require a project-scoped stream");
       }
-      if (event.payload.receiver.action === "processor-wake") {
-        // Name and slug are ONE identity for hosted processors: the facet
-        // name, the progress key, and the wake route are all this string.
-        // Multi-instance (two names, one slug) is deliberately future work.
-        if (requestedName !== event.payload.receiver.processorSlug) {
-          throw new Error(
-            `processor-wake subscriptions must be named after their contract: ` +
-              `expected name "${event.payload.receiver.processorSlug}", got ` +
-              `${requestedName === undefined ? "no name" : `"${requestedName}"`}`,
-          );
-        }
-      }
       if (
         event.payload.receiver.action === "copy-to-stream" &&
         event.payload.receiver.receivingStreamPath === args.state.path

@@ -7,7 +7,7 @@
 import type { StreamEvent } from "./schemas.ts";
 
 /** Source-local identity for one durable subscription that sends matching stream events. */
-export type SubscriptionKey = string;
+export type SubscriptionName = string;
 
 /** Stable identity for one live connection to a processEventBatch callback. */
 export type ConnectionKey = string;
@@ -200,12 +200,11 @@ export type SubscriptionConfigurationForDelivery = {
     receiver:
       | {
           action: "processor-wake";
-          /** Which contract runs — required, and the subscription name must
-           * equal it (one identity; multi-instance is future work). */
-          processorSlug: string;
           /** `"facet"`: the processor runs as a facet of the stream's own
-           * Durable Object (the name IS the facet name; no expression).
-           * Omitted: the wake dials `expression` as before. */
+           * Durable Object (the subscription name IS the facet name and the
+           * registered contract slug; no expression). Omitted: the wake dials
+           * `expression` as before. Either way the subscription NAME selects
+           * which registered contract runs. */
           placement?: "facet";
           expression?: Array<string | [method: string, ...args: unknown[]]>;
         }
@@ -268,7 +267,7 @@ export type StreamDeliveryBatch = {
   events: StreamEvent[];
   streamMaxOffset: number;
   /** The source stream's subscription this delivery serves, by NAME. */
-  name: SubscriptionKey;
+  name: SubscriptionName;
   /**
    * Offset of the configure or cursor-set event that started this delivery run.
    * It stays stable across network retries, but changes after an explicit seek
@@ -416,7 +415,7 @@ export type StreamWebhookDelivery = {
    */
   event: StreamEvent;
   /** The source stream's subscription this delivery serves, by NAME. */
-  name: SubscriptionKey;
+  name: SubscriptionName;
   /** See {@link StreamDeliveryBatch.cursorChangedAtSourceOffset}. */
   cursorChangedAtSourceOffset: number;
   /** Stable across retries of this event within one delivery run. */
@@ -441,11 +440,12 @@ export type StreamProcessorWakeRequest = {
   };
   /**
    * The subscription's NAME — the caller-chosen per-stream binding this wake
-   * serves. Processor-wake names EQUAL their contract slug (enforced at
-   * configure time), so it is also the registered processor name (and, under
-   * facet placement, the facet name): hosts route on this one identity.
+   * serves. Processor-wake names EQUAL their contract slug, so it is also the
+   * registered processor name (and, under facet placement, the facet name):
+   * hosts route on this one identity, and a name matching no registered
+   * processor fails loudly here with the registry's unknown-name error.
    */
-  name: SubscriptionKey;
+  name: SubscriptionName;
 };
 
 /**

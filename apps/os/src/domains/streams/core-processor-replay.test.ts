@@ -110,7 +110,6 @@ const VERSION_30_COMMITTED_EVENTS: StreamEvent[] = [
     receiver: {
       action: "processor-wake",
       expression: ["agents", ["get", "/agents/reviewer"], "processor", "wakeStreamProcessor"],
-      processorSlug: "agent",
     },
   }),
   committed(17, "events.iterate.com/stream/subscription-configured", {
@@ -119,7 +118,6 @@ const VERSION_30_COMMITTED_EVENTS: StreamEvent[] = [
     receiver: {
       action: "processor-wake",
       placement: "facet",
-      processorSlug: "device",
     },
   }),
   committed(18, "events.iterate.com/stream/subscription-configured", {
@@ -245,7 +243,6 @@ describe("core processor version 30 committed-event replay", () => {
                   "processor",
                   "wakeStreamProcessor",
                 ],
-                processorSlug: "agent",
               },
             },
             configuredAtOffset: 16,
@@ -258,7 +255,6 @@ describe("core processor version 30 committed-event replay", () => {
               receiver: {
                 action: "processor-wake",
                 placement: "facet",
-                processorSlug: "device",
               },
             },
             configuredAtOffset: 17,

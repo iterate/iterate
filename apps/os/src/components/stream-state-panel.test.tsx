@@ -553,7 +553,6 @@ function streamRuntimeState(maxOffset: number): StreamRuntimeDebugState {
                 name: PROCESSOR_SUBSCRIPTION_NAME,
                 receiver: {
                   action: "processor-wake",
-                  processorSlug: "test",
                   expression: ["agents", "processor", "wakeStreamProcessor"],
                 },
               },

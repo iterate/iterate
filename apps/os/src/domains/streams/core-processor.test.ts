@@ -1081,7 +1081,6 @@ describe("StreamCoreProcessor validation and dispatch", () => {
             name: "wake-transformed",
             receiver: {
               action: "processor-wake",
-              processorSlug: "reviewer",
               expression: [
                 "agents",
                 ["get", "/agents/reviewer"],
@@ -1098,7 +1097,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     ).toThrow(/unrecognized/i);
   });
 
-  test("processor-wake requires a processorSlug and exactly one placement", () => {
+  test("processor-wake requires exactly one placement", () => {
     const { processor, state } = harness(SOURCE_PATH);
     const configure = (receiver: Record<string, unknown>) => () =>
       processor.validate({
@@ -1111,29 +1110,16 @@ describe("StreamCoreProcessor validation and dispatch", () => {
       });
     const expression = ["agents", ["get", "/agents/reviewer"], "processor", "wakeStreamProcessor"];
 
-    // The slug is an attribute of the subscription, never parsed from its name.
-    expect(configure({ action: "processor-wake", expression })).toThrow(/processorSlug/);
     // Neither placement: nothing to dial.
-    expect(configure({ action: "processor-wake", processorSlug: "agent" })).toThrow(
+    expect(configure({ action: "processor-wake" })).toThrow(/exactly one of placement/);
+    // Both placements: ambiguous.
+    expect(configure({ action: "processor-wake", placement: "facet", expression })).toThrow(
       /exactly one of placement/,
     );
-    // Both placements: ambiguous.
-    expect(
-      configure({
-        action: "processor-wake",
-        processorSlug: "agent",
-        placement: "facet",
-        expression,
-      }),
-    ).toThrow(/exactly one of placement/);
     // Facet placement: the subscription name IS the facet name; no expression.
-    expect(
-      configure({ action: "processor-wake", processorSlug: "agent", placement: "facet" }),
-    ).not.toThrow();
+    expect(configure({ action: "processor-wake", placement: "facet" })).not.toThrow();
     // Expression placement: today's own-DO / userspace-worker wake.
-    expect(
-      configure({ action: "processor-wake", processorSlug: "agent", expression }),
-    ).not.toThrow();
+    expect(configure({ action: "processor-wake", expression })).not.toThrow();
   });
 
   test("resumed requires a halted subscription", () => {
@@ -1159,23 +1145,24 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     ).toThrow(/not halted/);
   });
 
-  test("processor-wake subscriptions must be named after their contract slug", () => {
+  test("processor-wake accepts any name at configure time", () => {
     const { processor, state } = harness(SOURCE_PATH);
-    const configure = (name: string | undefined) => () =>
+    const configure = (name: string) => () =>
       processor.validate({
         event: {
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
-            ...(name === undefined ? {} : { name }),
-            receiver: { action: "processor-wake", processorSlug: "agent", placement: "facet" },
+            name,
+            receiver: { action: "processor-wake", placement: "facet" },
           },
         },
         state,
         authority: "public",
       });
-    // One identity: the name IS the slug (multi-instance is future work).
-    expect(configure("reviewer")).toThrow(/must be named after their contract/);
-    expect(configure(undefined)).toThrow(/must be named after their contract/);
+    // The NAME is the contract selector (name == registered slug), but nothing
+    // enforces that here: a name matching no registered processor fails loudly
+    // at wake with the registry's unknown-name error.
     expect(configure("agent")).not.toThrow();
+    expect(configure("not-a-registered-processor")).not.toThrow();
   });
 });

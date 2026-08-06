@@ -167,7 +167,7 @@ export function workspaceCreationEvents(input: {
         ]),
     buildFacetProcessorSubscriptionConfiguredEvent({
       idempotencyKey: `stream/subscription-configured:${WorkspaceProcessorContract.slug}`,
-      processorSlug: WorkspaceProcessorContract.slug,
+      name: WorkspaceProcessorContract.slug,
     }),
   ];
 }

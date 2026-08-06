@@ -55,7 +55,7 @@ export function repoCreationEvents(input: {
     }),
     buildFacetProcessorSubscriptionConfiguredEvent({
       idempotencyKey: `stream/subscription-configured:${RepoProcessorContract.slug}`,
-      processorSlug: RepoProcessorContract.slug,
+      name: RepoProcessorContract.slug,
     }),
   ];
 }

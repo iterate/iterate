@@ -124,7 +124,9 @@ type ConnectionRuntime = StreamRuntimeDebugState["runtime"]["connections"][strin
 type SubscriptionRow = {
   name: string;
   kind: SubscriptionKind;
-  /** Which contract runs — present iff `kind` is processor-wake. */
+  /** Which contract runs — present iff `kind` is processor-wake. Derived from
+   * the subscription name: the NAME is the contract selector (name ==
+   * registered slug). */
   processorSlug?: string;
   /** The processor runs as a facet of this stream's own Durable Object. */
   facet: boolean;
@@ -841,9 +843,7 @@ function readSubscriptionRow(
   return {
     name,
     kind,
-    ...(typeof receiver?.processorSlug === "string" && receiver.processorSlug !== ""
-      ? { processorSlug: receiver.processorSlug }
-      : {}),
+    ...(kind === "processor-wake" ? { processorSlug: name } : {}),
     facet,
     // Durable facts (reduced from committed events) outrank the mirrored
     // runtime row, which may not have loaded yet.

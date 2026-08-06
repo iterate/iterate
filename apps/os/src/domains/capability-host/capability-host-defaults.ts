@@ -46,7 +46,7 @@ export function capabilityHostCreationEvents(input: {
     }),
     buildFacetProcessorSubscriptionConfiguredEvent({
       idempotencyKey: `stream/subscription-configured:${CapabilityHostProcessorContract.slug}`,
-      processorSlug: CapabilityHostProcessorContract.slug,
+      name: CapabilityHostProcessorContract.slug,
     }),
   ];
 }

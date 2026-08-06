@@ -311,7 +311,8 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
   }
 
   /** Resolve once the named processor's acknowledged cursor reaches `offset` —
-   * the read-your-writes barrier (`waitUntilConfirmed`'s processor-wake case). */
+   * the read-your-writes barrier. The subscription catalog's uniform
+   * `waitUntilProcessed` delegates its facet-placed processor rows here. */
   async waitUntilProcessed(args: {
     offset: number;
     timeoutMs?: number;

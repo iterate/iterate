@@ -313,17 +313,17 @@ test("Agent create replays its earlier birth and setup events through its subscr
   const wakeSubscriptionPayload = (event: { payload?: Record<string, unknown> }) =>
     event.payload as {
       name?: string;
-      receiver?: { action?: string; placement?: string; processorSlug?: string };
+      receiver?: { action?: string; placement?: string };
     };
-  const facetWakeSubscriptionOffset = (description: string, processorSlug: string) =>
+  // The subscription NAME is the contract selector (name == registered slug).
+  const facetWakeSubscriptionOffset = (description: string, name: string) =>
     requiredOffset(description, (event) => {
       if (event.type !== "events.iterate.com/stream/subscription-configured") return false;
       const payload = wakeSubscriptionPayload(event);
       return (
         payload.receiver?.action === "processor-wake" &&
         payload.receiver.placement === "facet" &&
-        payload.receiver.processorSlug === processorSlug &&
-        payload.name === processorSlug
+        payload.name === name
       );
     });
   const agentSubscriptionOffset = facetWakeSubscriptionOffset(
@@ -692,11 +692,13 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     );
     subscriptionCount = subscriptions.length;
     processorSlugs = subscriptions
-      .map(
+      .filter(
         (event) =>
-          (event.payload as { receiver?: { processorSlug?: string } } | undefined)?.receiver
-            ?.processorSlug,
+          (event.payload as { receiver?: { action?: string } } | undefined)?.receiver?.action ===
+          "processor-wake",
       )
+      // The subscription NAME is the contract selector (name == registered slug).
+      .map((event) => (event.payload as { name?: string } | undefined)?.name)
       .filter((slug): slug is string => typeof slug === "string");
     if (processorSlugs.includes("agent") && processorSlugs.includes("capability-host")) break;
     if (Date.now() > mechanicsDeadline) break;

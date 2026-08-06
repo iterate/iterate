@@ -63,11 +63,11 @@ import { EventFilter } from "./event-filter.ts";
 // (opaque, caller-chosen; auto-generated names keep the reserved
 // `subscription:<offset>` form and are first-class — the old
 // generated-key flag is gone), outbound subscriptions live
-// under `subscriptions.outbound.byName`, and `processorSlug` is required on
-// `processor-wake` — the subscription name must EQUAL it (one identity; two
-// instances of one contract are future work) — and the receiver gains
-// `placement: "facet"` (the subscription name IS the facet name; no itx
-// expression).
+// under `subscriptions.outbound.byName`, the subscription NAME alone selects
+// which registered contract a `processor-wake` runs (no receiver slug field;
+// one identity — two instances of one contract are future work), and the
+// receiver gains `placement: "facet"` (the subscription name IS the facet
+// name; no itx expression).
 export const CORE_STATE_VERSION = 30;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
@@ -142,14 +142,13 @@ export const SubscriptionReceiver = z.discriminatedUnion("action", [
       // equal folding its stream's committed events. Wake delivery feeds the
       // processor its own log, so transforming it would break replay/rebuild
       // determinism.
+      // The subscription NAME is the contract selector: it must equal the
+      // registered processor slug (one identity; multi-instance — two names,
+      // one slug — is deliberately future work; see
+      // docs/stream-subscription-model-redesign.md). Nothing enforces that at
+      // configure time: a name matching no registered processor fails loudly
+      // at wake with the registry's unknown-name error.
       action: z.literal("processor-wake"),
-      /**
-       * Which contract runs. Required, and the subscription NAME must equal
-       * it: name and slug are one identity (multi-instance — two names, one
-       * slug — is deliberately future work; see
-       * docs/stream-subscription-model-redesign.md).
-       */
-      processorSlug: z.string().trim().min(1),
       /**
        * Where the processor runs. `"facet"` hosts it as a facet of this
        * stream's own Durable Object: the subscription name IS the facet name
@@ -535,7 +534,6 @@ export const CoreProcessorContract = defineProcessorContract({
                 "processor",
                 "wakeStreamProcessor",
               ],
-              processorSlug: "agent",
             },
           },
         },
@@ -547,7 +545,6 @@ export const CoreProcessorContract = defineProcessorContract({
             receiver: {
               action: "processor-wake",
               placement: "facet",
-              processorSlug: "device",
             },
           },
         },

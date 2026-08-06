@@ -1811,11 +1811,12 @@ export interface WorkspaceGit {
 
 /**
  * One durable subscription on one source stream: its committed configuration
- * and cursor (`describe`), the uniform confirmation barrier
- * (`waitUntilConfirmed` — works for EVERY receiver kind off the confirmed
- * cursor), and — for processor-wake subscriptions — the hosted processor
- * instance's facade. Cursor seeks and resumes stay stream verbs
- * (`setSubscriptionCursor` / `resumeSubscription`).
+ * and cursor (`describe`), the uniform barrier (`waitUntilProcessed` — one
+ * verb for EVERY receiver kind: processor-wake rows delegate to the hosted
+ * runner's own barrier, push kinds resolve off the confirmed cursor), and —
+ * for processor-wake subscriptions — the hosted processor instance's facade.
+ * Cursor seeks and resumes stay stream verbs (`setSubscriptionCursor` /
+ * `resumeSubscription`).
  */
 export interface StreamSubscription {
   __describe(): Promise<Description>;
@@ -1824,11 +1825,12 @@ export interface StreamSubscription {
   describe(): Promise<StreamSubscriptionDescription | null>;
   /**
    * The uniform barrier: resolve once this subscription's receiver has
-   * durably confirmed through `offset` — a push acknowledgement, a hosted
-   * processor's reported checkpoint, or an offset-acking webhook's response.
-   * One-shot: it dies with the caller, like waitForEvent.
+   * durably processed through `offset`. Processor-wake rows delegate to the
+   * hosted runner's own barrier (precise even mid-connection); every other
+   * kind resolves off the confirmed cursor — the awaited push
+   * acknowledgement. One-shot: it dies with the caller, like waitForEvent.
    */
-  waitUntilConfirmed(args: { offset: number; timeoutMs?: number }): Promise<void>;
+  waitUntilProcessed(args: { offset: number; timeoutMs?: number }): Promise<void>;
   /** The hosted processor instance behind a processor-wake subscription
    * (snapshot/getRuntimeState/waitUntilProcessed), dialed by placement. */
   processor: StreamProcessorRpc;
@@ -2198,7 +2200,7 @@ export type StreamDeliveryBatch = {
   events: StreamEvent[];
   streamMaxOffset: number;
   /** The source stream's subscription this delivery serves, by NAME. */
-  name: SubscriptionKey;
+  name: SubscriptionName;
   /**
    * Offset of the configure or cursor-set event that started this delivery run.
    * It stays stable across network retries, but changes after an explicit seek
@@ -2293,11 +2295,12 @@ export type StreamProcessorWakeRequest = {
   };
   /**
    * The subscription's NAME — the caller-chosen per-stream binding this wake
-   * serves. Processor-wake names EQUAL their contract slug (enforced at
-   * configure time), so it is also the registered processor name (and, under
-   * facet placement, the facet name): hosts route on this one identity.
+   * serves. Processor-wake names EQUAL their contract slug, so it is also the
+   * registered processor name (and, under facet placement, the facet name):
+   * hosts route on this one identity, and a name matching no registered
+   * processor fails loudly here with the registry's unknown-name error.
    */
-  name: SubscriptionKey;
+  name: SubscriptionName;
 };
 
 /**
@@ -3473,7 +3476,7 @@ export type DynamicWorkerDispatchOptions = {
 };
 
 /** Source-local identity for one durable subscription that sends matching stream events. */
-export type SubscriptionKey = string;
+export type SubscriptionName = string;
 
 /**
  * The committed subscription fields carried with a delivery whose cursor the
@@ -3499,12 +3502,11 @@ export type SubscriptionConfigurationForDelivery = {
     receiver:
       | {
           action: "processor-wake";
-          /** Which contract runs — required, and the subscription name must
-           * equal it (one identity; multi-instance is future work). */
-          processorSlug: string;
           /** `"facet"`: the processor runs as a facet of the stream's own
-           * Durable Object (the name IS the facet name; no expression).
-           * Omitted: the wake dials `expression` as before. */
+           * Durable Object (the subscription name IS the facet name and the
+           * registered contract slug; no expression). Omitted: the wake dials
+           * `expression` as before. Either way the subscription NAME selects
+           * which registered contract runs. */
           placement?: "facet";
           expression?: Array<string | [method: string, ...args: unknown[]]>;
         }
@@ -3773,7 +3775,6 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
       receiver:
         | {
             action: "processor-wake";
-            processorSlug: string;
             placement?: "facet" | undefined;
             expression?: ItxExpression | undefined;
           }
@@ -3806,7 +3807,6 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
       receiver:
         | {
             action: "processor-wake";
-            processorSlug: string;
             placement?: "facet" | undefined;
             expression?: ItxExpression | undefined;
           }
@@ -4365,7 +4365,6 @@ export type CoreProcessorState = {
             receiver:
               | {
                   action: "processor-wake";
-                  processorSlug: string;
                   placement?: "facet" | undefined;
                   expression?: ItxExpression | undefined;
                 }

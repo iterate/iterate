@@ -55,7 +55,6 @@ test("a linked connection gets a hosted review processor", async () => {
               "processor",
               "wakeStreamProcessor",
             ],
-            processorSlug: "review-bot",
           },
           filter: {
             eventTypes: ["events.iterate.com/github/webhook-received"],
@@ -143,7 +142,6 @@ test("a config worker update refreshes every linked connection processor", async
         payload: {
           receiver: {
             action: "processor-wake",
-            processorSlug: "review-bot",
           },
           filter: {
             eventTypes: ["events.iterate.com/github/webhook-received"],

@@ -390,7 +390,6 @@ describe("userspace GitHub pull-request routing", () => {
           },
           receiver: {
             action: "processor-wake",
-            processorSlug: "github-ai-linter",
           },
         },
       },

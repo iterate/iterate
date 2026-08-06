@@ -83,7 +83,6 @@ function hostedConfig(
     receiver: {
       action: "processor-wake",
       expression: ["agents", ["get", "/source"], "processor", "wakeStreamProcessor"],
-      processorSlug: "test-processor",
     },
   };
 }

@@ -1666,10 +1666,10 @@ test("changing a subscription cursor deliberately copies the same source coordin
     name: subscriptionName,
     afterOffset: selected!.offset - 1,
   });
-  // The uniform barrier works for a copy receiver too: confirmed = the copy ack.
+  // The uniform barrier works for a copy receiver too: processed = the copy ack.
   await source.subscriptions
     .get(subscriptionName)
-    .waitUntilConfirmed({ offset: selected!.offset, timeoutMs: 30_000 });
+    .waitUntilProcessed({ offset: selected!.offset, timeoutMs: 30_000 });
   const copiesAfterSeek = await receiver.getEvents({
     afterOffset: 0,
     eventTypes: [MATCHING_EVENT_TYPE],
@@ -2016,7 +2016,6 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
       receiver: {
         action: "processor-wake",
         expression: ["schedulers", ["get", streamPath], "processor", "wakeStreamProcessor"],
-        processorSlug: "scheduler",
       },
     }),
   );
@@ -2341,7 +2340,6 @@ test.skipIf(deployedBaseUrl() === null)(
         receiver: {
           action: "processor-wake",
           expression: ["schedulers", ["get", streamPath], "processor", "wakeStreamProcessor"],
-          processorSlug: "scheduler",
         },
       });
 
@@ -2463,7 +2461,6 @@ test("hosted delivery intersects the stored filter with the processor's announce
       receiver: {
         action: "processor-wake",
         expression: ["schedulers", ["get", streamPath], "processor", "wakeStreamProcessor"],
-        processorSlug: "scheduler",
       },
     }),
   );
@@ -2546,7 +2543,6 @@ test("a facet-placed processor delivers in-process and serves snapshots through 
       receiver: {
         action: "processor-wake",
         placement: "facet",
-        processorSlug: "slack",
       },
     }),
   );
@@ -2565,7 +2561,7 @@ test("a facet-placed processor delivers in-process and serves snapshots through 
     name: subscriptionName,
     status: "active",
     configuration: {
-      receiver: { action: "processor-wake", placement: "facet", processorSlug: "slack" },
+      receiver: { action: "processor-wake", placement: "facet" },
     },
   });
 
@@ -3155,15 +3151,14 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
     },
     {
       // Wake delivery must feed the processor its committed log verbatim, so
-      // the processor-wake receiver has no jsonataTransform field at all. The
-      // name equals the slug, so the transform is the only invalid field.
+      // the processor-wake receiver has no jsonataTransform field at all —
+      // the transform is the only invalid field here.
       key: `wake-transform-${marker}`,
       message: /unrecognized/i,
       event: subscriptionConfigured({
         name: "agent",
         receiver: {
           action: "processor-wake",
-          processorSlug: "agent",
           expression: ["agents", ["get", `/agents/${marker}`], "processor", "wakeStreamProcessor"],
           jsonataTransform: "payload",
         },
