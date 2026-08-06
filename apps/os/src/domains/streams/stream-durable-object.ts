@@ -879,7 +879,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     waitUntil: (work) => this.ctx.waitUntil(work),
   });
   readonly #eventSender: StreamEventSender = new StreamEventSender({
-    idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
       // Delivery needs byte lengths for its batch cap. This merges durable
       // SQLite rows with the current incarnation's memory-only ephemeral
@@ -3050,14 +3049,6 @@ export class StreamDurableObject extends DurableObject<Env> {
   // Operator/admin verbs.
   // ===========================================================================
 
-  /** Sever every idle durable connection now — the idle timer's action, exposed for tests/operators. */
-  runIdleTeardownNow(): void {
-    this.#eventSender.runIdleTeardownNow();
-    // A stream going quiet checkpoints before it hibernates, so the next wake
-    // rebuilds from a fresh checkpoint instead of folding the debounce window.
-    this.#flushCoreProcessorState();
-  }
-
   /** Kills the current Durable Object incarnation so experiments can observe restart behavior. */
   kill(): void {
     this.ctx.abort("kill requested");
@@ -3093,11 +3084,4 @@ function parseStreamDurableObjectName(name: string | undefined) {
     throw new Error("Stream Durable Object must be addressed by name.");
   }
   return DurableObjectNameCodec.parse(name, { allowNullProjectId: true });
-}
-
-/** How long a stream may hold idle configured delivery connections before severing them. */
-function idleTeardownMs(env: Env): number {
-  const raw = (env as { STREAM_IDLE_TEARDOWN_MS?: string | number }).STREAM_IDLE_TEARDOWN_MS;
-  const parsed = typeof raw === "string" ? Number(raw) : raw;
-  return typeof parsed === "number" && Number.isFinite(parsed) && parsed > 0 ? parsed : 5 * 60_000;
 }

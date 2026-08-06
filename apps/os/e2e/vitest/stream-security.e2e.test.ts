@@ -41,7 +41,6 @@ test("project users cannot reach stream test controls or the raw Durable Object"
   const hostile = userStream as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
 
   const attempts: Array<[string, unknown[]]> = [
-    ["testRunIdleTeardownNow", []],
     ["testReset", []],
     ["testAppendCoreEvents", [[{ type: "events.iterate.com/stream/paused", payload: {} }]]],
     ["testReceiveCopiedEvents", [{}]],

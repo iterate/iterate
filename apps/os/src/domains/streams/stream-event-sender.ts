@@ -102,6 +102,7 @@ import {
   isDurableObjectLifecycleError,
   isRetryableDurableObjectAvailabilityError,
 } from "./stream-unavailable.ts";
+import { eventCanWakeDormantSubscriber } from "./stream-subscriber-pager.ts";
 
 // =============================================================================
 // Delivery math: pure retry and batch-size calculations. Every function here
@@ -151,6 +152,8 @@ const DELIVERY_BATCH_LIMIT = 1000;
  */
 const HOSTED_CALLBACK_EVENT_LIMIT = 1;
 const HOSTED_SCAN_EVENT_LIMIT = 100;
+/** Briefly coalesce active bursts, then release every callback that can be re-paged or re-woken. */
+const IDLE_CONNECTION_TEARDOWN_MS = 5_000;
 
 /** Soft cap on a delivery batch's payload bytes (large events shrink the batch). */
 const DELIVERY_BATCH_BYTE_LIMIT = 1024 * 1024;
@@ -355,17 +358,6 @@ export class StreamEventSender {
   // resets these and the durable rows + folded config re-derive every decision
   // (at-least-once absorbs the repeats).
   readonly #hostedWakesInFlight = new Set<string>();
-  /**
-   * Hosted callbacks deliberately closed after an idle, fully-settled period.
-   * Keep them closed until this source appends something new. This is
-   * incarnation-local: after eviction a redundant wake is safe, while a
-   * same-turn idle close followed by an immediate wake would create an
-   * unbounded open/close alarm loop on a quiet stream.
-   */
-  readonly #hostedIdledAtOffset = new Map<
-    string,
-    { configuredAtOffset: number; sourceOffset: number }
-  >();
   #nextHostedConnectionGeneration = 0;
   readonly #sourceOwnedSendsInFlight = new Set<string>();
   /**
@@ -385,10 +377,9 @@ export class StreamEventSender {
     string,
     { completionLatency: LatencyRing; deliveryDuration: LatencyRing; bytesSent: number }
   >();
-  constructor(args: { idleTeardownMs: number; hooks: StreamEventSenderHooks }) {
+  constructor(args: { hooks: StreamEventSenderHooks }) {
     this.#hooks = args.hooks;
     this.connections = new StreamConnections({
-      idleTeardownMs: args.idleTeardownMs,
       hooks: {
         ...args.hooks,
         readBatch: (afterOffset, beforeOffset, limit) =>
@@ -478,7 +469,7 @@ export class StreamEventSender {
 
   /** The DO alarm handler body: retry whatever is due, then re-arm. */
   onAlarm(): boolean {
-    this.#rememberIdleHostedCallbacks(this.connections.onAlarm());
+    this.connections.onAlarm();
     this.#failExpiredHostedDeliveries();
     return this.sendDue();
   }
@@ -506,7 +497,6 @@ export class StreamEventSender {
       this.#hooks.store.delete(row.name);
       this.#limitNextReadToOne.delete(row.name);
       this.#subscriptionMetrics.delete(row.name);
-      this.#hostedIdledAtOffset.delete(row.name);
     }
 
     for (const [name, entry] of Object.entries(state.subscriptions.outbound.byName)) {
@@ -559,11 +549,34 @@ export class StreamEventSender {
         if (this.connections.has(name) || this.#hostedWakesInFlight.has(name)) {
           continue;
         }
-        const idled = this.#hostedIdledAtOffset.get(name);
-        if (idled?.configuredAtOffset === configOffset && state.maxOffset <= idled.sourceOffset) {
-          continue;
+        if (row.nextAttemptAt === null) {
+          if (row.confirmedOffset >= state.maxOffset) continue;
+
+          // The hosted cursor is the complete dormancy record. Idle teardown
+          // advances it through its own close fact; a later incarnation may
+          // add only `woken` before checking the subscription. Absorb that
+          // lifecycle-only suffix durably instead of resurrecting the
+          // processor. The explicit-filter carve-out matches session Pagers:
+          // a subscriber that names a lifecycle type still wakes for it.
+          const pending = this.#readBatch(
+            row.confirmedOffset,
+            Number.MAX_SAFE_INTEGER,
+            HOSTED_SCAN_EVENT_LIMIT,
+          );
+          const completeSuffix =
+            pending.length < HOSTED_SCAN_EVENT_LIMIT ||
+            pending.at(-1)?.event.offset === state.maxOffset;
+          const explicitTypes = config.filter?.eventTypes;
+          const lifecycleOnly = pending.every(
+            ({ event }) => !eventCanWakeDormantSubscriber(event.type, explicitTypes),
+          );
+          if (completeSuffix && lifecycleOnly) {
+            this.#hooks.store.ack(name, state.maxOffset, {
+              cursorChangedAtOffset: row.cursorChangedAtOffset,
+            });
+            continue;
+          }
         }
-        this.#hostedIdledAtOffset.delete(name);
         this.#wakeStreamProcessor(name, config.receiver, {
           configuredAtOffset: configOffset,
           cursorChangedAtOffset: row.cursorChangedAtOffset,
@@ -1502,23 +1515,6 @@ export class StreamEventSender {
       }),
     );
   }
-
-  runIdleTeardownNow(): void {
-    this.#rememberIdleHostedCallbacks(this.connections.runIdleTeardownNow());
-  }
-
-  #rememberIdleHostedCallbacks(names: readonly string[]): void {
-    if (names.length === 0) return;
-    const state = this.#hooks.coreState();
-    for (const name of names) {
-      const configured = state.subscriptions.outbound.byName[name];
-      if (configured?.configuration.receiver.action !== "processor-wake") continue;
-      this.#hostedIdledAtOffset.set(name, {
-        configuredAtOffset: configured.configuredAtOffset,
-        sourceOffset: state.maxOffset,
-      });
-    }
-  }
 }
 
 // =============================================================================
@@ -1714,14 +1710,12 @@ function deliveryErrorDiagnostics(error: unknown): {
  */
 export class StreamConnections {
   readonly #hooks: StreamConnectionsHooks;
-  readonly #idleTeardownMs: number;
   readonly #connections = new Map<string, StreamConnection>();
   #idleTeardownAtMs: number | null = null;
   #tearingDown = false;
   #lastPingRoundAtMs: number | null = null;
 
-  constructor(args: { idleTeardownMs: number; hooks: StreamConnectionsHooks }) {
-    this.#idleTeardownMs = args.idleTeardownMs;
+  constructor(args: { hooks: StreamConnectionsHooks }) {
     this.#hooks = args.hooks;
   }
 
@@ -1986,10 +1980,10 @@ export class StreamConnections {
     // that nested turn issues one pointless immediate wake per teardown.
     if (this.#tearingDown) return;
     const eligible = this.#idleEligibleConnectionKeys();
-    // Wedged connections are excluded from the activity derivation (teardown
-    // still closes them, but never acks or memoizes them) — their in-flight
-    // watchdog owns their future, and letting their stale lastDeliveredAt
-    // drive a past-due idle deadline would arm an immediate alarm every turn.
+    // Pending connections are excluded from both activity derivation and
+    // teardown — their in-flight watchdog owns their future. Letting stale
+    // lastDeliveredAt drive a past-due idle deadline would arm an immediate
+    // alarm every turn, while closing them would interrupt legitimate work.
     const idleCandidates = [...eligible.hosted, ...eligible.session].filter(
       (key) => this.#connections.get(key)?.hasPendingDelivery() !== true,
     );
@@ -2013,17 +2007,22 @@ export class StreamConnections {
       if (Number.isFinite(activityMs) && activityMs > lastActivityMs) lastActivityMs = activityMs;
     }
     this.#idleTeardownAtMs =
-      (lastActivityMs === 0 ? this.#hooks.now() : lastActivityMs) + this.#idleTeardownMs;
+      (lastActivityMs === 0 ? this.#hooks.now() : lastActivityMs) + IDLE_CONNECTION_TEARDOWN_MS;
     this.#hooks.armAlarm(Math.max(this.#hooks.now(), this.#idleTeardownAtMs));
   }
 
   runIdleTeardownNow(): string[] {
     this.#idleTeardownAtMs = null;
     const { hosted, session } = this.#idleEligibleConnectionKeys();
-    const keys = [...hosted, ...session];
-    const wedgedKeys = new Set(
-      hosted.filter((key) => this.#connections.get(key)?.hasPendingDelivery() === true),
+    // This alarm can be due because a quiet sibling armed it. Never let that
+    // sibling's lease dispose a different callback whose batch is still live.
+    const idleHosted = hosted.filter(
+      (key) => this.#connections.get(key)?.hasPendingDelivery() === false,
     );
+    const idleSessions = session.filter(
+      (key) => this.#connections.get(key)?.hasPendingDelivery() === false,
+    );
+    const keys = [...idleHosted, ...idleSessions];
     this.#tearingDown = true;
     try {
       for (const connectionKey of keys) this.close(connectionKey, "idle");
@@ -2040,17 +2039,13 @@ export class StreamConnections {
     // next real wake replays from, so a presence-consuming processor still
     // sees them then.
     const maxOffset = this.#hooks.coreState().maxOffset;
-    for (const connectionKey of hosted) {
-      if (wedgedKeys.has(connectionKey)) continue;
-      this.#hooks.store.ack(connectionKey, maxOffset);
-    }
+    for (const connectionKey of idleHosted) this.#hooks.store.ack(connectionKey, maxOffset);
     // Session connections have no cursor row; their equivalent of the ack
     // above is the stream-subscriber-pager attachment stamp, which must likewise land
     // AFTER the close facts so those facts can never wake the subscriber.
-    if (session.length > 0) this.#hooks.onSessionsIdleClosed(session);
+    if (idleSessions.length > 0) this.#hooks.onSessionsIdleClosed(idleSessions);
     this.#idleTeardownAtMs = null;
-    if (wedgedKeys.size > 0) queueMicrotask(() => this.#hooks.sendDueSubscriptions());
-    return keys.filter((connectionKey) => !wedgedKeys.has(connectionKey));
+    return keys;
   }
 
   /**

@@ -962,12 +962,6 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].kill());
   }
 
-  /** @internal Force the production idle-teardown action in live non-production tests. */
-  testRunIdleTeardownNow(): Promise<void> {
-    this.#assertCanUseStreamTestMethod("testRunIdleTeardownNow");
-    return Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].runIdleTeardownNow());
-  }
-
   /** @internal Delete one stream and create a new lifetime on its next request. */
   testReset(): Promise<void> {
     this.#assertCanUseStreamTestMethod("testReset");

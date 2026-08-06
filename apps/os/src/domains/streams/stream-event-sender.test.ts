@@ -138,7 +138,6 @@ function harness(args: {
     deliverToWebhook: args.deliverToWebhook ?? (async () => undefined),
   };
   const eventSender = new StreamEventSender({
-    idleTeardownMs: 60_000,
     hooks: {
       readEvents: ({ afterOffset, beforeOffset, limit }) =>
         args.events
@@ -311,11 +310,15 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(delivered[0]).toMatchObject({ scannedAfterOffset: 1, scannedThroughOffset: 5 });
   });
 
-  it("reopens from a lower processor checkpoint and retries from an alarm on a quiet stream", async () => {
+  it("reopens from a lower processor checkpoint on new work and retries on a quiet alarm", async () => {
     const attemptedOffsets: number[][] = [];
     let wakeNumber = 0;
     const h = harness({
-      events: [event(2, "b", { keep: true }), event(3, "b", { keep: true })],
+      events: [
+        event(2, "b", { keep: true }),
+        event(3, "b", { keep: true }),
+        event(4, "b", { keep: true }),
+      ],
       filter: { eventTypes: ["b"] },
       wakeProcessor: async () => {
         wakeNumber += 1;
@@ -330,7 +333,10 @@ describe("StreamEventSender hosted processor delivery", () => {
         };
       },
     });
-    h.store.ack(PROCESSOR_KEY, h.state.maxOffset);
+    // The stored cursor was caught up before offset 4 arrived. Waking for that
+    // real append still trusts the processor's lower checkpoint and replays
+    // from it; only lifecycle-only suffixes are suppressed.
+    h.store.ack(PROCESSOR_KEY, 3);
 
     h.eventSender.sendDue();
     await h.settle();
@@ -349,8 +355,12 @@ describe("StreamEventSender hosted processor delivery", () => {
     await h.settle();
 
     expect(h.wakeCalls).toHaveLength(2);
+    expect(attemptedOffsets).toEqual([[2], [4]]);
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
-    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({ nextAttemptAt: null });
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      confirmedOffset: 3,
+      nextAttemptAt: null,
+    });
   });
 
   it("rejects a hosted processor checkpoint beyond the current source head", async () => {
@@ -400,7 +410,7 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(processEventBatch[Symbol.dispose]).toHaveBeenCalledOnce();
   });
 
-  it("keeps an idle hosted callback closed until the source appends another event", async () => {
+  it("keeps an idle-closed hosted processor dormant across Stream incarnations", async () => {
     const events = [event(2, "b", { keep: true })];
     const h = harness({
       events,
@@ -418,17 +428,58 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(h.wakeCalls).toHaveLength(1);
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
 
-    h.eventSender.runIdleTeardownNow();
-    h.eventSender.sendDue();
+    h.setNow(15_000);
+    h.eventSender.onAlarm();
     await h.settle();
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(false);
     expect(h.wakeCalls).toHaveLength(1);
+    expect(h.alarmClears.length).toBeGreaterThan(0);
 
-    events.push(event(3, "b", { keep: true }));
-    h.state.maxOffset = 3;
+    // A cold Stream boot appends `woken`. The new sender has none of the old
+    // sender's memory, so the durable cursor must be sufficient to classify
+    // that lifecycle-only suffix as non-waking and advance through it.
+    events.push(event(3, "events.iterate.com/stream/woken", { incarnationId: "fresh" }));
+    const rebuilt = harness({
+      events,
+      store: h.store,
+      wakeProcessor: async () => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: 4,
+        processEventBatch: retainedProcessEventBatch((batch) => {
+          batch.reportDeliveryResult({ outcome: "ok" });
+        }),
+      }),
+    });
+    rebuilt.eventSender.sendDue();
+    await rebuilt.settle();
+    expect(rebuilt.wakeCalls).toHaveLength(0);
+    expect(rebuilt.store.get(PROCESSOR_KEY)).toMatchObject({ confirmedOffset: 3 });
+    expect(rebuilt.alarmClears.length).toBeGreaterThan(0);
+
+    events.push(event(4, "b", { keep: true }));
+    rebuilt.state.maxOffset = 4;
+    rebuilt.eventSender.sendDue();
+    await rebuilt.settle();
+    expect(rebuilt.wakeCalls).toHaveLength(1);
+    expect(rebuilt.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
+  });
+
+  it("wakes a hosted processor whose filter explicitly names a lifecycle event", async () => {
+    const h = harness({
+      events: [event(2, "events.iterate.com/stream/woken", { incarnationId: "fresh" })],
+      filter: { eventTypes: ["events.iterate.com/stream/woken"] },
+      wakeProcessor: async () => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: 2,
+        processEventBatch: retainedProcessEventBatch(() => undefined),
+      }),
+    });
+    h.store.ack(PROCESSOR_KEY, 1);
+
     h.eventSender.sendDue();
     await h.settle();
-    expect(h.wakeCalls).toHaveLength(2);
+
+    expect(h.wakeCalls).toHaveLength(1);
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
   });
 
@@ -1928,7 +1979,6 @@ function connectionsHarness(
   });
   let connections!: StreamConnections;
   connections = new StreamConnections({
-    idleTeardownMs: 60_000,
     hooks: {
       // Force several batches so the test can observe the one-at-a-time gate.
       readBatch:
@@ -2535,28 +2585,43 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(connection.isLive()).toBe(false);
   });
 
-  it("idle teardown never acknowledges a batch that has not completed", () => {
+  it("idle teardown closes a quiet sibling without interrupting a pending hosted batch", async () => {
     const h = connectionsHarness();
-    const calls: DeliveryCall[] = [];
-    const disposed = vi.fn();
-    const connection = h.connections.openHosted({
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    h.store.ensure("settled", 0, 12);
+    const pending = h.connections.openHosted({
       connectionKey: "processor",
       expectedHostedDelivery: h.expectedDelivery,
-      processEventBatch: recordingProcessEventBatch(calls, disposed),
+      processEventBatch: recordingProcessEventBatch([], () => undefined),
       replayAfterOffset: 0,
     });
-    connection.sendQueued();
-    const before = h.store.get("processor")!;
-
-    h.connections.runIdleTeardownNow();
-
-    expect(connection.isLive()).toBe(false);
-    expect(disposed).toHaveBeenCalledTimes(1);
-    expect(h.store.get("processor")).toMatchObject({
-      confirmedOffset: before.confirmedOffset,
-      inFlightDeadlineAt: before.inFlightDeadlineAt,
-      inFlightConnectionGeneration: before.inFlightConnectionGeneration,
+    const settledCalls: DeliveryCall[] = [];
+    h.connections.openHosted({
+      connectionKey: "settled",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(settledCalls, () => undefined),
+      replayAfterOffset: 2,
     });
+
+    h.connections.sendQueued();
+    settledCalls[0]!.report("ok");
+    await flushMicrotasks();
+    const pendingDeadline = h.store.get("processor")!.inFlightDeadlineAt!;
+
+    h.setNow(6_000);
+    h.connections.armOrClearIdleAlarm();
+    expect(h.connections.onAlarm()).toEqual(["settled"]);
+    expect(h.connections.has("settled")).toBe(false);
+    expect(pending.isLive()).toBe(true);
+    expect(h.store.get("processor")?.inFlightDeadlineAt).toBe(pendingDeadline);
+
+    // Exemption from idle teardown is bounded by the existing delivery
+    // watchdog, so a genuinely wedged callback still cannot pin forever.
+    h.setNow(pendingDeadline);
+    expect(h.connections.onAlarm()).toEqual([]);
+    expect(pending.isLive()).toBe(false);
+    expect(h.deliveryFailures).toHaveBeenCalledOnce();
+    errorLog.mockRestore();
   });
 
   it("idle-tears a session connection only when it has a Pager, stamping after the close fact", () => {
@@ -2617,7 +2682,7 @@ describe("StreamConnections hosted delivery watchdog", () => {
     // deadline: the old now+window reset slid it forward on the idle alarm's
     // own turn, so a fire landing just before the pushed deadline missed it
     // and real-clock teardown took up to two windows.
-    h.setNow(40_000);
+    h.setNow(4_000);
     h.connections.armOrClearIdleAlarm();
     expect(h.alarmTimes.at(-1)).toBe(firstDeadline);
 
