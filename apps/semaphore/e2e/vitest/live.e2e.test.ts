@@ -306,8 +306,6 @@ describe.sequential("live semaphore E2E", () => {
     // rejection during the retry even when the retry itself passes.
     const waiterSettlements = Promise.allSettled([waitingForAlpha, waitingForBeta]);
     try {
-      await sleep(250);
-
       await semaphore.resources.release({
         type,
         slug: "beta",

@@ -11,7 +11,8 @@ tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 
 Implementation is about 98% complete. Both mobile skips are removed and the
 reported delivery defects plus each recovery failure found by the strict gate
-have regression coverage. The latest exact-head baseline was clean.
+have regression coverage. The latest exact-head baseline kept both restored
+mobile flows first-try green but was rejected for one unrelated retry.
 
 Gate candidate one then caught two classified Auth deployment gaps: the
 post-deploy OAuth seed could race bootstrap-admin visibility, and Wrangler did
@@ -19,7 +20,10 @@ not recover Cloudflare D1 code 7009. The server now reports the first as 503;
 the seed and captured-output command wrapper bound retries to explicit
 availability outcomes while still rejecting unclassified failures. Auth's 86
 tests, the 18-test deploy-helper suite, typechecks, lint, and formatting are
-green. The 25-run streak remains at zero until this fix passes a fresh preview.
+green. The latest baseline then exposed a Semaphore waiter timing out while
+its lease assignment was already in flight; that lifecycle is now explicit
+and covered by the tightened live case. The 25-run streak remains at zero
+until these fixes pass a fresh preview.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -493,3 +497,13 @@ Test these in order; do not treat the first plausible one as the conclusion.
   a later unrelated error and all unclassified failures remain terminal. The
   18 deploy-helper tests and Auth's 86 tests pass with typecheck, lint, and
   formatting green.
+- 2026-08-06: Head `e32c5486a` passed 190 OS tests and both restored mobile
+  flows first try, but its baseline was rejected because Semaphore's
+  allowed-slug waiter case retried once. Exact traces showed both waiters
+  started before release; beta was reserved, then its D1 mirror write took
+  6.944 seconds and crossed the five-second wait deadline. The old timeout
+  discarded an assignment already in flight and returned both requests as
+  conflicts. Waiters now time out only while idle in the queue; an in-flight
+  assignment finishes, while its own failure rejects that waiter explicitly.
+  The live case no longer relies on a 250 ms cushion. Semaphore typecheck, its
+  four local tests, lint, and formatting pass.

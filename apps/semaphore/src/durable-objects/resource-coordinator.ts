@@ -23,8 +23,11 @@ type Waiter = {
   holder: string | null;
   allowedSlugs: string[] | undefined;
   timeoutHandle: ReturnType<typeof setTimeout>;
+  deadline: number;
+  acquiring: boolean;
   settled: boolean;
   resolve: (value: SemaphoreLeaseRecord | null) => void;
+  reject: (reason: unknown) => void;
 };
 
 export class ResourceCoordinator extends DurableObject<Env> {
@@ -57,7 +60,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
       return null;
     }
 
-    return new Promise<SemaphoreLeaseRecord | null>((resolve) => {
+    return new Promise<SemaphoreLeaseRecord | null>((resolve, reject) => {
       const waiterId = ++this.nextWaiterId;
       const waiter: Waiter = {
         id: waiterId,
@@ -66,7 +69,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
         holder: holder ?? null,
         allowedSlugs,
         timeoutHandle: setTimeout(() => {
-          if (waiter.settled) {
+          if (waiter.settled || waiter.acquiring) {
             return;
           }
 
@@ -74,8 +77,11 @@ export class ResourceCoordinator extends DurableObject<Env> {
           this.waiters = this.waiters.filter((candidate) => candidate.id !== waiterId);
           resolve(null);
         }, waitMs),
+        deadline: Date.now() + waitMs,
+        acquiring: false,
         settled: false,
         resolve,
+        reject,
       };
 
       this.waiters.push(waiter);
@@ -417,14 +423,29 @@ export class ResourceCoordinator extends DurableObject<Env> {
           continue;
         }
 
-        const lease = await this.tryAcquire(
-          waiter.type,
-          waiter.leaseMs,
-          waiter.holder,
-          waiter.allowedSlugs,
-        );
+        waiter.acquiring = true;
+        let lease: SemaphoreLeaseRecord | null;
+        try {
+          lease = await this.tryAcquire(
+            waiter.type,
+            waiter.leaseMs,
+            waiter.holder,
+            waiter.allowedSlugs,
+          );
+        } catch (error) {
+          waiter.acquiring = false;
+          waiter.settled = true;
+          clearTimeout(waiter.timeoutHandle);
+          waiter.reject(error);
+          continue;
+        }
+        waiter.acquiring = false;
         if (!lease) {
-          if (!waiter.settled) {
+          if (Date.now() >= waiter.deadline) {
+            waiter.settled = true;
+            clearTimeout(waiter.timeoutHandle);
+            waiter.resolve(null);
+          } else {
             deferred.push(waiter);
           }
           continue;
