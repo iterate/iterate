@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makeMemoryProgressStore } from "iterate/processors/testing";
+import { RepoNotSeededError } from "../repos/utils.ts";
 import { WorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { workerBuildingResponse } from "../workers/worker-fetch-dispatch.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
@@ -435,6 +436,23 @@ describe("ProjectProcessor bootstrap", () => {
       },
     ]);
     expect(h.state().birthCertificate).toEqual(PROJECT_CREATED.payload);
+  });
+
+  it("waits through a not-yet-seeded config repo before appending project/created", async () => {
+    const h = makeProjectHarness({
+      workerOutcomes: [
+        new RepoNotSeededError("Repo has no commits yet: Could not find main."),
+        Response.json({ app: "hello", projectId: "prj_test" }),
+      ],
+      workerRetrySleep: async () => undefined,
+    });
+    await h.stream.append(PROJECT_CREATE_REQUESTED, CONFIG_REPO_CREATED);
+
+    await h.settle();
+
+    expect(h.workerFetchCalls()).toBe(2);
+    expect(h.events("events.iterate.com/project/create-failed")).toEqual([]);
+    expect(h.events("events.iterate.com/project/created")).toHaveLength(1);
   });
 
   it("terminalizes a deterministic worker source-build failure", async () => {

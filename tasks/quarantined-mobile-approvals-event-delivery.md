@@ -22,8 +22,10 @@ The corrected head passed one clean exact-head preview. The first 25-run gate
 attempt was correctly rejected for a separate Project-create lifecycle reset
 and error-level hosted acknowledgement timeouts after rollout. Project-create
 recovery and explicit acknowledgement-timeout classification now have
-red/green coverage; the combined head needs a fresh preview before the gate
-restarts from zero.
+red/green coverage. The next attempt then exposed the Project processor's
+direct readiness probe bypassing the existing not-yet-seeded repo classifier;
+that bounded retry now has red/green coverage too. The combined head needs a
+fresh preview before the gate restarts from zero.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -163,6 +165,14 @@ notification journal.
   second even after prior failures, and logs as expected availability rather
   than an application error. Late results remain ignored by the existing
   per-batch token fence.
+- The next unchanged-head attempt again made both restored cases 0/0 in
+  PostHog and had no test retry, but the exact trace audit rejected it for a
+  `RepoNotSeededError` from the Project processor's default-worker readiness
+  probe (`prj_f7984c399815471887c4f38259c46677`). Browser fetch dispatch and
+  project-worker event delivery already classify this config-repo birth window
+  as “not ready yet”; only the processor's direct probe bypassed that contract.
+  It now retries the same bounded 20-attempt readiness loop and still
+  propagates every non-lifecycle dispatch failure.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -339,3 +349,10 @@ Test these in order; do not treat the first plausible one as the conclusion.
   and retry-policy coverage: an expired acknowledgement is now a bounded
   receiver-unavailable warning with a one-second retry, even late in the
   attempt ladder; genuine processor failures remain errors.
+- 2026-08-06: One strict rerun passed every test without retry but emitted one
+  Project processor callback error after the suite: `RepoNotSeededError` while
+  probing a newly born config repo. Added a red lifecycle spec and routed that
+  named transient (plus the matching build-in-progress shape) through the
+  processor's existing bounded readiness loop. The 31 project-processor tests,
+  OS typecheck, lint, and formatting pass. The restoration streak is zero
+  because this product commit changes the candidate head.

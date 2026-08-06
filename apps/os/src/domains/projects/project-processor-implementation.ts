@@ -10,6 +10,7 @@ import { timedStep } from "../../lib/step-timing.ts";
 import { parseConfigRepoTemplateReference } from "../../lib/config-repo-template-reference.ts";
 import { CONFIG_REPO_PATH } from "../repos/paths.ts";
 import { repoCreationEvents } from "../repos/repo-defaults.ts";
+import { isRepoNotSeededError } from "../repos/utils.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import type { ProjectDirectoryRecord } from "../../project-directory.ts";
 import { capabilityHostCreationEvents } from "../capability-host/capability-host-defaults.ts";
@@ -19,6 +20,7 @@ import { emailRouterCreationEvents } from "../email/email-defaults.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH } from "../email/utils.ts";
 import { isWorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
+import { isWorkerBuildInProgressError } from "../workers/worker-loader.ts";
 import { WORKER_SERVE_HEADER } from "../workers/worker-serve-info.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
@@ -580,9 +582,19 @@ export class ProjectProcessor extends StreamProcessor<
       // without the trusted source stamp. DynamicWorkerRunner owns this
       // authority boundary and replaces any userspace-authored serve header
       // with the commit it actually resolved, built, loaded, and invoked.
-      const response = await this.deps.workerFetch(
-        new Request("https://iterate-project.localhost/__itx_project_ready"),
-      );
+      let response: Response;
+      try {
+        response = await this.deps.workerFetch(
+          new Request("https://iterate-project.localhost/__itx_project_ready"),
+        );
+      } catch (error) {
+        if (!isRepoNotSeededError(error) && !isWorkerBuildInProgressError(error)) throw error;
+        if (attempt < PROJECT_WORKER_READY_ATTEMPTS) {
+          await this.#sleep(PROJECT_WORKER_READY_RETRY_MS);
+          continue;
+        }
+        break;
+      }
       try {
         if (response.headers.get(WORKER_BUILDING_HEADER) !== "1") {
           // Any application response proves the module built and loaded. Its
