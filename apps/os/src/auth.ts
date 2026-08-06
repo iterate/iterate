@@ -120,6 +120,14 @@ export type ItxAuthToken =
 /** Authority object carried by server-side RPC target instances. */
 export interface ItxAuth {
   readonly principal: string;
+  /**
+   * Where this authority came from: "external" when a credential was
+   * presented over the wire (any resolveItxAuth door, a middleware
+   * principal), "internal" for in-process trusted mints. The itx-vending
+   * boundary derives egress provenance from this — external sessions journal
+   * a client-session stream context naming the principal.
+   */
+  readonly origin: "external" | "internal";
   isAdmin(): boolean;
   canAccessProject(projectId: string): boolean;
   assertCanAccessProject(projectId: string | null): void;
@@ -139,6 +147,7 @@ type ProjectDirectory = {
 class ItxAuthContext implements ItxAuth {
   readonly #directory: ProjectDirectory | undefined;
   readonly #isAdmin: boolean;
+  readonly #origin: "external" | "internal";
   readonly #principal: string;
   readonly #projectIds: Set<string>;
   readonly #userPrincipal: UserPrincipal | undefined;
@@ -146,12 +155,14 @@ class ItxAuthContext implements ItxAuth {
   constructor(input: {
     directory?: ProjectDirectory;
     isAdmin: boolean;
+    origin: "external" | "internal";
     principal: string;
     projectIds?: Iterable<string>;
     userPrincipal?: UserPrincipal;
   }) {
     this.#directory = input.directory;
     this.#isAdmin = input.isAdmin;
+    this.#origin = input.origin;
     this.#principal = input.principal;
     this.#projectIds = new Set(input.projectIds || []);
     this.#userPrincipal = input.userPrincipal;
@@ -159,6 +170,10 @@ class ItxAuthContext implements ItxAuth {
 
   get principal(): string {
     return this.#principal;
+  }
+
+  get origin(): "external" | "internal" {
+    return this.#origin;
   }
 
   /** The signed-in user behind this context, when the credential carried one. */
@@ -214,7 +229,7 @@ class ItxAuthContext implements ItxAuth {
 }
 
 export function trustedInternalAuthContext(): ItxAuthContext {
-  return new ItxAuthContext({ isAdmin: true, principal: "trusted-internal" });
+  return new ItxAuthContext({ isAdmin: true, origin: "internal", principal: "trusted-internal" });
 }
 
 const streamDeliveryAuthContexts = new WeakSet<ItxAuthContext>();
@@ -226,6 +241,7 @@ const streamDeliveryAuthContexts = new WeakSet<ItxAuthContext>();
 export function streamDeliveryAuthContext(projectId: string | null): ItxAuthContext {
   const auth = new ItxAuthContext({
     isAdmin: projectId === null,
+    origin: "internal",
     principal: "trusted-internal",
     ...(projectId === null ? {} : { projectIds: [projectId] }),
   });
@@ -300,7 +316,7 @@ export async function resolveItxAuth(input: {
 
   if (credentials.type === "admin-secret") {
     assertAdminSecret(config, credentials.secret);
-    return new ItxAuthContext({ isAdmin: true, principal: "admin" });
+    return new ItxAuthContext({ isAdmin: true, origin: "external", principal: "admin" });
   }
 
   if (credentials.type === "project-secret") {
@@ -322,6 +338,7 @@ export async function resolveItxAuth(input: {
     // widen into.
     return new ItxAuthContext({
       isAdmin: false,
+      origin: "external",
       principal: `project-secret:${projectId}`,
       projectIds: [projectId],
     });
@@ -337,6 +354,7 @@ export async function resolveItxAuth(input: {
     // through the proxied app.
     return new ItxAuthContext({
       isAdmin: false,
+      origin: "external",
       principal: `project-app-session:${claims.userId}@${claims.projectId}`,
       projectIds: [claims.projectId],
     });
@@ -408,11 +426,12 @@ export function itxAuthFromPrincipal(
   options: { allowDirectoryFallback?: boolean } = {},
 ): ItxAuthContext {
   if (principal.type === "admin") {
-    return new ItxAuthContext({ isAdmin: true, principal: "admin" });
+    return new ItxAuthContext({ isAdmin: true, origin: "external", principal: "admin" });
   }
   return new ItxAuthContext({
     directory: options.allowDirectoryFallback === false ? undefined : authWorkerProjectDirectory(),
     isAdmin: principalIsAdmin(principal),
+    origin: "external",
     principal: principal.userId,
     projectIds: principal.projects.map((project) => project.id),
     userPrincipal: principal,
@@ -421,10 +440,15 @@ export function itxAuthFromPrincipal(
 
 function contextFromImpersonatedToken(token: ItxAuthToken): ItxAuthContext {
   if (token.type === "admin") {
-    return new ItxAuthContext({ isAdmin: true, principal: token.principal ?? "admin" });
+    return new ItxAuthContext({
+      isAdmin: true,
+      origin: "external",
+      principal: token.principal ?? "admin",
+    });
   }
   return new ItxAuthContext({
     isAdmin: false,
+    origin: "external",
     principal: token.principal,
     projectIds: token.projectScopes,
   });

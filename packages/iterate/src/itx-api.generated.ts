@@ -1342,7 +1342,7 @@ export interface Stream {
   /**
    * Push-driven stream runtime state for polling-free debug surfaces.
    *
-   * Rides the hibernatable liveState socket (domains/live-state-socket.ts) —
+   * Rides the client-given hibernatable Live State Pager —
    * a watched idle stream hibernates at zero duration and pushes frames only
    * when something actually changes. Snapshot-only degrade on purpose, never
    * the pinning fallback the generic hosts use: the DO's `liveState` property
@@ -2577,7 +2577,7 @@ export type AgentProcessorState = {
           )[]
         | undefined;
       actor?:
-        | { type: "user"; origin: "mcp" | "web" }
+        | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
         | { type: "agent"; path: string }
         | { type: "script"; executionId: string }
         | { type: "integration"; name: string }
@@ -2765,7 +2765,7 @@ export type AgentEventInput =
             )[]
           | undefined;
         actor?:
-          | { type: "user"; origin: "mcp" | "web" }
+          | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
           | { type: "agent"; path: string }
           | { type: "script"; executionId: string }
           | { type: "integration"; name: string }
@@ -3747,11 +3747,12 @@ export type StreamRuntimeDebugState = {
     connections: Record<string, ConnectionRuntimeState>;
     /**
      * Idle-closed session connections whose subscriber is still present on a
-     * hibernatable wake socket (wake-socket.ts). Presence surfaces should
+     * hibernatable Subscriber Pager that the client gave the Stream DO
+     * (stream-subscriber-pager.ts). Presence surfaces should
      * render these as dormant, not gone: their `connection-closed
      * reason:"idle"` fact is deliberately not a departure.
      */
-    dormantSubscribers: Record<string, { idleDeliveredThrough: number; wakeSentAtOffset?: number }>;
+    dormantSubscribers: Record<string, { idleDeliveredThrough: number; pageSentAtOffset?: number }>;
     /** Stored subscription progress, keyed by subscription key. */
     subscriptions: Record<string, SubscriptionRuntimeState>;
     metrics: StreamThroughputMetrics;
@@ -4160,6 +4161,7 @@ export type DeviceAppendInput =
   | TypedConsumedEventInput<
       "events.iterate.com/device/notification-requested",
       {
+        agentReplyEventOffset?: number | undefined;
         approvalRequestEventOffset?: number | undefined;
         body: string;
         destination:

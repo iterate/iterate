@@ -72,10 +72,11 @@ const myComputer = {
 
   /**
    * A liveness probe, deliberately absent from the declared types so agents
-   * never see it. The provider self-calls it over the full agent path to keep
-   * the capability-host warm and detect a dropped mount — see keepMountAlive. It
-   * returns THIS process's mount id so the caller can tell its own live mount
-   * from a different process that grabbed the same name (names collide easily).
+   * never see it. The provider calls it only after its relay-local
+   * Capability Provider Pager check fails, to distinguish a broken return channel
+   * from a different process taking the same name. It is not a periodic
+   * keepalive: idle sharing must leave the CapabilityHost Durable Object
+   * eligible for hibernation.
    */
   async ["__ping"]() {
     return MOUNT_ID;
@@ -184,7 +185,7 @@ async function connectAndProvide(
   input: ConnectInput,
   name: string,
   capability: typeof myComputer,
-): Promise<RpcStub<Project>> {
+): Promise<MountedSession> {
   const { auth, headers } = await input.reauth();
   const itx = connectItx({
     auth,
@@ -193,7 +194,7 @@ async function connectAndProvide(
     headers,
   }) as RpcStub<Project>;
   try {
-    await withTimeout(
+    const provision = await withTimeout(
       itx.provideCapability({
         type: "live",
         path: [name],
@@ -204,15 +205,20 @@ async function connectAndProvide(
       PROVIDE_TIMEOUT_MS,
       "provide",
     );
-    return itx;
+    return { itx, provision };
   } catch (error) {
     disposeItx(itx); // disposing the session cancels the in-flight handshake/provide
     throw error;
   }
 }
 
-const HEALTH_CHECK_INTERVAL_MS = 8_000;
-const HEALTH_CHECK_TIMEOUT_MS = 5_000;
+type MountedSession = {
+  itx: RpcStub<Project>;
+  provision: Awaited<ReturnType<RpcStub<Project>["provideCapability"]>>;
+};
+
+const PAGER_CHECK_INTERVAL_MS = 8_000;
+const PAGER_CHECK_TIMEOUT_MS = 5_000;
 // The provide await includes connectItx's ~15s handshake, so its bound sits well
 // above that — a handshake that would have succeeded must not be abandoned.
 const PROVIDE_TIMEOUT_MS = 25_000;
@@ -248,29 +254,53 @@ function disposeItx(itx: RpcStub<Project>): void {
   }
 }
 
-/** Ping the mount over the FULL agent path; returns the mount id the provider reports. */
+function disposeMountedSession(session: MountedSession): void {
+  try {
+    session.provision[Symbol.dispose]?.();
+  } catch {
+    // already gone
+  }
+  disposeItx(session.itx);
+}
+
+/** Probe the stateless ownership handle; this call never reaches the CapabilityHost DO. */
+function capabilityProviderPagerActive(provision: MountedSession["provision"]): Promise<boolean> {
+  // This watchdog-only method is deliberately omitted from the generated public ITX API.
+  // CapabilityProvision supplies it on every returned provision; the assertion exposes
+  // only that internal method because code generation intentionally hides it from agents.
+  const pager = provision as unknown as { __capabilityProviderPagerActive(): Promise<boolean> };
+  return withTimeout(
+    pager.__capabilityProviderPagerActive(),
+    PAGER_CHECK_TIMEOUT_MS,
+    "Capability Provider Pager check",
+  );
+}
+
+/** Diagnose an ended Pager-backed mount over the full path; returns the provider's mount id. */
 function pingMount(itx: RpcStub<Project>, name: string): Promise<string> {
+  // `myComputer` above always supplies __ping, but the mount name is runtime-selected and
+  // the method is intentionally absent from the public generated API agents receive.
   const ping = (itx as unknown as Record<string, { __ping(): Promise<string> }>)[name].__ping();
-  return withTimeout(ping, HEALTH_CHECK_TIMEOUT_MS, "mount ping");
+  return withTimeout(ping, PAGER_CHECK_TIMEOUT_MS, "mount ownership check");
 }
 
 /**
  * Keep the live mount routable for as long as we run. A live capability's
- * provider ref lives only in the capability-host DO's memory, so a DO eviction or
- * a dropped socket silently takes it "offline" while this process keeps running.
- * So every few seconds we self-call the mount over the full agent path: that
- * round-trip keeps the host DO warm AND proves it still answers AS US — `__ping`
- * returns our unique id, so a different process that grabbed the same name is
- * detected rather than mistaken for our own live mount.
+ * client gave the CapabilityHost DO one hibernatable Capability Provider Pager:
+ * "if you need my provider after releasing it, Page me here." The relay's
+ * local ownership probe is the Pager-backed mount's cheap health check. It never touches the
+ * CapabilityHost DO, so an idle shared computer no longer defeats DO
+ * hibernation. Only after the Pager-backed mount reports that it ended do we make one full
+ * path call to learn whether another provider took the name.
  *
  * States, reported via the callbacks (transitions only, not every retry):
- * - answers with our id  → live (`onLive`).
- * - doesn't answer       → dispose the suspect session and reconnect fresh (with
+ * - provision is active  → live (`onLive`).
+ * - Pager check fails     → dispose the suspect session and reconnect fresh (with
  *   re-resolved auth, so a reconnect past the token TTL still authenticates);
  *   `onDegraded` fires once until we're live again. This never throws out of the
  *   loop — a failed round backs off and retries.
- * - answers with a DIFFERENT id → another process owns the name; we `onConflict`
- *   and STOP rather than fight it forever (they'd endlessly replace each other).
+ * - inactive + mount answers with a DIFFERENT id → another process owns the
+ *   name; we `onConflict` and STOP rather than fight it forever.
  */
 async function keepMountAlive(input: {
   connect: ConnectInput;
@@ -280,7 +310,7 @@ async function keepMountAlive(input: {
   onDegraded?: () => void;
   onConflict?: () => void;
 }): Promise<void> {
-  let session: RpcStub<Project> | undefined;
+  let session: MountedSession | undefined;
   // Report transitions only — including the FIRST connect. `undefined` until we
   // report either state, so a failed initial connect still surfaces `onDegraded`
   // (not a silent "Starting…" while the CLI retries in the background).
@@ -307,34 +337,49 @@ async function keepMountAlive(input: {
         await sleep(RECOVERY_BACKOFF_MS);
         continue;
       }
-      // Don't declare live yet: fall through to the ping so we confirm the mount
-      // still answers AS US first. Another process could have grabbed the same
-      // name between our provide and now — verifying before goLive means the UI
-      // never flashes "live" for a mount we've already lost.
+      // provideCapability returns only after this exact Pager-backed relay owns the
+      // durable mount, so no DO round trip is needed to declare it live.
+      goLive();
     }
+
+    await sleep(PAGER_CHECK_INTERVAL_MS);
+    let active: boolean;
+    try {
+      active = await capabilityProviderPagerActive(session.provision);
+    } catch {
+      disposeMountedSession(session);
+      session = undefined;
+      goDown();
+      continue;
+    }
+    if (active) continue;
 
     let observedId: string;
     try {
-      observedId = await pingMount(session, input.name);
+      observedId = await pingMount(session.itx, input.name);
     } catch {
-      disposeItx(session); // suspect/wedged — disposing cancels the pending ping
+      disposeMountedSession(session);
       session = undefined;
       goDown();
-      continue; // reconnect immediately
+      continue;
     }
     if (observedId !== MOUNT_ID) {
       input.onConflict?.();
-      disposeItx(session);
+      disposeMountedSession(session);
       return; // yield the name; the caller (process/menu bar) decides what's next
     }
-    goLive();
-    await sleep(HEALTH_CHECK_INTERVAL_MS);
+
+    // This Pager-backed mount ended but the durable route still momentarily reaches us.
+    // Replace it on a fresh relay instead of leaving a healthy-looking zombie.
+    disposeMountedSession(session);
+    session = undefined;
+    goDown();
   }
 }
 
 /**
  * Ask for a name, provide `itx.<name>`, and hold the line until Ctrl-C (or until
- * another session takes the name over). The keepalive loop owns the connection.
+ * another provider takes the name over). The Pager watchdog owns the connection.
  */
 export async function shareMyComputer(
   input: ConnectInput & { log?: (message: string) => void },

@@ -46,6 +46,14 @@ page committed history, wait for or subscribe to events, and inspect runtime
 state.
 _Avoid_: StreamCapability, generic stream client
 
+**Hibernatable Pager**:
+A client-supplied WebSocket accepted by one Durable Object as a hibernation-safe return channel. The Durable Object can send a one-way Page after releasing its ordinary RPC reference to the client relay.
+_Avoid_: wake socket, lease socket, provider socket
+
+**Page**:
+A one-way Durable Object-to-relay message over a Hibernatable Pager. A Page is a best-effort prompt or latest-state update; durable events, state, and cursors remain the source of correctness.
+_Avoid_: callback, RPC call, wake-socket frame
+
 **Secret**:
 A project-scoped credential record whose Secret Material is write-only through
 the public itx surface and may be used only by authorized server-side runtime

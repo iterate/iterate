@@ -107,7 +107,7 @@ async function registerClient(config: OidcConfig): Promise<string> {
  * flow (including the auth worker's project-selection page), and persists the
  * resulting refresh token. Returns once tokens are live.
  */
-export async function signIn(baseUrl: string): Promise<void> {
+export async function signIn(baseUrl: string, options: { loginHint?: string } = {}): Promise<void> {
   const issuer = await discoverIssuer(baseUrl);
   const config = await fetchOidcConfig(issuer);
   const clientId = await registerClient(config);
@@ -118,7 +118,14 @@ export async function signIn(baseUrl: string): Promise<void> {
     redirectUri: REDIRECT_URI,
     scopes: SCOPES,
     usePKCE: true,
-    extraParams: { resource },
+    extraParams: {
+      resource,
+      // Rides the OAuth authorize request into the auth worker's login page,
+      // which prefills it — and, for `*+test@nustom.com` on deployments with
+      // the test OTP enabled, signs in with it automatically (preview QR
+      // deep links carry a per-PR test identity).
+      ...(options.loginHint ? { login_hint: options.loginHint } : {}),
+    },
   });
   console.log(`[auth] prompting: redirectUri=${REDIRECT_URI} clientId=${clientId}`);
   const result = await request.promptAsync({

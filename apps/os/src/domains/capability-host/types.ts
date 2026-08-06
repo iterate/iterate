@@ -14,6 +14,11 @@ import type { ItxExpression } from "../../itx/expression.ts";
 
 export type { ItxExpression } from "../../itx/expression.ts";
 
+/** Durable reference to the event that connected the provider's client-given Pager. */
+export type CapabilityProviderPagerReference = {
+  connectedAtOffset: number;
+};
+
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {
   args: unknown[];
@@ -75,6 +80,7 @@ export type CapabilityProvidedPayload =
       flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];
+      providerPager: CapabilityProviderPagerReference;
       type: "live";
       types?: string;
     }
