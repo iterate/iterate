@@ -311,7 +311,7 @@ expr)` (decode — walk with `Reflect.get`/`Reflect.apply`), plus `itxRoot(invok
 
 ## Increment 16 — WebSocket upgrades pass THROUGH the capability graph (the fetch lane)
 
-**Commit** `<pending>`. Jonas: "we could not have an ESP device connect to a project and present a website with
+**Commit** `0d50b29fe`. Jonas: "we could not have an ESP device connect to a project and present a website with
 WebSocket functionality — we really want that. Now that we can serialise an ItxExpression as a string in an
 HTTP header, we could reach a fetch-shaped capability by hopping between fetch functions." This is the thing
 apps/os cannot do (proven by its quarantined `apps/os/e2e/vitest/live-capability-websocket.e2e.test.ts` — a
