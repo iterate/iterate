@@ -1,8 +1,13 @@
 # Stream subscriptions, connections, and readers — model redesign
 
-Status: **design** (2026-08-03, not yet scheduled). Companion to
+Status: **core model shipped** (CORE*STATE_VERSION 30; clean break, no data
+migration). The identity doctrine (`name`, `byName`, opaque names), the
+single-column confirmed cursor, facet placement, and the unified
+`waitUntilConfirmed` barrier are implemented. A few designed extensions were
+deliberately **deferred** — each is marked "future work" inline below.
+Companion to
 [stream processors as facets](../tasks/stream-processors-as-facets.md) —
-that task decides _where processors run_; this doc decides _how anything
+that task decides \_where processors run*; this doc decides _how anything
 attaches to a stream and how it is identified_. The two are halves of one
 rebuild. Evidence base: a full consumer census of this repo, three
 independently produced designs reconciled against it, and the platform
@@ -33,26 +38,24 @@ stream-storage.ts:257-267`), the discriminator (receiver kind) lives in
    — the unification is half-real and unstated.
 3. **Absence is indistinguishable from failure.** A subscription whose
    receiver is legitimately gone (a live capability whose providing
-   session closed — `capability "…" is offline`,
-   `capability-host-processor-implementation.ts:476`) burns the 15-attempt
-   ladder (~2–2.5 h, `stream-event-sender.ts:117`) and then halts
-   permanently. There is no parked state.
+   session closed — `capability "…" is offline`) burns the 15-attempt
+   ladder (~2–2.5 h) and then halts permanently. There is no parked state.
+   _(Still true — a `parked` state was designed and prototyped but
+   deliberately deferred; see "Future work" below.)_
 4. **No receiver can own its cursor unless it speaks the wake protocol.**
-   `delivery` policy is documented as existing "only when the source owns
-   an awaited delivery cursor" (`core-processor-contract.ts:112-117`), and
-   the webhook adapter _discards the response body_
-   (`stream-durable-object.ts:328-334`) — a remote cannot ack an offset
-   even if it wants to. Notably `webhook-post` has **zero production
-   configs**; it was re-added in core-state v28 explicitly as the future
-   lane for remotely-hosted processors (`core-processor-contract.ts:52-55`),
-   so it can be redesigned for free.
+   `delivery` policy exists "only when the source owns an awaited delivery
+   cursor", and the webhook adapter _discards the response body_ — a
+   remote cannot ack an offset even if it wants to. Notably `webhook-post`
+   has **zero production configs**; it was re-added in core-state v28
+   explicitly as the future lane for remotely-hosted processors, so it can
+   be redesigned for free. _(Still true — the offset-acking webhook was
+   designed and prototyped but deliberately deferred; see "Future work".)_
 5. **Pull is load-bearing but has no public model.** The runner catches
-   itself up by paging its own stream (`stream-processor-runner.ts:
-1050-1080`), folds rebuild by replay, the agent re-reads its whole log
-   for prompts, and a dozen surfaces call `getEvents`/`getEventPage` ad
-   hoc — while the remote-apps vessel consumes streams through an
-   `as unknown as` cast onto a method that does not exist on the typed
-   surface (`apps/tasks/src/rpc-api.ts:497-503`).
+   itself up by paging its own stream, folds rebuild by replay, the agent
+   re-reads its whole log for prompts, and a dozen surfaces call
+   `getEvents`/`getEventPage` ad hoc — and the (since-retired and removed)
+   remote-apps vessel consumed streams through an `as unknown as` cast
+   onto a method that did not exist on the typed surface.
 
 ## The model
 
@@ -149,31 +152,31 @@ Rules:
 - **Caller-chosen, per-stream unique, 1–500 chars, trimmed** — the
   existing `SubscriptionKey` constraints (`core-processor-contract.ts:
 203-208`), applied to a better string.
-- **Slug is an attribute, not identity.** `processorSlug` becomes
-  _required_ on `processor-wake` and says which contract runs. Name
-  defaults to slug — the single-instance case reads as today
-  (`subscriptions.get("agent")`) — and two instances of one contract are
-  two birth events with two names and one slug.
+- **Slug names the contract.** `processorSlug` is _required_ on
+  `processor-wake` and says which contract runs. As shipped, the
+  subscription name must EQUAL the slug — one identity, enforced at
+  configure time — so the single-instance case reads as today
+  (`subscriptions.get("agent")`). Two instances of one contract (two
+  names, one slug) is designed but deferred; see "Future work".
 - **The field is renamed `subscriptionKey` → `name`** (event payload,
   state map, cursor table, wake request) under a `CORE_STATE_VERSION`
   bump. "Name" aligns with `ctx.facets.get(name, …)` and `getByName`;
   "key" stays reserved for storage internals, idempotency keys, and API
   keys, which it already means.
 
-## The cursor row: two offsets, one rule
+## The cursor row: one offset, one rule
 
 Keep `subscription_cursors`, one row per subscription. Replace the
-polymorphic offset with two columns whose meanings never vary by kind:
+polymorphic offset with ONE column whose meaning never varies by kind:
 
 ```sql
 create table subscription_cursors (
   name                                    text primary key,
   configured_at_offset                    integer not null,  -- birth epoch
   cursor_changed_at_offset                integer not null,  -- seek epoch
-  delivered_offset                        integer not null,  -- source completed transfer through here
   confirmed_offset                        integer not null,  -- far side durably claims through here
-  state                                   text not null default 'active',
-                                          -- 'active' | 'parked' | 'halted'
+  status                                  text not null default 'active',
+                                          -- 'active' | 'halted'
   -- retry block, verbatim from today (already kind-independent):
   attempt                                 integer not null default 0,
   next_attempt_at                         integer,
@@ -186,51 +189,67 @@ create table subscription_cursors (
   in_flight_connection_generation         integer,
   updated_at                              text not null
 );
--- invariant: confirmed_offset <= delivered_offset
 ```
 
 **The one scheduling rule, for every kind: delivery resumes after
-`confirmed_offset`.** `delivered_offset` bounds the outstanding window
-and feeds telemetry; it is never authority.
+`confirmed_offset`.** Anything sent but never confirmed redelivers —
+at-least-once; receivers dedupe by `(streamId, offset)`.
 
-Separate writers, no ambiguity: the send loop writes `delivered`; the
-receiver's completion/report path writes `confirmed`; both are fenced by
-`cursor_changed_at_offset` + `in_flight_connection_generation`, exactly
-like today's late-ack protection.
+Writers, fenced by `cursor_changed_at_offset` +
+`in_flight_connection_generation` exactly like today's late-ack
+protection:
 
-Per-kind semantics:
+| Receiver       | writes `confirmed`                                                                                                                   |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| copy-to-stream | the awaited receiving append resolves (the ack)                                                                                      |
+| itx-call       | the awaited call resolves (the ack)                                                                                                  |
+| webhook-post   | HTTP 2xx (response body discarded)                                                                                                   |
+| processor-wake | the wake response's reported checkpoint; live batch acks settle the in-flight watchdog only, so a stale row costs one redundant wake |
 
-| Receiver                                        | writes `delivered`       | writes `confirmed`                            | net behavior                                                                                                                                                              |
-| ----------------------------------------------- | ------------------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| copy-to-stream                                  | receiving append commits | same ack (both at once)                       | identical to today                                                                                                                                                        |
-| itx-call                                        | awaited call resolves    | same ack (both at once)                       | identical to today                                                                                                                                                        |
-| webhook-post (plain)                            | HTTP 2xx                 | same ack (both at once)                       | identical to today                                                                                                                                                        |
-| webhook-post (offset-acking)                    | HTTP 2xx                 | `confirmedOffset` in the 2xx response body    | remote owns its position; eviction ⇒ redelivery of the delivered-but-unconfirmed window — the at-least-once contract a remote-tracked webhook wants                       |
-| processor-wake                                  | wake/batch ack           | reported checkpoint                           | today's semantics ("a stale row costs one redundant wake"), in a dedicated column; `recordReportedCheckpoint` stops being a carve-out — it is a confirm without a deliver |
-| pull (registered reader / future SSE/long-poll) | page end returned        | the fetch itself declares `confirmed = after` | position-vs-committed, in existing vocabulary                                                                                                                             |
+The barrier verb `waitUntilConfirmed(name, {offset})` reads this column
+for every kind. Processor-wake caveat: during a live hosted connection
+the stored confirmation deliberately goes stale until the next wake
+report — callers that need the processor's own fold position use the
+processor facade's `waitUntilProcessed`.
 
-Lag becomes well-defined for every kind — `head − confirmed`, with
-`delivered − confirmed` as the outstanding window — which directly feeds
+Lag is well-defined for every kind — `head − confirmed` — which directly
+feeds
 [surface-durable-consumer-lag-in-stream-ui](../tasks/surface-durable-consumer-lag-in-stream-ui.md).
 
-## Subscription states: active, parked, halted
+**Future work — the delivered/confirmed split.** The original design
+carried a second `delivered_offset` column ("the source completed
+transfer through here") so a receiver could own its confirmation
+separately from transfer — the enabler for offset-acking webhooks (a
+remote returns `{ confirmedOffset }` in its 2xx body and owns its durable
+position, with eviction redelivering the delivered-but-unconfirmed
+window) and for pull-style registered readers. It was built, then cut
+before merge: no consumer existed, and the split leaked complexity into
+every ack path. If a remote-tracked webhook consumer materializes,
+reintroduce `delivered_offset` alongside the webhook 2xx-body parse in
+`stream-durable-object.ts` and the boot-time
+rewind-delivered-to-confirmed rule.
 
-`active` and `halted` are today's states (halt = the terminal outcome of
-the retry ladder; `subscription-delivery-resumed` already un-halts).
-**`parked` is new: the receiver is legitimately absent, and that is not a
-failure.** Parked means the cursor row stays put, no retry alarm is
-armed, and nothing is charged against the failure ladder. A receiver kind
-that can signal presence parks instead of failing:
+## Subscription statuses: active, halted
 
-- a live capability on the itx tree — the capability host knows
-  provide/revoke; the durable record already outlives the session-lived
-  target (precedent: `__describe` answers from durable metadata while the
-  live target is gone, `capability-host-processor-implementation.ts:461-470`);
-- a remote app — connect/disconnect on its inbound session.
+`active` and `halted` are the shipped statuses (halt = the terminal
+outcome of the retry ladder; `subscription-delivery-resumed` un-halts,
+via `streams.get(path).resumeSubscription`).
 
-`halted` stays reserved for genuine failure (receiver present and
-erroring). Open question below: whether the park/resume poke is an event
-(fits doctrine) or an RPC to the source.
+**Future work — `parked`.** The design added a third durable status: the
+receiver is legitimately absent (a live capability whose providing
+session closed, a disconnected remote app), and that is not a failure —
+cursor stays put, no retry alarm, nothing charged against the failure
+ladder. It was built end-to-end (event type, reducer arm,
+`StreamReceiverAbsentError`, UI badges, an internal resume door), then
+cut before merge because nothing ever wired the RESUME side: the
+capability host threw the absent error on invoke, but no presence signal
+(provide/revoke, remote-app connect) ever poked the stream to resume, so
+a parked subscription stayed parked forever — strictly worse than the
+halt ladder it replaced. Reintroducing it requires the resume wiring
+first: the receiver host must append `subscription-delivery-resumed`
+(or call a resume door) when the receiver announces presence again.
+Until then a legitimately-absent receiver burns the ordinary retry
+ladder and halts loudly.
 
 ## Receiver kinds
 
@@ -248,24 +267,28 @@ Existing arms, adjusted:
   must never skip).
 - **`itx-call`** — unchanged mechanics (expression evaluated per delivery
   against a fresh delivery-authority root); now the arm that also serves
-  live provided capabilities, with `parked` handling absence. This arm —
+  live provided capabilities (absence fails and retries like any other
+  delivery failure until `parked` ships — see "Future work" above). This arm —
   through a `remoteCapability` mount ([remote apps](./remote-apps.md)) —
   is also the first answer for "call RPC stub methods on a remote capnweb
   server": the remote dials in, mounts, and receives batches; if it
   implements the wake protocol it gets resumable checkpointed feeds,
   exactly as userspace SDK processors already do.
-- **`webhook-post`** — the adapter stops discarding the response body; an
-  optional `confirmedOffset` in the 2xx body splits confirmed from
-  delivered (see table). No new config knob.
+- **`webhook-post`** — unchanged: one POST per event, the 2xx alone
+  acknowledges, the response body is discarded. (The offset-acking
+  variant is future work — see "Future work" above.)
 
-**Per-subscription delivery controls (in scope).** No subscription has
-any size/shape control today — webhook page size is pinned to 1 event
-(`stream-event-sender.ts:706-717`), batch limits are global constants —
-while sessions gained `maxDeliveryEvents` / `maxDeliveryBytes` /
-`state: false` per connection (PR #2384). These become ordinary optional
-config in the subscription's birth event, honored by every push arm: a
-webhook-hosted remote processor can ask for real batches, a constrained
-device consumer can cap bytes.
+**Future work — per-subscription delivery controls.** No subscription
+has any size/shape control — webhook page size is pinned to 1 event,
+batch limits are global constants — while sessions have
+`maxDeliveryEvents` / `maxDeliveryBytes` / `state: false` per connection
+(PR #2384; those per-CONNECTION controls shipped and stay). The design
+made the same three knobs ordinary optional config in the subscription's
+birth event, honored by every push arm — a webhook-hosted remote
+processor asks for real batches, a constrained device consumer caps
+bytes. Built, then cut before merge: no consumer existed. Reintroduce as
+three optional fields on `SubscriptionConfiguredPayload` plus the batch
+narrowing in the send loop when one does.
 
 Deferred members (add when a real consumer demands them, as data):
 
@@ -285,15 +308,15 @@ Existing nouns only; sugar follows the documented shortcut precedent
 
 ```
 project.streams.get(path)                  // exists (ProjectStreamCollectionRpcTarget)
-  .subscriptions.list()                    // catalog ⋈ cursor rows: name, kind, slug?,
-                                           //   state, lag (head − confirmed), lastError
+  .subscriptions.list()                    // catalog ⋈ cursor rows: name, kind,
+                                           //   status, lag (head − confirmed), lastError
   .subscriptions.get(name)
-     .describe()                           // config + delivered/confirmed + retry state
+     .describe()                           // config + confirmed cursor + retry state
      .waitUntilConfirmed({offset})         // uniform barrier, every kind
-     .setCursor({afterOffset})             // existing cursor-set event
      .processor                            // present iff processor-wake:
-        .snapshot() .getRuntimeState()     //   dialed by placement (facet | DO | expression)
-        .liveState                         //   REQUIRED on every instance — see "Live state"
+        .snapshot() .getRuntimeState()     //   dialed by placement (facet | expression)
+  .setSubscriptionCursor({name, afterOffset}) // repair verbs stay stream-level
+  .resumeSubscription({name})
   .getEvents({after}) / .getEventPage(...) // reader surface (existing)
   .waitForEvent(...)                       // log-predicate barrier (existing)
   .openConnection(...)                     // sessions (existing, + #2384 controls)
@@ -301,6 +324,10 @@ project.streams.get(path)                  // exists (ProjectStreamCollectionRpc
 agent.processor                            // stays, as sugar for
                                            // streams.get(agentPath).subscriptions.get("agent").processor
 ```
+
+(Catalog-node sugar for `.setCursor` / `.resume` / `.liveState` was
+built and cut — zero callers; the stream-level verbs and the facet
+liveState relays cover every real consumer.)
 
 ## Live state
 
@@ -335,11 +362,10 @@ The engine follows the instance's placement:
 One structural consequence: today one engine per host DO _composes_ all
 of that DO's runners into a single `Live` object. Per-instance placement
 dissolves that composition — subscribers attach per instance
-(`subscriptions.get(name).processor.liveState`, with `agent.liveState`
-remaining as the documented sugar), and cross-instance composition
-happens at the stream's own `liveState`, which already carries the
-per-subscription runtime rows (state, lag, last error) that the
-consumer-lag UI task needs.
+(via the per-domain facades, e.g. `agent.liveState`), and
+cross-instance composition happens at the stream's own `liveState`,
+which already carries the per-subscription runtime rows (status, lag,
+last error) that the consumer-lag UI task needs.
 
 ## Coverage: every census kind, mapped
 
@@ -348,16 +374,16 @@ consumer-lag UI task needs.
 | processor on own DO (agent, project, repo, …)                                  | subscription, `processor-wake` + expression; confirmed = reported checkpoint                                                                         |
 | processor as stream facet (planned)                                            | subscription, `processor-wake` + `facet` placement; name = facet name; in-process dial                                                               |
 | userspace worker processor (`createProcessorHost`, sdk)                        | subscription, `processor-wake` + expression — unchanged protocol                                                                                     |
-| two instances, one contract                                                    | two subscriptions, two names, one slug; own-DO progress re-keyed by name                                                                             |
+| two instances, one contract                                                    | future work: name==slug is enforced today; two names sharing one slug needs name-keyed registration re-added                                         |
 | copy-to-stream (repo links, agent-collection, catalogs)                        | subscription, `copy-to-stream` — unchanged                                                                                                           |
 | project-worker feed, PostHog feed                                              | subscriptions, `itx-call` — already the target naming style (`project-worker`, `iterate-platform-posthog`)                                           |
-| live provided capability on the itx tree                                       | subscription, `itx-call` + `parked`                                                                                                                  |
+| live provided capability on the itx tree                                       | subscription, `itx-call`; absence retries/halts until `parked` ships (future work)                                                                   |
 | remote capnweb server                                                          | remote dials in + `remoteCapability` mount + `itx-call`; wake protocol for resumable feeds; outward `capnweb-call` deferred                          |
 | webhook, stream-tracked                                                        | subscription, `webhook-post` (plain)                                                                                                                 |
-| webhook, remote-tracked                                                        | subscription, `webhook-post` + `confirmedOffset` ack — or registered-reader pull                                                                     |
+| webhook, remote-tracked                                                        | future work: `webhook-post` + `confirmedOffset` ack (needs the delivered/confirmed split) — or registered-reader pull                                |
 | browser mirror (+ mirror-hosted browser processors)                            | reader (registered), deliberately not a subscription; checkpoints stay client-side                                                                   |
 | session connections (tabs, TUI, mobile, state-only, ad-hoc React)              | caller-opened connections; outside the durable model; #2384 controls here                                                                            |
-| remote-app vessel relay (`apps/tasks`)                                         | caller-opened connection through the vessel; **fix the `as unknown as` drift onto the real typed surface**                                           |
+| remote-app vessel relay                                                        | the vessel app was retired and removed (its stale `apps/tasks` build artifacts too); remote apps ride [remote apps](./remote-apps.md)                |
 | `waitForEvent` / `waitUntilProcessed`                                          | verbs: `waitForEvent` unchanged; `waitUntilConfirmed` replaces the processor-only barrier                                                            |
 | runner self-catch-up, fold rebuilds, agent prompt re-reads, ad-hoc `getEvents` | readers (unregistered), unchanged                                                                                                                    |
 | LiveState subscribers                                                          | not an event consumer (no cursor/replay) — but `liveState` is a **required surface on every processor instance** and on the stream; see "Live state" |
@@ -368,13 +394,10 @@ consumer-lag UI task needs.
 ## What dies, what stays
 
 **Dies:** the `${durableObjectName}#${slug}` name convention;
-slug-keyed progress (`stream-processor:<slug>:progress` → keyed by
-subscription name — this is also what makes multi-instance physically
-possible); the polymorphic `acknowledged_offset`;
+the polymorphic `acknowledged_offset`;
 `recordReportedCheckpoint` as a special case; `waitUntilProcessed` as a
-processor-only verb; halt-as-only-terminal-state; the
-`subscriptionKeyWasGenerated` flag (generated names are first-class);
-the vessel's cast.
+processor-only verb; the `subscriptionKeyWasGenerated` flag (generated
+names are first-class); the vessel's cast (with the vessel itself).
 
 **Stays untouched:** the log and offsets; the inline core processor
 (pre-commit, assigns offsets — the runner-redesign non-goal stands); the
@@ -386,26 +409,33 @@ keepalive/revival machinery; the LiveState engine and protocol (snapshot
 
 - patches + revisions — only where engines live moves, per placement).
 
-## Migration (clean break)
+## Migration (clean break — as shipped)
 
-1. Cursor rows: copy `acknowledged_offset` into both `delivered_offset`
-   and `confirmed_offset`; `state = 'active'` (`'halted'` where a halt
-   event is in force). Processor kinds may see one redundant wake —
-   today's documented stale-row cost.
-2. Progress records: re-key slug→name on first wake, or discard the
-   reduction and copy only `processing` (state is a disposable fold).
-3. Event payload / state map / wake request: `subscriptionKey` → `name`
-   inside a `CORE_STATE_VERSION` bump.
-4. Production subscription names: the census's full inventory is small
-   (`project-worker`, `iterate-platform-posthog`, `github-repo:<path>`,
-   `notification-intent:<path>`, `repo-catalog`, `project-config-to-root`,
-   `agent-collection`, per-connection router keys, two starter-app keys) —
-   re-configure, don't shim.
-5. Fix `apps/tasks/src/rpc-api.ts` onto the real typed surface.
+No data migration at all: the redesign ships inside `CORE_STATE_VERSION`
+30 with a deploy-time production erase. Cursor rows, progress records,
+and event payloads are all born under the new vocabulary
+(`subscriptionKey` → `name`, one `confirmed_offset`, `status`); the
+retired vessel app's stale build artifacts (`apps/tasks/dist-package`)
+were deleted with it.
 
 ## Scope boundaries
 
 Explicit, so nothing is excluded silently. Three categories:
+
+**Deferred slices of this design (built, cut before merge — see the
+"Future work" notes inline):**
+
+- **`parked` / receiver-absent handling** — blocked on resume wiring
+  (the presence signal that un-parks).
+- **The delivered/confirmed split + offset-acking webhooks** — blocked
+  on a real remote-tracked consumer.
+- **Multi-instance (name ≠ slug)** — name==slug is enforced; two
+  instances of one contract need name-keyed registration re-added.
+- **Per-subscription delivery controls** — per-connection controls
+  (#2384) shipped; the subscription-level knobs wait for a consumer.
+- **Catalog-node sugar** (`subscriptions.get(name).setCursor` /
+  `.resume()` / `.liveState`) — zero callers; stream-level verbs cover
+  every real consumer.
 
 **Dependencies this design names but does not solve:**
 
@@ -457,9 +487,9 @@ Explicit, so nothing is excluded silently. Three categories:
 
 ## Open questions
 
-1. **Park/resume poke protocol** — who may wake a parked subscription,
-   and is the poke an appended event (fits creation-is-an-event doctrine)
-   or an RPC to the source DO?
+1. **Park/resume poke protocol** (blocks the deferred `parked` status) —
+   who may wake a parked subscription, and is the poke an appended event
+   (fits creation-is-an-event doctrine) or an RPC to the source DO?
 2. **Reader registration and retention** — must the browser mirror (and
    any pull remote) register before ephemeral-event eviction ships, or
    does eviction simply ignore unregistered readers?
@@ -468,6 +498,3 @@ Explicit, so nothing is excluded silently. Three categories:
    nothing bounds total outbound rows. Add a cap.
 4. **`capnweb-call` timing** — wait for a consumer that composition
    (inward dial + mount) genuinely cannot serve.
-5. **Sequencing vs facets** — the cursor split, naming, and `parked` are
-   independent of placement and can land first; facet placement of the
-   wake arm rides [stream-processors-as-facets](../tasks/stream-processors-as-facets.md).

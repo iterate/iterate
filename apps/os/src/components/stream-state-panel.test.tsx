@@ -265,10 +265,9 @@ test.each([
     },
   });
   state.runtime.subscriptions[name] = {
-    deliveredOffset: 4,
     confirmedOffset: 4,
     lag: 4,
-    state: "active",
+    status: "active",
     attempt: 0,
     nextAttemptAt: null,
     inFlightDeadlineAt: null,
@@ -295,7 +294,7 @@ test.each([
   await vi.waitFor(() => expect(host.textContent).toContain(label));
 });
 
-test("the catalog renders one uniform row per subscription with state, lag, and outstanding window", async () => {
+test("the catalog renders one uniform row per subscription with status and lag", async () => {
   const state = streamRuntimeState(20);
   state.coreProcessorState = CoreProcessorContract.stateSchema.parse({
     maxOffset: 20,
@@ -312,11 +311,6 @@ test("the catalog renders one uniform row per subscription with state, lag, and 
                 expression: ["capabilities", "processEventBatch"],
                 delivery: { start: "now", onFailingEvent: "halt" },
               },
-            },
-            deliveryParked: {
-              reason: "receiver-absent",
-              afterOffset: 12,
-              error: 'capability "dashboard" is offline',
             },
           },
           "ops-webhook": {
@@ -342,20 +336,18 @@ test("the catalog renders one uniform row per subscription with state, lag, and 
     },
   });
   state.runtime.subscriptions["live-capability"] = {
-    deliveredOffset: 14,
     confirmedOffset: 12,
     lag: 8,
-    state: "parked",
-    attempt: 0,
-    nextAttemptAt: null,
+    status: "active",
+    attempt: 3,
+    nextAttemptAt: 1_753_000_000_000,
     inFlightDeadlineAt: null,
-    lastError: null,
+    lastError: 'capability "dashboard" is offline',
   };
   state.runtime.subscriptions["ops-webhook"] = {
-    deliveredOffset: 9,
     confirmedOffset: 9,
     lag: 11,
-    state: "halted",
+    status: "halted",
     attempt: 15,
     nextAttemptAt: null,
     inFlightDeadlineAt: null,
@@ -379,15 +371,14 @@ test("the catalog renders one uniform row per subscription with state, lag, and 
     root.render(<StreamStatePanel {...panelProps()} />);
   });
 
-  const parkedRow = [...host.querySelectorAll("button")].find((button) =>
+  const backoffRow = [...host.querySelectorAll("button")].find((button) =>
     button.textContent?.includes("live-capability"),
   );
-  expect(parkedRow?.textContent).toContain("parked");
-  expect(parkedRow?.textContent).toContain("itx-call");
-  // lag = head − confirmed (8); outstanding = delivered − confirmed (2).
-  expect(parkedRow?.textContent).toContain("8");
-  expect(parkedRow?.textContent).toContain("2");
-  expect(parkedRow?.textContent).toContain('capability "dashboard" is offline');
+  expect(backoffRow?.textContent).toContain("backoff");
+  expect(backoffRow?.textContent).toContain("itx-call");
+  // lag = head − confirmed (8).
+  expect(backoffRow?.textContent).toContain("8");
+  expect(backoffRow?.textContent).toContain('capability "dashboard" is offline');
 
   const haltedRow = [...host.querySelectorAll("button")].find((button) =>
     button.textContent?.includes("ops-webhook"),
@@ -434,7 +425,7 @@ test("core state renders the passive inbound record for each source subscription
   expect(host.textContent).toContain("last event 2026-07-21T12:00:00.000Z");
 });
 
-test("core state marks parked and halted outbound subscriptions distinctly", async () => {
+test("core state marks halted outbound subscriptions distinctly", async () => {
   const { host, root } = mountPanel();
   await act(async () => {
     root.render(
@@ -457,7 +448,11 @@ test("core state marks parked and halted outbound subscriptions distinctly", asy
                       delivery: { start: "now", onFailingEvent: "halt" },
                     },
                   },
-                  deliveryParked: { reason: "receiver-absent", afterOffset: 8 },
+                  deliveryHalted: {
+                    reason: "delivery-failed",
+                    afterOffset: 8,
+                    attempts: 15,
+                  },
                 },
               },
             },
@@ -468,7 +463,7 @@ test("core state marks parked and halted outbound subscriptions distinctly", asy
   });
 
   expect(host.textContent).toContain("live-capability");
-  expect(host.textContent).toContain("itx-call · parked");
+  expect(host.textContent).toContain("itx-call · halted");
 });
 
 function mountPanel() {
@@ -585,10 +580,9 @@ function streamRuntimeState(maxOffset: number): StreamRuntimeDebugState {
       dormantSubscribers: {},
       subscriptions: {
         [PROCESSOR_SUBSCRIPTION_NAME]: {
-          deliveredOffset: maxOffset,
           confirmedOffset: maxOffset,
           lag: 0,
-          state: "active",
+          status: "active",
           attempt: 0,
           nextAttemptAt: null,
           inFlightDeadlineAt: null,

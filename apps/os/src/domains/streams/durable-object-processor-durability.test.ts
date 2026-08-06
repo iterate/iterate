@@ -359,7 +359,6 @@ describe("durableObjectRecovery", () => {
       durableObjectRecovery({
         storage: args.storage,
         name: SLUG,
-        processorSlug: SLUG,
         stream: args.journal.stream,
         version: "v1",
         armAlarm: (atMs) => void alarmCalls.push(atMs),

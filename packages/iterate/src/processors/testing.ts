@@ -462,7 +462,6 @@ export function makeProcessorHarness<
     recovery = durableObjectRecovery({
       storage: durability.storage,
       name: processor.contract.slug,
-      processorSlug: processor.contract.slug,
       stream,
       version: "test-harness",
       armAlarm: (atMs) => {

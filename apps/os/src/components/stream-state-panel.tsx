@@ -107,8 +107,8 @@ export function PresenceAvatar({
 /** The receiver kinds a subscription can be configured with. */
 type SubscriptionKind = "processor-wake" | "copy-to-stream" | "itx-call" | "webhook-post";
 
-/** Durable delivery state of one subscription, in cursor-row vocabulary. */
-type SubscriptionRowState = "active" | "parked" | "halted";
+/** Durable delivery status of one subscription, in cursor-row vocabulary. */
+type SubscriptionRowStatus = "active" | "halted";
 
 /** Cursor row + in-memory delivery metrics for one subscription. */
 type SubscriptionProgress = StreamRuntimeDebugState["runtime"]["subscriptions"][string];
@@ -129,7 +129,7 @@ type SubscriptionRow = {
   /** The processor runs as a facet of this stream's own Durable Object. */
   facet: boolean;
   /** Durable facts outrank the mirrored runtime row; absent runtime = active. */
-  state: SubscriptionRowState;
+  status: SubscriptionRowStatus;
   /** A retry is scheduled: delivery is failing but has not halted yet. */
   backoff: boolean;
   configuredAtOffset?: number;
@@ -144,13 +144,7 @@ type SubscriptionRow = {
   start?: "beginning" | "now";
   onFailingEvent?: "halt" | "skip";
   webhookUrl?: string;
-  /** Per-subscription delivery controls (optional in the birth event). */
-  maxDeliveryEvents?: number;
-  maxDeliveryBytes?: number;
-  /** `state: false` control: wake batches omit the reduced-state snapshot. */
-  stateExcluded: boolean;
   halted?: { afterOffset: number; attempts: number; error?: string };
-  parked?: { afterOffset: number; error?: string };
   /** Absent until the runtime snapshot loads. */
   progress?: SubscriptionProgress;
   /** The open wake-feed connection serving this subscription, if one is live. */
@@ -176,11 +170,11 @@ const CORE_STATE_KEY = "__stream-core__";
 /**
  * The Stream state sheet: the stream's vitals (age, storage, events, live
  * throughput/latency), every durable subscription as one uniform catalog row
- * (name, kind, state including parked, lag = head − confirmed, outstanding =
- * delivered − confirmed, last error), and every live connection (sessions and
- * wake feeds) — with REAL RTT/lag pushed from the stream's runtime LiveState
- * while this sheet is open. Clicking a row drills into its configuration,
- * delivery stats, and (for processors) the reduced-state snapshot.
+ * (name, kind, status, lag = head − confirmed, last error), and every live
+ * connection (sessions and wake feeds) — with REAL RTT/lag pushed from the
+ * stream's runtime LiveState while this sheet is open. Clicking a row drills
+ * into its configuration, delivery stats, and (for processors) the
+ * reduced-state snapshot.
  */
 export function StreamStatePanel({
   open,
@@ -220,9 +214,7 @@ export function StreamStatePanel({
 }) {
   const projectStreamRuntime = useLiveState(
     (itx) => itx.streams.get(streamPath).liveState,
-    // TODO(stream-subscriptions): drop this retype once the rpc-targets rename
-    // lands and itx-api.generated.ts is regenerated with the new shape.
-    (state) => state as unknown as StreamRuntimeDebugState,
+    (state): StreamRuntimeDebugState => state,
     [streamPath],
     {
       enabled: open && projectId !== null,
@@ -231,7 +223,7 @@ export function StreamStatePanel({
   );
   const deploymentStreamRuntime = useIterateSessionLiveState(
     (session) => session.streams.get(streamPath).liveState,
-    (state) => state as unknown as StreamRuntimeDebugState,
+    (state): StreamRuntimeDebugState => state,
     [streamPath],
     { enabled: open && projectId === null },
   );
@@ -695,13 +687,10 @@ function StreamOverview({
         </div>
 
         <div>
-          <div className="grid grid-cols-[minmax(0,1fr)_52px_44px] gap-1.5 px-3 pb-2 text-[10px] uppercase tracking-wider text-muted-foreground/70">
+          <div className="grid grid-cols-[minmax(0,1fr)_52px] gap-1.5 px-3 pb-2 text-[10px] uppercase tracking-wider text-muted-foreground/70">
             <span>Subscriptions</span>
             <span className="text-right" title="head − confirmed">
               Lag
-            </span>
-            <span className="text-right" title="delivered − confirmed (outstanding window)">
-              Out
             </span>
           </div>
           <div className="flex flex-col">
@@ -802,15 +791,6 @@ function readSubscriptionRow(
           ...(typeof haltedRecord?.error === "string" ? { error: haltedRecord.error } : {}),
         }
       : undefined;
-  const parkedRecord = readRuntimeRecord(configured?.deliveryParked);
-  const parkedAfterOffset = readNumber(parkedRecord, "afterOffset");
-  const parked: SubscriptionRow["parked"] =
-    parkedAfterOffset !== null
-      ? {
-          afterOffset: parkedAfterOffset,
-          ...(typeof parkedRecord?.error === "string" ? { error: parkedRecord.error } : {}),
-        }
-      : undefined;
 
   const progress = streamRuntime?.runtime.subscriptions[name];
   const connection = Object.values(streamRuntime?.runtime.connections ?? {}).find(
@@ -857,8 +837,6 @@ function readSubscriptionRow(
     typeof payload?.description === "string" && payload.description.trim() !== ""
       ? payload.description.trim()
       : undefined;
-  const maxDeliveryEvents = readNumber(payload, "maxDeliveryEvents") ?? undefined;
-  const maxDeliveryBytes = readNumber(payload, "maxDeliveryBytes") ?? undefined;
 
   return {
     name,
@@ -869,12 +847,7 @@ function readSubscriptionRow(
     facet,
     // Durable facts (reduced from committed events) outrank the mirrored
     // runtime row, which may not have loaded yet.
-    state:
-      halted !== undefined
-        ? "halted"
-        : parked !== undefined
-          ? "parked"
-          : (progress?.state ?? "active"),
+    status: halted !== undefined ? "halted" : (progress?.status ?? "active"),
     backoff: progress?.nextAttemptAt != null,
     ...(configuredAtOffset === undefined ? {} : { configuredAtOffset }),
     ...(description === undefined ? {} : { description }),
@@ -886,11 +859,7 @@ function readSubscriptionRow(
     ...(start === undefined ? {} : { start }),
     ...(onFailingEvent === undefined ? {} : { onFailingEvent }),
     ...(webhookUrl === undefined ? {} : { webhookUrl }),
-    ...(maxDeliveryEvents === undefined ? {} : { maxDeliveryEvents }),
-    ...(maxDeliveryBytes === undefined ? {} : { maxDeliveryBytes }),
-    stateExcluded: payload?.state === false,
     ...(halted === undefined ? {} : { halted }),
-    ...(parked === undefined ? {} : { parked }),
     ...(progress === undefined ? {} : { progress }),
     ...(connection === undefined ? {} : { connection }),
   };
@@ -960,7 +929,7 @@ function connectionLabel(row: ConnectionRow): string {
 // Overview rows
 // ---------------------------------------------------------------------------
 
-/** The uniform catalog row: name · kind · state | lag | outstanding. */
+/** The uniform catalog row: name · kind · status | lag. */
 function SubscriptionRowButton({
   row,
   focused,
@@ -971,14 +940,13 @@ function SubscriptionRowButton({
   onFocus: (key: string) => void;
 }) {
   const lag = row.progress?.lag ?? null;
-  const outstanding = outstandingWindow(row);
   const lastError = subscriptionLastError(row);
   return (
     <button
       type="button"
       onClick={() => onFocus(row.name)}
       className={cn(
-        "grid w-full grid-cols-[minmax(0,1fr)_52px_44px] items-start gap-1.5 rounded-xl px-3 py-2 text-left hover:bg-muted/40",
+        "grid w-full grid-cols-[minmax(0,1fr)_52px] items-start gap-1.5 rounded-xl px-3 py-2 text-left hover:bg-muted/40",
         focused && "bg-muted/60 ring-1 ring-inset ring-border",
       )}
     >
@@ -993,7 +961,7 @@ function SubscriptionRowButton({
           <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
             {subscriptionKindLabel(row)}
           </span>
-          <SubscriptionStateBadge row={row} />
+          <SubscriptionStatusBadge row={row} />
         </span>
         <span className={cn("block text-xs", subscriptionStatusTone(row))}>
           {subscriptionStatusLabel(row)}
@@ -1013,15 +981,6 @@ function SubscriptionRowButton({
         title="head − confirmed"
       >
         {lag == null ? "—" : String(lag)}
-      </span>
-      <span
-        className={cn(
-          "pt-0.5 text-right font-mono text-xs",
-          outstanding == null || outstanding === 0 ? "text-muted-foreground" : "text-amber-600",
-        )}
-        title="delivered − confirmed (outstanding window)"
-      >
-        {outstanding == null ? "—" : String(outstanding)}
       </span>
     </button>
   );
@@ -1087,15 +1046,8 @@ function ConnectionRowButton({
   );
 }
 
-/** `delivered − confirmed`: transferred but not yet durably claimed. */
-function outstandingWindow(row: SubscriptionRow): number | null {
-  return row.progress == null
-    ? null
-    : Math.max(0, row.progress.deliveredOffset - row.progress.confirmedOffset);
-}
-
 function subscriptionLastError(row: SubscriptionRow): string | null {
-  return row.halted?.error ?? row.parked?.error ?? row.progress?.lastError ?? null;
+  return row.halted?.error ?? row.progress?.lastError ?? null;
 }
 
 function subscriptionKindLabel(row: SubscriptionRow): string {
@@ -1104,21 +1056,16 @@ function subscriptionKindLabel(row: SubscriptionRow): string {
   return `${row.kind}${slug}${placement}`;
 }
 
-function SubscriptionStateBadge({ row }: { row: SubscriptionRow }) {
+function SubscriptionStatusBadge({ row }: { row: SubscriptionRow }) {
   const badge =
-    row.state === "halted"
+    row.status === "halted"
       ? { label: "halted", className: "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300" }
-      : row.state === "parked"
+      : row.backoff
         ? {
-            label: "parked",
-            className: "bg-sky-50 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+            label: "backoff",
+            className: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
           }
-        : row.backoff
-          ? {
-              label: "backoff",
-              className: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
-            }
-          : null;
+        : null;
   if (badge == null) return null;
   return (
     <span
@@ -1133,21 +1080,17 @@ function SubscriptionStateBadge({ row }: { row: SubscriptionRow }) {
 }
 
 /**
- * The three stopped-or-struggling states are distinct on purpose: halted =
- * the receiver is present and delivery gave up; parked = the receiver is
- * legitimately absent (no retry ladder burned); backoff = failing and
- * retrying, not stopped yet.
+ * The two stopped-or-struggling states are distinct on purpose: halted =
+ * delivery gave up after the retry ladder; backoff = failing and retrying,
+ * not stopped yet.
  */
 function subscriptionStatusLabel(row: SubscriptionRow): string {
   const configured =
     row.configuredAtOffset == null ? "configured" : `configured #${row.configuredAtOffset}`;
-  if (row.state === "halted") {
+  if (row.status === "halted") {
     return row.halted == null
       ? `${configured} · halted`
       : `${configured} · halted after #${row.halted.afterOffset} (${row.halted.attempts} attempts)`;
-  }
-  if (row.state === "parked") {
-    return `${configured} · parked, receiver absent`;
   }
   if (row.backoff) {
     return `${configured} · retry backoff (attempt ${row.progress?.attempt ?? 0})`;
@@ -1164,8 +1107,7 @@ function subscriptionStatusLabel(row: SubscriptionRow): string {
 }
 
 function subscriptionStatusTone(row: SubscriptionRow): string {
-  if (row.state === "halted") return "text-destructive";
-  if (row.state === "parked") return "text-sky-600 dark:text-sky-400";
+  if (row.status === "halted") return "text-destructive";
   if (row.backoff) return "text-amber-600";
   if (row.connection !== undefined) return "text-emerald-600";
   return "text-muted-foreground";
@@ -1586,7 +1528,7 @@ function SubscriptionConfigDetail({ row }: { row: SubscriptionRow }) {
     row.kind === "copy-to-stream"
       ? "Matching events are appended to the destination stream in order with source provenance."
       : row.kind === "webhook-post"
-        ? "Each matching event is POSTed as JSON to the configured URL. An offset-acking receiver may confirm its durable position through {confirmedOffset} in the 2xx body."
+        ? "Each matching event is POSTed as JSON to the configured URL; a 2xx response acknowledges it."
         : row.kind === "itx-call"
           ? "Matching events are delivered in awaited batches to the configured ITX expression."
           : row.facet
@@ -1630,17 +1572,6 @@ function SubscriptionConfigDetail({ row }: { row: SubscriptionRow }) {
         {row.onFailingEvent == null ? null : (
           <DetailField label="on failing event">{row.onFailingEvent}</DetailField>
         )}
-        {row.maxDeliveryEvents == null ? null : (
-          <DetailField label="max events / batch">{String(row.maxDeliveryEvents)}</DetailField>
-        )}
-        {row.maxDeliveryBytes == null ? null : (
-          <DetailField label="max bytes / batch">
-            {formatFileSize(row.maxDeliveryBytes)}
-          </DetailField>
-        )}
-        {row.stateExcluded ? (
-          <DetailField label="reduced state">omitted from wake batches</DetailField>
-        ) : null}
       </div>
 
       <div>
@@ -1711,37 +1642,31 @@ function DetailField({
 }
 
 /**
- * The cursor row, verbatim: delivered and confirmed offsets, lag
- * (head − confirmed), the outstanding window (delivered − confirmed), retry
- * facts, and last error. Same fields for every receiver kind.
+ * The cursor row, verbatim: the confirmed offset, lag (head − confirmed),
+ * retry facts, and last error. Same fields for every receiver kind.
  */
 function SubscriptionDeliveryStats({ row }: { row: SubscriptionRow }) {
   const progress = row.progress;
-  const outstanding = outstandingWindow(row);
   const lastError = subscriptionLastError(row);
   return (
     <div>
       <SectionHeading>Delivery</SectionHeading>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <RuntimeStateStat
-          label="state"
-          value={row.backoff ? `${row.state} · backoff` : row.state}
-        />
-        <RuntimeStateStat
-          label="delivered"
-          value={progress == null ? "—" : `#${progress.deliveredOffset}`}
+          label="status"
+          value={row.backoff ? `${row.status} · backoff` : row.status}
         />
         <RuntimeStateStat
           label="confirmed"
           value={progress == null ? "—" : `#${progress.confirmedOffset}`}
         />
         <RuntimeStateStat label="lag" value={progress == null ? "—" : String(progress.lag)} />
+        <RuntimeStateStat
+          label="sent"
+          value={progress?.bytesSent == null ? "—" : formatFileSize(progress.bytesSent)}
+        />
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <RuntimeStateStat
-          label="outstanding"
-          value={outstanding == null ? "—" : String(outstanding)}
-        />
         <RuntimeStateStat
           label="settle"
           value={(() => {
@@ -1756,14 +1681,9 @@ function SubscriptionDeliveryStats({ row }: { row: SubscriptionRow }) {
             return stats == null ? "—" : `${stats.last}ms · p95 ${stats.p95}ms`;
           })()}
         />
-        <RuntimeStateStat
-          label="sent"
-          value={progress?.bytesSent == null ? "—" : formatFileSize(progress.bytesSent)}
-        />
       </div>
       {row.configuredAtOffset == null &&
       row.halted == null &&
-      row.parked == null &&
       progress?.nextAttemptAt == null &&
       lastError == null ? null : (
         <div className="mt-2 rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
@@ -1773,12 +1693,6 @@ function SubscriptionDeliveryStats({ row }: { row: SubscriptionRow }) {
           {row.halted == null ? null : (
             <div className="text-destructive">
               halted after #{row.halted.afterOffset} after {row.halted.attempts} attempts
-            </div>
-          )}
-          {row.parked == null ? null : (
-            <div className="text-sky-600 dark:text-sky-400">
-              parked at #{row.parked.afterOffset} — the receiver is legitimately absent, so no retry
-              ladder is burning. Resuming delivery reactivates it at its cursor.
             </div>
           )}
           {progress?.nextAttemptAt == null ? null : (

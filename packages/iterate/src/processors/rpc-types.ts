@@ -50,12 +50,12 @@ export type ProcessorSnapshot<State> = {
  * (trusted-internal): its processEventBatch callback drives the host's durable
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
- * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
- * processor wakes from the request's `processorSlug`. Each public domain
- * surface selects that same named processor for inspection, while deliberately
- * omitting this method from its public TypeScript contract, so
- * `agent.processor`, `agent.slack.processor`, and other siblings expose their
- * own snapshots and checkpoints.
+ * agent stream hosts agent + slack-agent + more) resolve WHICH processor
+ * wakes from the request's `name` (which equals the contract slug). Each
+ * public domain surface selects that same named processor for inspection,
+ * while deliberately omitting this method from its public TypeScript
+ * contract, so `agent.processor`, `agent.slack.processor`, and other siblings
+ * expose their own snapshots and checkpoints.
  */
 export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
   wakeStreamProcessor(request: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse>;
@@ -197,16 +197,11 @@ export type SubscriptionConfigurationForDelivery = {
       eventTypes?: string[];
       jsonataCondition?: string;
     };
-    /** Per-subscription delivery controls (see the platform contract): batch
-     * event cap, serialized-bytes cap, and `state: false` to omit reduced
-     * state from wake-fed batches. */
-    maxDeliveryEvents?: number;
-    maxDeliveryBytes?: number;
-    state?: false;
     receiver:
       | {
           action: "processor-wake";
-          /** Which contract runs — required; the name is the instance identity. */
+          /** Which contract runs — required, and the subscription name must
+           * equal it (one identity; multi-instance is future work). */
           processorSlug: string;
           /** `"facet"`: the processor runs as a facet of the stream's own
            * Durable Object (the name IS the facet name; no expression).
@@ -446,14 +441,11 @@ export type StreamProcessorWakeRequest = {
   };
   /**
    * The subscription's NAME — the caller-chosen per-stream binding this wake
-   * serves. Under name-based registration it is also the registered processor
-   * name (and, under facet placement, the facet name), so hosts route on it
-   * first; `processorSlug` says which CONTRACT the named instance must run.
+   * serves. Processor-wake names EQUAL their contract slug (enforced at
+   * configure time), so it is also the registered processor name (and, under
+   * facet placement, the facet name): hosts route on this one identity.
    */
   name: SubscriptionKey;
-  /** Which processor contract to wake. Required: the slug is an attribute of
-   * the subscription, never derived from its name. */
-  processorSlug: string;
 };
 
 /**

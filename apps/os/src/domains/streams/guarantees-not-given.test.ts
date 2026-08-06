@@ -430,7 +430,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
         deliveredBatches.push(batch.events.map(({ offset }) => offset));
       },
       copyToStream: async () => ({ acknowledged: 0 }),
-      deliverToWebhook: async () => ({}),
+      deliverToWebhook: async () => {},
     };
     const eventSender = new StreamEventSender({
       idleTeardownMs: 60_000,

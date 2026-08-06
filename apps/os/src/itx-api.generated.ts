@@ -1813,8 +1813,9 @@ export interface WorkspaceGit {
  * One durable subscription on one source stream: its committed configuration
  * and cursor (`describe`), the uniform confirmation barrier
  * (`waitUntilConfirmed` — works for EVERY receiver kind off the confirmed
- * cursor), the cursor/resume verbs (ordinary core events), and — for
- * processor-wake subscriptions — the hosted processor instance's facade.
+ * cursor), and — for processor-wake subscriptions — the hosted processor
+ * instance's facade. Cursor seeks and resumes stay stream verbs
+ * (`setSubscriptionCursor` / `resumeSubscription`).
  */
 export interface StreamSubscription {
   __describe(): Promise<Description>;
@@ -1828,15 +1829,9 @@ export interface StreamSubscription {
    * One-shot: it dies with the caller, like waitForEvent.
    */
   waitUntilConfirmed(args: { offset: number; timeoutMs?: number }): Promise<void>;
-  /** Change where this subscription reads next (the existing cursor-set event). */
-  setCursor(args: { afterOffset: number }): Promise<StreamEvent>;
-  /** Un-halt delivery without changing the cursor. */
-  resume(): Promise<StreamEvent>;
   /** The hosted processor instance behind a processor-wake subscription
    * (snapshot/getRuntimeState/waitUntilProcessed), dialed by placement. */
   processor: StreamProcessorRpc;
-  /** The hosted processor instance's live state. */
-  liveState: LiveStateRpc<Record<string, unknown>>;
 }
 
 /** Attributed tracked changes since the last commit: author-tagged inserted
@@ -2017,12 +2012,12 @@ export type ProjectDescription = Description & {
  * (trusted-internal): its processEventBatch callback drives the host's durable
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
- * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
- * processor wakes from the request's `processorSlug`. Each public domain
- * surface selects that same named processor for inspection, while deliberately
- * omitting this method from its public TypeScript contract, so
- * `agent.processor`, `agent.slack.processor`, and other siblings expose their
- * own snapshots and checkpoints.
+ * agent stream hosts agent + slack-agent + more) resolve WHICH processor
+ * wakes from the request's `name` (which equals the contract slug). Each
+ * public domain surface selects that same named processor for inspection,
+ * while deliberately omitting this method from its public TypeScript
+ * contract, so `agent.processor`, `agent.slack.processor`, and other siblings
+ * expose their own snapshots and checkpoints.
  */
 export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
   wakeStreamProcessor(request: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse>;
@@ -2298,14 +2293,11 @@ export type StreamProcessorWakeRequest = {
   };
   /**
    * The subscription's NAME — the caller-chosen per-stream binding this wake
-   * serves. Under name-based registration it is also the registered processor
-   * name (and, under facet placement, the facet name), so hosts route on it
-   * first; `processorSlug` says which CONTRACT the named instance must run.
+   * serves. Processor-wake names EQUAL their contract slug (enforced at
+   * configure time), so it is also the registered processor name (and, under
+   * facet placement, the facet name): hosts route on this one identity.
    */
   name: SubscriptionKey;
-  /** Which processor contract to wake. Required: the slug is an attribute of
-   * the subscription, never derived from its name. */
-  processorSlug: string;
 };
 
 /**
@@ -3504,16 +3496,11 @@ export type SubscriptionConfigurationForDelivery = {
       eventTypes?: string[];
       jsonataCondition?: string;
     };
-    /** Per-subscription delivery controls (see the platform contract): batch
-     * event cap, serialized-bytes cap, and `state: false` to omit reduced
-     * state from wake-fed batches. */
-    maxDeliveryEvents?: number;
-    maxDeliveryBytes?: number;
-    state?: false;
     receiver:
       | {
           action: "processor-wake";
-          /** Which contract runs — required; the name is the instance identity. */
+          /** Which contract runs — required, and the subscription name must
+           * equal it (one identity; multi-instance is future work). */
           processorSlug: string;
           /** `"facet"`: the processor runs as a facet of the stream's own
            * Durable Object (the name IS the facet name; no expression).
@@ -3783,9 +3770,6 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
       filter?:
         | { eventTypes?: string[] | undefined; jsonataCondition?: string | undefined }
         | undefined;
-      maxDeliveryEvents?: number | undefined;
-      maxDeliveryBytes?: number | undefined;
-      state?: false | undefined;
       receiver:
         | {
             action: "processor-wake";
@@ -3819,9 +3803,6 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
       filter?:
         | { eventTypes?: string[] | undefined; jsonataCondition?: string | undefined }
         | undefined;
-      maxDeliveryEvents?: number | undefined;
-      maxDeliveryBytes?: number | undefined;
-      state?: false | undefined;
       receiver:
         | {
             action: "processor-wake";
@@ -4380,9 +4361,6 @@ export type CoreProcessorState = {
             filter?:
               | { eventTypes?: string[] | undefined; jsonataCondition?: string | undefined }
               | undefined;
-            maxDeliveryEvents?: number | undefined;
-            maxDeliveryBytes?: number | undefined;
-            state?: false | undefined;
             receiver:
               | {
                   action: "processor-wake";
@@ -4421,9 +4399,6 @@ export type CoreProcessorState = {
                 error?: string | undefined;
               }
             | undefined;
-          deliveryParked?:
-            | { reason: "receiver-absent"; afterOffset: number; error?: string | undefined }
-            | undefined;
         }
       >;
     };
@@ -4443,14 +4418,12 @@ export type ConnectionRuntimeState = ConnectionRuntimeDetails &
 
 /** Serializable debug view of one stored subscription's cursor row, for `runtimeState()`. */
 export type SubscriptionRuntimeState = {
-  /** Exclusive: the source completed transfer through this offset. */
-  deliveredOffset: number;
   /** Exclusive: the receiver durably claims through this offset. */
   confirmedOffset: number;
-  /** `maxOffset - confirmedOffset`; `deliveredOffset - confirmedOffset` is the outstanding window. */
+  /** `maxOffset - confirmedOffset`. */
   lag: number;
-  /** Mirrored delivery state: `active`, `parked` (receiver absent), or `halted`. */
-  state: "active" | "parked" | "halted";
+  /** Mirrored delivery status: `active` or `halted`. */
+  status: "active" | "halted";
   attempt: number;
   nextAttemptAt: number | null;
   inFlightDeadlineAt: number | null;
@@ -4529,18 +4502,16 @@ export type ConnectionKey = string;
 
 /**
  * One row of `subscriptions.list()`: the committed catalog entry joined with
- * its durable cursor — name, receiver kind, state, lag (head − confirmed),
- * and the outstanding delivered/confirmed window.
+ * its durable cursor — name, receiver kind, status, and lag
+ * (head − confirmed).
  */
 export type StreamSubscriptionListEntry = {
   name: string;
   action: string;
-  processorSlug?: string;
   placement?: "facet";
   configuredAtOffset: number;
-  state: "active" | "parked" | "halted";
+  status: "active" | "halted";
   lag: number;
-  deliveredOffset: number;
   confirmedOffset: number;
   lastError: string | null;
 };
@@ -4756,14 +4727,13 @@ export type ThroughputReport = {
 };
 
 /** `subscriptions.get(name).describe()`: the committed configuration plus the
- * durable delivered/confirmed cursor and retry state. */
+ * durable confirmed cursor and retry state. */
 export type StreamSubscriptionDescription = {
   name: string;
   configuration: unknown;
   configuredAtOffset: number;
-  state: "active" | "parked" | "halted";
+  status: "active" | "halted";
   lag: number;
-  deliveredOffset: number;
   confirmedOffset: number;
   attempt: number;
   nextAttemptAt: number | null;

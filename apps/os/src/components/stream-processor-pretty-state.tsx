@@ -120,16 +120,14 @@ export function CorePrettyState({
               const subscriptionProgress = readRuntimeRecord(subscriptionProgressByName[name]);
               const lag = readNumber(subscriptionProgress, "lag");
               // Durable facts outrank the mirrored runtime row; halted vs
-              // parked vs plain retry stay visibly distinct.
-              const state =
+              // plain retry stay visibly distinct.
+              const status =
                 configured?.deliveryHalted !== undefined
                   ? "halted"
-                  : configured?.deliveryParked !== undefined
-                    ? "parked"
-                    : typeof subscriptionProgress?.state === "string" &&
-                        subscriptionProgress.state !== "active"
-                      ? subscriptionProgress.state
-                      : null;
+                  : typeof subscriptionProgress?.status === "string" &&
+                      subscriptionProgress.status !== "active"
+                    ? subscriptionProgress.status
+                    : null;
               const filter = readRuntimeRecord(payload?.filter);
               const eventTypes = Array.isArray(filter?.eventTypes)
                 ? filter.eventTypes.filter((t): t is string => typeof t === "string")
@@ -150,15 +148,13 @@ export function CorePrettyState({
                     <div className="min-w-0 break-all font-mono text-xs">{name}</div>
                     <div
                       className={
-                        state === "halted"
+                        status === "halted"
                           ? "shrink-0 font-mono text-[10px] text-destructive"
-                          : state === "parked"
-                            ? "shrink-0 font-mono text-[10px] text-sky-600 dark:text-sky-400"
-                            : "shrink-0 font-mono text-[10px] text-muted-foreground"
+                          : "shrink-0 font-mono text-[10px] text-muted-foreground"
                       }
                     >
                       {kind}
-                      {state == null ? "" : ` · ${state}`}
+                      {status == null ? "" : ` · ${status}`}
                       {lag == null ? "" : ` · lag ${lag}`}
                     </div>
                   </div>

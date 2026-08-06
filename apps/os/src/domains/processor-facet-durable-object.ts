@@ -25,6 +25,7 @@
  */
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import {
+  FACET_IDENTITY_KEY,
   ProcessorFacet as ProcessorFacetBase,
   type ProcessorFacetAlarmProxy,
   type ProcessorFacetHost,
@@ -91,11 +92,6 @@ type ParentStreamStub = ProcessorFacetAlarmProxy & {
   appendCoreEventsIfStreamId(args: { streamId: string; events: unknown[] }): Promise<unknown>;
   presentAgentRuntimeTransition(args: { transition: AgentRuntimeTransition }): Promise<unknown>;
 };
-
-/** Where the base class stashes its first-contact identity (its private
- * constant, mirrored here so the subclass's own doors can self-heal a fresh
- * incarnation before the base's boot microtask has run). */
-const FACET_IDENTITY_KEY = "iterate:processor-facet:identity";
 
 // The run-script worker load happens in a stateless loopback entrypoint, not
 // in this facet. Keep the handle type shallow (ported from the retired

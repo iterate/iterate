@@ -75,41 +75,33 @@ const VERSION_30_COMMITTED_EVENTS: StreamEvent[] = [
     name: SUBSCRIPTION_NAME,
     afterOffset: 0,
   }),
-  committed(9, "events.iterate.com/stream/subscription-delivery-parked", {
-    name: SUBSCRIPTION_NAME,
-    reason: "receiver-absent",
-    afterOffset: 4,
-    error: 'capability "tasks" is offline',
-  }),
-  committed(10, "events.iterate.com/stream/subscription-delivery-resumed", {
-    name: SUBSCRIPTION_NAME,
-  }),
-  committed(11, "events.iterate.com/stream/connection-opened", {
+  committed(9, "events.iterate.com/stream/connection-opened", {
     connectionKey: "browser-1",
     kind: "session",
     openedBy: { description: "browser" },
   }),
-  committed(12, "events.iterate.com/stream/connection-closed", {
+  committed(10, "events.iterate.com/stream/connection-closed", {
     connectionKey: "browser-1",
     reason: "closed-by-owner",
   }),
-  committed(13, STREAM_PROCESSOR_REVIVED_EVENT_TYPE, {
+  committed(11, STREAM_PROCESSOR_REVIVED_EVENT_TYPE, {
     processorSlug: "agent",
     revivals: 1,
     version: "1.0.0",
   }),
-  committed(14, "events.iterate.com/stream/error-occurred", {
+  committed(12, "events.iterate.com/stream/error-occurred", {
     message: "processor failed once",
     error: { name: "Error", message: "synthetic failure", code: "E_SYNTHETIC" },
   }),
-  committed(15, "events.iterate.com/stream/paused", { reason: "operator" }),
-  committed(16, "events.iterate.com/stream/resumed", { reason: "operator" }),
-  committed(17, "events.iterate.com/stream/subscription-removed", {
+  committed(13, "events.iterate.com/stream/paused", { reason: "operator" }),
+  committed(14, "events.iterate.com/stream/resumed", { reason: "operator" }),
+  committed(15, "events.iterate.com/stream/subscription-removed", {
     name: SUBSCRIPTION_NAME,
     reason: "requested",
   }),
-  committed(18, "events.iterate.com/stream/subscription-configured", {
-    name: "hosted-agent",
+  committed(16, "events.iterate.com/stream/subscription-configured", {
+    // Name = slug: one identity for hosted processors.
+    name: "agent",
     description: "Wake the reviewer agent",
     filter: {
       eventTypes: ["*"],
@@ -121,8 +113,8 @@ const VERSION_30_COMMITTED_EVENTS: StreamEvent[] = [
       processorSlug: "agent",
     },
   }),
-  committed(19, "events.iterate.com/stream/subscription-configured", {
-    name: "facet-device",
+  committed(17, "events.iterate.com/stream/subscription-configured", {
+    name: "device",
     description: "Run the device processor as a facet of this stream",
     receiver: {
       action: "processor-wake",
@@ -130,11 +122,9 @@ const VERSION_30_COMMITTED_EVENTS: StreamEvent[] = [
       processorSlug: "device",
     },
   }),
-  committed(20, "events.iterate.com/stream/subscription-configured", {
+  committed(18, "events.iterate.com/stream/subscription-configured", {
     name: "itx-sink",
     description: "Call a durable ITX receiver",
-    maxDeliveryEvents: 50,
-    maxDeliveryBytes: 65_536,
     receiver: {
       action: "itx-call",
       expression: ["eventSinks", ["get", "audit"], "processEventBatch"],
@@ -145,7 +135,7 @@ const VERSION_30_COMMITTED_EVENTS: StreamEvent[] = [
     },
   }),
   {
-    ...committed(21, "events.iterate.com/stream/configured", {
+    ...committed(19, "events.iterate.com/stream/configured", {
       // A copied control event is historical product data on this stream. Its
       // source payload may predate the receiver's current control-event schema
       // and must remain replayable without being interpreted.
@@ -207,17 +197,7 @@ describe("core processor version 30 committed-event replay", () => {
       afterOffset: 0,
       setAtSourceOffset: 8,
     });
-    expect(states.get(9)?.subscriptions.outbound.byName[SUBSCRIPTION_NAME]?.deliveryParked).toEqual(
-      {
-        reason: "receiver-absent",
-        afterOffset: 4,
-        error: 'capability "tasks" is offline',
-      },
-    );
-    expect(
-      states.get(10)?.subscriptions.outbound.byName[SUBSCRIPTION_NAME]?.deliveryParked,
-    ).toBeUndefined();
-    expect(states.get(17)?.subscriptions.outbound.byName[SUBSCRIPTION_NAME]).toBeUndefined();
+    expect(states.get(15)?.subscriptions.outbound.byName[SUBSCRIPTION_NAME]).toBeUndefined();
 
     expect(state).toMatchObject({
       projectId: PROJECT_ID,
@@ -242,16 +222,16 @@ describe("core processor version 30 committed-event replay", () => {
               streamCreatedAt: SOURCE_STREAM_CREATED_AT,
               cursorChangedAtSourceOffset: 5,
               numEventsReceived: 1,
-              lastEventReceivedAt: "2026-07-21T12:00:21.000Z",
+              lastEventReceivedAt: "2026-07-21T12:00:19.000Z",
             },
           },
         },
       },
       outbound: {
         byName: {
-          "hosted-agent": {
+          agent: {
             configuration: {
-              name: "hosted-agent",
+              name: "agent",
               description: "Wake the reviewer agent",
               filter: {
                 eventTypes: ["*"],
@@ -268,12 +248,12 @@ describe("core processor version 30 committed-event replay", () => {
                 processorSlug: "agent",
               },
             },
-            configuredAtOffset: 18,
-            configuredAt: "2026-07-21T12:00:18.000Z",
+            configuredAtOffset: 16,
+            configuredAt: "2026-07-21T12:00:16.000Z",
           },
-          "facet-device": {
+          device: {
             configuration: {
-              name: "facet-device",
+              name: "device",
               description: "Run the device processor as a facet of this stream",
               receiver: {
                 action: "processor-wake",
@@ -281,15 +261,13 @@ describe("core processor version 30 committed-event replay", () => {
                 processorSlug: "device",
               },
             },
-            configuredAtOffset: 19,
-            configuredAt: "2026-07-21T12:00:19.000Z",
+            configuredAtOffset: 17,
+            configuredAt: "2026-07-21T12:00:17.000Z",
           },
           "itx-sink": {
             configuration: {
               name: "itx-sink",
               description: "Call a durable ITX receiver",
-              maxDeliveryEvents: 50,
-              maxDeliveryBytes: 65_536,
               receiver: {
                 action: "itx-call",
                 expression: ["eventSinks", ["get", "audit"], "processEventBatch"],
@@ -299,8 +277,8 @@ describe("core processor version 30 committed-event replay", () => {
                 },
               },
             },
-            configuredAtOffset: 20,
-            configuredAt: "2026-07-21T12:00:20.000Z",
+            configuredAtOffset: 18,
+            configuredAt: "2026-07-21T12:00:18.000Z",
           },
         },
       },

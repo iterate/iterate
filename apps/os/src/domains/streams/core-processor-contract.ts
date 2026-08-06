@@ -63,14 +63,11 @@ import { EventFilter } from "./event-filter.ts";
 // (opaque, caller-chosen; auto-generated names keep the reserved
 // `subscription:<offset>` form and are first-class — the old
 // generated-key flag is gone), outbound subscriptions live
-// under `subscriptions.outbound.byName`, `processorSlug` is required on
-// `processor-wake` and the receiver gains `placement: "facet"` (the
-// subscription name IS the facet name; no itx expression), subscriptions may
-// carry per-subscription delivery controls
-// (`maxDeliveryEvents`/`maxDeliveryBytes`/`state: false`), and `parked` joins
-// `halted` as a durable delivery state (`subscription-delivery-parked`:
-// the receiver is legitimately absent — no retry ladder, cursor intact,
-// `subscription-delivery-resumed` reactivates it).
+// under `subscriptions.outbound.byName`, and `processorSlug` is required on
+// `processor-wake` — the subscription name must EQUAL it (one identity; two
+// instances of one contract are future work) — and the receiver gains
+// `placement: "facet"` (the subscription name IS the facet name; no itx
+// expression).
 export const CORE_STATE_VERSION = 30;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
@@ -120,9 +117,6 @@ const OnFailingEventPolicy = z.enum(["halt", "skip"]);
 /** Event sending halts only when delivering matching events exhausts its retry budget. */
 const SubscriptionHaltReason = z.literal("delivery-failed");
 
-/** A subscription parks only when its receiver signals it is legitimately absent. */
-const SubscriptionParkReason = z.literal("receiver-absent");
-
 /** Policy for subscriptions whose awaited delivery cursor the source stream owns. */
 const DeliveryPolicy = z.strictObject({
   start: SubscriptionStart,
@@ -150,9 +144,10 @@ export const SubscriptionReceiver = z.discriminatedUnion("action", [
       // determinism.
       action: z.literal("processor-wake"),
       /**
-       * Which contract runs. Required: the subscription NAME is the instance's
-       * identity; the slug names the code. Two instances of one contract are
-       * two names sharing one slug.
+       * Which contract runs. Required, and the subscription NAME must equal
+       * it: name and slug are one identity (multi-instance — two names, one
+       * slug — is deliberately future work; see
+       * docs/stream-subscription-model-redesign.md).
        */
       processorSlug: z.string().trim().min(1),
       /**
@@ -237,17 +232,6 @@ export const SubscriptionConfiguredPayload = z.strictObject({
   name: SubscriptionName.optional(),
   description: z.string().trim().min(1).optional(),
   filter: EventFilter.optional(),
-  /**
-   * Optional per-subscription delivery controls, honored by every push arm:
-   * `maxDeliveryEvents` caps events per delivered batch (never raises the
-   * global batch bound), `maxDeliveryBytes` caps a batch's serialized payload
-   * bytes (at least one event is always delivered), and `state: false` omits
-   * the reduced-state snapshot from wake-fed batches for constrained
-   * consumers.
-   */
-  maxDeliveryEvents: z.number().int().min(1).optional(),
-  maxDeliveryBytes: z.number().int().min(1).optional(),
-  state: z.literal(false).optional(),
   receiver: SubscriptionReceiver,
 }) satisfies z.ZodType<SubscriptionConfigurationForDelivery["payload"]>;
 
@@ -497,21 +481,6 @@ export const CoreProcessorContract = defineProcessorContract({
                       error: z.string().trim().min(1).optional(),
                     })
                     .optional(),
-                  /**
-                   * The receiver is legitimately absent (a live capability
-                   * whose providing session closed, a disconnected remote
-                   * app). Not a failure: the cursor stays put, no retry alarm
-                   * is armed, and nothing is charged against the failure
-                   * ladder. `subscription-delivery-resumed` reactivates it.
-                   */
-                  deliveryParked: z
-                    .strictObject({
-                      reason: SubscriptionParkReason,
-                      /** Confirmed cursor when this subscription parked. */
-                      afterOffset: z.number().int().nonnegative(),
-                      error: z.string().trim().min(1).optional(),
-                    })
-                    .optional(),
                 }),
               )
               .default({}),
@@ -655,19 +624,8 @@ export const CoreProcessorContract = defineProcessorContract({
         error: z.string().trim().min(1).max(4_096).optional(),
       }),
     },
-    "events.iterate.com/stream/subscription-delivery-parked": {
-      description:
-        "One subscription's receiver signalled it is legitimately absent (a live capability whose providing session closed, a disconnected remote app). Delivery stops without burning the retry ladder: the cursor stays put and no retry alarm is armed. `subscription-delivery-resumed` — or the stream's internal resume poke — reactivates it.",
-      payloadSchema: z.strictObject({
-        name: z.string().trim().min(1),
-        reason: SubscriptionParkReason,
-        /** The confirmed cursor when this subscription parked. */
-        afterOffset: z.number().int().min(0),
-        error: z.string().trim().min(1).max(4_096).optional(),
-      }),
-    },
     "events.iterate.com/stream/subscription-delivery-resumed": {
-      description: "Resumes one halted or parked subscription at its existing cursor.",
+      description: "Resumes one halted subscription at its existing cursor.",
       payloadSchema: z.strictObject({
         name: z.string().trim().min(1),
       }),
@@ -759,7 +717,6 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/subscription-configured",
     "events.iterate.com/stream/subscription-removed",
     "events.iterate.com/stream/subscription-delivery-halted",
-    "events.iterate.com/stream/subscription-delivery-parked",
     "events.iterate.com/stream/subscription-delivery-resumed",
     "events.iterate.com/stream/subscription-cursor-set",
     "events.iterate.com/stream/connection-opened",
@@ -772,7 +729,6 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/connection-opened",
     "events.iterate.com/stream/connection-closed",
     "events.iterate.com/stream/subscription-delivery-halted",
-    "events.iterate.com/stream/subscription-delivery-parked",
     "events.iterate.com/stream/child-stream-created",
   ],
 });

@@ -63,7 +63,6 @@ const CHECKPOINT_GROWTH_EVENT_TYPES = new Set<string>([
   "events.iterate.com/stream/child-stream-created",
   "events.iterate.com/stream/subscription-configured",
   "events.iterate.com/stream/subscription-delivery-halted",
-  "events.iterate.com/stream/subscription-delivery-parked",
   "events.iterate.com/stream/paused",
 ]);
 
@@ -104,7 +103,6 @@ const CORE_AUTHORED_EVENT_TYPES = new Set<string>([
   "events.iterate.com/stream/woken",
   "events.iterate.com/stream/child-stream-created",
   "events.iterate.com/stream/subscription-delivery-halted",
-  "events.iterate.com/stream/subscription-delivery-parked",
   "events.iterate.com/stream/connection-opened",
   "events.iterate.com/stream/connection-closed",
 ]);
@@ -226,6 +224,18 @@ export class StreamCoreProcessor {
       if (event.payload.receiver.action === "webhook-post" && this.#projectId === null) {
         throw new Error("webhook subscriptions require a project-scoped stream");
       }
+      if (event.payload.receiver.action === "processor-wake") {
+        // Name and slug are ONE identity for hosted processors: the facet
+        // name, the progress key, and the wake route are all this string.
+        // Multi-instance (two names, one slug) is deliberately future work.
+        if (requestedName !== event.payload.receiver.processorSlug) {
+          throw new Error(
+            `processor-wake subscriptions must be named after their contract: ` +
+              `expected name "${event.payload.receiver.processorSlug}", got ` +
+              `${requestedName === undefined ? "no name" : `"${requestedName}"`}`,
+          );
+        }
+      }
       if (
         event.payload.receiver.action === "copy-to-stream" &&
         event.payload.receiver.receivingStreamPath === args.state.path
@@ -297,8 +307,8 @@ export class StreamCoreProcessor {
       if (configured === undefined) {
         throw new Error(`subscription "${event.payload.name}" does not exist`);
       }
-      if (configured.deliveryHalted === undefined && configured.deliveryParked === undefined) {
-        throw new Error(`subscription "${event.payload.name}" is neither halted nor parked`);
+      if (configured.deliveryHalted === undefined) {
+        throw new Error(`subscription "${event.payload.name}" is not halted`);
       }
     }
 
@@ -324,7 +334,6 @@ export class StreamCoreProcessor {
       case "events.iterate.com/stream/connection-closed":
       case "events.iterate.com/stream/subscription-removed":
       case "events.iterate.com/stream/subscription-delivery-halted":
-      case "events.iterate.com/stream/subscription-delivery-parked":
         return;
       default:
         throw new StreamReceiverUnavailableError(
@@ -536,36 +545,6 @@ export class StreamCoreProcessor {
           },
         };
       }
-      case "events.iterate.com/stream/subscription-delivery-parked": {
-        const event = parseCoreEvent(
-          args.event,
-          "events.iterate.com/stream/subscription-delivery-parked",
-        );
-        const existing = next.subscriptions.outbound.byName[event.payload.name];
-        if (existing === undefined) {
-          return next;
-        }
-        return {
-          ...next,
-          subscriptions: {
-            ...next.subscriptions,
-            outbound: {
-              ...next.subscriptions.outbound,
-              byName: {
-                ...next.subscriptions.outbound.byName,
-                [event.payload.name]: {
-                  ...existing,
-                  deliveryParked: {
-                    reason: event.payload.reason,
-                    afterOffset: event.payload.afterOffset,
-                    ...(event.payload.error === undefined ? {} : { error: event.payload.error }),
-                  },
-                },
-              },
-            },
-          },
-        };
-      }
       case "events.iterate.com/stream/subscription-delivery-resumed": {
         const event = parseCoreEvent(
           args.event,
@@ -575,7 +554,7 @@ export class StreamCoreProcessor {
         if (existing === undefined) {
           return next;
         }
-        const { deliveryHalted: _cleared, deliveryParked: _unparked, ...resumed } = existing;
+        const { deliveryHalted: _cleared, ...resumed } = existing;
         return {
           ...next,
           subscriptions: {

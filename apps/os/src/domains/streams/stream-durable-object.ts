@@ -422,34 +422,14 @@ function createSubscriptionReceiverCalls(deps: {
           headers: { "content-type": "application/json" },
           body: JSON.stringify(delivery),
         });
+        // The 2xx alone is the whole acknowledgement; the body is discarded
+        // unread. (An offset-acking webhook that owns its durable position
+        // through the response body is future work — see
+        // docs/stream-subscription-model-redesign.md.)
+        await response.body?.cancel();
         if (!response.ok) {
-          await response.body?.cancel();
           throw new Error(`webhook responded ${response.status} ${response.statusText}`);
         }
-        // An offset-acking webhook owns its durable position by answering
-        // with JSON `{ confirmedOffset }`. Only a JSON-typed body is read —
-        // anything else is cancelled unread, so a plain webhook's 2xx keeps
-        // exactly its old cost.
-        const contentType = response.headers.get("content-type") ?? "";
-        if (!contentType.includes("json")) {
-          await response.body?.cancel();
-          return {};
-        }
-        let body: unknown;
-        try {
-          body = (await response.json()) as unknown;
-        } catch {
-          return {};
-        }
-        const confirmedOffset =
-          typeof body === "object" && body !== null && "confirmedOffset" in body
-            ? body.confirmedOffset
-            : undefined;
-        return typeof confirmedOffset === "number" &&
-          Number.isSafeInteger(confirmedOffset) &&
-          confirmedOffset >= 0
-          ? { confirmedOffset }
-          : {};
       } catch (error) {
         if (webhookEgress === egress) webhookEgress = undefined;
         (egress as Partial<Disposable>)[Symbol.dispose]?.();
@@ -491,31 +471,28 @@ const FACET_ALARM_RETRY_DELAY_MS = 1_000;
 
 /**
  * One row of `subscriptions.list()`: the committed catalog entry joined with
- * its durable cursor — name, receiver kind, state, lag (head − confirmed),
- * and the outstanding delivered/confirmed window.
+ * its durable cursor — name, receiver kind, status, and lag
+ * (head − confirmed).
  */
 export type StreamSubscriptionListEntry = {
   name: string;
   action: string;
-  processorSlug?: string;
   placement?: "facet";
   configuredAtOffset: number;
-  state: "active" | "parked" | "halted";
+  status: "active" | "halted";
   lag: number;
-  deliveredOffset: number;
   confirmedOffset: number;
   lastError: string | null;
 };
 
 /** `subscriptions.get(name).describe()`: the committed configuration plus the
- * durable delivered/confirmed cursor and retry state. */
+ * durable confirmed cursor and retry state. */
 export type StreamSubscriptionDescription = {
   name: string;
   configuration: unknown;
   configuredAtOffset: number;
-  state: "active" | "parked" | "halted";
+  status: "active" | "halted";
   lag: number;
-  deliveredOffset: number;
   confirmedOffset: number;
   attempt: number;
   nextAttemptAt: number | null;
@@ -860,11 +837,6 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    // The one scheduling rule: delivery RESUMES after confirmed_offset. A
-    // fresh incarnation rewinds every row's transfer position to its durable
-    // confirmation, redelivering the delivered-but-unconfirmed window
-    // (at-least-once; receivers dedupe by (streamId, offset)).
-    this.#subscriptionCursorStore.rewindDeliveredToConfirmed();
     const loaded = this.#readCoreProcessorState();
     if (loaded.kind === "ready") {
       this.#coreProcessorState = loaded.state;
@@ -1174,7 +1146,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * The subscription catalog: configured subscriptions joined with their
    * durable cursor rows — `streams.get(path).subscriptions.list()`. Lag is
    * `head − confirmed` (durable cursors advance over EVERY offset, ephemeral
-   * included), with `delivered − confirmed` as the outstanding window.
+   * included).
    */
   listSubscriptions(): StreamSubscriptionListEntry[] {
     const head = this.#coreProcessorState.maxOffset;
@@ -1186,22 +1158,14 @@ export class StreamDurableObject extends DurableObject<Env> {
         return {
           name,
           action: receiver.action,
-          ...(receiver.action === "processor-wake"
-            ? {
-                processorSlug: receiver.processorSlug,
-                ...(receiver.placement === "facet" ? { placement: "facet" as const } : {}),
-              }
+          ...(receiver.action === "processor-wake" && receiver.placement === "facet"
+            ? { placement: "facet" as const }
             : {}),
           configuredAtOffset: entry.configuredAtOffset,
-          state:
-            row?.state ??
-            (entry.deliveryHalted !== undefined
-              ? ("halted" as const)
-              : entry.deliveryParked !== undefined
-                ? ("parked" as const)
-                : ("active" as const)),
+          status:
+            row?.status ??
+            (entry.deliveryHalted !== undefined ? ("halted" as const) : ("active" as const)),
           lag: Math.max(0, head - confirmedOffset),
-          deliveredOffset: row?.deliveredOffset ?? 0,
           confirmedOffset,
           lastError: row?.lastError ?? null,
         };
@@ -1210,7 +1174,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /** One subscription's full description: committed configuration plus the
-   * durable delivered/confirmed cursor and retry state. */
+   * durable confirmed cursor and retry state. */
   describeSubscription(args: { name: string }): StreamSubscriptionDescription | null {
     const entry = this.#coreProcessorState.subscriptions.outbound.byName[args.name];
     if (entry === undefined) return null;
@@ -1220,15 +1184,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       name: args.name,
       configuration: entry.configuration,
       configuredAtOffset: entry.configuredAtOffset,
-      state:
-        row?.state ??
-        (entry.deliveryHalted !== undefined
-          ? "halted"
-          : entry.deliveryParked !== undefined
-            ? "parked"
-            : "active"),
+      status: row?.status ?? (entry.deliveryHalted !== undefined ? "halted" : "active"),
       lag: Math.max(0, this.#coreProcessorState.maxOffset - confirmedOffset),
-      deliveredOffset: row?.deliveredOffset ?? 0,
       confirmedOffset,
       attempt: row?.attempt ?? 0,
       nextAttemptAt: row?.nextAttemptAt ?? null,
@@ -2299,10 +2256,17 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /**
    * The uniform barrier: resolve once the named subscription's receiver has
-   * durably confirmed through `offset` — a push acknowledgement, a hosted
-   * processor's reported checkpoint, or an offset-acking webhook's response.
-   * Works for every receiver kind off `confirmed_offset`; today's
+   * durably confirmed through `offset` — the awaited push acknowledgement
+   * (copy/itx/webhook), or a hosted processor's reported checkpoint. Works
+   * for every receiver kind off `confirmed_offset`; today's
    * `waitUntilProcessed` is the processor-wake case of this one verb.
+   *
+   * PROCESSOR-WAKE CAVEAT: confirmation advances only on wake reports (the
+   * wake response's checkpoint), never on live batch acks — so while a hosted
+   * connection is streaming, this barrier can lag events the processor has
+   * already durably processed until the next wake cycle re-reports. Callers
+   * that need the processor's own fold position should use the processor
+   * facade's `waitUntilProcessed`, which reads the runner's cursor directly.
    *
    * One-shot like `waitForEvent`: it dies with the RPC caller or this
    * incarnation, and a timeout carries the modelled wait-timeout prefix.
@@ -2352,7 +2316,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         new Error(
           `${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}subscription "${trimmedName}" confirmed ` +
             `${row?.confirmedOffset ?? 0} < ${args.offset} after ${timeoutMs}ms` +
-            `${row === undefined ? "" : ` (state: ${row.state})`}`,
+            `${row === undefined ? "" : ` (status: ${row.status})`}`,
         ),
       );
     }, timeoutMs);
@@ -2364,25 +2328,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       clearTimeout(timer);
       this.#confirmationWaiters.delete(waiter);
     }
-  }
-
-  /**
-   * Internal poke door: resume one PARKED subscription (its receiver announced
-   * presence again). Level-triggered and idempotent — a no-op when the
-   * subscription is missing, active, or halted (halts carry failure evidence
-   * and keep their explicit operator resume path). The transition itself is
-   * the ordinary `subscription-delivery-resumed` event.
-   */
-  resumeParkedSubscription(args: { name: string }): void {
-    const entry = this.#coreProcessorState.subscriptions.outbound.byName[args.name];
-    if (entry === undefined || entry.deliveryParked === undefined) return;
-    if (entry.deliveryHalted !== undefined) return;
-    this.#append({ authority: "public" }, [
-      {
-        type: "events.iterate.com/stream/subscription-delivery-resumed",
-        payload: { name: args.name },
-      },
-    ]);
   }
 
   runtimeState(): StreamRuntimeDebugState {

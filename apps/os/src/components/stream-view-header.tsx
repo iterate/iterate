@@ -99,7 +99,7 @@ export function StreamViewHeader({
   } = useStreamViewPanels();
   const caps = modeCapabilities(search, streamPath);
   // Presence = who is here NOW. The reduced roster keeps disconnected
-  // entries (the panel needs them for asleep/parked rows), but avatars and
+  // entries (the panel needs them for asleep rows), but avatars and
   // the +N overflow must not count corpses — a listing stream accumulates
   // every browser tab that ever visited.
   const connectedPresence = presence.filter((entry) => entry.connected);

@@ -55,41 +55,6 @@ describe("selectStrugglingSubscriptions", () => {
     ]);
   });
 
-  it("surfaces parked subscriptions as parked, not as failures", () => {
-    const struggling = selectStrugglingSubscriptions({
-      configured: {
-        "live-capability": {
-          ...sourceOwnedConfiguration,
-          deliveryParked: {
-            afterOffset: 210,
-            error: 'capability "dashboard" is offline',
-          },
-        },
-      },
-      runtime: {
-        "live-capability": {
-          confirmedOffset: 210,
-          lag: 7,
-          attempt: 0,
-          nextAttemptAt: null,
-          lastError: null,
-        },
-      },
-    });
-    expect(struggling).toEqual([
-      {
-        name: "live-capability",
-        status: "parked",
-        confirmedOffset: 210,
-        haltedAfterOffset: null,
-        lag: 7,
-        attempt: 0,
-        lastError: 'capability "dashboard" is offline',
-        canSetCursor: true,
-      },
-    ]);
-  });
-
   it("surfaces subscriptions failing in backoff before they halt", () => {
     const struggling = selectStrugglingSubscriptions({
       configured: { "project-worker": sourceOwnedConfiguration },
@@ -117,13 +82,12 @@ describe("selectStrugglingSubscriptions", () => {
     ]);
   });
 
-  it("ranks a durable halt above the park fact and the retry row", () => {
+  it("ranks a durable halt above the retry row", () => {
     const struggling = selectStrugglingSubscriptions({
       configured: {
         "project-worker": {
           ...sourceOwnedConfiguration,
           deliveryHalted: { afterOffset: 300, attempts: 15 },
-          deliveryParked: { afterOffset: 290 },
         },
       },
       runtime: {
@@ -169,26 +133,6 @@ describe("buildRedriveEvents", () => {
       {
         type: "events.iterate.com/stream/subscription-delivery-resumed",
         payload: { name: "project-worker" },
-      },
-    ]);
-  });
-
-  it("resume un-parks a parked subscription with the same event", () => {
-    expect(
-      buildRedriveEvents("resume", {
-        name: "live-capability",
-        status: "parked",
-        confirmedOffset: 210,
-        haltedAfterOffset: null,
-        lag: 7,
-        attempt: 0,
-        lastError: null,
-        canSetCursor: true,
-      }),
-    ).toEqual([
-      {
-        type: "events.iterate.com/stream/subscription-delivery-resumed",
-        payload: { name: "live-capability" },
       },
     ]);
   });

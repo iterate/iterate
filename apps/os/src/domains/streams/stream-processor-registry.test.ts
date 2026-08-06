@@ -193,7 +193,6 @@ function makeHarness(
       return await registry.wakeStreamProcessor({
         stream: { projectId: null, path: HOME, streamId, streamMaxOffset: head() },
         name: slug,
-        processorSlug: slug,
       });
     },
     /** Wake `slug` and push everything past its acknowledged cursor as one
@@ -446,7 +445,6 @@ describe("wakeStreamProcessor", () => {
       h.registry.wakeStreamProcessor({
         stream: { projectId: null, path: HOME, streamId: STREAM_ID, streamMaxOffset: 0 },
         name: "wake:unspecified",
-        processorSlug: "alpha-proc",
       }),
     ).rejects.toThrow(/unknown name "wake:unspecified"/);
 
@@ -587,7 +585,6 @@ describe("wakeStreamProcessor", () => {
           streamMaxOffset: 5,
         },
         name: "alpha-proc",
-        processorSlug: "alpha-proc",
       }),
     ).rejects.toThrow(/coordinate mismatch/);
 
@@ -601,7 +598,6 @@ describe("wakeStreamProcessor", () => {
           streamMaxOffset: 5,
         },
         name: "alpha-proc",
-        processorSlug: "alpha-proc",
       }),
     ).rejects.toThrow(/coordinate mismatch/);
 
@@ -616,7 +612,6 @@ describe("wakeStreamProcessor", () => {
           streamMaxOffset: 5,
         },
         name: "wake:unspecified",
-        processorSlug: "unregistered-contract",
       }),
     ).rejects.toThrow(/coordinate mismatch/);
 
@@ -624,7 +619,6 @@ describe("wakeStreamProcessor", () => {
     const woken = await h.registry.wakeStreamProcessor({
       stream: { projectId: null, path: HOME, streamId: STREAM_ID, streamMaxOffset: 0 },
       name: "alpha-proc",
-      processorSlug: "alpha-proc",
     });
     expect(woken.checkpointOffset).toBe(0);
   });

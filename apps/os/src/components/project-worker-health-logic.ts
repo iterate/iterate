@@ -3,13 +3,10 @@ import type { StreamEventInput } from "../itx-api.generated.ts";
 /**
  * A stopped-or-struggling subscription the sidebar warning surfaces, read
  * from the root stream's reduced configuration and runtime cursor row. The
- * three states are distinct on purpose:
+ * two states are distinct on purpose:
  *
- * - `halted` — the receiver is present and delivery gave up (durable
- *   `subscription-delivery-halted` fact after the retry ladder burned out);
- * - `parked` — the receiver is legitimately absent (durable
- *   `subscription-delivery-parked` fact): not a failure, no ladder burning,
- *   but events accumulate undelivered until it resumes;
+ * - `halted` — delivery gave up (durable `subscription-delivery-halted` fact
+ *   after the retry ladder burned out);
  * - `backoff` — delivery is failing and retrying; not stopped yet.
  *
  * Halted attempts and errors come from the durable halt fact. Backoff
@@ -17,7 +14,7 @@ import type { StreamEventInput } from "../itx-api.generated.ts";
  */
 export type SubscriptionHealth = {
   name: string;
-  status: "halted" | "parked" | "backoff";
+  status: "halted" | "backoff";
   /** Exclusive confirmed cursor: the receiver durably claims through here.
    * The next (stuck) event is `confirmedOffset + 1`; the skip verb seeks past it. */
   confirmedOffset: number;
@@ -38,7 +35,7 @@ type SubscriptionRuntimeFacts = {
   lastError: string | null;
 };
 
-/** The durable stop facts reduced from halt/park events. */
+/** The durable stop facts reduced from halt events. */
 type ConfiguredSubscriptionFacts = {
   configuration: {
     receiver: { action: string };
@@ -48,18 +45,13 @@ type ConfiguredSubscriptionFacts = {
     attempts: number;
     error?: string;
   };
-  deliveryParked?: {
-    afterOffset: number;
-    error?: string;
-  };
 };
 
 /**
  * The subscriptions on a stream that are not delivering normally: HALTED (a
- * durable event says delivery gave up), PARKED (a durable event says the
- * receiver is legitimately absent), or in BACKOFF (the cursor row has a retry
- * time). Healthy subscriptions are omitted. Durable facts outrank transient
- * retry state.
+ * durable event says delivery gave up) or in BACKOFF (the cursor row has a
+ * retry time). Healthy subscriptions are omitted. Durable facts outrank
+ * transient retry state.
  */
 export function selectStrugglingSubscriptions(
   args:
@@ -75,11 +67,9 @@ export function selectStrugglingSubscriptions(
     const status: SubscriptionHealth["status"] | null =
       configured.deliveryHalted !== undefined
         ? "halted"
-        : configured.deliveryParked !== undefined
-          ? "parked"
-          : runtime.nextAttemptAt !== null
-            ? "backoff"
-            : null;
+        : runtime.nextAttemptAt !== null
+          ? "backoff"
+          : null;
     if (status === null) return [];
     return [
       {
@@ -89,8 +79,7 @@ export function selectStrugglingSubscriptions(
         haltedAfterOffset: configured.deliveryHalted?.afterOffset ?? null,
         lag: runtime.lag,
         attempt: configured.deliveryHalted?.attempts ?? runtime.attempt,
-        lastError:
-          configured.deliveryHalted?.error ?? configured.deliveryParked?.error ?? runtime.lastError,
+        lastError: configured.deliveryHalted?.error ?? runtime.lastError,
         canSetCursor: configured.configuration.receiver.action !== "processor-wake",
       },
     ];
@@ -98,12 +87,10 @@ export function selectStrugglingSubscriptions(
 }
 
 /**
- * The events to append to unstick a subscription. `resume` clears the halt OR
- * the park (`subscription-delivery-resumed` reactivates both) and kicks
- * delivery from the existing cursor — the same event the Stream DO's internal
- * `resumeParkedSubscription` poke appends. `skip` first moves the cursor past
- * the stuck event so it does not just fail on the same one again, then
- * resumes.
+ * The events to append to unstick a subscription. `resume` clears the halt
+ * (`subscription-delivery-resumed`) and kicks delivery from the existing
+ * cursor. `skip` first moves the cursor past the stuck event so it does not
+ * just fail on the same one again, then resumes.
  *
  * Delivery resumes STRICTLY after the confirmed cursor, so `confirmedOffset`
  * is the last claimed offset and the stuck event is `confirmedOffset + 1`.

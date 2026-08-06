@@ -86,7 +86,6 @@ import {
   hasStructuredIdPrefix,
   internalStreamId,
   internalStreamIdPrefix,
-  isStreamReceiverAbsentError,
   structuredId,
   withDeliveryTimeout,
 } from "./stream-delivery-utils.ts";
@@ -216,14 +215,12 @@ const LIFECYCLE_RETRY_DELAY_MS = 1_000;
 
 /** Serializable debug view of one stored subscription's cursor row, for `runtimeState()`. */
 export type SubscriptionRuntimeState = {
-  /** Exclusive: the source completed transfer through this offset. */
-  deliveredOffset: number;
   /** Exclusive: the receiver durably claims through this offset. */
   confirmedOffset: number;
-  /** `maxOffset - confirmedOffset`; `deliveredOffset - confirmedOffset` is the outstanding window. */
+  /** `maxOffset - confirmedOffset`. */
   lag: number;
-  /** Mirrored delivery state: `active`, `parked` (receiver absent), or `halted`. */
-  state: "active" | "parked" | "halted";
+  /** Mirrored delivery status: `active` or `halted`. */
+  status: "active" | "halted";
   attempt: number;
   nextAttemptAt: number | null;
   inFlightDeadlineAt: number | null;
@@ -235,13 +232,6 @@ export type SubscriptionRuntimeState = {
   /** Duration of the awaited copy, ITX, or webhook call itself. */
   deliveryDurationMs?: LatencyStats;
 };
-
-/**
- * What a webhook receiver said in its 2xx response body. An offset-acking
- * remote returns `{ confirmedOffset }` to own its durable position; a plain
- * webhook returns anything else and the 2xx alone acknowledges the event.
- */
-export type WebhookDeliveryReceipt = { confirmedOffset?: number };
 
 /**
  * One explicit call per receiver variant. Hosted-processor wake dials by the
@@ -260,11 +250,10 @@ export type SubscriptionReceiverCalls = {
   /** Deliver a batch to a stream, which appends source.copiedFrom to each event. */
   copyToStream(path: string, batch: StreamDeliveryBatch): Promise<CopyReceipt>;
   /**
-   * POST one event to the webhook URL. Resolve (2xx) = delivered; non-2xx
-   * rejects. The receipt carries an optional `confirmedOffset` read from a
-   * JSON 2xx response body.
+   * POST one event to the webhook URL. Resolve (2xx) = the whole
+   * acknowledgement; non-2xx rejects. The response body is discarded.
    */
-  deliverToWebhook(url: string, delivery: StreamWebhookDelivery): Promise<WebhookDeliveryReceipt>;
+  deliverToWebhook(url: string, delivery: StreamWebhookDelivery): Promise<void>;
 };
 
 /** The policy/storage seams the owning Stream Durable Object provides. */
@@ -533,21 +522,17 @@ export class StreamEventSender {
         row = this.#hooks.store.get(name);
       }
 
-      // Mirror the reduced-state delivery state onto the row, level-triggered:
-      // halted and parked are event-sourced (the fold is authoritative); the
-      // row's copy exists so cursor-row readers see one self-describing record.
-      const desiredState =
-        entry.deliveryHalted !== undefined
-          ? ("halted" as const)
-          : entry.deliveryParked !== undefined
-            ? ("parked" as const)
-            : ("active" as const);
-      if (row !== undefined && row.state !== desiredState) {
-        this.#hooks.store.setState(name, desiredState);
+      // Mirror the reduced-state delivery status onto the row, level-triggered:
+      // halted is event-sourced (the fold is authoritative); the row's copy
+      // exists so cursor-row readers see one self-describing record.
+      const desiredStatus =
+        entry.deliveryHalted !== undefined ? ("halted" as const) : ("active" as const);
+      if (row !== undefined && row.status !== desiredStatus) {
+        this.#hooks.store.setStatus(name, desiredStatus);
         row = this.#hooks.store.get(name);
       }
 
-      if (entry.deliveryHalted !== undefined || entry.deliveryParked !== undefined) continue;
+      if (entry.deliveryHalted !== undefined) continue;
 
       if (row === undefined) continue; // unreachable after ensure; defensive
       if (row.inFlightDeadlineAt !== null) {
@@ -572,7 +557,7 @@ export class StreamEventSender {
         continue;
       }
 
-      if (row.deliveredOffset >= state.maxOffset) continue; // caught up; nothing to send
+      if (row.confirmedOffset >= state.maxOffset) continue; // caught up; nothing to send
 
       if (this.#sourceOwnedSendsInFlight.has(name)) continue;
       this.#sendPendingSourceOwnedEvents(name);
@@ -603,8 +588,9 @@ export class StreamEventSender {
         streamId: state.streamId,
         streamMaxOffset: state.maxOffset,
       },
+      // Name IS the contract slug for processor-wake subscriptions (enforced
+      // at configure time), so the request needs no separate slug field.
       name,
-      processorSlug: receiver.processorSlug,
     };
 
     this.#hooks.runDurable(async () => {
@@ -686,7 +672,6 @@ export class StreamEventSender {
               );
             },
           },
-          includeState: current.configuration.state !== false,
           openedBy,
           getRuntimeState: response.getRuntimeState,
           ping: response.ping,
@@ -694,10 +679,10 @@ export class StreamEventSender {
         // The wake response's checkpoint IS a reported checkpoint: the far
         // side durably claims through it, so it lands in `confirmed_offset`.
         // While the connection streams, the stored confirmation deliberately
-        // goes stale (batch acks advance `delivered_offset` only); its job is
-        // deciding whether to wake the processor when no callback exists, and
-        // a stale row costs one redundant wake. The confirm write clears the
-        // retry schedule always, but the failure streak only on PROGRESS —
+        // goes stale (batch acks settle the watchdog without confirming); its
+        // job is deciding whether to wake the processor when no callback
+        // exists, and a stale row costs one redundant wake. The confirm write
+        // clears the retry schedule always, but the failure streak only on PROGRESS —
         // a successful wake proves the host is reachable, not that
         // deliveries succeed, and resetting the counter without progress is
         // what let a deterministically failing processor spin forever.
@@ -735,11 +720,7 @@ export class StreamEventSender {
         for (;;) {
           const state = this.#hooks.coreState();
           const entry = state.subscriptions.outbound.byName[name];
-          if (
-            entry === undefined ||
-            entry.deliveryHalted !== undefined ||
-            entry.deliveryParked !== undefined
-          ) {
+          if (entry === undefined || entry.deliveryHalted !== undefined) {
             return;
           }
           const config = entry.configuration;
@@ -767,25 +748,14 @@ export class StreamEventSender {
           // failure pin composes rather than duplicates: for a webhook it is
           // already the steady state. The cost is one row/config re-read per
           // event on a backlog, noise against the HTTP POST itself.
-          //
-          // Per-subscription delivery controls only ever NARROW the global
-          // bounds: a config cap can shrink a batch, never grow one.
           const limit =
             receiver.action === "webhook-post" || this.#limitNextReadToOne.has(name)
               ? 1
-              : Math.min(DELIVERY_BATCH_LIMIT, config.maxDeliveryEvents ?? DELIVERY_BATCH_LIMIT);
-          const byteLimit = Math.min(
-            DELIVERY_BATCH_BYTE_LIMIT,
-            config.maxDeliveryBytes ?? DELIVERY_BATCH_BYTE_LIMIT,
-          );
+              : DELIVERY_BATCH_LIMIT;
 
-          // The read resumes after `delivered`: within a run the transfer
-          // position advances even when the receiver confirms lazily. The one
-          // scheduling rule — resume after `confirmed` — is enforced at boot,
-          // where rewindDeliveredToConfirmed rewinds this read position and
-          // redelivers the unconfirmed window.
-          const sized = this.#readBatch(row.deliveredOffset, Number.MAX_SAFE_INTEGER, limit, {
-            byteLimit,
+          // The one scheduling rule: delivery resumes after `confirmed`.
+          const sized = this.#readBatch(row.confirmedOffset, Number.MAX_SAFE_INTEGER, limit, {
+            byteLimit: DELIVERY_BATCH_BYTE_LIMIT,
           });
           const lastOffset = sized.at(-1)?.event.offset;
           if (lastOffset === undefined) {
@@ -793,7 +763,7 @@ export class StreamEventSender {
             // ephemeral eviction. An empty range read proves that whole suffix
             // contains no durable work, so advance the durable cursor through
             // it instead of reporting permanent phantom lag.
-            if (row.deliveredOffset < state.maxOffset) {
+            if (row.confirmedOffset < state.maxOffset) {
               this.#hooks.store.ack(name, state.maxOffset, {
                 cursorChangedAtOffset: row.cursorChangedAtOffset,
                 preserveFailingEventSkips: true,
@@ -901,11 +871,10 @@ export class StreamEventSender {
           // Same ordering as hosted wake: the durable retry must commit
           // before any remote receiver can observe this attempt.
           this.#armInFlightWatchdog();
-          let webhookReceipt: WebhookDeliveryReceipt | undefined;
           try {
             if (receiver.action === "webhook-post") {
               if (state.projectId === null) return; // unreachable: rejected at append (egress attribution)
-              webhookReceipt = await withDeliveryTimeout(
+              await withDeliveryTimeout(
                 this.#hooks.receiverCalls.deliverToWebhook(receiver.url, {
                   projectId: state.projectId,
                   path: state.path,
@@ -991,8 +960,8 @@ export class StreamEventSender {
             // "continue" = the failure handler already moved the goalposts
             // (dropped the next read straight to batch size 1 or stepped over
             // a confirmed failing event) and the loop should try again NOW;
-            // anything else backs off, parks, or halts and the alarm/resume
-            // owns the future.
+            // anything else backs off or halts and the alarm/resume owns the
+            // future.
             if (this.#onSourceOwnedFailure({ name, config, matched, error }) === "continue") {
               continue;
             }
@@ -1021,31 +990,9 @@ export class StreamEventSender {
           // above. If a seek or replacement was appended while this delivery
           // was in flight, this acknowledgement does nothing; the next
           // iteration re-reads the row and sends from the newly chosen cursor.
-          const remoteConfirmedOffset = webhookReceipt?.confirmedOffset;
-          if (
-            receiver.action === "webhook-post" &&
-            typeof remoteConfirmedOffset === "number" &&
-            Number.isSafeInteger(remoteConfirmedOffset) &&
-            remoteConfirmedOffset >= 0
-          ) {
-            // Offset-acking webhook: the remote owns its durable position. The
-            // 2xx completed transfer (delivered); the body's confirmedOffset —
-            // clamped to what has actually been sent — is the far side's
-            // durable claim. A fresh incarnation redelivers the
-            // delivered-but-unconfirmed window (at-least-once).
-            this.#hooks.store.recordDelivered(name, deliveredThroughOffset, {
-              cursorChangedAtOffset: row.cursorChangedAtOffset,
-            });
-            this.#hooks.store.confirm(
-              name,
-              Math.min(remoteConfirmedOffset, deliveredThroughOffset),
-              { cursorChangedAtOffset: row.cursorChangedAtOffset },
-            );
-          } else {
-            this.#hooks.store.ack(name, deliveredThroughOffset, {
-              cursorChangedAtOffset: row.cursorChangedAtOffset,
-            });
-          }
+          this.#hooks.store.ack(name, deliveredThroughOffset, {
+            cursorChangedAtOffset: row.cursorChangedAtOffset,
+          });
           this.#limitNextReadToOne.delete(name);
         }
       } catch (error) {
@@ -1088,8 +1035,8 @@ export class StreamEventSender {
 
   /**
    * Read up to `limit` events after `afterOffset`, shrinking under the byte
-   * cap (a per-subscription `maxDeliveryBytes` can narrow it, and at least one
-   * event is always kept so an oversized event cannot wedge delivery). A
+   * cap (at least one event is always kept so an oversized event cannot wedge
+   * delivery). A
    * reader positioned exactly before the just-committed first event consumes the
    * handed-over fresh events instead of re-reading them from SQLite — the
    * committed objects are byte-for-byte what a read-back would parse (append
@@ -1195,11 +1142,6 @@ export class StreamEventSender {
     error: unknown;
   }): "continue" | "stop" {
     const { name, config, matched, error } = args;
-    // Receiver absence is not a failure: park instead of charging the ladder.
-    if (isStreamReceiverAbsentError(error)) {
-      this.#park(name, error);
-      return "stop";
-    }
     this.#limitNextReadToOne.add(name);
     // A receiver that declared itself unavailable, or a receiver call rejected
     // by workerd because its Durable Object is temporarily unavailable, is
@@ -1284,14 +1226,6 @@ export class StreamEventSender {
 
   /** Shared failure path for hosted wake and halt-policy delivery. */
   #onDeliveryFailure(name: string, error: unknown, previousAttempts?: number): void {
-    // Receiver absence is not a failure. The receiver said "my target is
-    // legitimately gone" (a live capability's providing session closed, a
-    // remote app disconnected): park with the cursor intact instead of burning
-    // the 15-attempt ladder into a terminal halt.
-    if (isStreamReceiverAbsentError(error)) {
-      this.#park(name, error);
-      return;
-    }
     const attempts = previousAttempts ?? this.#hooks.store.get(name)?.attempt ?? 0;
     const attempt = attempts + 1;
     // A receiver that reports its failure as deterministic (a worker source
@@ -1310,49 +1244,6 @@ export class StreamEventSender {
   }
 
   /**
-   * Park loudly but calmly: the parked event reduces into core state (delivery
-   * stops, nothing charged to the failure ladder) and the cursor row keeps its
-   * position with no retry alarm. `subscription-delivery-resumed` — appended
-   * by the receiver host's presence signal or the stream's resume poke — is
-   * the way back.
-   */
-  #park(name: string, error: unknown): void {
-    // State-guarded like #halt: while parked, the send loop never runs this
-    // path, so a duplicate park is structurally impossible.
-    if (this.#hooks.coreState().subscriptions.outbound.byName[name]?.deliveryParked !== undefined) {
-      return;
-    }
-    const row = this.#hooks.store.get(name);
-    const parkError = boundedErrorMessage(error);
-    const recorded = this.#hooks.appendDeliveryEvent({
-      type: "events.iterate.com/stream/subscription-delivery-parked",
-      payload: {
-        name,
-        reason: "receiver-absent",
-        afterOffset: row?.confirmedOffset ?? 0,
-        ...(parkError === undefined ? {} : { error: parkError }),
-      },
-    });
-    if (!recorded) {
-      // Parking is an appended event, not an in-memory transition. Keep the
-      // row retryable until that event commits so a lifecycle interruption can
-      // neither strand the subscription nor lose the durable explanation.
-      const nextAttemptAt = this.#hooks.now() + LIFECYCLE_RETRY_DELAY_MS;
-      this.#hooks.store.nack(name, {
-        attempt: row?.attempt ?? 0,
-        nextAttemptAt,
-        error: errorMessage(error),
-      });
-      this.#hooks.armAlarm(nextAttemptAt);
-      return;
-    }
-    // A parked row must not keep driving the alarm: clear any backoff while
-    // keeping both cursors exactly where they are.
-    if (row !== undefined) this.#hooks.store.recordDelivered(name, row.deliveredOffset);
-    this.#limitNextReadToOne.delete(name);
-  }
-
-  /**
    * Convert a persisted hosted-batch watchdog into the ordinary bounded
    * failure ladder. A live connection gets first refusal in
    * `StreamConnections.onAlarm()`; rows left here are the eviction/idle case,
@@ -1366,14 +1257,12 @@ export class StreamEventSender {
       if (
         entry === undefined ||
         entry.deliveryHalted !== undefined ||
-        entry.deliveryParked !== undefined ||
         entry.configuredAtOffset !== row.configuredAtOffset ||
         entry.configuration.receiver.action !== "processor-wake"
       ) {
         this.#hooks.store.clearInFlight(row.name, {
           connectionGeneration: row.inFlightConnectionGeneration ?? -1,
           cursorChangedAtOffset: row.cursorChangedAtOffset,
-          deliveredOffset: row.deliveredOffset,
         });
         continue;
       }
@@ -1447,15 +1336,16 @@ export class StreamEventSender {
     // a nack whose (now past) next_attempt_at would otherwise be re-armed by
     // every onAlarm forever — a permanent alarm hot loop per halted
     // subscription. Clear the backoff, keep the cursor (the halted event carries
-    // the attempts + error for the audit trail).
-    if (row !== undefined) this.#hooks.store.recordDelivered(name, row.deliveredOffset);
+    // the attempts + error for the audit trail); an equal-offset ack is a
+    // no-move under the monotonic max.
+    if (row !== undefined) this.#hooks.store.ack(name, row.confirmedOffset);
     this.#limitNextReadToOne.delete(name);
   }
 
   #armAlarmFromStore(): void {
-    // Not a bare MIN over the rows: halted and parked rows keep their cursor
-    // but must not arm the alarm, and a row whose retry is in flight this turn
-    // still carries its (past) due time until the attempt settles — re-arming
+    // Not a bare MIN over the rows: halted rows keep their cursor but must
+    // not arm the alarm, and a row whose retry is in flight this turn still
+    // carries its (past) due time until the attempt settles — re-arming
     // from either spins the alarm at zero delay.
     const state = this.#hooks.coreState();
     let next: number | null = null;
@@ -1467,7 +1357,7 @@ export class StreamEventSender {
         this.#hooks.store.delete(key);
         continue;
       }
-      if (configured.deliveryHalted !== undefined || configured.deliveryParked !== undefined) {
+      if (configured.deliveryHalted !== undefined) {
         continue;
       }
       if (row.inFlightDeadlineAt !== null) {
@@ -1567,7 +1457,6 @@ export class StreamEventSender {
     return Object.fromEntries(
       Object.keys(state.subscriptions.outbound.byName).map((name) => {
         const row = rows.get(name);
-        const deliveredOffset = row?.deliveredOffset ?? 0;
         const confirmedOffset = row?.confirmedOffset ?? 0;
         const metrics = this.#subscriptionMetrics.get(name);
         const completionLatencyMs = metrics?.completionLatency.stats() ?? null;
@@ -1575,10 +1464,9 @@ export class StreamEventSender {
         return [
           name,
           {
-            deliveredOffset,
             confirmedOffset,
             lag: Math.max(0, state.maxOffset - confirmedOffset),
-            state: row?.state ?? "active",
+            status: row?.status ?? "active",
             attempt: row?.attempt ?? 0,
             nextAttemptAt: row?.nextAttemptAt ?? null,
             inFlightDeadlineAt: row?.inFlightDeadlineAt ?? null,
@@ -1716,11 +1604,7 @@ type OpenConnectionArgs<Batch extends StreamEventBatch> = {
   maxDeliveryEvents?: number;
   /** Per-connection ceiling on summed event bytes per delivered batch; always ≥1 event. */
   maxDeliveryBytes?: number;
-  /**
-   * `false` sends batches with `state: null` — set per session connection
-   * (#2384) or by the per-subscription `state: false` delivery control for
-   * constrained wake-fed consumers.
-   */
+  /** `false` sends batches with `state: null` — set per session connection (#2384). */
   includeState?: boolean;
   openedBy?: ConnectionOpenerDescriptor;
   getRuntimeState?: GetProcessorRuntimeState;
@@ -2126,16 +2010,16 @@ export class StreamConnections {
     // Closing each callback appends its connection-closed fact synchronously.
     // A settled hosted processor has already handled everything that existed
     // before teardown, and waking it solely to consume those close facts would
-    // create an immediate close -> wake -> open -> idle-close loop. Advance its
-    // TRANSFER position (delivered_offset only — the processor never reported
-    // a checkpoint for the close facts) through them on purpose. A processor
-    // that consumes connection presence sees them on its next real wake, when
-    // the runner replays from its own reported checkpoint; the sending cursor
-    // is only the source stream's wake/delivery position.
+    // create an immediate close -> wake -> open -> idle-close loop. Advance
+    // the sending cursor through them on purpose: the row is only the source
+    // stream's wake/delivery position, and the runner's OWN durable
+    // checkpoint — which never advanced over the close facts — is what its
+    // next real wake replays from, so a presence-consuming processor still
+    // sees them then.
     const maxOffset = this.#hooks.coreState().maxOffset;
     for (const connectionKey of hosted) {
       if (wedgedKeys.has(connectionKey)) continue;
-      this.#hooks.store.recordDelivered(connectionKey, maxOffset);
+      this.#hooks.store.ack(connectionKey, maxOffset);
     }
     // Session connections have no cursor row; their equivalent of the ack
     // above is the wake-socket attachment stamp, which must likewise land
@@ -2347,8 +2231,8 @@ export class StreamConnections {
             scannedAfterOffset,
             scannedThroughOffset: deliveredThroughOffset,
             streamMaxOffset: currentState.maxOffset,
-            // `state: false` delivery control: a constrained consumer opts out
-            // of the reduced-state snapshot riding every batch.
+            // `state: false` per-connection control: a constrained consumer
+            // opts out of the reduced-state snapshot riding every batch.
             state: args.includeState === false ? null : currentState,
           } satisfies StreamEventBatch;
           if (kind === "hosted") {
@@ -2386,14 +2270,14 @@ export class StreamConnections {
                   this.#connections.get(connectionKey) === connection &&
                   this.#hooks.hostedDeliveryStillMatches(connectionKey, expectedDelivery)
                 ) {
-                  // The batch ack is a TRANSFER completion: the source is done
-                  // with this window, so it lands in delivered_offset. The
-                  // receiver's durable claim (confirmed_offset) only moves on
-                  // reported checkpoints — the wake response's checkpoint.
+                  // The batch ack settles the watchdog and failure streak.
+                  // The receiver's durable claim (confirmed_offset) only
+                  // moves on reported checkpoints — the wake response's
+                  // checkpoint — so an eviction redelivers anything
+                  // unconfirmed (at-least-once).
                   this.#hooks.store.clearInFlight(connectionKey, {
                     connectionGeneration: expectedDelivery.connectionGeneration,
                     cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
-                    deliveredOffset: batch.scannedThroughOffset,
                   });
                   // The batch's pre-armed watchdog is now moot; let the full
                   // recomputation decide whether anything still needs a turn.

@@ -17,12 +17,11 @@ export { resolveStreamPath } from "iterate/processors";
  * Object (docs/stream-subscription-model-redesign.md +
  * tasks/stream-processors-as-facets.md).
  *
- * The subscription `name` is the instance identity — the stream's catalog
- * key, the facet name, and the progress-key component are all this exact
- * string. It defaults to the contract slug, so the single-instance case reads
- * as `subscriptions.get("agent")`; two instances of one contract are two
- * names sharing one slug. Names never carry a hostname or Durable Object
- * name — placement must not leak into identity.
+ * The subscription name is the contract slug — the stream's catalog key, the
+ * facet name, and the progress-key component are all this exact string (one
+ * identity; validation rejects a processor-wake subscription named anything
+ * else). Names never carry a hostname or Durable Object name — placement
+ * must not leak into identity.
  *
  * Birth-batch call sites pass a stable `idempotencyKey`, so an ambiguous
  * create retry reuses the same configuration event. The event itself remains
@@ -30,15 +29,13 @@ export { resolveStreamPath } from "iterate/processors";
  */
 export function buildFacetProcessorSubscriptionConfiguredEvent(input: {
   idempotencyKey?: string;
-  /** Subscription name (instance identity). Defaults to `processorSlug`. */
-  name?: string;
   processorSlug: string;
 }) {
   return CoreProcessorContract.buildEvent({
     type: "events.iterate.com/stream/subscription-configured",
     ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
     payload: {
-      name: input.name ?? input.processorSlug,
+      name: input.processorSlug,
       receiver: {
         action: "processor-wake",
         placement: "facet",

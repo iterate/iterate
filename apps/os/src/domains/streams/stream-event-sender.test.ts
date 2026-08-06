@@ -22,7 +22,6 @@ import {
   StreamConnections,
   StreamEventSender,
   type SubscriptionReceiverCalls,
-  type WebhookDeliveryReceipt,
 } from "./stream-event-sender.ts";
 import { SqliteSubscriptionCursorStore } from "./stream-storage.ts";
 
@@ -137,7 +136,7 @@ function harness(args: {
     },
     deliverToItx: args.deliverToItx ?? (async () => undefined),
     copyToStream: args.copyToStream ?? (async () => ({ acknowledged: 0 })),
-    deliverToWebhook: args.deliverToWebhook ?? (async () => ({})),
+    deliverToWebhook: args.deliverToWebhook ?? (async () => undefined),
   };
   const eventSender = new StreamEventSender({
     idleTeardownMs: 60_000,
@@ -1397,7 +1396,6 @@ describe("StreamEventSender webhook delivery", () => {
     const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(
       async (_url, delivery) => {
         deliveries.push(delivery);
-        return {};
       },
     );
     const h = harness({
@@ -1456,7 +1454,6 @@ describe("StreamEventSender webhook delivery", () => {
           throw new Error("webhook responded 503 Service Unavailable");
         }
         delivered.push(delivery.event.offset);
-        return {};
       },
     );
     const h = harness({
@@ -1554,7 +1551,6 @@ describe("StreamEventSender webhook delivery", () => {
           throw new Error("webhook responded 422 Unprocessable Entity");
         }
         delivered.push(delivery.event.offset);
-        return {};
       },
     );
     const h = harness({
@@ -1606,7 +1602,7 @@ describe("StreamEventSender webhook delivery", () => {
   });
 
   it("a replaced webhook cannot acknowledge its stale POST or keep the old URL in the loop", async () => {
-    const staleAck = Promise.withResolvers<WebhookDeliveryReceipt>();
+    const staleAck = Promise.withResolvers<void>();
     // Only the pre-replacement POST settles; the replacement's own delivery
     // stays open so the stale acknowledgement is the only ack.
     const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>((url) =>
@@ -1639,7 +1635,7 @@ describe("StreamEventSender webhook delivery", () => {
       confirmedOffset: 0,
     });
 
-    staleAck.resolve({});
+    staleAck.resolve();
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
@@ -1668,7 +1664,7 @@ describe("StreamEventSender webhook delivery", () => {
     const release = Promise.withResolvers<void>();
     const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(() => {
       firstPostStarted.resolve();
-      return release.promise.then(() => ({}));
+      return release.promise;
     });
     const h = harness({
       events: [
@@ -1698,7 +1694,6 @@ describe("StreamEventSender webhook delivery", () => {
     const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(
       async (_url, delivery) => {
         deliveries.push(delivery);
-        return {};
       },
     );
     const h = harness({
@@ -1738,7 +1733,6 @@ describe("StreamEventSender webhook delivery", () => {
     const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(
       async (_url, delivery) => {
         delivered.push(delivery.event.offset);
-        return {};
       },
     );
     const h = harness({
@@ -1789,314 +1783,6 @@ describe("StreamEventSender webhook delivery", () => {
       attempt: 0,
       nextAttemptAt: null,
     });
-  });
-});
-
-describe("StreamEventSender delivered/confirmed split", () => {
-  it("an offset-acking webhook owns its position: 2xx advances delivered, the body advances confirmed, and boot redelivers the unconfirmed window", async () => {
-    const posted: number[] = [];
-    // The remote confirms lazily: each 2xx body claims one offset behind.
-    const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(
-      async (_url, delivery) => {
-        posted.push(delivery.event.offset);
-        return { confirmedOffset: delivery.event.offset - 1 };
-      },
-    );
-    const configuration: SubscriptionConfiguredPayload = {
-      name: PROCESSOR_KEY,
-      receiver: {
-        action: "webhook-post",
-        url: "https://receiver.example/events",
-        delivery: { start: "beginning", onFailingEvent: "halt" },
-      },
-    };
-    const events = [
-      event(2, "example.com/issue-created", { issue: 1 }),
-      event(3, "example.com/issue-created", { issue: 2 }),
-    ];
-    const h = harness({
-      events,
-      configuration,
-      deliverToWebhook,
-      wakeProcessor: async () => {
-        throw new Error("a webhook receiver must not wake a hosted processor");
-      },
-    });
-
-    h.eventSender.sendDue();
-    await h.settle();
-
-    // Within the run delivery proceeded past delivered; the remote's durable
-    // claim trails by one.
-    expect(posted).toEqual([2, 3]);
-    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      deliveredOffset: 3,
-      confirmedOffset: 2,
-      attempt: 0,
-      nextAttemptAt: null,
-    });
-
-    // Boot: the one scheduling rule — delivery resumes after confirmed — so a
-    // fresh incarnation redelivers the delivered-but-unconfirmed window.
-    h.store.rewindDeliveredToConfirmed();
-    const rebooted = harness({
-      events,
-      configuration,
-      store: h.store,
-      deliverToWebhook,
-      wakeProcessor: async () => {
-        throw new Error("a webhook receiver must not wake a hosted processor");
-      },
-    });
-    rebooted.eventSender.sendDue();
-    await rebooted.settle();
-
-    expect(posted).toEqual([2, 3, 3]);
-    expect(rebooted.store.get(PROCESSOR_KEY)).toMatchObject({
-      deliveredOffset: 3,
-      confirmedOffset: 2,
-    });
-  });
-
-  it("a webhook body confirmation can never fast-forward past what was actually sent", async () => {
-    const deliverToWebhook = vi.fn<SubscriptionReceiverCalls["deliverToWebhook"]>(async () => ({
-      confirmedOffset: 999,
-    }));
-    const h = harness({
-      events: [event(2, "example.com/issue-created", { issue: 1 })],
-      configuration: {
-        name: PROCESSOR_KEY,
-        receiver: {
-          action: "webhook-post",
-          url: "https://receiver.example/events",
-          delivery: { start: "beginning", onFailingEvent: "halt" },
-        },
-      },
-      deliverToWebhook,
-      wakeProcessor: async () => {
-        throw new Error("a webhook receiver must not wake a hosted processor");
-      },
-    });
-
-    h.eventSender.sendDue();
-    await h.settle();
-
-    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      deliveredOffset: 2,
-      confirmedOffset: 2,
-    });
-  });
-});
-
-describe("StreamEventSender parked subscriptions", () => {
-  function absentError() {
-    const error = new Error('capability "tasks" is offline; its providing session closed');
-    error.name = "StreamReceiverAbsentError";
-    return error;
-  }
-
-  it("a receiver-absence rejection parks the subscription: no ladder, no alarm, cursor intact", async () => {
-    const appended: StreamEventInput[] = [];
-    const deliverToItx = vi.fn<SubscriptionReceiverCalls["deliverToItx"]>(async () => {
-      throw absentError();
-    });
-    const h = harness({
-      events: [event(2, "example.com/issue-created", { issue: 1 })],
-      configuration: {
-        name: PROCESSOR_KEY,
-        receiver: {
-          action: "itx-call",
-          expression: ["capabilities", ["get", "tasks"], "processEventBatch"],
-          delivery: { start: "beginning", onFailingEvent: "halt" },
-        },
-      },
-      deliverToItx,
-      appendDeliveryEvent: (input) => {
-        appended.push(input);
-        // Model the DO's synchronous fold of the parked fact.
-        if (input.type === "events.iterate.com/stream/subscription-delivery-parked") {
-          h.state.subscriptions.outbound.byName[PROCESSOR_KEY]!.deliveryParked = {
-            reason: "receiver-absent",
-            afterOffset: 0,
-          };
-        }
-        return true;
-      },
-      wakeProcessor: async () => {
-        throw new Error("an ITX receiver must not wake a hosted processor");
-      },
-    });
-
-    h.eventSender.sendDue();
-    await h.settle();
-
-    expect(deliverToItx).toHaveBeenCalledOnce();
-    expect(appended).toEqual([
-      {
-        type: "events.iterate.com/stream/subscription-delivery-parked",
-        payload: {
-          name: PROCESSOR_KEY,
-          reason: "receiver-absent",
-          afterOffset: 0,
-          error: 'capability "tasks" is offline; its providing session closed',
-        },
-      },
-    ]);
-    // Nothing charged to the failure ladder, no retry alarm armed.
-    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      deliveredOffset: 0,
-      confirmedOffset: 0,
-      attempt: 0,
-      nextAttemptAt: null,
-      lastError: null,
-    });
-
-    // While parked: no further deliveries, and the row mirrors the state.
-    h.eventSender.sendDue();
-    await h.settle();
-    expect(deliverToItx).toHaveBeenCalledOnce();
-    expect(h.store.get(PROCESSOR_KEY)!.state).toBe("parked");
-
-    // Un-park (the resumed event's fold) and the same cursor resumes.
-    deliverToItx.mockImplementation(async () => undefined);
-    delete h.state.subscriptions.outbound.byName[PROCESSOR_KEY]!.deliveryParked;
-    h.eventSender.sendDue();
-    await h.settle();
-    expect(deliverToItx).toHaveBeenCalledTimes(2);
-    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
-      state: "active",
-      deliveredOffset: 2,
-      confirmedOffset: 2,
-    });
-  });
-
-  it("a hosted wake rejected as receiver-absent parks instead of backing off", async () => {
-    const appended: StreamEventInput[] = [];
-    const h = harness({
-      events: [event(2, "b", { keep: true })],
-      wakeProcessor: async () => {
-        throw absentError();
-      },
-      appendDeliveryEvent: (input) => {
-        appended.push(input);
-        if (input.type === "events.iterate.com/stream/subscription-delivery-parked") {
-          h.state.subscriptions.outbound.byName[PROCESSOR_KEY]!.deliveryParked = {
-            reason: "receiver-absent",
-            afterOffset: 0,
-          };
-        }
-        return true;
-      },
-    });
-
-    h.eventSender.sendDue();
-    await h.settle();
-
-    expect(h.wakeCalls).toHaveLength(1);
-    expect(
-      appended.filter(
-        (input) => input.type === "events.iterate.com/stream/subscription-delivery-parked",
-      ),
-    ).toHaveLength(1);
-    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({ attempt: 0, nextAttemptAt: null });
-
-    // Parked hosted subscriptions are not rewoken.
-    h.eventSender.sendDue();
-    await h.settle();
-    expect(h.wakeCalls).toHaveLength(1);
-  });
-});
-
-describe("StreamEventSender per-subscription delivery controls", () => {
-  it("maxDeliveryEvents narrows the batch bound for push deliveries", async () => {
-    const batches: number[][] = [];
-    const deliverToItx = vi.fn<SubscriptionReceiverCalls["deliverToItx"]>(
-      async (_expression, batch) => {
-        batches.push(batch.events.map(({ offset }) => offset));
-      },
-    );
-    const h = harness({
-      events: [
-        event(2, "example.com/issue-created", { issue: 1 }),
-        event(3, "example.com/issue-created", { issue: 2 }),
-        event(4, "example.com/issue-created", { issue: 3 }),
-      ],
-      configuration: {
-        name: PROCESSOR_KEY,
-        maxDeliveryEvents: 2,
-        receiver: {
-          action: "itx-call",
-          expression: ["worker", "processEventBatch"],
-          delivery: { start: "beginning", onFailingEvent: "halt" },
-        },
-      },
-      deliverToItx,
-      wakeProcessor: async () => {
-        throw new Error("an ITX receiver must not wake a hosted processor");
-      },
-    });
-
-    h.eventSender.sendDue();
-    await h.settle();
-
-    expect(batches).toEqual([[2, 3], [4]]);
-    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({ confirmedOffset: 4 });
-  });
-
-  it("maxDeliveryBytes shrinks the batch but always keeps at least one event", async () => {
-    const batches: number[][] = [];
-    const deliverToItx = vi.fn<SubscriptionReceiverCalls["deliverToItx"]>(
-      async (_expression, batch) => {
-        batches.push(batch.events.map(({ offset }) => offset));
-      },
-    );
-    const h = harness({
-      events: [
-        event(2, "example.com/issue-created", { issue: 1 }),
-        event(3, "example.com/issue-created", { issue: 2 }),
-      ],
-      configuration: {
-        name: PROCESSOR_KEY,
-        // Smaller than one serialized event: the batch still carries one.
-        maxDeliveryBytes: 1,
-        receiver: {
-          action: "itx-call",
-          expression: ["worker", "processEventBatch"],
-          delivery: { start: "beginning", onFailingEvent: "halt" },
-        },
-      },
-      deliverToItx,
-      wakeProcessor: async () => {
-        throw new Error("an ITX receiver must not wake a hosted processor");
-      },
-    });
-
-    h.eventSender.sendDue();
-    await h.settle();
-
-    expect(batches).toEqual([[2], [3]]);
-  });
-
-  it("state: false delivers wake batches without the reduced-state snapshot", async () => {
-    const states: unknown[] = [];
-    const h = harness({
-      events: [event(2, "b", { keep: true })],
-      configuration: { ...hostedConfig(), state: false },
-      wakeProcessor: async () => ({
-        streamId: SOURCE_STREAM_ID,
-        checkpointOffset: 0,
-        processEventBatch: retainedProcessEventBatch((batch) => {
-          states.push(batch.state);
-          batch.reportDeliveryResult({ outcome: "ok" });
-        }),
-      }),
-    });
-
-    h.eventSender.sendDue();
-    await h.settle();
-
-    expect(states.length).toBeGreaterThan(0);
-    expect(states.every((state) => state === null)).toBe(true);
   });
 });
 
@@ -2635,7 +2321,10 @@ describe("StreamConnections hosted delivery watchdog", () => {
     await flushMicrotasks();
     expect(calls).toHaveLength(2);
     expect(calls[1]!.batch.events.map((event) => event.offset)).toEqual([2]);
+    // The batch ack cleared the failure state but not the cursor: confirmed
+    // advances only on reported checkpoints, never on batch acknowledgements.
     expect(h.store.get("processor")).toMatchObject({
+      confirmedOffset: 0,
       attempt: 0,
       nextAttemptAt: null,
       lastError: null,
@@ -2815,7 +2504,6 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(connection.isLive()).toBe(false);
     expect(disposed).toHaveBeenCalledTimes(1);
     expect(h.store.get("processor")).toMatchObject({
-      deliveredOffset: before.deliveredOffset,
       confirmedOffset: before.confirmedOffset,
       inFlightDeadlineAt: before.inFlightDeadlineAt,
       inFlightConnectionGeneration: before.inFlightConnectionGeneration,
@@ -2912,10 +2600,10 @@ describe("StreamConnections hosted delivery watchdog", () => {
 
     expect(disposed).toHaveBeenCalledOnce();
     expect(h.state.maxOffset).toBe(5);
-    // Only the TRANSFER position advances through the close facts: the
-    // processor never reported a checkpoint for them, so its durable claim
-    // stays put and a boot rewind would redeliver them (harmless — the
-    // runner's own reported checkpoint drives replay on the next real wake).
-    expect(h.store.get("processor")).toMatchObject({ deliveredOffset: 5, confirmedOffset: 3 });
+    // The cursor advances through the close facts on purpose: the row is only
+    // the source stream's wake/delivery position, and the runner's OWN durable
+    // checkpoint — which never advanced over the close facts — is what its
+    // next real wake replays from.
+    expect(h.store.get("processor")).toMatchObject({ confirmedOffset: 5 });
   });
 });

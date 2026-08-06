@@ -22,7 +22,8 @@ import type { StreamEvent } from "./schemas.ts";
 // here (its `cloudflare:workers` import only resolves inside workerd), so the
 // suite pins the literals and the worker's own assertions keep them honest.
 const FACET_TEST_SLUG = "facet-proof";
-const FACET_TEST_SUBSCRIPTION_NAME = "proof-sub";
+// One identity: the subscription name IS the contract slug.
+const FACET_TEST_SUBSCRIPTION_NAME = FACET_TEST_SLUG;
 const REVIVED_TYPE = "events.iterate.com/stream/processor-revived";
 
 let mf: Miniflare;
@@ -101,10 +102,10 @@ describe("ProcessorFacet in real workerd (Miniflare)", () => {
       });
       expect(delivered).toEqual({ outcome: "ok" });
 
-      // Progress keyed by SUBSCRIPTION NAME (not slug), in the FACET's own kv.
+      // Progress keyed by the subscription name (= contract slug — one
+      // identity), in the FACET's own kv.
       const proof1 = await invoke(run, "facetReadProof");
       expect(proof1.progressKey).toBe(`stream-processor:${FACET_TEST_SUBSCRIPTION_NAME}:progress`);
-      expect(FACET_TEST_SUBSCRIPTION_NAME).not.toBe(FACET_TEST_SLUG);
       expect(proof1.progress?.streamId).toBe("11111111-1111-4111-8111-111111111111");
       expect(proof1.progress?.processing?.acknowledgedThroughOffset).toBe(2);
       expect(proof1.progress?.reduction?.state).toMatchObject({ count: 2, lastNote: "b" });

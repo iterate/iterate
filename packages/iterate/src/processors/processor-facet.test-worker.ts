@@ -37,9 +37,9 @@ import type {
 // Mirrored as literals in processor-facet.test.ts (this module only loads
 // inside workerd, and workerd rejects non-handler top-level exports).
 const FACET_TEST_SLUG = "facet-proof";
-/** The subscription NAME — deliberately DIFFERENT from the contract slug, so
- * the suite proves name-keyed progress/keepalive/routing end to end. */
-const FACET_TEST_SUBSCRIPTION_NAME = "proof-sub";
+/** The subscription NAME — equals the contract slug (one identity; the
+ * registry registers by slug and wake requests route on the name). */
+const FACET_TEST_SUBSCRIPTION_NAME = FACET_TEST_SLUG;
 const FACET_STREAM_PATH = "/facet-proof";
 const FACET_STREAM_ID = "11111111-1111-4111-8111-111111111111";
 const FACET_NAME = "processors";
@@ -284,7 +284,7 @@ export class ProofProcessorFacet extends ProcessorFacet<Env> {
             recordEffect: (entry) => this.#recordEffect(entry),
             isHangArmed: () => this.#hangArmed,
           }),
-          { recovery: true, name: FACET_TEST_SUBSCRIPTION_NAME },
+          { recovery: true },
         );
       },
     };
@@ -518,7 +518,6 @@ export class FacetTestParent extends DurableObject<Env> {
         streamMaxOffset: info.maxOffset,
       },
       name: FACET_TEST_SUBSCRIPTION_NAME,
-      processorSlug: FACET_TEST_SLUG,
     };
     const response = await this.#facet().wakeStreamProcessor(request);
     let runtimeState: unknown = null;

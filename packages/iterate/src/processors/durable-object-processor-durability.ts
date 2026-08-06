@@ -24,11 +24,8 @@ import type {
 } from "./stream-processor-runner.ts";
 
 // -----------------------------------------------------------------------------
-// Key layout. Per registered NAME (the subscription name; defaults to the
-// contract slug on single-instance hosts, so existing keys read unchanged),
-// all under the `stream-processor:` prefix. Keying by name — not slug — is
-// what lets two instances of one contract live on one host without their
-// cursors colliding.
+// Key layout. Per registered NAME (the subscription name, which equals the
+// contract slug — one identity), all under the `stream-processor:` prefix.
 // -----------------------------------------------------------------------------
 
 /** The two-cursor progress record ({@link ProcessorProgress}). */
@@ -77,8 +74,8 @@ function sameKeepaliveAttempt(
  */
 export function durableObjectProgressStore<State>(args: {
   storage: DurableObjectStorage;
-  /** The registered processor name (subscription name; defaults to the
-   * contract slug on single-instance hosts) — keys the progress record. */
+  /** The registered processor name (subscription name = contract slug) —
+   * keys the progress record. */
   name: string;
 }): ProcessorProgressStore<State> {
   const { storage, name } = args;
@@ -179,13 +176,10 @@ export function durableObjectProgressStore<State>(args: {
  */
 export function durableObjectRecovery(args: {
   storage: DurableObjectStorage;
-  /** The registered processor name (subscription name; defaults to the
-   * contract slug) — keys the per-runner keepalive record and the revival
-   * fact's idempotency key, so two instances of one contract never collide. */
+  /** The registered processor name (subscription name = contract slug) —
+   * keys the per-runner keepalive record and the revival fact's idempotency
+   * key, and fills the revival payload's `processorSlug`. */
   name: string;
-  /** The processor's contract slug — carried in the revival fact's payload
-   * (`processorSlug`), which names the CONTRACT that was revived. */
-  processorSlug: string;
   /** The processor's home stream: revived facts and crash-loop evidence land here. */
   stream: ProcessorStream;
   /** Worker deploy version; a change resets the keepalive's crash-loop budget
@@ -271,7 +265,8 @@ export function durableObjectRecovery(args: {
             `processor-revived:${args.name}` +
             `@${record.version}:${record.revivals}:${record.lastRevivalAt}`,
           payload: {
-            processorSlug: args.processorSlug,
+            // The registered name IS the contract slug (one identity).
+            processorSlug: args.name,
             revivals: record.revivals,
             version: record.version,
           },

@@ -106,7 +106,6 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   // exact lane without opening a live delivery sink in the test.
   await expect(
     directGuestbook.processor.wakeStreamProcessor({
-      processorSlug: "guestbook",
       stream: {
         path: "/wrong-stream",
         projectId,

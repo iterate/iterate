@@ -4,35 +4,6 @@ import { StreamReceiverUnavailableError } from "iterate/processors";
 export const DEFAULT_DELIVERY_TIMEOUT_MS = 20_000;
 
 /**
- * A durable receiver's declaration that it is LEGITIMATELY ABSENT — the live
- * capability's providing session closed, the remote app disconnected — as
- * opposed to present-and-failing ({@link StreamReceiverUnavailableError} means
- * "down right now, retry me"). A delivery rejection carrying this name PARKS
- * the subscription: the cursor row stays put, no retry alarm is armed, and
- * nothing is charged against the failure ladder. A
- * `subscription-delivery-resumed` event — or the stream's internal resume
- * poke — reactivates delivery when the receiver announces presence again.
- *
- * Matched by NAME, not instanceof: the rejection crosses Workers RPC hops
- * (loopback itx roots, DO bindings), which preserve `error.name` but not
- * class identity. Receiver hosts (the capability host, remote-app inbound
- * sessions) throw this from their delivery methods.
- */
-export class StreamReceiverAbsentError extends Error {
-  static readonly NAME = "StreamReceiverAbsentError";
-  override readonly name = StreamReceiverAbsentError.NAME;
-}
-
-export function isStreamReceiverAbsentError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "name" in error &&
-    error.name === StreamReceiverAbsentError.NAME
-  );
-}
-
-/**
  * Namespace reserved for idempotency keys minted while one stream appends an
  * event received from another. Public appends must never be able to occupy a
  * future source coordinate before the platform delivery arrives.

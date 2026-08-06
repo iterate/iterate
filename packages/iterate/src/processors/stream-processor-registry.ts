@@ -173,20 +173,17 @@ type RegistryEntry = {
 };
 
 /**
- * Options for {@link StreamProcessorRegistry.register}. `name` is the
- * registered processor's identity on this host — the subscription NAME under
- * the identity doctrine (docs/stream-subscription-model-redesign.md): the same
- * string as the stream's catalog key, the facet name under facet placement,
- * and the progress-key component. It defaults to the contract slug, so
- * single-instance hosts read exactly as before; two instances of one contract
- * are two registrations with two names and one slug.
+ * Options for {@link StreamProcessorRegistry.register}. A processor registers
+ * under its contract slug — which IS the subscription name under the identity
+ * doctrine (docs/stream-subscription-model-redesign.md): the same string as
+ * the stream's catalog key, the facet name under facet placement, and the
+ * progress-key component. (Registering two instances of one contract under
+ * distinct names is deliberately future work.)
  */
 export type RegisterProcessorOptions = {
   /** Post-eviction keepalive recovery — REQUIRED for consequential
    * `runInBackground` work (see the module doc). */
   recovery?: boolean;
-  /** Registered name (subscription name). Defaults to the contract slug. */
-  name?: string;
 };
 
 const WakeDeliveryThrowableFields = z.object({
@@ -268,7 +265,7 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
   readonly names: readonly string[];
   /**
    * Register a processor (constructed by the DO — the processor is the star,
-   * the registry is plumbing) under its NAME (default: the contract slug —
+   * the registry is plumbing) under its contract slug (= subscription name —
    * see {@link RegisterProcessorOptions}) and build its runner: durable
    * two-cursor progress in DO KV keyed by the name, plus — WHEN THE
    * DO PASSES `{ recovery: true }` — the per-runner recovery adapter
@@ -303,8 +300,8 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
   ): () => void;
   /**
    * Wire this to the host DO's wakeStreamProcessor RPC method. Resolves the
-   * woken runner (by the request's `processorSlug`, or the only registered
-   * one) and answers with its acknowledged cursor and a fresh processEventBatch.
+   * woken runner by the request's `name` (= contract slug) and answers with
+   * its acknowledged cursor and a fresh processEventBatch.
    */
   wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse>;
   /**
@@ -472,23 +469,16 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
   }
 
   /**
-   * Route a wake to a registered entry. The subscription NAME is the key
-   * (name-based registration; under facet placement the name IS the facet
-   * name). Every subscription carries a name, so an unknown name is a loud
-   * error — there is no slug-based fallback.
+   * Route a wake to a registered entry. The subscription NAME is the key —
+   * and equals the contract slug (enforced at configure time; under facet
+   * placement it is also the facet name). An unknown name is a loud error.
    */
   function resolveProcessorName(args: StreamProcessorWakeRequest): string {
     const named = entries.get(args.name);
     if (named === undefined) {
       throw new Error(
-        `wakeStreamProcessor for unknown name "${args.name}" (contract "${args.processorSlug}") — ` +
+        `wakeStreamProcessor for unknown name "${args.name}" — ` +
           `subscribe by registered name (registered: ${[...entries.keys()].join(", ") || "none"})`,
-      );
-    }
-    if (named.processor.contract.slug !== args.processorSlug) {
-      throw new Error(
-        `wakeStreamProcessor for "${args.name}" expects contract "${args.processorSlug}", ` +
-          `but that name is registered with contract "${named.processor.contract.slug}"`,
       );
     }
     return args.name;
@@ -536,8 +526,9 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     },
 
     register(processor, opts) {
-      const { slug } = processor.contract;
-      const name = opts?.name ?? slug;
+      // The registered name IS the contract slug (one identity — see
+      // RegisterProcessorOptions).
+      const name = processor.contract.slug;
       if (entries.has(name)) {
         throw new Error(`Stream processor name "${name}" is already registered on this registry`);
       }
@@ -556,7 +547,6 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         ? durableObjectRecovery({
             storage: ctx.storage,
             name,
-            processorSlug: slug,
             stream: options.stream,
             version: options.version,
             armAlarm: (atMs) => void setAlarmSlice(`keepalive:${name}`, atMs),
@@ -704,8 +694,8 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       // is accepted: foreign events fold into this processor's state, its
       // consequences run against this processor's fixed Stream capability, and
       // its checkpoint advances on foreign offsets. Reject before resolving the
-      // processor or opening delivery. (Selecting by `processorSlug` alone is
-      // the gap this closes — the slug is not unique across streams.)
+      // processor or opening delivery. (Selecting by name alone is the gap
+      // this closes — a name is not unique across streams.)
       if (args.stream.projectId !== options.projectId || args.stream.path !== options.path) {
         throw new Error(
           `wakeStreamProcessor coordinate mismatch: wake for ${args.stream.projectId ?? "null"}:${args.stream.path} does not match registry ${options.projectId ?? "null"}:${options.path}`,

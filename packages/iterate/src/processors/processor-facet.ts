@@ -31,8 +31,13 @@ import {
   type StreamProcessorRegistry,
 } from "./stream-processor-registry.ts";
 
-/** Where the configured identity lives in the facet's own kv. */
-const FACET_IDENTITY_KEY = "iterate:processor-facet:identity";
+/**
+ * Where the configured identity lives in the facet's own kv. Exported so a
+ * subclass's own doors can self-heal a fresh incarnation (re-run the
+ * idempotent `configure` from the stash) before the base's boot microtask has
+ * run — see apps/os `ProcessorFacet.#requireRegistry`.
+ */
+export const FACET_IDENTITY_KEY = "iterate:processor-facet:identity";
 
 /**
  * The identity a {@link ProcessorFacet} is configured with on first contact —

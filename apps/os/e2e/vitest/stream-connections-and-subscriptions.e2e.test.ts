@@ -1216,98 +1216,6 @@ test("resumeSubscription restarts a halted rule at its existing cursor", async (
   ).not.toHaveProperty("deliveryHalted");
 });
 
-test("a parked subscription holds delivery without burning the retry ladder and resumes at its cursor", async () => {
-  const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/subscriptions/park/source/${marker}`;
-  const receivingStreamPath = `/e2e/subscriptions/park/receiver/${marker}`;
-  const subscriptionName = `park-${marker}`;
-
-  using testProject = await openTestProject(marker);
-  const { project } = testProject;
-  using source = project.streams.get(sourcePath);
-  using receiver = project.streams.get(receivingStreamPath);
-
-  await receiver.subscribeToEventsFrom({
-    sourceStreamPath: sourcePath,
-    name: subscriptionName,
-    filter: { eventTypes: [MATCHING_EVENT_TYPE] },
-  });
-  const [beforePark] = await source.append({
-    type: MATCHING_EVENT_TYPE,
-    payload: { marker, phase: "before-park" },
-  });
-  // The uniform barrier works for a copy receiver too: confirmed = the copy ack.
-  await source.subscriptions
-    .get(subscriptionName)
-    .waitUntilConfirmed({ offset: beforePark!.offset, timeoutMs: 30_000 });
-
-  // Park exactly as a receiver-absence signal would (the park event is
-  // platform-authored, so the trusted test door appends it). Parked is not a
-  // failure: the cursor stays put and no retry alarm is armed.
-  await appendTrustedCoreEvents(source, [
-    {
-      type: "events.iterate.com/stream/subscription-delivery-parked",
-      payload: {
-        name: subscriptionName,
-        reason: "receiver-absent",
-        afterOffset: beforePark!.offset,
-        error: "synthetic receiver absence",
-      },
-    },
-  ]);
-  const [held] = await source.append({
-    type: MATCHING_EVENT_TYPE,
-    payload: { marker, phase: "while-parked" },
-  });
-
-  await waitForCondition(
-    async () =>
-      runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionName]?.state ===
-      "parked",
-    { description: "the cursor row to mirror the parked state" },
-  );
-  expect(
-    coreState(await source.runtimeState()).subscriptions.outbound.byName[subscriptionName],
-  ).toMatchObject({
-    deliveryParked: { reason: "receiver-absent", afterOffset: beforePark!.offset },
-  });
-  // No retry ladder while parked: nothing is charged as an attempt and no
-  // retry alarm is armed, while the held event stays unconfirmed.
-  await new Promise((resolve) => setTimeout(resolve, 750));
-  const parkedRow = runtimeState(await source.runtimeState()).runtime.subscriptions[
-    subscriptionName
-  ]!;
-  expect(parkedRow).toMatchObject({ state: "parked", attempt: 0, nextAttemptAt: null });
-  expect(parkedRow.confirmedOffset).toBeLessThan(held!.offset);
-  expect(
-    (await receiver.getEvents({ afterOffset: 0, eventTypes: [MATCHING_EVENT_TYPE] })).map(
-      (event) => event.payload?.phase,
-    ),
-  ).toEqual(["before-park"]);
-
-  // The catalog's resume door reactivates delivery at the retained cursor.
-  const resumed = await source.subscriptions.get(subscriptionName).resume();
-  expect(resumed).toMatchObject({
-    type: "events.iterate.com/stream/subscription-delivery-resumed",
-    payload: { name: subscriptionName },
-  });
-  const delivered = await receiver.waitForEvent({
-    afterOffset: 0,
-    eventTypes: [MATCHING_EVENT_TYPE],
-    predicate: (event) => event.payload?.phase === "while-parked",
-    timeoutMs: 15_000,
-  });
-  expect(delivered.source?.copiedFrom?.at(-1)?.offset).toBe(held!.offset);
-  expect(
-    coreState(await source.runtimeState()).subscriptions.outbound.byName[subscriptionName],
-  ).not.toHaveProperty("deliveryParked");
-  await waitForCondition(
-    async () =>
-      runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionName]?.state ===
-      "active",
-    { description: "the resumed cursor row to return to active" },
-  );
-});
 // Stream copies: provenance, cursors, and end conditions.
 test("chains longer than five copies retain provenance, cycles terminate, and removal revokes both sides", async () => {
   const marker = crypto.randomUUID();
@@ -1758,12 +1666,10 @@ test("changing a subscription cursor deliberately copies the same source coordin
     name: subscriptionName,
     afterOffset: selected!.offset - 1,
   });
-  await waitForCondition(
-    async () =>
-      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionName]
-        ?.confirmedOffset ?? 0) >= selected!.offset,
-    { description: "the rewound stream subscription to confirm the event again" },
-  );
+  // The uniform barrier works for a copy receiver too: confirmed = the copy ack.
+  await source.subscriptions
+    .get(subscriptionName)
+    .waitUntilConfirmed({ offset: selected!.offset, timeoutMs: 30_000 });
   const copiesAfterSeek = await receiver.getEvents({
     afterOffset: 0,
     eventTypes: [MATCHING_EVENT_TYPE],
@@ -1939,7 +1845,6 @@ test("a filter failure retries in order and never advances past later events", a
   const runtime = runtimeState(await source.runtimeState()).runtime.subscriptions[
     subscriptionName
   ]!;
-  expect(runtime.deliveredOffset).toBeLessThan(failed!.offset);
   expect(runtime.confirmedOffset).toBeLessThan(failed!.offset);
   expect(runtime.confirmedOffset).toBeLessThan(later!.offset);
   expect(runtime.lastError).toContain("filter condition failed");
@@ -2068,7 +1973,6 @@ test("every project child stream is born with ordinary project-worker and PostHo
     hiddenProcessorWake.wakeStreamProcessor({
       stream: { projectId, path: "/", streamId: crypto.randomUUID(), streamMaxOffset: 1 },
       name: "forged",
-      processorSlug: "project",
     }),
   ).rejects.toThrow("wakeStreamProcessor may be called only by trusted stream event sending");
 
@@ -2652,23 +2556,18 @@ test("a facet-placed processor delivers in-process and serves snapshots through 
   });
 
   // The processor facade is the fold barrier: waitUntilProcessed resolves off
-  // the runner's committed checkpoint through the parent→facet dial. (The
-  // cursor row's confirmed_offset moves only on wake reports for a
-  // processor-wake subscription — while the connection streams, batch acks
-  // advance delivered_offset and a stale confirm costs one redundant wake.)
+  // the runner's committed checkpoint through the parent→facet dial.
   const subscription = stream.subscriptions.get(subscriptionName);
   await subscription.processor.waitUntilProcessed({ offset: created!.offset, timeoutMs: 30_000 });
 
   const described = await subscription.describe();
   expect(described).toMatchObject({
     name: subscriptionName,
-    state: "active",
+    status: "active",
     configuration: {
       receiver: { action: "processor-wake", placement: "facet", processorSlug: "slack" },
     },
   });
-  expect(described!.deliveredOffset).toBeGreaterThanOrEqual(created!.offset);
-  expect(described!.deliveredOffset).toBeGreaterThanOrEqual(described!.confirmedOffset);
 
   // The catalog's processor facade dials the facet directly (an own-DO or
   // expression placement would resolve through its own host instead).
@@ -2682,9 +2581,8 @@ test("a facet-placed processor delivers in-process and serves snapshots through 
       expect.objectContaining({
         name: subscriptionName,
         action: "processor-wake",
-        processorSlug: "slack",
         placement: "facet",
-        state: "active",
+        status: "active",
       }),
     ]),
   );
@@ -3257,11 +3155,12 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
     },
     {
       // Wake delivery must feed the processor its committed log verbatim, so
-      // the processor-wake receiver has no jsonataTransform field at all.
+      // the processor-wake receiver has no jsonataTransform field at all. The
+      // name equals the slug, so the transform is the only invalid field.
       key: `wake-transform-${marker}`,
       message: /unrecognized/i,
       event: subscriptionConfigured({
-        name: `wake-transform-${marker}`,
+        name: "agent",
         receiver: {
           action: "processor-wake",
           processorSlug: "agent",
@@ -3411,15 +3310,6 @@ test("public callers cannot forge copied events or platform-authored stream fact
         reason: "delivery-failed",
         afterOffset: 0,
         attempts: 1,
-        error: "forged",
-      },
-    },
-    {
-      type: "events.iterate.com/stream/subscription-delivery-parked",
-      payload: {
-        name: `forged-parked-${marker}`,
-        reason: "receiver-absent",
-        afterOffset: 0,
         error: "forged",
       },
     },

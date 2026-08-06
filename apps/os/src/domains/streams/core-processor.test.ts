@@ -1136,9 +1136,9 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     ).not.toThrow();
   });
 
-  test("parked and resumed fold as delivery state transitions", () => {
+  test("resumed requires a halted subscription", () => {
     const { processor } = harness(SOURCE_PATH);
-    let state = reduce(
+    const state = reduce(
       processor,
       coreState(SOURCE_PATH),
       committed(1, "events.iterate.com/stream/subscription-configured", streamSubscription(), {
@@ -1156,59 +1156,26 @@ describe("StreamCoreProcessor validation and dispatch", () => {
         state,
         authority: "public",
       }),
-    ).toThrow(/neither halted nor parked/);
+    ).toThrow(/not halted/);
+  });
 
-    // The park fact is platform-authored, like the halt fact.
-    const parkInput: StreamEventInput = {
-      type: "events.iterate.com/stream/subscription-delivery-parked",
-      payload: {
-        name: "issues",
-        reason: "receiver-absent",
-        afterOffset: 1,
-        error: 'capability "tasks" is offline',
-      },
-    };
-    expect(() => processor.validate({ event: parkInput, state, authority: "public" })).toThrow(
-      /platform-authored/,
-    );
-    expect(() =>
-      processor.validate({ event: parkInput, state, authority: "core-event" }),
-    ).not.toThrow();
-
-    state = reduce(
-      processor,
-      state,
-      committed(2, "events.iterate.com/stream/subscription-delivery-parked", parkInput.payload, {
-        path: SOURCE_PATH,
-      }),
-    );
-    expect(state.subscriptions.outbound.byName.issues?.deliveryParked).toEqual({
-      reason: "receiver-absent",
-      afterOffset: 1,
-      error: 'capability "tasks" is offline',
-    });
-
-    // Resumed un-parks (the same event that un-halts).
-    expect(() =>
+  test("processor-wake subscriptions must be named after their contract slug", () => {
+    const { processor, state } = harness(SOURCE_PATH);
+    const configure = (name: string | undefined) => () =>
       processor.validate({
         event: {
-          type: "events.iterate.com/stream/subscription-delivery-resumed",
-          payload: { name: "issues" },
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            ...(name === undefined ? {} : { name }),
+            receiver: { action: "processor-wake", processorSlug: "agent", placement: "facet" },
+          },
         },
         state,
         authority: "public",
-      }),
-    ).not.toThrow();
-    state = reduce(
-      processor,
-      state,
-      committed(
-        3,
-        "events.iterate.com/stream/subscription-delivery-resumed",
-        { name: "issues" },
-        { path: SOURCE_PATH },
-      ),
-    );
-    expect(state.subscriptions.outbound.byName.issues?.deliveryParked).toBeUndefined();
+      });
+    // One identity: the name IS the slug (multi-instance is future work).
+    expect(configure("reviewer")).toThrow(/must be named after their contract/);
+    expect(configure(undefined)).toThrow(/must be named after their contract/);
+    expect(configure("agent")).not.toThrow();
   });
 });

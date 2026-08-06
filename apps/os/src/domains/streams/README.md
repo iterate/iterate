@@ -178,8 +178,8 @@ receiver: {
 ```
 
 `processorSlug` is required and names which contract runs; the subscription
-NAME is the instance's identity, so two instances of one contract are two
-names sharing one slug. Instead of an expression, `placement: "facet"` hosts
+NAME must equal it — one identity (two instances of one contract is
+deliberately future work). Instead of an expression, `placement: "facet"` hosts
 the processor as a facet of the stream's own Durable Object: the subscription
 name is the facet name, delivery is an in-process parent→facet dial through
 the same wake protocol, and the facet's alarms are proxied to the parent's
@@ -240,14 +240,11 @@ receiver: {
 ```
 
 The source POSTs one event at a time through the project's attributed egress.
-A 2xx response completes the transfer (`delivered_offset`). A plain webhook is
-confirmed by the same 2xx; an offset-acking webhook answers with JSON
-`{ "confirmedOffset": N }` to own its durable position (`confirmed_offset`) —
-after an eviction the delivered-but-unconfirmed window redelivers, the
-at-least-once contract a remote-tracked processor wants. Webhook delivery is
-at-least-once either way, so a remote processor must deduplicate by
-`(streamId, offset)`. A `jsonataTransform` reshapes the POSTed event body
-while the envelope keeps the real source coordinates.
+The 2xx response alone is the acknowledgement (`confirmed_offset`); the
+response body is discarded. Webhook delivery is at-least-once, so a remote
+processor must deduplicate by `(streamId, offset)`. A `jsonataTransform`
+reshapes the POSTed event body while the envelope keeps the real source
+coordinates.
 
 ## Events marked ephemeral
 
@@ -293,19 +290,18 @@ Rebuilding core state counts durable events instead of assuming
 ## Product-event retries and cursors
 
 `stream-event-sender.ts` reads after each durable cursor, applies the filter,
-sends a bounded batch, and records progress in two columns whose meanings
-never vary by receiver kind: `delivered_offset` (the source completed
-transfer) and `confirmed_offset` (the far side durably claims). Push kinds
-write both with one acknowledgement; a hosted processor's batch acks write
-`delivered` and its reported checkpoints write `confirmed`; an offset-acking
-webhook splits them via its 2xx body. The one scheduling rule, for every
-kind: delivery RESUMES after `confirmed_offset` — a fresh incarnation rewinds
-`delivered` to `confirmed` and redelivers the unconfirmed window.
+sends a bounded batch, and records progress in ONE column whose meaning never
+varies by receiver kind: `confirmed_offset` (the far side durably claims
+through here). Push kinds write it with the awaited acknowledgement; a hosted
+processor's reported checkpoints write it, while its live batch acks only
+settle the in-flight watchdog. The one scheduling rule, for every kind:
+delivery RESUMES after `confirmed_offset` — anything sent but never confirmed
+redelivers (at-least-once; receivers dedupe by `(streamId, offset)`).
 
 Guarantees:
 
 - Cursor advances are SQLite rows, not an event per batch.
-- Halt, park, resume, seek, and removal are appended events.
+- Halt, resume, seek, and removal are appended events.
 - Non-matching events still advance the subscription cursor stored on the
   source stream.
 - ITX calls, stream appends, and webhook responses are awaited.
@@ -315,19 +311,11 @@ Guarantees:
 - Retries are bounded and visible; the final failure halts the subscription.
   After any batch failure the next read uses batch size 1, so a poison event
   cannot strand its healthy prefix.
-- A receiver that signals its target is legitimately ABSENT
-  (`StreamReceiverAbsentError`, matched by name across RPC hops) PARKS the
-  subscription instead of burning the ladder: cursor intact, no retry alarm,
-  nothing charged as failure. `subscription-delivery-resumed` — or the Stream
-  DO's internal `resumeParkedSubscription` poke — reactivates it. `halted`
-  stays reserved for genuine failure.
 - A Durable Object alarm starts due retries even when the source is quiet.
-- Optional per-subscription delivery controls in the birth event —
-  `maxDeliveryEvents`, `maxDeliveryBytes`, `state: false` — narrow batch
-  size/bytes for push arms and strip the reduced-state snapshot from wake
-  batches.
 - `waitUntilConfirmed(name, { offset, timeoutMs? })` on the Stream DO is the
-  uniform barrier for every kind, off `confirmed_offset`.
+  uniform barrier for every kind, off `confirmed_offset`. For processor-wake
+  rows confirmation advances on wake reports, so during a live hosted
+  connection it can lag until the next wake cycle.
 
 Operator commands are literal:
 
