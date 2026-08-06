@@ -2291,11 +2291,11 @@ test("a session connection detects an interrupted stream incarnation and resumes
       payload: { round: "after-interruption" },
     });
 
-    // The wake socket can remain locally open after the Stream DO has lost it,
-    // so the relay must trust the dead RPC leg rather than that stale socket.
-    // Cloudflare propagates the broken RPC leg asynchronously after kill()
-    // returns; require the same bounded liveness transition that the owner's
-    // watchdog polls, then reopen from its last delivered cursor explicitly.
+    // The wake socket and old RPC handle can both appear locally live after the
+    // Stream DO has lost them. The relay therefore asks a fresh incarnation
+    // about the exact socket identity. Require the same bounded liveness
+    // transition that the owner's watchdog polls, then reopen from its last
+    // delivered cursor explicitly.
     await waitForCondition(async () => (await handle.ping()) === false, {
       description: "the session relay to observe the interrupted stream RPC leg",
       timeoutMs: 15_000,

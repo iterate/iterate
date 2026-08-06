@@ -494,6 +494,7 @@ Test these in order; do not treat the first plausible one as the conclusion.
   `StreamConnection.ping` calls after the deliberate kill: the aborted DO's
   old capability kept returning captured in-memory liveness indefinitely.
   Added red/green relay and wake-registry coverage. A relay with a wake socket
-  now probes a fresh DO for that exact socket identity, preserving intentional
-  dormancy but rejecting orphaned old incarnations. The three focused suites
-  pass 68 tests; OS typecheck, lint, and formatting are green.
+  now probes a fresh DO for that exact socket identity. Its tri-state result
+  preserves intentional dormancy, clears a stale handle when an idle frame was
+  missed, and rejects orphaned old incarnations. The three focused suites pass
+  69 tests; OS typecheck, lint, and formatting are green.

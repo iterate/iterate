@@ -141,10 +141,10 @@ export async function openRelayedStreamConnection(input: {
   // incarnation. A deliberately idle relay remains logically alive; a socket
   // absent from the current incarnation is orphaned even if its local endpoint
   // has not emitted `close`.
-  const probeRelay = () =>
+  const probeRelayState = () =>
     Promise.resolve()
-      .then(() => input.stub().isRelayedSessionConnectionLive({ connectionKey, wakeSocketId }))
-      .catch(() => false);
+      .then(() => input.stub().relayedConnectionState({ connectionKey, wakeSocketId }))
+      .catch(() => "dead" as const);
 
   /** The one terminal transition; every teardown path funnels here. */
   const teardown = (args2: { reason: string; socketCode: number; warn?: unknown }) => {
@@ -337,11 +337,18 @@ export async function openRelayedStreamConnection(input: {
       const handle = currentHandle;
       const socket = wakeSocket;
       if (socket !== undefined) {
-        return probeRelay().then((live) => {
+        return probeRelayState().then((state) => {
           if (currentHandle !== handle || wakeSocket !== socket) return active;
-          if (live) return active;
-          currentHandle = undefined;
-          disposeStub(handle);
+          if (state === "live") return active;
+          if (state === "dormant") {
+            currentHandle = undefined;
+            disposeStub(handle);
+            return active;
+          }
+          teardown({
+            reason: "wake socket absent from current stream incarnation",
+            socketCode: 1000,
+          });
           return false;
         });
       }

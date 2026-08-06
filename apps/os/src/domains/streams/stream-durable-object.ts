@@ -1645,8 +1645,11 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /** @internal Fresh-incarnation liveness for the worker-side wake relay. */
-  isRelayedSessionConnectionLive(args: { connectionKey: string; wakeSocketId: string }): boolean {
-    return this.#wakeSockets.relayState(args.connectionKey, args.wakeSocketId) !== "dead";
+  relayedConnectionState(args: {
+    connectionKey: string;
+    wakeSocketId: string;
+  }): "live" | "dormant" | "dead" {
+    return this.#wakeSockets.relayState(args.connectionKey, args.wakeSocketId);
   }
 
   /**
