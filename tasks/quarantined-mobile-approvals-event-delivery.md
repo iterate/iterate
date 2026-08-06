@@ -28,7 +28,13 @@ that bounded retry now has red/green coverage too. The combined head needs a
 fresh preview before the gate restarts from zero. Its first preview found one
 test-only split catalog wait whose second half accidentally used a five-second
 default despite the test's existing 30-second propagation budget; that wait is
-now one exact-state condition under the original budget.
+now one exact-state condition under the original budget. Eight subsequent
+gate candidates made both restored cases first-try green with no durable
+callback failures. Candidate nine exposed a race in the new stream-incarnation
+regression: Cloudflare can return from the deliberate kill just before the
+relay observes its broken RPC leg. The test now requires that public ping to
+transition to false inside the owner's existing 15-second liveness window; the
+product contract is unchanged, and the exact-head gate restarts from zero.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree

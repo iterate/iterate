@@ -2289,9 +2289,13 @@ test("a session connection detects an interrupted stream incarnation and resumes
 
     // The wake socket can remain locally open after the Stream DO has lost it,
     // so the relay must trust the dead RPC leg rather than that stale socket.
-    // useStreamConnection responds to this false result by reopening with the
-    // same key and its last delivered cursor; do that owner step explicitly.
-    await expect(Promise.resolve(handle.ping())).resolves.toBe(false);
+    // Cloudflare propagates the broken RPC leg asynchronously after kill()
+    // returns; require the same bounded liveness transition that the owner's
+    // watchdog polls, then reopen from its last delivered cursor explicitly.
+    await waitForCondition(async () => (await handle.ping()) === false, {
+      description: "the session relay to observe the interrupted stream RPC leg",
+      timeoutMs: 15_000,
+    });
     await handle.close();
     const resumed = await stream.openConnection({
       connectionKey,
