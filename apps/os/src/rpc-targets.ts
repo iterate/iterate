@@ -2024,6 +2024,10 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
       name: AgentCollectionProcessorContract.slug,
       path: AGENT_COLLECTION_PATH,
       projectId: this.props.projectId,
+      // agents.list() on a project that never created an agent reads the
+      // collection before its birth batch exists — empty catalog, not refusal.
+      unbornState: () =>
+        AgentCollectionProcessorContract.stateSchema.parse({}) as AgentCollectionProcessorState,
     });
   }
 
@@ -2269,6 +2273,10 @@ class ClientCollectionRpcTarget extends IterateRpcTarget<"ClientCollection"> {
       name: ClientCollectionProcessorContract.slug,
       path: CLIENT_COLLECTION_PATH,
       projectId: this.props.projectId,
+      // clients.list() on a project that never connected a client reads the
+      // collection before its birth batch exists — empty roster, not refusal.
+      unbornState: () =>
+        ClientCollectionProcessorContract.stateSchema.parse({}) as ClientCollectionProcessorState,
     });
   }
 
@@ -4882,6 +4890,10 @@ function agentProcessorRelay(input: {
     name: AgentProcessorContract.slug,
     path: input.path,
     projectId: input.projectId,
+    // Pre-create reads (the create door's own birth check, `agents.get(x)
+    // .processor.snapshot()` from scripts and the REPL catalogue) must see
+    // the unborn fold — birthCertificate null — not the facade's refusal.
+    unbornState: () => AgentProcessorContract.stateSchema.parse({}) as AgentProcessorState,
   });
 }
 
@@ -8604,13 +8616,51 @@ function facetProcessorRelay<State = unknown, PublicState = State>(input: {
   path: string;
   projectId: string | null;
   publicState?: (state: State) => PublicState;
+  /**
+   * The pre-birth substitute: when the stream's committed catalog does not
+   * configure this subscription yet, the facade refuses the name (a read must
+   * never materialize a facet) — with this supplied, `snapshot()` answers the
+   * refusal with the contract's empty fold instead, exactly as the retired
+   * hosting Durable Objects fabricated their pre-birth reads (see
+   * isUnconfiguredSubscriptionError). Only the pure fold read has a
+   * meaningful pre-birth answer; every other verb still propagates the
+   * refusal, and each acquisition re-dials, so a birth committing between
+   * calls is picked up on the next one. Omitted = the refusal propagates.
+   */
+  unbornState?: () => State;
 }): ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState> {
+  const unbornState = input.unbornState;
   return new ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState>({
     auth: input.auth,
-    host: () => streamProcessorFacade(input),
+    host:
+      unbornState === undefined
+        ? () => streamProcessorFacade(input)
+        : () =>
+            Promise.resolve(streamProcessorFacade(input)).catch((error: unknown) => {
+              if (!isUnconfiguredSubscriptionError(error)) throw error;
+              return unbornProcessorFacadeStandIn(unbornState, error);
+            }),
     processorFacade: (host) => Promise.resolve(host),
     ...(input.publicState === undefined ? {} : { publicState: input.publicState }),
   });
+}
+
+/**
+ * The stand-in a {@link facetProcessorRelay} acquisition resolves to while
+ * its subscription is unborn: the fold read fabricates the empty state at
+ * offset 0, everything else rethrows the facade's refusal.
+ */
+function unbornProcessorFacadeStandIn<State>(
+  unbornState: () => State,
+  refusal: unknown,
+): ProcessorHostStub {
+  const refuse = () => Promise.reject(refusal);
+  return {
+    snapshot: () => Promise.resolve({ offset: 0, state: unbornState() }),
+    getRuntimeState: refuse,
+    waitUntilProcessed: refuse,
+    processEventBatch: refuse,
+  } as unknown as ProcessorHostStub;
 }
 
 /**

@@ -19,6 +19,10 @@ test("projects.connect registers a client whose capabilities fan out over its op
   using project = await providerItx.projects.get(`clients-${marker}`).create({});
   const { projectId } = await project.__describe();
 
+  // Before ANY client ever connected, the collection stream is unborn — the
+  // roster read must answer with the empty fold, not the facade's refusal.
+  expect(await project.clients.list()).toEqual([]);
+
   class BrowserTarget extends RpcTarget {
     navigate(url: string) {
       return { marker, navigated: url };
