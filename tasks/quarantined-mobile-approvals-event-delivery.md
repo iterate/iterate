@@ -11,15 +11,14 @@ tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 
 Implementation is about 98% complete. Both mobile skips are removed and the
 reported delivery defects plus each recovery failure found by the strict gate
-have regression coverage. The latest head also stops cold project indexing
-from eagerly loading every processor fold.
+have regression coverage. The latest exact-head baseline was clean.
 
-The new-head baseline was clean, but its first gate candidate exposed an
-ambiguous empty Artifacts repo whose valid control-plane handle never gained
-`log()`. Recovery now treats that shape explicitly and uses the safe Git
-clone-and-seed path to preserve a real head or seed an empty remote. Local
-repo/project suites, typecheck, lint, and formatting are green. The 25-run
-streak remains at zero until this fix passes a fresh preview.
+Gate candidate one then caught Auth's post-deploy OAuth seed before the newly
+written bootstrap admin was visible to the Worker. The server now reports
+that exact state as a bounded 503; the seed retries 503 and Cloudflare edge
+propagation statuses while still rejecting unclassified 500s. Auth's 86 tests,
+both package typechecks, lint, and formatting are green. The 25-run streak
+remains at zero until this fix passes a fresh preview.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -476,3 +475,12 @@ Test these in order; do not treat the first plausible one as the conclusion.
   state. Recovery now lets the existing clone-and-seed operation preserve a
   real head or seed the empty remote instead of retrying that handle forever.
   The 273-test repo/project set, OS typecheck, lint, and formatting pass.
+- 2026-08-06: Head `29c441742` passed its baseline with 190 OS tests, both
+  restored mobile flows first try, interrupted-session recovery, and no retry
+  markers. Candidate `hx0b2b0z3n` failed before tests when Auth's post-deploy
+  `setClient` returned 500. Exact trace `b877e9090b092860b9d935d678180e47`
+  showed the freshly seeded bootstrap admin was not yet visible; the same
+  idempotent seed passed immediately afterward. Added a red/green bounded-503
+  seed test and an explicit server precondition: only that missing-admin state
+  becomes `SERVICE_UNAVAILABLE`; arbitrary 500s remain terminal. Auth's 86
+  tests, Auth and contract typechecks, lint, and formatting pass.

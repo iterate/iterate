@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { retryTransientCloudflarePropagation } from "./seed-oauth-clients.ts";
+import { retryTransientOAuthSeed } from "./seed-oauth-clients.ts";
 
 test("OAuth client seeding retries only transient Cloudflare propagation failures", async () => {
   const attempts: number[] = [];
   const delays: number[] = [];
 
-  const result = await retryTransientCloudflarePropagation(
+  const result = await retryTransientOAuthSeed(
     async () => {
       attempts.push(attempts.length + 1);
       if (attempts.length < 3) throw { status: 522 };
@@ -26,12 +26,32 @@ test("OAuth client seeding retries only transient Cloudflare propagation failure
   assert.deepEqual(delays, [10, 20]);
 });
 
+test("OAuth client seeding retries a bounded bootstrap-admin visibility delay", async () => {
+  let attempts = 0;
+
+  const result = await retryTransientOAuthSeed(
+    async () => {
+      attempts += 1;
+      if (attempts === 1) throw { status: 503 };
+      return "seeded";
+    },
+    {
+      delaysMs: [10],
+      label: "preview OAuth client seed",
+      sleep: async () => undefined,
+    },
+  );
+
+  assert.equal(result, "seeded");
+  assert.equal(attempts, 2);
+});
+
 test("OAuth client seeding does not retry an unclassified server error", async () => {
   let attempts = 0;
   const error = { status: 500 };
 
   await assert.rejects(
-    retryTransientCloudflarePropagation(
+    retryTransientOAuthSeed(
       async () => {
         attempts += 1;
         throw error;
@@ -53,7 +73,7 @@ test("OAuth client seeding stops after its bounded propagation retry schedule", 
   const error = { status: 522 };
 
   await assert.rejects(
-    retryTransientCloudflarePropagation(
+    retryTransientOAuthSeed(
       async () => {
         attempts += 1;
         throw error;

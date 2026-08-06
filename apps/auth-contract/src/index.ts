@@ -484,6 +484,9 @@ export const authContract = oc.router({
   internal: {
     oauth: {
       ensureClient: oc
+        .errors({
+          SERVICE_UNAVAILABLE: { message: "Bootstrap admin seed is not visible yet" },
+        })
         .route({
           method: "POST",
           path: "/internal/oauth/ensure-client",
@@ -493,6 +496,9 @@ export const authContract = oc.router({
         .input(InternalEnsureOAuthClientInput)
         .output(OAuthClientRecord),
       setClient: oc
+        .errors({
+          SERVICE_UNAVAILABLE: { message: "Bootstrap admin seed is not visible yet" },
+        })
         .route({
           method: "POST",
           path: "/internal/oauth/set-client",

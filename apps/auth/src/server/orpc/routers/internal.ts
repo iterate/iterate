@@ -23,6 +23,7 @@ import {
   updateVerifiedUserById,
 } from "../../db/queries/index.ts";
 import { BOOTSTRAP_ADMIN_EMAIL } from "../../bootstrap-admin.ts";
+import type { DB } from "../../db/index.ts";
 import { generateId } from "../../id.ts";
 import { hashOAuthStoredValue } from "../../oauth-storage.ts";
 import { ensureOrganizationForProjectSeed } from "../../organization-seed.ts";
@@ -36,8 +37,16 @@ function extractCookieHeader(setCookieHeader: string | null): string | null {
 }
 
 async function getBootstrapAdminAuthHeaders(params: {
+  db: DB;
   serviceAuthToken: string;
 }): Promise<Headers> {
+  const bootstrapAdmin = await getUserByEmail(params.db, { email: BOOTSTRAP_ADMIN_EMAIL });
+  if (!bootstrapAdmin) {
+    throw new ORPCError("SERVICE_UNAVAILABLE", {
+      message: "Bootstrap admin seed is not visible yet",
+    });
+  }
+
   const signInResult = await auth.api.signInEmail({
     returnHeaders: true,
     body: {
@@ -392,6 +401,7 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
     }
 
     const headers = await getBootstrapAdminAuthHeaders({
+      db: context.db,
       serviceAuthToken,
     });
     const created = await auth.api.adminCreateOAuthClient({
@@ -462,7 +472,7 @@ const setOAuthClient = os.internal.oauth.setClient
           message: "config.serviceAuthToken is required for OAuth client provisioning",
         });
       }
-      const headers = await getBootstrapAdminAuthHeaders({ serviceAuthToken });
+      const headers = await getBootstrapAdminAuthHeaders({ db: context.db, serviceAuthToken });
       const created = await auth.api.adminCreateOAuthClient({
         headers,
         body: {
