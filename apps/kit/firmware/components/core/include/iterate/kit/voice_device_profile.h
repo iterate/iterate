@@ -181,11 +181,27 @@ enum {
    * frozen at 8468, conceal 0, gaps 0, entirely healthy and entirely
    * unreachable.
    *
-   * Ninety seconds is far longer than any legitimate quiet — a mounted device
-   * exchanges a ping every five — and short enough that a person who walks up
-   * to it finds it working.
+   * THREE MINUTES WAS WRONG, and the sentence that justified it was too: it
+   * said "a mounted device exchanges a ping every five [seconds]", so silence
+   * on this counter would mean something real. But the ping is OUTBOUND — the
+   * device pings the platform — while this watchdog counts dispatches served
+   * TO the device. On an idle board nothing is served, so the counter never
+   * moves and the watchdog fires on a schedule, forever, on a device that is
+   * working perfectly.
+   *
+   * What it does when it fires is not cheap either: it replaces the whole
+   * transport — TLS, socket, session and mount. Measured on an idle M5StickS3,
+   * seven of them in twenty-six minutes. From across the room that is a device
+   * that "just randomly disconnects and reconnects", because it is.
+   *
+   * Fifteen minutes keeps the safety net for the failure it was built for — a
+   * capability that has gone offline server-side under a healthy socket — while
+   * making the flap rare enough not to be the thing people notice about the
+   * device. The real fix is a re-registration that does not drop the socket,
+   * or an inbound page that moves this counter honestly; both are larger than
+   * a constant.
    */
-  ITERATE_KIT_VOICE_IDLE_REMOUNT_MS = 180000,
+  ITERATE_KIT_VOICE_IDLE_REMOUNT_MS = 900000,
 };
 
 /**
