@@ -30,6 +30,8 @@ export default async function run(
 
     The eval may link to one or more real streams. Inspect them to understand what happened and to source realistic external-system responses. The product evolves constantly, so the latest agent may make requests that do not exactly match historical calls. Use the stream evidence and your judgment to return coherent responses to whatever it asks now.
 
+    Referenced streams are read-only evidence. Read their journaled events; never invoke the referenced project's integrations or spend its secrets — that hits real external services and can trip production egress approvals, paging a human. Anything you invoke live belongs in the fresh eval project, behind your broker.
+
     When an eval needs an unavailable external integration, create a live capability backed by a request/response broker. Do not hard-code a narrow response table, spawn another Codex session, fork yourself, or call itx.ai.run to decide what the integration should return.
 
     Each capability invocation must:
