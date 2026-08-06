@@ -428,7 +428,7 @@ args})` **fans out** over the connections at a path (`Promise.all`, `[]` if none
 
 ## Increment 19 — don't-pin PROVEN at 1000, and hibernation-safe by extracting a `LeaseServer`
 
-**Commit** `<pending>`. Jonas: prove the DO really doesn't pin (1000 clients for minutes, then call one or two),
+**Commit** `7bd5bfec6`. Jonas: prove the DO really doesn't pin (1000 clients for minutes, then call one or two),
 and cook the code down. Both, and they turned out to be the same fix.
 
 - **The correctness fix (also the simplification): leases live in the Pager socket ATTACHMENT, not memory.** My
