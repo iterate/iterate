@@ -1517,6 +1517,9 @@ static size_t health_json(char *out, size_t capacity) {
     {"rpcImportsMax", tables.imports_capacity},
     {"rpcCalls", tables.calls_used},
     {"rpcCallsMax", tables.calls_capacity},
+    /* Which step of preparing a conversation failed last — the reason that
+     * used to exist only on a console whose opening reboots the board. */
+    {"setupFailStep", (uint32_t)runtime.voicelab.setup_failure_step},
     {"heapFree", (uint32_t)esp_get_free_heap_size()},
     /*
      * INTERNAL, NOT TOTAL. `heapFree` counts PSRAM, and on a board with eight

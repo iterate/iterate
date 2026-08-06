@@ -1531,6 +1531,7 @@ static void setup_completed(void *context, const struct capnweb_result *result) 
   voicelab->setup_pending = false;
   if (result == NULL || result->kind != CAPNWEB_RESULT_VALUE) {
     voicelab->setup_failed = true;
+    voicelab->setup_failure_step = 1U;
     return;
   }
   voicelab->setup_succeeded = true;
@@ -1544,11 +1545,13 @@ static void setup_worker_ready(
   if (result == NULL || result->kind != CAPNWEB_RESULT_VALUE) {
     voicelab->setup_pending = false;
     voicelab->setup_failed = true;
+    voicelab->setup_failure_step = 2U;
     return;
   }
   if (!take_result_capability(result, &voicelab->setup_capability)) {
     voicelab->setup_pending = false;
     voicelab->setup_failed = true;
+    voicelab->setup_failure_step = 3U;
     return;
   }
   voicelab->has_setup_capability = true;
@@ -1558,6 +1561,7 @@ static void setup_worker_ready(
   if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
     voicelab->setup_pending = false;
     voicelab->setup_failed = true;
+    voicelab->setup_failure_step = 4U;
     return;
   }
   if (capnweb_session_call_path(
@@ -1566,6 +1570,7 @@ static void setup_worker_ready(
           setup_completed, voicelab) != CAPNWEB_OK) {
     voicelab->setup_pending = false;
     voicelab->setup_failed = true;
+    voicelab->setup_failure_step = 5U;
   }
 }
 

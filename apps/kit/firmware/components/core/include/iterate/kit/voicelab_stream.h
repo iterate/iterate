@@ -213,6 +213,17 @@ struct iterate_kit_voicelab {
   bool setup_pending;
   bool setup_succeeded;
   bool setup_failed;
+  /**
+   * WHICH of the five ways preparing a conversation can fail, last time.
+   *
+   * The reason existed only as an ESP_LOGE on a serial port that REBOOTS these
+   * boards when you attach to it, so from the outside a device that could not
+   * prepare was indistinguishable from one that simply never answered. It cost
+   * an evening: the server was minting the stream and returning an error, and
+   * nothing the device published said so. 1..5 in source order; 0 = never
+   * failed.
+   */
+  uint8_t setup_failure_step;
   bool has_session_capability;
   bool has_project_capability;
   bool has_stream_capability;
