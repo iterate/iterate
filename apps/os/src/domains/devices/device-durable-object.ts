@@ -21,6 +21,7 @@ import type { DeviceAppendInput, DeviceDescription, DeviceEnrollInput } from "./
 import { PUBLIC_DEVICE_EVENT_TYPES } from "./types.ts";
 
 const INGEST_WAIT_TIMEOUT_MS = 15_000;
+const EXPO_PUSH_SEND_TIMEOUT_MS = 15_000;
 const EXPO_PUSH_ORIGIN = "https://exp.host";
 
 export class DeviceDurableObject extends DurableObject<Env> {
@@ -71,6 +72,7 @@ export class DeviceDurableObject extends DurableObject<Env> {
       // persist across deploys and a rename would strand one mid-window.
       repointGraceAlarm: (atMs) => this.#registry.setAlarmSlice("device-approval-grace", atMs),
       repointReceiptAlarm: (atMs) => this.#registry.setAlarmSlice("device-receipts", atMs),
+      sendTimeoutMs: EXPO_PUSH_SEND_TIMEOUT_MS,
       send: async ({
         notification,
         pushTokenSecretPath,

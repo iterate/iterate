@@ -168,7 +168,17 @@ The notifications spec passed its exact-version focused run in 1.3 minutes;
 the first approvals run was excluded because three Durable Objects on that
 exact OS version reported Cloudflare's `object has moved to a different
 machine` failure during delivery, and its fresh rerun passed in 54.8 seconds.
-The strict streak remains zero pending this corrected exact head.
+The next paired run reproduced the original notification hang with zero
+exact-version Cloudflare errors: the second attempt remained `started` for the
+whole 90-second spec because the same Device incarnation kept an unsettled
+Expo/Secret promise in its live set. Vendor sends now have a 15-second bound.
+Once durable `attempt-started` exists, a rejection or deadline records an
+`uncertain` terminal fact instead of retrying a push Expo may already have
+accepted. The mobile row calls that outcome `Delivery uncertain`; the spec
+accepts only that exact shape or an explicit Expo rejection. The red/green
+same-incarnation regression, all 30 Device tests, all 10 mobile notification
+projection tests, both app typechecks, targeted lint, and formatting pass. The
+strict streak remains zero pending this corrected exact head.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -910,3 +920,12 @@ Test these in order; do not treat the first plausible one as the conclusion.
   each turn preserves another native alarm, and observes the fourth idempotent
   append succeed. All 29 copy-recovery/background-work tests pass; the streak
   restarts at zero.
+- 2026-08-06: A focused merged-head run reproduced the notification spec's
+  original one-of-two settlement after 90 seconds with no exact-version
+  Cloudflare error. The row and device stream both remained at `started`: the
+  same processor incarnation still held an unsettled Expo/Secret send, so the
+  eviction-only recovery path never ran. A red processor regression now parks
+  that send without crashing. Production bounds the attempt at 15 seconds and
+  appends an `uncertain` settlement on rejection/deadline, preserving the
+  no-double-push rule. The UI renders `Delivery uncertain`, and the browser
+  spec accepts only that exact send-phase outcome or explicit Expo rejection.

@@ -103,7 +103,7 @@ type ReceiptAnswer =
   | { status: "accepted-by-push-service" }
   | { status: "rejected-by-push-service"; error: string; message: string };
 
-function makeDeviceHarness(substrate?: HarnessSubstrate) {
+function makeDeviceHarness(substrate?: HarnessSubstrate, sendTimeoutMs = 5 * 60_000) {
   const gateway: {
     send: DevicePushSender;
     getReceipt: (ticketId: string) => Promise<ReceiptAnswer>;
@@ -151,6 +151,7 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
         repointReceiptAlarm: async (atMs) => {
           receiptAlarms.push(atMs);
         },
+        sendTimeoutMs,
       }),
     substrate: base,
   });
@@ -429,6 +430,29 @@ describe("DeviceProcessor settlements", () => {
             kind: "uncertain",
             phase: "expo-send",
             reason: expect.stringContaining("incarnation"),
+          },
+        },
+      },
+    ]);
+  });
+
+  it("a send that never settles is bounded and settles uncertain in the same incarnation", async () => {
+    const h = makeDeviceHarness(undefined, 10);
+    h.gateway.send = () => new Promise<never>(() => {});
+
+    await h.play(["append", DEVICE_CREATED, notificationRequested()]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await h.settle();
+
+    expect(h.sent).toHaveLength(1);
+    expect(h.events(SETTLED)).toMatchObject([
+      {
+        payload: {
+          requestOffset: 2,
+          outcome: {
+            kind: "uncertain",
+            phase: "expo-send",
+            reason: expect.stringContaining("deadline"),
           },
         },
       },

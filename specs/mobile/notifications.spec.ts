@@ -19,11 +19,11 @@
 // Web-platform approximations, deliberate and dev-only: the web build has no
 // push channel, so the spec enrolls this browser's device identity
 // server-side with a format-valid but undeliverable Expo token. Expo answers
-// DeviceNotRegistered at send time (verified against the real API), so lane
-// two's deterministic terminal status is "Send failed" — the honest web-build
-// account of "the push left the building"; a real phone would read
-// Sent/Delivered. That rejection also revokes the fake device, which is why
-// the send lane runs LAST.
+// DeviceNotRegistered normally answers at send time (verified against the real
+// API), so lane two reads "Send failed". If the vendor call crosses its
+// bounded deadline after the durable attempt starts, the only honest terminal
+// status is "Delivery uncertain" — it may have accepted the push, so the
+// processor never retries. A real phone would normally read Sent/Delivered.
 
 import { expect, type Page } from "@playwright/test";
 import { connectItxReady } from "iterate/node";
@@ -189,7 +189,8 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // ── Lane two: the user stays HERE while a different thread's batch
     // parks. No dialog renders, nothing claims the batch, the grace window
     // lapses, and the device processor sends the push — on the web build's
-    // undeliverable token that terminally reads "Send failed" (see header).
+    // undeliverable token that terminally reads either an explicit rejection
+    // or bounded uncertainty (see header).
     const elsewhereAgent = await itx.agents.get("/agents/elsewhere-thread").create();
     // The thread's agent-maintained status, appended ahead of the run so the
     // notification expansion's thread-context line has something real to
@@ -219,7 +220,16 @@ test("the approval push is suppressed in the watched thread and sent when you're
           ).length,
       )
       .toBe(2);
-    await page.getByText("Send failed").waitFor();
+    const settlements = await itx.streams.get(`/devices/${DEVICE_ID}`).getEvents({
+      eventTypes: ["events.iterate.com/device/notification-settled"],
+    });
+    const sendOutcome = (settlements.at(-1)!.payload as any).outcome;
+    expect(["rejected-by-expo", "uncertain"]).toContain(sendOutcome.kind);
+    if (sendOutcome.kind === "uncertain") {
+      expect(sendOutcome).toMatchObject({ phase: "expo-send", reason: expect.any(String) });
+    }
+    const sendStatus = sendOutcome.kind === "uncertain" ? "Delivery uncertain" : "Send failed";
+    await page.getByText(sendStatus).waitFor();
     // Both lanes journaled side by side — the comparison this spec exists for.
     await page.getByText("Skipped — already on screen").waitFor();
 
@@ -230,7 +240,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // there.
     await page
       .getByTestId(/^notification-row-/)
-      .filter({ hasText: "Send failed" })
+      .filter({ hasText: sendStatus })
       .click();
     await page.getByText("Awaiting decision").waitFor();
     await page.getByText("egress-echo?elsewhere=1").waitFor();
