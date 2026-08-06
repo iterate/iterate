@@ -98,7 +98,8 @@ export type AssembledPreamble = {
  * the common empty scope pays nothing.
  */
 export function assemblePreamble(input: {
-  entries: PreambleEntry[];
+  /** Injection order is the array order (state keeps first-set order). */
+  entries: Pick<PreambleEntry, "key" | "code">[];
   results: RetainedScriptResult[];
 }): AssembledPreamble | null {
   const sections: { ts: string; js: string }[] = [];

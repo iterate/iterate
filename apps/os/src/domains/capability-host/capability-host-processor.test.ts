@@ -65,6 +65,7 @@ function makeScriptedWorker() {
     options: {
       emittedJs?: string;
       expiresAt: number;
+      preambleJs?: string;
       streamContext: Extract<StreamContext, { kind: "script-execution" }>;
     };
     resolve: (settlement: unknown) => void;
@@ -80,6 +81,7 @@ function makeScriptedWorker() {
       options: {
         emittedJs?: string;
         expiresAt: number;
+        preambleJs?: string;
         streamContext: Extract<StreamContext, { kind: "script-execution" }>;
       },
     ) {
@@ -551,5 +553,80 @@ describe("CapabilityHostProcessor capability table", () => {
     // execution reduces to nothing.
     await h.play(["append", { type: STARTED, payload: { executionId: "ghost" } }]);
     expect(h.state().scriptExecutions).toEqual({});
+  });
+});
+
+// =============================================================================
+// The preamble: settled results reduce into retained rows, and the NEXT run
+// receives the assembled preamble — ts to the typecheck gate, js to the worker.
+// =============================================================================
+
+describe("CapabilityHostProcessor preamble", () => {
+  it("derives the results array from settled runs and injects it into the next script", async () => {
+    const h = makeHostHarness();
+    await h.play(
+      ["append", ...NEW_HOST_EVENTS],
+      ["append", scriptRunRequested("exec-1", h.clock.now + 60_000, "async () => 1")],
+    );
+    await h.play(() => h.worker.succeed({ users: ["amy"] }));
+
+    expect(h.state().settledScriptResults).toMatchObject([
+      { kind: "data", executionId: "exec-1", resultJson: '{"users":["amy"]}' },
+    ]);
+
+    await h.play([
+      "append",
+      scriptRunRequested("exec-2", h.clock.now + 60_000, "async () => results[0].data"),
+    ]);
+    expect(h.worker.calls).toHaveLength(2);
+    const preambleJs = h.worker.calls[1]!.options.preambleJs!;
+    expect(preambleJs).toContain("const results = [");
+    expect(preambleJs).toContain('{ executionId: "exec-1", data: {"users":["amy"]} }');
+    // js variant, not ts: the worker only ever needs the no-emit fallback text
+    expect(preambleJs).not.toContain("as const");
+
+    // The FIRST run had nothing to inject — the empty scope pays nothing.
+    expect(h.worker.calls[0]!.options.preambleJs).toBeUndefined();
+  });
+
+  it("hands the ts preamble to the typecheck gate alongside the script", async () => {
+    const seen: (string | undefined)[] = [];
+    const h = makeHostHarness({
+      typecheckScript: async (input) => {
+        seen.push(input.preamble);
+        return { verdict: "clean" };
+      },
+    });
+    await h.play(
+      ["append", ...NEW_HOST_EVENTS],
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/preamble-set",
+          payload: { key: "channels", code: 'const TECH_CHANNEL_ID = "c1234";' },
+        },
+      ],
+      ["append", scriptRunRequested("exec-1", h.clock.now + 60_000, "async () => TECH_CHANNEL_ID")],
+    );
+    await h.play(() => h.worker.succeed(null));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain('const TECH_CHANNEL_ID = "c1234";');
+    expect(h.state().preamble).toMatchObject([{ key: "channels" }]);
+  });
+
+  it("caps retained results and drops the oldest beyond the limit", async () => {
+    const h = makeHostHarness();
+    await h.play(["append", ...NEW_HOST_EVENTS]);
+    for (let i = 0; i < 25; i++) {
+      await h.play([
+        "append",
+        scriptRunRequested(`exec-${i}`, h.clock.now + 60_000, "async () => 1"),
+      ]);
+      await h.play(() => h.worker.succeed(i));
+    }
+    const retained = h.state().settledScriptResults;
+    expect(retained).toHaveLength(20);
+    expect(retained[0]).toMatchObject({ executionId: "exec-5" });
+    expect(retained.at(-1)).toMatchObject({ executionId: "exec-24" });
   });
 });

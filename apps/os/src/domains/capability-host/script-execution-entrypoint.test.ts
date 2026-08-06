@@ -67,4 +67,37 @@ describe("scriptWorkerRef", () => {
     expect(main).not.toContain("target.exec(command");
     expect(main).not.toContain("sandboxWithExecutionDeadline(await target.get(...args))");
   });
+
+  it("the no-emit fallback scopes the preamble in an async IIFE the script closes over", () => {
+    const ref = scriptWorkerRef({
+      code: "async (itx) => results[0].data",
+      expiresAt: 1_783_012_500_000,
+      preambleJs: 'const results = [{ executionId: "exec-1", data: 1 }];',
+      scopePath: "/agents/test",
+    });
+    if (!("createWorker" in ref.source) || ref.source.createWorker.files.type !== "inline")
+      throw new Error("expected inline createWorker source");
+    const main = ref.source.createWorker.files.files["main.js"];
+    // IIFE-scoped, not top-level: preamble names (results, fn-alikes) must
+    // never collide with the harness's own symbols in main.js.
+    expect(main).toContain("const fn = await (async () => {");
+    expect(main).toContain('const results = [{ executionId: "exec-1", data: 1 }];');
+    expect(main).toContain("return (async (itx) => results[0].data);");
+  });
+
+  it("the emitted-module path ignores preambleJs — the compiled module already carries the preamble", () => {
+    const ref = scriptWorkerRef({
+      code: "async (itx) => results[0].data",
+      emittedJs:
+        "const results = [];\nconst script = async (itx) => results;\nexport default script;",
+      expiresAt: 1_783_012_500_000,
+      preambleJs: "const results = [];",
+      scopePath: "/agents/test",
+    });
+    if (!("createWorker" in ref.source) || ref.source.createWorker.files.type !== "inline")
+      throw new Error("expected inline createWorker source");
+    const main = ref.source.createWorker.files.files["main.js"];
+    expect(main).toContain("const fn = scriptModule;");
+    expect(main).not.toContain("await (async () => {");
+  });
 });

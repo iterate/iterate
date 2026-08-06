@@ -1,14 +1,15 @@
 ---
-status: in-progress
+status: implemented
 size: large
 branch: codemode-script-preamble
+pr: https://github.com/iterate/iterate/pull/2431
 ---
 
 # Codemode script preamble ("prior results" for agent scripts)
 
 ## Status summary
 
-Spec settled via a plannotator grill session (4 rounds; decisions below). Implementation not started yet — this commit is the spec.
+Implemented and green locally (typecheck, lint, knip, format, full test suite). Main pieces all landed: contract events + retained-results state, the two-variant assembler, typecheck/execution injection with attribution rules, host verbs (`setPreamble`/`removePreamble`/`getPreamble`/`getScriptResult`), agent rendering + prompt teach, ~30 new tests. Remaining: CI + review; possible follow-up to teach the Slack/Telegram prompts about `results` (left out to respect their budgets).
 
 ## Motivation
 
@@ -26,48 +27,37 @@ function myHelper(input: string) { /* ... */ }
 
 ## Decisions (grill session, 2026-08-06)
 
-1. **Capability host owns preamble state.** New events `capability-host/preamble-set {key, code}` (keyed upsert) / `capability-host/preamble-removed {key}` on the capability-host contract (version bump), reduced into host state; entries ordered by first-set offset. Every script door in the scope — agent output, slash commands, scheduler, public `runScript` — gets the preamble at typecheck + execution. Agent scripts run on the agent's own stream, so this is per-agent for agents. *(user-approved)*
+1. **Capability host owns preamble state.** New events `capability-host/preamble-set {key, code}` (keyed upsert) / `capability-host/preamble-removed {key}` on the capability-host contract (v0.5.0), reduced into host state; entries ordered by first-set offset. Every script door in the scope — agent output, slash commands, scheduler, public `runScript` — gets the preamble at typecheck + execution. *(user-approved)*
 
-2. **Prior results are auto-provided by the platform**, reusing the existing small-vs-spilled split — no new truncation algorithm. Small results embed as JSON literals (their literal type comes for free); large ones contribute their already-inferred type (reuse `inferJsonType` from the agent render path) plus an **async** loader. *(user-approved)*
+2. **Prior results are auto-provided by the platform**, reusing the existing small-vs-spilled split — no new truncation algorithm. Small results embed as JSON literals (their literal type comes for free); large ones contribute their already-inferred type (`inferJsonType`) plus an **async** loader. *(user-approved)*
 
-3. **One `results` array, DERIVED — never stored as preamble code.** The host already reduces `script-run-settled`; it retains the last ~20 settlements (metadata + small payloads) in state, and the preamble *assembler* stitches the array fresh for each script run. No per-result events, no O(n²) array rewrites — the settlement event is the only durable storage. Shape *(user-specified)*:
+3. **One `results` array, DERIVED — never stored as preamble code.** The host reduces `script-run-settled` into a retained tail (last 20) and the assembler stitches the array fresh per run. No per-result events, no O(n²) array rewrites — the settlement event is the only durable storage. `results[0]` is newest; `.data` (never `.result`), `.error` for failures, `as const` for literal types, and large rows get `get data(): never { throw }` steering to a typed `load(itx)`. *(user-specified shape)*
 
-   ```ts
-   const results = [
-     // newest first: results[0] = the script you just ran
-     { executionId: "agent-output:57", data: { users: ["..."] } },      // small: inline literal
-     { executionId: "agent-output:42",                                  // large: typed loader
-       get data(): never { throw new Error("Large result: use `await results[1].load(itx)`") },
-       load: async (itx: Itx): Promise<Result42> => /* reads the settled result back */ },
-     { executionId: "agent-output:33", error: "TypeError: ..." },       // failed script
-   ] as const;
-   ```
+4. **Writer surface: methods on the capability host** — `await itx.capabilityHost.setPreamble({ key, code })` / `removePreamble({ key })` / `getPreamble()`. `setPreamble` compiles the assembled preamble at set time and rejects only problems the candidate *introduces* (a stale entry never vetoes an unrelated set).
 
-   `as const` so `results[0].data` has its literal type. `.data` / `.error` (never `.result`, which reads awkwardly as `results[0].result`). Large entries: `.data` typed `never` with a throwing getter pointing at `.load`. Inline-vs-loader gate: one host-side size constant (~16KB serialized), mirroring the render-side spill threshold. The loader reads the settlement back from the scope stream (works for every script door; no workspace coupling).
+5. **Execution mechanics.** Typecheck module injects the preamble between the `Itx` alias and the script const — the emitted-JS path carries it for free. No-emit fallback wraps `const fn = await (async () => { <preambleJs>; return (<code>); })()` so preamble names cannot collide with harness symbols.
 
-4. **Writer surface: methods on the capability host** — `await itx.capabilityHost.setPreamble({ key, code })` / `removePreamble({ key })`, and via `capabilityHosts.get(path)` for other scopes. Mirrors `provideCapability`/`revokeCapability`; no new top-level itx name. `setPreamble` compiles the assembled preamble at set time (same pattern as the capability `types` compile gate) and rejects entries that would break later scripts.
+6. **Typecheck attribution.** Any error on preamble lines downgrades the run gate to `unchecked` (a preamble syntax error cascades misparses, so even script-line diagnostics are untrustworthy then). The advisory door labels preamble errors `preamble:N`.
 
-5. **Execution mechanics.** Typecheck module (`virtual-project.ts`) injects preamble statements between the itx-type prelude and `const script = (` — module scope, so the emitted-JS path carries the preamble for free (`Itx` type is in scope for loaders). Raw-embed fallback (no emitted JS): wrap as `const fn = await (async () => { <preamble>; return (<code>); })()` so preamble names cannot collide with harness symbols in `main.js`.
+7. **Model visibility.** Settlement render names the binding (`results[0].data` or `await results[0].load(itx)`); `preamble-set`/`removed` transcribe as non-triggering developer context; the system prompt's fresh-scripts bullet teaches `results` + `setPreamble` (prompt ceiling 4200 → 4250, documented in agent-prompt-budgets.test.ts).
 
-6. **Typecheck attribution.** Compiler errors on preamble lines never block a script (it didn't write them): they downgrade the gate verdict to `unchecked` (run anyway) with a log. Script-line errors keep blocking as today; line numbers mapped past prelude + preamble so blame stays accurate.
-
-7. **Model visibility.** Agent processor transcribes `preamble-set`/`preamble-removed` into developer context items showing the code. The `results` array needs no transcription — the settlement render already shows the data; it now also names the binding (e.g. "this result is available to your next script as `results[0].data`" / "`await results[0].load(itx)`"). The codemode system prompt (`agent-defaults.ts`) gains a short paragraph documenting the preamble and `results`.
-
-8. **`itx.docs.typecheck` parity** — the advisory checker includes the scope's preamble exactly like the real gate.
+8. **`itx.docs.typecheck` parity** — the advisory checker includes the scope's preamble via `getPreamble()`.
 
 ## Checklist
 
-- [ ] Contract: `preamble-set` / `preamble-removed` events + preamble entries + retained-settlements state on `CapabilityHostProcessorContract` (version bump), consumes/emits updated
-- [ ] Assembly: a helper that renders host state → preamble text (`results` array + user entries, stable order), shared by gate, execution, and docs.typecheck
-- [ ] Typecheck: `virtual-project.ts` accepts preamble input, injects at module scope, maps line numbers, downgrades preamble-line errors to `unchecked`
-- [ ] Execution: `script-execution-entrypoint.ts` `scriptWorkerRef` takes preamble; emitted-JS path + raw-fallback async-IIFE wrap
-- [ ] Host implementation: preamble reduce; retained settlements (cap ~20, size-capped inline payloads); wire assembled preamble into `#typecheckScriptForRun` and execution; result loader read-back path
-- [ ] RPC surface: `setPreamble` (set-time compile gate) / `removePreamble` on `CapabilityHostRpcTarget`; `__describe` mentions them; regen generated API files
-- [ ] Agent processor: settlement render names the `results[N]` binding; transcribe preamble-set/removed as developer context
-- [ ] Prompt docs: `agent-defaults.ts` paragraph on preamble + `results`
-- [ ] Tests: host reduce/set-gate/run-with-preamble; virtual-project preamble typecheck (attribution + line mapping); entrypoint fallback wrap; agent processor render/transcription; an end-to-end "script 1 returns data, script 2 uses `results[0].data`" spec
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
+- [x] Contract: `preamble-set` / `preamble-removed` events + preamble entries + retained-settlements state (v0.5.0) — _capability-host-processor-contract.ts, rows pinned to `capability-host-preamble.ts` types_
+- [x] Assembly: state → preamble text, shared by gate/execution/docs — _`assemblePreamble` renders ts + js variants; `retainedScriptResult` classifies settlements (16KB inline cap, 3KB inferred-type budget, 2KB error cap); `__proto__` JSON falls back to JSON.parse_
+- [x] Typecheck: preamble input, module-scope injection, line mapping, downgrade-to-unchecked — _virtual-project.ts `assembleScriptProject`/`checkItxScriptForExecution`/`checkItxScript` + new `checkPreamble`; `formatProblems` labels `preamble:N`_
+- [x] Execution: `scriptWorkerRef` takes `preambleJs`; async-IIFE wrap on the no-emit fallback — _script-execution-entrypoint.ts_
+- [x] Host: reduce (upsert/remove/retained tail), verbs with set-time gate diffing with/without candidate, `getScriptResult` point read by settle idempotency key, preamble threaded from head state — _capability-host-processor-implementation.ts, durable object, deps_
+- [x] RPC surface + regenerated `itx-api.generated.ts` — _CapabilityHostRpcTarget setPreamble/removePreamble/getPreamble/getScriptResult; docs.typecheck parity_
+- [x] Agent processor: render names the binding (small vs large); preamble transcription (non-triggering); prompt teach — _agent-processor-implementation.ts, agent-defaults.ts_
+- [x] Tests — _capability-host-preamble.test.ts (assembler + verbs, 11), virtual-project.test.ts (+6 real-compiler: end-to-end results typing incl. the `never` trap, unchecked downgrade, preamble:N attribution, checkPreamble), capability-host-processor.test.ts (+3: derive+inject, gate threading, retention cap), agent-processor.test.ts (+2 & extended render assertions), script-execution-entrypoint.test.ts (+2 fallback wrap)_
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test` — _all green locally_
 
 ## Implementation notes
 
-*(log added during implementation)*
+- The `results` array is assembled at the **at-head pass** from the same head state as capabilities, so a result settled in the same delivery as the next request is visible to it.
+- Slack/Telegram system prompts were deliberately NOT updated (their own budgets); their scripts still GET the preamble — the scope is the stream — they just aren't taught it. Possible follow-up.
+- `getScriptResult` reads the settlement event back by `capability-host/script-run-settled@<executionId>`, so loaders work for any execution that ever settled in the scope, retained or not, and for every script door (no workspace coupling).
+- Set-time gate compares problems with vs without the candidate (string-set diff) — a scope already broken (stale entry, rotted inferred type) doesn't block new sets, mirroring the run gate's never-block-on-scope-code stance.
