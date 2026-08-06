@@ -173,9 +173,10 @@ export class LiveCapabilityProviderRelay {
       providedAtOffset: provision.providedAtOffset,
       socketId,
     });
-    if (activeLeg === undefined) {
-      throw new Error(`live capability "${provision.path.join(".")}" activation was refused`);
-    }
+    // The DO returns no leg when this wake lost its pending-attach race. A
+    // later wake may already be waiting, so this is stale work, not a failed
+    // provider transport.
+    if (activeLeg === undefined) return;
     this.#releaseActiveLeg();
     if (this.#retired === undefined) this.#activeLeg = activeLeg;
     else activeLeg[Symbol.dispose]();

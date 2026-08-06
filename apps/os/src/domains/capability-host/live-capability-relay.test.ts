@@ -151,6 +151,40 @@ describe("LiveCapabilityProviderRelay", () => {
     expect(provision.isActive()).toBe(true);
   });
 
+  it("ignores a late activation after its pending attach expired and serves the next wake", async () => {
+    const socket = new FakeSocket();
+    openSocket.mockResolvedValue(socket);
+    const firstActivation = Promise.withResolvers<undefined>();
+    const disposeLeg = vi.fn();
+    const durableObject = makeDurableObject({
+      activateLiveCapability: vi
+        .fn()
+        .mockReturnValueOnce(firstActivation.promise)
+        .mockResolvedValueOnce({ [Symbol.dispose]: disposeLeg }),
+    });
+    const background: Promise<unknown>[] = [];
+    const provision = await relayOver(durableObject, (promise) => background.push(promise)).provide(
+      {
+        capability: { echo: (value: string) => value },
+        path: ["provider"],
+        type: "live",
+      },
+    );
+
+    socket.frame({ type: "wake" });
+    await vi.waitFor(() => expect(durableObject.activateLiveCapability).toHaveBeenCalledOnce());
+    socket.frame({ type: "wake" });
+    firstActivation.resolve(undefined);
+
+    await vi.waitFor(() => expect(durableObject.activateLiveCapability).toHaveBeenCalledTimes(2));
+    await expect(Promise.all(background)).resolves.toEqual([undefined, undefined]);
+    expect(durableObject.revokeCapability).not.toHaveBeenCalled();
+    expect(provision.isActive()).toBe(true);
+
+    socket.frame({ type: "idle" });
+    await vi.waitFor(() => expect(disposeLeg).toHaveBeenCalledOnce());
+  });
+
   it("returns an inactive handle when the host retires the committed mount", async () => {
     const socket = new FakeSocket();
     openSocket.mockResolvedValue(socket);

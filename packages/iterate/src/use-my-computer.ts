@@ -265,12 +265,16 @@ function disposeMountedSession(session: MountedSession): void {
 /** Probe the stateless ownership handle; this call never reaches the CapabilityHost DO. */
 function pingProvision(provision: MountedSession["provision"]): Promise<boolean> {
   // This watchdog-only method is deliberately omitted from the generated public ITX API.
+  // CapabilityProvision supplies it on every returned provision; the assertion exposes
+  // only that internal method because code generation intentionally hides it from agents.
   const lease = provision as unknown as { __leaseActive(): Promise<boolean> };
   return withTimeout(lease.__leaseActive(), LEASE_CHECK_TIMEOUT_MS, "provision lease ping");
 }
 
 /** Diagnose an ended lease over the full path; returns the provider process's mount id. */
 function pingMount(itx: RpcStub<Project>, name: string): Promise<string> {
+  // `myComputer` above always supplies __ping, but the mount name is runtime-selected and
+  // the method is intentionally absent from the public generated API agents receive.
   const ping = (itx as unknown as Record<string, { __ping(): Promise<string> }>)[name].__ping();
   return withTimeout(ping, LEASE_CHECK_TIMEOUT_MS, "mount ownership check");
 }
