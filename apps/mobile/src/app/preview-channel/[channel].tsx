@@ -10,7 +10,7 @@
 // identity there. `env` resolves against the preset list only
 // (serverPresetForEnvKey), so a crafted link can't name an arbitrary server.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Redirect, Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { buildInfo } from "../../lib/build-info.ts";
@@ -44,25 +44,27 @@ export default function PreviewChannelScreen() {
   const switchChannel = useMutation({
     mutationFn: () => switchChannelAndReload(channel),
     // Only reaches onSuccess without a reload ("no-update"); the invalidate
-    // flips `current` and the Redirect below takes over. After a real reload
-    // the deep link re-opens this screen in the NEW bundle and the same
-    // Redirect fires there.
+    // flips `current` and the button below becomes "Continue". After a real
+    // reload the deep link re-opens this screen in the NEW bundle.
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["preview-channel-override"] }),
   });
 
   // Already on the target channel — including the relaunch after a successful
-  // switch, where the deep link URL re-opens this screen. Hand the hints to
-  // the sign-in screen instead of parking on build-info.
-  if (current.isSuccess && current.data === channel) {
-    return <Redirect href={{ pathname: "/", params: hintParams }} />;
-  }
+  // switch, where the deep link URL re-opens this screen. Deliberately NOT a
+  // silent redirect: scanning a QR for the channel you're already on should
+  // SHOW you that (Current = Target, plus the running commit) rather than
+  // leave you wondering whether anything happened. Continue hands the hints
+  // to the sign-in screen.
+  const alreadyOnTarget = current.isSuccess && current.data === channel;
 
   const currentChannel = current.data || Updates.channel || "preview";
 
   return (
     <View style={styles.container}>
       <Stack.Screen options={{ title: "Switch preview channel" }} />
-      <Text style={styles.heading}>Point this app at another channel?</Text>
+      <Text style={styles.heading}>
+        {alreadyOnTarget ? "You're already on this channel" : "Point this app at another channel?"}
+      </Text>
       <View style={styles.card}>
         <Row label="Current" value={currentChannel} />
         <Row label="Target" value={channel} />
@@ -74,8 +76,17 @@ export default function PreviewChannelScreen() {
           label="Running"
           value={`${buildInfo.branch || "?"} @ ${buildInfo.commit.slice(0, 7) || "?"}`}
         />
+        {buildInfo.message ? <Row label="Commit" value={buildInfo.message} /> : null}
       </View>
-      {!Updates.isEnabled ? (
+      {alreadyOnTarget ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => router.replace({ pathname: "/", params: hintParams })}
+          style={styles.button}
+        >
+          <Text style={styles.buttonLabel}>Continue</Text>
+        </Pressable>
+      ) : !Updates.isEnabled ? (
         <Text style={styles.note}>
           OTA updates are off in this bundle (Metro dev server) — channel switching only works in
           installed builds.

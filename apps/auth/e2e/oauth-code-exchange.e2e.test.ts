@@ -402,6 +402,34 @@ describe("deployed auth OAuth2/OIDC provider", () => {
     ]);
   });
 
+  test("login_hint survives into the signed /login redirect for signed-out users", async () => {
+    // The mobile preview deep-link flow (specs/mobile/preview-deeplink-hints.spec.ts)
+    // depends on this hop: an UNAUTHENTICATED authorize request carrying a
+    // login_hint must 302 to /login with the hint still in the query — the
+    // login page prefills it and offers "Continue as <email>". The stock
+    // @better-auth/oauth-provider authorize endpoint STRIPS undeclared query
+    // keys, so this is the executable spec for the login_hint entry in
+    // patches/@better-auth__oauth-provider@1.6.9.patch. If a rewrite drops
+    // the patch, this test names exactly what must be reimplemented.
+    const hint = "pr9999+test@nustom.com";
+    // No cookie: a fresh phone has no session. Like authorizeJson above, ask
+    // for the JSON envelope ({redirect: true, url}) — better-auth serves that
+    // to API clients where a browser would get the 302 with the same URL.
+    const response = await authFetch(
+      authorizeUrlFor(fx.armsClient, { login_hint: hint }).toString(),
+      { headers: { accept: "application/json" }, redirect: "manual" },
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { redirect: boolean; url: string };
+    expect(body.redirect).toBe(true);
+    const redirect = new URL(body.url, baseUrl);
+    expect(redirect.pathname).toBe("/login");
+    expect(redirect.searchParams.get("login_hint")).toBe(hint);
+    // Still the SIGNED redirect — the hint rides inside the signature, so the
+    // post-login authorize re-entry can't be tampered with.
+    expect(redirect.searchParams.get("sig")).toBeTruthy();
+  });
+
   test("an unregistered redirect_uri never receives a code at authorize time", async () => {
     const body = await authorizeJson(
       authorizeUrlFor(fx.armsClient, { redirect_uri: "https://attacker.example/steal" }),
