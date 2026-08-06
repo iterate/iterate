@@ -2857,7 +2857,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * next wake cycle's checkpoint report. Facet placement dials the facet
    * facade; expression placement dials the same public `waitUntilProcessed`
    * verb on the receiver expression's `processor` node. Every OTHER kind
-   * resolves off the durable cursor row (`confirmed_offset >= offset`): the
+   * resolves off the durable cursor row (`processed_through_offset >= offset`): the
    * awaited push acknowledgement (copy/itx/webhook).
    *
    * One-shot like `waitForEvent`: it dies with the RPC caller or this

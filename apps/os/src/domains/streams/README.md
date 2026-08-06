@@ -241,7 +241,7 @@ receiver: {
 ```
 
 The source POSTs one event at a time through the project's attributed egress.
-The 2xx response alone is the acknowledgement (`confirmed_offset`); the
+The 2xx response alone is the acknowledgement (`processed_through_offset`); the
 response body is discarded. Webhook delivery is at-least-once, so a remote
 processor must deduplicate by `(streamId, offset)`. A `jsonataTransform`
 reshapes the POSTed event body while the envelope keeps the real source
@@ -292,11 +292,11 @@ Rebuilding core state counts durable events instead of assuming
 
 `stream-event-sender.ts` reads after each durable cursor, applies the filter,
 sends a bounded batch, and records progress in ONE column whose meaning never
-varies by receiver kind: `confirmed_offset` (the far side durably claims
+varies by receiver kind: `processed_through_offset` (the far side durably claims
 through here). Push kinds write it with the awaited acknowledgement; a hosted
 processor's reported checkpoints write it, while its live batch acks only
 settle the in-flight watchdog. The one scheduling rule, for every kind:
-delivery RESUMES after `confirmed_offset` — anything sent but never confirmed
+delivery RESUMES after `processed_through_offset` — anything sent but never confirmed
 redelivers (at-least-once; receivers dedupe by `(streamId, offset)`).
 
 Guarantees:
@@ -316,7 +316,7 @@ Guarantees:
 - `waitUntilProcessed(name, { offset, timeoutMs? })` on the Stream DO is the
   uniform barrier for every kind. Processor-wake rows delegate to the hosted
   runner's own barrier (precise even mid-connection); every other kind
-  resolves off `confirmed_offset` — the awaited push acknowledgement.
+  resolves off `processed_through_offset` — the awaited push acknowledgement.
 
 Operator commands are literal:
 

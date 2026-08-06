@@ -737,7 +737,7 @@ export class StreamEventSender {
           ping: response.ping,
         });
         // The wake response's checkpoint IS a reported checkpoint: the far
-        // side durably claims through it, so it lands in `confirmed_offset`.
+        // side durably claims through it, so it lands in `processed_through_offset`.
         // While the connection streams, the stored confirmation deliberately
         // goes stale (batch acks settle the watchdog without confirming); its
         // job is deciding whether to wake the processor when no callback
@@ -2376,7 +2376,7 @@ export class StreamConnections {
                   this.#hooks.hostedDeliveryStillMatches(connectionKey, expectedDelivery)
                 ) {
                   // The batch ack settles the watchdog and failure streak.
-                  // The receiver's durable claim (confirmed_offset) only
+                  // The receiver's durable claim (processed_through_offset) only
                   // moves on reported checkpoints — the wake response's
                   // checkpoint — so an eviction redelivers anything
                   // unconfirmed (at-least-once).
