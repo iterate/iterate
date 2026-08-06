@@ -263,8 +263,12 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     await page.goBack(); // chat → chat list: browser history IS the app's back stack on web
     await page.getByLabel("Open project menu").click();
     await page.getByRole("button", { name: "Notifications" }).click();
-    // Newest first: the reject burst's row sits above the approve burst's.
-    const batchRows = page.getByTestId(/^notification-row-/);
+    // Main also journals each scripted outcome message as an "Agent replied"
+    // notification. Select only the approval-batch rows: newest first, the
+    // reject burst sits above the approve burst.
+    const batchRows = page
+      .getByTestId(/^notification-row-/)
+      .filter({ has: page.getByText("Approvals needed", { exact: true }) });
     await withApprovalDeliveryDiagnostic({
       description: "The second approval notification row did not render.",
       deviceId: DEVICE_ID,
@@ -272,8 +276,6 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       streamPaths: [agentPath],
       wait: () => batchRows.nth(1).waitFor(),
     });
-    await batchRows.first().click();
-    await batchRows.nth(1).click();
     const threadName = agentPath.replace(/^\/agents\//, "");
     // The line is a link (tap = open the thread), one per card, each unique
     // by its lane's status title. Full-text equality, not substring: a
@@ -282,13 +284,19 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // activity-only update.
     const approveContext = page.getByRole("link", { name: /Refund sweep/ });
     const rejectContext = page.getByRole("link", { name: /Invoice chase/ });
-    await approveContext.waitFor();
+    // Inspect one row at a time, as a person does. Each expansion contains the
+    // full batch and can push its sibling outside FlatList's rendered window;
+    // collapsing it first keeps the next row mounted and actionable.
+    await batchRows.first().click();
     await rejectContext.waitFor();
-    expect(await approveContext.textContent()).toBe(
-      `${threadName} · Refund sweep — Emailing 3 customers about order refunds`,
-    );
     expect(await rejectContext.textContent()).toBe(
       `${threadName} · Invoice chase — Requesting payment for 3 overdue invoices`,
+    );
+    await batchRows.first().click();
+    await batchRows.nth(1).click();
+    await approveContext.waitFor();
+    expect(await approveContext.textContent()).toBe(
+      `${threadName} · Refund sweep — Emailing 3 customers about order refunds`,
     );
 
     // Tapping the line deep-links back into the thread it snapshotted.

@@ -79,7 +79,13 @@ classifies the cause. Its first dispatch never reached tests because the branch
 conflicted with `main`, preventing GitHub from publishing the exact-sha preview
 packages. Current `main` is now merged; its chat-reply suppression and this
 branch's approval claim-before-intent state are combined under Device processor
-version 0.7.0 so existing 0.6.0 caches refold. A new exact-head baseline is next.
+version 0.7.0 so existing 0.6.0 caches refold. The merged-head baseline then
+failed both attempts of the approvals spec: the
+new chat-reply feature correctly added two `Agent replied` notification rows,
+and the spec's broad notification-row locator clicked one of those rows instead
+of an approval batch. The locator now selects `Approvals needed` rows and
+inspects them one at a time; the exact spec passes against preview with no
+timeout increase. A new exact-head baseline is next.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -750,3 +756,13 @@ Test these in order; do not treat the first plausible one as the conclusion.
   and bumps the combined contract to 0.7.0 so deployed 0.6.0 caches refold.
   The 49 focused Device, chat-reply, and stream-background tests plus OS
   typecheck and lint pass. The strict streak remains zero.
+- 2026-08-06: Merged-head baseline `9rdgznlx1l` deployed successfully and all
+  non-mobile OS tests passed, but approvals failed both attempts after the
+  first notification-row click navigated back to chat. The local page snapshot
+  showed why: `main`'s chat-reply notification feature now journals each
+  scripted outcome as `Agent replied`, so the test's broad row locator selected
+  those valid deep-link rows before the two approval rows. A red local preview
+  repro captured the same navigation. The spec now selects only exact
+  `Approvals needed` rows and expands/collapses them one at a time for FlatList
+  stability; the same preview-backed spec passes in 1.1 minutes without any
+  timeout increase. The strict streak remains zero for the next exact head.
