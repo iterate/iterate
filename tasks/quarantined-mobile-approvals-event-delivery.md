@@ -102,6 +102,18 @@ processor-host revival reset still logged at error level. Keepalive now reports
 only its narrow lifecycle shapes outside error telemetry while preserving true
 application failures. The strict streak remains zero.
 
+On the current keepalive-classifier head, a clean baseline passed in 325
+seconds, but its successor exceeded the 420-second budget without retrying.
+Three later candidates were rejected by short Cloudflare internal-error waves:
+the largest produced 54 distinct references across six Project/Stream objects
+in 19.6 seconds. The latest wave also exposed a product recovery gap. Three
+classified platform failures made the root-Stream readiness loop sleep for
+5 + 10 + 15 seconds, consuming its entire 30-second bound before it could make
+a fourth probe after Cloudflare recovered. The handoff remains five seconds
+but no longer grows exponentially, so the same three-error regression reaches
+the ready fourth target in 15 seconds. Nine focused readiness/create tests pass;
+the 25-run streak remains zero for this new exact head.
+
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
 model and routing; the mobile bundle does not import its route helper. The
@@ -816,3 +828,17 @@ Test these in order; do not treat the first plausible one as the conclusion.
   `stream-unavailable` contract to warning telemetry while an application
   failure remains error-level. All 18 keepalive tests pass. The candidate and
   its cancelled successor are discarded; the streak restarts at zero.
+- 2026-08-06: Head `12c80d831` produced one accepted 325-second baseline, then
+  a green but rejected 436-second candidate. Subsequent candidates
+  `hn37cs3qhp`, `3wj8fm7d35`, and `1lg8jr6lvh` kept both mobile flows and both
+  recovery proofs first-try green but were excluded for Cloudflare failure
+  waves. Exact-version telemetry found, respectively, 54 references across six
+  Durable Objects in 19.6 seconds, ten references across three objects in ten
+  seconds, and seven references across Project/Stream objects plus a later
+  storage reset. The last run also showed root-Stream readiness exhausting its
+  30-second budget after only three retryable failures. Its exponential
+  5/10/15-second handoff consumed the deadline despite the provider wave ending
+  after 4.5 seconds. A red regression reproduced that exact three-failure
+  sequence; capping each invocation-free handoff at five seconds reaches the
+  ready fourth target in 15 seconds without raising the timeout. The focused
+  nine-test readiness/create set passes; the streak restarts at zero.

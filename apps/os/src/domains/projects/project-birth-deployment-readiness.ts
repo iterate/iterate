@@ -4,9 +4,12 @@ import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-una
 
 const deploymentWaitTimeoutMs = 30_000;
 // A code-update reset needs an invocation-free window before Cloudflare can
-// replace the old incarnation. Short probing kept that incarnation alive.
+// replace the old incarnation. Short probing kept that incarnation alive, but
+// longer exponential sleeps consumed the recovery budget without improving
+// the handoff: three platform failures used 5 + 10 + 15 seconds and prevented
+// a fourth probe after the platform had recovered.
 const deploymentPollIntervalMs = 5_000;
-const deploymentMaxPollIntervalMs = 15_000;
+const deploymentMaxPollIntervalMs = deploymentPollIntervalMs;
 
 type ProjectBirthDeploymentReadinessOptions = {
   maxPollIntervalMs?: number;

@@ -115,6 +115,41 @@ test("bounds lifecycle and platform convergence without accepting application fa
   ).rejects.toThrow('the version probe failed with "processor invariant failed"');
 });
 
+test("retries after each invocation-free handoff during a short platform failure burst", async () => {
+  const internal = new Error("internal error; reference = abcdef0123456789");
+  let acquisition = 0;
+  let time = 0;
+  const getTarget = vi.fn(() => {
+    acquisition += 1;
+    return disposableTarget({
+      deploymentVersion: async () => {
+        if (acquisition <= 3) throw internal;
+        return "version-new";
+      },
+    });
+  });
+
+  await expect(
+    waitForProjectBirthDeploymentVersion(
+      {
+        expectedVersion: "version-new",
+        getTarget,
+        projectId: "prj_test",
+        targetKind: "Stream Durable Object",
+      },
+      {
+        now: () => time,
+        sleep: async (durationMs) => {
+          time += durationMs;
+        },
+      },
+    ),
+  ).resolves.toMatchObject({
+    readiness: { platformFailures: 3, probes: 4, waitedMs: 15_000 },
+  });
+  expect(getTarget).toHaveBeenCalledTimes(4);
+});
+
 test("never overlaps a probe that has not settled", async () => {
   vi.useFakeTimers();
   try {
