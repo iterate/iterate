@@ -246,6 +246,15 @@ export class CapabilityProviderPagerRelay {
     } catch (error) {
       console.error("live provider disposal failed", { error, providedAtOffset });
     }
+    const pager = this.#pager;
+    if (this.#mounts.size > 0 || pager === undefined) return;
+    this.#pager = undefined;
+    this.#connectedAtOffset = undefined;
+    try {
+      pager.close(1000, "no live capability mounts");
+    } catch {
+      // Already closed.
+    }
   }
 
   #releaseActiveLeg(mounted: MountedProvider): void {
