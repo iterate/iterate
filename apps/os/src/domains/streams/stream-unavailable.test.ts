@@ -22,6 +22,11 @@ describe("isDurableObjectLifecycleError", () => {
     ["retryable flag", withFlag("retryable"), true],
     ["overloaded flag", withFlag("overloaded"), true],
     [
+      "unflagged local code-update reset",
+      new Error("Durable Object reset because its code was updated."),
+      true,
+    ],
+    [
       "unflagged local storage reset with Cloudflare reference",
       new Error(
         "Internal error in Durable Object storage caused object to be reset; reference = rke8qila30vbnhapsf1qshri",

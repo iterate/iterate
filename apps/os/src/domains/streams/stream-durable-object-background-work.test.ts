@@ -27,6 +27,22 @@ describe("settleStreamCoreBackgroundWork", () => {
     expect(error).not.toHaveBeenCalled();
   });
 
+  it("settles an unflagged local code-update reset as an observed lifecycle interruption", async () => {
+    const reset = new Error("Durable Object reset because its code was updated.");
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await expect(
+      settleStreamCoreBackgroundWork(() => Promise.reject(reset)),
+    ).resolves.toBeUndefined();
+
+    expect(info).toHaveBeenCalledWith(
+      "stream core background work interrupted by durable object lifecycle",
+      { message: reset.message },
+    );
+    expect(error).not.toHaveBeenCalled();
+  });
+
   it("settles a local Durable Object storage reset as an observed lifecycle interruption", async () => {
     const reset = new Error(
       "Internal error in Durable Object storage caused object to be reset; reference = rke8qila30vbnhapsf1qshri",

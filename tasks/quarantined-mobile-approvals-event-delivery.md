@@ -54,11 +54,15 @@ version readiness proof. Its first deployed check proved the orchestrator
 waited for that condition, then exposed an E2E helper still requiring the old
 literal `OK` body. The helper now validates the exact JSON/header version
 contract; a fresh head is pending.
-That fresh baseline passed every group and both restored mobile flows first
-try, but a sandbox case retried after project config-repo birth lost its
-successful Artifact create token when the first Git seed failed. The durable
-birth queue now checkpoints that token before seeding and reuses it on the
-bounded alarm retry; another exact-head baseline is pending.
+That fresh baseline and three cold candidates passed every group and both
+restored mobile flows first try. Two intervening Semaphore D1 code-7500 deploy
+failures never reached tests and were excluded as infrastructure non-candidates.
+The fourth candidate passed cleanly but its exact-version audit caught local
+subscription `nack` logging an unflagged code-update reset as an application
+error. The shared lifecycle classifier now accepts only Cloudflare's exact
+code-update sentence in addition to the existing flagged and referenced-reset
+shapes. Focused regressions and OS typecheck pass; the 25-run streak returns to
+zero for the new candidate head.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -668,3 +672,16 @@ Test these in order; do not treat the first plausible one as the conclusion.
   classified seed retry skips create/read and repeats only the deterministic
   push. A red/green coordinator regression and OS typecheck pass; the streak
   remains zero for the new head.
+- 2026-08-06: Canonical baseline `0c7df0qwmb` and cold candidates
+  `m2jqb4cwd5`, `v48nxrd221`, and `7ww9l64vgz` on `40b0fddbe` passed all six
+  groups without retries. Both restored mobile specs and both linked recovery
+  proofs passed first try; each exact-version audit had zero restoration-
+  blocking errors. Semaphore D1 migration failures `fztdq6xgpx` and
+  `p64kmjtqjl` returned Cloudflare code 7500 before tests and are not gate
+  candidates. Candidate `879n79wzv9` then passed every test first try but was
+  rejected for two ingested copies of one Stream DO error: local subscription
+  `nack` threw the exact unflagged `Durable Object reset because its code was
+  updated.` platform shape. Red/green classifier and background-work specs now
+  keep that exact lifecycle interruption outside error telemetry while
+  preserving arbitrary application failures. The 34 focused tests and OS
+  typecheck pass; the streak is zero for the new head.
