@@ -57,12 +57,15 @@ test.skipIf(!llmEvalsEnabled)(
     // Round 1: a synthetic assistant turn whose script generates values at
     // RUNTIME — they exist only in the settlement, so the model cannot
     // re-derive them from its own script text, and re-generating produces a
-    // wrong total the correctness assertion catches.
+    // wrong total the correctness assertion catches. 300 rows: comfortably
+    // inside the 16k compact-JSON inline gate, but far past what a model can
+    // sum in its head off the rendered JSON (a first cut used 24 rows and the
+    // model simply mental-arithmetic'd the total without touching `results`).
     const { assistantContext } = await appendSyntheticProviderOutput(
       agent.stream,
       fencedAgentScript(`
         async (itx) => {
-          const orders = Array.from({ length: 24 }, (_, i) => ({
+          const orders = Array.from({ length: 300 }, (_, i) => ({
             id: "ord-" + (i + 1),
             amountCents: 10000 + Math.floor(Math.random() * 89999),
           }));
@@ -81,7 +84,7 @@ test.skipIf(!llmEvalsEnabled)(
     // Fixture sanity: on the inline side of the gate, so the preamble row for
     // this result has `.data` (not `.load`) and the render says so.
     expect(JSON.stringify((settlement as any).result).length).toBeLessThan(INLINE_GATE_CHARS);
-    await agent.stream.waitForEvent({
+    const render = await agent.stream.waitForEvent({
       afterOffset: assistantContext.offset,
       eventTypes: [AGENT_CONTEXT_ADDED_TYPE],
       predicate: (event) =>
@@ -91,9 +94,14 @@ test.skipIf(!llmEvalsEnabled)(
     });
 
     // A result-bearing settlement triggers an autonomous feedback turn (the
-    // codemode loop). Let the loop go quiet so the round-2 window contains
-    // only scripts written in response to the user's question.
-    const cursor = await waitForQuietAgent(agent.stream, { timeoutMs: 120_000 });
+    // codemode loop), and the model is free to dig into the result right
+    // then — a first cut started the assertion window after the loop went
+    // quiet and watched the model answer round 2 from work it had already
+    // done. The window therefore opens AT THE RENDER: every script written
+    // after the model saw "your script returned …" counts, whichever turn
+    // it lands in. The quiet-wait still separates the rounds so the ask's
+    // reply correlates cleanly.
+    await waitForQuietAgent(agent.stream, { timeoutMs: 120_000 });
 
     // Round 2 — the real product surface and a real LLM turn. The question
     // needs the data but does not mention `results`: whether the model
@@ -105,11 +113,12 @@ test.skipIf(!llmEvalsEnabled)(
       timeoutMs: 150_000,
     });
 
-    const scripts = await scriptsBetween(agent.stream, cursor, reply.offset);
+    const scripts = await scriptsBetween(agent.stream, render.offset, reply.offset);
     expect(scripts.length).toBeGreaterThan(0);
-    // THE eval: the first thing the model runs references the prior result
-    // through the preamble array.
-    expect(scripts[0]).toMatch(/results\[\d+\]\.data/);
+    // THE eval: whichever script consumes the result reaches it through the
+    // preamble array. (Not necessarily scripts[0] — the loop may narrate or
+    // update its summary first.)
+    expect(scripts).toContainEqual(expect.stringMatching(/results\[\d+\]\.data/));
     const joined = scripts.join("\n");
     // Anti-patterns: reading the (nonexistent here) spill file, or
     // re-generating the data — this scenario's version of re-fetching.
@@ -166,7 +175,7 @@ test.skipIf(!llmEvalsEnabled)(
     expect(secret).toMatch(/^[0-9a-f-]{36}$/);
     // Fixture sanity: on the `.load` side of the gate.
     expect(JSON.stringify((settlement as any).result).length).toBeGreaterThan(INLINE_GATE_CHARS);
-    await agent.stream.waitForEvent({
+    const render = await agent.stream.waitForEvent({
       afterOffset: assistantContext.offset,
       eventTypes: [AGENT_CONTEXT_ADDED_TYPE],
       predicate: (event) =>
@@ -175,7 +184,9 @@ test.skipIf(!llmEvalsEnabled)(
       timeoutMs: 60_000,
     });
 
-    const cursor = await waitForQuietAgent(agent.stream, { timeoutMs: 120_000 });
+    // Window opens at the render — see the inline case for why (the loop's
+    // feedback turn may load the result before the user asks anything).
+    await waitForQuietAgent(agent.stream, { timeoutMs: 120_000 });
 
     const reply = await agent.ask({
       message:
@@ -184,10 +195,12 @@ test.skipIf(!llmEvalsEnabled)(
       timeoutMs: 150_000,
     });
 
-    const scripts = await scriptsBetween(agent.stream, cursor, reply.offset);
+    const scripts = await scriptsBetween(agent.stream, render.offset, reply.offset);
     expect(scripts.length).toBeGreaterThan(0);
-    // THE eval: the typed loader, not the workspace spill file.
-    expect(scripts[0]).toMatch(/await results\[\d+\]\.load\(itx\)/);
+    // THE eval: the typed loader, not the workspace spill file the render's
+    // footnote also mentions (the field-test regression was the model copying
+    // a readFile recipe instead of the loader).
+    expect(scripts).toContainEqual(expect.stringMatching(/await results\[\d+\]\.load\(itx\)/));
     expect(scripts.join("\n")).not.toMatch(/workspace\.readFile/);
 
     expect(String(reply.payload?.message ?? "")).toContain(secret);
@@ -256,8 +269,10 @@ async function waitForQuietAgent(stream: Stream, input: { timeoutMs: number }): 
       timeoutMs: input.timeoutMs,
     },
   );
-  const allEvents: any[] = await stream.getEvents({ limit: 1_000 });
-  return allEvents.at(-1)?.offset ?? 0;
+  // The filtered head is a valid cursor: it is at or past every round-1
+  // script request (their settlements and the loop's llm settlements come
+  // later), and round-2 scripts can only land after the user's next message.
+  return previousHead;
 }
 
 /** The code of every script the agent requested strictly inside the offset

@@ -8,9 +8,10 @@ branch: preamble-results-eval
 
 ## Status summary
 
-Spec committed first (this commit). Implementation next: one opt-in
-real-LLM e2e file with two cases (inline `results[N].data`, large
-`await results[N].load(itx)`).
+Implemented: `apps/os/e2e/vitest/agent-preamble-results.llm.e2e.test.ts`,
+two opt-in cases (inline `results[N].data`, large
+`await results[N].load(itx)`), gated behind `LLM_EVALS=1`. Static checks
+green. Live-run results recorded in the log below.
 
 ## Why
 
@@ -72,26 +73,30 @@ read the workspace spill file.
 
 ## Cases
 
-- [ ] **Inline case**: round-1 script returns ~24 orders with random
-      `amountCents` (compact JSON well under the 16,000-char inline gate, so
-      its `results` row has `.data`). User asks for the exact sum. Assert:
-      the first round-2 script matches `/results\[\d+\]\.data/`; no round-2
-      script matches `workspace.readFile` or `Math.random` (re-generation =
-      re-fetch); the visible reply contains the true total (computed by the
-      test from the journaled settlement).
-- [ ] **Large case**: round-1 script returns ~2,500 rows with a
+- [x] **Inline case**: round-1 script returns 300 orders with random
+      `amountCents` (compact JSON under the 16,000-char inline gate, so its
+      `results` row has `.data`). User asks for the exact sum. Assert: some
+      in-window script matches `/results\[\d+\]\.data/`; no window script
+      matches `workspace.readFile` or `Math.random` (re-generation =
+      re-fetch) or re-pastes 3+ amount literals; the visible reply contains
+      the true total (computed by the test from the journaled settlement).
+      _Implemented in apps/os/e2e/vitest/agent-preamble-results.llm.e2e.test.ts;
+      grew from 24 to 300 rows after the model mental-summed 24 (see log)._
+- [x] **Large case**: round-1 script returns 2,500 rows with a
       `crypto.randomUUID()` secret buried mid-array (compact JSON over the
-      16,000-char gate → `.load` row; pretty-printed over the ~30k render
-      limit → also spills to a workspace file, so the readFile temptation
-      from the field test is present). User asks for the secret. Assert: the
-      first round-2 script matches `/await results\[\d+\]\.load\(itx\)/`; no
-      round-2 script touches `workspace.readFile`; the reply contains the
-      actual secret.
-- [ ] Header comment documents the exact run command; task file + PR body
-      show it too.
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
+      16,000-char gate → `.load` row; pretty-printed over the render limit →
+      also spills to a workspace file, so the readFile temptation from the
+      field test is present). User asks for the secret. Assert: some
+      in-window script matches `/await results\[\d+\]\.load\(itx\)/`; no
+      window script touches `workspace.readFile`; the reply contains the
+      actual secret. _Same file, second test._
+- [x] Header comment documents the exact run command; task file + PR body
+      show it too. _File header + this file + PR #2442 body._
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
       green; eval run against a live environment at least once with results
-      recorded here.
+      recorded here. _All green locally; two live runs against local dev
+      recorded in the log (first exposed a window-design flaw, second passed
+      2/2)._
 
 ## Non-goals
 
@@ -106,3 +111,23 @@ read the workspace spill file.
 
 - Worktree `preamble-results-eval` off origin/main (34c7de98a, the preamble
   PR itself).
+- Live run 1 (local dev, 2026-08-06 17:57): both cases FAILED — and the
+  failures were the eval earning its keep plus one design flaw of mine:
+  - The model answered round 2 with a bare `itx.chat.sendMessage("<answer>")`
+    script. For the large case the answer was the correct buried UUID, which
+    the model could only have obtained by running the loader DURING the
+    autonomous feedback turn after the settlement render — i.e. the desired
+    behavior happened, but before my assertion window opened (I had anchored
+    it after the loop went quiet). Fix: the window now opens at the
+    settlement render, so feedback-turn scripts count.
+  - For the small case the model mental-summed 24 rendered amounts and
+    hardcoded the total. Fix: 300 rows — still inline, but far past honest
+    mental arithmetic.
+  - Also fixed: `getEvents` caps `limit` at 500 (my cursor read used 1000).
+- Live run 2 (local dev, 2026-08-06 17:58): **2/2 passed** — inline case
+  24.9s, large case 16.8s. The prompt currently teaches `results` well
+  enough to pass both cases.
+- Assertion loosened deliberately from "the first script" to "some script in
+  the render→reply window, and no anti-pattern anywhere in it": the loop may
+  narrate or update its summary in a separate script first, and pinning
+  scripts[0] made the eval flake on behavior that is fine.
