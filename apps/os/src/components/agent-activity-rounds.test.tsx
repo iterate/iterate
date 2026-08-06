@@ -5,7 +5,9 @@ import { expect, test } from "vitest";
 import { AgentActivityRounds } from "./agent-activity-rounds.tsx";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 
-test("the Result tab defaults to the settlement text the agent was shown", async () => {
+test("a result the agent saw in full keeps the raw view as the default", async () => {
+  // The untransformed render embeds the exact stringified result, so the
+  // agent saw everything — the raw view is nicer to read and stays default.
   const agentRender =
     'Your script returned:\n```json\n{\n  "ok": true\n}\n```\n' +
     "This result is available to your next script as `results[0].data` (the preamble `results` array, newest first).";
@@ -16,22 +18,49 @@ test("the Result tab defaults to the settlement text the agent was shown", async
   const { host } = mounted;
   await clickResultTab(host);
 
+  // SourceCodeBlock is a lazy client-only chunk, so assert the raw container
+  // rather than the highlighted YAML text (it never paints in jsdom).
+  expect(host.querySelector('[data-testid="script-result-raw"]')).not.toBeNull();
+  expect(host.querySelector('[data-testid="script-result-agent-view"]')).toBeNull();
+  // The agent's view is still one toggle away.
+  const toggle = host.querySelector<HTMLButtonElement>('[data-testid="script-result-view-toggle"]');
+  expect(toggle?.textContent).toBe("Show agent view");
+  await act(async () => toggle!.click());
   const agentView = host.querySelector('[data-testid="script-result-agent-view"]');
   expect(agentView?.textContent).toContain("Your script returned");
   expect(agentView?.textContent).toContain("results[0].data");
-  // The client-side YAML re-serialization is NOT the default any more…
   expect(host.querySelector('[data-testid="script-result-raw"]')).toBeNull();
-  // …but stays one toggle away.
+  expect(host.querySelector('[data-testid="script-result-view-toggle"]')?.textContent).toBe(
+    "Show raw result",
+  );
+});
+
+test("a truncated render defaults to the agent view — the raw view would misrepresent it", async () => {
+  // Inline truncation: the render carries only a slice of the stringified
+  // result plus the truncation notice, so containment fails.
+  const result = { items: "item ".repeat(50).trim() };
+  const truncatedRender =
+    "Your script returned:\n```json\n" +
+    JSON.stringify(result, null, 2).slice(0, 80) +
+    "\n… truncated (262 chars total; up to 80 render inline — return less: slice arrays, pick fields)\n```\n" +
+    "This result is available to your next script as `results[0].data` (the preamble `results` array, newest first).";
+  await using mounted = await renderRounds(
+    databaseWithRenderEvent("agent-output:53", truncatedRender),
+    codeStep({ result }),
+  );
+  const { host } = mounted;
+  await clickResultTab(host);
+
+  const agentView = host.querySelector('[data-testid="script-result-agent-view"]');
+  expect(agentView?.textContent).toContain("Your script returned");
+  expect(agentView?.textContent).toContain("truncated (262 chars total");
+  expect(host.querySelector('[data-testid="script-result-raw"]')).toBeNull();
+  // The full raw result stays one toggle away.
   const toggle = host.querySelector<HTMLButtonElement>('[data-testid="script-result-view-toggle"]');
   expect(toggle?.textContent).toBe("Show raw result");
   await act(async () => toggle!.click());
   expect(host.querySelector('[data-testid="script-result-agent-view"]')).toBeNull();
-  // SourceCodeBlock is a lazy client-only chunk, so assert the raw container
-  // rather than the highlighted YAML text (it never paints in jsdom).
   expect(host.querySelector('[data-testid="script-result-raw"]')).not.toBeNull();
-  expect(host.querySelector('[data-testid="script-result-view-toggle"]')?.textContent).toBe(
-    "Show agent view",
-  );
 });
 
 test("a stream with no agent-facing render falls back to the raw result view", async () => {

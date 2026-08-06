@@ -35,10 +35,11 @@ const SCRIPT_RENDER_EVENT_TYPE = "events.iterate.com/agents/context-added";
 // Script and Result (approval batches derived from root-stream events, which
 // this feed doesn't have wired in yet) and streams thinking text inline. If
 // you change the round/tab/Meta structure on one surface, ask whether the
-// other should follow. Known divergence: this feed's Result tab defaults to
-// the AGENT-VISIBLE settlement render (queried from the raw-event mirror,
-// which mobile doesn't have wired in) with the raw view behind a toggle;
-// mobile still shows only the raw result.
+// other should follow. Known divergence: this feed's Result tab can show the
+// AGENT-VISIBLE settlement render (queried from the raw-event mirror, which
+// mobile doesn't have wired in) — the default whenever that render was
+// truncated/transformed, a toggle away otherwise; mobile still shows only
+// the raw result.
 
 /**
  * The rounds rail of one settled (or fully-grouped live) activity. A single
@@ -326,12 +327,15 @@ function RoundTabs({
 }
 
 /**
- * The Result tab body. When the raw-event mirror is available, the DEFAULT
- * view is the agent's: the exact settlement text `renderScriptSettlement`
- * appended for the model (truncated at the configured history limit,
- * oversized results as an inferred type + bounded preview + loader recipe),
- * with the client-side raw view one toggle away. Without a mirror the raw
- * view stands alone, exactly as before.
+ * The Result tab body. When the raw-event mirror is available, the agent's
+ * view — the exact settlement text `renderScriptSettlement` appended for the
+ * model — is one toggle away, and becomes the DEFAULT precisely when that
+ * text is a transformed representation (inline truncation at the history
+ * limit, or an oversized result replaced by an inferred type + bounded
+ * preview + loader recipe): in that case the raw view would misrepresent
+ * what the agent could actually see. When the agent saw the full result, the
+ * raw view is strictly nicer to read and stays the default. Without a mirror
+ * the raw view stands alone, exactly as before.
  */
 function RoundResult({
   code,
@@ -360,7 +364,7 @@ function AgentRenderedRoundResult({
   code: AgentUiCodeStep;
   database: StreamBrowserDatabase;
 }) {
-  const [showRaw, setShowRaw] = useState(false);
+  const [toggled, setToggled] = useState<boolean | null>(null);
   const eventsResult = useStreamQuery(
     database,
     `SELECT json(raw_jsonb) AS raw_json FROM events
@@ -386,6 +390,7 @@ function AgentRenderedRoundResult({
   // view and swapping it out from under the reader.
   if (eventsResult.status === "pending") return null;
   if (agentText == null) return <RawRoundResult code={code} />;
+  const showRaw = toggled ?? !renderIsTransformed(code, agentText);
   return (
     <>
       {showRaw ? (
@@ -410,13 +415,45 @@ function AgentRenderedRoundResult({
         variant="ghost"
         size="xs"
         data-testid="script-result-view-toggle"
-        onClick={() => setShowRaw(!showRaw)}
+        onClick={() => setToggled(!showRaw)}
         className="-ml-2 self-start font-normal text-muted-foreground"
       >
         {showRaw ? "Show agent view" : "Show raw result"}
       </Button>
     </>
   );
+}
+
+/**
+ * Did the agent see a TRANSFORMED representation of this settlement, rather
+ * than the full thing? Detected structurally, coupled to the server-side
+ * render (`renderScriptSettlement` in
+ * apps/os/src/domains/agents/agent-processor-implementation.ts): the
+ * untransformed render always embeds the exact stringified settlement
+ * verbatim inside its fence — a returned string as itself, any other value
+ * as `JSON.stringify(value, null, 2)` (the server's
+ * `stringifyScriptResult`), a failure as its error text — while every
+ * transforming path (inline truncation at the history limit, oversized
+ * spills replaced by an inferred type + elided preview) necessarily drops
+ * part of it. So a simple containment check distinguishes the cases without
+ * matching on notice strings. The check degrades SAFELY: if the server's
+ * stringification ever changes shape, containment fails and the tab defaults
+ * to the agent view — which never misrepresents — rather than to a raw view
+ * claiming the agent saw everything.
+ */
+function renderIsTransformed(code: AgentUiCodeStep, agentText: string): boolean {
+  let full: string | null = null;
+  if (code.result !== undefined) {
+    try {
+      full = typeof code.result === "string" ? code.result : JSON.stringify(code.result, null, 2);
+    } catch {
+      full = null;
+    }
+  } else if (code.errorMessage != null) {
+    full = code.errorMessage;
+  }
+  if (full == null) return true;
+  return !agentText.includes(full);
 }
 
 function RawRoundResult({ code }: { code: AgentUiCodeStep }) {
