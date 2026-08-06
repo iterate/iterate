@@ -13,7 +13,7 @@ const INVALID_CAPABILITY_PATH_SEGMENTS = new Set([
   "onRpcBroken",
 ]);
 
-/** Validate one durable capability-table address before it enters a batch. */
+/** Validate one durable capability-table address before it is mounted. */
 export function assertCapabilityPath(path: string[]): void {
   if (!Array.isArray(path)) {
     throw new Error('capability path must be an ARRAY of segments (e.g. ["tools", "weather"])');
@@ -30,4 +30,10 @@ export function assertCapabilityPath(path: string[]): void {
       throw new Error(`invalid capability path segment "${String(segment)}"`);
     }
   }
+}
+
+export function sameCapabilityPath(first: string[], second: string[]): boolean {
+  return (
+    first.length === second.length && first.every((segment, index) => segment === second[index])
+  );
 }

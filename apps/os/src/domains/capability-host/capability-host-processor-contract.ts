@@ -25,7 +25,6 @@ import { ItxExpression, ItxExpressionStep } from "../../itx/expression.ts";
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
-  RevokeCapabilitiesInput,
   RevokeCapabilityInput,
 } from "./types.ts";
 import { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
@@ -59,15 +58,12 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
                 .meta({ description: 'Mount point as path segments, e.g. ["tools", "weather"].' }),
               providerBinding: z
                 .strictObject({
-                  channelKey: z.string().min(1),
-                  leaseKey: z.string().min(1),
-                  socketId: z.string().min(1).optional(),
+                  socketId: z.string().min(1),
                 })
-                .optional()
                 .meta({
                   description:
-                    "The durable address of this live provider inside its stateless " +
-                    "session channel. It contains no RPC stub.",
+                    "The durable address of this live provider's hibernatable socket. " +
+                    "It contains no RPC stub.",
                 }),
               providedAtOffset: z
                 .number()
@@ -231,15 +227,12 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
               .meta({ description: 'Mount point as path segments, e.g. ["tools", "weather"].' }),
             providerBinding: z
               .strictObject({
-                channelKey: z.string().min(1),
-                leaseKey: z.string().min(1),
-                socketId: z.string().min(1).optional(),
+                socketId: z.string().min(1),
               })
-              .optional()
               .meta({
                 description:
-                  "The durable address of this live provider inside its stateless " +
-                  "session channel. It contains no RPC stub.",
+                  "The durable address of this live provider's hibernatable socket. " +
+                  "It contains no RPC stub.",
               }),
             instructions: z
               .string()
@@ -330,25 +323,6 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
           }),
       }) satisfies z.ZodType<RevokeCapabilityInput, unknown>,
     },
-    "events.iterate.com/capability-host/capabilities-revoked": {
-      description:
-        "Many exact dynamic-capability mounts were removed in one bounded table reduction.",
-      payloadSchema: z.strictObject({
-        revocations: z
-          .array(
-            z.strictObject({
-              path: z
-                .array(z.string())
-                .meta({ description: "The mount point to revoke, as path segments." }),
-              providedAtOffset: z.number().int().nonnegative().meta({
-                description:
-                  "The exact mount identity. A newer mount at the same path survives the batch.",
-              }),
-            }),
-          )
-          .min(1),
-      }) satisfies z.ZodType<RevokeCapabilitiesInput, unknown>,
-    },
     "events.iterate.com/capability-host/script-run-requested": {
       description:
         "A script should run in this capability scope. Before any attempt starts, the code is typechecked against the scope's capability types: a script with a PROVABLE error — a syntax error, or a near-miss typo where the compiler names the fix (\"Did you mean 'get'?\") — settles straight to an error completion carrying the compiler errors, without ever running (no started event). Everything less certain runs: capabilities are provided dynamically and declared types can lag the runtime, so bare property/argument mismatches, unknown/untyped capabilities, non-async block shapes, and checker failures all let the script run unchecked.",
@@ -391,7 +365,6 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     "events.iterate.com/capability-host/created",
     "events.iterate.com/capability-host/capability-provided",
     "events.iterate.com/capability-host/capability-revoked",
-    "events.iterate.com/capability-host/capabilities-revoked",
     "events.iterate.com/capability-host/script-run-requested",
     "events.iterate.com/capability-host/script-run-started",
     "events.iterate.com/capability-host/script-run-settled",
@@ -410,7 +383,6 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     "events.iterate.com/capability-host/created",
     "events.iterate.com/capability-host/capability-provided",
     "events.iterate.com/capability-host/capability-revoked",
-    "events.iterate.com/capability-host/capabilities-revoked",
     "events.iterate.com/capability-host/script-run-requested",
     "events.iterate.com/capability-host/script-run-started",
     "events.iterate.com/capability-host/script-run-settled",

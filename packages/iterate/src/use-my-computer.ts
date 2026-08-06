@@ -264,7 +264,9 @@ function disposeMountedSession(session: MountedSession): void {
 
 /** Probe the stateless ownership handle; this call never reaches the CapabilityHost DO. */
 function pingProvision(provision: MountedSession["provision"]): Promise<boolean> {
-  return withTimeout(provision.ping(), LEASE_CHECK_TIMEOUT_MS, "provision lease ping");
+  // This watchdog-only method is deliberately omitted from the generated public ITX API.
+  const lease = provision as unknown as { __leaseActive(): Promise<boolean> };
+  return withTimeout(lease.__leaseActive(), LEASE_CHECK_TIMEOUT_MS, "provision lease ping");
 }
 
 /** Diagnose an ended lease over the full path; returns the provider process's mount id. */
@@ -275,8 +277,8 @@ function pingMount(itx: RpcStub<Project>, name: string): Promise<string> {
 
 /**
  * Keep the live mount routable for as long as we run. A live capability's
- * provider ref lives in a stateless relay, which exposes `provision.ping()` as
- * the logical lease's cheap health check. That ping never touches the
+ * provider ref lives in a stateless relay, whose internal ownership probe is
+ * the logical lease's cheap health check. It never touches the
  * CapabilityHost DO, so an idle shared computer no longer defeats DO
  * hibernation. Only after the lease reports that it ended do we make one full
  * path call to learn whether another provider took the name.

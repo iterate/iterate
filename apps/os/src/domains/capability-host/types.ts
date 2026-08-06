@@ -14,16 +14,9 @@ import type { ItxExpression } from "../../itx/expression.ts";
 
 export type { ItxExpression } from "../../itx/expression.ts";
 
-/**
- * Durable address of one session-owned provider in a multiplexed reconstruction
- * channel. It contains no RPC stub: the channel is a hibernatable socket and
- * the lease key selects the provider retained by its stateless owner.
- */
+/** Durable address of one session-owned provider's hibernatable socket. */
 export type LiveCapabilityProviderBinding = {
-  channelKey: string;
-  leaseKey: string;
-  /** Exact physical-channel epoch. Absent only on pre-hibernatable records. */
-  socketId?: string;
+  socketId: string;
 };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
@@ -87,7 +80,7 @@ export type CapabilityProvidedPayload =
       flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];
-      providerBinding?: LiveCapabilityProviderBinding;
+      providerBinding: LiveCapabilityProviderBinding;
       type: "live";
       types?: string;
     }
@@ -109,12 +102,4 @@ export type CapabilityRecord = CapabilityProvidedPayload & {
 export type RevokeCapabilityInput = {
   path: string[];
   providedAtOffset?: number;
-};
-
-/** Exact revocations reduced together in one bounded capability-table pass. */
-export type RevokeCapabilitiesInput = {
-  revocations: {
-    path: string[];
-    providedAtOffset: number;
-  }[];
 };

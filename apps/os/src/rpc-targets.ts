@@ -245,7 +245,7 @@ import type {
   ProjectDescription,
 } from "./domains/itx/describe.ts";
 import {
-  LiveCapabilityProviderChannel,
+  LiveCapabilityProviderRelay,
   type LiveProvideInput,
 } from "./domains/capability-host/live-capability-relay.ts";
 import type { CfExecutionContext } from "./domains/itx/utils.ts";
@@ -5270,73 +5270,6 @@ type CapabilityHostRpcTargetProps = {
   projectId: string;
 };
 
-// A capability-tree getter is free to mint a fresh host wrapper on every
-// traversal (`capabilityHosts.get(path)`, `agents.get(path)`, and friends).
-// Channel identity belongs to the stateless execution context and durable
-// host address, not to one ephemeral RpcTarget wrapper; target-local caching
-// would silently regress repeated getter traversal to one socket per provider.
-const liveCapabilityProviderChannels = new WeakMap<
-  object,
-  Map<string, LiveCapabilityProviderChannel>
->();
-type LiveCapabilityRelay = {
-  provide(input: LiveProvideInput): Promise<CapabilityProvisionRpcTarget>;
-};
-const liveCapabilityRelayEntrypoints = new WeakMap<object, Map<string, LiveCapabilityRelay>>();
-
-function liveCapabilityScopeKey(scope: { path: string; projectId: string }): string {
-  return JSON.stringify([scope.projectId, normalizePath(scope.path)]);
-}
-
-function liveCapabilityProviderChannelFor(
-  ctx: CfExecutionContext,
-  scope: { path: string; projectId: string },
-): LiveCapabilityProviderChannel {
-  let channels = liveCapabilityProviderChannels.get(ctx);
-  if (channels === undefined) {
-    channels = new Map();
-    liveCapabilityProviderChannels.set(ctx, channels);
-  }
-  const key = liveCapabilityScopeKey(scope);
-  let channel = channels.get(key);
-  if (channel === undefined || !channel.acceptsProviders) {
-    channel = new LiveCapabilityProviderChannel({
-      env,
-      scope,
-      waitUntil: (promise) => ctx.waitUntil(promise),
-    });
-    channels.set(key, channel);
-  }
-  return channel;
-}
-
-function liveCapabilityRelayFor(
-  ctx: Extract<CfExecutionContext, { acceptWebSocket: unknown }>,
-  scope: { path: string; projectId: string },
-): LiveCapabilityRelay {
-  let relays = liveCapabilityRelayEntrypoints.get(ctx);
-  if (relays === undefined) {
-    relays = new Map();
-    liveCapabilityRelayEntrypoints.set(ctx, relays);
-  }
-  const key = liveCapabilityScopeKey(scope);
-  let relay = relays.get(key);
-  if (relay === undefined) {
-    // This file is compiled transitively by workspaces that do not load OS's
-    // worker-env.d.ts augmentation, so their Cloudflare.Exports cannot name
-    // this loopback entrypoint. At runtime, OS's WorkerMainModule registers it;
-    // this shallow signature is the remote surface consumed immediately here.
-    const exports = ctx.exports as unknown as {
-      LiveCapabilityRelayEntrypoint(input: {
-        props: { path: string; projectId: string };
-      }): LiveCapabilityRelay;
-    };
-    relay = exports.LiveCapabilityRelayEntrypoint({ props: scope });
-    relays.set(key, relay);
-  }
-  return relay;
-}
-
 /**
  * The host surface for ONE capability scope: mount, revoke, invoke, describe,
  * and run scripts against the durable capability table at `path` (backed by
@@ -5438,13 +5371,18 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         // origin DO's isolate, which currently prevents that origin DO from
         // hibernating; merely caching an ordinary DO stub would not. See
         // https://github.com/cloudflare/capnweb/issues/36#issuecomment-3572361727
-        // What we can and must avoid is multiplying the stateless
-        // entrypoint and hibernatable socket per mount, so one cached relay
-        // multiplexes every provider for this origin-context/host pair.
-        const relay = await liveCapabilityRelayFor(this.#props.ctx, {
-          path: this.#props.path,
-          projectId: this.#props.projectId,
-        }).provide(input);
+        // rpc-targets.ts is also compiled without OS's worker-env.d.ts, so use
+        // the one shallow loopback signature consumed here.
+        const exports = this.#props.ctx.exports as unknown as {
+          LiveCapabilityRelayEntrypoint(input: { props: { path: string; projectId: string } }): {
+            provide(input: LiveProvideInput): Promise<unknown>;
+          };
+        };
+        const relay = await exports
+          .LiveCapabilityRelayEntrypoint({
+            props: { path: this.#props.path, projectId: this.#props.projectId },
+          })
+          .provide(input);
         // `ctx.exports` correctly types a returned RpcTarget as its remote
         // `RpcStub` projection (async properties, no private fields). This
         // method immediately relays that object capability across Cap'n Web,
@@ -5453,15 +5391,13 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         return relay as unknown as CapabilityProvisionRpcTarget;
       }
 
-      // `/api` and env.ITX already run in the desired stateless execution
-      // context. Keep all of their providers in that one session instead of
-      // allocating one loopback WorkerEntrypoint context per provider; the
-      // latter exhausts a workerd isolate at hundreds of idle leases.
-      const channel = liveCapabilityProviderChannelFor(this.#props.ctx, {
-        path: this.#props.path,
-        projectId: this.#props.projectId,
+      // `/api` and env.ITX already run in the desired stateless context.
+      const relay = new LiveCapabilityProviderRelay({
+        env,
+        scope: { path: this.#props.path, projectId: this.#props.projectId },
+        waitUntil: (promise) => this.#props.ctx.waitUntil(promise),
       });
-      const provision = await channel.provide(input);
+      const provision = await relay.provide(input);
       return new CapabilityProvisionRpcTarget({
         ctx: this.#props.ctx,
         isActive: provision.isActive,
@@ -6959,7 +6895,6 @@ export class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityPr
     return describeNode({
       instructions: `The ownership handle for the mount at "${this.path.join(".")}" (providedAtOffset ${this.providedAtOffset}): revoke() removes exactly this mount; disposal (\`using\`) revokes too.`,
       children: {
-        ping: "Check whether this provision's ownership lease is still active.",
         revoke: "Remove this mount.",
       },
       parent: "returned by provideCapability",
@@ -6998,14 +6933,8 @@ export class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityPr
     return this.#providedAtOffset;
   }
 
-  /**
-   * Probe this ownership lease without touching the CapabilityHost Durable
-   * Object. Live provisions answer from their stateless relay, so clients can
-   * detect a replaced or broken provider lane without defeating hibernation.
-   * This is relay-local and advisory: `true` does not prove that a later DO
-   * wake and provider attach will succeed.
-   */
-  ping(): boolean | Promise<boolean> {
+  /** @internal Advisory relay-local liveness for the use-my-computer watchdog. */
+  __leaseActive(): boolean {
     return this.#revokePromise === undefined && this.#isActive();
   }
 

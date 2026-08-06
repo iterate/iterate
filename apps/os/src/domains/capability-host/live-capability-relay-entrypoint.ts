@@ -1,10 +1,10 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { CapabilityProvisionRpcTarget } from "../../rpc-targets.ts";
-import { LiveCapabilityProviderChannel, type LiveProvideInput } from "./live-capability-relay.ts";
+import { LiveCapabilityProviderRelay, type LiveProvideInput } from "./live-capability-relay.ts";
 
 /**
- * Stateless owner of one multiplexed session/CapabilityHost provider channel.
+ * Stateless termination point for providers originating in a Durable Object.
  * This is the ordinary-Worker termination point Kenton sketches before the
  * short, demand-driven Workers RPC leg into the Durable Object:
  * https://github.com/cloudflare/capnweb/issues/36#issuecomment-3334955335
@@ -24,19 +24,13 @@ export class LiveCapabilityRelayEntrypoint extends WorkerEntrypoint<
   Env,
   { path: string; projectId: string }
 > {
-  #channel: LiveCapabilityProviderChannel | undefined;
-
   async provide(input: LiveProvideInput): Promise<CapabilityProvisionRpcTarget> {
-    let channel = this.#channel;
-    if (channel === undefined || !channel.acceptsProviders) {
-      channel = new LiveCapabilityProviderChannel({
-        env: this.env,
-        scope: this.ctx.props,
-        waitUntil: (promise) => this.ctx.waitUntil(promise),
-      });
-      this.#channel = channel;
-    }
-    const provision = await channel.provide(input);
+    const relay = new LiveCapabilityProviderRelay({
+      env: this.env,
+      scope: this.ctx.props,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+    });
+    const provision = await relay.provide(input);
     return new CapabilityProvisionRpcTarget({
       ctx: this.ctx,
       isActive: provision.isActive,

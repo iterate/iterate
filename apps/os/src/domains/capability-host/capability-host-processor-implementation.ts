@@ -1,11 +1,5 @@
 import { StreamProcessor } from "iterate/processors";
-import type {
-  EmittedInput,
-  ProcessEventArgs,
-  ProcessorState,
-  ReduceArgs,
-  StreamEvent,
-} from "iterate/processors";
+import type { ProcessEventArgs, ProcessorState, ReduceArgs, StreamEvent } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
@@ -18,7 +12,7 @@ import type {
   ProvideCapabilityInput,
   RevokeCapabilityInput,
 } from "./types.ts";
-import { assertCapabilityPath } from "./capability-path.ts";
+import { assertCapabilityPath, sameCapabilityPath } from "./capability-path.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import {
@@ -35,11 +29,6 @@ import {
   invokeNormalizedCapability,
   normalizeCapabilityProvider,
 } from "./itx-expression.ts";
-
-type CapabilityCommitSettlement = {
-  /** Keep a transport-side retirement guarded until commit or rollback is readable. */
-  retain(resource: Disposable): void;
-};
 
 /**
  * The capability-host processor: one scope's dynamic capability table plus its
@@ -256,12 +245,14 @@ export class CapabilityHostProcessor extends StreamProcessor<
           // they received, without a second generated id.
           providedAtOffset: event.offset,
         };
-        const exists = state.capabilities.some((capability) => samePath(capability.path, row.path));
+        const exists = state.capabilities.some((capability) =>
+          sameCapabilityPath(capability.path, row.path),
+        );
         return {
           ...state,
           capabilities: exists
             ? state.capabilities.map((capability) =>
-                samePath(capability.path, row.path) ? row : capability,
+                sameCapabilityPath(capability.path, row.path) ? row : capability,
               )
             : [...state.capabilities, row],
         };
@@ -271,7 +262,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
         return {
           ...state,
           capabilities: state.capabilities.filter((capability) => {
-            if (!samePath(capability.path, revoke.path)) return true;
+            if (!sameCapabilityPath(capability.path, revoke.path)) return true;
             // With providedAtOffset the revoke names ONE exact mount: a path
             // re-mounted since then keeps its newer row.
             return (
@@ -279,20 +270,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
               capability.providedAtOffset !== revoke.providedAtOffset
             );
           }),
-        };
-      }
-      case "events.iterate.com/capability-host/capabilities-revoked": {
-        const revoked = new Set(
-          event.payload.revocations.map(({ path, providedAtOffset }) =>
-            exactMountKey(path, providedAtOffset),
-          ),
-        );
-        return {
-          ...state,
-          capabilities: state.capabilities.filter(
-            (capability) =>
-              !revoked.has(exactMountKey(capability.path, capability.providedAtOffset)),
-          ),
         };
       }
       case "events.iterate.com/capability-host/script-run-requested":
@@ -338,141 +315,34 @@ export class CapabilityHostProcessor extends StreamProcessor<
   async provideCapability(
     input: CapabilityProvidedPayload,
     options: {
-      afterCommit?(
-        input: {
-          provision: { path: string[]; providedAtOffset: number };
-          record: CapabilityRecord;
-        },
-        settlement: CapabilityCommitSettlement,
-      ): void | Promise<void>;
+      afterAppend?(record: CapabilityRecord): void | Promise<void>;
     } = {},
   ) {
-    const [mount] = await this.#commitCapabilities([input], (mounts, settlement) => {
-      const committed = mounts[0];
-      if (committed === undefined) throw new Error("capability commit returned no mount");
-      return options.afterCommit?.(committed, settlement);
-    });
-    if (mount === undefined) throw new Error("capability commit returned no mount");
-    return mount.provision;
-  }
-
-  /**
-   * Commit a burst of already-independent mounts in one stream append.
-   *
-   * A stateless provider channel commonly receives tens or hundreds of
-   * simultaneous Cap'n Web exports. Each project stream also feeds the
-   * project worker, so one append per export would manufacture the same
-   * number of delivery turns and short-lived dynamic-worker runners. The
-   * stream is already a batch log; preserve each mount's distinct offset and
-   * ownership while sharing the commit and delivery boundary.
-   */
-  async provideCapabilities(
-    inputs: CapabilityProvidedPayload[],
-    options: {
-      afterCommit?(
-        input: {
-          mounts: {
-            provision: { path: string[]; providedAtOffset: number };
-            record: CapabilityRecord;
-          }[];
-        },
-        settlement: CapabilityCommitSettlement,
-      ): void | Promise<void>;
-    } = {},
-  ): Promise<{ path: string[]; providedAtOffset: number }[]> {
-    const mounts = await this.#commitCapabilities(inputs, (committed, settlement) =>
-      options.afterCommit?.({ mounts: committed }, settlement),
-    );
-    return mounts.map(({ provision }) => provision);
-  }
-
-  /**
-   * Commit, physically bind, and ingest one or many mounts as one transaction.
-   * Any failure after the append is compensated by one exact durable rollback,
-   * including a readiness wait failure after a successful physical binding.
-   */
-  async #commitCapabilities(
-    inputs: CapabilityProvidedPayload[],
-    afterCommit: (
-      mounts: {
-        provision: { path: string[]; providedAtOffset: number };
-        record: CapabilityRecord;
-      }[],
-      settlement: CapabilityCommitSettlement,
-    ) => void | Promise<void>,
-  ) {
-    if (inputs.length === 0) return [];
     await this.#assertCreated();
-    const records = await Promise.all(inputs.map((input) => this.#prepareCapabilityRecord(input)));
-    const committed = await this.append(
-      ...records.map(
-        (record): EmittedInput<CapabilityHostProcessorContract> => ({
-          type: "events.iterate.com/capability-host/capability-provided",
-          payload: record,
-        }),
-      ),
-    );
-    if (committed.length !== records.length) {
-      throw new Error(
-        `capability batch committed ${committed.length} events for ${records.length} mounts`,
-      );
-    }
-    const mounts = records.map((record, index) => {
-      const event = committed[index];
-      if (event === undefined) throw new Error(`capability batch lost committed event ${index}`);
-      return {
-        provision: { path: record.path, providedAtOffset: event.offset },
-        record: { ...record, providedAtOffset: event.offset } satisfies CapabilityRecord,
-      };
+    const prepared = await this.#prepareCapabilityRecord(input);
+    const [committed] = await this.append({
+      type: "events.iterate.com/capability-host/capability-provided",
+      payload: prepared,
     });
-    const last = committed.at(-1);
-    if (last === undefined) throw new Error("capability batch committed no events");
+    const provision = { path: prepared.path, providedAtOffset: committed.offset };
+    const record = { ...prepared, providedAtOffset: committed.offset } satisfies CapabilityRecord;
 
-    // The append is the mount's commit point. Bind incarnation-local transport
-    // before ingestion makes the mount visible, then prove the complete mount
-    // is readable. A failed proof is just as unsafe as a failed binding.
-    const transportSettlements: Disposable[] = [];
-    const settlement: CapabilityCommitSettlement = {
-      retain: (resource) => transportSettlements.push(resource),
-    };
-    const settleTransport = () => {
-      for (const resource of transportSettlements.reverse()) resource[Symbol.dispose]();
-    };
-    try {
-      await afterCommit(mounts, settlement);
-      await this.deps.reads.waitUntilEvent({
-        offset: last.offset,
-        timeoutMs: INGEST_WAIT_TIMEOUT_MS,
-      });
-    } catch (error) {
-      try {
-        const [revoked] = await this.append({
-          type: "events.iterate.com/capability-host/capabilities-revoked",
-          payload: { revocations: mounts.map(({ provision }) => provision) },
-        });
-        if (revoked === undefined) throw new Error("capability rollback committed no event");
-        await this.deps.reads.waitUntilEvent({
-          offset: revoked.offset,
-          timeoutMs: INGEST_WAIT_TIMEOUT_MS,
-        });
-      } catch (rollbackError) {
-        throw new AggregateError(
-          [error, rollbackError],
-          "capability commit and durable rollback both failed",
-        );
-      }
-      settleTransport();
-      throw error;
-    }
-    settleTransport();
-    return mounts;
+    // Live transport binds after append but before the record becomes visible
+    // through the runner. A failed relay closes its socket; reconciliation
+    // then removes the now-ownerless record.
+    await options.afterAppend?.(record);
+    await this.deps.reads.waitUntilEvent({
+      offset: committed.offset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
+    return provision;
   }
 
   async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {
     await this.#assertCreated();
     assertCapabilityPath(path);
     const { state } = await this.deps.reads.snapshot();
-    const current = state.capabilities.find((record) => samePath(record.path, path));
+    const current = state.capabilities.find((record) => sameCapabilityPath(record.path, path));
     if (providedAtOffset !== undefined && current?.providedAtOffset !== providedAtOffset) {
       return;
     }
@@ -482,32 +352,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
         path,
         ...(providedAtOffset === undefined ? {} : { providedAtOffset }),
       },
-    });
-    await this.deps.reads.waitUntilEvent({
-      offset: committed.offset,
-      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
-    });
-  }
-
-  /**
-   * Remove many exact mounts in one stream append. A multiplexed provider
-   * channel can own thousands of records, so its departure must be one
-   * bounded mutation rather than a thousand sequential DO/RPC turns.
-   */
-  async revokeCapabilities(inputs: RevokeCapabilityInput[]): Promise<void> {
-    if (inputs.length === 0) return;
-    await this.#assertCreated();
-    const revocations: { path: string[]; providedAtOffset: number }[] = [];
-    for (const input of inputs) {
-      assertCapabilityPath(input.path);
-      if (input.providedAtOffset === undefined) {
-        throw new Error("batched capability revocation requires exact providedAtOffset values");
-      }
-      revocations.push({ path: input.path, providedAtOffset: input.providedAtOffset });
-    }
-    const [committed] = await this.append({
-      type: "events.iterate.com/capability-host/capabilities-revoked",
-      payload: { revocations },
     });
     await this.deps.reads.waitUntilEvent({
       offset: committed.offset,
@@ -1187,12 +1031,6 @@ function truncatedTypes(types: string, mountPoint: string): string {
     `\n// … truncated — read slices with itx.docs.get({ name: ${JSON.stringify(mountPoint)}, maxTokens: 4000 })`
   );
 }
-
-const samePath = (a: string[], b: string[]) =>
-  a.length === b.length && a.every((segment, index) => segment === b[index]);
-
-const exactMountKey = (path: string[], providedAtOffset: number) =>
-  JSON.stringify([path, providedAtOffset]);
 
 function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
   let best: { record: CapabilityRecord; rest: string[] } | null = null;

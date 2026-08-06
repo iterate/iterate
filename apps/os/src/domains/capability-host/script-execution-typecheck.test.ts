@@ -249,7 +249,12 @@ describe("script execution typecheck gate", () => {
     });
     await stream.append({
       type: T.provided,
-      payload: { path: ["local"], type: "live", types: "export type Local = { ping(): void };" },
+      payload: {
+        path: ["local"],
+        providerBinding: { socketId: "test-socket" },
+        type: "live",
+        types: "export type Local = { ping(): void };",
+      },
     });
     await requestScript(stream, harness);
 

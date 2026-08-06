@@ -1,20 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { openSocket } = vi.hoisted(() => ({
-  openSocket: vi.fn(),
-}));
+const { openSocket } = vi.hoisted(() => ({ openSocket: vi.fn() }));
 
 vi.mock("../hibernatable-rpc-lease.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../hibernatable-rpc-lease.ts")>()),
   openHibernatableRpcLeaseSocket: openSocket,
 }));
 
-import { LiveCapabilityProviderChannel } from "./live-capability-relay.ts";
+import { LIVE_CAPABILITY_RETIRED_CLOSE_CODE } from "./live-capability-lease.ts";
+import { LiveCapabilityProviderRelay } from "./live-capability-relay.ts";
+import type { CapabilityProvidedPayload } from "./types.ts";
 
 class FakeSocket extends EventTarget {
   readonly closed: { code?: number; reason?: string }[] = [];
-
-  accept(): void {}
 
   close(code?: number, reason?: string): void {
     this.closed.push({ code, reason });
@@ -23,229 +21,208 @@ class FakeSocket extends EventTarget {
   frame(frame: unknown): void {
     this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
   }
+
+  disconnect(code: number): void {
+    const event = new Event("close");
+    Object.defineProperty(event, "code", { value: code });
+    this.dispatchEvent(event);
+  }
 }
 
-describe("LiveCapabilityProviderChannel", () => {
-  it("returns an inactive handle when a simultaneous same-path mount supersedes it", async () => {
-    const socket = new FakeSocket();
-    openSocket.mockResolvedValue(socket);
-    const durableObject = {
-      provideCapabilities: vi.fn(
-        async (records: { path: string[]; providerBinding?: { leaseKey: string } }[]) => {
-          socket.frame({ type: "retire", leaseKey: records[0]?.providerBinding?.leaseKey });
-          return records.map(({ path }, index) => ({ path, providedAtOffset: index + 1 }));
-        },
-      ),
-      revokeCapabilities: vi.fn(async () => undefined),
-    };
-    const channel = new LiveCapabilityProviderChannel({
-      env: {
-        CAPABILITY_HOST: { getByName: () => durableObject },
-      } as never,
-      scope: { path: "/", projectId: "project" },
-      waitUntil: vi.fn(),
-    });
+type LiveCapabilityProvidedPayload = Extract<CapabilityProvidedPayload, { type: "live" }>;
 
-    const firstMount = channel.provide({
-      capability: { value: () => "first" },
-      path: ["samePath"],
-      type: "live",
-    });
-    const secondMount = channel.provide({
-      capability: { value: () => "second" },
-      path: ["samePath"],
-      type: "live",
-    });
-    const [first, second] = await Promise.all([firstMount, secondMount]);
-
-    expect(first.isActive()).toBe(false);
-    expect(second.isActive()).toBe(true);
-    await second.revoke({ path: second.path, providedAtOffset: second.providedAtOffset });
-  });
-
-  it("exact-revokes a committed mount when the shared socket closes before provide returns", async () => {
-    const socket = new FakeSocket();
-    openSocket.mockResolvedValue(socket);
-    let finishCommit!: () => void;
-    const committed = new Promise<void>((resolve) => {
-      finishCommit = resolve;
-    });
-    const durableObject = {
-      provideCapabilities: vi.fn(async (records: { path: string[] }[]) => {
-        await committed;
-        return records.map(({ path }, index) => ({ path, providedAtOffset: index + 7 }));
-      }),
-      revokeCapability: vi.fn(async () => undefined),
-      revokeCapabilities: vi.fn(async () => undefined),
-    };
-    const channel = new LiveCapabilityProviderChannel({
-      env: {
-        CAPABILITY_HOST: { getByName: () => durableObject },
-      } as never,
-      scope: { path: "/", projectId: "project" },
-      waitUntil: vi.fn(),
-    });
-
-    const mounting = channel.provide({
-      capability: { value: () => "must not remain mounted" },
-      path: ["racing"],
-      type: "live",
-    });
-    await vi.waitFor(() => expect(durableObject.provideCapabilities).toHaveBeenCalledOnce());
-    socket.dispatchEvent(new Event("close"));
-    finishCommit();
-
-    await expect(mounting).rejects.toThrow("channel closed while mounting");
-    expect(durableObject.revokeCapability).toHaveBeenCalledExactlyOnceWith({
-      path: ["racing"],
+function makeDurableObject(overrides: Record<string, unknown> = {}) {
+  return {
+    activateLiveCapability: vi.fn(async () => ({ [Symbol.dispose]: vi.fn() })),
+    provideCapability: vi.fn(async (record: LiveCapabilityProvidedPayload) => ({
+      path: record.path,
       providedAtOffset: 7,
-    });
+    })),
+    revokeCapability: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function relayOver(
+  durableObject: ReturnType<typeof makeDurableObject>,
+  waitUntil: (promise: Promise<unknown>) => void = () => undefined,
+) {
+  return new LiveCapabilityProviderRelay({
+    env: { CAPABILITY_HOST: { getByName: () => durableObject } } as never,
+    scope: { path: "/", projectId: "project" },
+    waitUntil,
+  });
+}
+
+describe("LiveCapabilityProviderRelay", () => {
+  beforeEach(() => {
+    openSocket.mockReset();
   });
 
-  it("rejects one malformed mount without poisoning a simultaneous valid batch", async () => {
+  it("mounts exactly one provider on one socket with only a socketId binding", async () => {
     const socket = new FakeSocket();
     openSocket.mockResolvedValue(socket);
-    const durableObject = {
-      provideCapabilities: vi.fn(async (records: { path: string[] }[]) =>
-        records.map(({ path }, index) => ({ path, providedAtOffset: index + 1 })),
-      ),
-      revokeCapabilities: vi.fn(async () => undefined),
-    };
-    const channel = new LiveCapabilityProviderChannel({
-      env: {
-        CAPABILITY_HOST: { getByName: () => durableObject },
-      } as never,
-      scope: { path: "/", projectId: "project" },
-      waitUntil: vi.fn(),
-    });
+    const durableObject = makeDurableObject();
+    const relay = relayOver(durableObject);
 
-    const valid = channel.provide({
+    const provision = await relay.provide({
       capability: { value: () => "ok" },
-      path: ["valid"],
-      type: "live",
-    });
-    const invalid = channel.provide({
-      capability: { value: () => "bad" },
-      path: ["invalid-path"],
-      type: "live",
-    });
-
-    await expect(invalid).rejects.toThrow('invalid capability path segment "invalid-path"');
-    const provision = await valid;
-    expect(durableObject.provideCapabilities).toHaveBeenCalledOnce();
-    expect(durableObject.provideCapabilities.mock.calls[0]?.[0]).toMatchObject([
-      { path: ["valid"] },
-    ]);
-    await provision.revoke({ path: provision.path, providedAtOffset: provision.providedAtOffset });
-  });
-
-  it("releases the prior leg when a retried wake's attach is refused after idle", async () => {
-    const socket = new FakeSocket();
-    openSocket.mockResolvedValue(socket);
-    const attachResolvers: ((leg: Disposable | undefined) => void)[] = [];
-    const durableObject = {
-      activateLiveCapability: vi.fn(
-        () =>
-          new Promise<Disposable | undefined>((resolve) => {
-            attachResolvers.push(resolve);
-          }),
-      ),
-      provideCapabilities: vi.fn(async (records: { path: string[] }[]) =>
-        records.map(({ path }, index) => ({ path, providedAtOffset: index + 1 })),
-      ),
-      revokeCapabilities: vi.fn(async () => undefined),
-    };
-    const channel = new LiveCapabilityProviderChannel({
-      env: {
-        CAPABILITY_HOST: { getByName: () => durableObject },
-      } as never,
-      scope: { path: "/", projectId: "project" },
-      waitUntil: vi.fn(),
-    });
-    const provision = await channel.provide({
-      capability: { value: () => "ok" },
+      instructions: "A provider",
       path: ["provider"],
       type: "live",
     });
 
-    socket.frame({ type: "wake", leaseKey: expectLeaseKey(durableObject) });
-    await vi.waitFor(() => expect(attachResolvers).toHaveLength(1));
+    expect(openSocket).toHaveBeenCalledOnce();
+    const socketId = openSocket.mock.calls[0]?.[0].headerValue.socketId as string;
+    expect(durableObject.provideCapability).toHaveBeenCalledExactlyOnceWith(
+      {
+        flattenNestedPaths: undefined,
+        instructions: "A provider",
+        path: ["provider"],
+        providerBinding: { socketId },
+        type: "live",
+        types: undefined,
+      },
+      { socketId },
+    );
+    expect(provision.isActive()).toBe(true);
 
-    // A consumer retry can issue another wake after the DO's first pending
-    // attach timed out, while that first relay->DO RPC is still resolving.
-    socket.frame({ type: "wake", leaseKey: expectLeaseKey(durableObject) });
-    const disposeFirstLeg = vi.fn();
-    attachResolvers[0]!({ [Symbol.dispose]: disposeFirstLeg });
-    await vi.waitFor(() => expect(attachResolvers).toHaveLength(2));
-
-    // The first attached invocation drained while attach #2 was outstanding.
-    // The DO refuses #2 because it has no pending acquire anymore.
-    socket.frame({ type: "idle", leaseKey: expectLeaseKey(durableObject) });
-    attachResolvers[1]!(undefined);
-
-    await vi.waitFor(() => expect(disposeFirstLeg).toHaveBeenCalledOnce());
-    expect(socket.closed).toEqual([]);
     await provision.revoke({ path: provision.path, providedAtOffset: provision.providedAtOffset });
+    expect(durableObject.revokeCapability).toHaveBeenCalledExactlyOnceWith({
+      path: ["provider"],
+      providedAtOffset: 7,
+    });
+    expect(provision.isActive()).toBe(false);
   });
 
-  it("closes the shared epoch and surfaces a failed attach rollback through waitUntil", async () => {
+  it("creates independent sockets for independent provisions", async () => {
+    const firstSocket = new FakeSocket();
+    const secondSocket = new FakeSocket();
+    openSocket.mockResolvedValueOnce(firstSocket).mockResolvedValueOnce(secondSocket);
+    const durableObject = makeDurableObject();
+
+    const first = relayOver(durableObject).provide({
+      capability: { value: () => "first" },
+      path: ["first"],
+      type: "live",
+    });
+    const second = relayOver(durableObject).provide({
+      capability: { value: () => "second" },
+      path: ["second"],
+      type: "live",
+    });
+    await Promise.all([first, second]);
+
+    expect(openSocket).toHaveBeenCalledTimes(2);
+    const bindings = durableObject.provideCapability.mock.calls.map(
+      ([record]) => record.providerBinding.socketId,
+    );
+    expect(new Set(bindings).size).toBe(2);
+  });
+
+  it("attaches on wake and releases the short RPC leg on the following idle", async () => {
     const socket = new FakeSocket();
     openSocket.mockResolvedValue(socket);
+    const disposeLeg = vi.fn();
+    const durableObject = makeDurableObject({
+      activateLiveCapability: vi.fn(async () => ({ [Symbol.dispose]: disposeLeg })),
+    });
     const background: Promise<unknown>[] = [];
-    const durableObject = {
+    const provision = await relayOver(durableObject, (promise) => background.push(promise)).provide(
+      {
+        capability: { echo: (value: string) => value },
+        path: ["provider"],
+        type: "live",
+      },
+    );
+
+    socket.frame({ type: "wake" });
+    await vi.waitFor(() => expect(durableObject.activateLiveCapability).toHaveBeenCalledOnce());
+    expect(durableObject.activateLiveCapability).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: ["provider"],
+        providedAtOffset: 7,
+        socketId: expect.any(String),
+      }),
+    );
+    socket.frame({ type: "idle" });
+    await vi.waitFor(() => expect(disposeLeg).toHaveBeenCalledOnce());
+    await expect(Promise.all(background)).resolves.toEqual([undefined, undefined]);
+    expect(provision.isActive()).toBe(true);
+  });
+
+  it("returns an inactive handle when the host retires the committed mount", async () => {
+    const socket = new FakeSocket();
+    openSocket.mockResolvedValue(socket);
+    const durableObject = makeDurableObject();
+    const provision = await relayOver(durableObject).provide({
+      capability: { value: () => "old" },
+      path: ["provider"],
+      type: "live",
+    });
+
+    socket.disconnect(LIVE_CAPABILITY_RETIRED_CLOSE_CODE);
+
+    expect(provision.isActive()).toBe(false);
+    expect(durableObject.revokeCapability).not.toHaveBeenCalled();
+  });
+
+  it("exact-revokes a commit whose socket failed before provide returned", async () => {
+    const socket = new FakeSocket();
+    openSocket.mockResolvedValue(socket);
+    let finishCommit!: (provision: { path: string[]; providedAtOffset: number }) => void;
+    const durableObject = makeDurableObject({
+      provideCapability: vi.fn(
+        () =>
+          new Promise<{ path: string[]; providedAtOffset: number }>((resolve) => {
+            finishCommit = resolve;
+          }),
+      ),
+    });
+    const mounting = relayOver(durableObject).provide({
+      capability: { value: () => "must not remain mounted" },
+      path: ["racing"],
+      type: "live",
+    });
+    await vi.waitFor(() => expect(durableObject.provideCapability).toHaveBeenCalledOnce());
+
+    socket.disconnect(1006);
+    finishCommit({ path: ["racing"], providedAtOffset: 9 });
+
+    await expect(mounting).rejects.toThrow("socket closed while mounting");
+    expect(durableObject.revokeCapability).toHaveBeenCalledExactlyOnceWith({
+      path: ["racing"],
+      providedAtOffset: 9,
+    });
+  });
+
+  it("closes the lease and surfaces an activation plus rollback failure", async () => {
+    const socket = new FakeSocket();
+    openSocket.mockResolvedValue(socket);
+    const durableObject = makeDurableObject({
       activateLiveCapability: vi.fn(async () => {
         throw new Error("attach broke");
       }),
-      provideCapabilities: vi.fn(async (records: { path: string[] }[]) =>
-        records.map(({ path }, index) => ({ path, providedAtOffset: index + 1 })),
-      ),
       revokeCapability: vi.fn(async () => {
         throw new Error("rollback broke");
       }),
-      revokeCapabilities: vi.fn(async () => undefined),
-    };
-    const channel = new LiveCapabilityProviderChannel({
-      env: {
-        CAPABILITY_HOST: { getByName: () => durableObject },
-      } as never,
-      scope: { path: "/", projectId: "project" },
-      waitUntil: (promise) => background.push(promise),
     });
-    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      const [broken, sibling] = await Promise.all([
-        channel.provide({
-          capability: { value: () => "broken" },
-          path: ["broken"],
-          type: "live",
-        }),
-        channel.provide({
-          capability: { value: () => "sibling" },
-          path: ["sibling"],
-          type: "live",
-        }),
-      ]);
+    const background: Promise<unknown>[] = [];
+    const provision = await relayOver(durableObject, (promise) => background.push(promise)).provide(
+      {
+        capability: { value: () => "broken" },
+        path: ["broken"],
+        type: "live",
+      },
+    );
 
-      socket.frame({ type: "wake", leaseKey: expectLeaseKey(durableObject, 0) });
-      await vi.waitFor(() => expect(background).toHaveLength(1));
-      await expect(background[0]).rejects.toThrow("attach and rollback failed");
-      expect(broken.isActive()).toBe(false);
-      expect(sibling.isActive()).toBe(false);
-      expect(socket.closed.length).toBeGreaterThan(0);
-    } finally {
-      logged.mockRestore();
-    }
+    socket.frame({ type: "wake" });
+    await vi.waitFor(() => expect(background).toHaveLength(1));
+    await expect(background[0]).rejects.toThrow("activation and rollback failed");
+    expect(provision.isActive()).toBe(false);
+    expect(socket.closed).toContainEqual({
+      code: 1011,
+      reason: "live capability relay failed",
+    });
   });
 });
-
-function expectLeaseKey(
-  durableObject: { provideCapabilities: ReturnType<typeof vi.fn> },
-  index = 0,
-): string {
-  const records = durableObject.provideCapabilities.mock.calls[0]?.[0] as
-    | { providerBinding?: { leaseKey?: string } }[]
-    | undefined;
-  const leaseKey = records?.[index]?.providerBinding?.leaseKey;
-  if (leaseKey === undefined) throw new Error("test provision has no lease key");
-  return leaseKey;
-}

@@ -607,14 +607,6 @@ export interface CapabilityProvision {
   path: string[];
   /** The stream offset of the `capability-provided` event this handle owns. */
   providedAtOffset: number;
-  /**
-   * Probe this ownership lease without touching the CapabilityHost Durable
-   * Object. Live provisions answer from their stateless relay, so clients can
-   * detect a replaced or broken provider lane without defeating hibernation.
-   * This is relay-local and advisory: `true` does not prove that a later DO
-   * wake and provider attach will succeed.
-   */
-  ping(): boolean | Promise<boolean>;
   /** Remove exactly this mount (never a newer mount at the same path). */
   revoke(): Promise<void>;
   [Symbol.dispose](): void;

@@ -1,9 +1,6 @@
 import { RpcTarget } from "cloudflare:workers";
 import { z } from "zod";
-import {
-  HibernatableRpcLeaseSockets,
-  type HibernatableRpcLeaseBinding,
-} from "../hibernatable-rpc-lease.ts";
+import { HibernatableRpcLeaseSockets } from "../hibernatable-rpc-lease.ts";
 import type { CapabilityRecord } from "./types.ts";
 import { deepRetainRpcStubs } from "./live-capability.ts";
 
@@ -12,47 +9,27 @@ type LiveCapabilityRecord = Extract<CapabilityRecord, { type: "live" }>;
 /** Internal upgrade marker; no external ingress route addresses a CapabilityHost DO. */
 export const LIVE_CAPABILITY_LEASE_HEADER = "x-iterate-live-capability-lease";
 
+/** The host closed a healthy socket because its exact durable mount retired. */
+export const LIVE_CAPABILITY_RETIRED_CLOSE_CODE = 4000;
+
 const LIVE_CAPABILITY_LEASE_TAG = "live-capability-lease";
 const PROVIDER_ATTACH_TIMEOUT_MS = 10_000;
 
-const LiveCapabilityChannelUpgrade = z
+const LiveCapabilityLeaseUpgrade = z
+  .object({ socketId: z.string().trim().min(1) })
+  .strict()
+  .transform(({ socketId }) => ({ leaseKey: socketId, socketId }));
+
+const LiveCapabilityLeaseAttachment = z
   .object({
-    channelKey: z.string().trim().min(1),
-    socketId: z.string().trim().min(1),
+    socketId: z.string().min(1),
   })
-  .transform(({ channelKey, socketId }) => ({ leaseKey: channelKey, socketId }));
+  .strict();
 
-const LiveCapabilityChannelAttachment = z.object({
-  v: z.literal(2),
-  channelKey: z.string().min(1),
-  socketId: z.string().min(1),
-});
-
-type LiveCapabilityChannelAttachment = z.infer<typeof LiveCapabilityChannelAttachment>;
-
-const LiveCapabilityLeaseFrame = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("idle"), leaseKey: z.string().min(1) }),
-  z.object({ type: z.literal("retire"), leaseKey: z.string().min(1) }),
-  z.object({ type: z.literal("wake"), leaseKey: z.string().min(1) }),
-]);
-
-type LiveCapabilityLeaseFrame = z.infer<typeof LiveCapabilityLeaseFrame>;
-
-/** Decode one addressed channel frame; malformed frames are dropped whole. */
-export function parseLiveCapabilityLeaseFrame(data: unknown): LiveCapabilityLeaseFrame | undefined {
-  if (typeof data !== "string") return undefined;
-  try {
-    const parsed = LiveCapabilityLeaseFrame.safeParse(JSON.parse(data));
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
-}
+type LiveCapabilityLeaseAttachment = z.infer<typeof LiveCapabilityLeaseAttachment>;
 
 export type LiveCapabilityLeaseActivation = {
-  channelKey: string;
   invoker: unknown;
-  leaseKey: string;
   path: string[];
   providedAtOffset: number;
   socketId: string;
@@ -62,11 +39,7 @@ export type LiveCapabilityInvoker = {
   invoke(path: string[], args: unknown[]): unknown;
 };
 
-/**
- * Worker-side anchor for one active provider leg. Retaining its returned stub
- * keeps the same Workers RPC session alive while the DO has in-flight calls;
- * the relay disposes it on the DO's addressed `idle` frame.
- */
+/** Retaining this short RPC leg keeps the provider reachable during one invocation burst. */
 export class LiveCapabilityLegRpcTarget extends RpcTarget {}
 
 type ActiveProvider = {
@@ -77,7 +50,6 @@ type ActiveProvider = {
 
 type PendingProvider = {
   promise: Promise<void>;
-  record: LiveCapabilityRecord;
   reject(error: Error): void;
   resolve(): void;
   timer: ReturnType<typeof setTimeout>;
@@ -89,47 +61,27 @@ type LiveCapabilityLeaseHooks = {
 };
 
 /**
- * The CapabilityHost DO's half of a multiplexed provider channel.
+ * Durable-Object half of a live provider lease.
  *
- * One hibernatable socket represents one stateless session/CapabilityHost
- * pair; durable capability records address the logical provider by
- * `{channelKey, socketId, leaseKey}`. The DO therefore retains neither the provider RPC
- * stub nor one WebSocket per provider while idle. This deliberately emulates
- * the recreatable outbound-stub store Kenton describes for future native
- * hibernatable Workers RPC:
- * https://github.com/cloudflare/capnweb/issues/36#issuecomment-4040638107
- *
- * A provider is duplicated into this incarnation only after its addressed
- * `wake` frame, and is released as soon as the concurrent invocation burst
- * drains. The socket attachment contains only channel identity, so the same
- * channel can carry arbitrarily many durable logical bindings without making
- * the attachment proportional to provider count. Ordinary durable-state,
- * event, CPU, and memory limits still bound the logical population.
+ * Every durable live mount owns one hibernatable socket. The DO retains no
+ * provider RPC stub while idle: it asks the relay for a short-lived leg on
+ * demand and releases that leg when the concurrent invocation burst drains.
  */
 export class LiveCapabilityLeaseServer {
-  readonly #leases: HibernatableRpcLeaseSockets<
-    LiveCapabilityChannelAttachment,
-    LiveCapabilityLeaseFrame
-  >;
+  readonly #leases: HibernatableRpcLeaseSockets<LiveCapabilityLeaseAttachment>;
   readonly #activeProviders = new Map<string, ActiveProvider>();
-  readonly #departedSockets = new Set<string>();
   readonly #pendingProviders = new Map<string, PendingProvider>();
-  readonly #retiredRecords = new Map<string, number>();
 
   constructor(hooks: LiveCapabilityLeaseHooks) {
     this.#leases = new HibernatableRpcLeaseSockets({
-      attachmentSchema: LiveCapabilityChannelAttachment,
-      bindingOf: ({ channelKey, socketId }) => ({ leaseKey: channelKey, socketId }),
-      createAttachment: ({ leaseKey, socketId }) => ({
-        v: 2,
-        channelKey: leaseKey,
-        socketId,
-      }),
+      attachmentSchema: LiveCapabilityLeaseAttachment,
+      bindingOf: ({ socketId }) => ({ leaseKey: socketId, socketId }),
+      createAttachment: ({ socketId }) => ({ socketId }),
       headerName: LIVE_CAPABILITY_LEASE_HEADER,
       hooks,
       lane: "live capability",
       socketTag: LIVE_CAPABILITY_LEASE_TAG,
-      upgradeSchema: LiveCapabilityChannelUpgrade,
+      upgradeSchema: LiveCapabilityLeaseUpgrade,
     });
   }
 
@@ -137,43 +89,30 @@ export class LiveCapabilityLeaseServer {
     return this.#leases.acceptUpgrade(request);
   }
 
-  /** Bind a durable provision to its already-accepted shared channel. */
-  bindProvision(record: LiveCapabilityRecord, channel: HibernatableRpcLeaseBinding): boolean {
-    if (
-      record.providerBinding?.channelKey !== channel.leaseKey ||
-      record.providerBinding.socketId !== channel.socketId
-    ) {
-      return false;
-    }
-    if (this.#departedSockets.has(bindingKey(channel))) return false;
-    return this.#leases.claim(channel) !== undefined;
+  /** Bind a committed provision to its already-accepted socket. */
+  bindProvision(record: LiveCapabilityRecord, socketId: string): boolean {
+    return (
+      record.providerBinding.socketId === socketId &&
+      this.#leases.claim({ leaseKey: socketId, socketId }) !== undefined
+    );
   }
 
-  /** True when a durable record still has a live hibernatable owner channel. */
+  /** True when a durable record still has its exact hibernatable owner socket. */
   hasLease(record: LiveCapabilityRecord): boolean {
-    if (this.#retiredRecords.has(recordKey(record))) return false;
-    const entry = this.#entryFor(record);
-    return entry !== undefined && !this.#departedSockets.has(bindingKey(entry.binding));
+    return this.#entryFor(record) !== undefined;
   }
 
-  /**
-   * Adopt one short provider leg after a wake. A stale or unsolicited attach
-   * is refused: retaining it would recreate the idle pin this protocol removes.
-   */
+  /** Adopt one short provider leg after a wake request. */
   activate(
     input: LiveCapabilityLeaseActivation,
     record: LiveCapabilityRecord,
   ): LiveCapabilityLegRpcTarget | undefined {
-    const key = recordKey(record);
+    const key = record.providerBinding.socketId;
     const pending = this.#pendingProviders.get(key);
-    if (pending === undefined) return undefined;
-    const entry = this.#entryFor(record);
     if (
-      entry === undefined ||
-      entry.binding.leaseKey !== input.channelKey ||
-      entry.binding.socketId !== input.socketId ||
-      record.providerBinding?.leaseKey !== input.leaseKey ||
-      record.providerBinding.socketId !== input.socketId
+      pending === undefined ||
+      input.socketId !== record.providerBinding.socketId ||
+      this.#entryFor(record) === undefined
     ) {
       return undefined;
     }
@@ -218,16 +157,13 @@ export class LiveCapabilityLeaseServer {
     }
   }
 
-  /** Remove one exact logical lease without disturbing its sibling providers. */
-  remove(record: LiveCapabilityRecord, options: { notifyRelay?: boolean } = {}): Disposable {
-    const key = recordKey(record);
+  /** Retire one exact mount and optionally notify its relay by closing the socket. */
+  remove(record: LiveCapabilityRecord, options: { notifyRelay?: boolean } = {}): void {
+    const key = record.providerBinding.socketId;
     const entry = this.#entryFor(record);
-    const leaseKey = record.providerBinding?.leaseKey;
-    if (options.notifyRelay !== false && entry !== undefined && leaseKey !== undefined) {
-      this.#leases.send(entry.ws, { type: "retire", leaseKey });
+    if (options.notifyRelay !== false && entry !== undefined) {
+      this.#leases.close(entry.ws, LIVE_CAPABILITY_RETIRED_CLOSE_CODE, "live capability retired");
     }
-    this.#retiredRecords.set(key, (this.#retiredRecords.get(key) ?? 0) + 1);
-
     const active = this.#activeProviders.get(key);
     if (active !== undefined) {
       this.#activeProviders.delete(key);
@@ -242,60 +178,6 @@ export class LiveCapabilityLeaseServer {
       }
     }
     this.#failPending(key, new Error(`capability "${record.path.join(".")}" is offline`));
-    let settled = false;
-    return {
-      [Symbol.dispose]: () => {
-        if (settled) return;
-        settled = true;
-        const remaining = (this.#retiredRecords.get(key) ?? 1) - 1;
-        if (remaining === 0) this.#retiredRecords.delete(key);
-        else this.#retiredRecords.set(key, remaining);
-      },
-    };
-  }
-
-  /** Mark one exact physical-channel epoch departed, even if a replacement exists. */
-  departedOnClose(ws: WebSocket): { channelKey: string; socketId: string } | undefined {
-    const attachment = this.#leases.attachment(ws);
-    if (attachment === undefined) return undefined;
-    this.#departedSockets.add(
-      bindingKey({ leaseKey: attachment.channelKey, socketId: attachment.socketId }),
-    );
-    return { channelKey: attachment.channelKey, socketId: attachment.socketId };
-  }
-
-  /** Release one departed-socket guard after every record it owned is durably gone. */
-  settleDeparture(binding: { channelKey: string; socketId: string }): void {
-    const leaseBinding = { leaseKey: binding.channelKey, socketId: binding.socketId };
-    const stillOwned = this.#leases
-      .entries(binding.channelKey)
-      .some(({ binding: candidate }) => candidate.socketId === binding.socketId);
-    if (!stillOwned) this.#departedSockets.delete(bindingKey(leaseBinding));
-  }
-
-  /**
-   * Recover guards whose mutation returned ambiguously but whose caught-up
-   * durable state now proves that the guarded record or socket is unreferenced.
-   */
-  settleDurableState(records: LiveCapabilityRecord[]): void {
-    const recordKeys = new Set(records.map(recordKey));
-    for (const key of this.#retiredRecords.keys()) {
-      if (!recordKeys.has(key)) this.#retiredRecords.delete(key);
-    }
-    const bindingKeys = new Set(
-      records.flatMap((record) => {
-        const binding = record.providerBinding;
-        return binding?.socketId === undefined
-          ? []
-          : [bindingKey({ leaseKey: binding.channelKey, socketId: binding.socketId })];
-      }),
-    );
-    const runtimeBindingKeys = new Set(
-      this.#leases.entries().map(({ binding }) => bindingKey(binding)),
-    );
-    for (const key of this.#departedSockets) {
-      if (!bindingKeys.has(key) && !runtimeBindingKeys.has(key)) this.#departedSockets.delete(key);
-    }
   }
 
   handleError(ws: WebSocket, error: unknown): void {
@@ -303,7 +185,7 @@ export class LiveCapabilityLeaseServer {
   }
 
   async #acquire(record: LiveCapabilityRecord): Promise<ActiveProvider> {
-    const key = recordKey(record);
+    const key = record.providerBinding.socketId;
     let active = this.#activeProviders.get(key);
     if (active === undefined) {
       let pending = this.#pendingProviders.get(key);
@@ -320,25 +202,17 @@ export class LiveCapabilityLeaseServer {
 
   #requestProvider(record: LiveCapabilityRecord): PendingProvider {
     const entry = this.#entryFor(record);
-    const leaseKey = record.providerBinding?.leaseKey;
-    if (entry === undefined || leaseKey === undefined) {
+    if (entry === undefined) {
       throw new Error(`capability "${record.path.join(".")}" is offline`);
     }
-    const key = recordKey(record);
-    let resolve!: () => void;
-    let reject!: (error: Error) => void;
-    const promise = new Promise<void>((resolvePromise, rejectPromise) => {
-      resolve = resolvePromise;
-      reject = rejectPromise;
-    });
+    const key = record.providerBinding.socketId;
+    const { promise, reject, resolve } = Promise.withResolvers<void>();
     const pending: PendingProvider = {
       promise,
-      record,
       reject,
       resolve,
       timer: setTimeout(() => {
-        const current = this.#pendingProviders.get(key);
-        if (current !== pending) return;
+        if (this.#pendingProviders.get(key) !== pending) return;
         this.#failPending(
           key,
           new Error(
@@ -348,7 +222,7 @@ export class LiveCapabilityLeaseServer {
       }, PROVIDER_ATTACH_TIMEOUT_MS),
     };
     this.#pendingProviders.set(key, pending);
-    if (!this.#leases.send(entry.ws, { type: "wake", leaseKey })) {
+    if (!this.#leases.send(entry.ws, { type: "wake" })) {
       this.#failPending(key, new Error(`capability "${record.path.join(".")}" wake failed`));
     }
     return pending;
@@ -357,7 +231,7 @@ export class LiveCapabilityLeaseServer {
   #release(active: ActiveProvider): void {
     active.inFlight -= 1;
     if (active.inFlight > 0) return;
-    const key = recordKey(active.record);
+    const key = active.record.providerBinding.socketId;
     if (this.#activeProviders.get(key) !== active) return;
     this.#activeProviders.delete(key);
     try {
@@ -370,10 +244,7 @@ export class LiveCapabilityLeaseServer {
       });
     }
     const entry = this.#entryFor(active.record);
-    const leaseKey = active.record.providerBinding?.leaseKey;
-    if (entry !== undefined && leaseKey !== undefined) {
-      this.#leases.send(entry.ws, { type: "idle", leaseKey });
-    }
+    if (entry !== undefined) this.#leases.send(entry.ws, { type: "idle" });
   }
 
   #failPending(key: string, error: Error): void {
@@ -385,21 +256,9 @@ export class LiveCapabilityLeaseServer {
   }
 
   #entryFor(record: LiveCapabilityRecord) {
-    if (this.#retiredRecords.has(recordKey(record))) return undefined;
-    const binding = record.providerBinding;
-    if (binding?.socketId === undefined) return undefined;
-    return this.#leases
-      .entries(binding.channelKey)
-      .find(({ binding: candidate }) => candidate.socketId === binding.socketId);
+    const { socketId } = record.providerBinding;
+    return this.#leases.entries(socketId).find(({ binding }) => binding.socketId === socketId);
   }
-}
-
-function recordKey(record: LiveCapabilityRecord): string {
-  return JSON.stringify([record.path, record.providedAtOffset]);
-}
-
-function bindingKey(binding: HibernatableRpcLeaseBinding): string {
-  return JSON.stringify([binding.leaseKey, binding.socketId]);
 }
 
 function isLiveCapabilityInvoker(value: unknown): value is LiveCapabilityInvoker {

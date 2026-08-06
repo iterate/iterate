@@ -17,6 +17,9 @@ function fakeSocket(attachment: unknown): FakeSocket {
     attachment,
     sent: [] as string[],
     closed: [] as { code?: number; reason?: string }[],
+    get readyState() {
+      return socket.closed.length === 0 ? 1 : 2;
+    },
     serializeAttachment(value: unknown) {
       socket.attachment = value;
     },

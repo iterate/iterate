@@ -1,4 +1,4 @@
-// A private compatibility layer for RPC references that cannot yet survive a
+// A private transport adapter for RPC references that cannot yet survive a
 // Durable Object hibernation boundary.
 //
 // The logical owner and the expensive Durable Object are connected by two
@@ -30,7 +30,7 @@
 
 import { z } from "zod";
 
-export type HibernatableRpcLeaseBinding = {
+type HibernatableRpcLeaseBinding = {
   leaseKey: string;
   socketId: string;
 };
@@ -147,6 +147,9 @@ export class HibernatableRpcLeaseSockets<
   entries(leaseKey?: string): HibernatableRpcLeaseSocketEntry<Attachment>[] {
     const entries: HibernatableRpcLeaseSocketEntry<Attachment>[] = [];
     for (const ws of this.#options.hooks.getWebSockets(this.#options.socketTag)) {
+      // getWebSockets() may retain a locally closed socket while its close
+      // handshake is still in progress. It no longer owns a usable lease.
+      if (ws.readyState !== WebSocket.OPEN) continue;
       const attachment = this.attachment(ws);
       if (attachment === undefined) continue;
       const binding = this.#options.bindingOf(attachment);

@@ -325,12 +325,12 @@ test("Successful live capability replacement uses the new target", async () => {
   const deadline = Date.now() + 15_000;
   let oldActive = true;
   while (Date.now() < deadline) {
-    oldActive = await oldProvision.ping();
+    oldActive = await leaseActive(oldProvision);
     if (!oldActive) break;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   expect(oldActive).toBe(false);
-  expect(await newProvision.ping()).toBe(true);
+  expect(await leaseActive(newProvision)).toBe(true);
 });
 
 test("Racing same-path live provisions leave one coherent durable and socket winner", async () => {
@@ -362,12 +362,13 @@ test("Racing same-path live provisions leave one coherent durable and socket win
   const deadline = Date.now() + 15_000;
   let activeCount = -1;
   while (Date.now() < deadline) {
-    activeCount = Number(await firstProvision.ping()) + Number(await secondProvision.ping());
+    activeCount =
+      Number(await leaseActive(firstProvision)) + Number(await leaseActive(secondProvision));
     if (activeCount === 1) break;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   expect(activeCount).toBe(1);
-  const expected = (await firstProvision.ping()) ? `first:${marker}` : `second:${marker}`;
+  const expected = (await leaseActive(firstProvision)) ? `first:${marker}` : `second:${marker}`;
   // @ts-expect-error - dynamic capability root
   expect(await project.raceProbe.value()).toBe(expected);
 });
@@ -485,3 +486,7 @@ test("Authenticated project can provide the Slack SDK as nested dotted functions
     await mock.close();
   }
 });
+
+function leaseActive(provision: unknown): Promise<boolean> {
+  return (provision as { __leaseActive(): Promise<boolean> }).__leaseActive();
+}
