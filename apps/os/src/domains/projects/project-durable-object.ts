@@ -354,15 +354,20 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Update the live projections from one committed delivery before that
-   * batch call returns. Both reducers are idempotent, so repeated calls
-   * are harmless; a storage/RPC failure rejects the batch instead of silently
-   * leaving live state stale.
+   * Persist the streams-index projection from one committed delivery before
+   * that batch call returns. Both reducers are idempotent, so repeated calls
+   * are harmless; a storage failure rejects the batch instead of silently
+   * leaving the index stale.
+   *
+   * Do not cold-load every processor merely to publish this auxiliary slice.
+   * A busy project can have many processors and no liveState watcher: eagerly
+   * loading all of their folds for every project-worker batch caused the host
+   * Durable Object to exceed its isolate memory limit. `refreshLive()` updates
+   * synchronously when the folds are already loaded; on the cold-runner wall,
+   * LiveStateSockets loads them only when an attached watcher actually needs a
+   * frame (and keeps that load single-flight).
    */
   async indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void> {
-    // See incrementLiveDemo: once this resolves every peer slice is real, so
-    // the synchronous refresh below cannot drop this external index update.
-    await this.#registry.loadAndRefreshLive();
     const streamsBefore = this.#streamDatabase.all();
     this.#streamDatabase.touch(input.stream);
     if (streamsBefore !== this.#streamDatabase.all()) {

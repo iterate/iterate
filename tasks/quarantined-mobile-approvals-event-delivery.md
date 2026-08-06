@@ -74,7 +74,14 @@ candidate had three retries, the next three were clean, then a repo-lazy 503
 and a second malformed Artifacts readback reset the streak. The binding
 contract says `get()` returns a repo handle with `log()`, so incomplete
 readbacks now remain inside the existing bounded readiness loop instead of
-escaping immediately. The gate is zero pending deployment of that fix.
+escaping immediately. That head then passed three wholly clean candidates;
+candidate four emitted a real callback error after a long-lived matrix test
+project's host Durable Object exceeded its memory limit. Cloudflare and
+PostHog correlation traced this to streams-index ingestion eagerly loading all
+project processor folds even with no live-state watcher. Cold batch indexing
+now commits its durable row without that fan-out; watcher-driven reload remains
+single-flight. A red/green host regression, 42 focused tests, OS typecheck,
+lint, and formatting are green. The gate is zero pending deployment.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -509,3 +516,14 @@ Test these in order; do not treat the first plausible one as the conclusion.
   `log()` method; another repo-lazy attempt saw an opaque Artifacts HTTP 503.
   Added red/green coverage that keeps the incomplete handle inside the same
   eight-second readiness loop. Real binding errors still surface unchanged.
+- 2026-08-06: Head `6ff4108bd` passed three wholly clean strict candidates.
+  Candidate four `4f0vk02271` passed the restoration targets but emitted one
+  exact-version callback error. Cloudflare request `JYIM4U7R0977H5GL` showed
+  a memory reset while acknowledging the root `project-worker` feed at offset
+  380 for `matrix-cli-1`; PostHog tied the project to the examples-matrix pool.
+  The same alarm showed 16 concurrent `getEventPage` calls. Removed the
+  unconditional `loadAndRefreshLive()` from durable stream-index ingestion:
+  the row still commits synchronously, loaded folds refresh inline, and cold
+  folds load only for an attached live-state watcher. The regression is red on
+  the old fan-out and green with the fix; four focused suites pass 42 tests,
+  and OS typecheck, lint, and formatting pass.
