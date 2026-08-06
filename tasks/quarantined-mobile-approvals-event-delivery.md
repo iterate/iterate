@@ -90,8 +90,13 @@ with all app retry fields null. Candidate two's exact trace audit still found a
 nested retryable SQLite reset reported by the source-owned subscription loop as
 an application error. The loop now keeps that already-bounded lifecycle retry
 outside error telemetry; its red/green regression proves the cursor stays
-durable and advances on the one-second retry. A new exact-head baseline is next
-and the strict streak is zero.
+durable and advances on the one-second retry. The next clean-slate workflow kept
+all six apps green and both mobile flows first try, but was rejected for one
+Semaphore retry and three processor blocked-work error rows. One row retained
+an explicit `stream-unavailable` timeout; two more lost their nested throwable
+fields at Cloudflare's two-argument console boundary. The runner now emits a
+bounded structured diagnostic before the next exact-head run classifies those
+outcomes. The strict streak remains zero.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -785,3 +790,14 @@ Test these in order; do not treat the first plausible one as the conclusion.
   stream-sender tests, OS typecheck, targeted lint, formatting, and diff checks
   pass. The two candidates are discarded; the streak restarts at zero on the
   new head.
+- 2026-08-06: Workflow `76nfz93j3j` on `91ba44fab` finished all six app
+  groups green and both restored mobile specs first try, but Semaphore retried
+  one generic 500 and the OS exact-version audit found three
+  `stream processor blocked work failed` rows across Project, Capability Host,
+  and Repo Durable Objects. The Project row's adjacent exception proves an
+  explicit `stream-unavailable` append timeout; Cloudflare dropped the nested
+  throwable from the other two two-argument console calls. A bounded structured
+  runner diagnostic now preserves name, message, lifecycle flags, call ID, and
+  opaque reference without changing failure or retry behavior. Its focused 34
+  tests, OS typecheck, lint, and formatting pass. The run is rejected and the
+  streak remains zero.
