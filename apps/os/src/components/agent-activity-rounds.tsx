@@ -5,6 +5,7 @@ import type {
   AgentUiCodeStep,
   AgentUiLlmStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message";
 import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
@@ -15,6 +16,10 @@ import { buildRoundMetaYaml, resultYaml } from "~/lib/agent-round-meta-yaml.ts";
 import { formatClockTime, formatSeconds, formatTokens, looksLikeCode } from "~/lib/feed-format.ts";
 import { LLM_REPLAY_EVENT_TYPES, replayLlmRequest } from "~/lib/llm-request-replay.ts";
 import { MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS } from "~/lib/script-result-preview.ts";
+
+/** The canonical model-visible context event; script-actor instances carry the
+ * settlement text `renderScriptSettlement` produced for the agent. */
+const SCRIPT_RENDER_EVENT_TYPE = "events.iterate.com/agents/context-added";
 
 // The web feed's ROUND rendering: an expanded "Ran code N×" activity is a list
 // of rounds (the llm step that writes a script and the code step that runs
@@ -30,7 +35,10 @@ import { MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS } from "~/lib/script-result-pr
 // Script and Result (approval batches derived from root-stream events, which
 // this feed doesn't have wired in yet) and streams thinking text inline. If
 // you change the round/tab/Meta structure on one surface, ask whether the
-// other should follow.
+// other should follow. Known divergence: this feed's Result tab defaults to
+// the AGENT-VISIBLE settlement render (queried from the raw-event mirror,
+// which mobile doesn't have wired in) with the raw view behind a toggle;
+// mobile still shows only the raw result.
 
 /**
  * The rounds rail of one settled (or fully-grouped live) activity. A single
@@ -295,7 +303,7 @@ function RoundTabs({
         )}
       </TabsContent>
       <TabsContent value="result" className="flex flex-col gap-2">
-        <RoundResult code={code} />
+        <RoundResult code={code} database={database} />
       </TabsContent>
       <TabsContent value="meta" className="flex flex-col gap-1.5">
         <RoundMeta llm={llm} code={code} database={database} />
@@ -317,7 +325,101 @@ function RoundTabs({
   );
 }
 
-function RoundResult({ code }: { code: AgentUiCodeStep }) {
+/**
+ * The Result tab body. When the raw-event mirror is available, the DEFAULT
+ * view is the agent's: the exact settlement text `renderScriptSettlement`
+ * appended for the model (truncated at the configured history limit,
+ * oversized results as an inferred type + bounded preview + loader recipe),
+ * with the client-side raw view one toggle away. Without a mirror the raw
+ * view stands alone, exactly as before.
+ */
+function RoundResult({
+  code,
+  database,
+}: {
+  code: AgentUiCodeStep;
+  database?: StreamBrowserDatabase;
+}) {
+  if (database == null) return <RawRoundResult code={code} />;
+  return <AgentRenderedRoundResult code={code} database={database} />;
+}
+
+/**
+ * The agent-visible settlement render lives ON THE STREAM: a developer
+ * `agents/context-added` event stamped `actor: {type: "script", executionId}`
+ * — queried from the mirror the same way the Meta tab replays its prompt
+ * (only while this tab is mounted; inactive base-ui tab panels unmount). The
+ * query is live, so a render event that lands moments after the settlement
+ * fills in when it arrives; streams with no render event (predating the
+ * server-side render, or non-agent executions) keep the raw view.
+ */
+function AgentRenderedRoundResult({
+  code,
+  database,
+}: {
+  code: AgentUiCodeStep;
+  database: StreamBrowserDatabase;
+}) {
+  const [showRaw, setShowRaw] = useState(false);
+  const eventsResult = useStreamQuery(
+    database,
+    `SELECT json(raw_jsonb) AS raw_json FROM events
+     WHERE type = ?
+       AND json_extract(raw_jsonb, '$.payload.actor.type') = 'script'
+       AND json_extract(raw_jsonb, '$.payload.actor.executionId') = ?
+     ORDER BY offset ASC
+     LIMIT 1`,
+    [SCRIPT_RENDER_EVENT_TYPE, code.executionId],
+  );
+  const agentText = useMemo(() => {
+    const row = eventsResult.data[0];
+    if (eventsResult.status !== "ok" || row == null) return null;
+    try {
+      const parsed = JSON.parse(String(row.raw_json)) as { payload?: { content?: unknown } };
+      const content = parsed.payload?.content;
+      return typeof content === "string" ? content : null;
+    } catch {
+      return null;
+    }
+  }, [eventsResult.status, eventsResult.data]);
+  // Wait for the local mirror (it answers in ms) instead of painting the raw
+  // view and swapping it out from under the reader.
+  if (eventsResult.status === "pending") return null;
+  if (agentText == null) return <RawRoundResult code={code} />;
+  return (
+    <>
+      {showRaw ? (
+        <RawRoundResult code={code} />
+      ) : (
+        <div
+          className="max-h-80 overflow-y-auto rounded-lg bg-muted/20 px-3 py-2 text-sm"
+          data-testid="script-result-agent-view"
+        >
+          {/* Same settled-markdown path as assistant messages: static mode,
+              no unpaired-marker balancing (see agent-feed.tsx). */}
+          <MessageResponse
+            className="min-w-0 max-w-full overflow-hidden"
+            mode="static"
+            parseIncompleteMarkdown={false}
+          >
+            {agentText}
+          </MessageResponse>
+        </div>
+      )}
+      <Button
+        variant="ghost"
+        size="xs"
+        data-testid="script-result-view-toggle"
+        onClick={() => setShowRaw(!showRaw)}
+        className="-ml-2 self-start font-normal text-muted-foreground"
+      >
+        {showRaw ? "Show agent view" : "Show raw result"}
+      </Button>
+    </>
+  );
+}
+
+function RawRoundResult({ code }: { code: AgentUiCodeStep }) {
   // One YAML fold for every size; only the RENDERER is bounded — CodeMirror
   // is expensive near the stream event-size ceiling, so oversized results get
   // a plain-text preview of the same YAML instead of falling back to JSON.
@@ -333,7 +435,7 @@ function RoundResult({ code }: { code: AgentUiCodeStep }) {
         </pre>
       )}
       {yaml == null ? null : yaml.length <= MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS ? (
-        <div className="max-h-80 overflow-y-auto rounded-lg">
+        <div className="max-h-80 overflow-y-auto rounded-lg" data-testid="script-result-raw">
           <SourceCodeBlock code={yaml} language="yaml" showLineNumbers={false} />
         </div>
       ) : (
