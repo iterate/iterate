@@ -54,12 +54,14 @@ export function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
 export class RepoNotSeededError extends Error {
   static readonly NAME = "RepoNotSeededError";
   override readonly name = RepoNotSeededError.NAME;
+  retryable = true;
 }
 
 /** A temporary source failure that must leave the repo-creation obligation
  * open for the processor's existing recovery lane. */
 export class RetryableRepoCreationError extends Error {
   override readonly name = "RetryableRepoCreationError";
+  retryable = true;
 }
 
 const ARTIFACTS_REPO_NOT_READY_CODES = new Set([

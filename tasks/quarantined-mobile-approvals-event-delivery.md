@@ -42,7 +42,11 @@ from zero after preview deployment. Two other rejected candidates exposed an
 isolated Artifacts 503 during `Repo.log` and one 160.5-second Artifacts create
 outlier. Repo clones now retry only classified transient infrastructure
 failures, while idempotent artifact create/readback has one eight-second total
-deadline that returns the obligation to durable recovery.
+deadline that returns the obligation to durable recovery. The first preview on
+that head proved recovery but exposed both named repo-readiness outcomes still
+crossing processor RPC without their retryable flag and polluting callback
+error telemetry. The repo errors now carry that wire-safe availability tag;
+the exact-head gate remains at zero pending deployment.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -219,6 +223,15 @@ notification journal.
   exceeded eight seconds. The idempotent create plus ambiguous-create readback
   now share one eight-second deadline, safely below the 20-second hosted
   callback watchdog; expiry is an explicit retryable repo-creation obligation.
+- Workflow `vhg630lf2m` passed all four linked cases first try, but its exact OS
+  Worker version emitted two callback application errors for the same repo:
+  first `RetryableRepoCreationError` at the eight-second create deadline, then
+  `RepoNotSeededError` at the shared readback deadline. Both are explicitly
+  retryable obligations, but neither class carried `retryable: true`, so the
+  processor serializer could not preserve their availability classification.
+  A red/green contract test now requires that flag on both errors; the existing
+  wire serializer and stream receiver classification route them to warning
+  telemetry while keeping the durable retry ladder unchanged.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -415,3 +428,8 @@ Test these in order; do not treat the first plausible one as the conclusion.
   eight-second artifact-creation deadline coverage. The four focused suites
   pass 104 tests, OS typecheck is green, and the streak remains zero pending a
   fresh exact-head preview.
+- 2026-08-06: The next preview exercised both bounded repo recovery outcomes
+  and proved they still arrived at the source Stream as application errors.
+  Added the missing wire-safe `retryable` flag to both named repo-readiness
+  errors. The expanded four-suite set passes 105 tests and OS typecheck is
+  green; no test wait or assertion changed.

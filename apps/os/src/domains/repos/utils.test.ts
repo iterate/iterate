@@ -5,6 +5,7 @@ import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import {
   RepoArtifactNameCodec,
   RepoNotSeededError,
+  RetryableRepoCreationError,
   base64ToBytes,
   bytesToBase64,
   classifyRepoAccessError,
@@ -128,6 +129,11 @@ describe("classifyRepoAccessError", () => {
     ).toBe(true);
     expect(isRepoNotSeededError(new Error("x"))).toBe(false);
     expect(isRepoNotSeededError(null)).toBe(false);
+  });
+
+  test("repo readiness errors retain their retryable contract across processor RPC", () => {
+    expect(new RepoNotSeededError("still seeding")).toMatchObject({ retryable: true });
+    expect(new RetryableRepoCreationError("create timed out")).toMatchObject({ retryable: true });
   });
 
   test("matches the property-stripped Artifacts error observed across Workers RPC", () => {
