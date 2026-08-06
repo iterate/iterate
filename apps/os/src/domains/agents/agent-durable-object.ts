@@ -11,6 +11,7 @@ import { callProjectSlackWebApi, storeSlackFilesForAgent } from "../integrations
 import { TelegramAgentProcessor } from "../integrations/telegram-agent-processor-implementation.ts";
 import { callProjectTelegramBotApi } from "../integrations/telegram-api.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
+import { ChatReplyNotifyProcessor } from "../notifications/chat-reply-notify-implementation.ts";
 import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "../files/project-files.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
@@ -283,6 +284,20 @@ export class AgentDurableObject extends DurableObject<Env> {
       },
     }),
     { recovery: true },
+  );
+
+  // Registered on every agent host; it only wakes on plain chat threads
+  // where the generic agents.create batch configured its subscription. Its
+  // one side effect — the chat-reply push intent on the project root — is a
+  // per-event `blockProcessorWhile` append (delivered-once, idempotency
+  // keyed), so no recovery registration: there is no `runInBackground` work
+  // whose loss an eviction could strand.
+  readonly chatReplyNotifyProcessor = this.#registry.register(
+    new ChatReplyNotifyProcessor({
+      stream: this.#stream,
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    }),
   );
 
   wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {

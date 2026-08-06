@@ -13,7 +13,7 @@ import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
 import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { LiveStateSockets } from "../live-state-socket.ts";
+import { LiveStatePagers } from "../live-state-pager.ts";
 import { parseConfig } from "../../config.ts";
 import {
   assertGithubInstallationTokenMintAuthorized,
@@ -54,7 +54,6 @@ import {
   bytesToBase64,
   classifyRepoAccessError,
   gitBranchContainsCommit,
-  isRepoNotSeededError,
 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
@@ -73,19 +72,12 @@ import {
 import { SingleFlightValue } from "./single-flight-value.ts";
 import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./github-sync-utils.ts";
 import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts";
-import {
-  getOrCreateArtifact,
-  stripArtifactTokenExpiry,
-  type GetOrCreateArtifactResult,
-} from "./artifact-creation.ts";
+import { getOrCreateArtifact, type GetOrCreateArtifactResult } from "./artifact-creation.ts";
+import { artifactWriteToken, seedArtifactRepo } from "./artifact-seeding.ts";
+import { downloadPublicGithubTemplate } from "./public-github-template.ts";
 
-const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
-// Artifact creation is an at-least-once obligation. Concurrent first drives
-// must produce the same root commit instead of racing two timestamped seeds.
-const REPO_SEED_COMMIT_TIMESTAMP_SECONDS = 1_577_836_800;
 const REPO_DIR = "/repo";
-
 // The durable GitHub link record: the mirror-push hot path (every commit)
 // reads it from KV instead of re-folding the stream. The link lifecycle events
 // on the repo stream are the record of TRUTH for inspection; this key is
@@ -127,13 +119,13 @@ export class RepoDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
-  /** liveState watcher sockets (domains/live-state-socket.ts) — watched repos hibernate at zero pin.
+  /** Client-given Live State Pagers — watched repos hibernate at zero pin.
    * The explicit field type is NOT inferable decoration: it breaks the
    * field-initializer inference cycle with #registry (its hooks read the
    * registry, whose onLiveAssembled reads this field back — TS7022 without
    * it), the same pattern as the registry option getLiveState's explicit
    * return type. */
-  readonly #liveStateSockets: LiveStateSockets = new LiveStateSockets({
+  readonly #liveStatePagers: LiveStatePagers = new LiveStatePagers({
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     readState: () => this.#registry.live.getState(),
@@ -145,13 +137,13 @@ export class RepoDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
-    onLiveAssembled: (assembly) => this.#liveStateSockets.refreshAfterAssembly(assembly),
+    onLiveAssembled: (assembly) => this.#liveStatePagers.refreshAfterAssembly(assembly),
   });
   // The DO constructs the processor — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive.
-  // Registered WITH recovery: creation and GitHub imports are consequential
-  // `runInBackground` work (stream-committed requested/started obligations whose
-  // OUTCOME matters). An incarnation that dies owing either must be revived.
+  // Registered WITH recovery because GitHub-backed creation and imports are
+  // consequential `runInBackground` work (stream-committed obligations whose
+  // OUTCOME matters).
   // The keepalive alarm appends the `stream/processor-revived` fact, whose wake
   // produces the eventless at-head pass that re-drives the obligations (see the
   // registry module doc's recovery rule).
@@ -164,6 +156,10 @@ export class RepoDurableObject extends DurableObject<Env> {
       // creation attempt is retry-safe, but it must not move the ref between a
       // mutation's checked clone and push.
       createEmptyArtifact: () => this.#serializeWrite(() => this.createEmptyArtifactRepo()),
+      createPublicGithubTemplateArtifact: (input) =>
+        this.#serializeWrite(() =>
+          this.createSeededArtifactRepo(() => downloadPublicGithubTemplate(input)),
+        ),
       importPublicGithubArtifact: (input) =>
         this.#serializeWrite(() => this.importPublicGithubArtifact(input)),
       linkGithub: async (input) => {
@@ -238,10 +234,10 @@ export class RepoDurableObject extends DurableObject<Env> {
     return new LiveStateRpcTarget(this.#registry);
   }
 
-  /** The repo DO's only fetch surface: the liveState-socket upgrade (see LiveStateSockets). */
+  /** The repo DO's only fetch surface: the client-given Live State Pager. */
   async fetch(request: Request): Promise<Response> {
     return (
-      (await this.#liveStateSockets.acceptUpgrade(request)) ??
+      (await this.#liveStatePagers.acceptUpgrade(request)) ??
       Response.json(
         { error: "repo durable objects accept only liveState-socket upgrades" },
         { status: 400 },
@@ -249,14 +245,14 @@ export class RepoDurableObject extends DurableObject<Env> {
     );
   }
 
-  /** liveState sockets are one-way (this DO → relay); inbound frames are ignored. */
+  /** Live State Pagers are one-way (this DO → relay); inbound frames are ignored. */
   webSocketMessage(): void {}
 
   /** A closed watcher socket simply drops off `getWebSockets`; nothing to clean up. */
   webSocketClose(): void {}
 
   webSocketError(_ws: WebSocket, error: unknown): void {
-    this.#liveStateSockets.socketError(error);
+    this.#liveStatePagers.pagerError(error);
   }
 
   /**
@@ -1855,6 +1851,14 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   private async createEmptyArtifactRepo() {
+    return await this.createSeededArtifactRepo(() => projectRepoSeedFiles(parseConfig(this.env)));
+  }
+
+  private async createSeededArtifactRepo(
+    loadFiles: () =>
+      | Array<{ content: string; path: string }>
+      | Promise<Array<{ content: string; path: string }>>,
+  ) {
     const artifactName = this.artifactName();
     const timing = { projectId: this.#name.projectId, path: this.#name.path };
     const artifact = await timedStep("create-timing", timing, "artifact-get-or-create", () =>
@@ -1868,6 +1872,8 @@ export class RepoDurableObject extends DurableObject<Env> {
     // whole repo to rediscover that fact can exceed a Repo DO's memory limit.
     if (artifact.lastPushAt !== null) return { artifactName, defaultBranch, remote };
 
+    const files = await loadFiles();
+
     // create() already minted the initial write token. Using it avoids an
     // immediate get()+createToken() against a repository whose create result
     // is authoritative but whose read replica may not have caught up. A
@@ -1876,13 +1882,13 @@ export class RepoDurableObject extends DurableObject<Env> {
     const token =
       artifact.initialWriteToken ??
       (await timedStep("create-timing", timing, "artifact-token", () =>
-        artifactToken(this.requireArtifacts(), artifactName),
+        artifactWriteToken(this.requireArtifacts(), artifactName),
       ));
 
     const seeded = await timedStep("create-timing", timing, "artifact-seed", () =>
       seedArtifactRepo({
         branch: defaultBranch,
-        files: projectRepoSeedFiles(parseConfig(this.env)),
+        files,
         remote,
         token,
       }),
@@ -1918,7 +1924,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   async gitAccess(): Promise<{ defaultBranch: string; remote: string; token: string }> {
     const artifactName = this.artifactName();
-    this.#artifactTokenPromise ??= artifactToken(this.requireArtifacts(), artifactName).catch(
+    this.#artifactTokenPromise ??= artifactWriteToken(this.requireArtifacts(), artifactName).catch(
       (error: unknown) => {
         this.#artifactTokenPromise = undefined;
         // A missing Artifacts repo is the pre-seed window (createArtifactRepo
@@ -1953,97 +1959,6 @@ export class RepoDurableObject extends DurableObject<Env> {
   private artifactRemote(artifactName: string) {
     return `https://${this.env.ARTIFACTS_ACCOUNT_ID}.artifacts.cloudflare.net/git/${this.env.ARTIFACTS_NAMESPACE}/${artifactName}.git`;
   }
-}
-
-async function artifactToken(artifacts: Artifacts, name: string) {
-  const repo = await artifacts.get(name);
-  const { plaintext } = await repo.createToken("write", REPO_WRITE_TOKEN_TTL_SECONDS);
-  return stripArtifactTokenExpiry(plaintext);
-}
-
-async function seedArtifactRepo(input: {
-  branch: string;
-  files: Array<{ content: string; path: string }>;
-  remote: string;
-  token: string;
-}): Promise<{ commitOid: string; contentHash: string }> {
-  const filesystem = new InMemoryFs();
-  const git = createGit(filesystem, REPO_DIR);
-  const credentials = { password: input.token, username: "x" };
-
-  let cloned = false;
-  try {
-    await git.clone({
-      branch: input.branch,
-      depth: 1,
-      singleBranch: true,
-      url: input.remote,
-      ...credentials,
-    });
-    cloned = true;
-  } catch {
-    await git.init({ defaultBranch: input.branch });
-    await git.remote({
-      add: { name: "origin", url: input.remote },
-    });
-  }
-
-  // Creation is create-if-absent, never reset-to-template. In particular, a
-  // create-succeeded/ready-append-failed retry must preserve every commit that
-  // may have landed since the first drive.
-  if (cloned) {
-    const [head] = await git.log({ depth: 1, ref: input.branch }).catch((error: unknown) => {
-      if (isRepoNotSeededError(classifyRepoAccessError(error, input.branch))) return [];
-      throw error;
-    });
-    if (head) {
-      return {
-        commitOid: head.oid,
-        contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
-      };
-    }
-  }
-
-  for (const file of input.files) {
-    const dir = `${REPO_DIR}/${file.path}`.replace(/\/[^/]+$/, "");
-    if (dir !== REPO_DIR && !(await filesystem.exists(dir))) {
-      await filesystem.mkdir(dir, { recursive: true });
-    }
-    await filesystem.writeFile(`${REPO_DIR}/${file.path}`, file.content);
-    await git.add({ filepath: file.path });
-  }
-
-  const identity = {
-    email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
-    name: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
-    timestamp: REPO_SEED_COMMIT_TIMESTAMP_SECONDS,
-    timezoneOffset: 0,
-  };
-  await git.commit({
-    author: identity,
-    message: "Seed minimal itx project worker",
-  });
-  await ensureBranchRef({ branch: input.branch, git });
-
-  // When two first drives both observe an empty remote, the fixed
-  // identity/timestamp above gives them the same root oid. Never force this
-  // publication: if a different branch head appeared, creation must lose the
-  // race instead of replacing real history.
-  const pushed = await git.push({
-    ref: input.branch,
-    remote: "origin",
-    ...credentials,
-  });
-  if (!pushed.ok) {
-    throw new Error(`Failed to push ${input.branch}: ${JSON.stringify(pushed.refs)}`);
-  }
-
-  const [head] = await git.log({ depth: 1, ref: input.branch });
-  if (!head) throw new Error(`Seeded repo has no head commit on ${input.branch}.`);
-  return {
-    commitOid: head.oid,
-    contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
-  };
 }
 
 async function commitFilesToArtifactRepo(input: {
@@ -2451,12 +2366,4 @@ function normalizeRepoFilePath(path: string): string {
     throw new Error(`Invalid repo file path: "${path}".`);
   }
   return normalized;
-}
-
-async function ensureBranchRef(input: { branch: string; git: ReturnType<typeof createGit> }) {
-  try {
-    await input.git.branch({ name: input.branch });
-  } catch (error) {
-    if (!String(error).match(/already exists/i)) throw error;
-  }
 }

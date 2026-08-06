@@ -11,7 +11,7 @@ import { StreamProcessorRunner } from "iterate/processors";
 import { MemoryStream } from "iterate/processors/testing";
 import type { ItxExpression } from "../../itx/expression.ts";
 import type { Project } from "../../itx-api.generated.ts";
-import type { ProvideCapabilityInput } from "./types.ts";
+import type { CapabilityProvidedPayload } from "./types.ts";
 import type { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { CapabilityHostProcessor } from "./capability-host-processor-implementation.ts";
 
@@ -42,7 +42,7 @@ type Harness = {
  * MemoryStream has no delivery loop, so pull the journal through the driving
  * runner until the provide settles.
  */
-async function provideDelivered(harness: Harness, input: ProvideCapabilityInput) {
+async function provideDelivered(harness: Harness, input: CapabilityProvidedPayload) {
   const pending = harness.processor.provideCapability(input);
   let settled = false;
   pending.finally(() => (settled = true)).catch(() => {});
@@ -221,6 +221,40 @@ describe("capability fallback resolution", () => {
 });
 
 describe("provide-time types validation", () => {
+  it("exact-revokes a committed mount when post-append settlement fails", async () => {
+    const stream = capabilityHostStream();
+    const harness = await makeProcessor({ stream });
+    const pending = harness.processor.provideCapability(
+      {
+        path: ["failedLive"],
+        providerPager: { connectedAtOffset: 2 },
+        type: "live",
+      },
+      {
+        afterAppend: () => {
+          throw new Error("Pager disappeared after append");
+        },
+      },
+    );
+    const rejection = expect(pending).rejects.toThrow("Pager disappeared after append");
+
+    await vi.waitFor(async () => {
+      await harness.runner.catchUp();
+      expect(harness.runner.currentState.capabilities).toEqual([]);
+    });
+    await rejection;
+    expect(stream.events.slice(-2)).toMatchObject([
+      {
+        type: "events.iterate.com/capability-host/capability-provided",
+        payload: { path: ["failedLive"], type: "live" },
+      },
+      {
+        type: "events.iterate.com/capability-host/capability-revoked",
+        payload: { path: ["failedLive"], providedAtOffset: 2 },
+      },
+    ]);
+  });
+
   it("rejects authored types that do not compile, appending nothing", async () => {
     const stream = capabilityHostStream();
     const { processor } = await makeProcessor({

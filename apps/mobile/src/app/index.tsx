@@ -6,13 +6,15 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Redirect, router, Stack } from "expo-router";
+import { Redirect, router, Stack, useLocalSearchParams } from "expo-router";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { AppDrawerButton } from "../components/project-drawer.tsx";
 import { hasSignIn, signIn } from "../lib/auth.ts";
+import { testEmailFromHint } from "../lib/deep-link-hints.ts";
 import { getItxSession, reconnectItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing, rememberedProjectInScope } from "../lib/open-project.ts";
-import { DEFAULT_SERVER, SERVER_PRESETS } from "../lib/servers.ts";
+import { DEFAULT_SERVER, SERVER_PRESETS, serverPresetForEnvKey } from "../lib/servers.ts";
 import {
   addRecentServer,
   clearLastProject,
@@ -25,6 +27,13 @@ import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function SignInScreen() {
   const queryClient = useQueryClient();
+  // Hints ferried from a preview-channel deep link (preview-channel/[channel].tsx):
+  // `env` names the PR's leased preview slot, `email` its per-PR test identity.
+  // Suggestions only — they preselect the server and ride the sign-in as a
+  // login_hint; the user still confirms everything.
+  const hints = useLocalSearchParams<{ env?: string; email?: string }>();
+  const recommended = typeof hints.env === "string" ? serverPresetForEnvKey(hints.env) : null;
+  const hintedEmail = testEmailFromHint(hints.email);
   // Persisted server + sign-in state decide whether to skip this screen.
   const bootstrap = useQuery({
     queryKey: ["bootstrap"],
@@ -69,7 +78,9 @@ export default function SignInScreen() {
   });
 
   const [editedServer, setEditedServer] = useState<string | null>(null);
-  const server = editedServer ?? bootstrap.data?.server ?? DEFAULT_SERVER;
+  // A recommended backend from a preview deep link preselects the server —
+  // the user's own edits always win.
+  const server = editedServer || recommended?.baseUrl || bootstrap.data?.server || DEFAULT_SERVER;
 
   const login = useMutation({
     mutationFn: async () => {
@@ -78,7 +89,14 @@ export default function SignInScreen() {
       if (!SERVER_PRESETS.some((preset) => preset.baseUrl === baseUrl)) {
         await addRecentServer(baseUrl);
       }
-      await signIn(baseUrl);
+      // The test-identity hint only accompanies its own backend: signing in
+      // anywhere else (say prd, where the test OTP is off) must not suggest a
+      // mailbox nobody can read.
+      const loginHint =
+        hintedEmail !== null && recommended !== null && baseUrl === recommended.baseUrl
+          ? { loginHint: hintedEmail }
+          : {};
+      await signIn(baseUrl, loginHint);
       return baseUrl;
     },
     onSuccess: (baseUrl) => {
@@ -96,7 +114,14 @@ export default function SignInScreen() {
       </View>
     );
   }
-  if (bootstrap.data?.signedIn && editedServer === null) {
+  // A recommendation pointing somewhere other than the signed-in server must
+  // show this screen (that's the whole point of the hint) instead of
+  // fast-forwarding into the current server's project.
+  const hintOverridesServer =
+    recommended !== null &&
+    bootstrap.data !== undefined &&
+    recommended.baseUrl !== bootstrap.data.server;
+  if (bootstrap.data?.signedIn && editedServer === null && !hintOverridesServer) {
     const last = bootstrap.data.lastProject;
     if (last) {
       return (
@@ -122,11 +147,28 @@ export default function SignInScreen() {
   return (
     <SafeAreaView style={styles.screen}>
       <Stack.Screen options={{ headerShown: false }} />
+      {/* Build info must stay reachable while signed out / picking a backend —
+          it names the running channel and commit, the first diagnostic when a
+          preview looks wrong. */}
+      <View style={styles.menuRow}>
+        <AppDrawerButton />
+      </View>
       <View style={styles.hero}>
         <Text style={styles.title}>Iterate</Text>
         <Text style={styles.subtitle}>
           Chat with your project&apos;s agents. Pick a deployment, sign in, start talking.
         </Text>
+        {recommended !== null ? (
+          <View style={styles.recommendation}>
+            <Text style={styles.recommendationTitle}>
+              Recommended backend for this preview channel
+            </Text>
+            <Text style={styles.recommendationBody}>
+              {recommended.label}
+              {hintedEmail !== null ? ` · test sign-in as ${hintedEmail}` : ""}
+            </Text>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.form}>
@@ -192,7 +234,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  menuRow: { alignItems: "flex-start" },
   hero: { flex: 1, justifyContent: "center", gap: spacing.md },
+  recommendation: {
+    backgroundColor: colors.surface,
+    borderColor: colors.accent,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    gap: 4,
+  },
+  recommendationTitle: { color: colors.text, fontSize: 13, fontWeight: "600" },
+  recommendationBody: { color: colors.textMuted, fontSize: 13 },
   title: { color: colors.text, fontSize: 34, fontWeight: "700", letterSpacing: -0.5 },
   subtitle: { color: colors.textMuted, fontSize: 15, lineHeight: 22 },
   form: { gap: spacing.sm, paddingBottom: spacing.xl },

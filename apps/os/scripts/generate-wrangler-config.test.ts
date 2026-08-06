@@ -190,6 +190,13 @@ it("does not retain a reconciled Durable Object tombstone", () => {
   expect(config.exports).not.toHaveProperty("CloudflareSandboxDurableObject");
 });
 
+it("retires the deleted template coordinator namespace", () => {
+  expect(config.exports.RepoCreationCoordinatorDurableObject).toEqual({
+    type: "durable-object",
+    state: "deleted",
+  });
+});
+
 it("routes public event docs hosts to the os worker", () => {
   const productionRoutes = config.env.prd.routes ?? [];
 

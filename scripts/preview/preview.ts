@@ -3031,6 +3031,16 @@ async function updateCloudflarePreviewState(params: {
   return { state: nextState };
 }
 
+/**
+ * Read the leased slot display out of a PR body this script maintains — for
+ * other CI that wants to point at the PR's preview env (the mobile QR
+ * publisher bakes it into the preview deep link). Display only, like the PR
+ * body itself: the semaphore stays the single source of lease truth.
+ */
+export function leasedPreviewSlotFromBody(body: string): CloudflarePreviewSlotDisplay | null {
+  return parseCloudflarePreviewState(body).environmentConfigLease || null;
+}
+
 function parseCloudflarePreviewState(body: string): CloudflarePreviewState {
   const current = markdownAnnotator(body, cloudflarePreviewStateLabel).current;
   if (!current) {

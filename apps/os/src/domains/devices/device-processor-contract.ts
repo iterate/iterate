@@ -20,6 +20,7 @@ import { z } from "zod";
 import { defineProcessorContract } from "iterate/processors";
 import { NotificationIntentContract } from "../notifications/notification-intent-contract.ts";
 import { ApprovalPresentedEvents } from "../projects/approval-presented-contract.ts";
+import { AgentReplyPresentedEvents } from "../projects/agent-reply-presented-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const DeviceProcessorContract = defineProcessorContract({
@@ -28,12 +29,22 @@ export const DeviceProcessorContract = defineProcessorContract({
   // approvalRequestEventOffset / presentedAt, config gains approvalGraceMs,
   // and the settlement union gains `suppressed`; the bump refolds persisted
   // reduction caches into the new shape.
-  version: "0.5.0",
+  // 0.6.0: chat-reply-push suppression — obligations carry
+  // agentReplyEventOffset, config gains replyGraceMs, user-scoped intents are
+  // filtered on the enrollment's ownerId at reduce, and recentReplyClaims
+  // closes the claim-before-intent race; the bump refolds persisted
+  // reduction caches into the new shape.
+  version: "0.6.0",
   description: "One enrolled installation and its durable push-notification obligations.",
   // ApprovalPresentedEvents is a standalone catalog, not a contract: the
   // project contract owns the claim event but already imports THIS module, so
   // the shared definition lives in its own file to break the cycle.
-  processorDeps: [CoreProcessorContract, NotificationIntentContract, ApprovalPresentedEvents],
+  processorDeps: [
+    CoreProcessorContract,
+    NotificationIntentContract,
+    ApprovalPresentedEvents,
+    AgentReplyPresentedEvents,
+  ],
   stateSchema: z.object({
     birthCertificate: deviceBirthCertificateSchema()
       .nullable()
@@ -81,6 +92,19 @@ export const DeviceProcessorContract = defineProcessorContract({
               "project/approval-presented claim. ~1.5s: long enough for a foregrounded app's " +
               "claim to arrive, short enough that a genuinely absent user barely notices the " +
               "extra latency.",
+          }),
+        replyGraceMs: z
+          .number()
+          .int()
+          .positive()
+          .default(3_000)
+          .meta({
+            description:
+              "How long a chat-reply obligation waits before its attempt may start, giving " +
+              "a client already showing the thread time to append its " +
+              "project/agent-reply-presented claim. Longer than approvalGraceMs because the " +
+              "claim path is reply render → append on a possibly-just-woken socket, and a " +
+              "few seconds' latency on a you-walked-away push is invisible.",
           }),
       })
       .prefault({})
@@ -161,10 +185,11 @@ export const DeviceProcessorContract = defineProcessorContract({
               .optional()
               .meta({
                 description:
-                  "Epoch ms a matching project/approval-presented claim reduced while the " +
-                  "obligation was still `requested` — the user is already looking at the " +
-                  "batch, so the send pass settles it `suppressed` instead of attempting. " +
-                  "Never set after an attempt starts: a late claim is a no-op.",
+                  "Epoch ms a matching presence claim (project/approval-presented, or " +
+                  "project/agent-reply-presented) reduced while the obligation was still " +
+                  "`requested` — the user is already looking at the content, so the send " +
+                  "pass settles it `suppressed` instead of attempting. Never set after an " +
+                  "attempt starts: a late claim is a no-op.",
               }),
             status: z.enum(["requested", "started", "ticketed"]).meta({
               description:
@@ -195,6 +220,33 @@ export const DeviceProcessorContract = defineProcessorContract({
           "event — the request's identity, no synthetic ids anywhere. A terminal " +
           "notification-settled fact deletes its entry; whatever remains is owed work the " +
           "at-head pass drives.",
+      }),
+    recentReplyClaims: z
+      .array(
+        z.strictObject({
+          claimedAt: z
+            .number()
+            .int()
+            .positive()
+            .meta({ description: "Epoch ms the claim event committed (its createdAt)." }),
+          path: z.string().meta({ description: "The claimed reply's agent stream path." }),
+          replyEventOffset: z
+            .number()
+            .int()
+            .positive()
+            .meta({ description: "The claimed reply's offset on that stream." }),
+        }),
+      )
+      .default([])
+      .meta({
+        description:
+          "Recently reduced project/agent-reply-presented claims, kept so an intent COPIED " +
+          "AFTER its claim still suppresses: a client watching the thread claims the moment " +
+          "the reply renders, and that claim can beat the producer's intent down the same " +
+          "root→device lane (approvals accept the mirror-image race because their request " +
+          "always commits long before any client can render the batch; a reply's claim and " +
+          "intent are triggered by the same event, so here the race is real). Bounded: " +
+          "pruned by age and count at reduce, deterministically.",
       }),
   }),
   events: {
@@ -411,11 +463,13 @@ export const DeviceProcessorContract = defineProcessorContract({
     // lanes configure. It reduces into the same obligation slot as a direct
     // device request.
     "events.iterate.com/notification/requested",
-    // The suppression claim (owned by the project contract, defined in the
-    // shared ApprovalPresentedEvents catalog), copied by the same
-    // subscription: it marks matching still-`requested` obligations so the
-    // send pass settles them `suppressed` instead of attempting.
+    // The suppression claims (owned by the project contract, defined in the
+    // shared ApprovalPresentedEvents / AgentReplyPresentedEvents catalogs),
+    // copied by the same subscription: they mark matching still-`requested`
+    // obligations so the send pass settles them `suppressed` instead of
+    // attempting.
     "events.iterate.com/project/approval-presented",
+    "events.iterate.com/project/agent-reply-presented",
     "events.iterate.com/device/push-token-updated",
     "events.iterate.com/device/revoked",
     "events.iterate.com/device/notification-attempt-started",
@@ -516,6 +570,20 @@ function deviceBirthCertificateSchema() {
  */
 function deviceNotificationRequestSchema() {
   return z.strictObject({
+    agentReplyEventOffset: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .meta({
+        description:
+          "Set when the notification is about ONE agent chat reply: the offset of its " +
+          "agents/web-message-sent event on the agent stream named by the agent-chat " +
+          "destination (path + offset together are the identity). Mirrors the intent's " +
+          "top-level field, and it is what a project/agent-reply-presented claim matches " +
+          "against — such obligations wait config.replyGraceMs before any attempt, so a " +
+          "claim can suppress the push.",
+      }),
     approvalRequestEventOffset: z
       .number()
       .int()

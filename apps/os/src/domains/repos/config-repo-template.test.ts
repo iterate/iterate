@@ -6,7 +6,7 @@
 // rebuilds a seeded worker, and the seeded-apps/github-review flows exercise
 // the template live.
 import { afterEach, expect, test, vi } from "vitest";
-import ProjectWorker from "../../../config-repo-template/worker.ts";
+import ProjectWorker from "../../../../../configs/default/worker.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 afterEach(() => vi.unstubAllGlobals());

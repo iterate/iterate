@@ -68,6 +68,7 @@ import {
 } from "../../../lib/approvals.ts";
 import { approverKeyStatus } from "../../../lib/approver.ts";
 import { InThreadApprovalCard } from "../../../components/in-thread-approval.tsx";
+import { useClaimReplyPresented } from "../../../lib/reply-presented.ts";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
@@ -108,6 +109,10 @@ export default function ChatScreen() {
     projectId,
     streamPath: path,
   });
+
+  // While this screen shows the newest reply to a foregrounded user, claim
+  // it so the reply push stays quiet (suppression, not read-state).
+  useClaimReplyPresented({ baseUrl, events: events.data || [], path, projectId });
 
   // Approvals live on the project ROOT stream; a held batch whose
   // script-execution provenance names THIS thread renders as a dialog inside
