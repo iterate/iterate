@@ -448,8 +448,41 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     `,
     migrations: [
       {
+        // Byte-identical to the text preview/dev Stream DOs already applied —
+        // sqlfu checksums applied migrations, so this entry may never change.
+        // The diet's shape changes land in _v3 below (drop + recreate), which
+        // is correct from ANY prior state; prd is erased at deploy regardless.
         name: "20260803000001_create_subscription_cursors_v2",
         content: sql`
+          create table subscription_cursors (
+            name text primary key,
+            configured_at_offset integer not null,
+            cursor_changed_at_offset integer not null,
+            delivered_offset integer not null,
+            confirmed_offset integer not null,
+            state text not null default 'active',
+            attempt integer not null default 0,
+            next_attempt_at integer,
+            failing_event_offset integer,
+            failing_event_attempt integer not null default 0,
+            failing_event_skips_since_last_success integer not null default 0,
+            last_error text,
+            in_flight_deadline_at integer,
+            in_flight_connection_generation integer,
+            updated_at text not null
+          );
+        `,
+      },
+      {
+        // The diet's final shape: one confirmed cursor, status vocabulary.
+        // Drop + recreate rather than alter: cursor rows are resumable
+        // bookkeeping (processor checkpoints are authoritative; source-owned
+        // kinds redeliver from their configured start), so rebuilding from
+        // empty on already-deployed preview/dev streams is safe and keeps
+        // this migration valid from any prior state.
+        name: "20260806000001_create_subscription_cursors_v3",
+        content: sql`
+          drop table if exists subscription_cursors;
           create table subscription_cursors (
             name text primary key,
             configured_at_offset integer not null,
