@@ -408,6 +408,7 @@ import {
 } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import { agentCreationForPath, type AgentCreateInput } from "./domains/agents/agent-defaults.ts";
+import { ChatReplyNotifyProcessorContract } from "./domains/notifications/chat-reply-notify-contract.ts";
 import { repoCreationEvents, type RepoCreateInput } from "./domains/repos/repo-defaults.ts";
 import { normalizeConfigRepoTemplateReference } from "./lib/config-repo-template-reference.ts";
 
@@ -4690,6 +4691,18 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       projectId: this.#props.projectId,
       ...(payload === undefined ? {} : { payload }),
       ...(await agentBootProjectFacts(this.#props.projectId)),
+      // Plain chat threads (mobile + web — everything born through this
+      // generic door) get the chat-reply push producer as their sibling.
+      // Integration threads (Slack/Telegram/Email) are born elsewhere with
+      // their own siblings and notify in-channel instead.
+      sibling: {
+        birthCertificate: ChatReplyNotifyProcessorContract.buildEvent({
+          type: "events.iterate.com/chat-reply-notify/created",
+          idempotencyKey: `chat-reply-notify/created:${this.#props.projectId}:${this.#path}`,
+          payload: { config: {} },
+        }),
+        processorSlug: ChatReplyNotifyProcessorContract.slug,
+      },
     });
     const committed = await this.stream.append(...creation.events);
     // append() preserves INPUT order, including idempotency hits at their old
@@ -4778,12 +4791,17 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     return event;
   }
 
-  /** Provenance for context added through this handle. */
-  #contextActor(): { type: "agent"; path: string } | { type: "user"; origin: "web" } {
+  /** Provenance for context added through this handle. The user variant
+   * stamps the authenticated principal — the identity device enrollments
+   * record as ownerId — so the chat-reply push producer can address the
+   * sender's devices only. */
+  #contextActor():
+    | { type: "agent"; path: string }
+    | { type: "user"; origin: "web"; userId: string } {
     const source = this.#props.sourceScopePath;
     return source !== undefined && source.startsWith("/agents/")
       ? { type: "agent", path: source }
-      : { type: "user", origin: "web" };
+      : { type: "user", origin: "web", userId: this.#props.auth.principal };
   }
 
   /**
@@ -4812,7 +4830,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       payload: {
         role: actor.type === "agent" ? "developer" : "user",
         content: input.message,
-        actor: actor.type === "user" ? { type: "user", origin: input.origin ?? "web" } : actor,
+        actor:
+          actor.type === "user"
+            ? { type: "user", origin: input.origin ?? "web", userId: actor.userId }
+            : actor,
       },
     });
     return await this.stream.waitForEvent({

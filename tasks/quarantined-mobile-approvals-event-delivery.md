@@ -75,7 +75,11 @@ one was rejected for four background ancestor-append failures from one Stream
 alarm plus its downstream Project processor failure. Cloudflare discarded the
 remote error payload from the two-argument console call, so the next exact head
 adds bounded structured diagnostics before another preview identifies and
-classifies the cause.
+classifies the cause. Its first dispatch never reached tests because the branch
+conflicted with `main`, preventing GitHub from publishing the exact-sha preview
+packages. Current `main` is now merged; its chat-reply suppression and this
+branch's approval claim-before-intent state are combined under Device processor
+version 0.7.0 so existing 0.6.0 caches refold. A new exact-head baseline is next.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -737,3 +741,12 @@ Test these in order; do not treat the first plausible one as the conclusion.
   fresh exact-head preview can distinguish a missing lifecycle shape from an
   application defect. The focused 12-test suite, OS typecheck, lint, and
   formatting pass; the strict streak remains zero.
+- 2026-08-06: Diagnostic-head workflow `81b2k7x0mh` was excluded before tests:
+  OS timed out waiting for exact-sha `pkg.pr.new` artifacts because the PR had
+  become merge-conflicted and GitHub could not create the pull-request merge
+  ref that runs the publisher. Merging `main` exposed two Device reducer
+  branches that had independently claimed version 0.6.0. The resolution keeps
+  both chat-reply suppression and durable approval claim-before-intent state,
+  and bumps the combined contract to 0.7.0 so deployed 0.6.0 caches refold.
+  The 49 focused Device, chat-reply, and stream-background tests plus OS
+  typecheck and lint pass. The strict streak remains zero.

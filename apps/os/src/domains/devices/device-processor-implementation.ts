@@ -55,6 +55,19 @@ import {
  * receipt check's exact shape). A claim arriving after the attempt started is
  * a no-op.
  *
+ * Chat-reply obligations (their request carries an agentReplyEventOffset)
+ * work the same way with `config.replyGraceMs` and the
+ * `project/agent-reply-presented` claim, matched on the (destination path,
+ * reply offset) pair — with one addition: reduced claims are remembered in
+ * `state.recentReplyClaims` (bounded, deterministically pruned), so an
+ * intent copied AFTER its claim still opens pre-claimed. Approvals accept
+ * the same race through `state.pendingApprovalPresentations`; replies use a
+ * bounded list because the destination path and reply offset form their key.
+ *
+ * User-scoped intents (`audience: {kind:"user"}`) reduce to obligations only
+ * on devices whose enrollment ownerId matches; other devices never open the
+ * obligation at all.
+ *
  * Receipts run outside delivery: the at-head pass points the Durable Object's
  * alarm slice at the earliest due check (`ticketObservedAt` +
  * `config.receiptCheckDelayMs`), and the DO's alarm calls `checkReceipts` with
@@ -191,10 +204,10 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         const at = notification.ticketObservedAt! + state.config.receiptCheckDelayMs;
         return earliest === null || at < earliest ? at : earliest;
       }, null);
-    // Approval obligations inside their grace window wait for a claim that may
-    // never come, and a grace expiry appends NO event — so point the DO's
-    // grace alarm slice at the earliest pending expiry; its firing calls
-    // releaseApprovalGraces below.
+    // Claimable obligations (approval batches, chat replies) inside their
+    // grace window wait for a claim that may never come, and a grace expiry
+    // appends NO event — so point the DO's grace alarm slice at the earliest
+    // pending expiry; its firing calls releaseGraces below.
     const nextGraceExpiry = this.#nextGraceExpiry(state);
     if (settlements.length > 0 || nextReceiptCheck !== null || nextGraceExpiry !== null) {
       runInBackground(async () => {
@@ -216,7 +229,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
           await this.deps.repointReceiptAlarm(nextReceiptCheck);
         }
         if (nextGraceExpiry !== null) {
-          await this.deps.repointApprovalGraceAlarm(nextGraceExpiry);
+          await this.deps.repointGraceAlarm(nextGraceExpiry);
         }
       });
     }
@@ -228,13 +241,10 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     if (pushTokenSecret === null || this.projectId === null) return;
     for (const [offset, notification] of Object.entries(state.notifications)) {
       const requestOffset = Number(offset);
-      // An approval obligation is not runnable until its grace window
+      // A claimable obligation is not runnable until its grace window
       // elapses (giving a foregrounded client time to claim it), and never
       // once claimed — the sweep above settles claimed ones `suppressed`.
-      const graceUntil =
-        notification.approvalRequestEventOffset === undefined
-          ? 0
-          : notification.requestedAt + state.config.approvalGraceMs;
+      const graceUntil = obligationGraceUntil(notification, state.config);
       if (
         notification.status !== "requested" ||
         notification.expiresAt <= this.deps.now() ||
@@ -309,17 +319,39 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       case "events.iterate.com/device/notification-requested":
       case "events.iterate.com/notification/requested": {
         // Both doors open the same obligation slot, keyed by the requesting
-        // event's offset. The intent's extra fields (audience) are project
-        // routing, not device concerns — only the request core is kept.
+        // event's offset. The intent's audience resolves HERE, at reduce: a
+        // user-scoped intent on a device another user enrolled opens no
+        // obligation at all — the copy is just an unconsumed fact.
+        if (
+          event.type === "events.iterate.com/notification/requested" &&
+          event.payload.audience.kind === "user" &&
+          event.payload.audience.userId !== state.birthCertificate?.config.ownerId
+        ) {
+          return state;
+        }
+        // An approval or reply intent copied after its matching foreground
+        // claim opens already-presented, so the send pass settles it
+        // suppressed. Consume approval claims by their stable request offset;
+        // reply claims remain in the bounded recent list for later intents.
         const approvalRequestEventOffset = event.payload.approvalRequestEventOffset;
         const pendingApprovalPresentations = { ...state.pendingApprovalPresentations };
-        const presentedAt =
+        const approvalClaimedAt =
           approvalRequestEventOffset === undefined
             ? undefined
             : pendingApprovalPresentations[String(approvalRequestEventOffset)];
         if (approvalRequestEventOffset !== undefined) {
           delete pendingApprovalPresentations[String(approvalRequestEventOffset)];
         }
+        const replyOffset = event.payload.agentReplyEventOffset;
+        const destination = event.payload.destination;
+        const replyClaim =
+          replyOffset !== undefined && destination.kind === "agent-chat"
+            ? state.recentReplyClaims.find(
+                (claim) =>
+                  claim.path === destination.path && claim.replyEventOffset === replyOffset,
+              )
+            : undefined;
+        const presentedAt = approvalClaimedAt || replyClaim?.claimedAt;
         return {
           ...state,
           latestApprovalRequestEventOffset:
@@ -330,6 +362,9 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
           notifications: {
             ...state.notifications,
             [event.offset]: {
+              ...(event.payload.agentReplyEventOffset === undefined
+                ? {}
+                : { agentReplyEventOffset: event.payload.agentReplyEventOffset }),
               ...(approvalRequestEventOffset === undefined ? {} : { approvalRequestEventOffset }),
               body: event.payload.body,
               destination: event.payload.destination,
@@ -372,6 +407,42 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
             [event.payload.approvalRequestEventOffset]: Date.parse(event.createdAt),
           },
         };
+      }
+      case "events.iterate.com/project/agent-reply-presented": {
+        // Same shape as the approval claim, matched on the (destination
+        // path, reply offset) pair — AND remembered, so an intent the
+        // subscription copies after this claim still opens pre-claimed (the
+        // claim-before-intent race is real for replies; see the module doc).
+        const claimedAt = Date.parse(event.createdAt);
+        const recentReplyClaims = [
+          ...state.recentReplyClaims.filter(
+            (claim) =>
+              claim.claimedAt > claimedAt - RECENT_REPLY_CLAIM_RETENTION_MS &&
+              !(
+                claim.path === event.payload.path &&
+                claim.replyEventOffset === event.payload.replyEventOffset
+              ),
+          ),
+          {
+            claimedAt,
+            path: event.payload.path,
+            replyEventOffset: event.payload.replyEventOffset,
+          },
+        ].slice(-RECENT_REPLY_CLAIM_LIMIT);
+        const claimed = Object.entries(state.notifications).filter(
+          ([, notification]) =>
+            notification.status === "requested" &&
+            notification.agentReplyEventOffset === event.payload.replyEventOffset &&
+            notification.destination.kind === "agent-chat" &&
+            notification.destination.path === event.payload.path &&
+            notification.presentedAt === undefined,
+        );
+        if (claimed.length === 0) return { ...state, recentReplyClaims };
+        const notifications = { ...state.notifications };
+        for (const [offset, notification] of claimed) {
+          notifications[offset] = { ...notification, presentedAt: claimedAt };
+        }
+        return { ...state, notifications, recentReplyClaims };
       }
       case "events.iterate.com/device/notification-attempt-started": {
         const notification = state.notifications[event.payload.requestOffset];
@@ -503,7 +574,8 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
   }
 
   /**
-   * Send every approval obligation whose grace window elapsed unclaimed —
+   * Send every claimable obligation (approval batch or chat reply) whose
+   * grace window elapsed unclaimed —
    * called by the device Durable Object's grace alarm, never from delivery: a
    * grace expiry appends NO event, so no delivery pass would otherwise run
    * the send. The rules mirror the at-head pass exactly: claimed obligations
@@ -524,15 +596,16 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
    * sweep still bounds it) — never a user-facing push — so it keeps its
    * simpler snapshot shape.
    */
-  async releaseApprovalGraces(readState: () => DeviceProcessorState): Promise<void> {
+  async releaseGraces(readState: () => DeviceProcessorState): Promise<void> {
     const state = readState();
     const now = this.deps.now();
     for (const [offset, notification] of Object.entries(state.notifications)) {
+      const graceUntil = obligationGraceUntil(notification, state.config);
       if (
         notification.status !== "requested" ||
-        notification.approvalRequestEventOffset === undefined ||
+        graceUntil === 0 ||
         notification.presentedAt !== undefined ||
-        now < notification.requestedAt + state.config.approvalGraceMs
+        now < graceUntil
       ) {
         continue;
       }
@@ -565,14 +638,14 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         requestOffset,
       });
     }
-    await this.deps.repointApprovalGraceAlarm(this.#nextGraceExpiry(readState()));
+    await this.deps.repointGraceAlarm(this.#nextGraceExpiry(readState()));
   }
 
   /**
-   * The earliest pending grace expiry among unclaimed approval obligations
+   * The earliest pending grace expiry among unclaimed claimable obligations
    * still inside their window, or null when none — what the grace alarm
    * slice points at. One derivation shared by the at-head pass and
-   * releaseApprovalGraces, so the alarm can never disagree with the send
+   * releaseGraces, so the alarm can never disagree with the send
    * gate about what is owed.
    */
   #nextGraceExpiry(state: DeviceProcessorState): number | null {
@@ -580,12 +653,10 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     return Object.values(state.notifications)
       .filter(
         (notification) =>
-          notification.status === "requested" &&
-          notification.approvalRequestEventOffset !== undefined &&
-          notification.presentedAt === undefined,
+          notification.status === "requested" && notification.presentedAt === undefined,
       )
       .reduce<number | null>((earliest, notification) => {
-        const at = notification.requestedAt + state.config.approvalGraceMs;
+        const at = obligationGraceUntil(notification, state.config);
         if (at <= now) return earliest;
         return earliest === null || at < earliest ? at : earliest;
       }, null);
@@ -743,8 +814,8 @@ type DeviceProcessorDeps = {
   getReceipt: (ticketId: string) => Promise<DevicePushReceipt>;
   /** Injectable clock — virtual time in tests, real time in the DO. */
   now: () => number;
-  /** Point the DO's approval-grace alarm slice at an epoch ms, or disarm with null. */
-  repointApprovalGraceAlarm: (atMs: number | null) => Promise<void>;
+  /** Point the DO's grace alarm slice at an epoch ms, or disarm with null. */
+  repointGraceAlarm: (atMs: number | null) => Promise<void>;
   /** Point the DO's receipt alarm slice at an epoch ms, or disarm with null. */
   repointReceiptAlarm: (atMs: number | null) => Promise<void>;
   send: DevicePushSender;
@@ -754,10 +825,39 @@ type DeviceProcessorDeps = {
 // Pure helpers.
 // -----------------------------------------------------------------------------
 
+/** How long a reduced reply claim stays matchable against a late-copied
+ * intent. Generous next to the grace window — retention costs a few state
+ * bytes, and a claim older than this can only mean the intent never came. */
+const RECENT_REPLY_CLAIM_RETENTION_MS = 10 * 60_000;
+
+/** Hard cap on remembered reply claims, so a claim-spamming client cannot
+ * grow the state without bound inside the retention window. */
+const RECENT_REPLY_CLAIM_LIMIT = 50;
+
+/**
+ * When an obligation's send attempt may start: `requestedAt` plus its grace
+ * window for claimable obligations (approval batches, chat replies), or 0 —
+ * no wait — for plain notifications. One derivation shared by the at-head
+ * send gate, the grace alarm, and releaseGraces.
+ */
+function obligationGraceUntil(
+  notification: DeviceProcessorState["notifications"][string],
+  config: DeviceProcessorState["config"],
+): number {
+  if (notification.approvalRequestEventOffset !== undefined) {
+    return notification.requestedAt + config.approvalGraceMs;
+  }
+  if (notification.agentReplyEventOffset !== undefined) {
+    return notification.requestedAt + config.replyGraceMs;
+  }
+  return 0;
+}
+
 /**
  * The notification-intent subscription on the project root stream: sends
  * every project-level `notification/requested` intent — and every
- * `project/approval-presented` suppression claim, which must chase the
+ * `project/approval-presented` / `project/agent-reply-presented` suppression
+ * claim, which must chase the
  * intents it cancels down the same ordered lane — onto this device's stream,
  * where they reduce into push obligations and claim marks. Keyed per device
  * path, so created/updated re-arms converge on one rule.
@@ -773,6 +873,7 @@ function notificationIntentSubscriptionEvent(input: { idempotencyKey: string; pa
         eventTypes: [
           "events.iterate.com/notification/requested",
           "events.iterate.com/project/approval-presented",
+          "events.iterate.com/project/agent-reply-presented",
         ],
       },
       receiver: {
