@@ -250,6 +250,20 @@ resolves the silence-vs-stuck ambiguity: say something and watch it move.
 
 Rules:
 
+- **Armed is the gate; connected is not.** The meter renders exactly when the device is
+  _capturing with intent_ — and that begins at the arming edge (button-down, wake
+  gesture), not at connection-established. Both directions matter:
+  - _Not armed → no level, ever._ The full-duplex boards capture continuously and
+    discard while not talking (`waveshare_device.c:1360-1380`) — codec activity is not
+    intent, and showing room level while not armed would claim the room is being
+    sampled. On PTT boards the meter is dark until the button is down; on open-mic
+    boards it runs exactly while awake (which is what mic-live already asserts).
+  - _Armed → level immediately, even with no stream and no Grok session yet._ From
+    button-down the meter tracks the real tap while frames queue into the pre-live
+    buffer (§3.4) and flush when the connection lands. The meter must never wait for
+    the network — it renders local capture, which is precisely its liveness value, and
+    it is the visual half of the hold-implies-call promise: you see it hearing you
+    while the ladder (§3.8) climbs behind you.
 - **Fed from the real tap, always.** HAVPE is the reference implementation: per-20 ms
   frame peak over the post-AEC processed frame, published lock-free,
   explicitly presentation-only (`havpe_device.c:826-861`, `havpe_ui.h:32-40`). Wiring
@@ -316,6 +330,46 @@ What this dimension adds or fixes:
   compose — remote injection drives the pipeline, the stream projection would let a
   host test read the result.
 
+### 3.8 The readiness ladder: things become green in order
+
+Readiness is not one boolean — it is a stack, and the lights can show the stack.
+Today the entire bring-up (Wi-Fi → WebSocket → `/api` mount → stream subscribe → call)
+collapses into `link_ready` and renders as one indistinguishable amber chase; the
+proposal is a **ladder of greens** where each rung is one layer of the connection
+stack, lighting in order:
+
+| Rung | Meaning                       | The gate that already exists in the firmware                                                                          |
+| ---- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| 1    | Connected to `/api`           | transport READY: Wi-Fi + WebSocket + Cap'n Web auth/mount (`itx_connection` READY, `esp_idf_itx_transport.h:74-113`)  |
+| 2    | Subscribed to an agent stream | voicelab READY + generation match + `openConnection` delivering — the other half of today's `link_ready` gate         |
+| 3    | Live session                  | `voice-agent/call-accepted` on the stream — the device-visible proxy for "a Grok session is active behind the worker" |
+
+Rendering: climbed rungs hold steady green; the rung currently being attempted is the
+one that moves (breathes or chases in place) — "motion says trying" preserved, but
+per-rung, so partial progress is finally legible. A rung that _falls_ (stream lost,
+call dropped) goes dark or red while the ones below it stay green, which is exactly the
+diagnostic today's single amber blob cannot express: "Wi-Fi is fine, the stream died"
+vs "the router is gone" look identical right now.
+
+Where it lives per board: on the ring and the StackChan body strips the network sector
+(pixels 0–2) _is_ the block — the ladder is a straight reassignment of those three
+dots; on the screens it is the top three rail dots; the Stick's single physical LED
+cannot carry a ladder (it carries amplitude and attention; the ladder lives on its
+drawn rail).
+
+Two interactions worth naming:
+
+- **This is the honest rendering of the background warm-up.** During hold-implies-call
+  (§3.4) the user holds, talks, and watches the rungs climb while the pre-live buffer
+  fills; when rung 3 lights, the queued speech flushes and the answer comes. The ladder
+  turns the invisible 1–3 s (or 8–10 s cold) window from dead air into visible
+  progress — and it is also what makes _call-opening_ renderable without a new state:
+  call-opening is simply "rung 2 green, rung 3 in motion."
+- **It resolves Fork 3 sideways and strengthens Fork 1's keep side.** The ladder
+  replaces RSSI banding as the meaning of the network sector (a far more useful use of
+  three pixels than signal bars), and it is a strong argument for keeping the sector
+  grammar somewhere on every board: a ladder needs positional pixels to climb.
+
 ---
 
 ## 4. The forks to actually discuss
@@ -355,7 +409,9 @@ split on three things — these are the real conversation:
 Wiring is one `esp_wifi_sta_get_ap_info()` call per board and gives the only "works in
 the kitchen, dies in the garden" diagnostic; deleting honors "no unreachable words."
 Either is fine; the current state (dead code rendering a permanent lie of 3 green bars)
-is the only wrong answer.
+is the only wrong answer. Third option, now preferred: the readiness ladder (§3.8)
+takes over the network sector entirely — RSSI banding is deleted and the three pixels
+show which layer of the connection stack is up instead.
 
 Related but bigger: the untracked `2026-08-06-voice-agent-event-contract.md` argues
 device state should be a stream projection so the ring is assertable off-device. This
