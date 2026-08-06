@@ -2491,28 +2491,43 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(connection.isLive()).toBe(false);
   });
 
-  it("idle teardown never acknowledges a batch that has not completed", () => {
+  it("idle teardown closes a quiet sibling without interrupting a pending hosted batch", async () => {
     const h = connectionsHarness();
-    const calls: DeliveryCall[] = [];
-    const disposed = vi.fn();
-    const connection = h.connections.openHosted({
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    h.store.ensure("settled", 0, 12);
+    const pending = h.connections.openHosted({
       connectionKey: "processor",
       expectedHostedDelivery: h.expectedDelivery,
-      processEventBatch: recordingProcessEventBatch(calls, disposed),
+      processEventBatch: recordingProcessEventBatch([], () => undefined),
       replayAfterOffset: 0,
     });
-    connection.sendQueued();
-    const before = h.store.get("processor")!;
-
-    h.connections.runIdleTeardownNow();
-
-    expect(connection.isLive()).toBe(false);
-    expect(disposed).toHaveBeenCalledTimes(1);
-    expect(h.store.get("processor")).toMatchObject({
-      acknowledgedOffset: before.acknowledgedOffset,
-      inFlightDeadlineAt: before.inFlightDeadlineAt,
-      inFlightConnectionGeneration: before.inFlightConnectionGeneration,
+    const settledCalls: DeliveryCall[] = [];
+    h.connections.openHosted({
+      connectionKey: "settled",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(settledCalls, () => undefined),
+      replayAfterOffset: 2,
     });
+
+    h.connections.sendQueued();
+    settledCalls[0]!.report("ok");
+    await flushMicrotasks();
+    const pendingDeadline = h.store.get("processor")!.inFlightDeadlineAt!;
+
+    h.setNow(6_000);
+    h.connections.armOrClearIdleAlarm();
+    expect(h.connections.onAlarm()).toEqual(["settled"]);
+    expect(h.connections.has("settled")).toBe(false);
+    expect(pending.isLive()).toBe(true);
+    expect(h.store.get("processor")?.inFlightDeadlineAt).toBe(pendingDeadline);
+
+    // Exemption from idle teardown is bounded by the existing delivery
+    // watchdog, so a genuinely wedged callback still cannot pin forever.
+    h.setNow(pendingDeadline);
+    expect(h.connections.onAlarm()).toEqual([]);
+    expect(pending.isLive()).toBe(false);
+    expect(h.deliveryFailures).toHaveBeenCalledOnce();
+    errorLog.mockRestore();
   });
 
   it("idle-tears a session connection only when it has a Pager, stamping after the close fact", () => {

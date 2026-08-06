@@ -1955,10 +1955,10 @@ export class StreamConnections {
     // that nested turn issues one pointless immediate wake per teardown.
     if (this.#tearingDown) return;
     const eligible = this.#idleEligibleConnectionKeys();
-    // Wedged connections are excluded from the activity derivation (teardown
-    // still closes them, but never acks or memoizes them) — their in-flight
-    // watchdog owns their future, and letting their stale lastDeliveredAt
-    // drive a past-due idle deadline would arm an immediate alarm every turn.
+    // Pending connections are excluded from both activity derivation and
+    // teardown — their in-flight watchdog owns their future. Letting stale
+    // lastDeliveredAt drive a past-due idle deadline would arm an immediate
+    // alarm every turn, while closing them would interrupt legitimate work.
     const idleCandidates = [...eligible.hosted, ...eligible.session].filter(
       (key) => this.#connections.get(key)?.hasPendingDelivery() !== true,
     );
@@ -1989,10 +1989,12 @@ export class StreamConnections {
   runIdleTeardownNow(): string[] {
     this.#idleTeardownAtMs = null;
     const { hosted, session } = this.#idleEligibleConnectionKeys();
-    const keys = [...hosted, ...session];
-    const wedgedKeys = new Set(
-      hosted.filter((key) => this.#connections.get(key)?.hasPendingDelivery() === true),
-    );
+    // This alarm can be due because a quiet sibling armed it. Never let that
+    // sibling's lease dispose a different callback whose batch is still live.
+    const isIdle = (key: string) => this.#connections.get(key)?.hasPendingDelivery() === false;
+    const idleHosted = hosted.filter(isIdle);
+    const idleSessions = session.filter(isIdle);
+    const keys = [...idleHosted, ...idleSessions];
     this.#tearingDown = true;
     try {
       for (const connectionKey of keys) this.close(connectionKey, "idle");
@@ -2008,17 +2010,13 @@ export class StreamConnections {
     // replays from its own reported checkpoint; the sending cursor is only the
     // source stream's wake/delivery position.
     const maxOffset = this.#hooks.coreState().maxOffset;
-    for (const connectionKey of hosted) {
-      if (wedgedKeys.has(connectionKey)) continue;
-      this.#hooks.store.ack(connectionKey, maxOffset);
-    }
+    for (const connectionKey of idleHosted) this.#hooks.store.ack(connectionKey, maxOffset);
     // Session connections have no cursor row; their equivalent of the ack
     // above is the stream-subscriber-pager attachment stamp, which must likewise land
     // AFTER the close facts so those facts can never wake the subscriber.
-    if (session.length > 0) this.#hooks.onSessionsIdleClosed(session);
+    if (idleSessions.length > 0) this.#hooks.onSessionsIdleClosed(idleSessions);
     this.#idleTeardownAtMs = null;
-    if (wedgedKeys.size > 0) queueMicrotask(() => this.#hooks.sendDueSubscriptions());
-    return keys.filter((connectionKey) => !wedgedKeys.has(connectionKey));
+    return keys;
   }
 
   /**
