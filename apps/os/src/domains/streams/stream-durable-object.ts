@@ -1837,14 +1837,6 @@ export class StreamDurableObject extends DurableObject<Env> {
   // Operator/admin verbs.
   // ===========================================================================
 
-  /** Sever every idle durable connection now — the idle timer's action, exposed for tests/operators. */
-  runIdleTeardownNow(): void {
-    this.#eventSender.runIdleTeardownNow();
-    // A stream going quiet checkpoints before it hibernates, so the next wake
-    // rebuilds from a fresh checkpoint instead of folding the debounce window.
-    this.#flushCoreProcessorState();
-  }
-
   /** Kills the current Durable Object incarnation so experiments can observe restart behavior. */
   kill(): void {
     this.ctx.abort("kill requested");

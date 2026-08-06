@@ -102,6 +102,7 @@ import {
   isDurableObjectLifecycleError,
   isRetryableDurableObjectAvailabilityError,
 } from "./stream-unavailable.ts";
+import { eventCanWakeDormantSubscriber } from "./stream-subscriber-pager.ts";
 
 // =============================================================================
 // Delivery math: pure retry and batch-size calculations. Every function here
@@ -338,17 +339,6 @@ export class StreamEventSender {
   // resets these and the durable rows + folded config re-derive every decision
   // (at-least-once absorbs the repeats).
   readonly #hostedWakesInFlight = new Set<string>();
-  /**
-   * Hosted callbacks deliberately closed after an idle, fully-settled period.
-   * Keep them closed until this source appends something new. This is
-   * incarnation-local: after eviction a redundant wake is safe, while a
-   * same-turn idle close followed by an immediate wake would create an
-   * unbounded open/close alarm loop on a quiet stream.
-   */
-  readonly #hostedIdledAtOffset = new Map<
-    string,
-    { configuredAtOffset: number; sourceOffset: number }
-  >();
   #nextHostedConnectionGeneration = 0;
   readonly #sourceOwnedSendsInFlight = new Set<string>();
   /**
@@ -461,7 +451,7 @@ export class StreamEventSender {
 
   /** The DO alarm handler body: retry whatever is due, then re-arm. */
   onAlarm(): boolean {
-    this.#rememberIdleHostedCallbacks(this.connections.onAlarm());
+    this.connections.onAlarm();
     this.#failExpiredHostedDeliveries();
     return this.sendDue();
   }
@@ -489,7 +479,6 @@ export class StreamEventSender {
       this.#hooks.store.delete(row.subscriptionKey);
       this.#limitNextReadToOne.delete(row.subscriptionKey);
       this.#subscriptionMetrics.delete(row.subscriptionKey);
-      this.#hostedIdledAtOffset.delete(row.subscriptionKey);
     }
 
     for (const [subscriptionKey, entry] of Object.entries(state.subscriptions.outbound.byKey)) {
@@ -539,11 +528,34 @@ export class StreamEventSender {
         ) {
           continue;
         }
-        const idled = this.#hostedIdledAtOffset.get(subscriptionKey);
-        if (idled?.configuredAtOffset === configOffset && state.maxOffset <= idled.sourceOffset) {
-          continue;
+        if (row.nextAttemptAt === null) {
+          if (row.acknowledgedOffset >= state.maxOffset) continue;
+
+          // The hosted cursor is the complete dormancy record. Idle teardown
+          // advances it through its own close fact; a later incarnation may
+          // add only `woken` before checking the subscription. Absorb that
+          // lifecycle-only suffix durably instead of resurrecting the
+          // processor. The explicit-filter carve-out matches session Pagers:
+          // a subscriber that names a lifecycle type still wakes for it.
+          const pending = this.#readBatch(
+            row.acknowledgedOffset,
+            Number.MAX_SAFE_INTEGER,
+            HOSTED_SCAN_EVENT_LIMIT,
+          );
+          const completeSuffix =
+            pending.length < HOSTED_SCAN_EVENT_LIMIT ||
+            pending.at(-1)?.event.offset === state.maxOffset;
+          const explicitTypes = config.filter?.eventTypes;
+          const lifecycleOnly = pending.every(
+            ({ event }) => !eventCanWakeDormantSubscriber(event.type, explicitTypes),
+          );
+          if (completeSuffix && lifecycleOnly) {
+            this.#hooks.store.ack(subscriptionKey, state.maxOffset, {
+              cursorChangedAtOffset: row.cursorChangedAtOffset,
+            });
+            continue;
+          }
         }
-        this.#hostedIdledAtOffset.delete(subscriptionKey);
         this.#wakeStreamProcessor(subscriptionKey, config.receiver, {
           configuredAtOffset: configOffset,
           cursorChangedAtOffset: row.cursorChangedAtOffset,
@@ -1472,23 +1484,6 @@ export class StreamEventSender {
         ];
       }),
     );
-  }
-
-  runIdleTeardownNow(): void {
-    this.#rememberIdleHostedCallbacks(this.connections.runIdleTeardownNow());
-  }
-
-  #rememberIdleHostedCallbacks(subscriptionKeys: readonly string[]): void {
-    if (subscriptionKeys.length === 0) return;
-    const state = this.#hooks.coreState();
-    for (const subscriptionKey of subscriptionKeys) {
-      const configured = state.subscriptions.outbound.byKey[subscriptionKey];
-      if (configured?.configuration.receiver.action !== "processor-wake") continue;
-      this.#hostedIdledAtOffset.set(subscriptionKey, {
-        configuredAtOffset: configured.configuredAtOffset,
-        sourceOffset: state.maxOffset,
-      });
-    }
   }
 }
 

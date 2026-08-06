@@ -311,11 +311,15 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(delivered[0]).toMatchObject({ scannedAfterOffset: 1, scannedThroughOffset: 5 });
   });
 
-  it("reopens from a lower processor checkpoint and retries from an alarm on a quiet stream", async () => {
+  it("reopens from a lower processor checkpoint on new work and retries on a quiet alarm", async () => {
     const attemptedOffsets: number[][] = [];
     let wakeNumber = 0;
     const h = harness({
-      events: [event(2, "b", { keep: true }), event(3, "b", { keep: true })],
+      events: [
+        event(2, "b", { keep: true }),
+        event(3, "b", { keep: true }),
+        event(4, "b", { keep: true }),
+      ],
       filter: { eventTypes: ["b"] },
       wakeProcessor: async () => {
         wakeNumber += 1;
@@ -330,7 +334,10 @@ describe("StreamEventSender hosted processor delivery", () => {
         };
       },
     });
-    h.store.ack(PROCESSOR_KEY, h.state.maxOffset);
+    // The stored cursor was caught up before offset 4 arrived. Waking for that
+    // real append still trusts the processor's lower checkpoint and replays
+    // from it; only lifecycle-only suffixes are suppressed.
+    h.store.ack(PROCESSOR_KEY, 3);
 
     h.eventSender.sendDue();
     await h.settle();
@@ -349,8 +356,12 @@ describe("StreamEventSender hosted processor delivery", () => {
     await h.settle();
 
     expect(h.wakeCalls).toHaveLength(2);
+    expect(attemptedOffsets).toEqual([[2], [4]]);
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
-    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({ nextAttemptAt: null });
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 3,
+      nextAttemptAt: null,
+    });
   });
 
   it("rejects a hosted processor checkpoint beyond the current source head", async () => {
@@ -400,7 +411,7 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(processEventBatch[Symbol.dispose]).toHaveBeenCalledOnce();
   });
 
-  it("closes a hosted callback on its one idle alarm and stays quiet until a real append", async () => {
+  it("keeps an idle-closed hosted processor dormant across Stream incarnations", async () => {
     const events = [event(2, "b", { keep: true })];
     const h = harness({
       events,
@@ -425,19 +436,51 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(h.wakeCalls).toHaveLength(1);
     expect(h.alarmClears.length).toBeGreaterThan(0);
 
-    // Even an impossible stray alarm turn cannot turn the close fact into a
-    // hosted close -> wake -> open -> close loop.
-    h.setNow(60_000);
-    h.eventSender.onAlarm();
-    await h.settle();
-    expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(false);
-    expect(h.wakeCalls).toHaveLength(1);
+    // A cold Stream boot appends `woken`. The new sender has none of the old
+    // sender's memory, so the durable cursor must be sufficient to classify
+    // that lifecycle-only suffix as non-waking and advance through it.
+    events.push(event(3, "events.iterate.com/stream/woken", { incarnationId: "fresh" }));
+    const rebuilt = harness({
+      events,
+      store: h.store,
+      wakeProcessor: async () => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: 4,
+        processEventBatch: retainedProcessEventBatch((batch) => {
+          batch.reportDeliveryResult({ outcome: "ok" });
+        }),
+      }),
+    });
+    rebuilt.eventSender.sendDue();
+    await rebuilt.settle();
+    expect(rebuilt.wakeCalls).toHaveLength(0);
+    expect(rebuilt.store.get(PROCESSOR_KEY)).toMatchObject({ acknowledgedOffset: 3 });
+    expect(rebuilt.alarmClears.length).toBeGreaterThan(0);
 
-    events.push(event(3, "b", { keep: true }));
-    h.state.maxOffset = 3;
+    events.push(event(4, "b", { keep: true }));
+    rebuilt.state.maxOffset = 4;
+    rebuilt.eventSender.sendDue();
+    await rebuilt.settle();
+    expect(rebuilt.wakeCalls).toHaveLength(1);
+    expect(rebuilt.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
+  });
+
+  it("wakes a hosted processor whose filter explicitly names a lifecycle event", async () => {
+    const h = harness({
+      events: [event(2, "events.iterate.com/stream/woken", { incarnationId: "fresh" })],
+      filter: { eventTypes: ["events.iterate.com/stream/woken"] },
+      wakeProcessor: async () => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: 2,
+        processEventBatch: retainedProcessEventBatch(() => undefined),
+      }),
+    });
+    h.store.ack(PROCESSOR_KEY, 1);
+
     h.eventSender.sendDue();
     await h.settle();
-    expect(h.wakeCalls).toHaveLength(2);
+
+    expect(h.wakeCalls).toHaveLength(1);
     expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
   });
 

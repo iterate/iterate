@@ -46,9 +46,9 @@ const OTHER_EVENT_TYPE = "events.iterate.test/subscriptions/other";
  *
  * A test opens sessions directly only when it specifically needs multiple
  * WebSockets, frame recording, session revocation, or a global stream. The
- * four explicitly named helpers at the bottom are the only test-only seams:
- * append trusted core events, deliver a trusted stream batch, force idle
- * teardown, and reset a stream lifetime.
+ * three explicitly named helpers at the bottom are the only test-only seams:
+ * append trusted core events, deliver a trusted stream batch, and reset a
+ * stream lifetime.
  */
 
 // Session callback connections and waitForEvent.
@@ -2104,18 +2104,44 @@ test("a hosted processor returns its callback, idles cleanly, and wakes again af
       timeoutMs: 15_000,
     },
   );
+  const idleClose = (
+    await stream.getEvents({
+      afterOffset: created!.offset,
+      eventTypes: ["events.iterate.com/stream/connection-closed"],
+      limit: 100,
+    })
+  ).find(
+    (event) => event.payload?.connectionKey === subscriptionKey && event.payload?.reason === "idle",
+  );
+  expect(idleClose).toBeDefined();
+
+  // Cold-boot the Stream with no real work, then leave it completely
+  // untouched past the 21-second delivery-watchdog horizon. Its durable
+  // cursor must absorb the boot's `woken` fact without waking the hosted
+  // processor, and no stale alarm may create another incarnation or callback
+  // cycle during the quiet window. The final read can itself cold-boot the
+  // Stream, so compare event timestamps against the time captured BEFORE it.
+  await stream.kill().catch(() => undefined);
+  const booted = runtimeState(await stream.runtimeState());
+  expect(booted.coreProcessorState.subscriptions.outbound.byKey[subscriptionKey]).toBeDefined();
+  const quietAfterOffset = booted.coreProcessorState.maxOffset;
+  await new Promise((resolve) => setTimeout(resolve, 25_000));
+  const quietEndedAt = Date.now();
+  const lifecycleEventsDuringQuiet = (
+    await stream.getEvents({
+      afterOffset: quietAfterOffset,
+      eventTypes: [
+        "events.iterate.com/stream/woken",
+        "events.iterate.com/stream/connection-opened",
+        "events.iterate.com/stream/connection-closed",
+      ],
+      limit: 100,
+    })
+  ).filter((event) => Date.parse(event.createdAt) < quietEndedAt);
+  expect(lifecycleEventsDuringQuiet).toEqual([]);
   expect(
-    (
-      await stream.getEvents({
-        afterOffset: created!.offset,
-        eventTypes: ["events.iterate.com/stream/connection-closed"],
-        limit: 100,
-      })
-    ).some(
-      (event) =>
-        event.payload?.connectionKey === subscriptionKey && event.payload?.reason === "idle",
-    ),
-  ).toBe(true);
+    runtimeState(await stream.runtimeState()).runtime.connections[subscriptionKey],
+  ).toBeUndefined();
 
   const routeKeyAfterIdle = `C${marker.slice(0, 6)}:1712345678.000100`;
   const [routeConfiguredAfterIdle] = await stream.append({
@@ -2138,36 +2164,6 @@ test("a hosted processor returns its callback, idles cleanly, and wakes again af
     },
     {
       description: "the idled Slack processor to wake from its checkpoint",
-      timeoutMs: 30_000,
-    },
-  );
-
-  await stream.kill().catch(() => undefined);
-  expect(
-    coreState(await stream.runtimeState()).subscriptions.outbound.byKey[subscriptionKey],
-  ).toBeDefined();
-
-  const routeKey = `C${marker.slice(0, 6)}:1712345678.000200`;
-  const [routeConfigured] = await stream.append({
-    type: "events.iterate.com/slack/thread-route-configured",
-    payload: {
-      channel: routeKey.split(":")[0],
-      threadTs: routeKey.split(":")[1],
-      streamPath: `/agents/slack/${connection}/route-${marker}`,
-    },
-  });
-  await waitForCondition(
-    async () => {
-      const runtime = await stream.getProcessorRuntimeState({ subscriptionKey });
-      return (
-        (runtime?.snapshot.offset ?? 0) >= routeConfigured!.offset &&
-        (runtime?.snapshot.state as { routes?: Record<string, string> } | undefined)?.routes?.[
-          routeKey
-        ] === `/agents/slack/${connection}/route-${marker}`
-      );
-    },
-    {
-      description: "the evicted Slack processor to re-wake and reduce a routed-thread fact",
       timeoutMs: 30_000,
     },
   );
@@ -2206,11 +2202,13 @@ test("an idle-torn session connection resumes on the next matching append withou
       description: "the live session connection to deliver the first append",
     });
 
-    await forceStreamIdleTeardown(stream);
     await waitForCondition(
       async () =>
         runtimeState(await stream.runtimeState()).runtime.connections[connectionKey] === undefined,
-      { description: "idle teardown to leave only the subscriber's hibernatable Pager" },
+      {
+        description: "the real idle alarm to leave only the subscriber's hibernatable Pager",
+        timeoutMs: 15_000,
+      },
     );
     expect(
       (
@@ -2292,11 +2290,13 @@ test("an idle close never Pages the subscriber it closed, even when its filter n
     await waitForCondition(async () => received.some((event) => event.offset === seed!.offset), {
       description: "the live connection to deliver the seed event",
     });
-    await forceStreamIdleTeardown(stream);
     await waitForCondition(
       async () =>
         runtimeState(await stream.runtimeState()).runtime.connections[connectionKey] === undefined,
-      { description: "idle teardown to sever the lifecycle-filtered session connection" },
+      {
+        description: "the real idle alarm to sever the lifecycle-filtered session connection",
+        timeoutMs: 15_000,
+      },
     );
 
     // The loop would re-open within one wake round trip; give it ample time
@@ -3405,16 +3405,6 @@ async function openAndCloseConnection(
     await handle.close();
     disposeRpc(handle);
   }
-}
-
-async function forceStreamIdleTeardown(stream: Stream): Promise<void> {
-  // Test-only operator path: exercise the five-minute production policy
-  // without making this real-deployment test wait five minutes.
-  await (
-    stream as unknown as {
-      testRunIdleTeardownNow(): Promise<void>;
-    }
-  ).testRunIdleTeardownNow();
 }
 
 async function forceStreamReset(stream: Stream): Promise<void> {
