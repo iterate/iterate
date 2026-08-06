@@ -127,13 +127,24 @@ function resolveFallback(ctx: unknown, env: Env, cfg: AppConfig): Fetcher {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "itxexpr-1";
+const CODE_VERSION = "wscap-1";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/version") return new Response(CODE_VERSION + "\n");
+
+    // ── THE FETCH LANE: reach a fetch-shaped capability by address (a serialized ItxExpression in `?cap=`),
+    // carrying WS upgrades. Set `x-itx-cap` and forward to the context host, which routes it natively. Checked
+    // BEFORE the generic WS catch so a cap WS isn't grabbed as ingress echo. ──
+    if (url.pathname === "/cap") {
+      const name = canonicalName(url.searchParams.get("ctx") ?? "prj_demo");
+      const cap = url.searchParams.get("cap"); // e.g. ["site"] — a serialized ItxExpression
+      const headers = new Headers(request.headers);
+      if (cap) headers.set("x-itx-cap", cap);
+      return env.ITX_HOST.getByName(name).fetch(new Request(request, { headers }));
+    }
 
     // ── INGRESS WS → the itx DO (proves a DO-stub fetch carries the 101) ──
     if (

@@ -20,7 +20,12 @@ import { DurableObject } from "cloudflare:workers";
 import { newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { substituteHeaderSecrets } from "./core/egress.ts";
 import { ITX_SURFACE_MODULE, CODE_CAP_RUNNER } from "./core/agent-runtime.ts";
-import { evaluateItxExpression, itxRoot, type ItxExpression } from "./core/itx-expression.ts";
+import {
+  evaluateItxExpression,
+  expressionCallPath,
+  itxRoot,
+  type ItxExpression,
+} from "./core/itx-expression.ts";
 import { parseName, stringifyName, parentPath } from "./core/names.ts";
 import type { StreamDurableObject, StreamEventInput } from "./stream-durable-object.ts";
 import type { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
@@ -92,6 +97,19 @@ export class Counter extends DurableObject {
   async value() { return (await this.ctx.storage.get("n")) ?? 0; }
   async whoAmI() { return await this.env.ITX.invokeCapability("itx.whoami", []); }
 }`,
+  // A fetch-serving dynamic worker: an HTTP page AND a WebSocket upgrade (101). The stand-in for "a device
+  // presents a website with WebSocket functionality" — here served by in-mesh loaded code, reached by fetch.
+  "/site.js": `export default {
+  async fetch(request) {
+    if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
+      const pair = new WebSocketPair();
+      pair[1].accept();
+      pair[1].addEventListener("message", (e) => pair[1].send("site-echo:" + e.data));
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+    return new Response("<!doctype html><title>dynamic site</title><h1>hello from a dynamic web capability</h1>", { headers: { "content-type": "text/html" } });
+  }
+};`,
 };
 
 // A mount (target-core §4.1). `itx-expression` = an ALIAS to another callPath. `static` = a plain value.
@@ -101,12 +119,18 @@ export class Counter extends DurableObject {
 //   • `code` = STATELESS — modules whose entry `cap.js` default-exports `(itx, ...args) => result`.
 //   • `stateful` = a `DurableObject` class (`className`), run by the dedicated `StatefulWorkerDurableObject`
 //     runner (a separate DO, one per stateful capability, hosting the class as a facet with its own SQLite).
+//   • `web` = FETCH-SHAPED — modules whose entry `cap.js` default-exports `{ fetch(request, env) }`. Reached by
+//     the FETCH LANE (`#fetchCapability`), so a WebSocket **upgrade (101) passes through** to it natively — the
+//     thing apps/os could not do (a provided capability there is reachable only by RPC replay, and a 101 can't
+//     serialize across an RPC hop). `code`/`stateful` are RPC-shaped; `web` (and `stateful`'s facet fetch) are
+//     fetch-shaped.
 // (`live` RPC-stub mounts are the capnweb path, above.)
 type Mount =
   | { type: "itx-expression"; expression: ItxCallPath }
   | { type: "static"; value: unknown }
   | { type: "code"; source: ItxExpression }
-  | { type: "stateful"; source: ItxExpression; className: string };
+  | { type: "stateful"; source: ItxExpression; className: string }
+  | { type: "web"; source: ItxExpression };
 
 export type ProvideCapabilityInput = { path: ItxCallPath } & Mount;
 
@@ -150,6 +174,19 @@ export class ItxDurableObject extends DurableObject<Env> {
   //     today. A marker will disambiguate when needed.) ──
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+
+    // ── THE FETCH LANE (target-core §6.0 / D33). A request carrying `x-itx-cap` (a capability address, as a
+    // serialized ItxExpression or a bare callPath) is routed to a FETCH-SHAPED capability by NATIVE `.fetch()`
+    // hops — so a WebSocket upgrade (101) passes straight through. This is the sibling of `invokeCapability`
+    // (RPC): a 101 can't cross an RPC hop, but it rides a fetch. Checked FIRST so a cap WS never hits the
+    // ingress-echo path below. ──
+    const capHeader = request.headers.get("x-itx-cap");
+    if (capHeader) {
+      const callPath = capHeader.startsWith("[")
+        ? expressionCallPath(JSON.parse(capHeader) as ItxExpression)
+        : capHeader;
+      return this.#fetchCapability(callPath, request);
+    }
 
     // A device REGISTERS a hibernatable wake socket declaring the capabilities it can provide. This socket does
     // NOT pin the DO (it survives hibernation) — 1000 of these cost ~nothing. It only carries pages (DO→device).
@@ -495,6 +532,63 @@ export class ItxDurableObject extends DurableObject<Env> {
       .getEntrypoint()
       .fetch(new Request("https://code.local/", { method: "POST", body: JSON.stringify(args) }));
     return ((await resp.json()) as { result: unknown }).result;
+  }
+
+  /** THE FETCH LANE dispatch: resolve a fetch-shaped capability and forward the request NATIVELY, so a 101
+   *  upgrade passes through. `web` → a loaded fetch worker; `stateful` → the runner's facet fetch; an alias
+   *  re-resolves; a live capnweb provider needs a frame bridge (a 101 can't cross capnweb) — deferred; a deep
+   *  path falls back to its PARENT PATH (a native DO→DO fetch, so the 101 still survives). */
+  async #fetchCapability(callPath: string, request: Request): Promise<Response> {
+    const mount = this.#mounts.get(callPath);
+    if (mount) {
+      if (mount.type === "itx-expression") return this.#fetchCapability(mount.expression, request); // alias
+      if (mount.type === "web") return this.#fetchWeb(mount.source, request);
+      if (mount.type === "stateful") {
+        const headers = new Headers(request.headers);
+        headers.set("x-itx-source", JSON.stringify(mount.source));
+        headers.set("x-itx-class", mount.className);
+        return this.#statefulRunner(callPath).fetch(new Request(request, { headers }));
+      }
+      return new Response(`capability "${callPath}" (${mount.type}) is not fetch-shaped\n`, {
+        status: 400,
+      });
+    }
+    // A live capnweb provider: a 101 can't cross capnweb, so a WS to a device needs a frame bridge (deferred).
+    if (this.#liveMountFor(callPath))
+      return new Response(
+        `fetch to a live provider "${callPath}" needs a frame bridge (deferred)\n`,
+        {
+          status: 501,
+        },
+      );
+    // Fall back to the PARENT PATH — a native DO→DO fetch, so the 101 survives the hop (reads fall back).
+    const parent = parentPath(this.#name.path);
+    if (parent === null)
+      return new Response(`no fetch capability "${callPath}"\n`, { status: 404 });
+    const headers = new Headers(request.headers);
+    headers.set("x-itx-cap", callPath);
+    return this.env.ITX_HOST.getByName(
+      stringifyName({ projectId: this.#projectId, path: parent }),
+    ).fetch(new Request(request, { headers }));
+  }
+
+  /** Load a `web` capability's modules and forward the request to its fetch entrypoint (env.ITX + globalOutbound
+   *  = a self-stub, like every dynamic worker). The entrypoint's `fetch` can `accept()` a WebSocket and return a
+   *  101, which flows straight back out through this native binding call. */
+  async #fetchWeb(source: ItxExpression, request: Request): Promise<Response> {
+    const modules = await this.#loadModules(source);
+    const self = this.env.ITX_HOST.getByName(this.ctx.id.name ?? "?");
+    const worker = this.env.LOADER.get(
+      `web:${this.ctx.id.name}:${hashSource(JSON.stringify(modules))}`,
+      () => ({
+        compatibilityDate: "2026-07-01",
+        mainModule: "cap.js",
+        modules: { "itx.js": ITX_SURFACE_MODULE, ...modules },
+        env: { ITX: self },
+        globalOutbound: self,
+      }),
+    );
+    return worker.getEntrypoint().fetch(request);
   }
 
   /** Longest dotted-prefix STATEFUL mount; the remaining segment(s) name the facet method to call. */

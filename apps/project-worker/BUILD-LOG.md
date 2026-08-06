@@ -309,6 +309,41 @@ expr)` (decode — walk with `Reflect.get`/`Reflect.apply`), plus `itxRoot(invok
 
 ---
 
+## Increment 16 — WebSocket upgrades pass THROUGH the capability graph (the fetch lane)
+
+**Commit** `<pending>`. Jonas: "we could not have an ESP device connect to a project and present a website with
+WebSocket functionality — we really want that. Now that we can serialise an ItxExpression as a string in an
+HTTP header, we could reach a fetch-shaped capability by hopping between fetch functions." This is the thing
+apps/os cannot do (proven by its quarantined `apps/os/e2e/vitest/live-capability-websocket.e2e.test.ts` — a
+provided capability is reachable only by RPC replay, and a 101 can't serialize across an RPC hop:
+`Could not serialize object of type "WebSocket"`).
+
+- **The fetch lane = the fetch-shaped sibling of `invokeCapability`.** A request carrying `x-itx-cap` (a
+  capability address — a serialized `ItxExpression` **or** a bare callPath) is routed by `#fetchCapability` to a
+  fetch-shaped capability via NATIVE `.fetch()` hops, so a **WS upgrade (101) passes straight through** (a 101
+  can't cross an RPC hop, but it rides a fetch). Checked FIRST in `ItxDurableObject.fetch` so a cap WS never
+  hits ingress-echo. apps/os keeps its fetch lane (`x-iterate-worker-dispatch`) physically separate from the
+  capability tree and carries a build **ref**; the clean-room advance is that the capability **address itself**
+  (an `ItxExpression`) rides the header — one lane, addressed like everything else.
+- **New `web` mount = a FETCH-SHAPED dynamic worker** (`{ type: "web"; source }`) whose entry `cap.js`
+  default-exports `{ fetch(request, env) }`. `#fetchWeb` loads its modules (same source-expression path as
+  code/stateful) and forwards the request to `worker.getEntrypoint().fetch(request)` — the entrypoint can
+  `accept()` a WebSocket and return a 101, which flows back out through the native binding call. `stateful`
+  facets are reached the same way (their existing `/facet` fetch lane). Alias re-resolves; a deep path falls
+  back to its PARENT PATH (a native DO→DO fetch — the 101 survives the hop).
+- **A live capnweb provider (external device) is explicitly 501 for now** — a 101 cannot cross capnweb, so a WS
+  to a device needs a **frame bridge** (browser WS frames ⇄ capnweb messages). That is the next increment; the
+  same `x-itx-cap` header routes TO the bridge. (apps/os hit the identical wall: its capnweb fork can tunnel a
+  socket across a session as a stream pair, but the next internal workerd RPC hop re-refuses it.)
+- **Proven** (deployed `wscap-1`, ctx `prj_wscap`): provide a `web` cap `itx.site`
+  (`source: ["files",["read","/site.js"]]`); **`GET /cap?cap=["site"]` → 200 HTML**; **a WS upgrade to
+  `/cap?cap=["site"]` echoes `site-echo:hello-from-eyeball`** — the 101 travelled edge → host DO →
+  `#fetchCapability` → loaded web worker → `accept()` → back, addressed only by the serialized expression in a
+  header (this IS apps/os's quarantined "DESIRED" test B, working). Ingress echo still works (a separate
+  handler); a WS to a bogus cap refuses the upgrade without hanging.
+
+---
+
 ## Status after increment 13 — the inner core end to end
 
 A single `ItxDurableObject` is the host for a `{projectId, path}` context: **ingress WS**, **egress** (project

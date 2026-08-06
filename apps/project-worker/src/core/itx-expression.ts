@@ -42,6 +42,13 @@ export function itxRoot(invoke: (callPath: string, args: unknown[]) => unknown):
   return build(["itx"]);
 }
 
+/** Reduce an expression to a flat `itx.a.b` callPath for ADDRESSING (string steps + call method names, joined).
+ *  Used to route a fetch to a fetch-shaped capability by a serialized expression carried in an HTTP header —
+ *  addressing names a MOUNT, so any call args in the expression don't participate. */
+export function expressionCallPath(expr: ItxExpression): string {
+  return "itx." + expr.map((s) => (typeof s === "string" ? s : s[0])).join(".");
+}
+
 /** decode: walk `expr` against `root`. A string step is a property read; a tuple step is an (awaited) call. Each
  *  step's result becomes the next receiver (so a future stub-returning call can pipeline). */
 export async function evaluateItxExpression(root: unknown, expr: ItxExpression): Promise<unknown> {

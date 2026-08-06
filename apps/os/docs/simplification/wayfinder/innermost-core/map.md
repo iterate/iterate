@@ -480,6 +480,20 @@ args)` — invokes `[[Call]]` directly, runs inside the owning DO, returns plain
   behind the same capability + expression later). The stateful runner **dropped `ITX_KV`** — it resolves source
   through the host (`env.ITX`) like everything else. Two caches, apps/os-shaped: level-1 = the loader isolate
   cache (deploy-version + content-hash); level-2 (build artifact) intentionally absent until there's a bundler.
+- **D37 — WebSocket upgrades pass THROUGH the capability graph via a FETCH LANE, addressed by a serialized
+  `ItxExpression` in a header. (proven, increment 16, `wscap-1`.)** `invokeCapability` (RPC) can't carry a 101;
+  its sibling `#fetchCapability` forwards a `Request` to a FETCH-SHAPED capability via native `.fetch()` hops, so
+  a WS upgrade rides through. A request carrying `x-itx-cap` (a serialized `ItxExpression` or a bare callPath) is
+  routed FIRST, before ingress-echo. Fetch-shaped kinds: a new `web` mount (a dynamic worker default-exporting
+  `{ fetch }`, loaded + `worker.getEntrypoint().fetch(request)` — its `accept()`ed 101 flows back out natively)
+  and a `stateful` facet (its `/facet` fetch). Alias re-resolves; a deep path falls back to its PARENT PATH (a
+  native DO→DO fetch — 101 survives). **This is what apps/os cannot do** (its quarantined
+  `live-capability-websocket.e2e.test.ts` pins `Could not serialize object of type "WebSocket"` — a provided cap
+  is reachable only by RPC replay). apps/os keeps a WS-capable fetch lane (`x-iterate-worker-dispatch`)
+  physically separate from the capability tree and carries a build **ref**; the clean-room advance is that the
+  capability **address** itself (an `ItxExpression`, now string-serializable) rides the header — one lane. **Open
+  (D37-next):** a WS to an EXTERNAL live capnweb provider (ESP32/Pi) needs a **frame bridge** (browser WS frames
+  ⇄ capnweb messages) — a 101 can't cross capnweb natively; the same `x-itx-cap` routes to the bridge.
 - **D14 — Cost/billing is USERSPACE, not a control-plane primitive.** Budgets/spend limits are a key PRODUCT
   concern but implemented in userspace: a **stream processor that consumes cost-bearing events** across
   streams and computes spend/budget. Can live on the product shell (for now), or the project shell (as a core
