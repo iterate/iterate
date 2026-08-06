@@ -1,109 +1,71 @@
 ---
 status: in-progress
-size: medium
+size: small
 branch: preamble-results-eval
 ---
 
-# Eval: the next script uses `results[...]` instead of re-fetching
+# Eval: follow-up scripts use `results[...]` instead of re-fetching
 
 ## Status summary
 
-Implemented: `apps/os/e2e/vitest/agent-preamble-results.llm.e2e.test.ts`,
-two opt-in cases (inline `results[N].data`, large
-`await results[N].load(itx)`), gated behind `LLM_EVALS=1`. Static checks
-green. Live-run results recorded in the log below.
+Redone per Misha's review on PR #2442: the deliverable is
+`evals/preamble-results/eval.md` — a short natural-language eval in the
+`evals/summarise-emails` style, run by the `evals/run.ts` harness. The
+earlier vitest e2e approach (two structural-assertion tests) is removed;
+its live-run lessons are kept in the log below and as prose hints in the
+eval.md.
 
 ## Why
 
 PR #2431 gave codemode scripts a preamble: a `results` array of prior
 script outcomes (`results[0].data` inline for small results,
 `await results[0].load(itx)` for large ones). The system prompt and the
-script-settlement renders teach it. Nothing proves the teaching works: a
-live field test caught the model copying a fenced
-`JSON.parse(await itx.workspace.readFile(...))` recipe instead of using the
-loader — a prompt regression an eval would have caught.
+script-settlement renders teach it. Field testing on preview 5 caught the
+model copying a fenced `JSON.parse(await itx.workspace.readFile(...))`
+recipe instead of using the loader, defensively writing API responses to
+workspace files, and returning full raw payloads — the regressions an eval
+should catch.
 
-This task adds that eval: after a script returns data, the model's NEXT
-script must reference `results[...]` — not re-fetch, not re-paste JSON, not
-read the workspace spill file.
+## Shape
 
-## Shape (decisions, made solo — flagged as assumptions)
+- One file: `evals/preamble-results/eval.md`. Terse prose in the
+  `evals/summarise-emails/eval.md` mold: the two preview-5 stream links from
+  the #2431 field test, the observed problems as bullets (described in
+  prose because preview streams are ephemeral), and "see that we've
+  improved" success criteria.
+- Run with the `evals/run.ts` harness: `run(slug)` spawns a coding agent
+  headlessly against a real environment (fresh project, default template,
+  brokered stand-ins for unavailable integrations), judges against the
+  eval's success criteria, and writes
+  `evals/runs.ignoreme/<slug>/<ts>/result.md`.
+- `evals/run.ts` and the rest of the evals folder are not yet in git — this
+  branch adds ONLY `evals/preamble-results/eval.md`. Harness output
+  (`runs.ignoreme/`) is already covered by the root .gitignore's
+  `*ignoreme*` rule; no gitignore change needed.
 
-- **File**: `apps/os/e2e/vitest/agent-preamble-results.llm.e2e.test.ts`.
-  _Assumption_: adopt the draft cost-dimension filename marker from
-  docs/testing.md (`*.llm.e2e.test.ts` for tests that pay for model turns) —
-  this is its first instance.
-- **Opt-in, not default CI**: model-choice assertions are single-sample and
-  probabilistic; they must not flake unrelated PRs. Gate:
-  `test.skipIf(process.env.LLM_EVALS !== "1")` — `skipIf` is the structural
-  form the dated-skips lint guard permits, and the skip is visible in every
-  run's output rather than hidden by a title filter. _Assumption_: env-gate
-  (the doppler-native control docs/testing.md sanctions) over a separate
-  vitest project, because bare `pnpm e2e` runs all projects and would
-  silently start paying.
-- **Invocation** (documented in the test header too), from `apps/os`:
+## Checklist
 
-  ```bash
-  # local dev (pnpm dev running or auto-started) or shared dev
-  doppler run --config dev -- env LLM_EVALS=1 pnpm e2e agent-preamble-results
-
-  # a preview slot
-  doppler run --config preview_3 -- env LLM_EVALS=1 pnpm e2e agent-preamble-results
-  ```
-
-- **Round 1 is synthetic, round 2 is real.** Round 1 (the script that
-  produces data) is journaled with the established
-  `appendSyntheticProviderOutput` fixture — the same trust-boundary-honest
-  helper the codemode fence/pipelining e2es use — and the script executes for
-  real in a dynamic worker, settles, and gets the real settlement render.
-  _Assumption_: this beats a fully-real round 1 because the eval's subject is
-  round 2 only; synthetic round 1 is deterministic and saves a paid turn.
-  Round 2 goes through the real product surface: `agent.ask(...)` (a user
-  web-chat message) and a real LLM turn using the environment's configured
-  transport.
-- **Data must be non-reproducible**: round-1 scripts generate values at
-  runtime (`Math.random`/`crypto.randomUUID`), so the values exist only in
-  the settlement — the model cannot re-derive them from its own script text,
-  and re-generating gives wrong answers the correctness assertion catches.
-- **Quiescence between rounds**: a result-bearing settlement triggers an
-  autonomous feedback turn (the codemode loop). The test waits until every
-  llm-request and script-run has settled and the stream head is stable
-  before recording the round-2 cursor, so the assertion window contains only
-  round-2 scripts.
-
-## Cases
-
-- [x] **Inline case**: round-1 script returns 300 orders with random
-      `amountCents` (compact JSON under the 16,000-char inline gate, so its
-      `results` row has `.data`). User asks for the exact sum. Assert: some
-      in-window script matches `/results\[\d+\]\.data/`; no window script
-      matches `workspace.readFile` or `Math.random` (re-generation =
-      re-fetch) or re-pastes 3+ amount literals; the visible reply contains
-      the true total (computed by the test from the journaled settlement).
-      _Implemented in apps/os/e2e/vitest/agent-preamble-results.llm.e2e.test.ts;
-      grew from 24 to 300 rows after the model mental-summed 24 (see log)._
-- [x] **Large case**: round-1 script returns 2,500 rows with a
-      `crypto.randomUUID()` secret buried mid-array (compact JSON over the
-      16,000-char gate → `.load` row; pretty-printed over the render limit →
-      also spills to a workspace file, so the readFile temptation from the
-      field test is present). User asks for the secret. Assert: some
-      in-window script matches `/await results\[\d+\]\.load\(itx\)/`; no
-      window script touches `workspace.readFile`; the reply contains the
-      actual secret. _Same file, second test._
-- [x] Header comment documents the exact run command; task file + PR body
-      show it too. _File header + this file + PR #2442 body._
-- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
-      green; eval run against a live environment at least once with results
-      recorded here. _All green locally; two live runs against local dev
-      recorded in the log (first exposed a window-design flaw, second passed
-      2/2)._
+- [x] ~~Vitest e2e with structural assertions
+      (`apps/os/e2e/vitest/agent-preamble-results.llm.e2e.test.ts`:
+      `LLM_EVALS=1` gate, regexes over the scripts between the settlement
+      render and the reply, correctness checks against the journaled
+      settlement)~~ _built, passed 2/2 live, then replaced per review —
+      "should be like the summarise emails one in the evals/ folder";
+      removed on this branch in the same commit that adds the eval.md_
+- [x] `evals/preamble-results/eval.md` in the summarise-emails style.
+      _Committed on this branch; short enough that PR #2442's body shows it
+      inline._
+- [x] Lessons from the vitest live runs preserved. _Implementation log
+      below + the success-criteria caveats in the eval.md (inline renders
+      can be mentally computed; agents legitimately dig into results on
+      their own follow-up turn)._
+- [x] Checks green. _typecheck/lint/knip/format/test — the eval.md is data
+      for the harness, nothing executes in CI._
 
 ## Non-goals
 
-- No multi-sample scoring/statistics harness — one good scenario per case,
-  run on demand. If we later want pass@k, this file is the seed.
-- No CI wiring — explicitly a manual lane (docs/testing.md's "wired or
-  documented as manual" rule; the file header is the documentation).
+- No harness changes — `evals/run.ts` is Misha's and not yet tracked; this
+  branch only adds an eval definition it can run.
 - Not editing `tasks/codemode-script-preamble-followups.md` (three sibling
   branches share it).
 
@@ -111,23 +73,24 @@ read the workspace spill file.
 
 - Worktree `preamble-results-eval` off origin/main (34c7de98a, the preamble
   PR itself).
-- Live run 1 (local dev, 2026-08-06 17:57): both cases FAILED — and the
-  failures were the eval earning its keep plus one design flaw of mine:
-  - The model answered round 2 with a bare `itx.chat.sendMessage("<answer>")`
-    script. For the large case the answer was the correct buried UUID, which
-    the model could only have obtained by running the loader DURING the
-    autonomous feedback turn after the settlement render — i.e. the desired
-    behavior happened, but before my assertion window opened (I had anchored
-    it after the loop went quiet). Fix: the window now opens at the
-    settlement render, so feedback-turn scripts count.
-  - For the small case the model mental-summed 24 rendered amounts and
-    hardcoded the total. Fix: 300 rows — still inline, but far past honest
-    mental arithmetic.
-  - Also fixed: `getEvents` caps `limit` at 500 (my cursor read used 1000).
-- Live run 2 (local dev, 2026-08-06 17:58): **2/2 passed** — inline case
-  24.9s, large case 16.8s. The prompt currently teaches `results` well
-  enough to pass both cases.
-- Assertion loosened deliberately from "the first script" to "some script in
-  the render→reply window, and no anti-pattern anywhere in it": the loop may
-  narrate or update its summary in a separate script first, and pinning
-  scripts[0] made the eval flake on behavior that is fine.
+- v1 (vitest, commits 9affd06e0/b7597d83b, later removed): two opt-in e2e
+  cases driving a real agent — synthetic round-1 script producing
+  runtime-generated data, real `agent.ask` follow-up, regex assertions on
+  the scripts between the settlement render and the reply. Live run 1
+  failed both cases and taught two lessons now baked into the eval.md
+  prose:
+  - the model legitimately digs into a fresh result during its own
+    follow-up turn, before the user asks — for the large case it ran
+    `await results[0].load(itx)` there and simply recalled the answer
+    later, so any judgement window must start at the settlement render,
+    not at the user's question;
+  - small inline results render fully in history, so a model can retype or
+    mentally compute from the render (it correctly summed 24 rendered
+    amounts without touching `results`); datasets must be big enough that
+    this is hopeless (300 rows was enough).
+  Live run 2 passed 2/2 (24.9s / 16.8s) after those fixes.
+- v2 (this shape): vitest file removed; `evals/preamble-results/eval.md`
+  added, referencing the two preview-5 field-test streams
+  (`…/nustom/agents/streams/agents/onboarding` — pre-fix readFile paging of
+  a spilled result; `…/agents/web/2026-08-06t16-13-19-265z` — better, but a
+  defensive `writeFile` copy and a full-payload return).
