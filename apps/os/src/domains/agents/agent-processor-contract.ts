@@ -33,7 +33,7 @@ import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presenc
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "5.1.0",
+  version: "5.2.0",
   description:
     "Maintains model-visible history, schedules debounced offset-identified LLM turns, runs " +
     "them through the Workers AI transport, and executes scripts through the capability host.",
@@ -366,14 +366,28 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agents/web-message-sent": {
       description:
-        "A visible agent message was sent to the web UI (itx.chat.sendMessage). The processor " +
-        "mirrors it back into context as assistant history so the model sees what it sent.",
+        "A visible agent message was sent to the web UI — by a script (itx.chat.sendMessage), " +
+        "or by a userland response interpreter delivering prose extracted straight from an " +
+        "assistant output. The processor mirrors script-sent messages back into context as " +
+        "assistant history so the model sees what it sent; extracted messages carry " +
+        "llmRequestOffset and are NOT mirrored — their raw text is already in history as the " +
+        "assistant context item.",
       payloadSchema: z.object({
         message: z.string().meta({ description: "The visible chat message (markdown)." }),
         files: z
           .array(agentFileAttachmentSchema())
           .optional()
           .meta({ description: "Files attached to the message." }),
+        llmRequestOffset: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .meta({
+            description:
+              "Present when the message was extracted from the identified LLM response rather " +
+              "than sent by a script. Suppresses the assistant-history mirror.",
+          }),
       }),
     },
     "events.iterate.com/agent/llm-request-requested": {
@@ -577,6 +591,10 @@ export const AgentProcessorContract = defineProcessorContract({
   ],
   emits: [
     "events.iterate.com/agents/context-added",
+    // Emitted by userland response interpreters through this vocabulary (the
+    // platform components never emit it themselves today); listed so variant
+    // hosts and tests can validate the full loop's appends in one place.
+    "events.iterate.com/agents/web-message-sent",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-settled",
     "events.iterate.com/agent/llm-response-chunk",

@@ -59,10 +59,14 @@ export function formatBytesPerSecond(bytesPerSecond: number): string {
 }
 
 /** Code-mode agents stream itx code as their response; chat agents stream
- * prose. Decides whether LLM response text renders as a code block. */
+ * prose. Decides whether LLM response text renders as a code block. A
+ * `<codemode>`-tagged response (the userland tag format: prose with an
+ * embedded code block) also renders as code — raw tag text streaming as
+ * prose reads as a glitch. */
 const CODE_START_PATTERN = /^\s*(async|await|function|const|let|import)\b/;
+const CODEMODE_TAG_PATTERN = /^[ \t]*<codemode(\s|>)/m;
 export function looksLikeCode(text: string): boolean {
-  return text.includes("```") || CODE_START_PATTERN.test(text);
+  return text.includes("```") || CODE_START_PATTERN.test(text) || CODEMODE_TAG_PATTERN.test(text);
 }
 
 /** Locale time-of-day with seconds, for step start times. */

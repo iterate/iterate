@@ -6,6 +6,9 @@ Each child directory is a complete project config repository:
   project-creation default.
 - `with-voice/` is a small alternate template used to prove public GitHub
   template creation end to end.
+- `codemode-tag/` is the `<codemode status="...">` response-format
+  experiment: its worker retargets agents to the platform's headless
+  processor and interprets assistant output itself (see its README).
 
 Every template root, and every direct child under its optional `apps/`
 directory, must contain a `tsconfig.json`; the OS typecheck validates all of
