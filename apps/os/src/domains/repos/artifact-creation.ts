@@ -5,11 +5,12 @@ import {
   RetryableRepoCreationError,
 } from "./utils.ts";
 
-// Healthy creates finish in about two seconds (live p99 2.1s). Keep the whole
-// idempotent create/readback operation below the hosted callback's 20-second
-// deadline so an Artifacts outlier returns to durable redelivery rather than
-// pinning the callback until its transport fails.
-const ARTIFACT_CREATION_DEADLINE_MS = 8_000;
+// Healthy creates finish in about two seconds (live p99 2.1s). Hosted callers
+// bound both the create attempt and an ambiguous-create readback. The durable
+// coordinator deliberately passes a null create timeout: the successful
+// response carries a one-time token and must not be abandoned by Promise.race.
+export const HOSTED_ARTIFACT_CREATE_TIMEOUT_MS = 8_000;
+export const HOSTED_ARTIFACT_RECOVERY_TIMEOUT_MS = 8_000;
 const EXISTING_ARTIFACT_READY_INITIAL_RETRY_MS = 250;
 const EXISTING_ARTIFACT_READY_MAX_RETRY_MS = 4_000;
 
@@ -42,9 +43,9 @@ type ExistingArtifact =
  *
  * An ALREADY_EXISTS response can mean a prior attempt committed but its
  * response was lost. In that case the create plane may reserve the name
- * before get() can observe the repo. Wait here with bounded exponential
- * backoff rather than repeatedly hammering create and surfacing every
- * not-ready observation through the durable processor error path.
+ * before get() can observe the repo. Wait here with a separately bounded
+ * exponential backoff rather than repeatedly hammering create and surfacing
+ * every not-ready observation through the durable processor error path.
  */
 export async function getOrCreateArtifact(
   artifacts: {
@@ -55,15 +56,21 @@ export async function getOrCreateArtifact(
     get(name: string): Promise<unknown>;
   },
   name: string,
-  input: { defaultBranch: string },
+  input: {
+    createTimeoutMs: number | null;
+    defaultBranch: string;
+    recoveryTimeoutMs: number;
+  },
 ): Promise<GetOrCreateArtifactResult> {
-  const deadlineAt = Date.now() + ARTIFACT_CREATION_DEADLINE_MS;
+  const createTimeoutMs = input.createTimeoutMs;
   try {
-    const created = await beforeArtifactCreationDeadline(
-      () => artifacts.create(name, { setDefaultBranch: input.defaultBranch }),
-      deadlineAt,
-      () => artifactCreationTimeout(name, undefined),
-    );
+    const create = () => artifacts.create(name, { setDefaultBranch: input.defaultBranch });
+    const created =
+      createTimeoutMs === null
+        ? await create()
+        : await beforeArtifactCreationDeadline(create, Date.now() + createTimeoutMs, () =>
+            artifactCreationTimeout(name, createTimeoutMs, undefined),
+          );
     return {
       branchState: "empty",
       created: true,
@@ -73,7 +80,13 @@ export async function getOrCreateArtifact(
     if ((error as { code?: string }).code !== "ALREADY_EXISTS") throw error;
   }
 
-  const existing = await waitForExistingArtifact(artifacts, name, deadlineAt);
+  const recoveryDeadlineAt = Date.now() + input.recoveryTimeoutMs;
+  const existing = await waitForExistingArtifact(
+    artifacts,
+    name,
+    recoveryDeadlineAt,
+    input.recoveryTimeoutMs,
+  );
   if (existing.kind === "control-plane-only") {
     // Artifacts can expose the documented token-management handle without its
     // content-read methods after an ambiguous empty create. The caller's
@@ -97,8 +110,8 @@ export async function getOrCreateArtifact(
         throw error;
       }
     },
-    deadlineAt,
-    () => artifactReadTimeout(name, undefined),
+    recoveryDeadlineAt,
+    () => artifactReadTimeout(name, input.recoveryTimeoutMs, undefined),
   );
   return {
     branchState: hasCommits ? "has-commits" : "empty",
@@ -111,6 +124,7 @@ async function waitForExistingArtifact(
   artifacts: { get(name: string): Promise<unknown> },
   name: string,
   deadlineAt: number,
+  recoveryTimeoutMs: number,
 ): Promise<ExistingArtifact> {
   let lastError: unknown;
   let retryDelayMs = EXISTING_ARTIFACT_READY_INITIAL_RETRY_MS;
@@ -121,7 +135,7 @@ async function waitForExistingArtifact(
         await beforeArtifactCreationDeadline(
           () => artifacts.get(name),
           deadlineAt,
-          () => artifactReadTimeout(name, lastError),
+          () => artifactReadTimeout(name, recoveryTimeoutMs, lastError),
         ),
       );
     } catch (error) {
@@ -137,7 +151,7 @@ async function waitForExistingArtifact(
   }
 
   throw new RepoNotSeededError(
-    `Artifact ${name} did not become readable within ${ARTIFACT_CREATION_DEADLINE_MS}ms.`,
+    `Artifact ${name} did not become readable within ${recoveryTimeoutMs}ms.`,
     { cause: lastError },
   );
 }
@@ -185,16 +199,24 @@ async function beforeArtifactCreationDeadline<T>(
   }
 }
 
-function artifactCreationTimeout(name: string, cause: unknown): RetryableRepoCreationError {
+function artifactCreationTimeout(
+  name: string,
+  createTimeoutMs: number,
+  cause: unknown,
+): RetryableRepoCreationError {
   return new RetryableRepoCreationError(
-    `Artifact ${name} did not finish creating within ${ARTIFACT_CREATION_DEADLINE_MS}ms.`,
+    `Artifact ${name} did not finish creating within ${createTimeoutMs}ms.`,
     { cause },
   );
 }
 
-function artifactReadTimeout(name: string, cause: unknown): RepoNotSeededError {
+function artifactReadTimeout(
+  name: string,
+  recoveryTimeoutMs: number,
+  cause: unknown,
+): RepoNotSeededError {
   return new RepoNotSeededError(
-    `Artifact ${name} did not become readable within ${ARTIFACT_CREATION_DEADLINE_MS}ms.`,
+    `Artifact ${name} did not become readable within ${recoveryTimeoutMs}ms.`,
     { cause },
   );
 }

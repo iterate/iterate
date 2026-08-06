@@ -477,6 +477,17 @@ function repoBirthCertificateSchema() {
       .min(1)
       .meta({ description: "The branch commit and task facts derive from." }),
     remote: z.string().url().meta({ description: "The artifact's Git remote URL." }),
+    seededHead: z
+      .strictObject({
+        branch: z.string().trim().min(1),
+        commitOid: z.string().trim().min(1),
+        contentHash: z.string().trim().min(1),
+      })
+      .optional()
+      .meta({
+        description:
+          "The exact seed pushed outside the Repo actor, adopted before birth is acknowledged.",
+      }),
   });
 }
 

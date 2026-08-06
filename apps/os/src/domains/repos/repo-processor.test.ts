@@ -124,6 +124,11 @@ function artifactPush(branch: string, oids?: { after?: string; before?: string }
 /** The generic harness plus the repo's scriptable vendor fakes. Pass another
  * harness's substrate for a replay incarnation over the SAME stream. */
 function makeRepoHarness(substrate?: HarnessSubstrate) {
+  const enqueueEmpty = {
+    calls: [] as Array<{ request: { type: "empty" }; streamId: string }>,
+    queued: false,
+    impl: async (): Promise<void> => {},
+  };
   const createEmpty = {
     calls: 0,
     impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
@@ -160,6 +165,7 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
       beforeCommitOid: string | null;
       branch: string;
     }[],
+    seeded: [] as { branch: string; commitOid: string; contentHash: string }[],
   };
   const harness = makeProcessorHarness<RepoProcessorContract, RepoProcessor>({
     createProcessor: (deps) =>
@@ -167,6 +173,13 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
         stream: deps.stream,
         path: deps.path,
         projectId: deps.projectId,
+        enqueueEmptyCreation: async (input) => {
+          if (enqueueEmpty.queued) return;
+          enqueueEmpty.queued = true;
+          enqueueEmpty.calls.push(input);
+          await enqueueEmpty.impl();
+        },
+        recordSeededHead: (input) => void headCache.seeded.push(input),
         createEmptyArtifact: () => {
           createEmpty.calls += 1;
           return createEmpty.impl();
@@ -198,6 +211,7 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
   });
   return {
     ...harness,
+    enqueueEmpty,
     createEmpty,
     createTemplate,
     importPublic,
@@ -213,30 +227,47 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
 // =============================================================================
 
 describe("RepoProcessor creation saga", () => {
-  it("seeds an empty Artifact once at head and appends the terminal certificate under the offset-free key", async () => {
+  it("hands empty creation to a durable coordinator under the source stream fence", async () => {
     const h = makeRepoHarness();
     await h.play(["append", CREATE_REQUESTED]);
 
-    // The seed ran exactly once even though later deliveries (the terminal
-    // certificate itself) re-ran the at-head pass over a state where the
-    // birth certificate already holds.
-    expect(h.createEmpty.calls).toBe(1);
-    expect(h.events("events.iterate.com/repos/created")).toMatchObject([
+    expect(h.enqueueEmpty.calls).toMatchObject([
       {
-        // NO event offset in the key: a redelivery/revival cannot rotate it
-        // and double-birth.
-        idempotencyKey: "repo/created",
-        payload: { ...SEEDED_ARTIFACT, request: { type: "empty" } },
+        request: { type: "empty" },
+        streamId: expect.any(String),
       },
     ]);
+    expect(h.createEmpty.calls).toBe(0);
+    expect(h.events("events.iterate.com/repos/created")).toEqual([]);
     expect(h.state()).toMatchObject({
       createRequest: { type: "empty" },
       createFailure: null,
-      birthCertificate: { request: { type: "empty" } },
+      birthCertificate: null,
       defaultBranch: "main",
-      artifactName: SEEDED_ARTIFACT.artifactName,
-      remote: SEEDED_ARTIFACT.remote,
     });
+  });
+
+  it("adopts a coordinator seed before acknowledging empty-repo birth", async () => {
+    const h = makeRepoHarness();
+    const seededHead = {
+      branch: "main",
+      commitOid: "seed-oid",
+      contentHash: "seed-content-hash",
+    };
+
+    await h.play(
+      ["append", CREATE_REQUESTED],
+      [
+        "append",
+        {
+          type: "events.iterate.com/repos/created",
+          payload: { ...SEEDED_ARTIFACT, request: { type: "empty" }, seededHead },
+        },
+      ],
+    );
+
+    expect(h.headCache.seeded).toEqual([seededHead]);
+    expect(h.state().birthCertificate).toMatchObject({ seededHead });
   });
 
   it("imports a public GitHub repo through Artifacts, then links it", async () => {
@@ -405,7 +436,7 @@ describe("RepoProcessor creation saga", () => {
 
   it("a duplicate request and a duplicate certificate both reduce to a no-op: the first ones win", async () => {
     const h = makeRepoHarness();
-    await h.play(["append", CREATE_REQUESTED]);
+    await h.play(["append", CREATE_REQUESTED, CREATED]);
     const before = h.state();
 
     // Conflicting requests are rejected at the create() door (the committed-
@@ -421,7 +452,7 @@ describe("RepoProcessor creation saga", () => {
     });
 
     expect(h.state()).toEqual(before);
-    expect(h.createEmpty.calls).toBe(1);
+    expect(h.createEmpty.calls).toBe(0);
   });
 });
 
@@ -719,12 +750,11 @@ describe("repos/create-requested payload schema", () => {
 
 describe("RepoProcessor full replay", () => {
   it("a fresh cursor over the same stream re-executes no vendor work, appends nothing new, and reaches the same state", async () => {
-    // Live flow first: the creation saga (artifact seeded, certificate
-    // appended), link, a webhook import that completes, then an Artifacts
-    // push that produces a commit fact.
+    // Live flow first: the creation intent is handed off, the coordinator's
+    // certificate arrives, then link, webhook import, and Artifacts push.
     const h = makeRepoHarness();
     await h.play(
-      ["append", CREATE_REQUESTED],
+      ["append", CREATE_REQUESTED, CREATED],
       ["append", GITHUB_LINK_CONFIGURED, githubPush()],
       ["append", artifactPush("main")],
       // The clock moves well past every original append: replayed per-event

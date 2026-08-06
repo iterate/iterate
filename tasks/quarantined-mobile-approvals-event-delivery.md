@@ -12,7 +12,8 @@ tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 Implementation is about 98% complete. Both mobile skips are removed and the
 reported delivery defects plus each recovery failure found by the strict gate
 have regression coverage. The latest exact-head baseline kept both restored
-mobile flows first-try green but was rejected for one unrelated retry.
+mobile flows first-try green but was rejected for six OS retries sharing one
+stalled config-repo birth.
 
 Gate candidate one then caught two classified Auth deployment gaps: the
 post-deploy OAuth seed could race bootstrap-admin visibility, and Wrangler did
@@ -20,13 +21,15 @@ not recover Cloudflare D1 code 7009. The server now reports the first as 503;
 the seed and captured-output command wrapper bound retries to explicit
 availability outcomes while still rejecting unclassified failures. Auth's 86
 tests, the 18-test deploy-helper suite, typechecks, lint, and formatting are
-green. The latest baseline then exposed a Semaphore waiter timing out while
-its lease assignment was already in flight; that lifecycle is now explicit
-and covered by the tightened live case. Its successor exposed a property-
-stripped Artifacts 503 crossing the processor RPC boundary without the
-availability flag; the repo processor now wraps that already-classified
-failure in the wire-safe retryable error. The 25-run streak remains at zero
-until these fixes pass a fresh preview.
+green. The next baseline exposed a Semaphore waiter timing out while its lease
+assignment was already in flight; that lifecycle is now explicit. Its
+successor exposed a deeper Artifacts flaw: the retained repo-processor callback
+raced first creation against eight seconds, abandoned the successful response's
+one-time write token, then hammered an existing but unreadable repo. Empty repo
+birth now transfers to an independent durable alarm actor which awaits that
+token, checkpoints the seeded Artifact, and appends the terminal fact under the
+original stream-lifetime fence. The 25-run streak remains at zero until this
+fix passes a fresh preview.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -510,13 +513,24 @@ Test these in order; do not treat the first plausible one as the conclusion.
   assignment finishes, while its own failure rejects that waiter explicitly.
   The live case no longer relies on a 250 ms cushion. Semaphore typecheck, its
   four local tests, lint, and formatting pass.
-- 2026-08-06: Baseline `3v3313vbpl` on `a7ec3271f` retried six OS cases and
-  emitted one exact-version callback application error. Project
-  `prj_9393c83a0a3e4e5eab80ad49de5ddba0` spent 48.969 seconds birthing its
-  config repo; the first repo-processor delivery received the live-observed
-  property-stripped `HTTP Error: 503 Service Unavailable`. The processor kept
-  the creation obligation open but rethrew the raw error, so its availability
-  classification did not survive the hosted-processor wire serializer. It now
-  wraps that already-classified Artifacts outage as
-  `RetryableRepoCreationError` with the original cause. The red/green recovery
-  case plus 69 focused repo tests, OS typecheck, lint, and formatting pass.
+- 2026-08-06: Baseline `3v3313vbpl` on `a7ec3271f` kept both restored mobile
+  flows first-try green but retried six OS cases. Exact-version telemetry had
+  277 error rows across config repos: each first `create()` crossed the
+  processor's eight-second `Promise.race`; the late invocation could reserve
+  the name, but its successful response and one-time initial write token were
+  abandoned. Recovery then saw `ALREADY_EXISTS`, could not read the repo, and
+  retried every second until project waits expired. The first sampled 503 also
+  lost its availability property over hosted-processor RPC, now preserved by
+  `RetryableRepoCreationError`, but the broader audit showed classification
+  alone could not repair the orphaned create.
+- 2026-08-06: Empty creation now durably enqueues a new
+  `RepoBirthCoordinatorDurableObject` and releases the retained Stream
+  callback. Its alarm validates the journaled request and stream ID, awaits
+  first `create()` without abandoning the token, bounds only ambiguous
+  readback, checkpoints the seeded Artifact before the terminal append, and
+  publishes `repos/created` through `appendIfStreamId`. Repo adopts the exact
+  seeded head before acknowledging birth. Classified vendor outages use a
+  bounded explicit alarm retry; invariant failures remain error-visible. The
+  red/green no-abandon, handoff, checkpoint, append-recovery, stale-lifetime,
+  and wire-stripped-503 cases pass with all 246 repo tests (two expected
+  failures), OS typecheck, root lint, and formatting.

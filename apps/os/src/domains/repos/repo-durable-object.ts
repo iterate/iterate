@@ -73,7 +73,12 @@ import {
 import { SingleFlightValue } from "./single-flight-value.ts";
 import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./github-sync-utils.ts";
 import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts";
-import { getOrCreateArtifact, type GetOrCreateArtifactResult } from "./artifact-creation.ts";
+import {
+  getOrCreateArtifact,
+  HOSTED_ARTIFACT_CREATE_TIMEOUT_MS,
+  HOSTED_ARTIFACT_RECOVERY_TIMEOUT_MS,
+  type GetOrCreateArtifactResult,
+} from "./artifact-creation.ts";
 import { artifactWriteToken, seedArtifactRepo } from "./artifact-seeding.ts";
 import { downloadPublicGithubTemplate } from "./public-github-template.ts";
 
@@ -96,6 +101,7 @@ const REPO_HEAD_TREE_KEY = "repo-head-tree:v1";
 // another mutation, so an already-landed Git commit cannot become a silent
 // no-op with no repo/commit-completed fact.
 const PENDING_COMMIT_COMPLETED_KV_KEY = "pending-commit-completed:v1";
+const COORDINATOR_SEED_HEAD_RECORDED_KV_KEY = "coordinator-seed-head-recorded:v1";
 // The lazy head-record publication computes the whole-snapshot contentHash
 // (worker builds want it hot) only when the manifest is small enough for
 // that to be a cheap in-store read; bigger repos leave the record to the
@@ -153,6 +159,8 @@ export class RepoDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
+      enqueueEmptyCreation: (input) =>
+        this.env.REPO_BIRTH_COORDINATOR.getByName(this.ctx.id.name!).enqueue(input),
       // Creation and public mutations all move the same branch. A recovered
       // creation attempt is retry-safe, but it must not move the ref between a
       // mutation's checked clone and push.
@@ -199,6 +207,7 @@ export class RepoDurableObject extends DurableObject<Env> {
           afterCommitOid: input.afterCommitOid,
           beforeCommitOid: input.beforeCommitOid,
         }),
+      recordSeededHead: (input) => this.#recordCoordinatorSeededHead(input),
     }),
     { recovery: true },
   );
@@ -1070,6 +1079,26 @@ export class RepoDurableObject extends DurableObject<Env> {
         commitOid: result.commitOid,
       }),
     );
+  }
+
+  #recordCoordinatorSeededHead(input: {
+    branch: string;
+    commitOid: string;
+    contentHash: string;
+  }): void {
+    const recorded = this.ctx.storage.kv.get<unknown>(COORDINATOR_SEED_HEAD_RECORDED_KV_KEY);
+    if (recorded !== undefined) {
+      if (recorded !== input.commitOid) {
+        throw new Error("The repo birth certificate changed its seeded head after adoption.");
+      }
+      return;
+    }
+    this.#recordPushedHead({ branch: input.branch, commitOid: input.commitOid });
+    this.ctx.storage.kv.put(repoHeadStorageKey(input.branch), {
+      commitOid: input.commitOid,
+      contentHash: input.contentHash,
+    });
+    this.ctx.storage.kv.put(COORDINATOR_SEED_HEAD_RECORDED_KV_KEY, input.commitOid);
   }
 
   #stageCommitCompleted(input: {
@@ -1964,7 +1993,9 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   private async getOrCreateArtifact(name: string): Promise<GetOrCreateArtifactResult> {
     return await getOrCreateArtifact(this.requireArtifacts(), name, {
+      createTimeoutMs: HOSTED_ARTIFACT_CREATE_TIMEOUT_MS,
       defaultBranch: REPO_DEFAULT_BRANCH,
+      recoveryTimeoutMs: HOSTED_ARTIFACT_RECOVERY_TIMEOUT_MS,
     });
   }
 

@@ -1,6 +1,8 @@
 import { expect, test, vi } from "vitest";
 import { getOrCreateArtifact } from "./artifact-creation.ts";
 
+const HOSTED_TIMEOUTS = { createTimeoutMs: 8_000, recoveryTimeoutMs: 8_000 };
+
 test("an existing seeded repo reports its branch head", async () => {
   const artifacts = {
     create: vi.fn(async () => {
@@ -12,6 +14,7 @@ test("an existing seeded repo reports its branch head", async () => {
   };
 
   const result = await getOrCreateArtifact(artifacts, "project-repo", {
+    ...HOSTED_TIMEOUTS,
     defaultBranch: "main",
   });
 
@@ -31,6 +34,7 @@ test("a new repo preserves create's initial write token without reading it back"
   };
 
   const result = await getOrCreateArtifact(artifacts, "project-repo", {
+    ...HOSTED_TIMEOUTS,
     defaultBranch: "trunk",
   });
 
@@ -43,6 +47,37 @@ test("a new repo preserves create's initial write token without reading it back"
     setDefaultBranch: "trunk",
   });
   expect(artifacts.get).not.toHaveBeenCalled();
+});
+
+test("coordinator-owned creation awaits the one-time initial token instead of abandoning it", async () => {
+  vi.useFakeTimers();
+  try {
+    const create = Promise.withResolvers<{ token: string }>();
+    const artifacts = {
+      create: vi.fn(() => create.promise),
+      get: vi.fn(),
+    };
+
+    const result = getOrCreateArtifact(artifacts, "project-repo", {
+      createTimeoutMs: null,
+      defaultBranch: "main",
+      recoveryTimeoutMs: 8_000,
+    });
+    const settled = vi.fn();
+    void result.then(settled, settled);
+
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(settled).not.toHaveBeenCalled();
+
+    create.resolve({ token: "art_v1_initial?expires=1760000000" });
+    await expect(result).resolves.toMatchObject({
+      created: true,
+      initialWriteToken: "art_v1_initial",
+    });
+    expect(artifacts.get).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("an existing repo without a branch remains eligible for recovery", async () => {
@@ -58,6 +93,7 @@ test("an existing repo without a branch remains eligible for recovery", async ()
   };
 
   const result = await getOrCreateArtifact(artifacts, "project-repo", {
+    ...HOSTED_TIMEOUTS,
     defaultBranch: "main",
   });
 
@@ -81,7 +117,10 @@ test("a missing default branch remains eligible for recovery", async () => {
   };
 
   await expect(
-    getOrCreateArtifact(artifacts, "project-repo", { defaultBranch: "main" }),
+    getOrCreateArtifact(artifacts, "project-repo", {
+      ...HOSTED_TIMEOUTS,
+      defaultBranch: "main",
+    }),
   ).resolves.toEqual({
     branchState: "empty",
     created: false,
@@ -102,6 +141,7 @@ test("branch verification shares the creation recovery deadline", async () => {
     };
 
     const result = getOrCreateArtifact(artifacts, "project-repo", {
+      ...HOSTED_TIMEOUTS,
       defaultBranch: "main",
     });
     const rejection = expect(result).rejects.toMatchObject({ name: "RepoNotSeededError" });
@@ -128,6 +168,7 @@ test("an ambiguous create waits for the existing repo to become readable", async
     };
 
     const result = getOrCreateArtifact(artifacts, "project-repo", {
+      ...HOSTED_TIMEOUTS,
       defaultBranch: "main",
     });
     await vi.runAllTimersAsync();
@@ -156,6 +197,7 @@ test("an ambiguous create waits for get to return a complete repo handle", async
   };
 
   const result = await getOrCreateArtifact(artifacts, "project-repo", {
+    ...HOSTED_TIMEOUTS,
     defaultBranch: "main",
   });
 
@@ -178,7 +220,10 @@ test("an existing control-plane repo handle defers branch verification to the gi
   };
 
   await expect(
-    getOrCreateArtifact(artifacts, "project-repo", { defaultBranch: "main" }),
+    getOrCreateArtifact(artifacts, "project-repo", {
+      ...HOSTED_TIMEOUTS,
+      defaultBranch: "main",
+    }),
   ).resolves.toEqual({
     branchState: "requires-clone",
     created: false,
@@ -196,6 +241,7 @@ test("a stalled create returns to durable recovery before the hosted callback de
     };
 
     const result = getOrCreateArtifact(artifacts, "project-repo", {
+      ...HOSTED_TIMEOUTS,
       defaultBranch: "main",
     });
     const settled = vi.fn();
@@ -216,7 +262,7 @@ test("a stalled create returns to durable recovery before the hosted callback de
   }
 });
 
-test("create and ambiguous-create readback share one recovery deadline", async () => {
+test("create and ambiguous-create readback each have an explicit hosted deadline", async () => {
   vi.useFakeTimers();
   try {
     const artifacts = {
@@ -233,6 +279,7 @@ test("create and ambiguous-create readback share one recovery deadline", async (
     const startedAt = Date.now();
 
     const result = getOrCreateArtifact(artifacts, "project-repo", {
+      ...HOSTED_TIMEOUTS,
       defaultBranch: "main",
     });
     const rejection = expect(result).rejects.toMatchObject({
@@ -241,7 +288,7 @@ test("create and ambiguous-create readback share one recovery deadline", async (
     await vi.runAllTimersAsync();
 
     await rejection;
-    expect(Date.now() - startedAt).toBe(8_000);
+    expect(Date.now() - startedAt).toBe(15_000);
     expect(artifacts.create).toHaveBeenCalledOnce();
     expect(artifacts.get.mock.calls.length).toBeGreaterThan(1);
   } finally {
@@ -262,6 +309,7 @@ test("an existing repo that never materializes remains a retryable obligation", 
     };
 
     const result = getOrCreateArtifact(artifacts, "project-repo", {
+      ...HOSTED_TIMEOUTS,
       defaultBranch: "main",
     });
     const rejection = expect(result).rejects.toMatchObject({
@@ -289,6 +337,7 @@ test("an existing repo does not hide a real Artifacts read failure", async () =>
 
   await expect(
     getOrCreateArtifact(artifacts, "project-repo", {
+      ...HOSTED_TIMEOUTS,
       defaultBranch: "main",
     }),
   ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
