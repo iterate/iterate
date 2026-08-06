@@ -621,60 +621,46 @@ class StreamProcessorFacadeRpcTarget extends RpcTarget {
     return new FacetLiveStateRelayRpcTarget(async () => (await this.#dial()).liveState());
   }
 
-  // Capability-host domain doors (meaningful on the "capability-host"
-  // facade): the retired CapabilityHostDurableObject's forwarded methods.
-  // With the parent wiring present they route through it, so reconciliation,
-  // live-mount retirement, and the control-plane serialization all engage.
-  async invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
-    if (this.#capabilityHost !== undefined) {
-      return await this.#capabilityHost.invokeCapability(input);
+  // Capability-host domain doors (the retired CapabilityHostDurableObject's
+  // forwarded methods). They are only ever dialed on the "capability-host"
+  // facade, which processorFacade always builds with the parent wiring, so
+  // reconciliation, live-mount retirement, and the control-plane serialization
+  // all engage. #requireCapabilityHost enforces that invariant.
+  #requireCapabilityHost(): CapabilityHostFacadeWiring {
+    if (this.#capabilityHost === undefined) {
+      throw new Error("capability door dialed on a facade without capability-host wiring");
     }
-    return await (await this.#dial()).invokeCapability(input);
+    return this.#capabilityHost;
+  }
+
+  async invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
+    return await this.#requireCapabilityHost().invokeCapability(input);
   }
 
   async provideCapability(
     input: CapabilityProvidedPayload,
   ): Promise<{ path: string[]; providedAtOffset: number }> {
-    if (this.#capabilityHost !== undefined) {
-      return await this.#capabilityHost.provideCapability(input);
-    }
-    return await (await this.#dial()).provideCapability(input);
+    return await this.#requireCapabilityHost().provideCapability(input);
   }
 
   async revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void> {
-    if (this.#capabilityHost !== undefined) {
-      await this.#capabilityHost.revokeCapability(input);
-      return;
-    }
-    await (await this.#dial()).revokeCapability(input);
+    await this.#requireCapabilityHost().revokeCapability(input);
   }
 
   async describeCapabilities(): Promise<unknown[]> {
-    if (this.#capabilityHost !== undefined) {
-      return await this.#capabilityHost.describeCapabilities();
-    }
-    return await (await this.#dial()).describeCapabilities();
+    return await this.#requireCapabilityHost().describeCapabilities();
   }
 
-  // Preamble doors (capability-host facades): the mutations ride the parent's
-  // capability serialization — a set-time compile snapshots state, awaits an
-  // expensive check, then appends, so two concurrent sets validating against
-  // the same snapshot could otherwise commit a preamble that no longer
-  // compiles. The reads forward plainly.
+  // Preamble mutations ride the parent's capability serialization (a set-time
+  // compile snapshots state, awaits an expensive check, then appends, so two
+  // concurrent sets validating against the same snapshot could otherwise
+  // commit a preamble that no longer compiles). The reads below forward plainly.
   async setPreamble(input: { code: string; key: string }): Promise<void> {
-    if (this.#capabilityHost !== undefined) {
-      await this.#capabilityHost.setPreamble(input);
-      return;
-    }
-    await (await this.#dial()).setPreamble(input);
+    await this.#requireCapabilityHost().setPreamble(input);
   }
 
   async removePreamble(input: { key: string }): Promise<void> {
-    if (this.#capabilityHost !== undefined) {
-      await this.#capabilityHost.removePreamble(input);
-      return;
-    }
-    await (await this.#dial()).removePreamble(input);
+    await this.#requireCapabilityHost().removePreamble(input);
   }
 
   async describePreamble(): Promise<{
