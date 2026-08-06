@@ -474,7 +474,8 @@ export class GithubAiLinterProcessor extends StreamProcessor<
 }
 
 /**
- * Convert one materialized analysis into the single GitHub review. All
+ * Convert one materialized analysis into a non-blocking GitHub review, or an
+ * explicit skipped result when there are no findings to publish. All
  * qualitative freedom ended when the agent appended its diagnostic and
  * assessment events; this function is intentionally mechanical.
  */
@@ -482,6 +483,11 @@ export async function publishGithubAiLinterReview(
   itx: Project,
   analysis: GithubAiLinterPublicationAnalysis,
 ): Promise<GithubAiLinterPublicationResult> {
+  const hasVisibleDiagnostics = analysis.diagnostics.some(
+    ({ suppression }) => suppression === null,
+  );
+  const publishesReview = hasVisibleDiagnostics || analysis.assessment.verdict !== "approve";
+
   const { request } = analysis;
   const params = {
     owner: request.repository.owner,
@@ -510,67 +516,87 @@ export async function publishGithubAiLinterReview(
   // If one GitHub PR must receive distinct reviews from several Iterate
   // projects with identical stream coordinates, add a stable project/config
   // identity to the request and marker before enabling that topology.
-  const marker = `<!-- iterate-github-ai-linter:${analysis.request.repository.id}:analysis:${analysis.analysisRequestOffset}:head:${analysis.request.headSha} -->`;
+  const publicationId = `iterate-github-ai-linter:${analysis.request.repository.id}:analysis:${analysis.analysisRequestOffset}:head:${analysis.request.headSha}`;
+  const marker = `<!-- ${publicationId} -->`;
+  const checkName = "Iterate GitHub AI linter";
+  const existingChecks = await octokit.rest.checks.listForRef({
+    check_name: checkName,
+    filter: "all",
+    owner: params.owner,
+    per_page: 100,
+    ref: request.headSha,
+    repo: params.repo,
+  });
+  const existingCheck = existingChecks.data.check_runs.find(
+    (checkRun) => checkRun.external_id === publicationId,
+  );
+  const checkResponse =
+    existingCheck === undefined
+      ? await octokit.rest.checks.create({
+          conclusion: publishesReview ? "neutral" : "success",
+          external_id: publicationId,
+          head_sha: request.headSha,
+          name: checkName,
+          output: {
+            summary: publishesReview
+              ? `The linter completed and found advisory issues. A non-blocking COMMENT review contains the inline details when publication succeeds.\n\n${analysis.assessment.summary}`
+              : analysis.assessment.summary,
+            title: publishesReview ? "Advisory findings found" : "No issues found",
+          },
+          owner: params.owner,
+          repo: params.repo,
+          status: "completed",
+        })
+      : { data: existingCheck };
+  if (checkResponse.data.html_url === null) {
+    throw new Error(`GitHub Check Run ${checkResponse.data.id} did not provide an HTML URL.`);
+  }
+  const checkRun = { id: checkResponse.data.id, url: checkResponse.data.html_url };
+  if (!publishesReview) {
+    return {
+      checkRun,
+      reason: "No visible findings to publish.",
+      status: "skipped",
+    };
+  }
+
   const reviews = await octokit.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
     ...params,
     per_page: 100,
   });
   // The marker is predictable, so body text alone is not authority: a human
   // reviewer could otherwise paste it and suppress the App's real review.
-  const existing = reviews.find(
-    (review) =>
-      review.user?.login === `${request.appSlug}[bot]` && review.body?.includes(marker) === true,
+  const existingReview = reviews.find(
+    (candidate) =>
+      candidate.user?.login === `${request.appSlug}[bot]` &&
+      candidate.body?.includes(marker) === true,
   );
-  if (existing !== undefined) {
+  if (existingReview !== undefined) {
     return {
-      reviewId: existing.id,
-      reviewUrl: existing.html_url,
+      checkRun,
+      reviewId: existingReview.id,
+      reviewUrl: existingReview.html_url,
       status: "succeeded",
     };
   }
 
-  // The marker repairs the common "GitHub succeeded, settlement append
-  // failed" retry. It cannot provide cross-process compare-and-swap: if this
-  // proof-of-concept ever permits concurrent publisher incarnations, move the
-  // external write to a GitHub primitive with a stable vendor-side key (for
-  // example a Check Run) before claiming strict exactly-once publication.
   // GitHub validates every inline location atomically with createReview. This
   // intentionally records an explicit failed publication if the LLM supplied
-  // a stale/non-diff span. A more elaborate version can deterministically
-  // pre-validate positions and degrade only invalid diagnostics to the review
-  // body, but silently dropping them here would hide malformed agent output.
-  const response = await octokit.rest.pulls.createReview({
+  // a stale/non-diff span. The neutral Check Run already records the advisory
+  // result, so a review failure cannot leave an unexplained review-only write.
+  const reviewResponse = await octokit.rest.pulls.createReview({
     ...params,
     body: githubAiLinterReviewBody(analysis, marker),
     comments: githubAiLinterReviewComments(analysis),
     commit_id: request.headSha,
-    event: githubAiLinterReviewEvent(analysis),
+    event: "COMMENT",
   });
   return {
-    reviewId: response.data.id,
-    reviewUrl: response.data.html_url,
+    checkRun,
+    reviewId: reviewResponse.data.id,
+    reviewUrl: reviewResponse.data.html_url,
     status: "succeeded",
   };
-}
-
-function githubAiLinterReviewEvent(
-  analysis: GithubAiLinterPublicationAnalysis,
-): "APPROVE" | "COMMENT" | "REQUEST_CHANGES" {
-  const diagnostics = analysis.diagnostics.filter(({ suppression }) => suppression === null);
-  const mechanicalVerdict = diagnostics.some(({ diagnostic }) => diagnostic.severity === "error")
-    ? 2
-    : diagnostics.length > 0
-      ? 1
-      : 0;
-  const assessmentVerdict = {
-    approve: 0,
-    comment: 1,
-    "request-changes": 2,
-  }[analysis.assessment.verdict];
-  const verdict = Math.max(mechanicalVerdict, assessmentVerdict);
-  if (verdict === 2) return "REQUEST_CHANGES";
-  if (verdict === 1) return "COMMENT";
-  return "APPROVE";
 }
 
 function githubAiLinterReviewBody(analysis: GithubAiLinterPublicationAnalysis, marker: string) {

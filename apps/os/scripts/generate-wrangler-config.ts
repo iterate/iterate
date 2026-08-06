@@ -232,6 +232,10 @@ const DO_EXPORTS = {
   // namespace on the next deploy of each env. Remove once every deployed env
   // reports "Safe to remove from `exports`".
   WorkspaceDurableObject: { type: "durable-object", state: "deleted" },
+  // An earlier revision of this branch provisioned a coordinator before the
+  // public-template path was simplified back onto the existing repo saga.
+  // Retire that preview namespace while keeping the coordinator code deleted.
+  RepoCreationCoordinatorDurableObject: { type: "durable-object", state: "deleted" },
 };
 
 /**

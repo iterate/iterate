@@ -63,16 +63,20 @@ async function publishMobileUpdate() {
 
   const sha = process.env.GITHUB_SHA || run("git", ["rev-parse", "HEAD"], repoRoot).trim();
   const appConfig = JSON.parse(readFileSync(path.join(mobileDir, "app.json"), "utf8"));
-  const { owner, slug } = appConfig.expo;
+  const { owner, slug, scheme } = appConfig.expo;
   const plan = planPreview({
     baseUrl: prdBaseUrl,
+    scheme,
     channel: "preview",
     publishedRuntime: runtimeVersion,
     installedRuntime,
     installUrl: `https://expo.dev/accounts/${owner}/projects/${slug}/builds/${installBuild.id}`,
+    // Main's QR points phones back at the default channel talking to prd —
+    // no recommended backend, and never a test sign-in (prd has no test OTP).
+    deepLinkParams: {},
   });
   const [deepLinkQrUrl, installQrUrl] = await Promise.all([
-    uploadQrAsset(`mobile-main-${sha.slice(0, 9)}-ota.png`, plan.deepLinkUrl),
+    uploadQrAsset(`mobile-main-${sha.slice(0, 9)}-ota-scheme.png`, plan.otaQrContent),
     uploadQrAsset(
       `mobile-main-${sha.slice(0, 9)}-install-${installBuild.id.slice(0, 8)}.png`,
       plan.installUrl,

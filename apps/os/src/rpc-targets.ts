@@ -409,7 +409,9 @@ import {
 } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import { agentCreationForPath, type AgentCreateInput } from "./domains/agents/agent-defaults.ts";
+import { ChatReplyNotifyProcessorContract } from "./domains/notifications/chat-reply-notify-contract.ts";
 import { repoCreationEvents, type RepoCreateInput } from "./domains/repos/repo-defaults.ts";
+import { normalizeConfigRepoTemplateReference } from "./lib/config-repo-template-reference.ts";
 
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
@@ -1431,9 +1433,9 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   /**
    * Request creation and wait for the repo creation saga's terminal fact.
    * The request chooses an empty starter seed (the default), a private
-   * GitHub pull at depth one, or a public import performed by Cloudflare
-   * Artifacts outside the Worker isolate (full history unless `depth` is
-   * provided). Appends the atomic request batch (`repos/create-requested` +
+   * GitHub pull at depth one, a full public import performed by Cloudflare
+   * Artifacts, or a one-time copy of a public GitHub template subtree.
+   * Appends the atomic request batch (`repos/create-requested` +
    * the repo processor subscription, plus the catalog subscription that copies the
    * terminal certificate onto `/`), then waits for
    * `repos/created` and resolves with this same handle, so create chains —
@@ -4661,6 +4663,18 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       projectId: this.#props.projectId,
       ...(payload === undefined ? {} : { payload }),
       ...(await agentBootProjectFacts(this.#props.projectId)),
+      // Plain chat threads (mobile + web — everything born through this
+      // generic door) get the chat-reply push producer as their sibling.
+      // Integration threads (Slack/Telegram/Email) are born elsewhere with
+      // their own siblings and notify in-channel instead.
+      sibling: {
+        birthCertificate: ChatReplyNotifyProcessorContract.buildEvent({
+          type: "events.iterate.com/chat-reply-notify/created",
+          idempotencyKey: `chat-reply-notify/created:${this.#props.projectId}:${this.#path}`,
+          payload: { config: {} },
+        }),
+        processorSlug: ChatReplyNotifyProcessorContract.slug,
+      },
     });
     const committed = await this.stream.append(...creation.events);
     // append() preserves INPUT order, including idempotency hits at their old
@@ -4749,12 +4763,17 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     return event;
   }
 
-  /** Provenance for context added through this handle. */
-  #contextActor(): { type: "agent"; path: string } | { type: "user"; origin: "web" } {
+  /** Provenance for context added through this handle. The user variant
+   * stamps the authenticated principal — the identity device enrollments
+   * record as ownerId — so the chat-reply push producer can address the
+   * sender's devices only. */
+  #contextActor():
+    | { type: "agent"; path: string }
+    | { type: "user"; origin: "web"; userId: string } {
     const source = this.#props.sourceScopePath;
     return source !== undefined && source.startsWith("/agents/")
       ? { type: "agent", path: source }
-      : { type: "user", origin: "web" };
+      : { type: "user", origin: "web", userId: this.#props.auth.principal };
   }
 
   /**
@@ -4783,7 +4802,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       payload: {
         role: actor.type === "agent" ? "developer" : "user",
         content: input.message,
-        actor: actor.type === "user" ? { type: "user", origin: input.origin ?? "web" } : actor,
+        actor:
+          actor.type === "user"
+            ? { type: "user", origin: input.origin ?? "web", userId: actor.userId }
+            : actor,
       },
     });
     return await this.stream.waitForEvent({
@@ -5137,7 +5159,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     return itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
-      streamContext: { kind: "scope", scopePath: "/" },
+      streamContext: streamContextForAuth(this.props.auth),
       path: "/",
       projectId,
     });
@@ -5715,9 +5737,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * Register (for a prospective slug) and append the complete root creation
    * request batch. By default this resolves once the bootstrap saga has
    * committed terminal `project/created` — the right shape for scripts that
-   * use the project immediately. `waitUntilCreated: false` resolves as soon
-   * as the identity is registered, directory primed, and request events
-   * appended:
+   * use the project immediately. `configRepoTemplate`, when present, is a
+   * pnpm-style public GitHub reference copied into the config repo before
+   * that terminal fact. `waitUntilCreated: false` resolves as soon as the
+   * identity is registered, directory primed, and request events appended:
    * the caller renders bootstrap progress itself, so nobody is left waiting.
    * The durable-delivery subscriptions committed in the birth batch are what
    * guarantee the saga runs; create also nudges both root processors AFTER
@@ -5726,10 +5749,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * same handle, and addressing an unknown slug is side-effect free.
    */
   async create(
-    args: { organizationSlug?: string; projectId?: string } = {},
+    args: { configRepoTemplate?: string; organizationSlug?: string; projectId?: string } = {},
     options?: { waitUntilCreated?: boolean },
   ): Promise<ProjectRpcTarget> {
     const projectCreateDeadline = Date.now() + PROJECT_CREATE_TIMEOUT_MS;
+    const configRepoTemplate =
+      args.configRepoTemplate === undefined
+        ? undefined
+        : normalizeConfigRepoTemplateReference(args.configRepoTemplate);
     if ("projectId" in this.#props && this.#capabilityHost.path !== "/") {
       throw new Error("project create() is only available on the project-root handle");
     }
@@ -5743,7 +5770,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         "auth-register",
         () =>
           this.#registerProject({
-            ...args,
+            ...(args.organizationSlug === undefined
+              ? {}
+              : { organizationSlug: args.organizationSlug }),
+            ...(args.projectId === undefined ? {} : { projectId: args.projectId }),
             slug: prospective.prospectiveSlug,
           }),
       );
@@ -5766,7 +5796,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           projectId: registered.projectId,
         }),
         ctx: prospective.ctx,
-        streamContext: { kind: "scope", scopePath: "/" },
+        streamContext: streamContextForAuth(prospective.auth),
         projectId: registered.projectId,
       };
       existing.auth.assertCanAccessProject(existing.projectId);
@@ -5798,6 +5828,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
               onboardingActive: true,
               slug: registered.slug,
               ...(creatorEmail === undefined ? {} : { creatorEmail }),
+              ...(configRepoTemplate === undefined ? {} : { configRepoTemplate }),
             },
           },
         }),
@@ -6657,6 +6688,19 @@ export function itxForScope(props: {
  */
 export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutionContext }) {
   return new SessionRpcTarget(props);
+}
+
+/**
+ * The stream context a project-root itx vends for this authority. External
+ * origin (a credential presented over the wire — CLI, REPL, dashboard,
+ * harness) journals server-derived client-session provenance, so approval
+ * surfaces can show WHO asked; internal mints keep the plain root scope.
+ * Never client-declared — both fields come from what auth verified.
+ */
+function streamContextForAuth(auth: ItxAuth): StreamContext {
+  return auth.origin === "external"
+    ? { kind: "client-session", principal: auth.principal, admin: auth.isAdmin() }
+    : { kind: "scope", scopePath: "/" };
 }
 
 /** The project stream's reduced state (repo catalog, worker builds, …) — also

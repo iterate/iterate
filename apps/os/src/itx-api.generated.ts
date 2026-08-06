@@ -84,9 +84,10 @@ export interface Project {
    * Register (for a prospective slug) and append the complete root creation
    * request batch. By default this resolves once the bootstrap saga has
    * committed terminal `project/created` — the right shape for scripts that
-   * use the project immediately. `waitUntilCreated: false` resolves as soon
-   * as the identity is registered, directory primed, and request events
-   * appended:
+   * use the project immediately. `configRepoTemplate`, when present, is a
+   * pnpm-style public GitHub reference copied into the config repo before
+   * that terminal fact. `waitUntilCreated: false` resolves as soon as the
+   * identity is registered, directory primed, and request events appended:
    * the caller renders bootstrap progress itself, so nobody is left waiting.
    * The durable-delivery subscriptions committed in the birth batch are what
    * guarantee the saga runs; create also nudges both root processors AFTER
@@ -95,7 +96,7 @@ export interface Project {
    * same handle, and addressing an unknown slug is side-effect free.
    */
   create(
-    args: { organizationSlug?: string; projectId?: string },
+    args: { configRepoTemplate?: string; organizationSlug?: string; projectId?: string },
     options?: { waitUntilCreated?: boolean },
   ): Promise<Project>;
   /**
@@ -1080,9 +1081,9 @@ export interface Repo {
   /**
    * Request creation and wait for the repo creation saga's terminal fact.
    * The request chooses an empty starter seed (the default), a private
-   * GitHub pull at depth one, or a public import performed by Cloudflare
-   * Artifacts outside the Worker isolate (full history unless `depth` is
-   * provided). Appends the atomic request batch (`repos/create-requested` +
+   * GitHub pull at depth one, a full public import performed by Cloudflare
+   * Artifacts, or a one-time copy of a public GitHub template subtree.
+   * Appends the atomic request batch (`repos/create-requested` +
    * the repo processor subscription, plus the catalog subscription that copies the
    * terminal certificate onto `/`), then waits for
    * `repos/created` and resolves with this same handle, so create chains —
@@ -2023,6 +2024,7 @@ export type ProjectProcessorState = {
       slug: string;
       onboardingActive?: boolean | undefined;
       creatorEmail?: string | undefined;
+      configRepoTemplate?: string | undefined;
     };
   } | null;
   createRequestedAtOffset: number | null;
@@ -2034,6 +2036,7 @@ export type ProjectProcessorState = {
         slug: string;
         onboardingActive?: boolean | undefined;
         creatorEmail?: string | undefined;
+        configRepoTemplate?: string | undefined;
       };
     };
   } | null;
@@ -2042,6 +2045,7 @@ export type ProjectProcessorState = {
       slug: string;
       onboardingActive?: boolean | undefined;
       creatorEmail?: string | undefined;
+      configRepoTemplate?: string | undefined;
     };
     createRequestedAtOffset: number;
   } | null;
@@ -2469,7 +2473,7 @@ export type AgentProcessorState = {
           )[]
         | undefined;
       actor?:
-        | { type: "user"; origin: "mcp" | "web" }
+        | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
         | { type: "agent"; path: string }
         | { type: "script"; executionId: string }
         | { type: "integration"; name: string }
@@ -2657,7 +2661,7 @@ export type AgentEventInput =
             )[]
           | undefined;
         actor?:
-          | { type: "user"; origin: "mcp" | "web" }
+          | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
           | { type: "agent"; path: string }
           | { type: "script"; executionId: string }
           | { type: "integration"; name: string }
@@ -3261,6 +3265,13 @@ export type CollectSecretLink = {
 /** The `repos/create-requested` payload — the creation saga's durable intent. */
 export type RepoCreateInput =
   | { type: "empty" }
+  | {
+      type: "github-public-template";
+      owner: string;
+      path?: string | undefined;
+      ref?: string | undefined;
+      repo: string;
+    }
   | { type: "github-private"; connection: string; owner: string; repo: string }
   | {
       type: "github-public";
@@ -3356,6 +3367,13 @@ export type GithubResetResult = {
 export type RepoProcessorState = {
   createRequest:
     | { type: "empty" }
+    | {
+        type: "github-public-template";
+        owner: string;
+        path?: string | undefined;
+        ref?: string | undefined;
+        repo: string;
+      }
     | { type: "github-private"; connection: string; owner: string; repo: string }
     | {
         type: "github-public";
@@ -3369,6 +3387,13 @@ export type RepoProcessorState = {
     error: string;
     request:
       | { type: "empty" }
+      | {
+          type: "github-public-template";
+          owner: string;
+          path?: string | undefined;
+          ref?: string | undefined;
+          repo: string;
+        }
       | { type: "github-private"; connection: string; owner: string; repo: string }
       | {
           type: "github-public";
@@ -3381,6 +3406,13 @@ export type RepoProcessorState = {
   birthCertificate: {
     request:
       | { type: "empty" }
+      | {
+          type: "github-public-template";
+          owner: string;
+          path?: string | undefined;
+          ref?: string | undefined;
+          repo: string;
+        }
       | { type: "github-private"; connection: string; owner: string; repo: string }
       | {
           type: "github-public";
@@ -3977,6 +4009,7 @@ export type DeviceAppendInput =
   | TypedConsumedEventInput<
       "events.iterate.com/device/notification-requested",
       {
+        agentReplyEventOffset?: number | undefined;
         approvalRequestEventOffset?: number | undefined;
         body: string;
         destination:

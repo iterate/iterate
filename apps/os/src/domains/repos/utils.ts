@@ -56,6 +56,12 @@ export class RepoNotSeededError extends Error {
   override readonly name = RepoNotSeededError.NAME;
 }
 
+/** A temporary source failure that must leave the repo-creation obligation
+ * open for the processor's existing recovery lane. */
+export class RetryableRepoCreationError extends Error {
+  override readonly name = "RetryableRepoCreationError";
+}
+
 const ARTIFACTS_REPO_NOT_READY_CODES = new Set([
   "NOT_FOUND",
   "IMPORT_IN_PROGRESS",

@@ -1,6 +1,6 @@
 // `pnpm cli config-repo reset --project <slug-or-id>` — overwrite a project's
 // config repo (`/repos/config`) so its tree matches the CURRENT template at
-// apps/os/config-repo-template. Run it from `apps/os`; the active Doppler
+// configs/default. Run it from `apps/os`; the active Doppler
 // config supplies the OS deployment URL and its matching admin secret:
 //
 //   doppler run --config prd -- pnpm cli config-repo reset --project iterate
