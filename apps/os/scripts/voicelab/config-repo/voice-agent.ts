@@ -153,7 +153,26 @@ const WARMUP_PROTOCOL_REVISION = "warmup/4-marked-brief";
  * remove.
  */
 const WARMUP_DEADLINE_MS = 45_000;
-const VOICE_AGENT_SUBSCRIPTION_KEY = "app-voice-agent#voice-agent";
+/**
+ * The subscription's name, which at CORE_STATE_VERSION 30 must EQUAL the
+ * processor slug.
+ *
+ * There used to be two identities here: a `subscriptionKey`
+ * (`app-voice-agent#voice-agent`) naming the subscription and a
+ * `receiver.processorSlug` naming the contract to run. Version 30 collapsed
+ * them — "the subscription NAME alone selects which registered contract a
+ * processor-wake runs" — and made the payload strict, so the old pair is now
+ * rejected outright. That rejection is what stopped every device: setup threw
+ * a ZodError before it ever reached the warm-up, and the firmware, having no
+ * way to report a rejected call, simply prepared a conversation again every
+ * thirty seconds.
+ *
+ * Nothing checks this equality at configure time. A name matching no
+ * registered processor commits happily and fails at the FIRST WAKE with the
+ * registry's unknown-name error — which is a delivery failure on a live
+ * conversation, not a setup failure anyone is watching.
+ */
+const VOICE_AGENT_SUBSCRIPTION_NAME = VOICE_AGENT_PROCESSOR_SLUG;
 const CALL_REQUEST_FRESHNESS_MS = 30_000;
 /**
  * What the voice model is told it is.
@@ -3759,7 +3778,12 @@ export interface SetupVoiceAgentResult {
   };
 }
 
-const SubscriptionLifecyclePayload = z.object({ subscriptionKey: z.string() });
+/*
+ * Both lifecycle events carry the subscription's `name`. It is optional only
+ * on configuration (an omitted name derives `subscription:<offset>`), and this
+ * setup always sends one, so an event without a name is somebody else's.
+ */
+const SubscriptionLifecyclePayload = z.object({ name: z.string() });
 
 async function voiceAgentSubscriptionStatus(stream: Stream): Promise<{
   active: boolean;
@@ -3778,7 +3802,7 @@ async function voiceAgentSubscriptionStatus(stream: Stream): Promise<{
     if (events.length === 0) break;
     for (const event of events) {
       const payload = SubscriptionLifecyclePayload.safeParse(event.payload);
-      if (!payload.success || payload.data.subscriptionKey !== VOICE_AGENT_SUBSCRIPTION_KEY) {
+      if (!payload.success || payload.data.name !== VOICE_AGENT_SUBSCRIPTION_NAME) {
         continue;
       }
       if (event.type === "events.iterate.com/stream/subscription-configured") {
@@ -4302,14 +4326,16 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
       /*
        * THE SUBSCRIPTION, as one value, because its KEY is derived from it.
        *
-       * `subscriptionKey` inside the payload is the platform's own handle on the
-       * subscription and must stay the stable VOICE_AGENT_SUBSCRIPTION_KEY: that
-       * is what makes a re-install REPLACE this subscription rather than run a
-       * second one alongside it. The idempotency key underneath is a different
-       * thing entirely and follows the content — see contentHash.
+       * `name` inside the payload is the platform's own handle on the
+       * subscription and must stay the stable VOICE_AGENT_SUBSCRIPTION_NAME:
+       * that is what makes a re-install REPLACE this subscription rather than
+       * run a second one alongside it, AND — since version 30 — what selects
+       * which registered processor contract the wake runs. The idempotency key
+       * underneath is a different thing entirely and follows the content — see
+       * contentHash.
        */
       const subscriptionPayload = {
-        subscriptionKey: VOICE_AGENT_SUBSCRIPTION_KEY,
+        name: VOICE_AGENT_SUBSCRIPTION_NAME,
         description: "Wake the separately deployed voice-agent guest for call requests.",
         filter: {
           eventTypes: [
@@ -4328,7 +4354,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
              * shape of that dependency: the filter lives in the payload whose
              * contentHash IS the idempotency key, so adding a type here makes a
              * re-setup append a new subscription-configured event under the same
-             * subscriptionKey, replacing the old filter rather than running two.
+             * name, replacing the old filter rather than running two.
              *
              * Neither the bridge (mic-frame, ping, turn, say, conversation-ended,
              * conversation-accepted) nor the device's downlink (speaker-frame,
@@ -4342,6 +4368,30 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
             "events.iterate.com/voice-agent/brief-current",
           ],
         },
+        /*
+         * AN EXPRESSION, NOT `placement: "facet"`, and that is not a leftover.
+         *
+         * Version 30 offers two placements for a processor-wake, and they are
+         * not interchangeable. `placement: "facet"` runs the processor as a
+         * facet of the stream's OWN Durable Object, which means the contract
+         * has to be one the OS worker itself registers: the facet is dialled
+         * by name out of `ProcessorFacet`'s composition
+         * (processor-facet-durable-object.ts), whose arms are chosen purely
+         * from the stream path (processor-facet-families.ts). A voice stream
+         * lives at `/agents/voice/…`, so its facet composition is the AGENT
+         * family plus the capability host — there is no `voice-agent` contract
+         * in it and there cannot be, because this contract is defined here, in
+         * a file that lives in the project's config repo.
+         *
+         * So the voice agent processor CANNOT be a facet without moving it
+         * into the OS worker, which would stop it being userspace code. The
+         * expression placement it uses instead is the supported lane for
+         * exactly this — version 30 kept it, in the schema's own words, for
+         * "own-DO or userspace-worker placement, exactly as before" — and the
+         * stream evaluates it as an itx expression against this project's
+         * dynamic worker. Everything downstream (retention, batching, the
+         * delivery watchdog) is shared with the facet lane.
+         */
         receiver: {
           action: "processor-wake",
           expression: [
@@ -4350,7 +4400,6 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
             "processor",
             "wakeStreamProcessor",
           ],
-          processorSlug: VOICE_AGENT_PROCESSOR_SLUG,
         },
       };
       const subscriptionKeyPrefix = `voice-agent/subscription-configured:${streamPath}`;
@@ -4662,13 +4711,13 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
           stream.append({
             type: "events.iterate.com/stream/subscription-removed",
             idempotencyKey: removalKey,
-            payload: { subscriptionKey: VOICE_AGENT_SUBSCRIPTION_KEY, reason: "requested" },
+            payload: { name: VOICE_AGENT_SUBSCRIPTION_NAME, reason: "requested" },
           }),
           "subscription removal append result",
         );
         removed.push(removalKey);
       } else {
-        alreadyAbsent.push(VOICE_AGENT_SUBSCRIPTION_KEY);
+        alreadyAbsent.push(VOICE_AGENT_SUBSCRIPTION_NAME);
       }
 
       using processor = project.workers.get(voiceAgentProcessorRef(options.streamPath));
