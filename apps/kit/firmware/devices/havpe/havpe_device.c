@@ -124,6 +124,8 @@ enum {
   PING_TIMEOUT_MS = ITERATE_KIT_VOICE_PING_TIMEOUT_MS,
   BRIDGE_SILENCE_MS = ITERATE_KIT_VOICE_BRIDGE_SILENCE_MS,
   DOWNLINK_SILENCE_MS = ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS,
+  /* How long an idle mount may go unexercised before re-registering. */
+  IDLE_REMOUNT_MS = 180000,
   NO_LIVENESS_RESTART_MS = ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS,
 };
 
@@ -264,6 +266,7 @@ static struct {
   uint32_t barge_in_flushes;
   /* Transports torn down because a ping went unanswered. */
   uint32_t liveness_restarts;
+  uint32_t idle_remounts;
   /* Calls abandoned because their bridge stopped proving it existed. */
   uint32_t bridge_losses;
   /* Connections replaced because nothing was being delivered on them. */
@@ -1216,6 +1219,7 @@ static size_t health_json(char *out, size_t capacity) {
     {"pings", runtime.voicelab.ping_count},
     {"pingFailures", runtime.voicelab.ping_failures},
     {"livenessRestarts", runtime.liveness_restarts},
+    {"idleRemounts", runtime.idle_remounts},
     /* Inbound capability dispatches served: the liveness proof. */
     {"servedDispatches", iterate_kit_peer_served_dispatches(&runtime.peer)},
     {"bridgeLosses", runtime.bridge_losses},
@@ -1471,28 +1475,6 @@ void iterate_kit_havpe_run(void) {
     ESP_LOGE(tag, "ring/button bring-up failed");
     return;
   }
-  /*
-   * The audio boot is legitimately long — a 3 s XMOS boot plus the AIC3204's
-   * 2.5 s analogue soft-start — so the ring already shows "connecting" and
-   * the task watchdog is fed around the waits by their owning task.
-   */
-  if (!havpe_audio_init()) {
-    park_with_fault("audio bring-up failed — failing closed");
-  }
-  runtime.codec = havpe_audio_codec();
-  runtime.processor = iterate_kit_audio_processor_passthrough();
-  if (iterate_kit_audio_codec_validate(&runtime.codec) != ITERATE_KIT_OK ||
-      iterate_kit_audio_processor_validate(&runtime.processor) !=
-          ITERATE_KIT_OK ||
-      runtime.codec.properties->capture_sample_rate_hz !=
-          runtime.processor.properties->sample_rate_hz ||
-      runtime.processor.properties->frame_samples != FRAME_SAMPLES ||
-      (runtime.processor.properties->requires_reference_channel &&
-       !runtime.codec.properties->has_reference_channel) ||
-      iterate_kit_audio_processor_reset(&runtime.processor) !=
-          ITERATE_KIT_OK) {
-    park_with_fault("incompatible codec and audio processor");
-  }
   havpe_ui_set_state(HAVPE_UI_CONNECTING);
   havpe_ui_set_status("connecting to iterate");
   runtime.mic_queue = xQueueCreate(MIC_QUEUE_DEPTH, sizeof(struct mic_frame));
@@ -1511,6 +1493,20 @@ void iterate_kit_havpe_run(void) {
   }
   iterate_kit_playout_reset(&runtime.playout, 1U);
   /*
+   * THE RADIO GOES FIRST, AND THE AUDIO BOOTS WHILE IT ASSOCIATES.
+   *
+   * This board's audio bring-up is legitimately long — a 3 s XMOS boot plus
+   * the AIC3204's 2.5 s analogue soft-start, 6.2 s measured — and it used to
+   * run to completion BEFORE Wi-Fi was even started. Nothing in the transport
+   * needs the codec; only the capture and playback tasks below do, and they
+   * are created after both. So the two waits ran back to back for no reason,
+   * and every later milestone inherited the delay: this board reached a ready
+   * mount at ~14 s where the others managed ~8 s, and its first conversation
+   * was prepared six seconds behind theirs.
+   *
+   * Wi-Fi association plus TLS plus the mount is itself ~6-8 s of waiting, so
+   * overlapping the two is very nearly free.
+   *
    * A RADIO THAT WILL NOT START IS NOT A FATAL FAULT, IT IS AN OFFLINE
    * DEVICE. This used to return, which — with the watchdog already
    * subscribed — turned a transient Wi-Fi start failure into a permanent
@@ -1528,6 +1524,29 @@ void iterate_kit_havpe_run(void) {
       havpe_ui_tick();
       vTaskDelay(pdMS_TO_TICKS(100));
     }
+  }
+
+  /*
+   * ...and only now the codec, while the radio is off doing its own waiting.
+   * Failing closed here still parks with the fault on the ring: a board whose
+   * audio did not come up must not go on to accept a conversation.
+   */
+  if (!havpe_audio_init()) {
+    park_with_fault("audio bring-up failed — failing closed");
+  }
+  runtime.codec = havpe_audio_codec();
+  runtime.processor = iterate_kit_audio_processor_passthrough();
+  if (iterate_kit_audio_codec_validate(&runtime.codec) != ITERATE_KIT_OK ||
+      iterate_kit_audio_processor_validate(&runtime.processor) !=
+          ITERATE_KIT_OK ||
+      runtime.codec.properties->capture_sample_rate_hz !=
+          runtime.processor.properties->sample_rate_hz ||
+      runtime.processor.properties->frame_samples != FRAME_SAMPLES ||
+      (runtime.processor.properties->requires_reference_channel &&
+       !runtime.codec.properties->has_reference_channel) ||
+      iterate_kit_audio_processor_reset(&runtime.processor) !=
+          ITERATE_KIT_OK) {
+    park_with_fault("incompatible codec and audio processor");
   }
   if (xTaskCreatePinnedToCore(
           capture_task,
@@ -2070,6 +2089,50 @@ void iterate_kit_havpe_run(void) {
           runtime.frame_sequence = 0U;
           havpe_ui_set_state(HAVPE_UI_LISTENING);
           havpe_ui_set_status("listening");
+        }
+      }
+
+      /*
+       * A MOUNT CAN GO STALE WHILE EVERY SIGNAL THIS DEVICE HAS SAYS HEALTHY.
+       *
+       * Measured repeatedly across a whole afternoon: the transport stays
+       * ready, pings keep being answered, dev-stats keep being accepted,
+       * livenessRestarts stays 0 — and every RPC to itx.kit.<name> fails with
+       * "capability is offline". The stream is fine; what has gone is the
+       * capability REGISTRATION, and nothing the device can observe about
+       * itself distinguishes that from a quiet afternoon. Boards became
+       * unreachable until somebody power-cycled them, and the only accidental
+       * recoveries were connection replacements.
+       *
+       * So the device stops trying to tell the two apart and simply
+       * re-registers when nothing has called it for a while. It cannot know
+       * whether the silence means "nobody wants me" or "nobody can reach me",
+       * and the cheap way to find out is to ask again. Never while a call is
+       * live or wanted: an idle reconnect costs about eight seconds nobody is
+       * listening to, and a mid-call one would cost a conversation.
+       */
+      {
+        static uint64_t dispatches_shown;
+        static uint64_t quiet_since_ms;
+        const uint64_t dispatches =
+            iterate_kit_peer_served_dispatches(&runtime.peer);
+        const bool idle = !wants_call && !runtime.voicelab.call_active &&
+            !runtime.voicelab.call_pending;
+        if (dispatches != dispatches_shown || !idle) {
+          dispatches_shown = dispatches;
+          quiet_since_ms = now;
+        } else if (quiet_since_ms == 0U) {
+          quiet_since_ms = now;
+        } else if (iterate_kit_voice_elapsed_ms(now, quiet_since_ms) >
+                   IDLE_REMOUNT_MS) {
+          quiet_since_ms = now;
+          ++runtime.idle_remounts;
+          ESP_LOGW(
+              tag,
+              "nothing has called this device in %us — re-registering",
+              (unsigned int)(IDLE_REMOUNT_MS / 1000U));
+          havpe_ui_set_status("re-registering");
+          iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
         }
       }
 

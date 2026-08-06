@@ -120,6 +120,8 @@ enum {
   PING_TIMEOUT_MS = ITERATE_KIT_VOICE_PING_TIMEOUT_MS,
   BRIDGE_SILENCE_MS = ITERATE_KIT_VOICE_BRIDGE_SILENCE_MS,
   DOWNLINK_SILENCE_MS = ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS,
+  /* How long an idle mount may go unexercised before re-registering. */
+  IDLE_REMOUNT_MS = 180000,
   NO_LIVENESS_RESTART_MS = ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS,
 };
 
@@ -262,6 +264,7 @@ static struct {
   uint32_t barge_in_flushes;
   /* Transports torn down because a ping went unanswered. */
   uint32_t liveness_restarts;
+  uint32_t idle_remounts;
   /* Calls abandoned because their bridge stopped proving it existed. */
   uint32_t bridge_losses;
   /* Connections replaced because nothing was being delivered on them. */
@@ -1135,6 +1138,7 @@ static size_t health_json(char *out, size_t capacity) {
     {"pings", runtime.voicelab.ping_count},
     {"pingFailures", runtime.voicelab.ping_failures},
     {"livenessRestarts", runtime.liveness_restarts},
+    {"idleRemounts", runtime.idle_remounts},
     /* Inbound capability dispatches served: the liveness proof. */
     {"servedDispatches", iterate_kit_peer_served_dispatches(&runtime.peer)},
     {"bridgeLosses", runtime.bridge_losses},
@@ -2026,6 +2030,50 @@ void iterate_kit_m5sticks3_run(void) {
         if (publish_turn_marker(ITERATE_KIT_VOICELAB_TURN_COMMIT)) {
           m5sticks3_ui_set_state(M5STICKS3_UI_SPEAKING);
           m5sticks3_ui_set_status("thinking");
+        }
+      }
+
+      /*
+       * A MOUNT CAN GO STALE WHILE EVERY SIGNAL THIS DEVICE HAS SAYS HEALTHY.
+       *
+       * Measured repeatedly across a whole afternoon: the transport stays
+       * ready, pings keep being answered, dev-stats keep being accepted,
+       * livenessRestarts stays 0 — and every RPC to itx.kit.<name> fails with
+       * "capability is offline". The stream is fine; what has gone is the
+       * capability REGISTRATION, and nothing the device can observe about
+       * itself distinguishes that from a quiet afternoon. Boards became
+       * unreachable until somebody power-cycled them, and the only accidental
+       * recoveries were connection replacements.
+       *
+       * So the device stops trying to tell the two apart and simply
+       * re-registers when nothing has called it for a while. It cannot know
+       * whether the silence means "nobody wants me" or "nobody can reach me",
+       * and the cheap way to find out is to ask again. Never while a call is
+       * live or wanted: an idle reconnect costs about eight seconds nobody is
+       * listening to, and a mid-call one would cost a conversation.
+       */
+      {
+        static uint64_t dispatches_shown;
+        static uint64_t quiet_since_ms;
+        const uint64_t dispatches =
+            iterate_kit_peer_served_dispatches(&runtime.peer);
+        const bool idle = !wants_call && !runtime.voicelab.call_active &&
+            !runtime.voicelab.call_pending;
+        if (dispatches != dispatches_shown || !idle) {
+          dispatches_shown = dispatches;
+          quiet_since_ms = now;
+        } else if (quiet_since_ms == 0U) {
+          quiet_since_ms = now;
+        } else if (iterate_kit_voice_elapsed_ms(now, quiet_since_ms) >
+                   IDLE_REMOUNT_MS) {
+          quiet_since_ms = now;
+          ++runtime.idle_remounts;
+          ESP_LOGW(
+              tag,
+              "nothing has called this device in %us — re-registering",
+              (unsigned int)(IDLE_REMOUNT_MS / 1000U));
+          m5sticks3_ui_set_status("re-registering");
+          iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
         }
       }
 

@@ -67,6 +67,14 @@ enum {
   PIN_I2S_DIN = 10,
   PIN_I2S_DOUT = 8,
   PIN_PA = 46,
+  /*
+   * How long this board's class-D amplifier needs between its enable going
+   * high and it reproducing a sample faithfully. Generous rather than tuned:
+   * the cost is 80 ms added to the first word of an answer, paid out of a
+   * thirty-second ring that already holds the whole thing, and the failure it
+   * prevents is a missing syllable that no counter can report.
+   */
+  AMPLIFIER_SETTLE_MS = 80,
   ADDR_ES8311_8BIT = 0x30, /* esp_codec_dev shifts to 7-bit 0x18 */
   ADDR_AXP2101 = 0x34,
 };
@@ -180,6 +188,13 @@ static void capture_hardware_task(void *argument) {
   }
 }
 
+/*
+ * When the amplifier can be trusted to reproduce a sample. Written by the
+ * receive path, read by the playback task; a single aligned 64-bit stamp on a
+ * board where only one writer ever sets it.
+ */
+static volatile int64_t amplifier_settled_at_us;
+
 static void playback_hardware_task(void *argument) {
   struct audio_frame frame;
   (void)argument;
@@ -189,6 +204,34 @@ static void playback_hardware_task(void *argument) {
     }
     const uint32_t frame_ms = (uint32_t)(
         frame.sample_count * 1000U / WAVESHARE_AUDIO_SAMPLE_RATE_HZ);
+    /*
+     * THE AMPLIFIER HAS TO BE CONDUCTING BEFORE THE FIRST SAMPLE, AND THIS IS
+     * THE SECOND TIME THAT HAS NEEDED FIXING.
+     *
+     * The first fix raised the amp when audio ARRIVED rather than when the
+     * first sample was written, and spent the playout prefill as settle time.
+     * That was sound while the server dripped frames in real time: the prefill
+     * really did take 160 ms of wall clock to accumulate. It is not sound any
+     * more — a whole answer now leaves the bridge as fast as the wire takes
+     * it, so the prefill threshold is crossed a few milliseconds after the
+     * first frame lands and the amp gets no settle window at all. Heard as
+     * "banana" arriving as "nana".
+     *
+     * The counters could not see it and never will: every frame was received,
+     * queued and written (spkPlayed == spkWrites, nothing discarded). The
+     * audio was lost in the analogue domain, after the last instrument.
+     *
+     * So the settle is an explicit deadline now rather than a side effect of
+     * how slowly audio happens to arrive. Waiting HERE is safe and waiting in
+     * the amplifier call is not: this task exists to feed DMA, while that one
+     * runs on the receive path that decodes speaker PCM.
+     */
+    {
+      const int64_t settle_us = amplifier_settled_at_us - esp_timer_get_time();
+      if (settle_us > 0) {
+        vTaskDelay(pdMS_TO_TICKS((uint32_t)((settle_us + 999) / 1000)));
+      }
+    }
     /*
      * Credit before the blocking write: DMA completion callbacks run from
      * inside esp_codec_dev_write(), so crediting afterwards fabricates an
@@ -268,6 +311,7 @@ static volatile uint32_t dma_underruns;
  * those produced 23471 "underruns" in six turns, which is the sound of a
  * metric measuring silence rather than a fault.
  */
+
 static volatile bool dma_watch;
 /*
  * True while the software has stopped handing over audio on purpose. Separate
@@ -882,11 +926,16 @@ void waveshare_audio_amplifier(bool on) {
   current = on;
   (void)gpio_set_level(PIN_PA, on ? 1 : 0);
   /*
-   * No delay on the way up. This is called from the receive path, ~160 ms of
-   * playout prefill before the first sample is written, so the amp settles
-   * for free — and blocking here would stall the task that decodes speaker
-   * PCM. Blocking is exactly what must not happen on that task.
+   * Still no delay on the way up — blocking here would stall the task that
+   * decodes speaker PCM, which is exactly what must not happen. Instead this
+   * publishes the instant the amp can be trusted, and the PLAYBACK task waits
+   * for it. See the wait in playback_task for why the old "the prefill settles
+   * it for free" reasoning stopped being true.
    */
+  if (on) {
+    amplifier_settled_at_us =
+        esp_timer_get_time() + (int64_t)AMPLIFIER_SETTLE_MS * 1000;
+  }
 }
 
 i2c_master_bus_handle_t waveshare_audio_i2c_bus(void) {
