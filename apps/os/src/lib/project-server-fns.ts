@@ -12,7 +12,7 @@ import {
   type RootProjectRedirectDecision,
 } from "~/lib/project-root-redirect.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
-import { ProjectCollectionRpcTarget } from "~/rpc-targets.ts";
+import { clientSessionStreamContext, ProjectCollectionRpcTarget } from "~/rpc-targets.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 /**
@@ -86,12 +86,14 @@ export const getRootProjectRedirectServerFn: (input?: {
     if (!principal) return { kind: "projects" };
 
     try {
+      const auth = itxAuthFromPrincipal(principal, {
+        allowDirectoryFallback: context.operatorSession == null,
+      });
       const projects = new ProjectCollectionRpcTarget({
-        auth: itxAuthFromPrincipal(principal, {
-          allowDirectoryFallback: context.operatorSession == null,
-        }),
+        auth,
         config: context.config,
         ctx: context.executionCtx,
+        streamContext: clientSessionStreamContext(auth),
       });
       const decision = chooseRootProjectRedirect({
         preferredProjectSlug:

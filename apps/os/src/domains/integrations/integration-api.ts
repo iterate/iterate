@@ -103,6 +103,7 @@ async function handleOAuthCallback(input: {
     auth: trustedInternalAuthContext(),
     config: input.context.config,
     ctx: input.context.executionCtx,
+    streamContext: { kind: "scope", scopePath: "/" },
   }).get(unverified.projectId);
   const result = await project.integrations.completeConnect({
     code,
@@ -187,6 +188,7 @@ async function handleMcpOAuthCallback(input: {
           auth: trustedInternalAuthContext(),
           config: input.context.config,
           ctx: input.context.executionCtx,
+          streamContext: { kind: "scope", scopePath: "/" },
         }).get(state.projectId);
         await project.agents
           .get(result.notify)

@@ -7,7 +7,11 @@ size: small
 
 ## Status summary
 
-Spec committed, implementation not started.
+Implemented and unit-tested; awaiting CI (e2e) and review. Main pieces: the
+`client-session` StreamContext variant, session-boundary threading in
+rpc-targets, mobile approval-card rendering, e2e assertion. Not done: web
+dashboard rendering (no approvals surface renders streamContext today), MCP
+caller provenance (see notes).
 
 ## Motivation
 
@@ -55,25 +59,32 @@ client-declared label in this task (deliberately deferred — see non-goals).
 
 ## Checklist
 
-- [ ] Add `client-session` variant to `StreamContext` in
+- [x] Add `client-session` variant to `StreamContext` in
       `apps/os/src/domains/projects/stream-context.ts`
-- [ ] Derive it from `ItxAuth` at the session-rooted handle sites in
-      `apps/os/src/rpc-targets.ts` (audit all `{kind: "scope", scopePath: "/"}`
-      literals there; change only the external-session ones)
-- [ ] Confirm the approval signing scheme (`egress-approvals.ts` approval.v2)
-      is unaffected — streamContext must not be part of the signed subject, or
-      if it is, both signer and verifier see the journaled value
-- [ ] Mobile: render the new kind in
-      `apps/mobile/src/components/approval-batch.tsx` (currently prints
-      `Triggered from {streamContext.scopePath}` for `scope` only) and confirm
-      `apps/mobile/src/lib/approvals.ts` parsing tolerates the new kind for
-      old journaled events and vice versa (old app builds seeing new events
-      must degrade gracefully, not crash)
-- [ ] Web dashboard: if there is an approvals surface rendering streamContext,
-      mirror the mobile rendering
-- [ ] Tests: context derivation unit test; an egress-approvals /
-      project-processor test journaling a `client-session` context;
-      mobile formatting test
+      _three-field strictObject: principal, admin; doc comment explains the
+      server-minted trust model_
+- [x] Derive it from `ItxAuth` at the session-rooted handle sites in
+      `apps/os/src/rpc-targets.ts`
+      _`clientSessionStreamContext(auth)` helper; `streamContext` is now a
+      required prop on SessionRpcTarget and ProjectCollectionRpcTarget so every
+      constructor site chooses explicitly: `authenticate()` and
+      project-server-fns pass client-session; deploymentItxForInternal,
+      integration-api, and mcp-handler keep explicit scope-"/"_
+- [x] Confirm the approval signing scheme is unaffected
+      _`buildApprovalMessage` deliberately excludes display/provenance fields —
+      streamContext is not part of the signed subject_
+- [x] Mobile: render the new kind in `approval-batch.tsx`
+      _"Triggered by an admin session / a client session" + selectable
+      principal; old builds fall through to rendering nothing (payload is
+      typed structurally, no runtime parse, so no crash)_
+- [x] ~~Web dashboard approvals surface~~ _none renders streamContext today;
+      nothing to mirror_
+- [x] Tests
+      _stream-context.test.ts round-trips the new variant;
+      egress-approvals.e2e.test.ts now asserts the requested payload journals
+      `{kind: "client-session", principal: "admin", admin: true}` for the
+      admin-secret session; mobile has no component-test infra so rendering is
+      typecheck-covered only_
 
 ## Non-goals
 
@@ -85,4 +96,13 @@ client-declared label in this task (deliberately deferred — see non-goals).
 
 ## Implementation notes
 
-(log added during implementation)
+- The generated itx API files did not change — StreamContext is server-internal
+  and not part of the public surface (`generate:itx-api` produced no diff).
+- MCP (`mcp-handler.ts`) keeps the scope-"/" fallback: it runs project itx with
+  `trustedInternalAuthContext()` after verifying the caller separately, so
+  minting a client-session there would falsely claim the internal principal.
+  Threading the MCP caller's real identity is a natural follow-up.
+- Push-notification body ("GET gmail.googleapis.com is waiting for approval.")
+  still has no provenance; the card does once opened. Adding the principal to
+  the notification body is another possible follow-up.
+- Client-declared labels deliberately deferred (Misha thinking about it).
