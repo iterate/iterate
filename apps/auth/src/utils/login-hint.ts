@@ -31,7 +31,7 @@ export function deriveLoginHintPresentation(input: {
   const hintedEmail =
     !signedIn && emailOtpEnabled && loginHint?.includes("@") ? loginHint : undefined;
   const otpGuess =
-    hintedEmail !== undefined && shouldUseTestOtp({ email: hintedEmail, fixedTestOtpEnabled })
+    hintedEmail && shouldUseTestOtp({ email: hintedEmail, fixedTestOtpEnabled })
       ? TEST_OTP_CODE
       : undefined;
   const mode =
