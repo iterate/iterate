@@ -1,0 +1,93 @@
+---
+status: in-progress
+size: small
+---
+
+# Result tab: show what the agent actually saw
+
+Follow-up from `tasks/codemode-script-preamble-followups.md` (second checklist item).
+
+## Status summary
+
+Spec committed; implementation not started yet.
+
+## Problem
+
+The agent feed's expanded activity rounds have a `Script | Result | Meta` tab bar
+(`apps/os/src/components/agent-activity-rounds.tsx`). The Result tab renders its own
+client-side view of the raw settlement: the result value re-serialized as YAML with its
+own truncation ("This result is 81,313 characters as YAML. Showing the first 64 KB
+without syntax highlighting.").
+
+That view is unrelated to what the AGENT was shown. The agent-facing render is produced
+server-side by `renderScriptSettlement`
+(`apps/os/src/domains/agents/agent-processor-implementation.ts`): truncation at
+`scriptResultHistoryLimit`, oversized results replaced by an inferred TS type + bounded
+JSON preview + a `results[0].load(itx)` recipe, spill-file pointers, failure text with
+recovery-tool hints. It is appended to the stream as a developer
+`events.iterate.com/agents/context-added` event with
+`payload.actor = { type: "script", executionId }` and content starting
+"Your script returned" / "Your script failed".
+
+Direction: **the Result tab should be a representation of what the agent is actually
+shown.** Keep the raw view reachable, but the agent's view is the default.
+
+## Design
+
+- The render already exists on the stream, so don't re-implement it client-side: query
+  the local raw-event mirror (`useStreamQuery`, same pattern as the Meta tab's
+  `RoundMetaWithPrompt`) for the `agents/context-added` event whose
+  `payload.actor.type = 'script'` and `payload.actor.executionId` matches the round's
+  code step. The query only runs while the Result tab is mounted (inactive base-ui tab
+  panels unmount), and it's live — if the render event lands after the settlement (it's
+  appended in a blocked async section), the tab picks it up when it arrives.
+- Render the event's `payload.content` through `MessageResponse`
+  (`packages/ui/src/components/ai-elements/message.tsx`, streamdown) with
+  `mode="static"` / `parseIncompleteMarkdown={false}` — the same markdown+fenced-code
+  renderer settled assistant messages use. The text is bounded server-side, so no
+  client-side truncation mechanism is needed on this path.
+- Keep the raw view: a small toggle inside the Result tab switches between the agent
+  view (default) and the existing raw YAML/error rendering. The full raw settlement
+  also stays one click away via the existing "Execution trace" sheet.
+- Fallbacks to the current raw view: no `database` prop, mirror query errored, or no
+  render event found (old streams predating `renderScriptSettlement`, renders for
+  non-agent executions, or a succeeded run with `result === undefined` which produces
+  no render event — though that case doesn't offer a Result tab anyway).
+
+## Assumptions (made while fleshing out, Misha AFK)
+
+- Scope is the FEED Result tab (`agent-activity-rounds.tsx`) — the string observed live
+  is from there. The execution-trace sheet
+  (`script-execution-inspector-panel.tsx`) keeps its raw Result tab as-is: it *is* the
+  raw capability the feed links to.
+- Mobile's structural twin (`apps/mobile/src/components/activity-card.tsx`) is NOT
+  updated in this PR — noted as a possible follow-up so the surfaces don't silently
+  diverge.
+- Correlation by `payload.actor.executionId` (exact match) is sufficient; no offset
+  proximity heuristics needed.
+- `useState` for the in-tab agent/raw toggle matches the file's existing tab-selection
+  pattern (CLAUDE.md's "almost never useState" yields to local UI toggle convention
+  already established in this file).
+
+## Checklist
+
+- [ ] Pass `database` down to `RoundResult`; query the mirror for the script's
+      `agents/context-added` render event
+- [ ] Render the agent-visible markdown via `MessageResponse` as the DEFAULT Result
+      view
+- [ ] Keep the raw YAML/error view behind a toggle, and as the fallback when no render
+      event exists
+- [ ] Component test following `agent-feed.test.tsx` patterns (fake
+      `StreamBrowserDatabase` with a canned query handle)
+- [ ] Screenshot for the PR body (local dev or spec tooling); if too painful, say so in
+      the PR body
+
+## Implementation log
+
+- Worktree `result-tab-agent-view` off origin/main (34c7de98a).
+- Located current truncation code: `RoundResult` in
+  `apps/os/src/components/agent-activity-rounds.tsx` (feed) — the inspector panel has a
+  separate, deliberately-raw equivalent.
+- Confirmed the reducer (`packages/ui/src/components/events/agent-ui-reducer.ts`) drops
+  script-actor context-added events ("model input, not another bubble") — so the mirror
+  query approach avoids growing always-in-memory reducer state with big rendered text.
