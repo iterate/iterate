@@ -344,6 +344,46 @@ provided capability is reachable only by RPC replay, and a 101 can't serialize a
 
 ---
 
+## Increment 17 — clients & connections (the principal operation is `.connect`)
+
+**Commit** `<pending>`. Jonas handed a "Clients & connections" design (`clients-and-connections-design.md`) and
+asked to bring it into the clean room with `.connect` as the principal operation. The design is apps/os-shaped
+(stream `openConnection`, processors, collections); the clean room has none of that delivery/processor spine —
+but it DOES have the substrate the design's "core move" needs (capnweb `/connect`, live-mount retention, wake
+sockets, `onRpcBroken` death, thin streams), so this is composition on what exists.
+
+- **`.connect` (the principal operation)** — a capnweb method on the `/connect` surface. A client attaches with
+  `connect(info, capabilities?, inbox?)`: `info = { path, description?, user?, exclusive? }`, `capabilities` = a
+  retained `RpcTarget` (the itx half, fanned out over all a client's connections), `inbox` = a retained stub
+  with `processEventBatch(batch)` (the stream half). Both duped, both die with the socket. A client has **0..N
+  connections** (an array), keyed by its caller-chosen `path` (also its stream address). `exclusive` pins a
+  fixed connectionKey so a reconnect **knocks out** the old connection (`replaced`).
+- **The runtime table is authoritative.** Connections live in `#clients: Map<path, ClientConnection[]>` on the
+  project ROOT host — "who is connected now" + where the live stubs physically are. Presence facts
+  (`client/connection-opened` / `connection-closed { replaced | departed }`) land on the client's OWN stream
+  (`StreamDurableObject` at its path). Death = `onRpcBroken` on a retained stub → drop + close fact.
+- **The itx surface (flat, v1):** `itx.clients.list` (roster), `itx.clients.get(path)` (client + connections
+  metadata), `itx.clients.call(path, capPath[], args)` (**FAN OUT** over connections' `capabilities`,
+  `Promise.all`, `[]` if none — a direct capnweb dispatch, never `.apply`), `itx.clients.append(path, event)`
+  (append to the client's stream + push to connected inboxes). Resolved only on ROOT; a deep context fails over
+  to its parent → root. The ergonomic `itx.clients.get(path).capabilities.x.y()` is pipelined sugar for later.
+- **Design decisions followed:** capabilities = an RpcTarget not a fetch door (Q11); `description` per-connection
+  (Q3); `[]` + `Promise.all` fan-out (Q4); `exclusive` in v1 (Q6); one shared `/clients/browser`, `user` in
+  `openedBy` (Q7); no extra ACL (Q8); both `capabilities` + `inbox` optional (Q10).
+- **Deferred (need the processor/delivery spine, not built yet):** the reduced-state `ClientProcessor` +
+  project-level `ClientCollectionProcessor` roster (v1 reads the runtime table — the design itself says the
+  table is authoritative for "open now" and reduced state may briefly overcount); full stream-wide push delivery
+  (any append anywhere → subscribers) — v1 delivers on `itx.clients.append`; static offline-capability discovery
+  (Q5). Death detection needs a retained stub, so a presence-only client that passes NEITHER
+  capabilities nor inbox won't auto-drop until eviction (documented).
+- **Proven** (deployed `clients-1`, ctx `prj_clients`, real capnweb Node clients): `.connect` two browser tabs
+  on `/clients/browser` + an exclusive desk-robot with an inbox → `itx.clients.list` shows browser=2/robot=1;
+  **fan-out** `itx.clients.call("/clients/browser", ["navigate"], [url])` ran `navigate` in BOTH tab processes
+  (2 results); **inbox** `itx.clients.append` to the robot pushed to its `processEventBatch`; **death** — closing
+  a tab's socket dropped it to 1 connection; **exclusive** — reconnecting the robot replaced the old (still 1).
+
+---
+
 ## Status after increment 13 — the inner core end to end
 
 A single `ItxDurableObject` is the host for a `{projectId, path}` context: **ingress WS**, **egress** (project

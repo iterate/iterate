@@ -1,7 +1,9 @@
 // The ItxDurableObject — the capability host (target-core §4.1). One DO per {projectId, path} (a faux-URL
 // name), the single host for a context:
 //   • NATIVE fetch — the ONE method a WS upgrade (101) can flow through. `/register` → a hibernatable WAKE
-//     socket (no pin); `/connect` → a capnweb provider RPC leg; `/facet?path=` → a STATEFUL worker's facet
+//     socket (no pin); `/connect` → a capnweb leg for `.connect` (CLIENTS — presence + capabilities + inbox) or
+//     the lower-level `provideCapability`; `x-itx-cap` → the FETCH LANE (a WS to a fetch-shaped capability);
+//     `/facet?path=` → a STATEFUL worker's facet
 //     fetch (WS/streaming into a hosted DO); a WS upgrade → ingress (acceptWebSocket); a non-WS request →
 //     EGRESS (secret-sub → fallback). `/state` → observability.
 //   • invokeCapability — the single dispatch: built-ins (whoami/kv/secrets/streams/repo/provideCapability/
@@ -51,14 +53,47 @@ function disposeStub(stub: LiveStub): void {
 const IDLE_MS = 2000; // tear the on-demand RPC leg down this long after the last call
 const WAKE_TIMEOUT_MS = 8000; // give a paged device this long to dial its RPC leg back
 
-/** The control surface a capability PROVIDER (device / browser / worker) gets when it connects over capnweb
- *  (target-core §4.1, "live" mounts / D7). It can mount LIVE capabilities at a callPath; invocations of them
- *  travel back over the same socket to the provider. */
+/** What a client supplies when it attaches with `.connect` (the principal client operation). `path` is its
+ *  caller-chosen identity + stream address; `exclusive` pins a fixed connectionKey so a reconnect knocks out the
+ *  old connection (no double-live during a race). */
+interface ClientInfo {
+  path: string;
+  description?: string;
+  user?: string;
+  exclusive?: boolean;
+}
+
+/** A CLIENT connection (0..N per client path) in the host's runtime table — the authoritative "who is connected
+ *  now" and where the RETAINED (duped) live stubs into the client's process physically live; both die with the
+ *  socket. (The reduced-state roster/history via a stream processor is deferred — the delivery spine isn't built
+ *  yet — so `itx.clients.list` reads this table directly for v1.) */
+interface ClientConnection {
+  connectionKey: string;
+  description?: string;
+  user?: string;
+  openedAt: string;
+  capabilities?: LiveStub; // the itx half — a duped RpcTarget, fanned out over connections
+  inbox?: LiveStub; // the stream half — a duped stub with `processEventBatch(batch)`
+}
+
+/** The control surface a PROVIDER / CLIENT gets over capnweb (target-core §4.1 / D7). Two ways to attach:
+ *   • `connect(info, capabilities?, inbox?)` — THE PRINCIPAL OPERATION. Become a visible CLIENT: presence + a
+ *     retained `capabilities` RpcTarget (the itx half, fanned out over all a client's connections) + an optional
+ *     `inbox` (the stream half — `processEventBatch(batch)`). Both optional, both die with the socket.
+ *   • `provideCapability(path, stub)` — the lower-level live mount (a single capability at a callPath). */
 class ProviderControl extends RpcTarget {
   #mount: (path: string, stub: LiveStub) => void;
-  constructor(mount: (path: string, stub: LiveStub) => void) {
+  #connect: (info: ClientInfo, capabilities?: LiveStub, inbox?: LiveStub) => Promise<unknown>;
+  constructor(
+    mount: (path: string, stub: LiveStub) => void,
+    connect: (info: ClientInfo, capabilities?: LiveStub, inbox?: LiveStub) => Promise<unknown>,
+  ) {
     super();
     this.#mount = mount;
+    this.#connect = connect;
+  }
+  connect(info: ClientInfo, capabilities?: LiveStub, inbox?: LiveStub): Promise<unknown> {
+    return this.#connect(info, capabilities, inbox);
   }
   provideCapability(path: string, capability: LiveStub): { ok: true } {
     this.#mount(path, capability.dup()); // dup: the param is disposed when this call returns; keep ours
@@ -145,6 +180,9 @@ export class ItxDurableObject extends DurableObject<Env> {
     { resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
   >();
   #idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // CLIENTS (target-core clients model). client path -> its 0..N open connections. The authoritative runtime
+  // table for "who is connected now" + where retained client stubs live. Lives on the project ROOT host.
+  #clients = new Map<string, ClientConnection[]>();
   incarnation = 0; // durable, bumped on every (re)construction — grows across an idle gap ⇒ the DO hibernated
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -205,7 +243,10 @@ export class ItxDurableObject extends DurableObject<Env> {
       const connectionKey = url.searchParams.get("connectionKey") ?? crypto.randomUUID();
       return newWorkersRpcResponse(
         request,
-        new ProviderControl((p, s) => this.#mountLive(connectionKey, p, s)),
+        new ProviderControl(
+          (p, s) => this.#mountLive(connectionKey, p, s),
+          (info, caps, inbox) => this.#connectClient(info, caps, inbox),
+        ),
       );
     }
 
@@ -298,6 +339,22 @@ export class ItxDurableObject extends DurableObject<Env> {
     if (callPath === "itx.provideCapability") {
       await this.provideCapability(args[0] as ProvideCapabilityInput);
       return { ok: true };
+    }
+    // CLIENTS — the roster + fan-out surface (target-core clients model). Resolved only on the project ROOT,
+    // where the runtime table lives; a deep context falls through and fails over to its parent → root.
+    if (callPath.startsWith("itx.clients.") && this.#name.path === "/") {
+      const op = callPath.slice("itx.clients.".length);
+      if (op === "list") return this.#clientsList();
+      if (op === "get") return this.#clientsGet(args[0] as string);
+      if (op === "call")
+        return this.#clientsCall(
+          args[0] as string,
+          args[1] as string[],
+          (args[2] as unknown[]) ?? [],
+        );
+      if (op === "append")
+        return this.#clientsAppend(args[0] as string, args[1] as StreamEventInput);
+      throw new Error(`itx.clients: no op "${op}"`);
     }
     // The v1 "file reader": evaluate a source expression's terminal call. Returns a `{ name: source }` modules
     // map. No repo/KV yet — a hardcoded hello (later: a repo snapshot at a ref, same capability + expression).
@@ -450,6 +507,114 @@ export class ItxDurableObject extends DurableObject<Env> {
       this.#liveMounts.delete(path);
     }
     this.#liveByConn.delete(connectionKey);
+  }
+
+  // ── CLIENTS (target-core clients model). `.connect` is the principal operation: a client attaches, retaining
+  //    a `capabilities` RpcTarget (fanned out over its connections) + an optional `inbox` (its stream half).
+  //    Presence facts land on the client's OWN stream; the runtime table above is authoritative for "open now". ──
+
+  /** THE PRINCIPAL OPERATION. Register a client connection: retain its stubs, record presence, wire death. */
+  async #connectClient(
+    info: ClientInfo,
+    capabilities?: LiveStub,
+    inbox?: LiveStub,
+  ): Promise<{ ok: true; connectionKey: string }> {
+    const path = info.path;
+    const connectionKey = info.exclusive ? `client:${path}` : crypto.randomUUID();
+    // exclusive knock-out: reopening the fixed key closes the old connection as `replaced` (no double-live).
+    if ((this.#clients.get(path) ?? []).some((c) => c.connectionKey === connectionKey))
+      await this.#dropClientConnection(path, connectionKey, "replaced");
+    const conn: ClientConnection = {
+      connectionKey,
+      description: info.description,
+      user: info.user,
+      openedAt: new Date(Date.now()).toISOString(),
+      capabilities: capabilities?.dup(), // dup: the arg is disposed when connect() returns; keep ours
+      inbox: inbox?.dup(),
+    };
+    const list = this.#clients.get(path) ?? [];
+    list.push(conn);
+    this.#clients.set(path, list);
+    // Death detection via a retained stub (mirrors #mountLive): the socket dying drops the connection.
+    (conn.capabilities ?? conn.inbox)?.onRpcBroken?.(() => {
+      void this.#dropClientConnection(path, connectionKey, "departed");
+    });
+    await this.#stream(path).append({
+      type: "client/connection-opened",
+      payload: { connectionKey, openedBy: { description: info.description, user: info.user } },
+    });
+    return { ok: true, connectionKey };
+  }
+
+  /** Drop a client connection (socket death / knock-out): dispose its stubs, record the close on its stream. */
+  async #dropClientConnection(path: string, connectionKey: string, reason: string): Promise<void> {
+    const list = this.#clients.get(path);
+    const idx = list?.findIndex((c) => c.connectionKey === connectionKey) ?? -1;
+    if (!list || idx === -1) return;
+    const [conn] = list.splice(idx, 1);
+    if (conn.capabilities) disposeStub(conn.capabilities);
+    if (conn.inbox) disposeStub(conn.inbox);
+    if (list.length === 0) this.#clients.delete(path);
+    await this.#stream(path).append({
+      type: "client/connection-closed",
+      payload: { connectionKey, reason },
+    });
+  }
+
+  /** itx.clients.list — the roster (from the runtime table; may briefly overcount after an eviction). */
+  #clientsList(): unknown {
+    return [...this.#clients.entries()].map(([path, list]) => ({
+      path,
+      description: list[list.length - 1]?.description ?? null,
+      openConnections: list.length,
+      hasCapabilities: list.some((c) => c.capabilities),
+    }));
+  }
+
+  /** itx.clients.get — one client + its connections (metadata only; the live stubs never cross the wire). */
+  #clientsGet(path: string): unknown {
+    const list = this.#clients.get(path) ?? [];
+    return {
+      path,
+      description: list[list.length - 1]?.description ?? null,
+      connections: list.map((c) => ({
+        connectionKey: c.connectionKey,
+        openedBy: { description: c.description, user: c.user },
+        openedAt: c.openedAt,
+        hasCapabilities: !!c.capabilities,
+      })),
+    };
+  }
+
+  /** itx.clients.call — FAN OUT a capability call over every open connection's `capabilities`, Promise.all. The
+   *  segment(s) after the path name the method (a direct capnweb dispatch, like #dispatchLive — never `.apply`).
+   *  Zero connections resolves `[]` (honest + composable — callers see the count via list/get). */
+  async #clientsCall(path: string, capPath: string[], args: unknown[]): Promise<unknown[]> {
+    const targets = (this.#clients.get(path) ?? []).filter((c) => c.capabilities);
+    return Promise.all(
+      targets.map((c) => {
+        let recv = c.capabilities as unknown as Record<string, unknown>;
+        for (let i = 0; i < capPath.length - 1; i++)
+          recv = recv[capPath[i]] as Record<string, unknown>;
+        return (recv[capPath[capPath.length - 1]] as (...a: unknown[]) => unknown)(...args);
+      }),
+    );
+  }
+
+  /** itx.clients.append — append to the client's OWN stream, then push it to every connected `inbox` (the stream
+   *  half). Full stream-wide push delivery (any append anywhere → subscribers) is the deferred delivery spine. */
+  async #clientsAppend(path: string, event: StreamEventInput): Promise<{ offset: number }> {
+    const r = await this.#stream(path).append(event);
+    await Promise.all(
+      (this.#clients.get(path) ?? [])
+        .filter((c) => c.inbox)
+        .map((c) =>
+          (c.inbox as unknown as { processEventBatch(b: unknown[]): unknown }).processEventBatch([
+            { ...event, offset: r.offset },
+          ]),
+        ),
+    );
+    return r;
   }
 
   /** itx.kv — a project-prefixed view of env.ITX_KV. `${projectId}:` prefix makes byte-identical project code

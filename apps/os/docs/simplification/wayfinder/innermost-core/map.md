@@ -494,6 +494,22 @@ args)` — invokes `[[Call]]` directly, runs inside the owning DO, returns plain
   capability **address** itself (an `ItxExpression`, now string-serializable) rides the header — one lane. **Open
   (D37-next):** a WS to an EXTERNAL live capnweb provider (ESP32/Pi) needs a **frame bridge** (browser WS frames
   ⇄ capnweb messages) — a 101 can't cross capnweb natively; the same `x-itx-cap` routes to the bridge.
+- **D38 — Clients & connections: the principal attach operation is `.connect`. (proven, increment 17,
+  `clients-1`.)** A **client** = a caller-chosen `path` (also its stream address) with **0..N connections** (an
+  array). `.connect(info, capabilities?, inbox?)` (a capnweb method on `/connect`) attaches one: `capabilities`
+  = a retained `RpcTarget` (the itx half, FANNED OUT over the client's connections via `Promise.all`), `inbox` =
+  a retained `processEventBatch(batch)` stub (the stream half); both optional, both die with the socket.
+  `exclusive` pins a fixed connectionKey → reconnect knocks out the old (`replaced`). The runtime table
+  (`#clients` on the project ROOT host) is authoritative for "open now" + holds the live stubs; presence facts
+  (`client/connection-opened`/`closed`) land on the client's OWN stream; death = `onRpcBroken`. itx surface (flat
+  v1): `itx.clients.list` / `get(path)` / `call(path, capPath[], args)` (fan-out) / `append(path, event)` (+push
+  to inboxes). **Built by COMPOSITION** on the existing capnweb/live-mount/wake substrate — the design's
+  apps/os-shaped stream-`openConnection` + processors + collections aren't in the clean room yet. **Deferred:**
+  the reduced-state `ClientProcessor` + `ClientCollectionProcessor` roster (needs the processor spine — v1 reads
+  the runtime table, authoritative for liveness); full stream-wide push delivery (v1 delivers on
+  `itx.clients.append`); the pipelined `itx.clients.get(path).capabilities.x.y()` ergonomic surface. Decisions
+  followed: capabilities = RpcTarget not fetch door (Q11); per-connection description (Q3); `[]`+`Promise.all`
+  (Q4); exclusive (Q6); shared `/clients/browser` + `user` in `openedBy` (Q7).
 - **D14 — Cost/billing is USERSPACE, not a control-plane primitive.** Budgets/spend limits are a key PRODUCT
   concern but implemented in userspace: a **stream processor that consumes cost-bearing events** across
   streams and computes spend/budget. Can live on the product shell (for now), or the project shell (as a core
