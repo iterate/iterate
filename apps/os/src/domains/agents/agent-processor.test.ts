@@ -1117,6 +1117,10 @@ describe("AgentProcessor script execution", () => {
     );
     // Raw string result: no json fence label, no JSON escaping.
     expect(rendered!.payload.content).not.toContain("```json");
+    // Inline-in-preamble string: the notice names the binding and stops — no
+    // recipe prescribing .slice; the model knows how to slice a string.
+    expect(rendered!.payload.content).toContain("`results[0].data`");
+    expect(rendered!.payload.content).not.toContain("```ts");
 
     // A small result later does not spill.
     const writesBefore = written.length;
