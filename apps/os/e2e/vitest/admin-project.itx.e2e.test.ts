@@ -36,13 +36,11 @@ test("creates a disposable project and uses project streams through itx", async 
   // Project processor sharing that Durable Object instance.
   for (const router of [
     {
-      processorSlug: "slack",
       slug: "slack",
       state: { routes: {} },
       processor: (connection: string) => itx.integrations.slack.get(connection).processor,
     },
     {
-      processorSlug: "telegram",
       slug: "telegram",
       state: { sentMessages: {}, sessionsByChat: {} },
       processor: (connection: string) => itx.integrations.telegram.get(connection).processor,
@@ -53,7 +51,8 @@ test("creates a disposable project and uses project streams through itx", async 
       buildIntegrationRouterCreatedEvent({ connection, slug: router.slug }),
       buildIntegrationRouterSubscriptionConfiguredEvent({
         connection,
-        processorSlug: router.processorSlug,
+        // The router subscription's NAME selects the contract (name == slug).
+        name: router.slug,
         projectId: handle.project.id,
         slug: router.slug,
       }),

@@ -84,7 +84,7 @@ describe("explicit webhook router creation", () => {
       buildIntegrationRouterCreatedEvent({ connection: CONNECTION, slug: "slack" }),
       buildIntegrationRouterSubscriptionConfiguredEvent({
         connection: CONNECTION,
-        processorSlug: "slack",
+        name: "slack",
         projectId: PROJECT_ID,
         slug: "slack",
       }),
@@ -138,7 +138,7 @@ describe("explicit webhook router creation", () => {
     await integrationStreamStub(PROJECT_ID, path).append(
       buildIntegrationRouterSubscriptionConfiguredEvent({
         connection: CONNECTION,
-        processorSlug: "slack",
+        name: "slack",
         projectId: PROJECT_ID,
         slug: "slack",
       }),

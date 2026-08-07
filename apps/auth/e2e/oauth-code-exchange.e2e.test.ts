@@ -52,6 +52,7 @@ import {
   ITERATE_ROLE_CLAIM,
 } from "@iterate-com/shared/auth-claims";
 import { createCloudflareWorkerVersionOverrideFetch } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { ITERATE_BROWSER_EXTENSION_ORIGIN } from "../src/server/browser-origin.ts";
 
 function requireAuthBaseUrl(): string {
   const value = process.env.AUTH_BASE_URL?.trim();
@@ -232,10 +233,20 @@ async function mintAuthorizationCode(client: OAuthClient, cookie: string): Promi
   return code!;
 }
 
-async function exchangeToken(body: Record<string, string>): Promise<Response> {
+async function exchangeToken(body: Record<string, string>, origin?: string): Promise<Response> {
   return authFetch(`${issuer}/oauth2/token`, {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      ...(origin
+        ? {
+            origin,
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "cross-site",
+          }
+        : {}),
+    },
     body: new URLSearchParams(body),
   });
 }
@@ -344,10 +355,16 @@ describe("deployed auth OAuth2/OIDC provider", () => {
     expect(code).toBeTruthy();
 
     // 3. token exchange with the RFC 8707 resource OS itself uses.
-    const tokenResponse = await exchangeToken({
-      ...codeExchangeBody(client, code!),
-      resource: OS_RESOURCE,
-    });
+    // Chrome attaches the extension origin and Fetch Metadata headers to its
+    // service-worker fetch. The metadata forces better-auth's origin check;
+    // omitting it makes a non-browser test silently skip the failing branch.
+    const tokenResponse = await exchangeToken(
+      {
+        ...codeExchangeBody(client, code!),
+        resource: OS_RESOURCE,
+      },
+      ITERATE_BROWSER_EXTENSION_ORIGIN,
+    );
     expect(tokenResponse.status).toBe(200);
     const tokens = (await tokenResponse.json()) as {
       access_token: string;

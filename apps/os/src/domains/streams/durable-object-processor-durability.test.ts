@@ -242,7 +242,7 @@ function makeRunner(args: {
     durability: {
       progress: durableObjectProgressStore<State>({
         storage: args.storage,
-        slug: SLUG,
+        name: SLUG,
       }),
       ...(args.recovery === undefined ? {} : { recovery: args.recovery }),
     },
@@ -260,7 +260,7 @@ describe("durableObjectProgressStore", () => {
     const { storage, map } = makeStorage();
     const store = durableObjectProgressStore<State>({
       storage,
-      slug: SLUG,
+      name: SLUG,
     });
     return { storage, map, store };
   };
@@ -358,7 +358,7 @@ describe("durableObjectRecovery", () => {
     const build = () =>
       durableObjectRecovery({
         storage: args.storage,
-        slug: SLUG,
+        name: SLUG,
         stream: args.journal.stream,
         version: "v1",
         armAlarm: (atMs) => void alarmCalls.push(atMs),
@@ -463,7 +463,7 @@ describe("durableObjectRecovery", () => {
     // but the receiving stream has not performed the identity check yet.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     journal.recreate(RECREATED_STREAM_ID);
-    durableObjectProgressStore<State>({ storage, slug: SLUG }).replaceForStream!(
+    durableObjectProgressStore<State>({ storage, name: SLUG }).replaceForStream!(
       progressAt(0, 1, RECREATED_STREAM_ID),
       { expectedStreamId: TEST_STREAM_ID, expectedCursorRevision: 0 },
     );
@@ -498,7 +498,7 @@ describe("durableObjectRecovery", () => {
 
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     journal.recreate(RECREATED_STREAM_ID);
-    durableObjectProgressStore<State>({ storage, slug: SLUG }).replaceForStream!(
+    durableObjectProgressStore<State>({ storage, name: SLUG }).replaceForStream!(
       progressAt(0, 1, RECREATED_STREAM_ID),
       { expectedStreamId: TEST_STREAM_ID, expectedCursorRevision: 0 },
     );

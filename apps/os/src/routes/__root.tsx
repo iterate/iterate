@@ -120,6 +120,7 @@ function RootComponent() {
       posthog={{
         appStage: config?.cloudflare?.workerName,
         capturePageviews: false,
+        enabled: config?.posthog?.capture === true,
         proxyUrl: "/e",
       }}
       devtools={

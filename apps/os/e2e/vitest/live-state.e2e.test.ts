@@ -148,9 +148,11 @@ test("stream.liveState pushes updates through the state socket without a DO-side
   expect(await subscription.ping()).toBe(true);
 });
 
-// Secret liveState now rides the same socket lane as streams (the generic
-// host wiring): pushed DESCRIPTION updates — never material — flow without a
-// DO-side retained subscription.
+// Secret liveState rides the Pager lane too — as a KEYED facet lane on the
+// secret STREAM Durable Object (the secret processor is facet-hosted; see
+// facetProcessorLiveStateRelay and the stream DO's facet lanes): pushed
+// DESCRIPTION updates — never material — flow without a DO-side retained
+// subscription.
 test("secret.liveState pushes description updates through the Live State Pager", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();

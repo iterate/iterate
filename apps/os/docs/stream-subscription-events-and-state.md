@@ -47,7 +47,6 @@ type SubscriptionConfigured = {
       | {
           action: "processor-wake";
           expression: ItxExpression;
-          processorSlug?: string;
         }
       | {
           action: "copy-to-stream";

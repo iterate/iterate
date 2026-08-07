@@ -277,6 +277,51 @@ describe("CapabilityHostProcessor script runs", () => {
 // Recovery — crash, revival, and the settle idempotency race
 // =============================================================================
 
+describe("CapabilityHostProcessor copied events", () => {
+  it("a COPIED capability-host fact is data, never this scope's own lifecycle", async () => {
+    // The clients-to-root subscription copies client scopes' provider Pager
+    // facts onto "/": the root host must not reduce them (phantom pager
+    // entries keyed by copy offsets would accumulate forever, and a source
+    // offset colliding with a real root pager's would clear the real one).
+    const copiedFrom = [
+      {
+        name: "clients-to-root",
+        streamId: "11111111-1111-4111-8111-111111111111",
+        streamCreatedAt: "2026-08-07T09:00:00.000Z",
+        cursorChangedAtSourceOffset: 1,
+        createdAt: "2026-08-07T10:00:00.000Z",
+        offset: 3,
+        path: "/clients/chrome",
+        projectId: "proj_harness",
+        type: "events.iterate.com/capability-host/capability-provider-pager-connected",
+      },
+    ];
+    const h = makeHostHarness();
+    await h.play(
+      ["append", ...NEW_HOST_EVENTS],
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/capability-provider-pager-connected",
+          payload: {},
+          source: { copiedFrom },
+        } as HostEventInput,
+      ],
+    );
+    expect(h.state().capabilityProviderPagers).toEqual([]);
+
+    // A first-hand fact still reduces exactly as before.
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/capability-host/capability-provider-pager-connected",
+        payload: {},
+      },
+    ]);
+    expect(h.state().capabilityProviderPagers).toHaveLength(1);
+  });
+});
+
 describe("CapabilityHostProcessor recovery", () => {
   it("crash mid-execution: the revival turn settles the orphan as a FAILURE and never re-runs the body", async () => {
     const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);

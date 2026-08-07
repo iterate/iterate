@@ -42,8 +42,8 @@ export const StreamEventInput = z
         copiedFrom: z
           .array(
             z.strictObject({
-              /** The source stream's subscription that copied this event. */
-              subscriptionKey: z.string().trim().min(1),
+              /** Name of the source stream's subscription that copied this event. */
+              name: z.string().trim().min(1),
               /** Random identity assigned when that source stream's storage was created. */
               streamId: z.uuid(),
               /** Creation time of that source stream, used to order destructive recreations. */

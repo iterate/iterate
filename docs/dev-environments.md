@@ -201,7 +201,7 @@ The output gives you three ways in:
 2. **Browser**: navigate to `browserSignInUrl`
    (`/api/iterate-auth/session-from-token?...`) — it validates the tokens and
    sets the normal session cookie, then redirects. Works for Playwright,
-   agent-browser, and pasting into a real browser. This is THE way to point a
+   Playwriter, and pasting into a real browser. This is THE way to point a
    browser at a local dev server or preview environment as a chosen identity.
 3. **Claims**: pass `--orgs/--projects/--claims` JSON to mint membership of
    specific orgs/projects, since authorization is claims-driven.

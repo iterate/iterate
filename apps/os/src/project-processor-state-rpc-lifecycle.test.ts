@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-const getProject = vi.hoisted(() => vi.fn());
+const getStream = vi.hoisted(() => vi.fn());
 
 vi.mock("./env.ts", () => ({
   itxEnv: {
-    PROJECT: {
-      getByName: getProject,
+    STREAM: {
+      getByName: getStream,
     },
   },
   workerVersion: () => "test-version",
@@ -14,18 +14,18 @@ vi.mock("./env.ts", () => ({
 const { ProjectRpcTarget } = await import("./rpc-targets.ts");
 
 describe("project processor-state reads", () => {
-  it("releases the snapshot, processor facade, and Project Durable Object stub", async () => {
+  it("releases the snapshot, processor facade, and Stream Durable Object stub", async () => {
     const streams = [{ createdAt: "2026-07-29T00:00:00.000Z", path: "/" }];
     const snapshot = { state: { streams } };
     const snapshotDispose = vi.fn();
-    const processorDispose = vi.fn();
-    const projectDispose = vi.fn();
+    const facadeDispose = vi.fn();
+    const streamDispose = vi.fn();
     Object.defineProperty(snapshot, Symbol.dispose, { value: snapshotDispose });
-    const processor = { snapshot: vi.fn(async () => snapshot) };
-    Object.defineProperty(processor, Symbol.dispose, { value: processorDispose });
-    const project = { processor: Promise.resolve(processor) };
-    Object.defineProperty(project, Symbol.dispose, { value: projectDispose });
-    getProject.mockReturnValue(project);
+    const facade = { snapshot: vi.fn(async () => snapshot) };
+    Object.defineProperty(facade, Symbol.dispose, { value: facadeDispose });
+    const stream = { processorFacade: vi.fn(async () => facade) };
+    Object.defineProperty(stream, Symbol.dispose, { value: streamDispose });
+    getStream.mockReturnValue(stream);
 
     const target = new ProjectRpcTarget({
       auth: { assertCanAccessProject: vi.fn() },
@@ -37,7 +37,7 @@ describe("project processor-state reads", () => {
 
     await expect(target.streams.list()).resolves.toEqual(streams);
     expect(snapshotDispose).toHaveBeenCalledOnce();
-    expect(processorDispose).toHaveBeenCalledOnce();
-    expect(projectDispose).toHaveBeenCalledOnce();
+    expect(facadeDispose).toHaveBeenCalledOnce();
+    expect(streamDispose).toHaveBeenCalledOnce();
   });
 });

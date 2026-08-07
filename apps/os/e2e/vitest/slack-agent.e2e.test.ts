@@ -64,7 +64,7 @@ test.skipIf(signingSecret === null)(
       buildIntegrationRouterSubscriptionConfiguredEvent({
         connection: CONNECTION,
         projectId,
-        processorSlug: "slack",
+        name: "slack",
         slug: "slack",
       }),
       {

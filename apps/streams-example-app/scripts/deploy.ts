@@ -21,8 +21,16 @@ import { streamsExampleEnvs } from "../../../envs.ts";
 import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import { ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
+import { resetWorkerDurableObjectsOnVersionChange } from "../../../scripts/lib/do-reset.ts";
 import { parseConfig } from "../src/config.ts";
-import { envShapedVars, REQUIRED_SECRETS } from "./generate-wrangler-config.ts";
+import {
+  COMPATIBILITY_DATE,
+  envShapedVars,
+  REQUIRED_SECRETS,
+  STREAMS_EXAMPLE_STORAGE_VERSION,
+} from "./generate-wrangler-config.ts";
+
+const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /** Deploy apps/streams-example-app to a deployed environment (see scripts/lib/deploy-app.ts for the pipeline). */
 export default async function deploy(
@@ -32,7 +40,7 @@ export default async function deploy(
   } = {},
 ) {
   await deployApp({
-    appRoot: fileURLToPath(new URL("..", import.meta.url)),
+    appRoot: APP_ROOT,
     appLabel: "apps/streams-example-app",
     envs: streamsExampleEnvs,
     dopplerProject: "streams-example-app",
@@ -66,6 +74,17 @@ export default async function deploy(
       // Parse the exact env the worker will see (secrets + generated vars)
       // with the worker's own schema — the strongest possible pre-flight.
       parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
+    },
+    beforeDeploy: async (ctx, _secretValues, credentials) => {
+      await resetWorkerDurableObjectsOnVersionChange({
+        ctx,
+        workerName: ctx.env.workerName,
+        cwd: APP_ROOT,
+        credentials,
+        compatibilityDate: COMPATIBILITY_DATE,
+        containerClassNames: [],
+        dataVersion: STREAMS_EXAMPLE_STORAGE_VERSION,
+      });
     },
     smokes: (env) => [
       {
