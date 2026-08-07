@@ -1,5 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
-import { detachExternalDurableObjectBindings, resetWorkerDurableObjects } from "./do-reset.ts";
+import {
+  detachExternalDurableObjectBindings,
+  resetWorkerDurableObjects,
+  resetWorkerDurableObjectsOnVersionChange,
+} from "./do-reset.ts";
 import { CloudflareApiError } from "./env-context.ts";
 
 type Settings = {
@@ -421,5 +425,106 @@ describe("resetWorkerDurableObjects", () => {
 
     expect(uploadAttempts).toBe(1);
     expect(cf.mock.calls.some(([path]) => path.includes("/settings"))).toBe(false);
+  });
+});
+
+describe("resetWorkerDurableObjectsOnVersionChange", () => {
+  const workerName = "streams-example-app-preview-13";
+  const dataVersion = {
+    bindingName: "STREAMS_EXAMPLE_STORAGE_VERSION",
+    current: "1",
+  };
+
+  test("resets an existing Worker that predates the current data version", async () => {
+    let parkedMetadata: unknown;
+    const cf = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path === `/workers/scripts/${workerName}/settings`) return { bindings: [] };
+      if (path === "/workers/scripts") return [{ id: workerName }];
+      if (path.startsWith("/workers/durable_objects/namespaces?")) {
+        return [
+          {
+            id: "stream-namespace",
+            script: workerName,
+            class: "StreamDurableObject",
+          },
+        ];
+      }
+      if (path === "/containers/applications") return [];
+      if (path === `/workers/scripts/${workerName}` && init?.method === "PUT") {
+        const body = init.body;
+        expect(body).toBeInstanceOf(FormData);
+        if (!(body instanceof FormData)) throw new Error("expected a FormData Worker upload");
+        const metadata = body.get("metadata");
+        expect(typeof metadata).toBe("string");
+        if (typeof metadata !== "string") throw new Error("expected string Worker metadata");
+        parkedMetadata = JSON.parse(metadata);
+        return undefined;
+      }
+      throw new Error(`unexpected Cloudflare request: ${path}`);
+    });
+
+    await expect(
+      resetWorkerDurableObjectsOnVersionChange({
+        ctx: { cf } as never,
+        workerName,
+        cwd: "/tmp/streams-example-app",
+        credentials: {},
+        compatibilityDate: "2026-06-17",
+        containerClassNames: [],
+        dataVersion,
+      }),
+    ).resolves.toMatchObject({ action: "reset" });
+    expect(parkedMetadata).toMatchObject({
+      migrations: { steps: [{ deleted_classes: ["StreamDurableObject"] }] },
+    });
+  });
+
+  test("keeps storage when the deployed data version matches", async () => {
+    const cf = vi.fn(async (path: string) => {
+      if (path === `/workers/scripts/${workerName}/settings`) {
+        return {
+          bindings: [
+            {
+              name: dataVersion.bindingName,
+              text: dataVersion.current,
+              type: "plain_text",
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected Cloudflare request: ${path}`);
+    });
+
+    await expect(
+      resetWorkerDurableObjectsOnVersionChange({
+        ctx: { cf } as never,
+        workerName,
+        cwd: "/tmp/streams-example-app",
+        credentials: {},
+        compatibilityDate: "2026-06-17",
+        containerClassNames: [],
+        dataVersion,
+      }),
+    ).resolves.toEqual({ action: "skipped", reason: "data version unchanged" });
+    expect(cf).toHaveBeenCalledTimes(1);
+  });
+
+  test("does nothing when the Worker has never been deployed", async () => {
+    const cf = vi.fn(async (path: string) => {
+      throw new CloudflareApiError("GET", path, 404, [{ message: "Worker not found" }]);
+    });
+
+    await expect(
+      resetWorkerDurableObjectsOnVersionChange({
+        ctx: { cf } as never,
+        workerName,
+        cwd: "/tmp/streams-example-app",
+        credentials: {},
+        compatibilityDate: "2026-06-17",
+        containerClassNames: [],
+        dataVersion,
+      }),
+    ).resolves.toEqual({ action: "skipped", reason: "script does not exist" });
+    expect(cf).toHaveBeenCalledTimes(1);
   });
 });
