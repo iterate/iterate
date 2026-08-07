@@ -52,3 +52,11 @@ dashboard's `/integrations` view, adapted to a phone-sized native UI.
 - 2026-08-07: Implemented OAuth, Telegram, non-OAuth account, disconnect,
   access-policy, provided-mount, and platform-capability UI. Mobile typecheck,
   all 85 mobile unit tests, root lint, formatting, and Playwright discovery pass.
+- 2026-08-07: Full repo typecheck and knip pass. The parallel root test run hit
+  one unrelated `packages/iterate` CLI loader failure; its exact failing test
+  passed immediately in isolation. Expo web export also passes. Local live UI
+  proof cannot start because this machine has no Doppler binary/config.
+- 2026-08-07: GitHub publishing is waiting on credentials: both HTTPS/SSH and
+  `gh` are unauthenticated, and GitHub's device flow reaches a sign-in page with
+  no logged-in browser session. Branch remains clean and two commits ahead of
+  `origin/main`.
