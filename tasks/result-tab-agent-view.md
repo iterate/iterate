@@ -97,6 +97,16 @@ shown.** Keep the raw view reachable, but the agent's view is the default.
 - [x] Screenshot for the PR body (local dev or spec tooling); if too painful, say so in
       the PR body _live capture: local dev + minted session (`pnpm getin`), real agent
       conversation running a fibonacci script; uploaded via gh image_
+- [x] Review follow-up: agent view is the default ONLY when the render was
+      truncated/transformed; full-result settlements keep the raw default
+      _`renderIsTransformed` in agent-activity-rounds.tsx: containment of the exact
+      stringified settlement in the render content; falls toward the agent view on
+      any mismatch_
+- [x] Review follow-up 2: share the actual server stringification instead of relying
+      on convention _`stringifyScriptResult`/`truncateScriptResult` extracted to
+      apps/os/src/lib/script-result-render.ts (pure, client-safe); processor and
+      `renderIsTransformed` import the ONE implementation; component tests build
+      their fixture renders through the same helpers, proving the round-trip_
 
 ## Implementation log
 
@@ -123,3 +133,7 @@ shown.** Keep the raw view reachable, but the agent's view is the default.
   the agent view (never claims the agent saw everything when it didn't).
 - Tests updated: full-result render → raw default with agent view a toggle away;
   truncated render → agent view default with raw a toggle away; fallbacks unchanged.
+- Hardening round (approved by Misha): extracted the stringification into
+  `lib/script-result-render.ts` so processor and client share one implementation —
+  drift now breaks a type/test rather than silently degrading the containment
+  heuristic. Doc comment updated: coupling enforced by sharing, fail-safe note kept.
