@@ -37,7 +37,6 @@ import type {
 } from "iterate/processors";
 import { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
-import { deepRetainRpcStubs, replayPath } from "../capability-host/live-capability.ts";
 import { dialHibernatablePager, parseHibernatablePage } from "../hibernatable-pager.ts";
 import {
   retainConnectionPing,
@@ -80,17 +79,11 @@ export async function openRelayedStreamConnection(input: {
   const forward = retainProcessEventBatch(args.processEventBatch);
   const ping = retainConnectionPing(args.ping);
   const getRuntimeState = retainGetProcessorRuntimeState(args.getRuntimeState);
-  // A client connection's live capabilities target: every stub in it is duped
-  // so the tree outlives this openConnection call, session-owned like the
-  // callbacks above. The DO only ever sees a dispatch arrow (see dial()).
-  const capabilities =
-    args.capabilities === undefined ? undefined : deepRetainRpcStubs(args.capabilities);
   const disposeRetained = () => {
     for (const dispose of [
       () => forward[Symbol.dispose](),
       () => ping?.[Symbol.dispose](),
       () => getRuntimeState?.[Symbol.dispose](),
-      () => capabilities?.dispose(),
     ]) {
       try {
         dispose();
@@ -139,15 +132,6 @@ export async function openRelayedStreamConnection(input: {
         // cascade into disposing the session-lifetime Cap'n Web callbacks.
         getRuntimeState: getRuntimeState === undefined ? undefined : () => getRuntimeState(),
         ping: ping === undefined ? undefined : (pingInput: StreamPingInput) => ping(pingInput),
-        // The raw capabilities value must never ride the spread into the DO —
-        // the retained tree lives HERE for the logical subscription's life.
-        // The DO receives a fresh dispatch arrow per dial, which replays the
-        // dotted path onto the retained tree exactly like a live mount does.
-        capabilities:
-          capabilities === undefined
-            ? undefined
-            : (input: { path: string[]; args: unknown[] }) =>
-                replayPath({ args: input.args, path: input.path, target: capabilities.value }),
       },
       // Internal plumbing rides a separate parameter, never the public arg
       // bag: with the spread above, anything merged into `args`'s shape would
@@ -193,24 +177,19 @@ export async function openRelayedStreamConnection(input: {
   };
 
   // Best-effort: without a Pager the connection simply keeps today's
-  // semantics — never idle-closed, pinned for the session's life. A
-  // capability-bearing connection skips the Pager ON PURPOSE: its dispatch
-  // door must stay reachable from itx callers, and the idle cycle would drop
-  // the DO's connection entry (and with it the door) until the next append.
-  if (capabilities === undefined) {
-    try {
-      subscriberPager = await dialHibernatablePager({
-        headerName: STREAM_SUBSCRIBER_PAGER_HEADER,
-        headerValue: { connectionKey, pagerId: subscriberPagerId },
-        stub: input.stub(),
-        url: "https://stream-subscriber-pager.internal/",
-      });
-    } catch (error) {
-      console.warn("stream Subscriber Pager unavailable; session connection will stay pinned", {
-        connectionKey,
-        error,
-      });
-    }
+  // semantics — never idle-closed, pinned for the session's life.
+  try {
+    subscriberPager = await dialHibernatablePager({
+      headerName: STREAM_SUBSCRIBER_PAGER_HEADER,
+      headerValue: { connectionKey, pagerId: subscriberPagerId },
+      stub: input.stub(),
+      url: "https://stream-subscriber-pager.internal/",
+    });
+  } catch (error) {
+    console.warn("stream Subscriber Pager unavailable; session connection will stay pinned", {
+      connectionKey,
+      error,
+    });
   }
 
   subscriberPager?.addEventListener("message", (event) => {

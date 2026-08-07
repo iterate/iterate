@@ -33,6 +33,40 @@ import { ApprovalPresentedEvents } from "./approval-presented-contract.ts";
 import { AgentReplyPresentedEvents } from "./agent-reply-presented-contract.ts";
 import { StreamContext } from "./stream-context.ts";
 
+/**
+ * One client scope in the project's clients catalog: a capability-host scope
+ * (typically under /clients/**) that `projects.connect` provided a live
+ * capability to, reduced from its copied provider Pager connected/disconnected
+ * facts. Presence is last-known: the platform journals the disconnect when
+ * the provider's socket dies.
+ */
+const ProjectClientRecord = z.object({
+  path: z.string().meta({ description: "The client's identity — its scope's stream path." }),
+  connected: z.boolean().meta({
+    description:
+      "True while at least one provider Pager is connected on the scope (a reconnect " +
+      "overlaps briefly, so this counts sessions, not sockets).",
+  }),
+  lastConnectedAt: z
+    .string()
+    .meta({ description: "Source-stream commit time of the newest pager-connected fact." }),
+  lastDisconnectedAt: z
+    .string()
+    .optional()
+    .meta({ description: "Source-stream commit time of the newest pager-disconnected fact." }),
+  connectedAtOffsets: z
+    .array(z.number().int().positive())
+    .default([])
+    .meta({
+      description:
+        "Reducer bookkeeping: source-stream offsets of the pager-connected facts still open " +
+        "(each pager-disconnected names the connectedAtOffset it closes). `connected` is " +
+        "this set's non-emptiness.",
+    }),
+});
+/** What `itx.clients.list()` returns per client. */
+export type ProjectClientRecord = z.infer<typeof ProjectClientRecord>;
+
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
   version: "0.7.0",
@@ -117,6 +151,18 @@ export const ProjectProcessorContract = defineProcessorContract({
           "Catalog of the project's physical streams (stream/created and " +
           "stream/child-stream-created facts). Purely physical: a path here never implies any " +
           "processor identity.",
+      }),
+    clients: z
+      .record(z.string(), ProjectClientRecord)
+      .default({})
+      .meta({
+        description:
+          "Catalog of client scopes keyed by path, recorded from copied capability-host " +
+          "provider Pager connected/disconnected facts (each projects.connect's birth batch " +
+          "configures the clients-to-root copy subscription); what itx.clients.list() reads. " +
+          "Last-known presence: the platform journals the disconnect when a provider's " +
+          "socket dies, so `connected` is honest to socket death, not merely to polite " +
+          "goodbyes.",
       }),
     customDomains: z
       .array(
@@ -488,6 +534,8 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/created",
     "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/notification/created",
+    "events.iterate.com/capability-host/capability-provider-pager-connected",
+    "events.iterate.com/capability-host/capability-provider-pager-disconnected",
   ],
   processorDeps: [
     CoreProcessorContract,

@@ -31,7 +31,6 @@
 import { z } from "zod";
 import type { StreamEvent } from "iterate/processors";
 import { HibernatablePagers } from "../hibernatable-pager.ts";
-import { ConnectionOpenerDescriptor } from "./core-processor-contract.ts";
 import { compileEventFilter, EventFilter } from "./event-filter.ts";
 
 /** Internal upgrade header carrying the stream-subscriber-pager binding; never routed from external requests. */
@@ -71,13 +70,6 @@ const StreamSubscriberPagerAttachment = z.object({
   filter: EventFilter.optional(),
   /** `false` mirrors a state-only connection (`openConnection({ events: false })`). */
   events: z.literal(false).optional(),
-  /**
-   * Stamped for CLIENT-marked connections only: a dormant client's death
-   * surfaces as this socket's close, and the departed fact it appends must
-   * echo the opener so the roster's copy feed (which withholds unmarked
-   * connection lifecycle facts) still learns the departure.
-   */
-  openedBy: ConnectionOpenerDescriptor.optional(),
   idleDeliveredThrough: z.number().int().nonnegative().optional(),
   pageSentAtOffset: z.number().int().nonnegative().optional(),
 });
@@ -199,81 +191,18 @@ export class StreamSubscriberPagerRegistry {
    * departed connectionKey and this Pager's id (for an idempotency key), or
    * undefined when no fact is owed.
    */
-  departedOnClose(
-    ws: WebSocket,
-  ): { connectionKey: string; pagerId: string; openedBy?: ConnectionOpenerDescriptor } | undefined {
+  departedOnClose(ws: WebSocket): { connectionKey: string; pagerId: string } | undefined {
     const attachment = this.#pagers.attachment(ws);
     if (attachment === undefined || attachment.idleDeliveredThrough === undefined) {
       return undefined;
     }
     if (this.#hooks.hasConnection(attachment.connectionKey)) return undefined;
-    return {
-      connectionKey: attachment.connectionKey,
-      pagerId: attachment.pagerId,
-      ...(attachment.openedBy === undefined ? {} : { openedBy: attachment.openedBy }),
-    };
+    return { connectionKey: attachment.connectionKey, pagerId: attachment.pagerId };
   }
 
   /** connectionKeys whose client has given this DO a live Pager. */
   connectionKeys(): ReadonlySet<string> {
     return new Set(this.#pagers.entries().map(({ attachment }) => attachment.connectionKey));
-  }
-
-  /**
-   * The dormant connection endings a platform kick of this connection would
-   * produce — a PURE READ, so the kick door can journal each ending's
-   * `kicked` fact BEFORE any state is cleared or socket closed (fact first;
-   * an interrupted kick then retries into the same idempotency keys instead
-   * of losing the close fact entirely). `bound` counts every Pager under the
-   * key, dormant or not, for the door's existence check.
-   */
-  dormantEndings(connectionKey: string): {
-    bound: number;
-    endedDormant: { pagerId: string; openedBy?: ConnectionOpenerDescriptor }[];
-  } {
-    const bound = this.#pagers
-      .entries()
-      .filter(({ attachment }) => attachment.connectionKey === connectionKey);
-    const dormant = this.#hooks.hasConnection(connectionKey)
-      ? []
-      : bound.filter(({ attachment }) => attachment.idleDeliveredThrough !== undefined);
-    return {
-      bound: bound.length,
-      endedDormant: dormant.map(({ attachment }) => ({
-        pagerId: attachment.pagerId,
-        ...(attachment.openedBy === undefined ? {} : { openedBy: attachment.openedBy }),
-      })),
-    };
-  }
-
-  /**
-   * Close every Pager bound to one connection (a platform-side kick or a
-   * client-cap eviction): the owner's relay breaks instead of re-dialing on
-   * the next Page, so a kicked or evicted dormant subscriber cannot
-   * resurrect.
-   *
-   * A DORMANT pager is its connection's only remaining leg, so closing it
-   * ends the connection for the CALLER's reason — the caller journals that
-   * fact itself (via {@link dormantEndings}, BEFORE calling this), and the
-   * dormancy marker is cleared here so the generic `webSocketClose` departed
-   * append stays silent instead of double-recording the end. Returns how
-   * many Pagers closed.
-   */
-  closeForConnection(connectionKey: string, reason: string): number {
-    const bound = this.#pagers
-      .entries()
-      .filter(({ attachment }) => attachment.connectionKey === connectionKey);
-    for (const { ws, attachment } of bound) {
-      if (
-        attachment.idleDeliveredThrough !== undefined &&
-        !this.#hooks.hasConnection(connectionKey)
-      ) {
-        const { idleDeliveredThrough: _ended, ...awake } = attachment;
-        this.#pagers.stamp(ws, awake);
-      }
-      this.#pagers.close(ws, 1000, reason);
-    }
-    return bound.length;
   }
 
   /**
@@ -289,7 +218,6 @@ export class StreamSubscriberPagerRegistry {
     subscriberPagerId: string | undefined;
     filter: EventFilter;
     events?: boolean;
-    openedBy?: ConnectionOpenerDescriptor;
   }): void {
     const hasFilter = Object.values(args.filter).some((value) => value !== undefined);
     const claimed = this.#pagers.claim({
@@ -303,7 +231,6 @@ export class StreamSubscriberPagerRegistry {
         pagerId: claimed.attachment.pagerId,
         ...(hasFilter ? { filter: args.filter } : {}),
         ...(args.events === false ? { events: false as const } : {}),
-        ...(args.openedBy?.client === undefined ? {} : { openedBy: args.openedBy }),
       });
     }
   }

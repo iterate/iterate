@@ -103,16 +103,6 @@ import {
   type AgentCollectionProcessorState,
 } from "./domains/agents/agent-collection-processor-contract.ts";
 import {
-  CLIENT_COLLECTION_PATH,
-  ClientCollectionProcessorContract,
-  type ClientCollectionProcessorState,
-} from "./domains/clients/client-collection-processor-contract.ts";
-import {
-  buildClientStreamCreationEvents,
-  clientCollectionCreationEvents,
-} from "./domains/clients/client-defaults.ts";
-import type { ClientConnectionListItem, ClientListItem } from "./domains/clients/types.ts";
-import {
   describeNode,
   rejectBuiltinCollision,
   installPrototypeInvokeCapabilityFallback,
@@ -383,6 +373,7 @@ import { withStreamContext, type StreamContext } from "./domains/projects/stream
 import {
   parseProjectCreationTerminal,
   ProjectProcessorContract,
+  type ProjectClientRecord,
   type ProjectProcessorState,
 } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
@@ -1050,23 +1041,6 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
      * to measure real transport RTT to this callback owner.
      */
     ping?: StreamConnectionPing;
-    /**
-     * Optional live capabilities target (an RpcTarget or plain object in the
-     * caller's process), retained for the connection's lifetime — the itx
-     * half of a project CLIENT. `itx.clients.get(path).capabilities.a.b(x)`
-     * replays the dotted path onto every open connection's target and
-     * Promise.alls the results. A capability-bearing connection stays pinned
-     * (never idle-closed) so its dispatch door remains reachable.
-     */
-    capabilities?: unknown;
-    /**
-     * Cap on simultaneously open CLIENT connections on this stream (openers
-     * carrying the descriptor's `client` marker; viewers and hosted callbacks
-     * never count). Opening past the cap evicts the oldest client connection
-     * as `replaced`, atomically with this open. `null` = unlimited; absent =
-     * no enforcement.
-     */
-    maxConnections?: number | null;
   }): Promise<StreamConnectionHandle> {
     // The relay (stream-connection-relay.ts) gives the Stream DO a
     // hibernatable Stream Subscriber Pager, then lends it an ordinary RPC leg
@@ -1077,34 +1051,6 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return new StreamConnectionRpcTarget(
       await openRelayedStreamConnection({ stub: () => this[STREAM_DURABLE_OBJECT_STUB], args }),
     );
-  }
-
-  /**
-   * Fan one client-capability call out over this stream's open client
-   * connections (`openConnection` with `capabilities`). Zero open doors
-   * resolves to `[]`. The published spelling is
-   * `itx.clients.get(path).capabilities.*` — this is its dispatch door.
-   */
-  async invokeClientCapabilities(input: { path: string[]; args: unknown[] }): Promise<unknown[]> {
-    const result = await this[STREAM_DURABLE_OBJECT_STUB].invokeClientCapabilities(input);
-    return detachPlainRpcResult(result);
-  }
-
-  /** Route one client-capability call to a single open connection by key (bare result). */
-  async invokeClientCapability(input: {
-    connectionKey: string;
-    path: string[];
-    args: unknown[];
-  }): Promise<unknown> {
-    const result = await this[STREAM_DURABLE_OBJECT_STUB].invokeClientCapability(input);
-    // A scalar result carries no stubs or dispose hook — nothing to detach.
-    if (typeof result !== "object" || result === null) return result;
-    return detachPlainRpcResult(result);
-  }
-
-  /** Kick one client connection from the platform side (close reason "kicked"). */
-  async closeClientConnection(input: { connectionKey: string }): Promise<void> {
-    await this[STREAM_DURABLE_OBJECT_STUB].closeClientConnection(input);
   }
 
   /** @internal Append a trusted batch copied from another stream. */
@@ -2097,223 +2043,51 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
 }
 
 /**
- * One project client — a logical endpoint (a browser, a CLI, a device)
- * identified by its caller-chosen stream path. The client's stream is its
- * stream half (inbox/outbox); its live `capabilities` target is its itx half.
- * `connections()` reads the LIVE runtime table on the client's stream —
- * authoritative for "open now"; the roster's reduced state is last-known
- * history. Unknown dotted members walk the prototype hop:
- * `client.capabilities.a.b(x)` fans the call out over every open
- * connection's live target and `Promise.all`s the results.
+ * Connected clients within one project (`itx.clients`). A client is a
+ * capability-host scope — typically under `/clients/**` — that
+ * `projects.connect` provided a live capability to; nothing client-specific
+ * exists at the platform layer. The birth batch every connect appends
+ * configures a narrow copy subscription sending the scope's
+ * `capability-provider-pager-connected` / `-disconnected` facts to the
+ * project root, where the project processor reduces the clients catalog
+ * (`list()`). Presence is last-known but honest: the platform journals the
+ * disconnect when the provider's Pager socket dies. `get(path)` returns the
+ * scope's capability host — `get(path).capabilities.browser.navigate(url)`
+ * invokes the live capability mounted there through the shipped capability
+ * machinery (hibernating Provider Pager, no pinned Durable Objects).
  */
-class ClientRpcTarget extends IterateRpcTarget<"Client"> {
-  async __describe(): Promise<Description> {
-    return describeNode({
-      instructions: `A project client at "${this.props.path}". capabilities.* fans calls out over every open connection's live target (Promise.all of per-connection results; [] when none is connected). connections() lists open connections from the live runtime table. stream is the client's own event stream — append to reach its inbox, observe to follow it.`,
-      children: {
-        capabilities: "Fan-out door onto every open connection's live capabilities target.",
-        connections: "Open client connections, from the stream's live runtime table.",
-        getConnection: "One connection by key: its capabilities target just it; close() kicks it.",
-        stream: "The client's own event stream (its inbox/outbox).",
-      },
-      parent: "clients.get(path)",
-    });
-  }
-
-  constructor(readonly props: { auth: ItxAuth; projectId: string; path: string }) {
-    super();
-    props.auth.assertCanAccessProject(props.projectId);
-  }
-
-  get #stream(): StreamRpcTarget {
-    return new StreamRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
-      path: this.props.path,
-    });
-  }
-
-  /** The client's own event stream (the stream half; capabilities are the itx half). */
-  get stream(): StreamRpcTarget {
-    return this.#stream;
-  }
-
-  /** Open client connections, read from the stream's live runtime table. */
-  async connections(): Promise<ClientConnectionListItem[]> {
-    const { runtime } = await this.#stream.runtimeState();
-    return Object.entries(runtime.connections).flatMap(([connectionKey, connection]) => {
-      if (connection.kind !== "session" || connection.openedBy?.client === undefined) return [];
-      return [
-        {
-          connectionKey,
-          startedAt: connection.startedAt,
-          ...(connection.openedBy.description === undefined
-            ? {}
-            : { description: connection.openedBy.description }),
-          ...(connection.openedBy.user === undefined ? {} : { user: connection.openedBy.user }),
-          hasCapabilities: connection.openedBy.client.capabilities === true,
-        },
-      ];
-    });
-  }
-
-  /**
-   * One connection by key — pure addressing. The returned handle's
-   * `capabilities.*` targets exactly that connection (bare result, no
-   * fan-out) and `close()` kicks it from the platform side.
-   */
-  getConnection(connectionKey: string): ClientConnectionRpcTarget {
-    return new ClientConnectionRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
-      path: this.props.path,
-      connectionKey,
-    });
-  }
-
-  /** The prototype hop's dispatch door: every dotted call goes through `.capabilities`. */
-  invokeCapability(input: { path: string[]; args: unknown[] }): Promise<unknown[]> {
-    const [head, ...rest] = input.path;
-    if (head !== "capabilities") {
-      throw new Error(
-        `unknown client member "${head ?? ""}" — live client calls go through .capabilities`,
-      );
-    }
-    if (rest.length === 0) {
-      throw new Error(
-        "client.capabilities needs a member path to call, e.g. capabilities.browser.navigate(url)",
-      );
-    }
-    return this.#stream.invokeClientCapabilities({ path: rest, args: input.args });
-  }
-}
-
-/**
- * One connection on a client, addressed by connectionKey. `capabilities.*`
- * targets exactly this connection and returns the bare result (no fan-out
- * array); `close()` kicks the connection from the platform side — the owner
- * observes its leg break and the roster sees a `kicked` close fact.
- */
-class ClientConnectionRpcTarget extends IterateRpcTarget<"ClientConnection"> {
-  async __describe(): Promise<Description> {
-    return describeNode({
-      instructions: `Connection "${this.props.connectionKey}" on client "${this.props.path}". capabilities.* calls target exactly this connection (bare result); close() disconnects it from the platform side (close reason "kicked").`,
-      children: {
-        capabilities: "This connection's live capabilities target (single-target, bare result).",
-        close: 'Kick this connection (close reason "kicked").',
-      },
-      parent: "clients.get(path).getConnection(connectionKey)",
-    });
-  }
-
-  constructor(
-    readonly props: { auth: ItxAuth; projectId: string; path: string; connectionKey: string },
-  ) {
-    super();
-    props.auth.assertCanAccessProject(props.projectId);
-  }
-
-  get #stream(): StreamRpcTarget {
-    return new StreamRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
-      path: this.props.path,
-    });
-  }
-
-  /** Kick this connection from the platform side (close reason "kicked"). */
-  close(): Promise<void> {
-    return this.#stream.closeClientConnection({ connectionKey: this.props.connectionKey });
-  }
-
-  /** The prototype hop's dispatch door: dotted calls go through `.capabilities`, single-target. */
-  invokeCapability(input: { path: string[]; args: unknown[] }): Promise<unknown> {
-    const [head, ...rest] = input.path;
-    if (head !== "capabilities") {
-      throw new Error(
-        `unknown connection member "${head ?? ""}" — live connection calls go through .capabilities`,
-      );
-    }
-    if (rest.length === 0) {
-      throw new Error(
-        "connection.capabilities needs a member path to call, e.g. capabilities.browser.navigate(url)",
-      );
-    }
-    return this.#stream.invokeClientCapability({
-      connectionKey: this.props.connectionKey,
-      path: rest,
-      args: input.args,
-    });
-  }
-}
-
-/**
- * Project client roster: the logical endpoints that have ever connected via
- * `projects.connect`, plus per-client handles whose `capabilities.*` fans out
- * over the currently open connections.
- */
-class ClientCollectionRpcTarget extends IterateRpcTarget<"ClientCollection"> {
+class ClientsRpcTarget extends IterateRpcTarget<"Clients"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Client roster: logical endpoints (browser, CLI, device) keyed by caller-chosen stream path, connected via projects.connect. get("/clients/<name>") returns the client handle; its capabilities.* fans calls out over every open connection. list() reads the roster projection (last-known presence; connections() on a handle is the live view).',
+        "Connected clients: capability-host scopes (typically \"/clients/<name>\") that projects.connect provided a live capability to. list() reads the project processor's clients catalog — path + connected, last-known presence (the platform journals the disconnect when the provider's socket dies). get(path) returns the scope's capability host; dotted calls like get(path).capabilities.browser.navigate(url) invoke the live capability mounted there.",
       children: {
-        get: "One client by path; addressing does not create.",
-        list: "Known clients (from the collection processor's reduced roster).",
-        liveState: "The collection processor's reduced roster.",
-        processor: "The collection's hosted stream processor.",
+        get: "The client scope's capability host (invoke its mounted capabilities).",
+        list: "Known clients from the project processor's catalog: path + connected.",
       },
       parent: "a project itx (itx.clients)",
     });
   }
 
-  get processor(): StreamProcessorRpc<ClientCollectionProcessorState> {
-    return facetProcessorRelay<ClientCollectionProcessorState>({
-      auth: this.props.auth,
-      name: ClientCollectionProcessorContract.slug,
-      path: CLIENT_COLLECTION_PATH,
-      projectId: this.props.projectId,
-      // clients.list() on a project that never connected a client reads the
-      // collection before its birth batch exists — empty roster, not refusal.
-      unbornState: () =>
-        ClientCollectionProcessorContract.stateSchema.parse({}) as ClientCollectionProcessorState,
-    });
-  }
-
-  get liveState(): LiveStateRpc<ClientCollectionProcessorState> {
-    return facetProcessorLiveStateRelay<ClientCollectionProcessorState>({
-      name: ClientCollectionProcessorContract.slug,
-      path: CLIENT_COLLECTION_PATH,
-      projectId: this.props.projectId,
-    });
-  }
-
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** One client handle by stream path; pure addressing, never creates. */
-  get(path: string): ClientRpcTarget {
-    return new ClientRpcTarget({
+  /** The client scope's capability host — the full shipped surface, no wrapper. */
+  get(path: string): CapabilityHostRpcTarget {
+    return new CapabilityHostRpcTarget({
       auth: this.props.auth,
-      projectId: this.props.projectId,
+      ctx: this.props.ctx,
       path,
+      projectId: this.props.projectId,
     });
   }
 
-  /** Known clients, read from the collection processor's reduced roster. */
-  async list(): Promise<ClientListItem[]> {
-    const { state } = await this.processor.snapshot();
-    return Object.values(state.clients).map((client) => ({
-      path: client.path,
-      ...(client.description === undefined ? {} : { description: client.description }),
-      createdAt: client.createdAt,
-      connections: Object.keys(client.connections).length,
-      hasCapabilities: Object.values(client.connections).some(
-        (connection) => connection.hasCapabilities,
-      ),
-    }));
+  /** Known clients, read from the project processor's reduced catalog. */
+  async list(): Promise<ProjectClientRecord[]> {
+    const state = await projectProcessorState(this.props.projectId);
+    return Object.values(state.clients);
   }
 }
 
@@ -5585,6 +5359,43 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
 
 type ProjectListEntryBase = Omit<ProjectListEntry, "deploymentStatus">;
 
+/**
+ * The client scope's complete atomic birth batch, appended idempotently by
+ * every `projects.connect`: the capability-host scope birth plus the
+ * clients-to-root copy subscription feeding the project processor's clients
+ * catalog. Keys derive from (projectId, path) only, so reconnects dedupe.
+ */
+function clientScopeCreationEvents(input: { path: string; projectId: string }) {
+  return [
+    ...capabilityHostCreationEvents({ path: input.path, projectId: input.projectId }),
+    {
+      type: "events.iterate.com/stream/subscription-configured",
+      idempotencyKey: "stream/subscription-configured:clients-to-root",
+      payload: {
+        name: "clients-to-root",
+        description:
+          "Copies this client scope's provider connect/disconnect facts to the project root " +
+          "for the clients catalog (itx.clients.list()).",
+        filter: {
+          eventTypes: [
+            "events.iterate.com/capability-host/capability-provider-pager-connected",
+            "events.iterate.com/capability-host/capability-provider-pager-disconnected",
+          ],
+        },
+        receiver: {
+          action: "copy-to-stream",
+          receivingStreamPath: "/",
+          delivery: {
+            // Configured in the same birth batch, so "beginning" is exact.
+            start: "beginning",
+            onFailingEvent: "halt",
+          },
+        },
+      },
+    },
+  ];
+}
+
 /** Catalog of projects reachable from a {@link Session}. */
 export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollection"> {
   async __describe(): Promise<Description> {
@@ -5638,37 +5449,31 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
   }
 
   /**
-   * `get` plus presence: connect as a project CLIENT. `path` is the client's
-   * caller-chosen identity — its own stream, e.g. `"/clients/chrome"` — and
-   * `description` labels this connection. Births the client stream
-   * idempotently (reconnecting dedupes to a no-op), then opens ONE stream
-   * connection on it carrying the caller's two optional halves: a live
-   * `capabilities` target (the itx half — `itx.clients.get(path).
-   * capabilities.*` fans calls out over every open connection) and a
-   * `processEventBatch` inbox (the stream half — consuming your own stream
-   * from the moment you connect). The existing connection machinery appends
-   * the durable presence facts (`connection-opened`, `connection-closed`
-   * with `departed` when the socket dies). `maxConnections` caps the client's
-   * simultaneously open connections: the DEFAULT of 1 gives the 0..1 shape a
-   * physical device wants (a reconnect evicts the previous connection as
-   * `replaced`); `null` allows unlimited connections (a browser's tabs).
+   * `get` plus presence: connect as a project CLIENT. A client is nothing
+   * platform-specific — it is a capability-host scope at the caller-chosen
+   * `path` (e.g. `"/clients/desk-robot"`; encode a tab id or device serial in
+   * the path if you want several). Connect appends the scope's idempotent
+   * birth batch (reconnecting dedupes to a no-op) plus one narrow copy
+   * subscription that sends the scope's provider connect/disconnect facts to
+   * the project root, where the project processor reduces the clients
+   * catalog (`itx.clients.list()`). When `capabilities` is passed, it is
+   * provided as a LIVE capability mounted at `capabilities` on the scope —
+   * the shipped capability machinery holds it behind a hibernating Provider
+   * Pager (no pinned Durable Objects), journals the provision, and journals
+   * the disconnect when this session's socket dies; the mount is retired
+   * with it. Callers invoke it through the scope's capability host:
+   * `itx.clients.get(path).capabilities.browser.navigate(url)`.
    * Returns the project itx, exactly like `get`.
    */
   async connect(
     idOrSlug: string,
     opts: {
+      /** The client's identity: an absolute stream path, e.g. "/clients/chrome". */
       path: string;
+      /** Human label for this client; journals as the provision's instructions. */
       description: string;
+      /** Live capabilities target (an RpcTarget or plain object in the caller's process). */
       capabilities?: unknown;
-      processEventBatch?: ProcessEventBatch;
-      maxConnections?: number | null;
-      /**
-       * Caller-chosen stable identity for THIS connection (a tab id, a device
-       * serial). `getConnection(connectionKey)` addresses it directly, and a
-       * reconnect under the same key atomically replaces its dead predecessor
-       * instead of accumulating. Omitted → a random key per connection.
-       */
-      connectionKey?: string;
     },
   ): Promise<ProjectRpcTarget> {
     if (typeof opts.path !== "string" || !opts.path.trim().startsWith("/")) {
@@ -5676,22 +5481,14 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
         `client path must be an absolute stream path (e.g. "/clients/chrome"), got ${JSON.stringify(opts.path)}`,
       );
     }
-    // Canonicalize BEFORE guarding: StreamRpcTarget canonicalizes the same
-    // input ("/clients/", "/x/../clients" → "/clients"), so an exact-string
-    // check here would let a spelling that only canonicalizes to the
-    // collection path birth a client ON the collection stream itself.
+    // Canonicalize BEFORE guarding, so a spelling that only canonicalizes to
+    // the root ("/x/..") cannot slip past the exact-string check.
     const path = canonicalizeStreamPath(opts.path);
-    if (path === "/" || path === CLIENT_COLLECTION_PATH) {
-      throw new Error(
-        `client path must not be the root or the collection stream ("${CLIENT_COLLECTION_PATH}"), got ${JSON.stringify(opts.path)}`,
-      );
+    if (path === "/") {
+      throw new Error(`client path must not be the project root, got ${JSON.stringify(opts.path)}`);
     }
     if (typeof opts.description !== "string" || opts.description.trim().length === 0) {
       throw new Error("client description is required");
-    }
-    const maxConnections = opts.maxConnections === undefined ? 1 : opts.maxConnections;
-    if (maxConnections !== null && (!Number.isSafeInteger(maxConnections) || maxConnections < 1)) {
-      throw new Error("maxConnections must be a positive integer or null (unlimited)");
     }
     const projectId = await resolveProjectIdBySlug({
       directory: env.PROJECT_DIRECTORY,
@@ -5701,31 +5498,43 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       throw new Error(`cannot connect a client to unknown project "${idOrSlug}"`);
     }
     await this.props.auth.ensureCanAccessProject?.(projectId);
-    // Ensure the singleton collection stream exists WITH its facet projection
-    // subscription BEFORE the client birth commits the copy feed into it —
-    // every event is idempotency-keyed, so reconnects are free (the
-    // agents.create pattern).
-    const collectionStream = new StreamRpcTarget({
-      auth: this.props.auth,
-      projectId,
-      path: CLIENT_COLLECTION_PATH,
-    });
-    await collectionStream.append(...clientCollectionCreationEvents({ projectId }));
+    // ONE atomic idempotent birth batch on the client scope's stream: the
+    // capability-host birth plus the clients-to-root copy subscription that
+    // feeds the project processor's catalog. Keys derive from (projectId,
+    // path) only, so every reconnect dedupes to a no-op.
     const stream = new StreamRpcTarget({ auth: this.props.auth, projectId, path });
-    await stream.append(...buildClientStreamCreationEvents({ path, projectId }));
-    await stream.openConnection({
-      maxConnections,
-      ...(opts.connectionKey === undefined ? {} : { connectionKey: opts.connectionKey }),
-      processEventBatch: opts.processEventBatch ?? (() => {}),
-      // A presence-only client (no inbox) rides the cheapest allowed shape:
-      // events omitted, coalesced state-only batches into a no-op.
-      ...(opts.processEventBatch === undefined ? { events: false } : {}),
-      openedBy: {
-        description: opts.description,
-        client: opts.capabilities === undefined ? {} : { capabilities: true },
-      },
-      ...(opts.capabilities === undefined ? {} : { capabilities: opts.capabilities }),
+    const committed = await stream.append(...clientScopeCreationEvents({ path, projectId }));
+    const host = new CapabilityHostRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      path,
+      projectId,
     });
+    // provideCapability requires the reduced birth (assertCreated) — wait for
+    // the batch to fold, exactly as capabilityHosts.get(path).create() does.
+    const birthOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+    if (birthOffset === 0) throw new Error("client connect committed no birth events");
+    await host.processor.waitUntilProcessed({
+      offset: birthOffset,
+      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    });
+    const ownedDisposables: Disposable[] = [];
+    if (opts.capabilities !== undefined) {
+      // The provision handle rides the returned itx as an OWNED disposable:
+      // when this session ends (politely or by socket death), capnweb
+      // disposes its exports, the project handle disposes the provision, the
+      // revoke retires the mount — and the now-empty provider Pager closes,
+      // journaling the disconnect the clients catalog reduces. Dropping the
+      // handle instead would orphan the mount as a zombie forever.
+      ownedDisposables.push(
+        await host.provideCapability({
+          type: "live",
+          path: ["capabilities"],
+          capability: opts.capabilities,
+          instructions: opts.description,
+        }),
+      );
+    }
     return itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
@@ -5735,6 +5544,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       streamContext: streamContextForAuth(this.props.auth),
       path: "/",
       projectId,
+      ownedDisposables,
     });
   }
 
@@ -6252,6 +6062,14 @@ type ExistingProjectRpcTargetProps = {
   ctx: CfExecutionContext;
   streamContext: StreamContext;
   projectId: string;
+  /**
+   * Owned handles whose lifetime IS this itx handle's: disposed when the
+   * handle is (explicitly, or by the session teardown disposing its exports).
+   * `projects.connect` parks its live-capability provision here so a dying
+   * client session revokes the mount — which empties and closes the
+   * provider's Pager, journaling the disconnect the clients catalog reduces.
+   */
+  ownedDisposables?: Disposable[];
 };
 
 type ProspectiveProjectRpcTargetProps = {
@@ -6308,6 +6126,19 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     super();
     if ("projectId" in props) props.auth.assertCanAccessProject(props.projectId);
     this.#props = props;
+  }
+
+  [Symbol.dispose](): void {
+    if (!("ownedDisposables" in this.#props)) return;
+    for (const owned of this.#props.ownedDisposables ?? []) {
+      try {
+        owned[Symbol.dispose]();
+      } catch (error) {
+        // Disposal is teardown cleanup; one owned handle's failure must not
+        // mask the others'.
+        console.warn("project itx owned-disposable teardown failed", { error });
+      }
+    }
   }
 
   get #existingProps(): ExistingProjectRpcTargetProps {
@@ -7023,10 +6854,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** Client roster: connected clients and the fan-out door onto their live capabilities. */
-  get clients(): ClientCollectionRpcTarget {
-    return new ClientCollectionRpcTarget({
+  /** Connected clients: the project processor's catalog plus each scope's capability host. */
+  get clients(): ClientsRpcTarget {
+    return new ClientsRpcTarget({
       auth: this.#props.auth,
+      ctx: this.#props.ctx,
       projectId: this.#projectId,
     });
   }
@@ -7285,6 +7117,8 @@ export function itxForScope(props: {
   streamContext: StreamContext;
   path: string;
   projectId: string;
+  /** See {@link ExistingProjectRpcTargetProps.ownedDisposables}. */
+  ownedDisposables?: Disposable[];
 }): ProjectRpcTarget {
   return new ProjectRpcTarget({
     auth: props.auth,
@@ -7292,6 +7126,7 @@ export function itxForScope(props: {
     ctx: props.ctx,
     streamContext: props.streamContext,
     projectId: props.projectId,
+    ...(props.ownedDisposables === undefined ? {} : { ownedDisposables: props.ownedDisposables }),
   });
 }
 
@@ -9329,11 +9164,3 @@ installPrototypeInvokeCapabilityFallback(SandboxRpcTarget);
 installPrototypeInvokeCapabilityFallback(AgentRpcTarget, {
   invokerFor: (agent) => agent.capabilityHost,
 });
-// `clients.get(path)`: the handle IS the invoker — every dotted call goes
-// through `.capabilities` and fans out over the client's open connections:
-// `itx.clients.get(path).capabilities.browser.navigate(url)` replays
-// ["browser","navigate"] on every connection's live target (Promise.all).
-installPrototypeInvokeCapabilityFallback(ClientRpcTarget);
-// `clients.get(path).getConnection(key)`: same door, single-target — the
-// dotted call replays on exactly that connection and returns the bare result.
-installPrototypeInvokeCapabilityFallback(ClientConnectionRpcTarget);

@@ -342,19 +342,6 @@ export const ConnectionOpenerDescriptor = z.object({
       announcement: ProcessorContractAnnouncement,
     })
     .optional(),
-  /**
-   * Present when this connection is a project CLIENT presence — opened by
-   * `projects.connect` on the client's own stream. The marker is what lets the
-   * client roster distinguish a client connection from an ordinary stream
-   * watcher opening the same stream. Presence metadata like everything else
-   * here, not authorization input.
-   */
-  client: z
-    .object({
-      /** True when the connection carries a live capabilities target. */
-      capabilities: z.boolean().optional(),
-    })
-    .optional(),
 });
 
 /** Serializable identity of the caller that opened a connection. */
@@ -393,12 +380,6 @@ export const ConnectionCloseReason = z.enum([
    * that `"idle"` deliberately is not.
    */
   "departed",
-  /**
-   * An itx caller closed this CLIENT connection from the platform side
-   * (`clients.get(path).getConnection(key).close()`). Distinct from
-   * `"closed-by-owner"` — the owner did not ask; it observes its leg break.
-   */
-  "kicked",
 ]);
 
 export type ConnectionCloseReason = z.infer<typeof ConnectionCloseReason>;
@@ -684,13 +665,6 @@ export const CoreProcessorContract = defineProcessorContract({
         reason: ConnectionCloseReason,
         /** Present when the connection closed because an operation failed. */
         error: z.string().trim().min(1).optional(),
-        /**
-         * The closed connection's opener descriptor, echoed by the sender for
-         * CLIENT-marked connections only: copy delivery withholds connection
-         * lifecycle facts unless the opener carries the `client` marker, and
-         * the close must be self-attributing for that check.
-         */
-        openedBy: ConnectionOpenerDescriptor.optional(),
       }),
     },
     [STREAM_PROCESSOR_REVIVED_EVENT_TYPE]: {

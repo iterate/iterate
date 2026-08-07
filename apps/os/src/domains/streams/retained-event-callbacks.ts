@@ -116,30 +116,6 @@ export function retainConnectionPing(
   return retainPulledCall<StreamPingInput, StreamPingReply>(ping);
 }
 
-/**
- * A client connection's capability dispatch door: the relay-side function that
- * replays one dotted path onto the connection owner's live capabilities
- * target. `itx.clients.get(path).capabilities.*` calls arrive here.
- */
-export type InvokeClientCapability = (input: {
-  path: string[];
-  args: unknown[];
-}) => unknown | Promise<unknown>;
-
-/** A retained capability dispatch door, disposed when its connection closes. */
-export type RetainedInvokeClientCapability = ((input: {
-  path: string[];
-  args: unknown[];
-}) => unknown | Promise<unknown>) &
-  Disposable;
-
-/** Retain a client connection's capability dispatch door for one connection. */
-export function retainInvokeClientCapability(
-  invoke: InvokeClientCapability | undefined,
-): RetainedInvokeClientCapability | undefined {
-  return retainPulledCall<{ path: string[]; args: unknown[] }, unknown>(invoke);
-}
-
 export type RetainedProcessorWakeResponse = {
   streamId: string;
   checkpointOffset: number;

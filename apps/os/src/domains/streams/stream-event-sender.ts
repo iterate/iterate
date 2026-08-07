@@ -92,11 +92,8 @@ import {
 import type { SizedStreamEvent, SubscriptionCursorStore } from "./stream-storage.ts";
 import {
   retainGetProcessorRuntimeState,
-  retainInvokeClientCapability,
   retainProcessEventBatch,
   retainConnectionPing,
-  type InvokeClientCapability,
-  type RetainedInvokeClientCapability,
   type RetainedProcessEventBatch,
   type RetainedConnectionPing,
   type RetainedProcessorWakeResponse,
@@ -174,28 +171,6 @@ const COPY_WITHHELD_LIFECYCLE_EVENT_TYPES = new Set<string>([
   "events.iterate.com/stream/connection-opened",
   "events.iterate.com/stream/connection-closed",
 ]);
-
-/**
- * The one exemption from the lifecycle withhold: CLIENT-marked connection
- * facts ARE product data — the client roster (/clients) reduces presence from
- * copies of them. They cannot feed the manufactured-lifecycle loop the
- * withhold exists for: only a real `projects.connect` session carries the
- * opener's `client` marker (hosted callbacks and pager dials never do), and a
- * copy delivery cannot open one, so copying these facts can never append more
- * of them. `stream/woken` and unmarked connection facts stay withheld. The
- * close fact carries the marker because the sender echoes the opener
- * descriptor onto client connections' connection-closed payloads.
- */
-function isClientConnectionLifecycleFact(event: { type: string; payload?: unknown }): boolean {
-  if (
-    event.type !== "events.iterate.com/stream/connection-opened" &&
-    event.type !== "events.iterate.com/stream/connection-closed"
-  ) {
-    return false;
-  }
-  const payload = event.payload as { openedBy?: { client?: unknown } } | undefined;
-  return payload?.openedBy?.client !== undefined;
-}
 
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 30 * 60_000;
@@ -365,13 +340,6 @@ type StreamEventSenderHooks = {
    * Called AFTER the close-fact appends, mirroring the hosted cursor ack.
    */
   onSessionsIdleClosed(connectionKeys: readonly string[]): void;
-  /**
-   * Client-cap enforcement just evicted these connections as "replaced"; the
-   * host must also close their Pagers, or an evicted presence-only
-   * subscriber stays dormant-looking and the next matching append resurrects
-   * it past the cap.
-   */
-  onClientConnectionsEvicted(connectionKeys: readonly string[]): void;
   /**
    * Post-commit: offer just-committed events to dormant Pager-backed
    * subscribers (stream-subscriber-pager.ts). Edge-triggered by design — a Page lost to
@@ -854,8 +822,7 @@ export class StreamEventSender {
             receiver.action === "copy-to-stream"
               ? visible.filter(
                   (event) =>
-                    (!COPY_WITHHELD_LIFECYCLE_EVENT_TYPES.has(event.type) ||
-                      isClientConnectionLifecycleFact(event)) &&
+                    !COPY_WITHHELD_LIFECYCLE_EVENT_TYPES.has(event.type) &&
                     !hasStructuredIdPrefix(
                       event.idempotencyKey,
                       internalStreamIdPrefix("copy-drop"),
@@ -1608,7 +1575,6 @@ type StreamConnection = {
   readonly completionLatency: LatencyRing;
   readonly pingRtt: LatencyRing;
   ping?: RetainedConnectionPing;
-  invokeClientCapability?: RetainedInvokeClientCapability;
   getProcessorRuntimeState?: GetProcessorRuntimeState & Disposable;
   sendQueued(): void;
   isLive(): boolean;
@@ -1662,10 +1628,6 @@ type OpenConnectionArgs<Batch extends StreamEventBatch> = {
   openedBy?: ConnectionOpenerDescriptor;
   getRuntimeState?: GetProcessorRuntimeState;
   ping?: StreamConnectionPing;
-  /** A client connection's capability dispatch door (see retained-event-callbacks.ts). */
-  invokeClientCapability?: InvokeClientCapability;
-  /** Cap on simultaneously open CLIENT connections (null/absent = unlimited). */
-  maxConnections?: number | null;
   sendOnOpen?: boolean;
 };
 
@@ -1682,7 +1644,6 @@ type StreamConnectionsHooks = Pick<
   | "keepAlive"
   | "subscriberPagerConnectionKeys"
   | "onSessionsIdleClosed"
-  | "onClientConnectionsEvicted"
 > & {
   readBatch(afterOffset: number, beforeOffset: number, limit: number): SizedStreamEvent[];
   hostedDeliveryStillMatches(
@@ -1837,8 +1798,6 @@ export class StreamConnections {
     openedBy?: ConnectionOpenerDescriptor;
     getRuntimeState?: GetProcessorRuntimeState;
     ping?: StreamConnectionPing;
-    invokeClientCapability?: InvokeClientCapability;
-    maxConnections?: number | null;
   }): StreamConnection {
     return this.#open({
       ...args,
@@ -1855,51 +1814,6 @@ export class StreamConnections {
 
   close(connectionKey: string, reason: ConnectionCloseReason): void {
     this.#connections.get(connectionKey)?.close(reason);
-  }
-
-  /**
-   * Fan one client-capability call out over every open session connection
-   * that carries a dispatch door (`projects.connect` with `capabilities`), in
-   * table order. Zero doors resolves to `[]` — callers see the count
-   * honestly. Plain `Promise.all` semantics on purpose (the spelled-out
-   * fan-out contract of `itx.clients`): one failing connection rejects the
-   * whole call.
-   */
-  invokeClientCapabilities(input: { path: string[]; args: unknown[] }): Promise<unknown[]> {
-    const doors = [...this.#connections.values()].filter(
-      (connection) => connection.kind === "session" && connection.invokeClientCapability,
-    );
-    return Promise.all(doors.map((connection) => connection.invokeClientCapability!(input)));
-  }
-
-  /** One connection's capability call, by key: the door must exist and be open. */
-  invokeClientCapability(input: {
-    connectionKey: string;
-    path: string[];
-    args: unknown[];
-  }): unknown {
-    const connection = this.#connections.get(input.connectionKey);
-    const door = connection?.kind === "session" ? connection.invokeClientCapability : undefined;
-    if (door === undefined) {
-      throw new Error(`no open client connection "${input.connectionKey}" carries capabilities`);
-    }
-    return door({ path: input.path, args: input.args });
-  }
-
-  /**
-   * Kick one CLIENT connection from the platform side. Returns false when no
-   * live entry exists (the caller may still close a dormant subscriber's wake
-   * socket); throws when the key names a viewer or hosted callback — those
-   * are not kickable through the client surface.
-   */
-  kickClientConnection(connectionKey: string): boolean {
-    const connection = this.#connections.get(connectionKey);
-    if (connection === undefined) return false;
-    if (connection.kind !== "session" || connection.openedBy?.client === undefined) {
-      throw new Error(`connection "${connectionKey}" is not a client connection`);
-    }
-    connection.close("kicked");
-    return true;
   }
 
   has(connectionKey: string): boolean {
@@ -2444,7 +2358,6 @@ export class StreamConnections {
       ...(args.openedBy === undefined ? {} : { openedBy: args.openedBy }),
       getProcessorRuntimeState: retainGetProcessorRuntimeState(args.getRuntimeState),
       ping: retainConnectionPing(args.ping),
-      invokeClientCapability: retainInvokeClientCapability(args.invokeClientCapability),
       get deliveredThroughOffset() {
         return deliveredThroughOffset;
       },
@@ -2470,7 +2383,6 @@ export class StreamConnections {
           this.#hooks.runtimeChanged();
         }
         connection.ping?.[Symbol.dispose]();
-        connection.invokeClientCapability?.[Symbol.dispose]();
         processEventBatch[Symbol.dispose]();
         connection.getProcessorRuntimeState?.[Symbol.dispose]();
         // Best-effort by design. A lifecycle-interrupted append loses this
@@ -2480,16 +2392,7 @@ export class StreamConnections {
         // opened/closed events, remains authoritative for "open now".
         void this.#hooks.appendDeliveryEvent({
           type: "events.iterate.com/stream/connection-closed",
-          payload: {
-            connectionKey,
-            reason,
-            ...(error === undefined ? {} : { error }),
-            // Client connections echo their opener: the roster's copy feed
-            // discriminates presence by the `client` marker, and the copy
-            // withhold only passes marked lifecycle facts
-            // (isClientConnectionLifecycleFact).
-            ...(connection.openedBy?.client === undefined ? {} : { openedBy: connection.openedBy }),
-          },
+          payload: { connectionKey, reason, ...(error === undefined ? {} : { error }) },
         });
         if (reason === "rpc-broken" || reason === "delivery-failed") {
           this.#hooks.sendDueSubscriptions();
@@ -2504,26 +2407,6 @@ export class StreamConnections {
     // wake path records the processor's reported checkpoint.
     this.#connections.set(connectionKey, connection);
     this.#hooks.runtimeChanged();
-    // Client-cap enforcement: a client connection's `maxConnections` bounds
-    // the simultaneously open CLIENT connections on this stream (viewers and
-    // hosted callbacks never count; `null` means unlimited). Oldest-first
-    // eviction as "replaced", atomic with this open under the DO's
-    // single-threaded execution — the closed facts land right after the new
-    // connection's opened fact.
-    if (kind === "session" && args.maxConnections != null && args.openedBy?.client !== undefined) {
-      const clientConnections = [...this.#connections.entries()].filter(
-        ([, candidate]) => candidate.kind === "session" && candidate.openedBy?.client !== undefined,
-      );
-      const excess = clientConnections.length - args.maxConnections;
-      if (excess > 0) {
-        const evicted = clientConnections.slice(0, excess);
-        for (const [, oldest] of evicted) oldest.close("replaced");
-        // The host also closes the evicted keys' wake sockets: without this a
-        // presence-only evictee parks as a dormant subscriber and the next
-        // matching append re-dials it straight past the cap.
-        this.#hooks.onClientConnectionsEvicted(evicted.map(([evictedKey]) => evictedKey));
-      }
-    }
     // Idle eligibility changed exactly here, so (re)derive the deadline here.
     // The connection-opened append's nested reconcile ran BEFORE this
     // publication and could not see the connection; on main the stray

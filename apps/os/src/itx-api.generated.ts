@@ -78,6 +78,7 @@ export interface Session {
  * host, chaining up to the project root.
  */
 export interface Project {
+  [Symbol.dispose](): void;
   /** The project this itx is scoped into. */
   projectId: string;
   /**
@@ -185,8 +186,8 @@ export interface Project {
   streams: ProjectStreamCollection;
   /** Agent catalog: get(path), list(). */
   agents: AgentCollection;
-  /** Client roster: connected clients and the fan-out door onto their live capabilities. */
-  clients: ClientCollection;
+  /** Connected clients: the project processor's catalog plus each scope's capability host. */
+  clients: Clients;
   /** Project-attributed outbound fetch (+ intercept). */
   egress: ProjectEgress;
   /** Project email: send(...) and the connection-scoped inbound address. */
@@ -270,37 +271,31 @@ export interface ProjectCollection {
    */
   get(idOrSlug: string): Promise<Project>;
   /**
-   * `get` plus presence: connect as a project CLIENT. `path` is the client's
-   * caller-chosen identity — its own stream, e.g. `"/clients/chrome"` — and
-   * `description` labels this connection. Births the client stream
-   * idempotently (reconnecting dedupes to a no-op), then opens ONE stream
-   * connection on it carrying the caller's two optional halves: a live
-   * `capabilities` target (the itx half — `itx.clients.get(path).
-   * capabilities.*` fans calls out over every open connection) and a
-   * `processEventBatch` inbox (the stream half — consuming your own stream
-   * from the moment you connect). The existing connection machinery appends
-   * the durable presence facts (`connection-opened`, `connection-closed`
-   * with `departed` when the socket dies). `maxConnections` caps the client's
-   * simultaneously open connections: the DEFAULT of 1 gives the 0..1 shape a
-   * physical device wants (a reconnect evicts the previous connection as
-   * `replaced`); `null` allows unlimited connections (a browser's tabs).
+   * `get` plus presence: connect as a project CLIENT. A client is nothing
+   * platform-specific — it is a capability-host scope at the caller-chosen
+   * `path` (e.g. `"/clients/desk-robot"`; encode a tab id or device serial in
+   * the path if you want several). Connect appends the scope's idempotent
+   * birth batch (reconnecting dedupes to a no-op) plus one narrow copy
+   * subscription that sends the scope's provider connect/disconnect facts to
+   * the project root, where the project processor reduces the clients
+   * catalog (`itx.clients.list()`). When `capabilities` is passed, it is
+   * provided as a LIVE capability mounted at `capabilities` on the scope —
+   * the shipped capability machinery holds it behind a hibernating Provider
+   * Pager (no pinned Durable Objects), journals the provision, and journals
+   * the disconnect when this session's socket dies; the mount is retired
+   * with it. Callers invoke it through the scope's capability host:
+   * `itx.clients.get(path).capabilities.browser.navigate(url)`.
    * Returns the project itx, exactly like `get`.
    */
   connect(
     idOrSlug: string,
     opts: {
+      /** The client's identity: an absolute stream path, e.g. "/clients/chrome". */
       path: string;
+      /** Human label for this client; journals as the provision's instructions. */
       description: string;
+      /** Live capabilities target (an RpcTarget or plain object in the caller's process). */
       capabilities?: unknown;
-      processEventBatch?: ProcessEventBatch;
-      maxConnections?: number | null;
-      /**
-       * Caller-chosen stable identity for THIS connection (a tab id, a device
-       * serial). `getConnection(connectionKey)` addresses it directly, and a
-       * reconnect under the same key atomically replaces its dead predecessor
-       * instead of accumulating. Omitted → a random key per connection.
-       */
-      connectionKey?: string;
     },
   ): Promise<Project>;
   /**
@@ -706,18 +701,25 @@ export interface AgentCollection {
 }
 
 /**
- * Project client roster: the logical endpoints that have ever connected via
- * `projects.connect`, plus per-client handles whose `capabilities.*` fans out
- * over the currently open connections.
+ * Connected clients within one project (`itx.clients`). A client is a
+ * capability-host scope — typically under `/clients/**` — that
+ * `projects.connect` provided a live capability to; nothing client-specific
+ * exists at the platform layer. The birth batch every connect appends
+ * configures a narrow copy subscription sending the scope's
+ * `capability-provider-pager-connected` / `-disconnected` facts to the
+ * project root, where the project processor reduces the clients catalog
+ * (`list()`). Presence is last-known but honest: the platform journals the
+ * disconnect when the provider's Pager socket dies. `get(path)` returns the
+ * scope's capability host — `get(path).capabilities.browser.navigate(url)`
+ * invokes the live capability mounted there through the shipped capability
+ * machinery (hibernating Provider Pager, no pinned Durable Objects).
  */
-export interface ClientCollection {
+export interface Clients {
   __describe(): Promise<Description>;
-  processor: StreamProcessorRpc<ClientCollectionProcessorState>;
-  liveState: LiveStateRpc<ClientCollectionProcessorState>;
-  /** One client handle by stream path; pure addressing, never creates. */
-  get(path: string): Client;
-  /** Known clients, read from the collection processor's reduced roster. */
-  list(): Promise<ClientListItem[]>;
+  /** The client scope's capability host — the full shipped surface, no wrapper. */
+  get(path: string): CapabilityHost;
+  /** Known clients, read from the project processor's reduced catalog. */
+  list(): Promise<ProjectClientRecord[]>;
 }
 
 /**
@@ -1436,39 +1438,7 @@ export interface Stream {
      * to measure real transport RTT to this callback owner.
      */
     ping?: StreamConnectionPing;
-    /**
-     * Optional live capabilities target (an RpcTarget or plain object in the
-     * caller's process), retained for the connection's lifetime — the itx
-     * half of a project CLIENT. `itx.clients.get(path).capabilities.a.b(x)`
-     * replays the dotted path onto every open connection's target and
-     * Promise.alls the results. A capability-bearing connection stays pinned
-     * (never idle-closed) so its dispatch door remains reachable.
-     */
-    capabilities?: unknown;
-    /**
-     * Cap on simultaneously open CLIENT connections on this stream (openers
-     * carrying the descriptor's `client` marker; viewers and hosted callbacks
-     * never count). Opening past the cap evicts the oldest client connection
-     * as `replaced`, atomically with this open. `null` = unlimited; absent =
-     * no enforcement.
-     */
-    maxConnections?: number | null;
   }): Promise<StreamConnectionHandle>;
-  /**
-   * Fan one client-capability call out over this stream's open client
-   * connections (`openConnection` with `capabilities`). Zero open doors
-   * resolves to `[]`. The published spelling is
-   * `itx.clients.get(path).capabilities.*` — this is its dispatch door.
-   */
-  invokeClientCapabilities(input: { path: string[]; args: unknown[] }): Promise<unknown[]>;
-  /** Route one client-capability call to a single open connection by key (bare result). */
-  invokeClientCapability(input: {
-    connectionKey: string;
-    path: string[];
-    args: unknown[];
-  }): Promise<unknown>;
-  /** Kick one client connection from the platform side (close reason "kicked"). */
-  closeClientConnection(input: { connectionKey: string }): Promise<void>;
   /** Change where one subscription whose cursor this stream stores reads next. An already-started receiver call may finish. */
   setSubscriptionCursor(args: { name: string; afterOffset: number }): Promise<StreamEvent>;
   /** Un-halt one subscription without changing its cursor. */
@@ -1544,32 +1514,6 @@ export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
-}
-
-/**
- * One project client — a logical endpoint (a browser, a CLI, a device)
- * identified by its caller-chosen stream path. The client's stream is its
- * stream half (inbox/outbox); its live `capabilities` target is its itx half.
- * `connections()` reads the LIVE runtime table on the client's stream —
- * authoritative for "open now"; the roster's reduced state is last-known
- * history. Unknown dotted members walk the prototype hop:
- * `client.capabilities.a.b(x)` fans the call out over every open
- * connection's live target and `Promise.all`s the results.
- */
-export interface Client {
-  __describe(): Promise<Description>;
-  /** The client's own event stream (the stream half; capabilities are the itx half). */
-  stream: Stream;
-  /** Open client connections, read from the stream's live runtime table. */
-  connections(): Promise<ClientConnectionListItem[]>;
-  /**
-   * One connection by key — pure addressing. The returned handle's
-   * `capabilities.*` targets exactly that connection (bare result, no
-   * fan-out) and `close()` kicks it from the platform side.
-   */
-  getConnection(connectionKey: string): ClientConnection;
-  /** The prototype hop's dispatch door: every dotted call goes through `.capabilities`. */
-  invokeCapability(input: { path: string[]; args: unknown[] }): Promise<unknown[]>;
 }
 
 /** Disposable handle for one live project egress interception. */
@@ -1818,20 +1762,6 @@ export interface StreamSubscriptionCollection {
   list(): Promise<StreamSubscriptionListEntry[]>;
   /** One subscription handle by its source-local name. */
   get(name: string): StreamSubscription;
-}
-
-/**
- * One connection on a client, addressed by connectionKey. `capabilities.*`
- * targets exactly this connection and returns the bare result (no fan-out
- * array); `close()` kicks the connection from the platform side — the owner
- * observes its leg break and the roster sees a `kicked` close fact.
- */
-export interface ClientConnection {
-  __describe(): Promise<Description>;
-  /** Kick this connection from the platform side (close reason "kicked"). */
-  close(): Promise<void>;
-  /** The prototype hop's dispatch door: dotted calls go through `.capabilities`, single-target. */
-  invokeCapability(input: { path: string[]; args: unknown[] }): Promise<unknown>;
 }
 
 /** Cloudflare Images binding exposed through itx as one-call helpers. */
@@ -2220,6 +2150,16 @@ export type ProjectProcessorState = {
   repos: { createdAt: string; path: string }[];
   secrets: { createdAt: string; path: string }[];
   streams: { createdAt: string; path: string }[];
+  clients: Record<
+    string,
+    {
+      path: string;
+      connected: boolean;
+      lastConnectedAt: string;
+      lastDisconnectedAt?: string | undefined;
+      connectedAtOffsets: number[];
+    }
+  >;
   customDomains: { hostname: string; kind: "cloudflare" | "direct" }[];
   egressRules: {
     ruleKey: string;
@@ -2401,14 +2341,6 @@ export type DynamicWorkerCapability<T extends object = Record<string, unknown>> 
     /** The stateful worker's armed alarm time (ms) or null. Stateless worker refs reject. */
     getAlarm(): Promise<number | null>;
   };
-
-/**
- * Callback invoked by the stream send loop for each delivered batch.
- *
- * It stays as a named type because Workers RPC callback lifecycle helpers need
- * to duplicate, retain, and dispose exactly this callback shape.
- */
-export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 
 /** One entry of a session's project catalog (`session.projects.list()`). */
 export type ProjectListEntry = {
@@ -3028,46 +2960,13 @@ export type AgentCollectionProcessorState = {
   waitingForSinceOffsets: Record<string, number>;
 };
 
-/** The singleton client collection processor's reduced roster state. */
-export type ClientCollectionProcessorState = {
-  birthCertificate: Record<string, never> | null;
-  clients: Record<
-    string,
-    {
-      path: string;
-      description?: string | undefined;
-      createdAt: string;
-      connections: Record<
-        string,
-        {
-          openedAt: string;
-          description?: string | undefined;
-          user?:
-            | {
-                id?: string | undefined;
-                email: string;
-                name?: string | undefined;
-                picture?: string | undefined;
-              }
-            | undefined;
-          hasCapabilities: boolean;
-          dormant?: boolean | undefined;
-        }
-      >;
-      lastDisconnectedAt?: string | undefined;
-    }
-  >;
-};
-
-/** One roster row from `itx.clients.list()`: last-known presence, not liveness. */
-export type ClientListItem = {
+/** What `itx.clients.list()` returns per client. */
+export type ProjectClientRecord = {
   path: string;
-  description?: string;
-  createdAt: string;
-  /** Connections the roster projection currently knows (dormant included). */
-  connections: number;
-  /** True when any known connection carries a live capabilities target. */
-  hasCapabilities: boolean;
+  connected: boolean;
+  lastConnectedAt: string;
+  lastDisconnectedAt?: string | undefined;
+  connectedAtOffsets: number[];
 };
 
 /**
@@ -3862,6 +3761,14 @@ export type StreamRuntimeDebugState = {
   };
 };
 
+/**
+ * Callback invoked by the stream send loop for each delivered batch.
+ *
+ * It stays as a named type because Workers RPC callback lifecycle helpers need
+ * to duplicate, retain, and dispose exactly this callback shape.
+ */
+export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
+
 /** A declarative event filter; an absent filter or empty object matches every event. */
 export type EventFilter = {
   eventTypes?: string[] | undefined;
@@ -4122,27 +4029,6 @@ export type CommittedSubscriptionRemovedEvent = Omit<
   } & { payload: { name: string; reason: "requested" } };
 
 /**
- * Batch delivered to stream processors and live connections.
- *
- * Kept named because callback retention, processor hosts, and tests all depend
- * on the same cross-RPC batch envelope.
- */
-export type StreamEventBatch = {
-  projectId: string | null;
-  path: string;
-  /** Random identity of this event log; changes when the stream is recreated. */
-  streamId: string;
-  events: StreamEvent[];
-  /** Exclusive raw-log cursor from which this delivery scan began. */
-  scannedAfterOffset: number;
-  /** Inclusive raw-log cursor through which this delivery scan completed. */
-  scannedThroughOffset: number;
-  streamMaxOffset: number;
-  /** Reduced core state, or null when the connection opts out with `state: false`. */
-  state: unknown;
-};
-
-/**
  * Whether a project the directory knows about actually exists in THIS
  * deployment's engine:
  * - `created` — the project stream's bootstrap saga committed `project/created`.
@@ -4209,15 +4095,6 @@ export type FlattenedCapabilityInvocation = {
 
 /** One step of an {@link ItxExpression}: a property read, or a `[method, ...args]` call. */
 export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
-
-/** One open client connection, read from the client stream's LIVE runtime table. */
-export type ClientConnectionListItem = {
-  connectionKey: string;
-  startedAt: string;
-  description?: string;
-  user?: ConnectionOpenerDescriptor["user"];
-  hasCapabilities: boolean;
-};
 
 /** A stored project file: what it looks like from the outside — its itx path plus wire facts. */
 export type ProjectFileMetadata = {
@@ -4702,6 +4579,27 @@ export type EphemeralEventBufferRuntimeState = {
 };
 
 /**
+ * Batch delivered to stream processors and live connections.
+ *
+ * Kept named because callback retention, processor hosts, and tests all depend
+ * on the same cross-RPC batch envelope.
+ */
+export type StreamEventBatch = {
+  projectId: string | null;
+  path: string;
+  /** Random identity of this event log; changes when the stream is recreated. */
+  streamId: string;
+  events: StreamEvent[];
+  /** Exclusive raw-log cursor from which this delivery scan began. */
+  scannedAfterOffset: number;
+  /** Inclusive raw-log cursor through which this delivery scan completed. */
+  scannedThroughOffset: number;
+  streamMaxOffset: number;
+  /** Reduced core state, or null when the connection opts out with `state: false`. */
+  state: unknown;
+};
+
+/**
  * The mutual ping's request half (NTP-style, for real latency measurement
  * between a stream and its callback owners): the requester stamps `t0` on its own
  * clock and observes `t3` when the reply lands.
@@ -4749,32 +4647,6 @@ type TypedStreamEventInput<Type extends string = string, Payload = Record<string
 > & {
   type: Type;
   payload: Payload;
-};
-
-/** Serializable identity of the caller that opened a connection. */
-export type ConnectionOpenerDescriptor = {
-  description?: string | undefined;
-  user?:
-    | {
-        id?: string | undefined;
-        email: string;
-        name?: string | undefined;
-        picture?: string | undefined;
-      }
-    | undefined;
-  processor?:
-    | {
-        announcement: {
-          slug: string;
-          version: string;
-          description: string;
-          consumes: string[];
-          emits: string[];
-          ownedEvents: { type: string; description?: string | undefined }[];
-        };
-      }
-    | undefined;
-  client?: { capabilities?: boolean | undefined } | undefined;
 };
 
 /** Input to the Images capability's `transform`: the source image stream,
@@ -5046,6 +4918,31 @@ export type DynamicWorkerSource =
 export type WorkspaceChange = {
   change: "added" | "deleted" | "modified";
   path: string;
+};
+
+/** Serializable identity of the caller that opened a connection. */
+export type ConnectionOpenerDescriptor = {
+  description?: string | undefined;
+  user?:
+    | {
+        id?: string | undefined;
+        email: string;
+        name?: string | undefined;
+        picture?: string | undefined;
+      }
+    | undefined;
+  processor?:
+    | {
+        announcement: {
+          slug: string;
+          version: string;
+          description: string;
+          consumes: string[];
+          emits: string[];
+          ownedEvents: { type: string; description?: string | undefined }[];
+        };
+      }
+    | undefined;
 };
 
 /** One rolling-minute throughput window. */

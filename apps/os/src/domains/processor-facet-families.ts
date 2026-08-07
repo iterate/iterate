@@ -8,7 +8,6 @@
 // (processor-facet-durable-object.ts) dispatches on exactly this function, so
 // the door-side guard and the composition can never drift.
 import { AGENT_COLLECTION_PATH } from "./agents/agent-collection-processor-contract.ts";
-import { CLIENT_COLLECTION_PATH } from "./clients/client-collection-processor-contract.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH } from "./email/utils.ts";
 import { WORKSPACE_PATH_PREFIX } from "./workspaces/utils.ts";
 
@@ -16,7 +15,6 @@ import { WORKSPACE_PATH_PREFIX } from "./workspaces/utils.ts";
 type FacetProcessorFamily =
   | "project-root"
   | "agent-collection"
-  | "client-collection"
   | "agent"
   | "email-router"
   | "slack-router"
@@ -42,7 +40,6 @@ export function facetProcessorFamilyForPath(input: {
   if (projectId === null) return "repo";
   if (path === "/") return "project-root";
   if (path === AGENT_COLLECTION_PATH) return "agent-collection";
-  if (path === CLIENT_COLLECTION_PATH) return "client-collection";
   if (path.startsWith("/agents/")) return "agent";
   if (path === EMAIL_INTEGRATION_STREAM_PATH) return "email-router";
   if (path.startsWith("/integrations/slack/")) return "slack-router";

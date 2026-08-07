@@ -939,11 +939,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       subscriberPagerConnectionKeys: () => this.#subscriberPagers.connectionKeys(),
       onSessionsIdleClosed: (connectionKeys) =>
         this.#subscriberPagers.recordIdleClosed(connectionKeys),
-      onClientConnectionsEvicted: (connectionKeys) => {
-        for (const connectionKey of connectionKeys) {
-          this.#subscriberPagers.closeForConnection(connectionKey, "replaced");
-        }
-      },
       pageDormantSubscribers: (justCommitted) =>
         this.#subscriberPagers.pageDormant(justCommitted.map((entry) => entry.event)),
     },
@@ -2665,20 +2660,6 @@ export class StreamDurableObject extends DurableObject<Env> {
         ? undefined
         : ConnectionOpenerDescriptorSchema.parse(args.openedBy);
 
-    // By the time `capabilities` reaches this DO it is the relay's dispatch
-    // arrow, never the caller's raw target (the relay overrides it after the
-    // spread). Anything else means a caller bypassed the relay.
-    if (args.capabilities !== undefined && typeof args.capabilities !== "function") {
-      throw new Error("openConnection capabilities must arrive as the relay's dispatch function");
-    }
-    if (
-      args.maxConnections !== undefined &&
-      args.maxConnections !== null &&
-      (!Number.isSafeInteger(args.maxConnections) || args.maxConnections < 1)
-    ) {
-      throw new Error("maxConnections must be a positive integer or null (unlimited)");
-    }
-
     // One filter shape everywhere: `eventTypes` is sugar for the filter's
     // type list (compileEventFilter also validates any condition upfront).
     const filterSpec: EventFilter = {
@@ -2701,10 +2682,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       openedBy,
       getRuntimeState: args.getRuntimeState,
       ping: args.ping,
-      invokeClientCapability: args.capabilities as
-        | ((input: { path: string[]; args: unknown[] }) => unknown)
-        | undefined,
-      maxConnections: args.maxConnections,
     });
 
     this.#subscriberPagers.bind({
@@ -2712,7 +2689,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       subscriberPagerId: relay?.subscriberPagerId,
       filter: filterSpec,
       events: args.events,
-      ...(openedBy === undefined ? {} : { openedBy }),
     });
 
     return new StreamConnectionRpcTarget({
@@ -2721,61 +2697,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       connectionKey,
       streamMaxOffset: this.#coreProcessorState.maxOffset,
     });
-  }
-
-  /**
-   * Fan one client-capability call out over this stream's open client
-   * connections (the ones `projects.connect` opened with `capabilities`).
-   * Resolves to the per-connection results in table order; `[]` when no door
-   * is open. The dispatch consults ONLY the live in-memory connection table —
-   * the durable opened/closed facts are presence history, not liveness.
-   */
-  invokeClientCapabilities(input: { path: string[]; args: unknown[] }): Promise<unknown[]> {
-    return this.#eventSender.connections.invokeClientCapabilities(input);
-  }
-
-  /** Route one client-capability call to a single open connection by key. */
-  async invokeClientCapability(input: {
-    connectionKey: string;
-    path: string[];
-    args: unknown[];
-  }): Promise<unknown> {
-    return await this.#eventSender.connections.invokeClientCapability(input);
-  }
-
-  /**
-   * Kick one client connection from the platform side: closes the live entry
-   * (reason "kicked") and any Subscriber Pager bound to it, so a dormant
-   * presence-only subscriber cannot resurrect on the next Page. The owner
-   * observes its leg break.
-   */
-  async closeClientConnection(input: { connectionKey: string }): Promise<void> {
-    const kickedLive = this.#eventSender.connections.kickClientConnection(input.connectionKey);
-    const { bound, endedDormant } = this.#subscriberPagers.dormantEndings(input.connectionKey);
-    if (!kickedLive && bound === 0) {
-      throw new Error(`no client connection "${input.connectionKey}" to close`);
-    }
-    // A DORMANT presence-only client has no live entry whose close() could
-    // journal this kick — append it here, with the opener echoed for the
-    // roster feed. Fact FIRST, cleanup after: an interruption before the
-    // close below leaves a retryable door (the pagerId idempotency key
-    // dedupes the re-appended fact), never a silently ended connection.
-    for (const ended of endedDormant) {
-      this.#append({ authority: "core-event" }, [
-        {
-          type: "events.iterate.com/stream/connection-closed",
-          idempotencyKey: internalStreamId("stream-subscriber-pager-kicked", ended.pagerId),
-          payload: {
-            connectionKey: input.connectionKey,
-            reason: "kicked",
-            ...(ended.openedBy === undefined ? {} : { openedBy: ended.openedBy }),
-          },
-        },
-      ]);
-    }
-    // Clears each ended dormancy marker as it closes, so the pagers' own
-    // webSocketClose stays silent instead of double-recording "departed".
-    this.#subscriberPagers.closeForConnection(input.connectionKey, "kicked");
   }
 
   /**
@@ -3105,14 +3026,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         {
           type: "events.iterate.com/stream/connection-closed",
           idempotencyKey: internalStreamId("stream-subscriber-pager-departed", departed.pagerId),
-          payload: {
-            connectionKey: departed.connectionKey,
-            reason: "departed",
-            // A dormant CLIENT's death is roster-relevant: the echoed opener
-            // lets this fact through the copy withhold (see the attachment's
-            // openedBy doc).
-            ...(departed.openedBy === undefined ? {} : { openedBy: departed.openedBy }),
-          },
+          payload: { connectionKey: departed.connectionKey, reason: "departed" },
         },
       ]);
     } catch (error) {

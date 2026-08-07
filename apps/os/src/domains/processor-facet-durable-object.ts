@@ -47,7 +47,6 @@ import {
   type AgentRuntimeTransition,
 } from "./agents/agent-processor-contract.ts";
 import { AgentCollectionStreamProcessor } from "./agents/agent-collection-processor-implementation.ts";
-import { ClientCollectionStreamProcessor } from "./clients/client-collection-processor-implementation.ts";
 import {
   CapabilityHostProcessor,
   type CapabilityHostProcessorReads,
@@ -324,9 +323,6 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       case "agent-collection":
         this.#registerAgentCollection(identity, stream, registry);
         break;
-      case "client-collection":
-        this.#registerClientCollection(identity, stream, registry);
-        break;
       case "agent":
         this.#registerAgent(identity, stream, registry);
         break;
@@ -503,23 +499,6 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   ): void {
     const processor = registry.register(
       new AgentCollectionStreamProcessor({
-        stream,
-        path: identity.path,
-        projectId: identity.projectId!,
-      }),
-    );
-    const reads = registry.reads(processor);
-    this.#getLiveState = () => reads.currentState;
-  }
-
-  /** The client roster projection at /clients — a pure projector, no recovery. */
-  #registerClientCollection(
-    identity: ProcessorFacetIdentity,
-    stream: ProcessorStream,
-    registry: StreamProcessorRegistry,
-  ): void {
-    const processor = registry.register(
-      new ClientCollectionStreamProcessor({
         stream,
         path: identity.path,
         projectId: identity.projectId!,
