@@ -66,3 +66,7 @@ dashboard's `/integrations` view, adapted to a phone-sized native UI.
   has a typed integration family. Mobile now joins `secrets.list()` too, renders
   every dashboard-style account connection, and optimistically shows a new
   account while the project secret index folds.
+- 2026-08-07: GitHub access was restored and draft PR #2453 was opened with a
+  mobile OTA preview. The first Cloudflare deploy exposed a broken legacy
+  `preview-8` OS worker before tests; the PR now requests clean slot
+  `preview-9` for the verification rerun.

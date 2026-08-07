@@ -1,16 +1,19 @@
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { listMobileIntegrations } from "./integrations.ts";
 
 test("joins built-in journals to live status and keeps project-provided mounts", async () => {
-  const getConnection = vi.fn(async ({ connection }: { connection: string }) => ({
-    connected: connection === "iterate-workspace",
-    displayName: connection === "iterate-workspace" ? "Iterate" : null,
-    externalId: connection === "iterate-workspace" ? "T123" : null,
-    metadata: {},
-  }));
+  const getConnectionCalls: { connection: string; provider: string }[] = [];
   const project = {
     integrations: {
-      getConnection,
+      getConnection: async (input: { connection: string; provider: string }) => {
+        getConnectionCalls.push(input);
+        return {
+          connected: input.connection === "iterate-workspace",
+          displayName: input.connection === "iterate-workspace" ? "Iterate" : null,
+          externalId: input.connection === "iterate-workspace" ? "T123" : null,
+          metadata: {},
+        };
+      },
       list: async () => [
         {
           connection: "iterate-workspace",
@@ -84,8 +87,5 @@ test("joins built-in journals to live status and keeps project-provided mounts",
       },
     ],
   });
-  expect(getConnection).toHaveBeenCalledWith({
-    connection: "old-account",
-    provider: "google",
-  });
+  expect(getConnectionCalls).toContainEqual({ connection: "old-account", provider: "google" });
 });
