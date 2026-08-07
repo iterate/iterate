@@ -1243,6 +1243,9 @@ static size_t health_json(char *out, size_t capacity) {
     {"bargeInsRejected", runtime.barge_in_rejected},
     /* Echo this device declined to send the provider; the self-cancel fix. */
     {"echoFramesMuted", havpe_audio_echo_frames_muted()},
+    {"gateAdmitted", havpe_audio_barge_in_admitted()},
+    {"gateRefused", havpe_audio_barge_in_refused()},
+    {"gateLoudestRefused", havpe_audio_loudest_refused()},
     {"turnMarkerFailures", runtime.turn_marker_failures},
     {"batches", runtime.voicelab.batches_on_connection},
     {"connGeneration", runtime.voicelab.connection_generation},

@@ -33,6 +33,26 @@ const COLUMNS = [
   "micCaptured",
   "micIdle",
   "micPeak",
+  /*
+   * RAW AND CLEAN, SIDE BY SIDE, because "the microphone went quiet" has two
+   * completely different causes and only this pair separates them. Raw is the
+   * tap before the board's processing; clean is after. Both collapsing means
+   * the signal never arrived. Only clean collapsing means we did it.
+   * Boards that do not publish these show "-" rather than a zero, which would
+   * read as a measurement.
+   */
+  "micRawPeak",
+  "micCleanPeak",
+  "echoRawPeak",
+  "echoCleanPeak",
+  /*
+   * The gate's own decisions. `echoFramesMuted` climbing while
+   * `gateLoudestRefused` sits just under the floor is the whole HA Voice PE
+   * story in two columns.
+   */
+  "echoFramesMuted",
+  "gateRefused",
+  "gateLoudestRefused",
   "bargeIns",
   "spkSupersededMidplay",
   "spkAnswerStarts",

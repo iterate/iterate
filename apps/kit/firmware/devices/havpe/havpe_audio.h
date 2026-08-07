@@ -125,6 +125,18 @@ void havpe_audio_reset_echo_peaks(void);
 
 /** Frames of this device's own echo that were withheld from the uplink. */
 uint32_t havpe_audio_echo_frames_muted(void);
+/** Frames the barge-in gate believed were a person. */
+uint32_t havpe_audio_barge_in_admitted(void);
+/** Frames it called echo — the decision that silences an interruption. */
+uint32_t havpe_audio_barge_in_refused(void);
+/**
+ * The loudest cancelled-plane peak the gate still called echo.
+ *
+ * The number the floor should be argued about with. If this sits close under
+ * ITERATE_KIT_BARGE_IN_FLOOR across real conversations, the floor is the
+ * reason interruptions do not work.
+ */
+uint32_t havpe_audio_loudest_refused(void);
 void havpe_audio_inject_starvation(uint32_t ms);
 bool havpe_audio_starvation_pending(void);
 uint32_t havpe_audio_take_injected_starvation(void);

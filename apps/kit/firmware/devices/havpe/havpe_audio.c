@@ -177,6 +177,19 @@ static uint8_t pipeline_stage[2];
 /* Capture-task owned: is a person talking, and how much echo was withheld. */
 static struct iterate_kit_barge_in capture_gate;
 static volatile uint32_t capture_echo_frames_muted;
+/*
+ * THE LOUDEST THING THIS DEVICE REFUSED TO TRANSMIT.
+ *
+ * The barge-in floor is one number, ITERATE_KIT_BARGE_IN_FLOOR, and it was
+ * calibrated against speech measured while the speaker was SILENT ("800 and
+ * up"). What it actually has to clear is speech on the cancelled plane while
+ * the speaker is RUNNING, which is a different and much smaller quantity —
+ * measured on this board at 293 against a floor of 300. A threshold set in
+ * one condition and applied in another cannot be argued about without this
+ * number, so the device keeps it: the high-water mark of what the gate saw
+ * and still called echo.
+ */
+static volatile uint32_t capture_loudest_refused;
 
 /* --- the shared codec seam ------------------------------------------------ */
 
@@ -490,6 +503,11 @@ static void capture_hardware_task(void *argument) {
             &capture_gate, (uint64_t)(esp_timer_get_time() / 1000))) {
       memset(frame.samples, 0, sizeof(frame.samples));
       ++capture_echo_frames_muted;
+      /* `capture_clean_peak` rather than the block-local above: this frame's
+       * cancelled-plane peak, published in the same iteration. */
+      if (capture_clean_peak > capture_loudest_refused) {
+        capture_loudest_refused = capture_clean_peak;
+      }
     }
     {
       const bool playing = havpe_audio_speaker_is_playing();
@@ -1093,3 +1111,9 @@ uint8_t havpe_audio_pipeline_stage(uint8_t channel) {
 uint32_t havpe_audio_echo_frames_muted(void) {
   return capture_echo_frames_muted;
 }
+
+uint32_t havpe_audio_barge_in_admitted(void) { return capture_gate.admitted; }
+
+uint32_t havpe_audio_barge_in_refused(void) { return capture_gate.rejected; }
+
+uint32_t havpe_audio_loudest_refused(void) { return capture_loudest_refused; }
