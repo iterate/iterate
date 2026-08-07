@@ -31,12 +31,41 @@ enum {
    * How loud the microphone must have been, in PCM16 magnitude, before a
    * barge-in is believed.
    *
-   * MEASURED, on the HA Voice PE with its AEC tap selected: the echo residual
-   * during playback peaks around 58, the worst residual seen through any tap
-   * was about 250, and ordinary speech at conversational distance reads 800
-   * and up. 300 sits above every residual measured and well under any real
-   * voice. It is a floor on ENERGY only — a quiet talker still crosses it,
-   * because 300 of 32767 is a whisper.
+   * MEASURED TWICE, and the first measurement was of the wrong thing.
+   *
+   * The original: "the echo residual during playback peaks around 58, the
+   * worst residual seen through any tap was about 250, and ordinary speech at
+   * conversational distance reads 800 and up" — so 300. But 800 is speech
+   * measured while the speaker was SILENT. What this floor has to clear is
+   * speech on the CANCELLED PLANE while the speaker is running, and the
+   * cancellation pulls everything down together.
+   *
+   * Measured on the HA Voice PE mid-answer, with `gateLoudestRefused` and
+   * `echoFramesMuted` reporting from inside the gate:
+   *
+   *   echo alone, before the interruption   clean peak ~203
+   *   the old floor                                    300
+   *   a person interrupting through it      284 refused, 321 admitted
+   *
+   * 300 sits at the TOP of real double-talk speech rather than between it and
+   * the echo, so interruptions are muted frame after frame and the HA Voice PE
+   * cannot be interrupted at all.
+   *
+   * AND LOWERING IT DOES NOT FIX THAT, which is the useful part. The worst
+   * residual measured across taps is 250 — `a_quiet_room_cannot_interrupt`
+   * pins exactly that sample and fails at any floor of 250 or below. So the
+   * whole window between "loudest echo" and "quietest admitted interruption"
+   * is 250 to 284: about one decibel. No single energy threshold separates
+   * those two populations with a margin worth having, and one placed inside
+   * that window trades a device that cannot be interrupted for a device whose
+   * answers cancel themselves — which is the failure this gate was built for.
+   *
+   * 300 therefore stays until the discriminator changes, not because it is
+   * right. What has to change is the premise in this file's own header: "not
+   * a VAD: no spectrum, no adaptation". Energy alone is out of room here.
+   * `gateLoudestRefused` and `echoFramesMuted` on the HA Voice PE report the
+   * two numbers above from live calls, so any replacement can be argued about
+   * with measurements rather than another single-condition calibration.
    */
   ITERATE_KIT_BARGE_IN_FLOOR = 300,
   /**
