@@ -7,9 +7,10 @@ size: medium
 
 ## Status
 
-About 80% complete. The drawer route, full mobile catalogue and connection
-controls, unit coverage, and preview-shaped Playwright spec are implemented and
-pass local static/unit checks. Preview proof, PR media, and CI/review remain.
+About 95% complete. The drawer route, full mobile catalogue and connection
+controls, unit coverage, preview deployment, and phone-sized visual proof are
+complete. The feature works against `preview-9`; green broad preview CI remains
+blocked by unrelated agent/workspace subscription failures on `main`.
 
 ## Goal
 
@@ -70,3 +71,11 @@ dashboard's `/integrations` view, adapted to a phone-sized native UI.
   mobile OTA preview. The first Cloudflare deploy exposed a broken legacy
   `preview-8` OS worker before tests; the PR now requests clean slot
   `preview-9` for the verification rerun.
+- 2026-08-07: `preview-9` deployed the branch and the real local mobile web
+  build signed up, opened the project drawer, loaded the live integration
+  catalogue, and produced PR media at a 390×844 viewport. The feature spec was
+  not among the failing cases. Broad preview CI is still red on three
+  out-of-scope `main` tests whose new projects cannot find the `agent` or
+  `workspace` subscription; the same missing `agent-collection` subscription
+  appeared on a freshly-created manual proof project before the integrations
+  route loaded successfully.
