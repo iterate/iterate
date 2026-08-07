@@ -58,5 +58,11 @@ dashboard's `/integrations` view, adapted to a phone-sized native UI.
   proof cannot start because this machine has no Doppler binary/config.
 - 2026-08-07: GitHub publishing is waiting on credentials: both HTTPS/SSH and
   `gh` are unauthenticated, and GitHub's device flow reaches a sign-in page with
-  no logged-in browser session. Branch remains clean and two commits ahead of
-  `origin/main`.
+  no logged-in browser session. The committed branch remains local-only.
+- 2026-08-07: Audited the current unskip work in draft PR #2428. Its restored
+  specs validate real preview signup and mobile UI while preserving durable
+  diagnostics for asynchronous delivery gaps. The audit also caught a parity
+  hole here: generic account-session secrets were omitted because only Waitrose
+  has a typed integration family. Mobile now joins `secrets.list()` too, renders
+  every dashboard-style account connection, and optimistically shows a new
+  account while the project secret index folds.

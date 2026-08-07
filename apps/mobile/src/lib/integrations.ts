@@ -58,7 +58,15 @@ export type MobileIntegrationConnection = BuiltinEntry & {
   status: IntegrationConnectionStatus;
 };
 
+export type MobileAccountConnection = {
+  connected: boolean | null;
+  connection: string;
+  integration: string;
+  path: string;
+};
+
 export type MobileIntegrations = {
+  accounts: MobileAccountConnection[];
   connections: Record<PublicBuiltinIntegrationSlug, MobileIntegrationConnection[]>;
   provided: Extract<IntegrationConnectionListEntry, { source: "provided" }>[];
 };
@@ -69,7 +77,10 @@ export type MobileIntegrations = {
  * need both pieces to render history without claiming stale credentials work.
  */
 export async function listMobileIntegrations(project: ProjectStub): Promise<MobileIntegrations> {
-  const entries = await project.integrations.list();
+  const [entries, secrets] = await Promise.all([
+    project.integrations.list(),
+    project.secrets.list(),
+  ]);
   const builtinEntries = entries.filter(
     (entry): entry is BuiltinEntry => entry.source === "builtin",
   );
@@ -83,14 +94,34 @@ export async function listMobileIntegrations(project: ProjectStub): Promise<Mobi
     })),
   );
 
+  const connections = {
+    github: connectedEntries.filter((entry) => entry.integration === "github"),
+    gmail: connectedEntries.filter((entry) => entry.integration === "gmail"),
+    slack: connectedEntries.filter((entry) => entry.integration === "slack"),
+    telegram: connectedEntries.filter((entry) => entry.integration === "telegram"),
+    waitrose: connectedEntries.filter((entry) => entry.integration === "waitrose"),
+  };
   return {
-    connections: {
-      github: connectedEntries.filter((entry) => entry.integration === "github"),
-      gmail: connectedEntries.filter((entry) => entry.integration === "gmail"),
-      slack: connectedEntries.filter((entry) => entry.integration === "slack"),
-      telegram: connectedEntries.filter((entry) => entry.integration === "telegram"),
-      waitrose: connectedEntries.filter((entry) => entry.integration === "waitrose"),
-    },
+    accounts: secrets.flatMap((secret) => {
+      const match = /^\/secrets\/integrations\/([^/]+)\/([^/]+)\/session$/.exec(secret.path);
+      if (match === null) return [];
+      const integration = match[1]!;
+      const connection = match[2]!;
+      const waitrose =
+        integration === "waitrose"
+          ? connections.waitrose.find((entry) => entry.connection === connection)
+          : undefined;
+      const connected = integration === "waitrose" ? waitrose?.status.connected || false : null;
+      return [
+        {
+          connected,
+          connection,
+          integration,
+          path: secret.path,
+        },
+      ];
+    }),
+    connections,
     provided: entries.filter(
       (entry): entry is Extract<IntegrationConnectionListEntry, { source: "provided" }> =>
         entry.source === "provided",

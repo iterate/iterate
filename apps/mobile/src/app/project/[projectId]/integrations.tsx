@@ -19,7 +19,9 @@ import {
   CONNECTABLE_INTEGRATIONS,
   listMobileIntegrations,
   PLATFORM_INTEGRATIONS,
+  type MobileAccountConnection,
   type MobileIntegrationConnection,
+  type MobileIntegrations,
 } from "../../../lib/integrations.ts";
 import { getItxSession, getProjectItx } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
@@ -147,8 +149,31 @@ export default function IntegrationsScreen() {
         });
       return account;
     },
-    onSuccess: async (account) => {
-      if (account !== null) await queryClient.invalidateQueries({ queryKey });
+    onSuccess: (account) => {
+      if (account === null) return;
+      queryClient.setQueryData<MobileIntegrations>(queryKey, (current) => {
+        if (
+          current === undefined ||
+          current.accounts.some(
+            (entry) =>
+              entry.integration === account.integration && entry.connection === account.connection,
+          )
+        ) {
+          return current;
+        }
+        return {
+          ...current,
+          accounts: [
+            ...current.accounts,
+            {
+              connected: account.integration === "waitrose" ? true : null,
+              connection: account.connection,
+              integration: account.integration,
+              path: `/secrets/integrations/${account.integration}/${account.connection}/session`,
+            },
+          ],
+        };
+      });
     },
   });
 
@@ -241,17 +266,19 @@ export default function IntegrationsScreen() {
               />
             ))}
             <AccountConnectionsCard
+              accounts={integrations.data.accounts}
               connecting={connectAccount.isPending}
-              connections={integrations.data.connections.waitrose}
               disconnecting={disconnect.isPending}
               onConnect={() => connectAccount.mutate()}
-              onDisconnect={async (connection) => {
+              onDisconnect={async (account) => {
                 const confirmed = await confirmAction(
-                  `Disconnect ${connection}?`,
+                  `Disconnect ${account.connection}?`,
                   "This account's stored session credential will stop working for this project.",
                   "Disconnect",
                 );
-                if (confirmed) disconnect.mutate({ connection, provider: "waitrose" });
+                if (confirmed) {
+                  disconnect.mutate({ connection: account.connection, provider: "waitrose" });
+                }
               }}
             />
           </Section>
@@ -359,17 +386,17 @@ function IntegrationCard({
 }
 
 function AccountConnectionsCard({
+  accounts,
   connecting,
-  connections,
   disconnecting,
   onConnect,
   onDisconnect,
 }: {
+  accounts: MobileAccountConnection[];
   connecting: boolean;
-  connections: MobileIntegrationConnection[];
   disconnecting: boolean;
   onConnect: () => void;
-  onDisconnect: (connection: string) => void;
+  onDisconnect: (account: MobileAccountConnection) => void;
 }) {
   return (
     <View style={styles.card}>
@@ -387,14 +414,29 @@ function AccountConnectionsCard({
           onPress={onConnect}
         />
       </View>
-      {connections.map((connection) => (
-        <ConnectionRow
-          key={connection.path}
-          connection={connection}
-          disconnecting={disconnecting}
-          onConfigureAccess={null}
-          onDisconnect={() => onDisconnect(connection.connection)}
-        />
+      {accounts.map((account) => (
+        <View key={account.path} style={styles.connection}>
+          <View style={styles.connectionCopy}>
+            <Text numberOfLines={1} style={styles.connectionName}>
+              {account.integration} / {account.connection}
+            </Text>
+            <Text numberOfLines={1} style={styles.path}>
+              itx.worker.{account.integration}.{account.connection}
+            </Text>
+            {account.connected === null ? null : (
+              <Text style={account.connected ? styles.connected : styles.disconnected}>
+                {account.connected ? "Connected" : "Disconnected"}
+              </Text>
+            )}
+          </View>
+          {account.integration === "waitrose" && account.connected ? (
+            <ActionButton
+              disabled={disconnecting}
+              label="Disconnect"
+              onPress={() => onDisconnect(account)}
+            />
+          ) : null}
+        </View>
       ))}
     </View>
   );

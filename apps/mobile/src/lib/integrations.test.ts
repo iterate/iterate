@@ -32,11 +32,36 @@ test("joins built-in journals to live status and keeps project-provided mounts",
         },
       ],
     },
+    secrets: {
+      list: async () => [
+        {
+          createdAt: "2026-08-07T00:00:00.000Z",
+          path: "/secrets/integrations/waitrose/personal/session",
+        },
+        {
+          createdAt: "2026-08-07T00:00:00.000Z",
+          path: "/secrets/integrations/grocer/mum/session",
+        },
+        { createdAt: "2026-08-07T00:00:00.000Z", path: "/secrets/ordinary-api-key" },
+      ],
+    },
   };
 
   const integrations = await listMobileIntegrations(project as any);
 
   expect(integrations).toMatchObject({
+    accounts: [
+      {
+        connected: false,
+        connection: "personal",
+        integration: "waitrose",
+      },
+      {
+        connected: null,
+        connection: "mum",
+        integration: "grocer",
+      },
+    ],
     connections: {
       gmail: [
         {
