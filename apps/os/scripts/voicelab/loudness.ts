@@ -26,7 +26,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import { type VoicelabConnectOptions, connectProject, deviceCapability } from "./connect.ts";
 
 /** Options for `pnpm cli voicelab loudness`. */
 export interface LoudnessOptions extends VoicelabConnectOptions {
@@ -136,8 +136,7 @@ interface DeviceCapability {
 
 export async function loudness(options: LoudnessOptions) {
   using itx = await connectProject(options);
-  const kit = (itx as unknown as { kit: Record<string, DeviceCapability> }).kit;
-  const capability = kit[options.name ?? "waveshare"];
+  const capability = deviceCapability<DeviceCapability>(itx, options.name ?? "waveshare");
   if (!capability) throw new Error(`no device capability named ${options.name ?? "waveshare"}`);
   const stream = itx.streams.get(options.path ?? "/agents/voice/device") as unknown as {
     append(...events: unknown[]): Promise<unknown>;

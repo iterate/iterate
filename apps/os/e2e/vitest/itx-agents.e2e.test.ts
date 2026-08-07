@@ -21,6 +21,7 @@ test("agent create installs only generic machinery; later events configure it", 
   });
 
   using project = await itx.projects.get(`agent-create-${crypto.randomUUID()}`).create({});
+  expect(await project.agents.list()).toEqual([]);
   using agent = project.agents.get(`/agents/create-${crypto.randomUUID()}`);
   expect((await agent.processor.snapshot()).state.birthCertificate).toBeNull();
 

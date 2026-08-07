@@ -33,8 +33,8 @@ static bool valid_options(
       options->send_text != NULL &&
       options->project_id != NULL &&
       options->project_api_key != NULL &&
-      options->mount_path != NULL &&
-      options->mount_path_count > 0U &&
+      options->client_path != NULL &&
+      options->description != NULL &&
       options->capability.dispatch != NULL;
 }
 
@@ -170,10 +170,9 @@ enum capnweb_status iterate_kit_itx_connection_open(
     &connection->session,
     connection->options.project_id,
     connection->options.project_api_key,
-    connection->options.mount_path,
-    connection->options.mount_path_count,
+    connection->options.client_path,
     connection->options.capability,
-    connection->options.instructions,
+    connection->options.description,
     connection->options.types,
   };
   status = iterate_kit_itx_mount_start(

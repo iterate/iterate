@@ -7,13 +7,17 @@
  *
  *   bootstrap.authenticate(project-secret)
  *     -> authenticated session capability
- *     -> projects.get(projectId)
- *     -> project capability
- *     -> provideCapability(type=live, local capability)
- *     -> CapabilityProvision handle
+ *     -> projects.connect(projectId, {path, description, capabilities})
+ *     -> project capability, with the live provision hung off it
  *
- * Only the provision handle remains remotely owned in READY. Every `has_*`
- * flag is an ownership ledger used by both success transitions and cleanup.
+ * TWO ROUND TRIPS, NOT THREE. Connecting as a client is what provides the
+ * capability, so the old separate provideCapability stage is gone; the saved
+ * trip is on the boot and reconnect path of every board.
+ *
+ * The project capability is therefore what READY owns: `connect` attaches the
+ * provision to it as an owned disposable, so releasing it revokes the mount
+ * and merely dropping it strands the mount as a zombie. Every `has_*` flag is
+ * an ownership ledger used by both success transitions and cleanup.
  * Collapsing the chain into nested generic helpers or retrying stages in place
  * was rejected: each rejection/result/protocol failure needs a stable,
  * diagnosable class, and retry belongs to a fresh outer connection generation.
@@ -23,53 +27,54 @@
  * only until capnweb_session_call_expressions returns.
  */
 static const char *const authenticate_path[] = {"authenticate"};
-static const char *const project_path[] = {"projects", "get"};
-static const char *const provide_path[] = {"provideCapability"};
+static const char *const connect_path[] = {"projects", "connect"};
 
 static bool nonempty(const char *value) {
   return value != NULL && value[0] != '\0';
 }
 
-static bool valid_path_segment(const char *segment) {
+static bool valid_client_path(const char *path) {
   size_t index;
   unsigned char character;
-  if (!nonempty(segment)) {
+  if (!nonempty(path)) {
     return false;
   }
 
   /*
-   * The OS capability host addresses mounts as JavaScript members and accepts
-   * exactly /^[A-Za-z_$][A-Za-z0-9_$]*$/. Product/device slugs commonly use
-   * hyphens, so treating a slug as a capability name lets the entire local
-   * protocol succeed before production rejects provideCapability. Mirror the
-   * stable wire grammar here instead of relying on that remote rejection: a
+   * A client path is a STREAM path, not a capability name, so the JavaScript
+   * member grammar the old mount enforced no longer applies — hyphenated
+   * device slugs are exactly what belongs here. What the server will reject is
+   * different: `projects.connect` canonicalizes the path and refuses the
+   * project root, and the stream layer refuses relative segments.
+   *
+   * Mirror those rules here rather than relying on the remote rejection. A
    * configuration defect must fail before authentication bytes leave the
    * device and must never become a reconnect loop mislabeled as networking.
    *
-   * Explicit ASCII tests are intentional. ctype predicates are locale-aware,
-   * while the server contract is not; accepting a locale-specific letter here
-   * would recreate the same cross-peer disagreement for non-ASCII bytes.
+   * Explicit ASCII tests are intentional. ctype predicates are locale-aware
+   * while the server contract is not, so accepting a locale-specific letter
+   * would recreate that cross-peer disagreement for non-ASCII bytes.
    */
-  character = (unsigned char)segment[0];
-  if (!((character >= (unsigned char)'A' &&
-         character <= (unsigned char)'Z') ||
-        (character >= (unsigned char)'a' &&
-         character <= (unsigned char)'z') ||
-        character == (unsigned char)'_' ||
-        character == (unsigned char)'$')) {
+  if (path[0] != '/' || path[1] == '\0') {
     return false;
   }
-  for (index = 1U; segment[index] != '\0'; ++index) {
-    character = (unsigned char)segment[index];
-    if (!((character >= (unsigned char)'A' &&
-           character <= (unsigned char)'Z') ||
-          (character >= (unsigned char)'a' &&
-           character <= (unsigned char)'z') ||
-          (character >= (unsigned char)'0' &&
-           character <= (unsigned char)'9') ||
-          character == (unsigned char)'_' ||
-          character == (unsigned char)'$')) {
+  for (index = 0U; path[index] != '\0'; ++index) {
+    if (index >= ITERATE_KIT_ITX_MOUNT_CLIENT_PATH_CAPACITY) {
       return false;
+    }
+    character = (unsigned char)path[index];
+    /* Printable ASCII only, and no spaces: a path is not a label. */
+    if (character <= (unsigned char)' ' || character >= (unsigned char)0x7F) {
+      return false;
+    }
+    /* No empty segment, and no "." / ".." to canonicalize away. */
+    if (character == (unsigned char)'/') {
+      if (path[index + 1U] == '/' || path[index + 1U] == '\0') {
+        return false;
+      }
+      if (path[index + 1U] == '.') {
+        return false;
+      }
     }
   }
   return true;
@@ -77,23 +82,14 @@ static bool valid_path_segment(const char *segment) {
 
 static bool valid_options(
     const struct iterate_kit_itx_mount_options *options) {
-  size_t index;
-  if (options == NULL ||
-      options->session == NULL ||
-      !nonempty(options->project_id) ||
-      !nonempty(options->project_api_key) ||
-      options->path == NULL ||
-      options->path_count == 0U ||
-      options->path_count > ITERATE_KIT_ITX_MOUNT_PATH_CAPACITY ||
-      options->capability.dispatch == NULL) {
-    return false;
-  }
-  for (index = 0U; index < options->path_count; ++index) {
-    if (!valid_path_segment(options->path[index])) {
-      return false;
-    }
-  }
-  return true;
+  return options != NULL &&
+      options->session != NULL &&
+      nonempty(options->project_id) &&
+      nonempty(options->project_api_key) &&
+      /* `connect` requires a description and rejects an empty one. */
+      nonempty(options->description) &&
+      valid_client_path(options->client_path) &&
+      options->capability.dispatch != NULL;
 }
 
 static enum capnweb_status fail(
@@ -156,65 +152,61 @@ static bool take_result_capability(
           &result->value, capability);
 }
 
-static void provide_completed(
+static void connect_completed(
     void *context, const struct capnweb_result *result);
 
-static enum capnweb_status begin_provide(
+static enum capnweb_status begin_connect(
     struct iterate_kit_itx_mount *mount) {
-  static const struct capnweb_expression live = {
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {"live", sizeof("live") - 1U}},
-  };
   static const struct capnweb_expression flatten_nested_paths = {
     CAPNWEB_EXPRESSION_BOOLEAN,
     {.boolean = true},
   };
-  struct capnweb_expression
-      path_items[ITERATE_KIT_ITX_MOUNT_PATH_CAPACITY];
+  struct capnweb_expression project_id;
   struct capnweb_expression path;
-  struct capnweb_expression capability;
-  struct capnweb_expression instructions;
+  struct capnweb_expression capabilities;
+  struct capnweb_expression description;
   struct capnweb_expression types;
-  struct capnweb_object_field fields[6];
-  struct capnweb_expression argument;
+  struct capnweb_object_field fields[5];
+  struct capnweb_expression arguments[2];
   size_t field_count = 0U;
-  size_t index;
   enum capnweb_status status;
 
-  memset(path_items, 0, sizeof(path_items));
-  /*
-   * The four-item fixed workspace is the reason paths are bounded in the
-   * public API. A VLA/heap array would make a control-plane call consume
-   * unreviewed stack/RAM based on profile data.
-   */
-  for (index = 0U; index < mount->options.path_count; ++index) {
-    path_items[index] = (struct capnweb_expression){
-      CAPNWEB_EXPRESSION_STRING,
-      {.string = {
-        mount->options.path[index],
-        strlen(mount->options.path[index]),
-      }},
-    };
-  }
-  path = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_ARRAY,
-    {.array = {path_items, mount->options.path_count}},
+  project_id = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {
+      mount->options.project_id,
+      strlen(mount->options.project_id),
+    }},
   };
-  capability = (struct capnweb_expression){
+  path = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {
+      mount->options.client_path,
+      strlen(mount->options.client_path),
+    }},
+  };
+  capabilities = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_CAPABILITY,
     {.capability = mount->local_capability},
   };
-  fields[field_count++] = (struct capnweb_object_field){
-    {"type", sizeof("type") - 1U},
-    &live,
+  description = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {
+      mount->options.description,
+      strlen(mount->options.description),
+    }},
   };
   fields[field_count++] = (struct capnweb_object_field){
     {"path", sizeof("path") - 1U},
     &path,
   };
   fields[field_count++] = (struct capnweb_object_field){
-    {"capability", sizeof("capability") - 1U},
-    &capability,
+    {"description", sizeof("description") - 1U},
+    &description,
+  };
+  fields[field_count++] = (struct capnweb_object_field){
+    {"capabilities", sizeof("capabilities") - 1U},
+    &capabilities,
   };
   /*
    * An exported Cap'n Web capability is a path-building proxy, not a material
@@ -229,19 +221,6 @@ static enum capnweb_status begin_provide(
     {"flattenNestedPaths", sizeof("flattenNestedPaths") - 1U},
     &flatten_nested_paths,
   };
-  if (mount->options.instructions != NULL) {
-    instructions = (struct capnweb_expression){
-      CAPNWEB_EXPRESSION_STRING,
-      {.string = {
-        mount->options.instructions,
-        strlen(mount->options.instructions),
-      }},
-    };
-    fields[field_count++] = (struct capnweb_object_field){
-      {"instructions", sizeof("instructions") - 1U},
-      &instructions,
-    };
-  }
   if (mount->options.types != NULL) {
     types = (struct capnweb_expression){
       CAPNWEB_EXPRESSION_STRING,
@@ -255,30 +234,31 @@ static enum capnweb_status begin_provide(
       &types,
     };
   }
-  argument = (struct capnweb_expression){
+  arguments[0] = project_id;
+  arguments[1] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_OBJECT,
     {.object = {fields, field_count}},
   };
 
-  mount->state = ITERATE_KIT_ITX_MOUNT_PROVIDING;
+  mount->state = ITERATE_KIT_ITX_MOUNT_CONNECTING;
   status = capnweb_session_call_expressions(
       mount->options.session,
-      mount->project_capability,
-      provide_path,
-      sizeof(provide_path) / sizeof(provide_path[0]),
-      &argument,
-      1U,
-      provide_completed,
+      mount->session_capability,
+      connect_path,
+      sizeof(connect_path) / sizeof(connect_path[0]),
+      arguments,
+      2U,
+      connect_completed,
       mount);
   if (status != CAPNWEB_OK) {
     return fail(
-        mount, ITERATE_KIT_ITX_MOUNT_FAILURE_PROVIDE_CALL, status);
+        mount, ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_CALL, status);
   }
   /*
    * The pending call now owns the exported capability reference. Release our
    * temporary local export immediately instead of holding duplicate ownership
-   * for the entire live provision. The returned provision capability is the
-   * durable revocation handle.
+   * for the entire live provision. The returned PROJECT capability is the
+   * durable revocation handle — `connect` hangs the provision off it.
    */
   status = release_local(mount);
   if (status != CAPNWEB_OK) {
@@ -288,72 +268,9 @@ static enum capnweb_status begin_provide(
   return CAPNWEB_OK;
 }
 
-static void project_completed(
-    void *context, const struct capnweb_result *result) {
-  struct iterate_kit_itx_mount *mount = context;
-  enum capnweb_status status;
-  if (mount->state == ITERATE_KIT_ITX_MOUNT_CLOSED) {
-    return;
-  }
-  if (result->kind == CAPNWEB_RESULT_SESSION_ENDED) {
-    (void)fail(
-        mount,
-        ITERATE_KIT_ITX_MOUNT_FAILURE_SESSION_ENDED,
-        result->status);
-    return;
-  }
-  if (result->kind == CAPNWEB_RESULT_REJECTION) {
-    (void)fail(
-        mount,
-        ITERATE_KIT_ITX_MOUNT_FAILURE_PROJECT_REJECTED,
-        CAPNWEB_OK);
-    return;
-  }
-  if (!take_result_capability(
-          result, &mount->project_capability)) {
-    /*
-     * A successful-looking reply of the wrong shape is protocol corruption,
-     * not an absent project. Do not coerce it to a generic rejection or
-     * continue with an invalid zero capability.
-     */
-    (void)fail(
-        mount,
-        ITERATE_KIT_ITX_MOUNT_FAILURE_PROJECT_RESULT,
-        CAPNWEB_E_INVALID_MESSAGE);
-    return;
-  }
-  mount->has_project_capability = true;
-  /*
-   * Each transition sheds the prior remote handle before acquiring more state.
-   * Keeping session and project imports until final READY would raise bounded
-   * import requirements and complicate cleanup without adding capability.
-   */
-  status = release_remote(
-      mount,
-      &mount->session_capability,
-      &mount->has_session_capability);
-  if (status != CAPNWEB_OK) {
-    (void)fail(
-        mount, ITERATE_KIT_ITX_MOUNT_FAILURE_RELEASE, status);
-    return;
-  }
-  status = capnweb_session_export_capability(
-      mount->options.session,
-      mount->options.capability,
-      &mount->local_capability);
-  if (status != CAPNWEB_OK) {
-    (void)fail(
-        mount, ITERATE_KIT_ITX_MOUNT_FAILURE_PROVIDE_CALL, status);
-    return;
-  }
-  mount->has_local_capability = true;
-  (void)begin_provide(mount);
-}
-
 static void authenticated(
     void *context, const struct capnweb_result *result) {
   struct iterate_kit_itx_mount *mount = context;
-  struct capnweb_expression project_id;
   enum capnweb_status status;
   if (mount->state == ITERATE_KIT_ITX_MOUNT_CLOSED) {
     return;
@@ -381,35 +298,26 @@ static void authenticated(
     return;
   }
   mount->has_session_capability = true;
-  project_id = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {
-      mount->options.project_id,
-      strlen(mount->options.project_id),
-    }},
-  };
-  mount->state = ITERATE_KIT_ITX_MOUNT_GETTING_PROJECT;
   /*
-   * Requests are sequential by design. Pipelining project lookup/provision
-   * cannot begin without prior handles and would make stage-specific failures
-   * and ownership much harder to prove for no latency benefit at boot scale.
+   * Export the device's capability BEFORE the call that carries it. Connect
+   * both addresses the project and provides the capability, so unlike the old
+   * three-stage chain there is no intermediate project handle to acquire
+   * first — the export is the only thing the call still needs.
    */
-  status = capnweb_session_call_expressions(
+  status = capnweb_session_export_capability(
       mount->options.session,
-      mount->session_capability,
-      project_path,
-      sizeof(project_path) / sizeof(project_path[0]),
-      &project_id,
-      1U,
-      project_completed,
-      mount);
+      mount->options.capability,
+      &mount->local_capability);
   if (status != CAPNWEB_OK) {
     (void)fail(
-        mount, ITERATE_KIT_ITX_MOUNT_FAILURE_PROJECT_CALL, status);
+        mount, ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_CALL, status);
+    return;
   }
+  mount->has_local_capability = true;
+  (void)begin_connect(mount);
 }
 
-static void provide_completed(
+static void connect_completed(
     void *context, const struct capnweb_result *result) {
   struct iterate_kit_itx_mount *mount = context;
   enum capnweb_status status;
@@ -426,23 +334,33 @@ static void provide_completed(
   if (result->kind == CAPNWEB_RESULT_REJECTION) {
     (void)fail(
         mount,
-        ITERATE_KIT_ITX_MOUNT_FAILURE_PROVIDE_REJECTED,
+        ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_REJECTED,
         CAPNWEB_OK);
     return;
   }
   if (!take_result_capability(
-          result, &mount->provision_capability)) {
+          result, &mount->project_capability)) {
+    /*
+     * A successful-looking reply of the wrong shape is protocol corruption,
+     * not an absent project. Do not coerce it to a generic rejection or
+     * continue with an invalid zero capability.
+     */
     (void)fail(
         mount,
-        ITERATE_KIT_ITX_MOUNT_FAILURE_PROVIDE_RESULT,
+        ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_RESULT,
         CAPNWEB_E_INVALID_MESSAGE);
     return;
   }
-  mount->has_provision_capability = true;
+  mount->has_project_capability = true;
+  /*
+   * Shed the session import now that the project handle exists. Keeping both
+   * until READY would raise bounded import requirements and complicate
+   * cleanup without adding capability.
+   */
   status = release_remote(
       mount,
-      &mount->project_capability,
-      &mount->has_project_capability);
+      &mount->session_capability,
+      &mount->has_session_capability);
   if (status != CAPNWEB_OK) {
     (void)fail(
         mount, ITERATE_KIT_ITX_MOUNT_FAILURE_RELEASE, status);
@@ -450,9 +368,10 @@ static void provide_completed(
   }
   mount->state = ITERATE_KIT_ITX_MOUNT_READY;
   /*
-   * READY means the server returned and we retain a provision capability; it
-   * does not prove future network liveness. The enclosing connection/session
-   * must still demote READY immediately on terminal transport state.
+   * READY means the server returned and we retain the project capability that
+   * owns the live provision; it does not prove future network liveness. The
+   * enclosing connection/session must still demote READY immediately on
+   * terminal transport state.
    */
   mount->failure = ITERATE_KIT_ITX_MOUNT_FAILURE_NONE;
   mount->capnweb_status = CAPNWEB_OK;
@@ -551,18 +470,18 @@ enum capnweb_status iterate_kit_itx_mount_close(
    * the causal result for diagnostics while later attempts minimize leaked
    * handles before the enclosing session is unconditionally closed.
    */
-  status = release_remote(
-      mount,
-      &mount->provision_capability,
-      &mount->has_provision_capability);
-  if (status != CAPNWEB_OK) {
-    first_error = status;
-  }
+  /*
+   * The project capability goes first because it IS the live mount: releasing
+   * it disposes the provision `connect` hung off it, which revokes the mount
+   * and lets the now-empty provider Pager journal the disconnect the clients
+   * catalogue reduces. Dropping it instead would leave a zombie mount that no
+   * later connect can displace.
+   */
   status = release_remote(
       mount,
       &mount->project_capability,
       &mount->has_project_capability);
-  if (first_error == CAPNWEB_OK && status != CAPNWEB_OK) {
+  if (status != CAPNWEB_OK) {
     first_error = status;
   }
   status = release_remote(
@@ -591,10 +510,8 @@ const char *iterate_kit_itx_mount_state_name(
       return "idle";
     case ITERATE_KIT_ITX_MOUNT_AUTHENTICATING:
       return "authenticating";
-    case ITERATE_KIT_ITX_MOUNT_GETTING_PROJECT:
-      return "getting project";
-    case ITERATE_KIT_ITX_MOUNT_PROVIDING:
-      return "providing capability";
+    case ITERATE_KIT_ITX_MOUNT_CONNECTING:
+      return "connecting as client";
     case ITERATE_KIT_ITX_MOUNT_READY:
       return "ready";
     case ITERATE_KIT_ITX_MOUNT_FAILED:
@@ -618,18 +535,12 @@ const char *iterate_kit_itx_mount_failure_name(
       return "authentication rejected";
     case ITERATE_KIT_ITX_MOUNT_FAILURE_AUTH_RESULT:
       return "invalid authentication result";
-    case ITERATE_KIT_ITX_MOUNT_FAILURE_PROJECT_CALL:
-      return "project lookup call failed";
-    case ITERATE_KIT_ITX_MOUNT_FAILURE_PROJECT_REJECTED:
-      return "project lookup rejected";
-    case ITERATE_KIT_ITX_MOUNT_FAILURE_PROJECT_RESULT:
-      return "invalid project lookup result";
-    case ITERATE_KIT_ITX_MOUNT_FAILURE_PROVIDE_CALL:
-      return "capability provision call failed";
-    case ITERATE_KIT_ITX_MOUNT_FAILURE_PROVIDE_REJECTED:
-      return "capability provision rejected";
-    case ITERATE_KIT_ITX_MOUNT_FAILURE_PROVIDE_RESULT:
-      return "invalid capability provision result";
+    case ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_CALL:
+      return "client connect call failed";
+    case ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_REJECTED:
+      return "client connect rejected";
+    case ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_RESULT:
+      return "invalid client connect result";
     case ITERATE_KIT_ITX_MOUNT_FAILURE_RELEASE:
       return "capability release failed";
     case ITERATE_KIT_ITX_MOUNT_FAILURE_SESSION_ENDED:

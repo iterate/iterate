@@ -25,6 +25,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { CloudflareApiError, type DeployableEnv, type EnvContext } from "./env-context.ts";
 
 /** The slice of EnvContext the reset needs: the account-scoped CF API fetch. */
@@ -41,6 +42,18 @@ type WorkerSettings = {
   annotations?: Record<string, unknown>;
   bindings?: WorkerBinding[];
 };
+
+const WorkerDataVersionSettings = z.looseObject({
+  bindings: z
+    .array(
+      z.looseObject({
+        name: z.unknown().optional(),
+        text: z.unknown().optional(),
+        type: z.unknown().optional(),
+      }),
+    )
+    .optional(),
+});
 
 const SETTINGS_SCAN_CONCURRENCY = 10;
 
@@ -570,6 +583,63 @@ export async function resetWorkerDurableObjects(input: {
       `; parked at 503 until the next deploy`,
   );
   return { action: "reset", deletedClasses, keptContainerClasses: kept };
+}
+
+/**
+ * Reset a Worker's Durable Objects exactly once when an app advances its
+ * explicitly deployed data version. The version lives in a plain-text Worker
+ * binding, so it changes atomically with the real code upload after this
+ * function parks the old Worker.
+ */
+export async function resetWorkerDurableObjectsOnVersionChange(
+  input: Parameters<typeof resetWorkerDurableObjects>[0] & {
+    dataVersion: Readonly<{ bindingName: string; current: string }>;
+  },
+): ReturnType<typeof resetWorkerDurableObjects> {
+  const settingsPath = `/workers/scripts/${encodeURIComponent(input.workerName)}/settings`;
+  let rawSettings: unknown;
+  try {
+    rawSettings = await input.ctx.cf(settingsPath);
+  } catch (error) {
+    if (error instanceof CloudflareApiError && error.status === 404) {
+      console.log(
+        `DO reset: worker ${input.workerName} does not exist — no data version to upgrade`,
+      );
+      return { action: "skipped", reason: "script does not exist" };
+    }
+    throw error;
+  }
+
+  const settings = WorkerDataVersionSettings.parse(rawSettings);
+  const versionBindings = (settings.bindings ?? []).filter(
+    (binding) => binding.name === input.dataVersion.bindingName,
+  );
+  if (versionBindings.length > 1) {
+    throw new Error(
+      `DO reset: worker ${input.workerName} has multiple ${input.dataVersion.bindingName} bindings`,
+    );
+  }
+  const versionBinding = versionBindings[0];
+  if (
+    versionBinding &&
+    (versionBinding.type !== "plain_text" || typeof versionBinding.text !== "string")
+  ) {
+    throw new Error(
+      `DO reset: worker ${input.workerName} has an invalid ${input.dataVersion.bindingName} binding`,
+    );
+  }
+  const deployedVersion = versionBinding?.text;
+  if (deployedVersion === input.dataVersion.current) {
+    console.log(
+      `DO reset: worker ${input.workerName} data version ${deployedVersion} unchanged — keeping Durable Objects`,
+    );
+    return { action: "skipped", reason: "data version unchanged" };
+  }
+
+  console.log(
+    `DO reset: worker ${input.workerName} data version ${deployedVersion ?? "unversioned"} → ${input.dataVersion.current} — resetting Durable Objects before deploy`,
+  );
+  return resetWorkerDurableObjects(input);
 }
 
 /**

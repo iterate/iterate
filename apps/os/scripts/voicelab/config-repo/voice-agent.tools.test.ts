@@ -49,7 +49,15 @@ const BOARD_INSTRUCTIONS = {
 
 /** One board mounted, the way the capability inventory reports it. */
 function mounted(board: keyof typeof BOARD_INSTRUCTIONS): ProvidedCapabilities {
-  return { live: [{ path: ["kit", board], instructions: BOARD_INSTRUCTIONS[board] }] };
+  return {
+    live: [
+      {
+        clientPath: `/clients/${board}`,
+        path: ["capabilities"],
+        instructions: BOARD_INSTRUCTIONS[board],
+      },
+    ],
+  };
 }
 
 /** The tools a set of mounts earns, by name. */
@@ -121,7 +129,8 @@ describe("directToolsFor", () => {
      * tool would be offering a call that answers "unknown device capability". */
     const everyBoard: ProvidedCapabilities = {
       live: Object.entries(BOARD_INSTRUCTIONS).map(([board, instructions]) => ({
-        path: ["kit", board],
+        clientPath: `/clients/${board}`,
+        path: ["capabilities"],
         instructions,
       })),
     };
@@ -132,7 +141,8 @@ describe("directToolsFor", () => {
     const withAFace: ProvidedCapabilities = {
       live: [
         {
-          path: ["kit", "stackchan"],
+          clientPath: "/clients/stackchan",
+          path: ["capabilities"],
           instructions: `${BOARD_INSTRUCTIONS.stackchan} face.set({expression}) changes its face.`,
         },
       ],
@@ -145,10 +155,9 @@ describe("directToolsFor", () => {
       "set_face",
     ]);
     /* …and bound to the mount that earned it, not to a guess. */
-    expect(derived.find(({ tool }) => tool.name === "set_face")?.mountPath).toEqual([
-      "kit",
-      "stackchan",
-    ]);
+    const setFace = derived.find(({ tool }) => tool.name === "set_face");
+    expect(setFace?.clientPath).toEqual("/clients/stackchan");
+    expect(setFace?.mountPath).toEqual(["capabilities"]);
   });
 
   it("keeps hang_up when nothing is mounted at all", () => {
@@ -165,11 +174,13 @@ describe("directToolsFor", () => {
 
   it("binds a device tool to the mount that advertised it", () => {
     const derived = directToolsFor(mounted("stackchan"));
-    expect(derived.find(({ tool }) => tool.name === "nod")?.mountPath).toEqual([
-      "kit",
-      "stackchan",
-    ]);
-    expect(derived.find(({ tool }) => tool.name === "hang_up")?.mountPath).toBeNull();
+    const nod = derived.find(({ tool }) => tool.name === "nod");
+    /* Both halves of the address: which board, and where in its host. */
+    expect(nod?.clientPath).toEqual("/clients/stackchan");
+    expect(nod?.mountPath).toEqual(["capabilities"]);
+    const hangUp = derived.find(({ tool }) => tool.name === "hang_up");
+    expect(hangUp?.mountPath).toBeNull();
+    expect(hangUp?.clientPath).toBeNull();
   });
 
   it("binds to the FIRST advertising mount when two boards are mounted", () => {
@@ -178,17 +189,29 @@ describe("directToolsFor", () => {
      * tool aimed at the first — never two tools with the same name. */
     const twoRobots: ProvidedCapabilities = {
       live: [
-        { path: ["kit", "stackchanA"], instructions: BOARD_INSTRUCTIONS.stackchan },
-        { path: ["kit", "stackchanB"], instructions: BOARD_INSTRUCTIONS.stackchan },
+        {
+          clientPath: "/clients/stackchan-a",
+          path: ["capabilities"],
+          instructions: BOARD_INSTRUCTIONS.stackchan,
+        },
+        {
+          clientPath: "/clients/stackchan-b",
+          path: ["capabilities"],
+          instructions: BOARD_INSTRUCTIONS.stackchan,
+        },
       ],
     };
     const nods = directToolsFor(twoRobots).filter(({ tool }) => tool.name === "nod");
     expect(nods).toHaveLength(1);
-    expect(nods[0]?.mountPath).toEqual(["kit", "stackchanA"]);
+    expect(nods[0]?.clientPath).toEqual("/clients/stackchan-a");
   });
 
   it("ignores a mount whose instructions are empty", () => {
-    expect(toolNames({ live: [{ path: ["kit", "mute"], instructions: "" }] })).toEqual(["hang_up"]);
+    expect(
+      toolNames({
+        live: [{ clientPath: "/clients/mute", path: ["capabilities"], instructions: "" }],
+      }),
+    ).toEqual(["hang_up"]);
   });
 });
 
@@ -364,7 +387,7 @@ describe("hangUpIsDue", () => {
 describe("capabilityBrief", () => {
   it("quotes the device rather than restating it", () => {
     const brief = capabilityBrief(mounted("stackchan"));
-    expect(brief).toContain("itx.kit.stackchan");
+    expect(brief).toContain('itx.clients.get("/clients/stackchan").capabilities');
     expect(brief).toContain(BOARD_INSTRUCTIONS.stackchan);
   });
 

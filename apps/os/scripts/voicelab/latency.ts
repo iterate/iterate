@@ -24,7 +24,12 @@
 // `wake` is the segment nothing else can see: it is the difference between the
 // device's own append time and the bridge's first instant, and it is where a
 // cold dynamic worker shows up.
-import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import {
+  type VoicelabConnectOptions,
+  connectProject,
+  deviceCapability,
+  deviceClientPath,
+} from "./connect.ts";
 
 /** Options for `pnpm cli voicelab latency`. */
 export interface LatencyOptions extends VoicelabConnectOptions {
@@ -302,8 +307,8 @@ export async function latency(options: LatencyOptions) {
    * from "the newest streams", which on a busy project is somebody else's call. */
   let pressed: { pressedAt: number; liveMs: number | null; path: string }[] = [];
   if (options.board !== undefined) {
-    const kit = (itx as unknown as { kit: Record<string, KitHandle> }).kit[options.board];
-    if (!kit) throw new Error(`nothing mounted at itx.kit.${options.board}`);
+    const kit = deviceCapability<KitHandle>(itx, options.board);
+    if (!kit) throw new Error(`nothing connected at ${deviceClientPath(options.board)}`);
     pressed = await pressAndTime(kit, options.presses ?? 3, options.settle ?? 20_000);
   }
 

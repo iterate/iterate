@@ -953,7 +953,7 @@ static uint8_t speaker_volume(void *context) {
 }
 
 static bool initialise_connection(void) {
-  static const char *const mount_path[] = {"kit", "m5sticks3"};
+  static const char *const client_path = "/clients/m5stick-s3";
   static struct iterate_kit_module modules[4];
   static struct iterate_kit_speaker speaker;
   static struct iterate_kit_health health;
@@ -1044,10 +1044,9 @@ static bool initialise_connection(void) {
   options.send_text_context = &runtime.transport;
   options.project_id = runtime.configuration.project_id;
   options.project_api_key = runtime.configuration.project_api_key;
-  options.mount_path = mount_path;
-  options.mount_path_count = sizeof(mount_path) / sizeof(mount_path[0]);
+  options.client_path = client_path;
   options.capability = iterate_kit_peer_capability(&runtime.peer);
-  options.instructions = instructions;
+  options.description = instructions;
   options.session_ended = on_session_ended;
   options.session_ended_context = NULL;
   if (iterate_kit_itx_connection_init(&runtime.connection, &options) !=

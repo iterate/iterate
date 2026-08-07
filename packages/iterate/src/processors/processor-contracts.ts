@@ -666,17 +666,6 @@ export function defineProcessorContract<
   processorDeps?: ProcessorDeps;
   events: Events;
   consumes: Consumes & ResolvedEventTypesOnly<Events, ProcessorDeps, Consumes, "*">;
-  /**
-   * Ephemeral event types this processor can handle LIVE.
-   *
-   * Deliberately not validated against `events` the way `consumes` is, and not
-   * a subset of it. Ephemeral types are appended by other parties — a device's
-   * microphone frames are not this processor's owned events — and, more
-   * importantly, they may never be folded into reduced state, so admitting one
-   * through `consumes` would be exactly the wrong shape. Delivery is the
-   * intersection of this list and the subscription's `includeEphemeral`.
-   */
-  consumesEphemeral?: readonly string[];
   emits: Emits & ResolvedEventTypesOnly<Events, ProcessorDeps, Emits>;
 }): {
   slug: string;
@@ -686,7 +675,6 @@ export function defineProcessorContract<
   processorDeps?: ProcessorDeps;
   events: Events;
   consumes: Consumes;
-  consumesEphemeral?: readonly string[];
   emits: Emits;
   buildEvent: ProcessorContractBuildEvent<Events, ProcessorDeps>;
   parseEvent: ProcessorContractParseEvent<Events, ProcessorDeps>;
@@ -843,6 +831,15 @@ function assertDefaultStateSchema(contract: unknown): void {
  * `z.unknown()` definition when the contract consumes `"*"`, and `undefined`
  * when the event is not consumed at all. Runtime counterpart of
  * `ConsumedEvent<Contract>`.
+ *
+ * `"*"` NEVER MATCHES AN EPHEMERAL EVENT, and that one rule is what lets
+ * ephemeral types live in `consumes` beside durable ones instead of in a
+ * parallel list. Naming a type explicitly is the opt-in: you cannot be handed
+ * a microphone firehose by a wildcard you wrote for durable facts, and a
+ * processor that wants live events says so by type. Ephemeral bodies live
+ * only in the Stream DO's bounded buffer, so a processor receiving one must
+ * have decided it can cope with never seeing it again — a decision nobody
+ * makes by writing `"*"`.
  */
 export function getConsumedEventDefinition(args: {
   contract: {
@@ -851,8 +848,11 @@ export function getConsumedEventDefinition(args: {
     consumes: readonly string[];
   };
   eventType: string;
+  /** Whether the event being resolved is ephemeral; gates the `"*"` fallback. */
+  ephemeral?: boolean;
 }): EventDefinition | undefined {
   if (!args.contract.consumes.includes(args.eventType)) {
+    if (args.ephemeral === true) return undefined;
     if (args.contract.consumes.includes("*")) return { payloadSchema: z.unknown() };
     return undefined;
   }
@@ -860,6 +860,20 @@ export function getConsumedEventDefinition(args: {
   if (eventDefinition == null) {
     throw new Error(`Unresolved stream processor consumes event type "${args.eventType}".`);
   }
+  /*
+   * NAMING A TYPE IS NOT THE SAME AS ACCEPTING AN EPHEMERAL COPY OF IT.
+   *
+   * A type is only ephemeral if its DEFINITION says so; the envelope flag is
+   * otherwise per-append, so anyone may append an ephemeral copy of an
+   * ordinarily-durable type. Admitting that would let it be folded into
+   * reduced state, and reduced state must equal folding the durable log —
+   * caught by an existing test that appends `scheduler/schedule-set` both
+   * ways and asserts only the durable one survives.
+   *
+   * So the contract decides on both sides: the catalogue says which types are
+   * live-only, `consumes` says which of them you want.
+   */
+  if (args.ephemeral === true && eventDefinition.ephemeral !== true) return undefined;
   return eventDefinition;
 }
 
@@ -979,20 +993,6 @@ export const ProcessorContractAnnouncement = z.object({
   version: z.string().trim().min(1),
   description: z.string(),
   consumes: z.array(z.string()),
-  /**
-   * Ephemeral event types this processor says it can handle live.
-   *
-   * SEPARATE FROM `consumes`, and not a subset of it, because the two are
-   * different promises. A type in `consumes` may be replayed into reduced
-   * state; a type here may NOT — an ephemeral event's body lives only in the
-   * Stream Durable Object's bounded buffer, so a restart or eviction leaves a
-   * permanent hole where it was. Listing one here says "I will act on this as
-   * it happens and my durable state will not depend on having seen it".
-   *
-   * Absent means none, which is what every processor written before this
-   * existed meant.
-   */
-  consumesEphemeral: z.array(z.string()).optional(),
   emits: z.array(z.string()),
   ownedEvents: z.array(
     z.object({

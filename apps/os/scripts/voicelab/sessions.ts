@@ -35,7 +35,12 @@ import fs from "node:fs";
 import type { DynamicWorkerCapability } from "iterate/sdk";
 
 import { bringCallUp, waitForQuietPlayout } from "./call.ts";
-import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import {
+  type VoicelabConnectOptions,
+  connectProject,
+  deviceCapability,
+  deviceClientPath,
+} from "./connect.ts";
 import {
   DAMAGE_MUST_NOT_MOVE,
   type DeviceStats,
@@ -1208,9 +1213,10 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
 
   let itx = await connectProject(input.options);
   const device = () => {
-    const kit = (itx as unknown as { kit: Record<string, DeviceCapability> }).kit;
-    const capability = kit[input.capabilityName];
-    if (!capability) throw new Error(`kit.${input.capabilityName} is offline`);
+    const capability = deviceCapability<DeviceCapability>(itx, input.capabilityName);
+    if (!capability) {
+      throw new Error(`${deviceClientPath(input.capabilityName)} is offline`);
+    }
     return capability;
   };
   const withVoiceAgent = async <T>(

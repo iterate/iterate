@@ -1,24 +1,21 @@
 /**
- * Goal coverage: oversized script results spill into the agent's workspace.
- * No LLM involved — the codemode "tool result" event is synthesized directly
- * on the agent stream, exactly as the capability host journals it for an
- * agent-requested script (executionId prefix "agent-output:"). The agent
- * processor must render developer context that references a workspace file
- * holding the FULL result; before the spill landed it hard-sliced at 30k chars
- * and the rest of the data was gone.
+ * Goal coverage: external script settlements cannot impersonate agent-owned
+ * work merely by choosing an `agent-output:` execution ID. The processor must
+ * neither add the result to model context nor spill it into the agent's
+ * workspace. Processor-owned result spilling is covered by the processor unit
+ * suite, where request provenance can be established without invoking an LLM.
  */
 import { test } from "vitest";
 import { measureE2ePhase } from "@iterate-com/shared/test-support/measure-e2e-phase";
 import { createTestProject } from "../test-support/create-test-project.ts";
-import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { AGENT_CONTEXT_ADDED_TYPE } from "./itx-test-support.ts";
 
 const AGENT_PATH = "/agents/e2e-script-spill";
 const SPILL_RESULT_CHARS = 2_000_000;
 
 test(
-  "a 2MB script result spills to a workspace file the agent can page through",
-  { timeout: 240_000 },
+  "an external agent-shaped script settlement stays out of context and the workspace",
+  { timeout: 120_000 },
   async ({ annotate, expect }) => {
     const measurePhase = <Value>(name: string, category: string, operation: () => Promise<Value>) =>
       measureE2ePhase(annotate, name, category, operation);
@@ -28,20 +25,14 @@ test(
     );
     using agent = handle.agent(AGENT_PATH);
     using itx = handle.itx();
-    // Agent creation explicitly births the agent's own workspace, and the
-    // spill is pure private scratch under that workspace's own path — no repo
-    // is involved, so nothing needs to be seeded or cloned first.
     await measurePhase("create agent", "fixture", () => agent.create());
 
-    // 2MB: well past the 30k-char context limit and safely past the workspace's
-    // ~1.5MB inline threshold, so this proves the R2 spillover lane end to end
-    // — journal append, agent-DO→workspace-DO RPC transfer, R2 put, and the
-    // full readback an agent script would do without paying for five times the
-    // boundary-crossing payload. The marker sits in the tail — the part the
-    // pre-spill behavior threw away.
+    // The result is large enough that accepting it would exercise the spill
+    // path. Its agent-shaped ID is deliberately untrusted: no request for it
+    // was appended by this agent processor.
     const marker = crypto.randomUUID();
     const result = { blob: "x".repeat(SPILL_RESULT_CHARS), marker };
-    await measurePhase("append oversized script result", "operation", () =>
+    const [settled] = await measurePhase("append external script result", "operation", () =>
       agent.append({
         type: "events.iterate.com/capability-host/script-run-settled",
         payload: {
@@ -51,59 +42,25 @@ test(
       }),
     );
 
-    // The agent processor wakes on the append and renders developer context
-    // for the tool result; with the spill it names the workspace file instead of only the
-    // "return less" hint. On pre-spill deployments this poll times out.
-    let content = "";
-    await measurePhase("wait for spill context", "processor", () =>
-      waitForCondition(
-        async () => {
-          // Type-filtered so the poll never re-downloads the oversized completion event.
-          const events = await agent.stream.getEvents({
-            eventTypes: [AGENT_CONTEXT_ADDED_TYPE],
-            limit: 500,
-          });
-          const context = events.find(
-            (event) =>
-              event.payload?.role === "developer" &&
-              String(event.payload.content ?? "").includes("saved in your workspace"),
-          );
-          content = String(context?.payload?.content ?? "");
-          return content !== "";
-        },
-        {
-          description: "spill-referencing developer context",
-          intervalMs: 1_000,
-          timeoutMs: 90_000,
-        },
-      ),
+    await measurePhase("process external script result", "processor", () =>
+      agent.processor.waitUntilProcessed({ offset: settled.offset, timeoutMs: 30_000 }),
     );
 
-    // The notice names the FULLY-QUALIFIED path: spill files live under the
-    // agent's own workspace directory (its stream path under /workspaces),
-    // where private scratch is writable and never committable.
-    const referencedPath = /saved in your workspace at "([^"]+)"/.exec(content)?.[1];
-    expect(referencedPath).toBe(`/workspaces${AGENT_PATH}/script-results/agent-output-1.json`);
-    // The paste-ready recipe leads with the preamble loader (this 2MB result
-    // is over the inline gate, so its `results` row has `.load`); the
-    // workspace file stays a secondary pointer for itx.workspace paging.
-    expect(content).toContain("await results[0].load(itx)");
-    // The inline preview stayed bounded — full result only in the file.
-    expect(content.length).toBeLessThan(35_000);
+    const contextEvents = await measurePhase("read agent context", "assertion", () =>
+      agent.stream.getEvents({ eventTypes: [AGENT_CONTEXT_ADDED_TYPE], limit: 500 }),
+    );
+    const forgedContext = contextEvents.find(
+      (event) =>
+        (event.payload?.actor as { type?: string; executionId?: string } | undefined)
+          ?.executionId === "agent-output:1",
+    );
+    expect(forgedContext).toBeUndefined();
 
-    // The file holds the COMPLETE serialized result, marker and all — the
-    // exact bytes the model's next-turn readFile sees. Sized assertions, not
-    // toEqual, so a failure doesn't print a multi-megabyte diff.
     using workspace = itx.workspaces.get(`/workspaces${AGENT_PATH}`);
-    await measurePhase("read and verify spilled result", "assertion", async () => {
-      const spilled = await workspace.readFile(referencedPath!);
-      const expected = JSON.stringify(result, null, 2);
-      expect(spilled).not.toBeNull();
-      expect(spilled!.length).toBe(expected.length);
-      const parsed = JSON.parse(spilled!) as typeof result;
-      // oxlint-disable-next-line iterate/prefer-object-property-match -- targeting the whole object would print the multi-megabyte blob on failure (see the sized-assertions comment above)
-      expect(parsed.marker).toBe(marker);
-      expect(parsed.blob.length).toBe(SPILL_RESULT_CHARS);
-    });
+    await expect(
+      measurePhase("verify no spill file", "assertion", () =>
+        workspace.readFile(`/workspaces${AGENT_PATH}/script-results/agent-output-1.json`),
+      ),
+    ).resolves.toBeNull();
   },
 );

@@ -52,7 +52,7 @@ static struct iterate_kit_poll_result close_module(void *context) {
 }
 
 static void fixture_init(struct fixture *fixture) {
-  static const char *const mount_path[] = {"kit", "posix"};
+  static const char *const client_path = "/clients/posix";
   static const char description[] = "{}";
   struct iterate_kit_peer_options peer_options;
   struct iterate_kit_itx_connection_options connection_options;
@@ -101,9 +101,9 @@ static void fixture_init(struct fixture *fixture) {
     .send_text_context = &fixture->transport,
     .project_id = fixture->configuration.project_id,
     .project_api_key = fixture->configuration.project_api_key,
-    .mount_path = mount_path,
-    .mount_path_count = 2U,
+    .client_path = client_path,
     .capability = iterate_kit_peer_capability(&fixture->peer),
+    .description = "posix test device",
   };
   assert(iterate_kit_itx_connection_init(
              &fixture->connection, &connection_options) == CAPNWEB_OK);

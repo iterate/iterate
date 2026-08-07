@@ -18,7 +18,7 @@
 //   doppler run --config preview_3 -- pnpm cli voicelab soak \
 //     --project prj_… --minutes 60 --every 45
 import fs from "node:fs";
-import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import { type VoicelabConnectOptions, connectProject, deviceCapability } from "./connect.ts";
 import { type DeviceStats, MUST_NOT_MOVE } from "./device-stats.ts";
 import { watchStream } from "./watch.ts";
 
@@ -62,8 +62,7 @@ export async function soak(options: SoakOptions) {
   const everyMs = (options.every ?? 45) * 1000;
   const streamPath = options.path ?? "/agents/voice/device";
   using itx = await connectProject(options);
-  const kit = (itx as unknown as { kit: Record<string, DeviceCapability> }).kit;
-  const capability = kit[options.name ?? "waveshare"];
+  const capability = deviceCapability<DeviceCapability>(itx, options.name ?? "waveshare");
   if (!capability) throw new Error(`no device capability named ${options.name ?? "waveshare"}`);
   const stream = itx.streams.get(streamPath);
 

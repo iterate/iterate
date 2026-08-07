@@ -121,13 +121,11 @@ static void fixture_init(struct fixture *fixture) {
 }
 
 static void start_mount(struct fixture *fixture) {
-  static const char *const path[] = {"kit", "m5sticks3"};
   const struct iterate_kit_itx_mount_options options = {
     &fixture->session,
     "prj_test",
     "itxk_secret-never-log",
-    path,
-    2U,
+    "/clients/m5stick-s3",
     {inert_dispatch, fixture, NULL},
     "M5StickS3 test device",
     "export interface M5StickS3 { ping(): Promise<void> }",
@@ -145,14 +143,14 @@ static void receive(struct fixture *fixture, const char *message) {
 }
 
 /*
- * A production mount traverses session authentication and project lookup
- * before exporting the device. Retaining every intermediate remote handle was
- * rejected because fixed Cap'n Web tables would slowly exhaust and obsolete
- * authority would survive longer than needed. This proves each temporary
- * handle is released as ownership advances, READY retains only the provision,
- * and a clean close explicitly revokes that final live mount.
+ * A production mount authenticates and then connects as a client. Retaining
+ * every intermediate remote handle was rejected because fixed Cap'n Web tables
+ * would slowly exhaust and obsolete authority would survive longer than
+ * needed. This proves each temporary handle is released as ownership advances,
+ * that READY retains only the project handle the live provision hangs off,
+ * and that a clean close explicitly revokes that final live mount.
  */
-static void mounts_and_retains_only_the_provision_handle(void) {
+static void mounts_and_retains_only_the_project_handle(void) {
   struct fixture fixture;
   fixture_init(&fixture);
   start_mount(&fixture);
@@ -169,31 +167,34 @@ static void mounts_and_retains_only_the_provision_handle(void) {
   assert(strcmp(fixture.captured[1], "[\"pull\",1]") == 0);
 
   receive(&fixture, "[\"resolve\",1,[\"export\",-10]]");
+  /*
+   * ONE CALL DOES BOTH. The old chain spent a whole round trip on
+   * projects.get before it could provide anything; connecting as a client
+   * addresses the project AND provides the capability, so the device is
+   * mounted a full trip sooner on every boot and every reconnect.
+   */
   assert(
       fixture.mount.state ==
-      ITERATE_KIT_ITX_MOUNT_GETTING_PROJECT);
+      ITERATE_KIT_ITX_MOUNT_CONNECTING);
   assert(fixture.captured_count == 5U);
   assert(strcmp(fixture.captured[2], "[\"release\",1,1]") == 0);
-  assert(strcmp(
+  assert(strstr(
       fixture.captured[3],
-      "[\"push\",[\"pipeline\",-10,[\"projects\",\"get\"],"
-      "[\"prj_test\"]]]") == 0);
-  assert(strcmp(fixture.captured[4], "[\"pull\",2]") == 0);
-
-  receive(&fixture, "[\"resolve\",2,[\"export\",-11]]");
-  assert(
-      fixture.mount.state ==
-      ITERATE_KIT_ITX_MOUNT_PROVIDING);
-  assert(fixture.captured_count == 9U);
-  assert(strcmp(fixture.captured[5], "[\"release\",2,1]") == 0);
-  assert(strcmp(fixture.captured[6], "[\"release\",-10,1]") == 0);
+      "[\"push\",[\"pipeline\",-10,[\"projects\",\"connect\"],"
+      "[\"prj_test\",{") != NULL);
+  /*
+   * The client path is a STREAM path, not a capability name: connect mounts
+   * the capability at the fixed name `capabilities` on that scope.
+   */
   assert(strstr(
-      fixture.captured[7],
-      "[\"push\",[\"pipeline\",-11,[\"provideCapability\"],") != NULL);
+      fixture.captured[3],
+      "\"path\":\"/clients/m5stick-s3\"") != NULL);
   assert(strstr(
-      fixture.captured[7],
-      "\"type\":\"live\",\"path\":[[\"kit\",\"m5sticks3\"]],"
-      "\"capability\":[\"export\",-1]") != NULL);
+      fixture.captured[3],
+      "\"description\":\"M5StickS3 test device\"") != NULL);
+  assert(strstr(
+      fixture.captured[3],
+      "\"capabilities\":[\"export\",-1]") != NULL);
   /*
    * The production capability host cannot replay a nested Cap'n Web proxy as
    * though it were an ordinary JavaScript object: awaiting the intermediate
@@ -203,31 +204,32 @@ static void mounts_and_retains_only_the_provision_handle(void) {
    * capability failed only after a real production mount.
    */
   assert(strstr(
-      fixture.captured[7],
+      fixture.captured[3],
       "\"flattenNestedPaths\":true") != NULL);
   assert(strstr(
-      fixture.captured[7],
-      "\"instructions\":\"M5StickS3 test device\"") != NULL);
-  assert(strstr(
-      fixture.captured[7],
+      fixture.captured[3],
       "\"types\":\"export interface M5StickS3") != NULL);
-  assert(strcmp(fixture.captured[8], "[\"pull\",3]") == 0);
+  assert(strcmp(fixture.captured[4], "[\"pull\",2]") == 0);
 
-  receive(&fixture, "[\"resolve\",3,[\"export\",-12]]");
+  receive(&fixture, "[\"resolve\",2,[\"export\",-11]]");
   assert(fixture.mount.state == ITERATE_KIT_ITX_MOUNT_READY);
   assert(fixture.mount.failure == ITERATE_KIT_ITX_MOUNT_FAILURE_NONE);
-  assert(fixture.mount.has_provision_capability);
-  assert(!fixture.mount.has_project_capability);
+  /*
+   * READY owns the PROJECT handle now, because connect hangs the provision
+   * off it. That inverts the old flow, which kept a provision handle and shed
+   * the project — and it is why close must release this one.
+   */
+  assert(fixture.mount.has_project_capability);
   assert(!fixture.mount.has_session_capability);
   assert(!fixture.mount.has_local_capability);
-  assert(fixture.captured_count == 11U);
-  assert(strcmp(fixture.captured[9], "[\"release\",3,1]") == 0);
-  assert(strcmp(fixture.captured[10], "[\"release\",-11,1]") == 0);
+  assert(fixture.captured_count == 7U);
+  assert(strcmp(fixture.captured[5], "[\"release\",2,1]") == 0);
+  assert(strcmp(fixture.captured[6], "[\"release\",-10,1]") == 0);
 
   assert(iterate_kit_itx_mount_close(&fixture.mount) == CAPNWEB_OK);
   assert(fixture.mount.state == ITERATE_KIT_ITX_MOUNT_CLOSED);
-  assert(fixture.captured_count == 12U);
-  assert(strcmp(fixture.captured[11], "[\"release\",-12,1]") == 0);
+  assert(fixture.captured_count == 8U);
+  assert(strcmp(fixture.captured[7], "[\"release\",-11,1]") == 0);
   capnweb_session_close(&fixture.session);
 }
 
@@ -256,13 +258,14 @@ static void authentication_rejection_is_terminal_and_not_retried(void) {
 }
 
 /*
- * A server or compatibility bug may resolve projects.get with a non-capability
- * value even though authentication succeeded. Continuing to provide the device
- * was rejected because authority was never established, while abandoning the
- * still-owned session handle would leak an import. The mount records the
- * contract failure and explicit close remains responsible for its release.
+ * A server or compatibility bug may resolve projects.connect with a
+ * non-capability value even though authentication succeeded. Treating the
+ * device as mounted was rejected because authority was never established,
+ * while abandoning the still-owned session handle would leak an import. The
+ * mount records the contract failure and explicit close remains responsible
+ * for its release.
  */
-static void invalid_project_result_is_classified_and_releases_session(void) {
+static void invalid_connect_result_is_classified_and_releases_session(void) {
   struct fixture fixture;
   fixture_init(&fixture);
   start_mount(&fixture);
@@ -271,7 +274,7 @@ static void invalid_project_result_is_classified_and_releases_session(void) {
   assert(fixture.mount.state == ITERATE_KIT_ITX_MOUNT_FAILED);
   assert(
       fixture.mount.failure ==
-      ITERATE_KIT_ITX_MOUNT_FAILURE_PROJECT_RESULT);
+      ITERATE_KIT_ITX_MOUNT_FAILURE_CONNECT_RESULT);
   assert(fixture.mount.has_session_capability);
   assert(iterate_kit_itx_mount_close(&fixture.mount) == CAPNWEB_OK);
   assert(strcmp(
@@ -299,37 +302,92 @@ static void session_end_is_reported_without_retry(void) {
   assert(fixture.mount.capnweb_status == CAPNWEB_E_CLOSED);
 }
 
-/*
- * OS resolves capability paths as JavaScript member names. A product slug is
- * allowed to contain hyphens, so reusing it as a mount segment looks natural
- * and previously survived every local check, only to make production reject
- * provideCapability after authentication. Reject that incompatible wire
- * address before emitting any secret-bearing authentication frame: a target
- * can then fail deterministically during bring-up instead of reconnecting to
- * an error that neither Wi-Fi nor retries can heal.
- */
-static void rejects_non_identifier_mount_segments_before_network_io(void) {
-  static const char *const path[] = {
-    "kit",
-    "home-assistant-voice-preview-edition",
+static enum capnweb_status start_with_client_path(
+    struct fixture *fixture, const char *client_path) {
+  const struct iterate_kit_itx_mount_options options = {
+    &fixture->session,
+    "prj_test",
+    "itxk_secret-never-log",
+    client_path,
+    {inert_dispatch, fixture, NULL},
+    "HAVPE test device",
+    NULL,
   };
+  fixture_init(fixture);
+  return iterate_kit_itx_mount_start(&fixture->mount, &options);
+}
+
+/*
+ * THE HYPHEN USED TO BE THE BUG, and now it is the point.
+ *
+ * Capability paths were resolved as JavaScript member names, so a product slug
+ * with hyphens survived every local check and then made production reject
+ * provideCapability after authentication. A client path is a stream path, and
+ * hyphenated device slugs are exactly what belongs in one — this pins that the
+ * old guard is gone rather than merely unused, because a stray identifier
+ * check here would take the whole HAVPE board off the network again.
+ */
+static void accepts_a_hyphenated_device_slug(void) {
+  struct fixture fixture;
+  assert(
+      start_with_client_path(
+          &fixture, "/clients/home-assistant-voice-preview-edition") ==
+      CAPNWEB_OK);
+  assert(
+      fixture.mount.state ==
+      ITERATE_KIT_ITX_MOUNT_AUTHENTICATING);
+  assert(iterate_kit_itx_mount_close(&fixture.mount) == CAPNWEB_OK);
+  capnweb_session_close(&fixture.session);
+}
+
+/*
+ * What IS still refused is refused before any secret-bearing authentication
+ * frame leaves the device: `connect` canonicalizes the path and rejects the
+ * project root, and the stream layer rejects traversal. A target then fails
+ * deterministically during bring-up instead of reconnecting forever to an
+ * error that neither Wi-Fi nor retries can heal.
+ */
+static void rejects_unusable_client_paths_before_network_io(void) {
+  static const char *const refused[] = {
+    "",                      /* absent */
+    "kit/stackchan",         /* not absolute */
+    "/",                     /* the project root, which connect refuses */
+    "/clients/",             /* empty trailing segment */
+    "/clients//stackchan",   /* empty interior segment */
+    "/clients/../secrets",   /* traversal, canonicalized away server-side */
+    "/clients/stack chan",   /* a label, not a path */
+  };
+  size_t index;
+  for (index = 0U; index < sizeof(refused) / sizeof(refused[0]); ++index) {
+    struct fixture fixture;
+    assert(
+        start_with_client_path(&fixture, refused[index]) ==
+        CAPNWEB_E_INVALID_ARGUMENT);
+    assert(fixture.mount.state == ITERATE_KIT_ITX_MOUNT_FAILED);
+    assert(
+        fixture.mount.failure ==
+        ITERATE_KIT_ITX_MOUNT_FAILURE_INVALID_OPTIONS);
+    assert(fixture.captured_count == 0U);
+    capnweb_session_close(&fixture.session);
+  }
+}
+
+/* `connect` rejects an empty description, so the device must not send one. */
+static void rejects_a_missing_description_before_network_io(void) {
   struct fixture fixture;
   const struct iterate_kit_itx_mount_options options = {
     &fixture.session,
     "prj_test",
     "itxk_secret-never-log",
-    path,
-    2U,
+    "/clients/stackchan",
     {inert_dispatch, &fixture, NULL},
-    "HAVPE test device",
+    NULL,
     NULL,
   };
-
   fixture_init(&fixture);
   assert(
       iterate_kit_itx_mount_start(&fixture.mount, &options) ==
       CAPNWEB_E_INVALID_ARGUMENT);
-  assert(fixture.mount.state == ITERATE_KIT_ITX_MOUNT_FAILED);
   assert(
       fixture.mount.failure ==
       ITERATE_KIT_ITX_MOUNT_FAILURE_INVALID_OPTIONS);
@@ -338,10 +396,12 @@ static void rejects_non_identifier_mount_segments_before_network_io(void) {
 }
 
 int main(void) {
-  mounts_and_retains_only_the_provision_handle();
+  mounts_and_retains_only_the_project_handle();
   authentication_rejection_is_terminal_and_not_retried();
-  invalid_project_result_is_classified_and_releases_session();
+  invalid_connect_result_is_classified_and_releases_session();
   session_end_is_reported_without_retry();
-  rejects_non_identifier_mount_segments_before_network_io();
+  accepts_a_hyphenated_device_slug();
+  rejects_unusable_client_paths_before_network_io();
+  rejects_a_missing_description_before_network_io();
   return 0;
 }

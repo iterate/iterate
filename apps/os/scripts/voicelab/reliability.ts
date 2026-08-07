@@ -15,7 +15,12 @@
 //   doppler run --config preview_3 -- pnpm cli voicelab reliability \
 //     --project prj_… --attempts 10
 import fs from "node:fs";
-import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import {
+  type VoicelabConnectOptions,
+  connectProject,
+  deviceCapability,
+  deviceClientPath,
+} from "./connect.ts";
 
 /** Options for `pnpm cli voicelab reliability`. */
 export interface ReliabilityOptions extends VoicelabConnectOptions {
@@ -86,7 +91,7 @@ export async function reliability(options: ReliabilityOptions) {
    */
   let itx = await connectProject(options);
   let stream = itx.streams.get(streamPath);
-  let kit = (itx as unknown as { kit: Record<string, DeviceCapability> }).kit;
+  let itxHandle = itx;
   const reconnect = async () => {
     try {
       (itx as unknown as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
@@ -95,7 +100,7 @@ export async function reliability(options: ReliabilityOptions) {
     }
     itx = await connectProject(options);
     stream = itx.streams.get(streamPath);
-    kit = (itx as unknown as { kit: Record<string, DeviceCapability> }).kit;
+    itxHandle = itx;
   };
 
   const results: {
@@ -140,8 +145,8 @@ export async function reliability(options: ReliabilityOptions) {
     });
 
   const device = () => {
-    const capability = kit[capabilityName];
-    if (!capability) throw new Error(`kit.${capabilityName} is offline`);
+    const capability = deviceCapability<DeviceCapability>(itxHandle, capabilityName);
+    if (!capability) throw new Error(`${deviceClientPath(capabilityName)} is offline`);
     return capability;
   };
 

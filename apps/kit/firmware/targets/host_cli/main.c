@@ -534,8 +534,14 @@ static bool cli_main_init_device_controls(struct cli_runtime *runtime)
 static bool cli_main_init_connection(struct cli_runtime *runtime)
 {
   assert(runtime != NULL);
-  runtime->mount_path[0] = "kit";
-  runtime->mount_path[1] = runtime->options.name;
+  if ((size_t)snprintf(
+          runtime->client_path,
+          sizeof(runtime->client_path),
+          "/clients/%s",
+          runtime->options.name) >= sizeof(runtime->client_path)) {
+    cli_runtime_log("error", "device name too long for a client path");
+    return false;
+  }
   const struct iterate_kit_itx_connection_options options = {
     .pending_calls = runtime->pending_calls,
     .pending_call_count = ITERATE_KIT_VOICE_PENDING_CALL_CAPACITY,
@@ -551,11 +557,9 @@ static bool cli_main_init_connection(struct cli_runtime *runtime)
     .send_text_context = &runtime->transport,
     .project_id = runtime->configuration.project_id,
     .project_api_key = runtime->configuration.project_api_key,
-    .mount_path = runtime->mount_path,
-    .mount_path_count =
-        sizeof(runtime->mount_path) / sizeof(runtime->mount_path[0]),
+    .client_path = runtime->client_path,
     .capability = iterate_kit_peer_capability(&runtime->peer),
-    .instructions = CLI_MAIN_CONNECTION_INSTRUCTIONS,
+    .description = CLI_MAIN_CONNECTION_INSTRUCTIONS,
     .session_ended = cli_capabilities_session_ended,
     .session_ended_context = runtime,
   };

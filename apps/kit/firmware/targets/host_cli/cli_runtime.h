@@ -65,8 +65,8 @@ struct cli_runtime {
   struct cli_device_controls device_controls;
   struct iterate_kit_voicelab voicelab;
   uint32_t voicelab_generation;
-  /* The connection borrows this array until process shutdown. */
-  const char *mount_path[2];
+  /* The connection borrows this buffer until process shutdown. */
+  char client_path[96];
   enum iterate_kit_posix_itx_transport_state announced_transport;
   enum iterate_kit_voicelab_state announced_voicelab;
   enum iterate_kit_voicelab_failure announced_failure;

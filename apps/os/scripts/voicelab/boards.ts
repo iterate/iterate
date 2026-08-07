@@ -20,7 +20,12 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import { promisify } from "node:util";
-import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import {
+  type VoicelabConnectOptions,
+  connectProject,
+  deviceCapability,
+  deviceClientPath,
+} from "./connect.ts";
 
 const run = promisify(execFile);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -133,11 +138,11 @@ export async function boards(options: BoardsOptions) {
   for (const board of chosen) {
     const record: BoardResult = { label: board.label, verdict: "FAIL: did not run" };
     results[board.name] = record;
-    console.error(`\n=== ${board.label} (kit.${board.name}) ===`);
+    console.error(`\n=== ${board.label} (${deviceClientPath(board.name)}) ===`);
     /* One connection per board: a socket that died proving the last board must
      * not be reported as this board's fault. */
     using itx = await connectProject(options);
-    const kit = (itx as unknown as { kit: Record<string, any> }).kit[board.name];
+    const kit = deviceCapability<any>(itx, board.name);
     if (!kit) {
       record.verdict = `FAIL: nothing mounted at kit.${board.name}`;
       console.error(`  ${record.verdict}`);

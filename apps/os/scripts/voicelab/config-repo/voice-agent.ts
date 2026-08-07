@@ -667,7 +667,17 @@ const NOTE_TO_SELF_TOOL = {
 
 /** One live capability mount, as both the prompt and the tool table read it. */
 export interface LiveCapability {
-  /** Dotted mount path, e.g. `["kit", "stackchan"]`. */
+  /**
+   * The CLIENT this mount belongs to — an absolute stream path, e.g.
+   * `"/clients/stackchan"`.
+   *
+   * Devices connect with `projects.connect`, which makes each board its own
+   * capability-host scope rather than a name on the project root. Reaching one
+   * therefore takes the path, not just a dotted name: the invocation goes to
+   * `clients.get(clientPath)`, and `path` addresses the mount within it.
+   */
+  clientPath: string;
+  /** Mount path within that client's host — `["capabilities"]` for a connect. */
   path: string[];
   /** The device's own description of itself — see advertisesMethod. */
   instructions: string;
@@ -693,6 +703,8 @@ export interface ProvidedCapabilities {
 export interface DerivedTool {
   tool: DirectTool;
   mountPath: string[] | null;
+  /** The client scope `mountPath` lives in; null exactly when `mountPath` is. */
+  clientPath: string | null;
 }
 
 /**
@@ -706,13 +718,15 @@ export function directToolsFor(provided: ProvidedCapabilities): DerivedTool[] {
   const derived: DerivedTool[] = [];
   for (const tool of DIRECT_TOOLS) {
     if (tool.needs.length === 0) {
-      derived.push({ tool, mountPath: null });
+      derived.push({ tool, mountPath: null, clientPath: null });
       continue;
     }
     const mount = provided.live.find((entry) =>
       tool.needs.every((method) => advertisesMethod(entry.instructions, method)),
     );
-    if (mount !== undefined) derived.push({ tool, mountPath: mount.path });
+    if (mount !== undefined) {
+      derived.push({ tool, mountPath: mount.path, clientPath: mount.clientPath });
+    }
   }
   return derived;
 }
@@ -844,7 +858,7 @@ export function capabilityBrief(provided: ProvidedCapabilities): string {
     provided.live
       .map((entry) =>
         [
-          `Capability \`itx.${entry.path.join(".")}\` — call it with dotted paths.`,
+          `Capability \`itx.clients.get("${entry.clientPath}").${entry.path.join(".")}\` — call it with dotted paths.`,
           entry.instructions,
         ].join("\n"),
       )
@@ -853,22 +867,55 @@ export function capabilityBrief(provided: ProvidedCapabilities): string {
   ].join("\n");
 }
 
-/** Read the project's live mounts. Never throws: an honest gap beats a wrong claim. */
+/**
+ * Read the project's live device mounts. Never throws: an honest gap beats a
+ * wrong claim.
+ *
+ * DEVICES ARE CLIENTS, so this walks `clients.list()` and describes each
+ * connected scope rather than reading the project root. A board used to mount
+ * itself at a root name (`kit.stackchan`) and appear in the root's own
+ * `__describe`; it now connects with `projects.connect`, which gives it a
+ * capability-host scope of its own. The root describes nothing about it, so a
+ * root read here would silently report a project with no devices — every tool
+ * withdrawn, the model quietly unable to move a servo, and no error anywhere.
+ *
+ * Disconnected clients are skipped: presence is last-known but honest, and
+ * offering a tool for a board that is not on the network buys a timeout
+ * instead of a gesture.
+ */
 async function readProvidedCapabilities(
   project: Awaited<IterateWorkerEntrypoint["itx"]>,
 ): Promise<ProvidedCapabilities> {
-  let description: Awaited<ReturnType<typeof project.__describe>> | undefined;
   try {
-    description = await project.__describe();
-    return {
-      live: description.capabilities
-        .filter((entry) => entry.type === "live" && (entry.instructions ?? "").trim().length > 0)
-        .map((entry) => ({ path: entry.path ?? [], instructions: entry.instructions ?? "" })),
-    };
+    const clients = await project.clients.list();
+    const connected = clients.filter((client) => client.connected);
+    const described = await Promise.all(
+      connected.map(async (client) => {
+        let description:
+          | Awaited<ReturnType<ReturnType<typeof project.clients.get>["__describe"]>>
+          | undefined;
+        try {
+          description = await project.clients.get(client.path).__describe();
+          return (description.capabilities ?? [])
+            .filter(
+              (entry) => entry.type === "live" && (entry.instructions ?? "").trim().length > 0,
+            )
+            .map((entry) => ({
+              clientPath: client.path,
+              path: entry.path ?? [],
+              instructions: entry.instructions ?? "",
+            }));
+        } catch {
+          /* One unreachable board must not blind the agent to the others. */
+          return [];
+        } finally {
+          disposeRpcStub(description, `client ${client.path} description result`);
+        }
+      }),
+    );
+    return { live: described.flat() };
   } catch (error) {
     return { live: [], error: String(error) };
-  } finally {
-    disposeRpcStub(description, "project description result");
   }
 }
 
@@ -1198,6 +1245,55 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
       description: "This stream's processor woke for a warm-up but could not resolve its brief.",
       payloadSchema: z.looseObject({ token: z.string().trim().min(1) }),
     },
+    /*
+     * THE LIVE HALF. Everything above is durable and may be folded into
+     * reduced state; nothing below may be. An ephemeral event's body lives
+     * only in the Stream Durable Object's bounded buffer, so a restart or FIFO
+     * eviction leaves a permanent hole where one was — which is exactly right
+     * for a microphone frame and would be a bug for anything the fold reads
+     * back.
+     *
+     * They are declared here, in `events`, and named in `consumes` beside the
+     * durable types, because THE DEFINITION IS WHAT MAKES THEM EPHEMERAL:
+     * `ephemeral: true` on the definition forces the envelope at every append
+     * site and is what lets delivery admit them. Naming the type in `consumes`
+     * is the whole opt-in — `"*"` never matches an ephemeral event, so no
+     * processor can be handed this firehose without asking for it by name.
+     *
+     * Schemas are loose on purpose: these arrive from four different
+     * microcontrollers, and a field a board adds must not stop its audio.
+     */
+    "events.iterate.com/voice-agent/mic-frame": {
+      description: "One 20 ms capture frame from a device's microphone, base64 in `pcm`.",
+      ephemeral: true,
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+        /** Device-side frame counter; gaps in it are dropped audio. */
+        seq: z.number().optional(),
+        /** `"u"` is G.711 mu-law — half the bytes of PCM16, which is what
+         * lets a microcontroller get its microphone onto the wire at all. */
+        enc: z.string().optional(),
+        pcm: z.string(),
+      }),
+    },
+    "events.iterate.com/voice-agent/turn": {
+      description: "A device opening (`start`) or closing (`commit`) its half of a turn.",
+      ephemeral: true,
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+        action: z.string(),
+      }),
+    },
+    "events.iterate.com/voice-agent/say": {
+      description: "A turn made of text rather than speech, so anything that can append can talk.",
+      ephemeral: true,
+      payloadSchema: z.looseObject({ text: z.string() }),
+    },
+    "events.iterate.com/voice-agent/ping": {
+      description: "Liveness probe; the bridge answers with `pong`, its only proof of life.",
+      ephemeral: true,
+      payloadSchema: z.looseObject({ id: z.string() }),
+    },
   },
   consumes: [
     "events.iterate.com/voice-agent/created",
@@ -1208,24 +1304,9 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/warmup",
     "events.iterate.com/voice-agent/brief-current",
-  ],
-  /*
-   * THE LIVE HALF, and it is deliberately not part of `consumes`.
-   *
-   * Everything above may be folded into reduced state, because it is durable
-   * and can be replayed. Nothing here can: an ephemeral event's body lives
-   * only in the Stream Durable Object's bounded buffer, so a restart or FIFO
-   * eviction leaves a permanent hole where one was. Declaring a type here says
-   * "I will act on this as it happens, and my durable state will not depend on
-   * having seen it" — which is exactly right for a microphone frame and would
-   * be a bug for anything the fold reads back.
-   *
-   * Delivery is the intersection of this list and the subscription's
-   * `includeEphemeral`, so listing a type here is necessary and not
-   * sufficient. Together they are what lets this processor own a live call
-   * without a second worker relaying the audio to it.
-   */
-  consumesEphemeral: [
+    /* The live half — see their definitions above. Naming them here is what
+     * lets this processor own a call outright, with no second worker relaying
+     * the audio to it. */
     "events.iterate.com/voice-agent/mic-frame",
     "events.iterate.com/voice-agent/turn",
     "events.iterate.com/voice-agent/say",
@@ -2334,14 +2415,26 @@ export class VoiceBridge extends IterateDurableObject {
      * place the tool was derived from. One stub for the call, released with the
      * rest of them in teardown.
      */
-    let capabilityHost: (typeof project)["capabilityHost"] | null = null;
+    const capabilityHosts = new Map<string, (typeof project)["capabilityHost"]>();
     /** One method on one mount. Awaited by its caller, never by the voice lane. */
     const invokeDevice = async (
+      clientPath: string,
       mountPath: readonly string[],
       method: string,
       argument?: unknown,
     ) => {
-      capabilityHost ??= project.capabilityHost;
+      /*
+       * One host per client, kept for the call's lifetime. Each board is its
+       * own capability-host scope now, so there is no single project-root host
+       * to cache — but a gesture is several calls to the SAME board, and
+       * re-dialling the scope per servo step would put a round trip inside the
+       * pacing that makes a nod a nod.
+       */
+      let capabilityHost = capabilityHosts.get(clientPath);
+      if (capabilityHost === undefined) {
+        capabilityHost = project.clients.get(clientPath);
+        capabilityHosts.set(clientPath, capabilityHost);
+      }
       deviceCalls++;
       try {
         /* The mount is flattened, so the whole dotted path is one invocation. */
@@ -2366,12 +2459,13 @@ export class VoiceBridge extends IterateDurableObject {
      * than flailing through the rest of it against a bus that is not answering.
      */
     const performGesture = async (
+      clientPath: string,
       mountPath: readonly string[],
       steps: readonly HeadGestureStep[],
     ) => {
       for (const step of steps) {
         if (closedDown) return;
-        if (!(await invokeDevice(mountPath, "servos.move", { ...step }))) return;
+        if (!(await invokeDevice(clientPath, mountPath, "servos.move", { ...step }))) return;
         await new Promise((resolve) => setTimeout(resolve, step.speed));
       }
     };
@@ -2411,18 +2505,18 @@ export class VoiceBridge extends IterateDurableObject {
     };
     /** Run one direct tool and answer the model, both without waiting for anything. */
     const runDirectTool = (id: string, derived: DerivedTool, args: Record<string, unknown>) => {
-      const { mountPath, tool } = derived;
+      const { clientPath, mountPath, tool } = derived;
       let told: string;
       try {
         told = tool.run({
           args,
           device: (method, argument) => {
-            if (mountPath === null) return;
-            this.ctx.waitUntil(invokeDevice(mountPath, method, argument));
+            if (mountPath === null || clientPath === null) return;
+            this.ctx.waitUntil(invokeDevice(clientPath, mountPath, method, argument));
           },
           gesture: (steps) => {
-            if (mountPath === null) return;
-            this.ctx.waitUntil(performGesture(mountPath, steps));
+            if (mountPath === null || clientPath === null) return;
+            this.ctx.waitUntil(performGesture(clientPath, mountPath, steps));
           },
           hangUp: (reason) => {
             pendingHangUp = { askedAtMs: Date.now(), reason };
@@ -3596,8 +3690,10 @@ export class VoiceBridge extends IterateDurableObject {
             await flushOutbound();
           } finally {
             disposeRpcStub(backOfficeAgent, "back-office agent");
-            disposeRpcStub(capabilityHost, "device capability host");
-            capabilityHost = null;
+            for (const [path, host] of capabilityHosts) {
+              disposeRpcStub(host, `device capability host ${path}`);
+            }
+            capabilityHosts.clear();
             disposeRpcStub(stream, "voice stream");
             disposeRpcStub(project, "ITX project");
             resolveFinished();
@@ -4417,22 +4513,14 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
         receiver: {
           action: "processor-wake",
           /*
-           * `includeEphemeral: true` GOES HERE, and deliberately does not yet.
-           *
-           * It is the other half of the contract's `consumesEphemeral` above,
-           * and together they are what lets this processor own a live call
-           * without a second worker relaying the audio to it. But the flag is
-           * validated by the OS worker's schema, and this file is deployed
-           * into a project's config repo — so a project can be running this
-           * code against a deployment that predates the field, and
-           * `SubscriptionConfiguredPayload` is strict:
-           *
-           *   unrecognized_keys ["includeEphemeral"] at payload.receiver
-           *
-           * which rejects setup and leaves every device unable to place a
-           * call. That is exactly the failure that cost a night already, from
-           * the other direction. Turn this on once the platform change is
-           * deployed to the environment being tested, not before.
+           * NOTHING HERE TURNS EPHEMERAL DELIVERY ON, and that is the point of
+           * the shipped design: the contract's `consumes` is the only opt-in,
+           * so this subscription payload is the same shape it was before live
+           * audio existed. That matters because this file is deployed into a
+           * project's config repo and `SubscriptionConfiguredPayload` is
+           * strict — a receiver field this deployment predates rejects setup
+           * outright and leaves every device unable to place a call. A design
+           * that needs no new field here cannot fail that way.
            */
           expression: [
             "workers",

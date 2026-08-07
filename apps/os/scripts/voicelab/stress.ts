@@ -24,7 +24,7 @@
 import fs from "node:fs";
 
 import { bringCallUp, waitForQuietPlayout } from "./call.ts";
-import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import { type VoicelabConnectOptions, connectProject, deviceCapability } from "./connect.ts";
 import {
   counterDelta,
   DAMAGE_MUST_NOT_MOVE,
@@ -413,8 +413,7 @@ export async function stress(options: StressOptions) {
   const capabilityName = options.name ?? "waveshare";
 
   using itx = await connectProject(options);
-  const kit = (itx as unknown as { kit: Record<string, DeviceCapability> }).kit;
-  const capability = kit[capabilityName];
+  const capability = deviceCapability<DeviceCapability>(itx, capabilityName);
   if (!capability) throw new Error(`no device capability named ${capabilityName}`);
   const stream = itx.streams.get(streamPath);
 

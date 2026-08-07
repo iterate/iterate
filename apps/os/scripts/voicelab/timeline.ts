@@ -9,7 +9,12 @@
 // collapse obvious in a single screen.
 import process from "node:process";
 import { spawn } from "node:child_process";
-import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import {
+  type VoicelabConnectOptions,
+  connectProject,
+  deviceCapability,
+  deviceClientPath,
+} from "./connect.ts";
 
 /** Options for `pnpm cli voicelab timeline`. */
 export interface TimelineOptions extends VoicelabConnectOptions {
@@ -69,9 +74,8 @@ export async function timeline(options: TimelineOptions) {
   const name = options.name ?? "homeAssistantVoicePreviewEdition";
   const everyMs = options.everyMs ?? 700;
   using itx = await connectProject(options);
-  const kit = (itx as unknown as { kit: Record<string, any> }).kit;
-  const board = kit[name];
-  if (!board) throw new Error(`nothing mounted at kit.${name}`);
+  const board = deviceCapability<any>(itx, name);
+  if (!board) throw new Error(`nothing connected at ${deviceClientPath(name)}`);
 
   const rows: { atMs: number; note?: string; values?: Record<string, unknown> }[] = [];
   const startedAt = Date.now();

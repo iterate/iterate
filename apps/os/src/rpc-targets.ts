@@ -100,6 +100,7 @@ import { parseAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
 import {
   AGENT_COLLECTION_PATH,
   AGENT_COLLECTION_SUBSCRIPTION_NAME,
+  AgentCollectionProcessorContract,
   type AgentCollectionProcessorState,
 } from "./domains/agents/agent-collection-processor-contract.ts";
 import {
@@ -346,6 +347,7 @@ import type {
   ProjectEgressInterceptor,
 } from "./domains/projects/egress.ts";
 import type {
+  FlattenedCapabilityTarget,
   ProvideCapabilityInput,
   RevokeCapabilityInput,
   SetPreambleInput,
@@ -373,6 +375,7 @@ import { withStreamContext, type StreamContext } from "./domains/projects/stream
 import {
   parseProjectCreationTerminal,
   ProjectProcessorContract,
+  type ProjectClientListItem,
   type ProjectProcessorState,
 } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
@@ -428,7 +431,6 @@ import {
 } from "./domains/agents/agent-defaults.ts";
 import { ChatReplyNotifyProcessorContract } from "./domains/notifications/chat-reply-notify-contract.ts";
 import { repoCreationEvents, type RepoCreateInput } from "./domains/repos/repo-defaults.ts";
-import { AgentCollectionProcessorContract } from "./domains/agents/agent-collection-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
 import { DeviceProcessorContract } from "./domains/devices/device-processor-contract.ts";
 import { describeDeviceState } from "./domains/devices/device-durable-object.ts";
@@ -1966,7 +1968,7 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   get processor(): StreamProcessorRpc<AgentCollectionProcessorState> {
     return facetProcessorRelay<AgentCollectionProcessorState>({
       auth: this.props.auth,
-      name: AgentCollectionProcessorContract.slug,
+      contract: AgentCollectionProcessorContract,
       path: AGENT_COLLECTION_PATH,
       projectId: this.props.projectId,
     });
@@ -2034,6 +2036,59 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
       path: agent.path,
       createdAt: agent.timestamps.createdAt,
     }));
+  }
+}
+
+/**
+ * Connected clients within one project (`itx.clients`). A client is a
+ * capability-host scope — typically under `/clients/**` — that
+ * `projects.connect` provided a live capability to; nothing client-specific
+ * exists at the platform layer. The birth batch every connect appends
+ * configures a narrow copy subscription sending the scope's
+ * `capability-provider-pager-connected` / `-disconnected` facts to the
+ * project root, where the project processor reduces the clients catalog
+ * (`list()`). Presence is last-known but honest: the platform journals the
+ * disconnect when the provider's Pager socket dies. `get(path)` returns the
+ * scope's capability host — `get(path).capabilities.browser.navigate(url)`
+ * invokes the live capability mounted there through the shipped capability
+ * machinery (hibernating Provider Pager, no pinned Durable Objects).
+ */
+class ClientsRpcTarget extends IterateRpcTarget<"Clients"> {
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Connected clients: capability-host scopes (typically \"/clients/<name>\") that projects.connect provided a live capability to. list() reads the project processor's clients catalog — path + connected, last-known presence (the platform journals the disconnect when the provider's socket dies). get(path) returns the scope's capability host; dotted calls like get(path).capabilities.browser.navigate(url) invoke the live capability mounted there.",
+      children: {
+        get: "The client scope's capability host (invoke its mounted capabilities).",
+        list: "Known clients from the project processor's catalog: path + connected.",
+      },
+      parent: "a project itx (itx.clients)",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  /** The client scope's capability host — the full shipped surface, no wrapper. */
+  get(path: string): CapabilityHostRpcTarget {
+    return new CapabilityHostRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      path,
+      projectId: this.props.projectId,
+    });
+  }
+
+  /** Known clients, read from the project processor's reduced catalog. */
+  async list(): Promise<ProjectClientListItem[]> {
+    const state = await projectProcessorState(this.props.projectId);
+    // Public fields only — connectedAtOffsets is reducer bookkeeping, not
+    // contract (the agents.list posture).
+    return Object.values(state.clients).map(
+      ({ connectedAtOffsets: _bookkeeping, ...client }) => client,
+    );
   }
 }
 
@@ -2461,7 +2516,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   get processor(): StreamProcessorRpc<WorkspaceProcessorState> {
     return facetProcessorRelay<WorkspaceProcessorState>({
       auth: this.props.auth,
-      name: WorkspaceProcessorContract.slug,
+      contract: WorkspaceProcessorContract,
       path: this.props.path,
       projectId: this.props.projectId,
     });
@@ -4607,7 +4662,7 @@ function agentProcessorRelay(input: {
 }): ProcessorRelayRpcTarget<AgentProcessorState> {
   return facetProcessorRelay<AgentProcessorState>({
     auth: input.auth,
-    name: AgentProcessorContract.slug,
+    contract: AgentProcessorContract,
     path: input.path,
     projectId: input.projectId,
   });
@@ -5301,6 +5356,43 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
 
 type ProjectListEntryBase = Omit<ProjectListEntry, "deploymentStatus">;
 
+/**
+ * The client scope's complete atomic birth batch, appended idempotently by
+ * every `projects.connect`: the capability-host scope birth plus the
+ * clients-to-root copy subscription feeding the project processor's clients
+ * catalog. Keys derive from (projectId, path) only, so reconnects dedupe.
+ */
+function clientScopeCreationEvents(input: { path: string; projectId: string }) {
+  return [
+    ...capabilityHostCreationEvents({ path: input.path, projectId: input.projectId }),
+    {
+      type: "events.iterate.com/stream/subscription-configured",
+      idempotencyKey: "stream/subscription-configured:clients-to-root",
+      payload: {
+        name: "clients-to-root",
+        description:
+          "Copies this client scope's provider connect/disconnect facts to the project root " +
+          "for the clients catalog (itx.clients.list()).",
+        filter: {
+          eventTypes: [
+            "events.iterate.com/capability-host/capability-provider-pager-connected",
+            "events.iterate.com/capability-host/capability-provider-pager-disconnected",
+          ],
+        },
+        receiver: {
+          action: "copy-to-stream",
+          receivingStreamPath: "/",
+          delivery: {
+            // Configured in the same birth batch, so "beginning" is exact.
+            start: "beginning",
+            onFailingEvent: "halt",
+          },
+        },
+      },
+    },
+  ];
+}
+
 /** Catalog of projects reachable from a {@link Session}. */
 export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollection"> {
   async __describe(): Promise<Description> {
@@ -5350,6 +5442,127 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       streamContext: streamContextForAuth(this.props.auth),
       path: "/",
       projectId,
+    });
+  }
+
+  /**
+   * `get` plus presence: connect as a project CLIENT. A client is nothing
+   * platform-specific — it is a capability-host scope at the caller-chosen
+   * `path` (e.g. `"/clients/desk-robot"`; encode a tab id or device serial in
+   * the path if you want several). Connect appends the scope's idempotent
+   * birth batch (reconnecting dedupes to a no-op) plus one narrow copy
+   * subscription that sends the scope's provider connect/disconnect facts to
+   * the project root, where the project processor reduces the clients
+   * catalog (`itx.clients.list()`). When `capabilities` is passed, it is
+   * provided as a LIVE capability mounted at `capabilities` on the scope —
+   * the shipped capability machinery holds it behind a hibernating Provider
+   * Pager (no pinned Durable Objects), journals the provision, and journals
+   * the disconnect when this session's socket dies; the mount is retired
+   * with it. Callers invoke it through the scope's capability host:
+   * `itx.clients.get(path).capabilities.browser.navigate(url)`.
+   * Returns the project itx, exactly like `get`.
+   */
+  async connect(
+    idOrSlug: string,
+    opts: {
+      /** The client's identity: an absolute stream path, e.g. "/clients/chrome". */
+      path: string;
+      /** Human label for this client; journals as the provision's instructions. */
+      description: string;
+      /** Live capabilities target (an RpcTarget or plain object in the caller's process). */
+      capabilities?: unknown;
+      /**
+       * Route the whole dotted path to the target as ONE call instead of
+       * traversing it member by member.
+       *
+       * Required by any client whose capabilities object is a path-building
+       * proxy rather than a material object tree — every microcontroller, and
+       * anything else that answers calls from a static dispatch table. Without
+       * it the host awaits each intermediate member, so `servos.move(...)`
+       * issues an incomplete call at `servos` and never reaches `move`.
+       */
+      flattenNestedPaths?: boolean;
+      /** Optional TypeScript declaration for the mounted surface. */
+      types?: string;
+    },
+  ): Promise<ProjectRpcTarget> {
+    if (typeof opts.path !== "string" || !opts.path.trim().startsWith("/")) {
+      throw new Error(
+        `client path must be an absolute stream path (e.g. "/clients/chrome"), got ${JSON.stringify(opts.path)}`,
+      );
+    }
+    // Canonicalize BEFORE guarding, so a spelling that only canonicalizes to
+    // the root ("/x/..") cannot slip past the exact-string check.
+    const path = canonicalizeStreamPath(opts.path);
+    if (path === "/") {
+      throw new Error(`client path must not be the project root, got ${JSON.stringify(opts.path)}`);
+    }
+    if (typeof opts.description !== "string" || opts.description.trim().length === 0) {
+      throw new Error("client description is required");
+    }
+    const projectId = await resolveProjectIdBySlug({
+      directory: env.PROJECT_DIRECTORY,
+      identifier: idOrSlug,
+    });
+    if (projectId === null) {
+      throw new Error(`cannot connect a client to unknown project "${idOrSlug}"`);
+    }
+    await this.props.auth.ensureCanAccessProject?.(projectId);
+    // ONE atomic idempotent birth batch on the client scope's stream: the
+    // capability-host birth plus the clients-to-root copy subscription that
+    // feeds the project processor's catalog. Keys derive from (projectId,
+    // path) only, so every reconnect dedupes to a no-op.
+    const stream = new StreamRpcTarget({ auth: this.props.auth, projectId, path });
+    const committed = await stream.append(...clientScopeCreationEvents({ path, projectId }));
+    const host = new CapabilityHostRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      path,
+      projectId,
+    });
+    // provideCapability requires the reduced birth (assertCreated) — wait for
+    // the batch to fold, exactly as capabilityHosts.get(path).create() does.
+    const birthOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+    if (birthOffset === 0) throw new Error("client connect committed no birth events");
+    await host.processor.waitUntilProcessed({
+      offset: birthOffset,
+      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    });
+    const ownedDisposables: Disposable[] = [];
+    if (opts.capabilities !== undefined) {
+      // The provision handle rides the returned itx as an OWNED disposable:
+      // when this session ends (politely or by socket death), capnweb
+      // disposes its exports, the project handle disposes the provision, the
+      // revoke retires the mount — and the now-empty provider Pager closes,
+      // journaling the disconnect the clients catalog reduces. Dropping the
+      // handle instead would orphan the mount as a zombie forever.
+      ownedDisposables.push(
+        await host.provideCapability({
+          type: "live",
+          path: ["capabilities"],
+          instructions: opts.description,
+          ...(opts.types === undefined ? {} : { types: opts.types }),
+          // The two shapes are one input union discriminated on the flag, so
+          // the branch is what types the capability — not a cast.
+          ...(opts.flattenNestedPaths === true
+            ? {
+                flattenNestedPaths: true as const,
+                capability: opts.capabilities as FlattenedCapabilityTarget,
+              }
+            : { capability: opts.capabilities }),
+        }),
+      );
+    }
+    return itxForScope({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      // Same provenance as get(): a direct /api session's client-session
+      // principal must ride the stream context of everything done through
+      // the returned handle.
+      streamContext: streamContextForAuth(this.props.auth),
+      path: "/",
+      projectId,
+      ownedDisposables,
     });
   }
 
@@ -5867,6 +6080,14 @@ type ExistingProjectRpcTargetProps = {
   ctx: CfExecutionContext;
   streamContext: StreamContext;
   projectId: string;
+  /**
+   * Owned handles whose lifetime IS this itx handle's: disposed when the
+   * handle is (explicitly, or by the session teardown disposing its exports).
+   * `projects.connect` parks its live-capability provision here so a dying
+   * client session revokes the mount — which empties and closes the
+   * provider's Pager, journaling the disconnect the clients catalog reduces.
+   */
+  ownedDisposables?: Disposable[];
 };
 
 type ProspectiveProjectRpcTargetProps = {
@@ -5923,6 +6144,19 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     super();
     if ("projectId" in props) props.auth.assertCanAccessProject(props.projectId);
     this.#props = props;
+  }
+
+  [Symbol.dispose](): void {
+    if (!("ownedDisposables" in this.#props)) return;
+    for (const owned of this.#props.ownedDisposables ?? []) {
+      try {
+        owned[Symbol.dispose]();
+      } catch (error) {
+        // Disposal is teardown cleanup; one owned handle's failure must not
+        // mask the others'.
+        console.warn("project itx owned-disposable teardown failed", { error });
+      }
+    }
   }
 
   get #existingProps(): ExistingProjectRpcTargetProps {
@@ -6638,6 +6872,15 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
+  /** Connected clients: the project processor's catalog plus each scope's capability host. */
+  get clients(): ClientsRpcTarget {
+    return new ClientsRpcTarget({
+      auth: this.#props.auth,
+      ctx: this.#props.ctx,
+      projectId: this.#projectId,
+    });
+  }
+
   /** Project-attributed outbound fetch (+ intercept). */
   get egress(): ProjectEgressRpcTarget {
     return new ProjectEgressRpcTarget({
@@ -6892,6 +7135,8 @@ export function itxForScope(props: {
   streamContext: StreamContext;
   path: string;
   projectId: string;
+  /** See {@link ExistingProjectRpcTargetProps.ownedDisposables}. */
+  ownedDisposables?: Disposable[];
 }): ProjectRpcTarget {
   return new ProjectRpcTarget({
     auth: props.auth,
@@ -6899,6 +7144,7 @@ export function itxForScope(props: {
     ctx: props.ctx,
     streamContext: props.streamContext,
     projectId: props.projectId,
+    ...(props.ownedDisposables === undefined ? {} : { ownedDisposables: props.ownedDisposables }),
   });
 }
 
@@ -7810,11 +8056,18 @@ export class ProcessorRelayRpcTarget<
   readonly #host: () => Host | PromiseLike<Host>;
   readonly #processorFacade: (host: Host) => PromiseLike<unknown>;
   readonly #publicState: ((state: State) => PublicState) | undefined;
+  readonly #initialStateWhenUnconfigured: (() => State) | undefined;
 
   constructor(args: {
     auth: ItxAuth;
     host: () => Host | PromiseLike<Host>;
     processorFacade?: (host: Host) => PromiseLike<unknown>;
+    /**
+     * The contract's initial fold for a processor whose subscription has not
+     * been configured yet. Only snapshot() uses it; runtime, wait, and wake
+     * keep the stream's modeled refusal.
+     */
+    initialStateWhenUnconfigured?: () => State;
     /**
      * Projection applied to every state that leaves this relay — snapshots
      * and runtime state. This is where a domain redacts internals from its
@@ -7828,6 +8081,7 @@ export class ProcessorRelayRpcTarget<
     this.#host = args.host;
     this.#processorFacade = args.processorFacade ?? ((host) => host.processor);
     this.#publicState = args.publicState;
+    this.#initialStateWhenUnconfigured = args.initialStateWhenUnconfigured;
   }
 
   #project(state: State): PublicState {
@@ -7939,7 +8193,20 @@ export class ProcessorRelayRpcTarget<
   }
 
   async snapshot() {
-    const snapshot = await this.#callProcessor((processor) => processor.snapshot());
+    let snapshot: ProcessorSnapshot<State>;
+    try {
+      snapshot = await this.#callProcessor((processor) => processor.snapshot());
+    } catch (error) {
+      if (
+        this.#initialStateWhenUnconfigured === undefined ||
+        !isUnconfiguredSubscriptionError(error)
+      ) {
+        throw error;
+      }
+      // Stream offsets are one-based: offset 0 is the honest snapshot of an
+      // empty journal prefix, before this processor's birth batch exists.
+      snapshot = { offset: 0, state: this.#initialStateWhenUnconfigured() };
+    }
     return { offset: snapshot.offset, state: this.#project(snapshot.state) };
   }
 
@@ -8217,17 +8484,47 @@ function streamProcessorFacade(input: {
  * itself carries the snapshot/getRuntimeState/waitUntilProcessed surface, so
  * the "facade of the host" is the host.
  */
-function facetProcessorRelay<State = unknown, PublicState = State>(input: {
+type FacetProcessorContract<State> = {
+  slug: string;
+  stateSchema: { parse(input: unknown): State };
+};
+
+type FacetProcessorRelayInput<State, PublicState> = {
   auth: ItxAuth;
-  name: string;
   path: string;
   projectId: string | null;
   publicState?: (state: State) => PublicState;
-}): ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState> {
+} & (
+  | { name: string; contract?: never }
+  | {
+      /**
+       * A known domain processor contract. Before its subscription is
+       * configured, snapshot() answers with the contract's initial fold at
+       * offset 0; every other verb preserves the stream refusal. Supplying
+       * the contract also binds the subscription name to its slug.
+       */
+      contract: FacetProcessorContract<State>;
+      name?: never;
+    }
+);
+
+function facetProcessorRelay<State = unknown, PublicState = State>(
+  input: FacetProcessorRelayInput<State, PublicState>,
+): ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState> {
+  const contract = input.contract;
+  const name = contract === undefined ? input.name : contract.slug;
   return new ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState>({
     auth: input.auth,
-    host: () => streamProcessorFacade(input),
+    host: () =>
+      streamProcessorFacade({
+        name,
+        path: input.path,
+        projectId: input.projectId,
+      }),
     processorFacade: (host) => Promise.resolve(host),
+    ...(contract === undefined
+      ? {}
+      : { initialStateWhenUnconfigured: () => contract.stateSchema.parse({}) }),
     ...(input.publicState === undefined ? {} : { publicState: input.publicState }),
   });
 }

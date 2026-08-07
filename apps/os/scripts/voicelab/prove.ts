@@ -28,7 +28,13 @@ import fs from "node:fs";
 import process from "node:process";
 import type { DynamicWorkerCapability } from "iterate/sdk";
 
-import { connectProject, resolveVoicelabBaseUrl, type VoicelabConnectOptions } from "./connect.ts";
+import {
+  type VoicelabConnectOptions,
+  connectProject,
+  deviceCapability,
+  deviceClientPath,
+  resolveVoicelabBaseUrl,
+} from "./connect.ts";
 import {
   baselineJpegProblems,
   DEVICE_IMAGE_LIMITS,
@@ -307,7 +313,7 @@ export async function prove(options: ProveOptions) {
     );
   }
   const capabilityName = options.name ?? "waveshare";
-  const mountPath = `kit.${capabilityName}`;
+  const mountPath = `${deviceClientPath(capabilityName)}.capabilities`;
   const askTimeoutMs = options.askTimeoutMs ?? 150_000;
   const only = options.only
     ? new Set(
@@ -397,8 +403,7 @@ export async function prove(options: ProveOptions) {
 
   const baseUrl = resolveVoicelabBaseUrl(options);
   using itx = await connectProject(options);
-  const kit = (itx as unknown as { kit: Record<string, DeviceCapability> }).kit;
-  const device = kit[capabilityName];
+  const device = deviceCapability<DeviceCapability>(itx, capabilityName);
   if (!device) throw new Error(`no device capability named ${capabilityName}`);
 
   const say = (line: string) => console.error(line);

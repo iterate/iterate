@@ -116,7 +116,7 @@ static void notify_peer_session_ended(void *context) {
 }
 
 static void fixture_init(struct fixture *fixture) {
-  static const char *const mount_path[] = {"kit", "m5sticks3"};
+  static const char *const client_path = "/clients/m5stick-s3";
   static const char description[] = "{}";
   struct iterate_kit_itx_connection_options options;
   struct iterate_kit_peer_options peer_options;
@@ -150,10 +150,9 @@ static void fixture_init(struct fixture *fixture) {
     .send_text_context = fixture,
     .project_id = "prj_test",
     .project_api_key = "itxk_test",
-    .mount_path = mount_path,
-    .mount_path_count = 2U,
+    .client_path = client_path,
     .capability = iterate_kit_peer_capability(&fixture->peer),
-    .instructions = NULL,
+    .description = "test device",
     .types = NULL,
     .session_ended = notify_peer_session_ended,
     .session_ended_context = fixture,
@@ -191,9 +190,9 @@ static void connection_mounts_reconnects_and_revokes(void) {
   assert(fixture.connection.generation == 1U);
   assert(fixture.captured_count == 2U);
 
+  /* Two calls mount a client now: authenticate, then projects.connect. */
   receive(&fixture, "[\"resolve\",1,[\"export\",-10]]");
   receive(&fixture, "[\"resolve\",2,[\"export\",-11]]");
-  receive(&fixture, "[\"resolve\",3,[\"export\",-12]]");
   assert(
       fixture.connection.state ==
       ITERATE_KIT_ITX_CONNECTION_READY);
@@ -213,7 +212,6 @@ static void connection_mounts_reconnects_and_revokes(void) {
 
   receive(&fixture, "[\"resolve\",1,[\"export\",-20]]");
   receive(&fixture, "[\"resolve\",2,[\"export\",-21]]");
-  receive(&fixture, "[\"resolve\",3,[\"export\",-22]]");
   assert(
       fixture.connection.state ==
       ITERATE_KIT_ITX_CONNECTION_READY);
@@ -226,7 +224,7 @@ static void connection_mounts_reconnects_and_revokes(void) {
       ITERATE_KIT_ITX_CONNECTION_CLOSED);
   assert(strcmp(
       fixture.captured[fixture.captured_count - 1U],
-      "[\"release\",-22,1]") == 0);
+      "[\"release\",-21,1]") == 0);
 }
 
 /*
@@ -292,9 +290,9 @@ static void session_loss_does_not_close_device_modules(void) {
   assert(
       iterate_kit_itx_connection_open(&fixture.connection) ==
       CAPNWEB_OK);
+  /* Two calls mount a client now: authenticate, then projects.connect. */
   receive(&fixture, "[\"resolve\",1,[\"export\",-10]]");
   receive(&fixture, "[\"resolve\",2,[\"export\",-11]]");
-  receive(&fixture, "[\"resolve\",3,[\"export\",-12]]");
 
   iterate_kit_itx_connection_lost(&fixture.connection);
 

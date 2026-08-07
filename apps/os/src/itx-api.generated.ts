@@ -78,6 +78,7 @@ export interface Session {
  * host, chaining up to the project root.
  */
 export interface Project {
+  [Symbol.dispose](): void;
   /** The project this itx is scoped into. */
   projectId: string;
   /**
@@ -185,6 +186,8 @@ export interface Project {
   streams: ProjectStreamCollection;
   /** Agent catalog: get(path), list(). */
   agents: AgentCollection;
+  /** Connected clients: the project processor's catalog plus each scope's capability host. */
+  clients: Clients;
   /** Project-attributed outbound fetch (+ intercept). */
   egress: ProjectEgress;
   /** Project email: send(...) and the connection-scoped inbound address. */
@@ -267,6 +270,34 @@ export interface ProjectCollection {
    * on the resolved id — the access check runs on the id, never the raw input.
    */
   get(idOrSlug: string): Promise<Project>;
+  /**
+   * `get` plus presence: connect as a project CLIENT. A client is nothing
+   * platform-specific — it is a capability-host scope at the caller-chosen
+   * `path` (e.g. `"/clients/desk-robot"`; encode a tab id or device serial in
+   * the path if you want several). Connect appends the scope's idempotent
+   * birth batch (reconnecting dedupes to a no-op) plus one narrow copy
+   * subscription that sends the scope's provider connect/disconnect facts to
+   * the project root, where the project processor reduces the clients
+   * catalog (`itx.clients.list()`). When `capabilities` is passed, it is
+   * provided as a LIVE capability mounted at `capabilities` on the scope —
+   * the shipped capability machinery holds it behind a hibernating Provider
+   * Pager (no pinned Durable Objects), journals the provision, and journals
+   * the disconnect when this session's socket dies; the mount is retired
+   * with it. Callers invoke it through the scope's capability host:
+   * `itx.clients.get(path).capabilities.browser.navigate(url)`.
+   * Returns the project itx, exactly like `get`.
+   */
+  connect(
+    idOrSlug: string,
+    opts: {
+      /** The client's identity: an absolute stream path, e.g. "/clients/chrome". */
+      path: string;
+      /** Human label for this client; journals as the provision's instructions. */
+      description: string;
+      /** Live capabilities target (an RpcTarget or plain object in the caller's process). */
+      capabilities?: unknown;
+    },
+  ): Promise<Project>;
   /**
    * The session's projects, enriched: identity (id/slug/org) from the auth
    * claims or the project directory, deployment status from a concurrent
@@ -667,6 +698,28 @@ export interface AgentCollection {
   get(path: string): Agent;
   /** Known agents, read from the collection processor's reduced database. */
   list(): Promise<StreamListItem[]>;
+}
+
+/**
+ * Connected clients within one project (`itx.clients`). A client is a
+ * capability-host scope — typically under `/clients/**` — that
+ * `projects.connect` provided a live capability to; nothing client-specific
+ * exists at the platform layer. The birth batch every connect appends
+ * configures a narrow copy subscription sending the scope's
+ * `capability-provider-pager-connected` / `-disconnected` facts to the
+ * project root, where the project processor reduces the clients catalog
+ * (`list()`). Presence is last-known but honest: the platform journals the
+ * disconnect when the provider's Pager socket dies. `get(path)` returns the
+ * scope's capability host — `get(path).capabilities.browser.navigate(url)`
+ * invokes the live capability mounted there through the shipped capability
+ * machinery (hibernating Provider Pager, no pinned Durable Objects).
+ */
+export interface Clients {
+  __describe(): Promise<Description>;
+  /** The client scope's capability host — the full shipped surface, no wrapper. */
+  get(path: string): CapabilityHost;
+  /** Known clients, read from the project processor's reduced catalog. */
+  list(): Promise<ProjectClientListItem[]>;
 }
 
 /**
@@ -2097,6 +2150,16 @@ export type ProjectProcessorState = {
   repos: { createdAt: string; path: string }[];
   secrets: { createdAt: string; path: string }[];
   streams: { createdAt: string; path: string }[];
+  clients: Record<
+    string,
+    {
+      path: string;
+      connected: boolean;
+      lastConnectedAt: string;
+      lastDisconnectedAt?: string | undefined;
+      connectedAtOffsets: number[];
+    }
+  >;
   customDomains: { hostname: string; kind: "cloudflare" | "direct" }[];
   egressRules: {
     ruleKey: string;
@@ -2895,6 +2958,14 @@ export type AgentCollectionProcessorState = {
     }
   >;
   waitingForSinceOffsets: Record<string, number>;
+};
+
+/** What `itx.clients.list()` returns per client: the catalog record minus reducer bookkeeping. */
+export type ProjectClientListItem = {
+  path: string;
+  connected: boolean;
+  lastConnectedAt: string;
+  lastDisconnectedAt?: string | undefined;
 };
 
 /**

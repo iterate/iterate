@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path_ from "node:path";
 import process from "node:process";
 import zlib from "node:zlib";
-import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import { type VoicelabConnectOptions, connectProject, deviceCapability } from "./connect.ts";
 
 /** Options for `pnpm cli voicelab device`. */
 export interface DeviceOptions extends VoicelabConnectOptions {
@@ -62,8 +62,7 @@ interface DeviceCapability {
 export async function device(options: DeviceOptions) {
   const action = options.action ?? "status";
   using itx = await connectProject(options);
-  const kit = (itx as unknown as { kit: Record<string, DeviceCapability> }).kit;
-  const capability = kit[options.name ?? "waveshare"];
+  const capability = deviceCapability<DeviceCapability>(itx, options.name ?? "waveshare");
   if (!capability) throw new Error(`no device capability named ${options.name ?? "waveshare"}`);
 
   if (action === "status") {
