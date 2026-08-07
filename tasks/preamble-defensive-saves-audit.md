@@ -66,24 +66,34 @@ for how to reuse a previous result finds only file-based answers.
       _above — headline: the system prompt's own oversized-results bullet
       (agent-defaults.ts:208) still taught workspace-file+readFile as the
       retention mechanism and never said "don't save copies"_
-- [ ] Reword the oversized-results bullet in `agent-defaults.ts` to lead with
+- [x] Reword the oversized-results bullet in `agent-defaults.ts` to lead with
       `results` retention + the no-defensive-copies implication; drop the
       readFile recipe; bump `DEFAULT_AGENT_SYSTEM_PROMPT_REVISION`
-- [ ] Update the gmail example description + comment to name the loader, not
-      the spill file
-- [ ] Add the script-results carve-out to the files example description
-- [ ] Teach the anti-pattern at the point of temptation: egress-fetch example
+      _SHAPE OF WORK bullet now says "never save your own copy to a file: the
+      platform retains every result"; revision "10"; slightly token-negative_
+- [x] Update the gmail example description + comment to name the loader, not
+      the spill file _both now say typed preview + `results[0].load(itx)`_
+- [x] Add the script-results carve-out to the files example description
+      _"but NOT for script results: those are retained automatically"_
+- [x] Teach the anti-pattern at the point of temptation: egress-fetch example
       description says return the data, never save a copy first
-- [ ] Regenerate `examples.generated.ts` via `pnpm generate:itx-examples`
-- [ ] Prompt-content test: default prompt teaches results retention and no
+      _one sentence in the egress-fetch description_
+- [x] Regenerate `examples.generated.ts` via `pnpm generate:itx-examples`
+      _ran in apps/os; freshness test green_
+- [x] Prompt-content test: default prompt teaches results retention and no
       longer contains the `itx.workspace.readFile` recipe
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
+      _new test in agent-prompt-budgets.test.ts, next to the other
+      prompt-content pins_
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
+      _all green locally_
 
 ## Status summary
 
-Audit complete (findings above); fixes not yet applied. Headline: the system
-prompt itself (agent-defaults.ts:208) still taught the spill-file+readFile
-retention story and never drew the "don't save copies" implication.
+Done, pending review (PR #2441). Audit findings above — headline: the system
+prompt itself (agent-defaults.ts:208) taught the spill-file+readFile
+retention story and never drew the "don't save copies" implication. All three
+teaching surfaces reworded, prompt revision bumped, catalogue regenerated,
+prompt-content test added.
 
 ## Implementation log
 
