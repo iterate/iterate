@@ -30,8 +30,9 @@ should catch.
 
 - One file: `evals/preamble-results/eval.md`. Terse prose in the
   `evals/summarise-emails/eval.md` mold: a concrete starter prompt (TVMaze
-  Sopranos episodes fetch, then a runtime follow-up that needs the data
-  again), the previously observed problems in prose, and success criteria
+  Sopranos episodes fetch, then the real field-test follow-up — "Which
+  episodes was Carmela happy in?", semantic judgment over the summaries),
+  the previously observed problems in prose, and success criteria
   describing HOW we expect it to happen. (An earlier revision linked the
   preview-5 field-test streams; those get erased with the preview slot, so
   the eval stands alone now.)
@@ -58,9 +59,13 @@ should catch.
       _Committed on this branch; short enough that PR #2442's body shows it
       inline._
 - [x] Rewritten per review to drop the deleted preview-5 stream links:
-      now a concrete starter prompt (TVMaze Sopranos episodes fetch +
-      runtime follow-up) plus success criteria describing HOW we expect it
-      to happen. _Review thread on eval.md, 2026-08-07._
+      now a concrete starter prompt (TVMaze Sopranos episodes fetch) plus
+      success criteria describing HOW we expect it to happen.
+      _Review thread on eval.md, 2026-08-07._
+- [x] Follow-up corrected to the real field-test exchange: "Which episodes
+      was Carmela happy in?" — semantic judgment over the episode summaries,
+      no arithmetic shortcut, exercising exactly the retained-results flow.
+      _Misha's correction, 2026-08-07; I'd invented a runtime question._
 - [x] Lessons from the vitest live runs preserved. _Implementation log
       below + the success-criteria caveats in the eval.md (inline renders
       can be mentally computed; agents legitimately dig into results on
