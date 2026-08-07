@@ -2751,17 +2751,15 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   async closeClientConnection(input: { connectionKey: string }): Promise<void> {
     const kickedLive = this.#eventSender.connections.kickClientConnection(input.connectionKey);
-    const { closed, endedDormant } = this.#subscriberPagers.closeForConnection(
-      input.connectionKey,
-      "kicked",
-    );
-    if (!kickedLive && closed === 0) {
+    const { bound, endedDormant } = this.#subscriberPagers.dormantEndings(input.connectionKey);
+    if (!kickedLive && bound === 0) {
       throw new Error(`no client connection "${input.connectionKey}" to close`);
     }
     // A DORMANT presence-only client has no live entry whose close() could
     // journal this kick — append it here, with the opener echoed for the
-    // roster feed. The registry cleared its dormancy marker, so the pager's
-    // own webSocketClose stays silent instead of recording "departed".
+    // roster feed. Fact FIRST, cleanup after: an interruption before the
+    // close below leaves a retryable door (the pagerId idempotency key
+    // dedupes the re-appended fact), never a silently ended connection.
     for (const ended of endedDormant) {
       this.#append({ authority: "core-event" }, [
         {
@@ -2775,6 +2773,9 @@ export class StreamDurableObject extends DurableObject<Env> {
         },
       ]);
     }
+    // Clears each ended dormancy marker as it closes, so the pagers' own
+    // webSocketClose stays silent instead of double-recording "departed".
+    this.#subscriberPagers.closeForConnection(input.connectionKey, "kicked");
   }
 
   /**

@@ -220,30 +220,49 @@ export class StreamSubscriberPagerRegistry {
   }
 
   /**
+   * The dormant connection endings a platform kick of this connection would
+   * produce — a PURE READ, so the kick door can journal each ending's
+   * `kicked` fact BEFORE any state is cleared or socket closed (fact first;
+   * an interrupted kick then retries into the same idempotency keys instead
+   * of losing the close fact entirely). `bound` counts every Pager under the
+   * key, dormant or not, for the door's existence check.
+   */
+  dormantEndings(connectionKey: string): {
+    bound: number;
+    endedDormant: { pagerId: string; openedBy?: ConnectionOpenerDescriptor }[];
+  } {
+    const bound = this.#pagers
+      .entries()
+      .filter(({ attachment }) => attachment.connectionKey === connectionKey);
+    const dormant = this.#hooks.hasConnection(connectionKey)
+      ? []
+      : bound.filter(({ attachment }) => attachment.idleDeliveredThrough !== undefined);
+    return {
+      bound: bound.length,
+      endedDormant: dormant.map(({ attachment }) => ({
+        pagerId: attachment.pagerId,
+        ...(attachment.openedBy === undefined ? {} : { openedBy: attachment.openedBy }),
+      })),
+    };
+  }
+
+  /**
    * Close every Pager bound to one connection (a platform-side kick or a
    * client-cap eviction): the owner's relay breaks instead of re-dialing on
    * the next Page, so a kicked or evicted dormant subscriber cannot
    * resurrect.
    *
    * A DORMANT pager is its connection's only remaining leg, so closing it
-   * ends the connection HERE, for the caller's reason — the generic
-   * `webSocketClose` departed append must stay silent for it. Clearing the
-   * dormancy marker before the close silences it (`departedOnClose` keys on
-   * `idleDeliveredThrough`), and each ended dormancy is returned so the
-   * caller can journal its own reason (a dormant kick must read "kicked",
-   * not "departed").
+   * ends the connection for the CALLER's reason — the caller journals that
+   * fact itself (via {@link dormantEndings}, BEFORE calling this), and the
+   * dormancy marker is cleared here so the generic `webSocketClose` departed
+   * append stays silent instead of double-recording the end. Returns how
+   * many Pagers closed.
    */
-  closeForConnection(
-    connectionKey: string,
-    reason: string,
-  ): {
-    closed: number;
-    endedDormant: { pagerId: string; openedBy?: ConnectionOpenerDescriptor }[];
-  } {
+  closeForConnection(connectionKey: string, reason: string): number {
     const bound = this.#pagers
       .entries()
       .filter(({ attachment }) => attachment.connectionKey === connectionKey);
-    const endedDormant: { pagerId: string; openedBy?: ConnectionOpenerDescriptor }[] = [];
     for (const { ws, attachment } of bound) {
       if (
         attachment.idleDeliveredThrough !== undefined &&
@@ -251,14 +270,10 @@ export class StreamSubscriberPagerRegistry {
       ) {
         const { idleDeliveredThrough: _ended, ...awake } = attachment;
         this.#pagers.stamp(ws, awake);
-        endedDormant.push({
-          pagerId: attachment.pagerId,
-          ...(attachment.openedBy === undefined ? {} : { openedBy: attachment.openedBy }),
-        });
       }
       this.#pagers.close(ws, 1000, reason);
     }
-    return { closed: bound.length, endedDormant };
+    return bound.length;
   }
 
   /**
