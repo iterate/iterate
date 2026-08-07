@@ -18,6 +18,12 @@ const TAB_KEY_PROBE_MS = 150;
  */
 async function tabConnectionKey(): Promise<string> {
   const stored = window.sessionStorage.getItem(TAB_KEY_STORAGE);
+  // Already held by THIS document — an effect restart (e.g. presence
+  // re-connecting after a socket reconnect), unquestionably ours. Skip the
+  // probe: BroadcastChannel delivers across channel objects within the same
+  // document too, so probing would hear our own holder answer and mistake
+  // this tab for a duplicate, churning identity every reconnect.
+  if (stored !== null && stored === heldTabKey) return stored;
   if (stored !== null && !(await keyHeldByAnotherTab(stored))) {
     holdTabKey(stored);
     return stored;
@@ -47,12 +53,22 @@ function keyHeldByAnotherTab(key: string): Promise<boolean> {
   });
 }
 
-/** Answer probes for this tab's key for the rest of the page's life. */
+/** The key THIS document holds; `tabConnectionKey` short-circuits on it. */
+let heldTabKey: string | undefined;
+let holderChannel: BroadcastChannel | undefined;
+
+/**
+ * Answer probes for this tab's key for the rest of the page's life. A module
+ * SINGLETON: one holder channel per document, re-keyed in place on effect
+ * restarts — a second channel would answer this document's own later probes.
+ */
 function holdTabKey(key: string): void {
-  const channel = new BroadcastChannel(TAB_KEY_CHANNEL);
-  channel.onmessage = (event) => {
-    if (event.data?.type === "probe" && event.data.key === key) {
-      channel.postMessage({ type: "held", key });
+  heldTabKey = key;
+  if (holderChannel !== undefined) return;
+  holderChannel = new BroadcastChannel(TAB_KEY_CHANNEL);
+  holderChannel.onmessage = (event) => {
+    if (event.data?.type === "probe" && event.data.key === heldTabKey) {
+      holderChannel?.postMessage({ type: "held", key: heldTabKey });
     }
   };
 }
