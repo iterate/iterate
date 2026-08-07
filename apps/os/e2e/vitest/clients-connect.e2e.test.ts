@@ -72,21 +72,24 @@ test("projects.connect registers a client whose capabilities fan out over its op
     .capabilities.browser.navigate("https://example.com");
   expect(silence).toEqual([]);
 
-  // The roster: copied facts reduce into the collection projection.
-  await expect
-    .poll(
-      async () => {
-        const list = await callerProject.clients.list();
-        return list.find((client) => client.path === "/clients/chrome");
-      },
-      { interval: 500, timeout: 30_000 },
-    )
-    .toMatchObject({
-      path: "/clients/chrome",
-      description: "e2e Chrome",
-      connections: 1,
-      hasCapabilities: true,
-    });
+  // The roster: copied facts reduce into the collection projection. Manual
+  // settle loop instead of expect.poll — the e2e lane runs tests concurrently
+  // on CI, and expect.poll loses the vitest test context there (same posture
+  // as itx-live-capabilities).
+  const deadline = Date.now() + 30_000;
+  let chrome: Awaited<ReturnType<typeof callerProject.clients.list>>[number] | undefined;
+  while (Date.now() < deadline) {
+    const list = await callerProject.clients.list();
+    chrome = list.find((client) => client.path === "/clients/chrome");
+    if (chrome !== undefined && chrome.connections === 1) break;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  expect(chrome).toMatchObject({
+    path: "/clients/chrome",
+    description: "e2e Chrome",
+    connections: 1,
+    hasCapabilities: true,
+  });
 });
 
 test("maxConnections defaults to 1: a reconnect evicts the previous connection as replaced", async () => {
