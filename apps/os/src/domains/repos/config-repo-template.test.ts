@@ -41,20 +41,36 @@ test.each([
     worker: (env: never) => new VoiceProjectWorker({} as never, env),
   },
 ])(
-  "$name template owns onboarding agent creation, startup, and connected OS client redirects",
+  "$name template owns onboarding agent creation, startup, and new-project client redirects",
   async ({ name, prompt, start, worker: makeWorker }) => {
     const create = vi.fn(async () => undefined);
     const append = vi.fn(async () => []);
-    const invokeCapability = vi.fn(async () => undefined);
+    const landingTabCapability = vi.fn(
+      async (call: { path: string[] }): Promise<string | undefined> =>
+        call.path.at(-1) === "url"
+          ? "https://os.iterate.test/projects/new-project?welcome=true"
+          : undefined,
+    );
+    const busyTabCapability = vi.fn(
+      async (): Promise<string> => "https://os.iterate.test/projects/new-project/repl",
+    );
     const project = {
       agents: {
         get: vi.fn(() => ({ append, create })),
       },
       clients: {
-        get: vi.fn(() => ({ invokeCapability })),
+        get: vi.fn((path: string) => ({
+          invokeCapability:
+            path === "/clients/os-app/landing-tab" ? landingTabCapability : busyTabCapability,
+        })),
         list: vi.fn(async () => [
           {
-            path: "/clients/os-app/connected-tab",
+            path: "/clients/os-app/landing-tab",
+            connected: true,
+            lastConnectedAt: "2026-08-07T10:00:00.000Z",
+          },
+          {
+            path: "/clients/os-app/busy-tab",
             connected: true,
             lastConnectedAt: "2026-08-07T10:00:00.000Z",
           },
@@ -116,10 +132,18 @@ test.each([
         }),
       }),
     );
-    expect(project.clients.get).toHaveBeenCalledExactlyOnceWith("/clients/os-app/connected-tab");
-    expect(invokeCapability).toHaveBeenCalledExactlyOnceWith({
+    expect(project.clients.get).toHaveBeenCalledTimes(2);
+    expect(project.clients.get).toHaveBeenCalledWith("/clients/os-app/landing-tab");
+    expect(project.clients.get).toHaveBeenCalledWith("/clients/os-app/busy-tab");
+    expect(landingTabCapability).toHaveBeenNthCalledWith(1, {
+      path: ["capabilities", "browser", "url"],
+    });
+    expect(landingTabCapability).toHaveBeenNthCalledWith(2, {
       path: ["capabilities", "browser", "navigate"],
       args: ["/projects/new-project/agents/streams/agents/onboarding"],
+    });
+    expect(busyTabCapability).toHaveBeenCalledExactlyOnceWith({
+      path: ["capabilities", "browser", "url"],
     });
   },
 );

@@ -48,8 +48,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  is installed immediately before it in the same atomic append, so the seeded\n" +
       "  worker receives it after the platform creation saga has completed. This\n" +
       "  template uses it to create `/agents/onboarding`, install the template-local\n" +
-      "  `ONBOARDING.md` prompt, trigger the agent's first turn, and navigate every\n" +
-      "  connected `/clients/os-app/**` browser client to its chat.\n" +
+      "  `ONBOARDING.md` prompt, trigger the agent's first turn, and navigate each\n" +
+      "  connected `/clients/os-app/**` browser client that is still on the new\n" +
+      "  project's landing page to its chat. A user who has already moved elsewhere\n" +
+      "  is not interrupted by a delayed lifecycle delivery.\n" +
       "\n" +
       "`project/create-requested` remains platform-only: it precedes the userspace\n" +
       "worker subscription. The terminal `project/created` certificate includes the\n" +
@@ -151,8 +153,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  is installed immediately before it in the same atomic append, so the seeded\n" +
       "  worker receives it after the platform creation saga has completed. This\n" +
       "  template uses it to create `/agents/onboarding`, install the template-local\n" +
-      "  `ONBOARDING.md` prompt, trigger the agent's first turn, and navigate every\n" +
-      "  connected `/clients/os-app/**` browser client to its chat.\n" +
+      "  `ONBOARDING.md` prompt, trigger the agent's first turn, and navigate each\n" +
+      "  connected `/clients/os-app/**` browser client that is still on the new\n" +
+      "  project's landing page to its chat.\n" +
       "\n" +
       "`project/create-requested` remains platform-only: it precedes the userspace\n" +
       "worker subscription. The terminal `project/created` certificate includes the\n" +
@@ -450,16 +453,27 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        );\n" +
       "\n" +
       "        const [{ slug }, clients] = await Promise.all([itx.identity(), itx.clients.list()]);\n" +
+      "        const projectHomePath = `/projects/${slug}`;\n" +
       "        const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;\n" +
       "        await Promise.all(\n" +
       "          clients\n" +
       "            .filter((client) => client.connected && client.path.startsWith(\"/clients/os-app/\"))\n" +
-      "            .map((client) =>\n" +
-      "              itx.clients.get(client.path).invokeCapability({\n" +
+      "            .map(async (client) => {\n" +
+      "              const browserClient = itx.clients.get(client.path);\n" +
+      "              const currentUrl = await browserClient.invokeCapability({\n" +
+      "                path: [\"capabilities\", \"browser\", \"url\"],\n" +
+      "              });\n" +
+      "              if (\n" +
+      "                typeof currentUrl !== \"string\" ||\n" +
+      "                new URL(currentUrl).pathname.replace(/\\/$/, \"\") !== projectHomePath\n" +
+      "              ) {\n" +
+      "                return;\n" +
+      "              }\n" +
+      "              await browserClient.invokeCapability({\n" +
       "                path: [\"capabilities\", \"browser\", \"navigate\"],\n" +
       "                args: [onboardingUrl],\n" +
-      "              }),\n" +
-      "            ),\n" +
+      "              });\n" +
+      "            }),\n" +
       "        );\n" +
       "        break;\n" +
       "      }\n" +

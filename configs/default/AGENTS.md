@@ -38,8 +38,10 @@ around them.
   is installed immediately before it in the same atomic append, so the seeded
   worker receives it after the platform creation saga has completed. This
   template uses it to create `/agents/onboarding`, install the template-local
-  `ONBOARDING.md` prompt, trigger the agent's first turn, and navigate every
-  connected `/clients/os-app/**` browser client to its chat.
+  `ONBOARDING.md` prompt, trigger the agent's first turn, and navigate each
+  connected `/clients/os-app/**` browser client that is still on the new
+  project's landing page to its chat. A user who has already moved elsewhere
+  is not interrupted by a delayed lifecycle delivery.
 
 `project/create-requested` remains platform-only: it precedes the userspace
 worker subscription. The terminal `project/created` certificate includes the

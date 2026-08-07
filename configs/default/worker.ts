@@ -142,16 +142,27 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         );
 
         const [{ slug }, clients] = await Promise.all([itx.identity(), itx.clients.list()]);
+        const projectHomePath = `/projects/${slug}`;
         const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;
         await Promise.all(
           clients
             .filter((client) => client.connected && client.path.startsWith("/clients/os-app/"))
-            .map((client) =>
-              itx.clients.get(client.path).invokeCapability({
+            .map(async (client) => {
+              const browserClient = itx.clients.get(client.path);
+              const currentUrl = await browserClient.invokeCapability({
+                path: ["capabilities", "browser", "url"],
+              });
+              if (
+                typeof currentUrl !== "string" ||
+                new URL(currentUrl).pathname.replace(/\/$/, "") !== projectHomePath
+              ) {
+                return;
+              }
+              await browserClient.invokeCapability({
                 path: ["capabilities", "browser", "navigate"],
                 args: [onboardingUrl],
-              }),
-            ),
+              });
+            }),
         );
         break;
       }
