@@ -5,6 +5,12 @@ size: small
 
 # getScriptResult slice — server-side paging of stored script results
 
+> **Status**: done, pending review — slice option live end to end (processor →
+> DO → rpc-target → generated itx API), raw-text spill notice teaches the new
+> recipe, all gates green (typecheck/lint/knip/format/test). Deliberately left
+> out: spill retirement (parent follow-ups task) and a slice recipe in the
+> oversized-JSON render.
+
 Follow-up to #2431, scoped-down take on the fourth item of
 `tasks/codemode-script-preamble-followups.md` ("do we still need spill?").
 Per Misha: do NOT retire the workspace spill mechanism yet — just close its
@@ -34,14 +40,14 @@ itx.capabilityHost.getScriptResult(executionId, options?: { slice?: [start: numb
 
 ## Checklist
 
-- [ ] `GetScriptResultOptions` type in capability-host `types.ts`
-- [ ] Processor verb accepts `options` and slices canonical text (`capability-host-processor-implementation.ts`)
-- [ ] DO + rpc-target pass-throughs (`capability-host-durable-object.ts`, `rpc-targets.ts`), docstrings + `__describe` children note updated
-- [ ] Regenerate `itx-api.generated.ts` / `itx-api-graph.generated.ts` (+ packages/iterate copy) via `pnpm generate:itx-api`
-- [ ] rawTextSpillNotice loader-branch recipe demonstrates server-side slicing via `getScriptResult(..., { slice })`; workspace pointer line stays
-- [ ] Tests: slice of a string result, slice of a JSON result (pretty-printed equivalence), clamping/negative offsets, unsliced unchanged, failed-script throw
-- [ ] Update agent test asserting the old load-then-slice recipe
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
+- [x] `GetScriptResultOptions` type in capability-host `types.ts` _plus `ScriptResultSlicedFrom`; lives beside SetPreambleInput, picked up by the itx generator_
+- [x] Processor verb accepts `options` and slices canonical text (`capability-host-processor-implementation.ts`) _slice resolution inline in `getScriptResult`; `validatedSlice` helper rejects malformed tuples_
+- [x] DO + rpc-target pass-throughs (`capability-host-durable-object.ts`, `rpc-targets.ts`), docstrings + `__describe` children note updated _the rpc-target docstring is what the generated API publishes_
+- [x] Regenerate `itx-api.generated.ts` / `itx-api-graph.generated.ts` (+ packages/iterate copy) via `pnpm generate:itx-api` _generator run; no hand edits; union signature + both new type aliases came through_
+- [x] rawTextSpillNotice loader-branch recipe demonstrates server-side slicing via `getScriptResult(..., { slice })`; workspace pointer line stays _agent-processor-implementation.ts; `load(itx)` kept as the whole-string escape hatch; small-result (`data`) branch unchanged_
+- [x] Tests: slice of a string result, slice of a JSON result (pretty-printed equivalence), clamping/negative offsets, unsliced unchanged, failed-script throw _three new specs in capability-host-preamble.test.ts beside the existing getScriptResult one_
+- [x] Update agent test asserting the old load-then-slice recipe _agent-processor.test.ts "oversized result's render points at the preamble's typed loader" now expects the slice recipe_
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test` _all green in the worktree (2710 tests, 262 files)_
 
 ## Assumptions (mine, delineated)
 
@@ -61,4 +67,17 @@ itx.capabilityHost.getScriptResult(executionId, options?: { slice?: [start: numb
   story.
 - **Spill stays**: the workspace pointer lines remain; retiring spill is a
   future decision (see the parent follow-ups task).
+
+## Implementation log
+
+- `slicedFrom.start/end` report the *resolved* offsets (after negative
+  resolution and clamping), not the caller's raw inputs — that's what a
+  paging loop needs; an inverted range serves the empty page at the resolved
+  start.
+- Slice validation rejects non-integer offsets loudly (repo style: validate
+  assumptions rather than coerce).
+- `results[N].load(itx)` preamble loaders keep calling `getScriptResult`
+  optionless; `.data` on the union return collapses to `unknown`, so the
+  loader's `as ResultN` cast needed no change. No stream/state/event changes
+  anywhere — read-verb extension only.
 
