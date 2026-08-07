@@ -156,13 +156,13 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     try {
       ({ state } = await (await this.#processorFacade()).snapshot());
     } catch (error) {
-      // UNBORN workspace: before the birth batch commits, the workspace
-      // subscription does not exist and the facade refuses the name (a read
-      // must never materialize a facet). Substitute the empty fold —
-      // #assertCreated then reports the friendly missing-workspace guidance,
-      // exactly as the retired host fabricated its pre-birth reads.
+      // Before the birth batch commits, the workspace subscription is absent
+      // from the stream catalog (and a read must never materialize its facet).
+      // The contract's initial fold lets #assertCreated report the domain's
+      // friendly missing-workspace guidance while every other error remains
+      // loud.
       if (!isUnconfiguredSubscriptionError(error)) throw error;
-      state = WorkspaceProcessorContract.stateSchema.parse({}) as WorkspaceProcessorState;
+      state = WorkspaceProcessorContract.stateSchema.parse({});
     }
     this.#reducedState = state;
     return state;
