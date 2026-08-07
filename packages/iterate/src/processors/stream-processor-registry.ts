@@ -174,16 +174,22 @@ type RegistryEntry = {
 
 /**
  * Options for {@link StreamProcessorRegistry.register}. A processor registers
- * under its contract slug — which IS the subscription name under the identity
- * doctrine (docs/stream-subscription-model-redesign.md): the same string as
- * the stream's catalog key, the facet name under facet placement, and the
- * progress-key component. (Registering two instances of one contract under
- * distinct names is deliberately future work.)
+ * under its contract slug by default — which IS the subscription name under the
+ * identity doctrine (docs/stream-subscription-model-redesign.md): the same
+ * string as the stream's catalog key, the facet name under facet placement,
+ * and the progress-key component. Pass an explicit `name` to register a second
+ * instance of one contract under a distinct name; reads, wake routing, and
+ * progress storage all already key by that name (see `reads`, `resolveProcessorName`,
+ * and `durableObjectProgressStore`), so the instances stay independent.
  */
 export type RegisterProcessorOptions = {
   /** Post-eviction keepalive recovery — REQUIRED for consequential
    * `runInBackground` work (see the module doc). */
   recovery?: boolean;
+  /** Registered/progress name for this instance. Defaults to the contract slug
+   * (name === slug, the identity-doctrine default). Supply a distinct name to
+   * host two instances of one contract on one registry without colliding. */
+  name?: string;
 };
 
 const WakeDeliveryThrowableFields = z.object({
@@ -526,9 +532,10 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     },
 
     register(processor, opts) {
-      // The registered name IS the contract slug (one identity — see
-      // RegisterProcessorOptions).
-      const name = processor.contract.slug;
+      // The registered name defaults to the contract slug (one identity — see
+      // RegisterProcessorOptions); an explicit name hosts a second instance of
+      // one contract without colliding.
+      const name = opts?.name ?? processor.contract.slug;
       if (entries.has(name)) {
         throw new Error(`Stream processor name "${name}" is already registered on this registry`);
       }
