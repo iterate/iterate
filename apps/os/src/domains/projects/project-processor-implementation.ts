@@ -676,6 +676,53 @@ export class ProjectProcessor extends StreamProcessor<
         return recordDomainObject(state, "repos", event);
       case "events.iterate.com/secret/created":
         return recordDomainObject(state, "secrets", event);
+      // The clients catalog: copied off each client scope's stream by the
+      // clients-to-root subscription that projects.connect's birth batch
+      // configures. Source-hop coordinates carry the client's path, the fact's
+      // original commit time, and — for the connected fact — the offset the
+      // matching disconnect will name in its payload.
+      case "events.iterate.com/capability-host/capability-provider-pager-connected": {
+        const source = event.source?.copiedFrom?.at(-1);
+        if (source === undefined) return state;
+        const previous = state.clients[source.path];
+        const connectedAtOffsets = [...(previous?.connectedAtOffsets ?? []), source.offset];
+        return {
+          ...state,
+          clients: {
+            ...state.clients,
+            [source.path]: {
+              path: source.path,
+              connected: true,
+              lastConnectedAt: source.createdAt,
+              ...(previous?.lastDisconnectedAt === undefined
+                ? {}
+                : { lastDisconnectedAt: previous.lastDisconnectedAt }),
+              connectedAtOffsets,
+            },
+          },
+        };
+      }
+      case "events.iterate.com/capability-host/capability-provider-pager-disconnected": {
+        const source = event.source?.copiedFrom?.at(-1);
+        if (source === undefined) return state;
+        const previous = state.clients[source.path];
+        if (previous === undefined) return state;
+        const connectedAtOffsets = previous.connectedAtOffsets.filter(
+          (offset) => offset !== event.payload.connectedAtOffset,
+        );
+        return {
+          ...state,
+          clients: {
+            ...state.clients,
+            [source.path]: {
+              ...previous,
+              connected: connectedAtOffsets.length > 0,
+              lastDisconnectedAt: source.createdAt,
+              connectedAtOffsets,
+            },
+          },
+        };
+      }
       case "events.iterate.com/project/egress-rules-configured":
         return { ...state, egressRules: event.payload.rules };
       case "events.iterate.com/project/human-approval-key-added":

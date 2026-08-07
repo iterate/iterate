@@ -692,6 +692,21 @@ export class StreamEventSender {
         const configuredFilter = compileEventFilter(current.configuration.filter);
         const announcedFilter =
           consumes === undefined ? undefined : compileEventFilter({ eventTypes: [...consumes] });
+        /*
+         * NAMING THE TYPE IS THE OPT-IN, and it is the only one.
+         *
+         * An ephemeral event reaches a hosted processor when its contract
+         * lists that exact type in `consumes` — never through the `"*"`
+         * wildcard, which exists for durable facts and must not hand anyone a
+         * microphone firehose they did not ask for. That single rule is why
+         * ephemeral types live in `consumes` beside durable ones instead of in
+         * a parallel list: one vocabulary, and the explicitness IS the
+         * permission.
+         *
+         * A processor that announces nothing gets durable events only, which
+         * is what every processor written before this did.
+         */
+        const explicitlyConsumed = new Set((consumes ?? []).filter((type) => type !== "*"));
         const connection = this.connections.openHosted({
           connectionKey: name,
           expectedHostedDelivery: expectedDelivery,
@@ -699,10 +714,9 @@ export class StreamEventSender {
           replayAfterOffset: response.checkpointOffset,
           filter: {
             matches(event) {
-              return (
-                configuredFilter.matches(event) &&
-                (announcedFilter === undefined || announcedFilter.matches(event))
-              );
+              if (!configuredFilter.matches(event)) return false;
+              if (event.ephemeral === true) return explicitlyConsumed.has(event.type);
+              return announcedFilter === undefined || announcedFilter.matches(event);
             },
           },
           openedBy,
@@ -2191,10 +2205,12 @@ export class StreamConnections {
               deliveredThroughOffset = Math.max(deliveredThroughOffset, currentMaxOffset);
             } else {
               deliveredThroughOffset = lastOffset;
-              const visible =
-                kind === "hosted"
-                  ? readEvents.filter((entry) => entry.event.ephemeral !== true)
-                  : readEvents;
+              // Ephemeral events reach the filter for every connection kind;
+              // for hosted ones the filter admits only types the processor
+              // named explicitly in `consumes`. Session connections have
+              // always received them — they own no durable cursor, so a hole
+              // costs them nothing.
+              const visible = readEvents;
               const matched =
                 args.filter === undefined
                   ? visible

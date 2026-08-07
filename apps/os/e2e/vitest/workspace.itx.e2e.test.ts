@@ -30,6 +30,10 @@ test(
 
     // -- explicit birth; the mount table is DERIVED, never stored -------------
 
+    await expect(workspace.processor.snapshot()).resolves.toMatchObject({
+      offset: 0,
+      state: { birthCertificate: null },
+    });
     await expect(workspace.readFile("/repos/config/package.json")).rejects.toThrow(
       /does not exist.*create it with itx\.workspaces\.get/s,
     );

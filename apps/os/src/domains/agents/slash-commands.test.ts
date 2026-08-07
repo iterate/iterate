@@ -1,16 +1,28 @@
 import { expect, test } from "vitest";
-import { resolveSlashCommand } from "./slash-commands.ts";
+import { buildSlashCommandCode, resolveSlashCommand } from "./slash-commands.ts";
 
-test("/script wraps a single expression with an implicit return", () => {
-  const resolved = resolveSlashCommand("/script await itx.__describe()");
+test("/script wraps a single expression and appends its result as interruptive context", () => {
+  const resolved = resolveSlashCommand("/script itx.__describe()");
   expect(resolved).toMatchObject({ command: "script" });
-  expect(resolved!.code).toBe("async (itx) => {\nreturn (await itx.__describe()\n);\n}");
+  const code = buildSlashCommandCode(resolved!, "slash-command:7");
+  expect(code).toContain(
+    "const result = await (async () => {\nreturn await (itx.__describe()\n);\n})();",
+  );
+  expect(code).toContain('type: "events.iterate.com/agents/context-added"');
+  expect(code).toContain(
+    'content: "User ran `/script itx.__describe()` command with the following result:\\n\\n"',
+  );
+  expect(code).toContain('actor: {"type":"script","executionId":"slash-command:7"}');
+  expect(code).toContain('llmRequestPolicy: { behaviour: "interrupt-current-request" }');
+  expect(code).toContain('idempotencyKey: "agent/slash-command-result@slash-command:7"');
+  expect(code).toContain("return result;");
 });
 
 test("/script return wrap survives a trailing line comment", () => {
   // The closing paren lives on its own line, so `// note` cannot eat it.
-  expect(resolveSlashCommand("/script await itx.__describe() // sanity check")!.code).toBe(
-    "async (itx) => {\nreturn (await itx.__describe() // sanity check\n);\n}",
+  const resolved = resolveSlashCommand("/script await itx.__describe() // sanity check");
+  expect(buildSlashCommandCode(resolved!, "slash-command:8")).toContain(
+    "return await (itx.__describe() // sanity check\n);",
   );
 });
 
@@ -18,27 +30,30 @@ test("/script runs statement-shaped code verbatim, stripping a markdown fence", 
   const resolved = resolveSlashCommand(
     "/script ```ts\nconst me = await itx.__describe();\nreturn me.projectId;\n```",
   );
-  expect(resolved!.code).toBe(
-    "async (itx) => {\nconst me = await itx.__describe();\nreturn me.projectId;\n}",
+  expect(buildSlashCommandCode(resolved!, "slash-command:9")).toContain(
+    "const result = await (async () => {\nconst me = await itx.__describe();\nreturn me.projectId;\n})();",
   );
 });
 
 test("/script never return-wraps statement keywords, even on one line", () => {
   // `return (throw …)` is a parse error — one-line throw/try/switch/do must
   // run verbatim like the other statement forms.
-  expect(resolveSlashCommand('/script throw new Error("boom")')!.code).toBe(
-    'async (itx) => {\nthrow new Error("boom")\n}',
+  const throwing = resolveSlashCommand('/script throw new Error("boom")');
+  expect(buildSlashCommandCode(throwing!, "slash-command:10")).toContain(
+    'const result = await (async () => {\nthrow new Error("boom")\n})();',
   );
-  expect(resolveSlashCommand("/script try { risky() } catch {}")!.code).toBe(
-    "async (itx) => {\ntry { risky() } catch {}\n}",
+  const catching = resolveSlashCommand("/script try { risky() } catch {}");
+  expect(buildSlashCommandCode(catching!, "slash-command:11")).toContain(
+    "const result = await (async () => {\ntry { risky() } catch {}\n})();",
   );
 });
 
 test("/example resolves a catalogue slug into the shared run-script envelope", () => {
   const resolved = resolveSlashCommand('/example describe-project {"who":"me"}');
   expect(resolved).toMatchObject({ command: "example" });
-  expect(resolved!.code).toContain('const vars = {"who":"me"};');
-  expect(resolved!.code.startsWith("async (itx) => {")).toBe(true);
+  const code = buildSlashCommandCode(resolved!, "slash-command:12");
+  expect(code).toContain('const vars = {"who":"me"};');
+  expect(code.startsWith("async (itx) => {")).toBe(true);
 });
 
 test("/example only resolves entries the run-script door can actually run", () => {

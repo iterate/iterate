@@ -313,8 +313,19 @@ export class StreamCoreProcessor {
       if (args.authority !== "public") {
         throw new Error("requested subscription removals must come from a public command");
       }
-      if (args.state.subscriptions.outbound.byName[event.payload.name] === undefined) {
+      const configured = args.state.subscriptions.outbound.byName[event.payload.name];
+      if (configured === undefined) {
         throw new Error(`subscription "${event.payload.name}" does not exist`);
+      }
+      // A hosted processor's subscription is part of its birth contract. Its
+      // configured event is idempotency-keyed, so removing the row would make
+      // a later create retry dedupe without restoring the processor. Push
+      // subscriptions remain removable through their owning domain doors.
+      if (
+        configured.configuration.receiver.action === "facet-processor" ||
+        configured.configuration.receiver.action === "wake-processor"
+      ) {
+        throw new Error("hosted processor subscriptions cannot be removed");
       }
     }
 

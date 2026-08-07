@@ -265,6 +265,12 @@ type MutuallyAssignable<Left, Right> = [Left] extends [Right]
  * envelope's shared payload type have exactly the same fields in both
  * directions.
  *
+ * WITH ONE BLIND SPOT WORTH KNOWING: mutual assignability does not catch an
+ * OPTIONAL property added to one side only. `{ a?: boolean; b: X }` and
+ * `{ b: X }` are assignable both ways, so a new optional field can be added to
+ * the schema here and silently never reach the envelope processors read. Add
+ * optional fields to BOTH by hand; this assertion will not remind you.
+ *
  * @public — never imported; the export exists so the compiler must evaluate
  * the assertion.
  */

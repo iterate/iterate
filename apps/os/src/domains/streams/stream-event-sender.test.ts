@@ -2028,6 +2028,104 @@ function connectionsHarness(
   };
 }
 
+describe("ephemeral delivery to hosted processors", () => {
+  /*
+   * ONE RULE: a hosted processor receives an ephemeral event when its contract
+   * names that exact type in `consumes`. Not through `"*"`, which exists for
+   * durable facts and must never hand anyone a microphone firehose they did
+   * not ask for; and not through a second declaration list, because naming the
+   * type IS the permission.
+   */
+  const announcing = (consumes: string[]) => ({
+    processor: {
+      announcement: {
+        slug: "voice-agent",
+        version: "1.0.0",
+        description: "d",
+        consumes,
+        emits: [],
+        ownedEvents: [],
+      },
+    },
+  });
+
+  const wakeReturning = (calls: DeliveryCall[], consumes: string[] | undefined) => async () => ({
+    streamId: SOURCE_STREAM_ID,
+    checkpointOffset: 0,
+    processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+    ...(consumes === undefined ? {} : { openedBy: announcing(consumes) }),
+  });
+
+  const ephemeralFirst = (): StreamEvent[] => [
+    { ...streamEvent(1, "events.example.com/mic-frame"), ephemeral: true },
+    streamEvent(2, "events.example.com/conversation-requested"),
+  ];
+
+  const typesDelivered = (calls: DeliveryCall[]) =>
+    calls.flatMap((call) => (call.batch.events ?? []).map((event) => event.type));
+
+  const drive = async (consumes: string[] | undefined) => {
+    const calls: DeliveryCall[] = [];
+    const h = harness({
+      events: ephemeralFirst(),
+      configuration: {
+        name: PROCESSOR_KEY,
+        description: "hosted",
+        receiver: {
+          action: "wake-processor",
+          expression: ["agents", ["get", "/source"], "processor", "wakeStreamProcessor"],
+        },
+      },
+      wakeProcessor: wakeReturning(calls, consumes),
+    });
+    h.eventSender.sendDue();
+    await h.settle();
+    return typesDelivered(calls);
+  };
+
+  it("delivers an ephemeral event whose type the processor named", async () => {
+    expect(await drive(["events.example.com/mic-frame"])).toContain("events.example.com/mic-frame");
+  });
+
+  /*
+   * THE RULE THAT MAKES ONE LIST SAFE. A wildcard is written for durable
+   * facts; sweeping live audio into it would be a firehose nobody asked for,
+   * and a processor cannot fold an ephemeral event into reduced state anyway.
+   */
+  it("never delivers one through the star wildcard", async () => {
+    expect(await drive(["*"])).not.toContain("events.example.com/mic-frame");
+  });
+
+  it("withholds one the processor did not name", async () => {
+    expect(await drive(["events.example.com/conversation-requested"])).not.toContain(
+      "events.example.com/mic-frame",
+    );
+  });
+
+  /* A processor that announces nothing keeps exactly today's delivery. */
+  it("withholds one from a processor that announces nothing", async () => {
+    expect(await drive(undefined)).not.toContain("events.example.com/mic-frame");
+  });
+
+  /*
+   * Session connections are unchanged and must stay that way: they own no
+   * durable cursor, so an evicted body costs them nothing, and they have
+   * always received both kinds. A regression here would be silent — the
+   * stream viewer would simply stop showing live audio.
+   */
+  it("leaves session connections receiving both kinds", () => {
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({ events: ephemeralFirst() });
+    const connection = h.connections.openSession({
+      connectionKey: "viewer",
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    connection.sendQueued();
+    expect(typesDelivered(calls)).toContain("events.example.com/mic-frame");
+  });
+});
+
 describe("StreamConnections hosted delivery watchdog", () => {
   it("does not publish a hosted callback until its opened event finishes appending", () => {
     const calls: DeliveryCall[] = [];

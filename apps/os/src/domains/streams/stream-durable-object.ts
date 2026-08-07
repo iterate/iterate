@@ -99,6 +99,7 @@ import {
   type CoreProcessorState,
   type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
+import { unconfiguredSubscriptionError } from "./utils.ts";
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
@@ -1204,7 +1205,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   #requireProcessorWakeSubscription(name: string): ProcessorWakeReceiver {
     const configured = this.#coreProcessorState.subscriptions.outbound.byName[name];
     if (configured === undefined) {
-      throw new Error(`subscription "${name}" does not exist`);
+      throw unconfiguredSubscriptionError(name);
     }
     const receiver = configured.configuration.receiver;
     if (receiver.action !== "facet-processor" && receiver.action !== "wake-processor") {
@@ -2830,7 +2831,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
     const configured = this.#coreProcessorState.subscriptions.outbound.byName[trimmedName];
     if (configured === undefined) {
-      throw new Error(`subscription "${trimmedName}" does not exist`);
+      throw unconfiguredSubscriptionError(trimmedName);
     }
 
     const receiver = configured.configuration.receiver;

@@ -426,6 +426,31 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     );
   });
 
+  test("hosted processor subscriptions cannot be removed", () => {
+    const { processor } = harness(SOURCE_PATH);
+    const state = reduce(
+      processor,
+      coreState(SOURCE_PATH),
+      committed(
+        2,
+        "events.iterate.com/stream/subscription-configured",
+        streamSubscription({
+          name: "agent",
+          receiver: { action: "facet-processor", source: { kind: "builtin" } },
+        }),
+        { path: SOURCE_PATH },
+      ),
+    );
+    const removal: StreamEventInput = {
+      type: "events.iterate.com/stream/subscription-removed",
+      payload: { name: "agent", reason: "requested" },
+    };
+
+    expect(() => processor.validate({ event: removal, state, authority: "public" })).toThrow(
+      "hosted processor subscriptions cannot be removed",
+    );
+  });
+
   test("a paused receiver rejects copied product appends as unavailable", () => {
     const { processor, state } = harness();
     const paused = { ...state, paused: true, pauseReason: "operator boundary" };
