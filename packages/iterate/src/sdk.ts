@@ -565,6 +565,17 @@ class ProcessorWakeTarget extends RpcTarget {
   }
 }
 
+/**
+ * The platform deps the host derives and hands a processor factory: the home
+ * stream and its coordinates. Everything else a processor needs (clocks,
+ * clients, itx-backed capabilities) the factory wires off `this.env`.
+ */
+export type ProcessorHostDeps = {
+  path: string;
+  projectId: string;
+  stream: ProcessorStream;
+};
+
 export type ProcessorHost<State extends object> = {
   /** The lazily built registry. Outside a wake request the coordinates come
    * from the durable cache, the static `path`, or one project dial. */
@@ -598,11 +609,7 @@ export function createProcessorHost<State extends object = Record<string, unknow
   path?: string;
   /** Post-eviction keepalive recovery, for processors that owe registered work. */
   recovery?: boolean;
-  createProcessor(deps: {
-    path: string;
-    projectId: string;
-    stream: ProcessorStream;
-  }): RegisterableProcessor;
+  createProcessor(deps: ProcessorHostDeps): RegisterableProcessor;
 }): ProcessorHost<State> {
   let built:
     | { reads: RegisteredProcessorReads<State>; registry: StreamProcessorRegistry<State> }
@@ -660,4 +667,109 @@ export function createProcessorHost<State extends object = Record<string, unknow
       await ensure(projectId, path).registry.handleAlarm(alarmInfo);
     },
   };
+}
+
+/**
+ * Ergonomic base for a Durable Object that hosts exactly one stream processor.
+ *
+ * It collapses the host boilerplate every processor app writes by hand today —
+ * a {@link createProcessorHost} field, an `alarm()` that forwards to it, and a
+ * `processor` getter exposing the wake door — down to a single
+ * {@link createProcessor} factory. First-party and userspace processors are
+ * authored the SAME way: all a subclass writes is how to build its processor
+ * from the host-derived platform deps (`{ stream, path, projectId }`) plus
+ * whatever it wires off `this.env`. That single seam is why a built-in
+ * processor forks into userspace with no change to the processor itself — only
+ * the dep wiring in `createProcessor` differs.
+ *
+ * Host-agnostic: the exact same class runs as its own Durable Object, as a
+ * facet of the Stream DO, or as a facet of another DO. Only the alarm adapter
+ * (native vs parent-proxied) and who dials the wake door differ per host, and
+ * the host owns both.
+ *
+ * ```ts
+ * export class GuestbookDurableObject extends StreamProcessorDurableObject<GuestbookState> {
+ *   protected readonly streamPath = guestbookStreamPath; // fixed home stream
+ *   protected createProcessor(deps: ProcessorHostDeps) {
+ *     return new GuestbookProcessor(deps);
+ *   }
+ *   // alarm(), the `processor` wake door, snapshot(), registry() — inherited.
+ * }
+ * ```
+ */
+export abstract class StreamProcessorDurableObject<
+  State extends object = Record<string, unknown>,
+  Env extends IterateEnv = IterateEnv,
+> extends IterateDurableObject<Env> {
+  /**
+   * Build the processor from the host-derived platform deps. Wire your own deps
+   * (clocks, clients, itx-backed capabilities) off `this.env` here — this is
+   * the one method a processor app must implement, and the seam that keeps a
+   * built-in processor forkable into userspace unchanged.
+   */
+  protected abstract createProcessor(deps: ProcessorHostDeps): RegisterableProcessor;
+
+  /**
+   * A fixed home stream path (the guestbook shape). Leave undefined to learn
+   * the stream from the first wake request and cache the coordinates durably
+   * (one Durable Object per dynamic stream).
+   */
+  protected readonly streamPath?: string;
+
+  /**
+   * Post-eviction keepalive recovery, for processors that owe registered
+   * background work (the obligation pattern). Off by default.
+   */
+  protected readonly recovery: boolean = false;
+
+  /**
+   * Built lazily on first door/alarm access — deliberately NOT a field
+   * initializer. A base-class field initializer runs before the subclass's
+   * `streamPath` / `recovery` field initializers, so it would capture the base
+   * defaults instead of a subclass's overrides; reading them on first use
+   * sidesteps that ordering trap. Memoized because the host owns the registry
+   * cache, and one host per Durable Object is assumed.
+   */
+  #memoHost?: ProcessorHost<State>;
+  get #host(): ProcessorHost<State> {
+    return (this.#memoHost ??= createProcessorHost<State>({
+      ctx: this.ctx,
+      env: this.env,
+      path: this.streamPath,
+      recovery: this.recovery,
+      createProcessor: (deps) => this.createProcessor(deps),
+    }));
+  }
+
+  /**
+   * The processor node the stream spine dials: the wake door plus the standard
+   * read verbs (`snapshot` / `getRuntimeState` / `waitUntilProcessed`), so the
+   * subscriptions catalog and the stream barrier reach this processor. It
+   * crosses Workers RPC as a property read before its method is called, so it
+   * must be a real RpcTarget — which the host guarantees.
+   */
+  get processor() {
+    return this.#host.wakeProcessor;
+  }
+
+  /** Route the Durable Object's native `alarm()` into the host's multiplex. */
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    await this.#host.handleAlarm(alarmInfo);
+  }
+
+  /**
+   * One consistent read of the hosted processor's committed fold, for a
+   * subclass's own read verbs (e.g. a `getState()`).
+   */
+  protected snapshot(): Promise<ProcessorSnapshot<State>> {
+    return this.#host.snapshot();
+  }
+
+  /**
+   * The lazily built registry, for subclasses that drive catch-up / live
+   * refresh directly (the guestbook's HTTP + append flow).
+   */
+  protected registry(): Promise<StreamProcessorRegistry<State>> {
+    return this.#host.registry();
+  }
 }

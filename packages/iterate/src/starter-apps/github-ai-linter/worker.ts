@@ -1,4 +1,4 @@
-import { IterateDurableObject, createProcessorHost } from "../../sdk.ts";
+import { StreamProcessorDurableObject, type ProcessorHostDeps } from "../../sdk.ts";
 import type { GithubAiLinterConfig } from "./index.ts";
 import { GithubAiLinterProcessor, publishGithubAiLinterReview } from "./ai-linter.ts";
 import { ReviewBotProcessor } from "./review-bot.ts";
@@ -6,30 +6,23 @@ import { ReviewBotProcessor } from "./review-bot.ts";
 /**
  * One stateful review-bot worker per GitHub connection. It serves no HTTP and
  * folds no application state; its durable processor checkpoint prevents a
- * project-worker deployment or eviction from duplicating review work.
+ * project-worker deployment or eviction from duplicating review work. `alarm()`
+ * and the `processor` wake door come from {@link StreamProcessorDurableObject};
+ * `recovery` keeps its registered obligations alive across eviction.
  */
 export function createGithubAiLinterWorker(
   config: GithubAiLinterConfig,
-): new (...args: ConstructorParameters<typeof IterateDurableObject>) => IterateDurableObject {
-  return class ReviewBotApp extends IterateDurableObject {
-    #host = createProcessorHost({
-      ctx: this.ctx,
-      env: this.env,
-      recovery: true,
-      createProcessor: (deps) =>
-        new ReviewBotProcessor({
-          ...deps,
-          config,
-          getItx: () => this.env.ITX.get(),
-        }),
-    });
-
-    async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-      await this.#host.handleAlarm(alarmInfo);
-    }
-
-    get processor() {
-      return this.#host.wakeProcessor;
+): new (
+  ...args: ConstructorParameters<typeof StreamProcessorDurableObject>
+) => StreamProcessorDurableObject {
+  return class ReviewBotApp extends StreamProcessorDurableObject {
+    protected readonly recovery = true;
+    protected createProcessor(deps: ProcessorHostDeps) {
+      return new ReviewBotProcessor({
+        ...deps,
+        config,
+        getItx: () => this.env.ITX.get(),
+      });
     }
   };
 }
@@ -40,29 +33,18 @@ export function createGithubAiLinterWorker(
  * because each processor owns its own checkpoint and runtime obligations.
  */
 export function createPullRequestLinterWorker(): new (
-  ...args: ConstructorParameters<typeof IterateDurableObject>
-) => IterateDurableObject {
-  return class GithubAiLinterApp extends IterateDurableObject {
-    #host = createProcessorHost({
-      ctx: this.ctx,
-      env: this.env,
-      recovery: true,
-      createProcessor: (deps) =>
-        new GithubAiLinterProcessor({
-          ...deps,
-          publishReview: async (analysis) => {
-            using itx = await this.env.ITX.get();
-            return await publishGithubAiLinterReview(itx, analysis);
-          },
-        }),
-    });
-
-    async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-      await this.#host.handleAlarm(alarmInfo);
-    }
-
-    get processor() {
-      return this.#host.wakeProcessor;
+  ...args: ConstructorParameters<typeof StreamProcessorDurableObject>
+) => StreamProcessorDurableObject {
+  return class GithubAiLinterApp extends StreamProcessorDurableObject {
+    protected readonly recovery = true;
+    protected createProcessor(deps: ProcessorHostDeps) {
+      return new GithubAiLinterProcessor({
+        ...deps,
+        publishReview: async (analysis) => {
+          using itx = await this.env.ITX.get();
+          return await publishGithubAiLinterReview(itx, analysis);
+        },
+      });
     }
   };
 }
