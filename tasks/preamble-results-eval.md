@@ -29,10 +29,12 @@ should catch.
 ## Shape
 
 - One file: `evals/preamble-results/eval.md`. Terse prose in the
-  `evals/summarise-emails/eval.md` mold: the two preview-5 stream links from
-  the #2431 field test, the observed problems as bullets (described in
-  prose because preview streams are ephemeral), and "see that we've
-  improved" success criteria.
+  `evals/summarise-emails/eval.md` mold: a concrete starter prompt (TVMaze
+  Sopranos episodes fetch, then a runtime follow-up that needs the data
+  again), the previously observed problems in prose, and success criteria
+  describing HOW we expect it to happen. (An earlier revision linked the
+  preview-5 field-test streams; those get erased with the preview slot, so
+  the eval stands alone now.)
 - Run with the `evals/run.ts` harness: `run(slug)` spawns a coding agent
   headlessly against a real environment (fresh project, default template,
   brokered stand-ins for unavailable integrations), judges against the
@@ -55,6 +57,10 @@ should catch.
 - [x] `evals/preamble-results/eval.md` in the summarise-emails style.
       _Committed on this branch; short enough that PR #2442's body shows it
       inline._
+- [x] Rewritten per review to drop the deleted preview-5 stream links:
+      now a concrete starter prompt (TVMaze Sopranos episodes fetch +
+      runtime follow-up) plus success criteria describing HOW we expect it
+      to happen. _Review thread on eval.md, 2026-08-07._
 - [x] Lessons from the vitest live runs preserved. _Implementation log
       below + the success-criteria caveats in the eval.md (inline renders
       can be mentally computed; agents legitimately dig into results on

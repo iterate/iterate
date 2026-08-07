@@ -1,12 +1,11 @@
-https://os.iterate-preview-5.com/projects/nustom/agents/streams/agents/onboarding
-https://os.iterate-preview-5.com/projects/nustom/agents/streams/agents/web/2026-08-06t16-13-19-265z
-field testing of the script preamble (#2431). first stream went badly (pre-fix); second was better but still wasteful. preview streams are ephemeral, so the problems are described below and this eval stands alone: have an agent fetch a chunky dataset (some rows small enough to render inline, one result big enough to exceed the inline limit), then ask follow-ups that need that data.
+Starter prompt, in a fresh project's chat:
 
-problems as we saw them:
+> Fetch the full Sopranos episode list from TVMaze (https://api.tvmaze.com/singlesearch/shows?q=sopranos&embed=episodes) and tell me in one line what you got.
 
-- paged a prior result with `JSON.parse(await itx.workspace.readFile(".../script-results/agent-output-424.json"))` instead of the preamble `results` array (`await results[0].load(itx)`) — the spill notice's fenced readFile recipe outcompeted the loader
-- defensively saved an API response with `await itx.workspace.writeFile("sopranos-tvmaze-full.json", text)` even though the platform retains results
-- returned the full raw payload when the next step needed a fraction of it
-- spent extra rounds re-fetching data it already had
+then, once it's answered:
 
-Success criteria: see that we've improved. Follow-up scripts reach prior data through the `results` array (`results[n].data` inline, `await results[n].load(itx)` for big ones); no workspace file copies of API responses, no re-fetching, fewer rounds. Two things we've watched confound naive checks: small results render fully inline, so the model can retype or mentally compute from the render (make the dataset big enough that this is hopeless), and the agent often digs into a fresh result on its own follow-up turn before the user asks — that's fine, and it counts as using the preamble if done through `results`.
+> Which season has the highest average episode runtime, and what's the name of that season's last episode?
+
+The embedded episodes payload is well past the inline result limit, and the follow-up needs the data again. Previously seen problems: paging the prior result with `itx.workspace.readFile` of the spill file instead of the preamble `results` array; defensively saving the response with `itx.workspace.writeFile` even though the platform retains results; returning the full raw payload when the next step needed a fraction of it; extra rounds re-fetching data it already had.
+
+Success criteria: how it happens matters as much as the answer. The fetch script returns only what it needs (the platform retains the rest). Follow-up scripts reach prior data through the `results` array — `results[n].data` for small results, `await results[n].load(itx)` for large ones — with no `workspace.readFile` paging of prior results, no `writeFile` copies of API responses, no re-fetching, and minimal rounds. The agent digging into a fresh result on its own turn, before the follow-up, is fine if done through `results`. Small results render fully in history, so check it computes from `results[n].data` rather than retyping rendered values.
