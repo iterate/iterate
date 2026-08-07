@@ -2751,9 +2751,29 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   async closeClientConnection(input: { connectionKey: string }): Promise<void> {
     const kickedLive = this.#eventSender.connections.kickClientConnection(input.connectionKey);
-    const pagersClosed = this.#subscriberPagers.closeForConnection(input.connectionKey, "kicked");
-    if (!kickedLive && pagersClosed === 0) {
+    const { closed, endedDormant } = this.#subscriberPagers.closeForConnection(
+      input.connectionKey,
+      "kicked",
+    );
+    if (!kickedLive && closed === 0) {
       throw new Error(`no client connection "${input.connectionKey}" to close`);
+    }
+    // A DORMANT presence-only client has no live entry whose close() could
+    // journal this kick — append it here, with the opener echoed for the
+    // roster feed. The registry cleared its dormancy marker, so the pager's
+    // own webSocketClose stays silent instead of recording "departed".
+    for (const ended of endedDormant) {
+      this.#append({ authority: "core-event" }, [
+        {
+          type: "events.iterate.com/stream/connection-closed",
+          idempotencyKey: internalStreamId("stream-subscriber-pager-kicked", ended.pagerId),
+          payload: {
+            connectionKey: input.connectionKey,
+            reason: "kicked",
+            ...(ended.openedBy === undefined ? {} : { openedBy: ended.openedBy }),
+          },
+        },
+      ]);
     }
   }
 

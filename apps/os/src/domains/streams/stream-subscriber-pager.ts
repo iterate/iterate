@@ -223,14 +223,42 @@ export class StreamSubscriberPagerRegistry {
    * Close every Pager bound to one connection (a platform-side kick or a
    * client-cap eviction): the owner's relay breaks instead of re-dialing on
    * the next Page, so a kicked or evicted dormant subscriber cannot
-   * resurrect. Returns how many Pagers closed.
+   * resurrect.
+   *
+   * A DORMANT pager is its connection's only remaining leg, so closing it
+   * ends the connection HERE, for the caller's reason — the generic
+   * `webSocketClose` departed append must stay silent for it. Clearing the
+   * dormancy marker before the close silences it (`departedOnClose` keys on
+   * `idleDeliveredThrough`), and each ended dormancy is returned so the
+   * caller can journal its own reason (a dormant kick must read "kicked",
+   * not "departed").
    */
-  closeForConnection(connectionKey: string, reason: string): number {
+  closeForConnection(
+    connectionKey: string,
+    reason: string,
+  ): {
+    closed: number;
+    endedDormant: { pagerId: string; openedBy?: ConnectionOpenerDescriptor }[];
+  } {
     const bound = this.#pagers
       .entries()
       .filter(({ attachment }) => attachment.connectionKey === connectionKey);
-    for (const { ws } of bound) this.#pagers.close(ws, 1000, reason);
-    return bound.length;
+    const endedDormant: { pagerId: string; openedBy?: ConnectionOpenerDescriptor }[] = [];
+    for (const { ws, attachment } of bound) {
+      if (
+        attachment.idleDeliveredThrough !== undefined &&
+        !this.#hooks.hasConnection(connectionKey)
+      ) {
+        const { idleDeliveredThrough: _ended, ...awake } = attachment;
+        this.#pagers.stamp(ws, awake);
+        endedDormant.push({
+          pagerId: attachment.pagerId,
+          ...(attachment.openedBy === undefined ? {} : { openedBy: attachment.openedBy }),
+        });
+      }
+      this.#pagers.close(ws, 1000, reason);
+    }
+    return { closed: bound.length, endedDormant };
   }
 
   /**
