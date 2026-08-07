@@ -100,6 +100,7 @@ import { parseAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
 import {
   AGENT_COLLECTION_PATH,
   AGENT_COLLECTION_SUBSCRIPTION_NAME,
+  AgentCollectionProcessorContract,
   type AgentCollectionProcessorState,
 } from "./domains/agents/agent-collection-processor-contract.ts";
 import {
@@ -429,7 +430,6 @@ import {
 } from "./domains/agents/agent-defaults.ts";
 import { ChatReplyNotifyProcessorContract } from "./domains/notifications/chat-reply-notify-contract.ts";
 import { repoCreationEvents, type RepoCreateInput } from "./domains/repos/repo-defaults.ts";
-import { AgentCollectionProcessorContract } from "./domains/agents/agent-collection-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
 import { DeviceProcessorContract } from "./domains/devices/device-processor-contract.ts";
 import { describeDeviceState } from "./domains/devices/device-durable-object.ts";
@@ -1967,13 +1967,9 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   get processor(): StreamProcessorRpc<AgentCollectionProcessorState> {
     return facetProcessorRelay<AgentCollectionProcessorState>({
       auth: this.props.auth,
-      name: AgentCollectionProcessorContract.slug,
+      contract: AgentCollectionProcessorContract,
       path: AGENT_COLLECTION_PATH,
       projectId: this.props.projectId,
-      // agents.list() on a project that never created an agent reads the
-      // collection before its birth batch exists — empty catalog, not refusal.
-      unbornState: () =>
-        AgentCollectionProcessorContract.stateSchema.parse({}) as AgentCollectionProcessorState,
     });
   }
 
@@ -2519,7 +2515,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   get processor(): StreamProcessorRpc<WorkspaceProcessorState> {
     return facetProcessorRelay<WorkspaceProcessorState>({
       auth: this.props.auth,
-      name: WorkspaceProcessorContract.slug,
+      contract: WorkspaceProcessorContract,
       path: this.props.path,
       projectId: this.props.projectId,
     });
@@ -4665,13 +4661,9 @@ function agentProcessorRelay(input: {
 }): ProcessorRelayRpcTarget<AgentProcessorState> {
   return facetProcessorRelay<AgentProcessorState>({
     auth: input.auth,
-    name: AgentProcessorContract.slug,
+    contract: AgentProcessorContract,
     path: input.path,
     projectId: input.projectId,
-    // Pre-create reads (the create door's own birth check, `agents.get(x)
-    // .processor.snapshot()` from scripts and the REPL catalogue) must see
-    // the unborn fold — birthCertificate null — not the facade's refusal.
-    unbornState: () => AgentProcessorContract.stateSchema.parse({}) as AgentProcessorState,
   });
 }
 
@@ -8042,11 +8034,18 @@ export class ProcessorRelayRpcTarget<
   readonly #host: () => Host | PromiseLike<Host>;
   readonly #processorFacade: (host: Host) => PromiseLike<unknown>;
   readonly #publicState: ((state: State) => PublicState) | undefined;
+  readonly #initialStateWhenUnconfigured: (() => State) | undefined;
 
   constructor(args: {
     auth: ItxAuth;
     host: () => Host | PromiseLike<Host>;
     processorFacade?: (host: Host) => PromiseLike<unknown>;
+    /**
+     * The contract's initial fold for a processor whose subscription has not
+     * been configured yet. Only snapshot() uses it; runtime, wait, and wake
+     * keep the stream's modeled refusal.
+     */
+    initialStateWhenUnconfigured?: () => State;
     /**
      * Projection applied to every state that leaves this relay — snapshots
      * and runtime state. This is where a domain redacts internals from its
@@ -8060,6 +8059,7 @@ export class ProcessorRelayRpcTarget<
     this.#host = args.host;
     this.#processorFacade = args.processorFacade ?? ((host) => host.processor);
     this.#publicState = args.publicState;
+    this.#initialStateWhenUnconfigured = args.initialStateWhenUnconfigured;
   }
 
   #project(state: State): PublicState {
@@ -8171,7 +8171,20 @@ export class ProcessorRelayRpcTarget<
   }
 
   async snapshot() {
-    const snapshot = await this.#callProcessor((processor) => processor.snapshot());
+    let snapshot: ProcessorSnapshot<State>;
+    try {
+      snapshot = await this.#callProcessor((processor) => processor.snapshot());
+    } catch (error) {
+      if (
+        this.#initialStateWhenUnconfigured === undefined ||
+        !isUnconfiguredSubscriptionError(error)
+      ) {
+        throw error;
+      }
+      // Stream offsets are one-based: offset 0 is the honest snapshot of an
+      // empty journal prefix, before this processor's birth batch exists.
+      snapshot = { offset: 0, state: this.#initialStateWhenUnconfigured() };
+    }
     return { offset: snapshot.offset, state: this.#project(snapshot.state) };
   }
 
@@ -8449,57 +8462,49 @@ function streamProcessorFacade(input: {
  * itself carries the snapshot/getRuntimeState/waitUntilProcessed surface, so
  * the "facade of the host" is the host.
  */
-function facetProcessorRelay<State = unknown, PublicState = State>(input: {
+type FacetProcessorContract<State> = {
+  slug: string;
+  stateSchema: { parse(input: unknown): State };
+};
+
+type FacetProcessorRelayInput<State, PublicState> = {
   auth: ItxAuth;
-  name: string;
   path: string;
   projectId: string | null;
   publicState?: (state: State) => PublicState;
-  /**
-   * The pre-birth substitute: when the stream's committed catalog does not
-   * configure this subscription yet, the facade refuses the name (a read must
-   * never materialize a facet) — with this supplied, `snapshot()` answers the
-   * refusal with the contract's empty fold instead, exactly as the retired
-   * hosting Durable Objects fabricated their pre-birth reads (see
-   * isUnconfiguredSubscriptionError). Only the pure fold read has a
-   * meaningful pre-birth answer; every other verb still propagates the
-   * refusal, and each acquisition re-dials, so a birth committing between
-   * calls is picked up on the next one. Omitted = the refusal propagates.
-   */
-  unbornState?: () => State;
-}): ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState> {
-  const unbornState = input.unbornState;
+} & (
+  | { name: string; contract?: never }
+  | {
+      /**
+       * A known domain processor contract. Before its subscription is
+       * configured, snapshot() answers with the contract's initial fold at
+       * offset 0; every other verb preserves the stream refusal. Supplying
+       * the contract also binds the subscription name to its slug.
+       */
+      contract: FacetProcessorContract<State>;
+      name?: never;
+    }
+);
+
+function facetProcessorRelay<State = unknown, PublicState = State>(
+  input: FacetProcessorRelayInput<State, PublicState>,
+): ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState> {
+  const contract = input.contract;
+  const name = contract === undefined ? input.name : contract.slug;
   return new ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState>({
     auth: input.auth,
-    host:
-      unbornState === undefined
-        ? () => streamProcessorFacade(input)
-        : () =>
-            Promise.resolve(streamProcessorFacade(input)).catch((error: unknown) => {
-              if (!isUnconfiguredSubscriptionError(error)) throw error;
-              return unbornProcessorFacadeStandIn(unbornState, error);
-            }),
+    host: () =>
+      streamProcessorFacade({
+        name,
+        path: input.path,
+        projectId: input.projectId,
+      }),
     processorFacade: (host) => Promise.resolve(host),
+    ...(contract === undefined
+      ? {}
+      : { initialStateWhenUnconfigured: () => contract.stateSchema.parse({}) }),
     ...(input.publicState === undefined ? {} : { publicState: input.publicState }),
   });
-}
-
-/**
- * The stand-in a {@link facetProcessorRelay} acquisition resolves to while
- * its subscription is unborn: the fold read fabricates the empty state at
- * offset 0, everything else rethrows the facade's refusal.
- */
-function unbornProcessorFacadeStandIn<State>(
-  unbornState: () => State,
-  refusal: unknown,
-): ProcessorHostStub {
-  const refuse = () => Promise.reject(refusal);
-  return {
-    snapshot: () => Promise.resolve({ offset: 0, state: unbornState() }),
-    getRuntimeState: refuse,
-    waitUntilProcessed: refuse,
-    processEventBatch: refuse,
-  } as unknown as ProcessorHostStub;
 }
 
 /**

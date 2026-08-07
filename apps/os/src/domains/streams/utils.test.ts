@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveStreamPath } from "./utils.ts";
+import {
+  isUnconfiguredSubscriptionError,
+  resolveStreamPath,
+  unconfiguredSubscriptionError,
+} from "./utils.ts";
 
 describe("stream utilities", () => {
   it("resolves child and sibling paths inside the held stream root", () => {
@@ -11,5 +15,15 @@ describe("stream utilities", () => {
 
   it("rejects relative paths that escape the stream root", () => {
     expect(() => resolveStreamPath("/", "..")).toThrow(/escapes the stream root/);
+  });
+
+  it("classifies an unconfigured subscription without changing its public refusal", () => {
+    const error = unconfiguredSubscriptionError("agent");
+
+    expect(error.message).toMatch(/subscription "agent" does not exist/);
+    expect(isUnconfiguredSubscriptionError(error)).toBe(true);
+    expect(isUnconfiguredSubscriptionError(new Error('subscription "agent" does not exist'))).toBe(
+      false,
+    );
   });
 });
