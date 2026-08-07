@@ -48,6 +48,12 @@ struct ui_model {
   char status[64];
   bool call_active;
   bool link_ready;
+  /*
+   * The two rungs beneath a call. `link_ready` is true only when the WHOLE
+   * chain is usable; these say which half of it is up.
+   */
+  bool api_ready;
+  bool stream_ready;
   bool call_requested;
   /* Unrecoverable start-up fault; see m5sticks3_ui_set_fault. */
   bool fault;
@@ -140,6 +146,8 @@ iterate_kit_conversation_visual_state face_status(void) {
   iterate_kit_conversation_visual_state status = {};
   status.network = ui.link_ready ? ITERATE_KIT_NETWORK_CONNECTED
                                  : ITERATE_KIT_NETWORK_CONNECTING;
+  status.reach =
+      iterate_kit_reach_from(ui.api_ready, ui.stream_ready, ui.call_active);
   status.conversation_active = ui.call_active;
   status.media_ready = ui.link_ready;
   status.media_failed = ui.fault;
@@ -396,6 +404,18 @@ void m5sticks3_ui_set_fault(void) {
 void m5sticks3_ui_set_link_ready(bool ready) {
   if (ui.link_ready == ready) return;
   ui.link_ready = ready;
+  ui.dirty = true;
+}
+
+void m5sticks3_ui_set_api_ready(bool ready) {
+  if (ui.api_ready == ready) return;
+  ui.api_ready = ready;
+  ui.dirty = true;
+}
+
+void m5sticks3_ui_set_stream_ready(bool ready) {
+  if (ui.stream_ready == ready) return;
+  ui.stream_ready = ready;
   ui.dirty = true;
 }
 

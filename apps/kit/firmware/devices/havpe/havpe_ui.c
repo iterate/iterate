@@ -47,6 +47,15 @@ static struct {
   enum havpe_ui_state state;
   bool call_active;
   bool link_ready;
+  /*
+   * The two rungs beneath a call, kept apart from `link_ready` on purpose.
+   *
+   * `link_ready` is the gate every producer sits behind and is true only when
+   * the WHOLE chain is usable. These two say which half of it is up, which is
+   * the difference between "wait a second" and "this will never work".
+   */
+  bool api_ready;
+  bool stream_ready;
   bool call_requested;
   /* Unrecoverable start-up fault; see havpe_ui_set_fault. */
   bool fault;
@@ -143,6 +152,8 @@ static struct iterate_kit_conversation_visual_state ring_state(void) {
   const struct iterate_kit_conversation_visual_state state = {
     .network = ui.link_ready ? ITERATE_KIT_NETWORK_CONNECTED
                              : ITERATE_KIT_NETWORK_CONNECTING,
+    .reach =
+        iterate_kit_reach_from(ui.api_ready, ui.stream_ready, ui.call_active),
     .has_wifi_rssi = false,
     .wifi_rssi_dbm = 0,
     .conversation_active = ui.call_active,
@@ -194,6 +205,18 @@ void havpe_ui_set_fault(void) {
 void havpe_ui_set_link_ready(bool ready) {
   if (ui.link_ready == ready) return;
   ui.link_ready = ready;
+  ui.dirty = true;
+}
+
+void havpe_ui_set_api_ready(bool ready) {
+  if (ui.api_ready == ready) return;
+  ui.api_ready = ready;
+  ui.dirty = true;
+}
+
+void havpe_ui_set_stream_ready(bool ready) {
+  if (ui.stream_ready == ready) return;
+  ui.stream_ready = ready;
   ui.dirty = true;
 }
 

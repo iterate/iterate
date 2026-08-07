@@ -28,6 +28,16 @@ void havpe_ui_set_state(enum havpe_ui_state state);
 void havpe_ui_set_status(const char *status);
 void havpe_ui_set_call_active(bool active);
 void havpe_ui_set_link_ready(bool ready);
+/** The first rung: the Cap'n Web session to /api is up and this device is on it. */
+void havpe_ui_set_api_ready(bool ready);
+/**
+ * The middle rung: a conversation stream exists and this device is on it.
+ *
+ * Separate from `link_ready` because they fail separately and a person needs
+ * to see which. A session to /api with no stream is a board that will accept a
+ * press and then take seconds to find somewhere to send it.
+ */
+void havpe_ui_set_stream_ready(bool ready);
 
 /**
  * The loudest sample in the most recent captured frame.

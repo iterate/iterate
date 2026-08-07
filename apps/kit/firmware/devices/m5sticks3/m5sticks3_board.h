@@ -41,6 +41,10 @@ void m5sticks3_ui_set_state(enum m5sticks3_ui_state state);
 void m5sticks3_ui_set_status(const char *status);
 void m5sticks3_ui_set_call_active(bool active);
 void m5sticks3_ui_set_link_ready(bool ready);
+/** The first rung: the Cap'n Web session to /api is up and this device is on it. */
+void m5sticks3_ui_set_api_ready(bool ready);
+/** The middle rung: a conversation stream exists and this device is on it. */
+void m5sticks3_ui_set_stream_ready(bool ready);
 /**
  * Latches an unrecoverable start-up fault onto this device's status surface.
  *

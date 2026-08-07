@@ -60,6 +60,12 @@ static struct {
   enum waveshare_ui_state state;
   char status[STATUS_CAPACITY];
   bool link_ready;
+  /*
+   * The two rungs beneath a call. `link_ready` is true only when the WHOLE
+   * chain is usable; these say which half of it is up.
+   */
+  bool api_ready;
+  bool stream_ready;
   bool call_active;
   bool call_requested;
   bool talk_held;
@@ -120,6 +126,22 @@ void waveshare_display_set_link_ready(bool ready) {
   publish(set_link_ready_locked, &ready);
 }
 
+static void set_api_ready_locked(void *argument) {
+  ui.api_ready = *(const bool *)argument;
+}
+
+void waveshare_display_set_api_ready(bool ready) {
+  publish(set_api_ready_locked, &ready);
+}
+
+static void set_stream_ready_locked(void *argument) {
+  ui.stream_ready = *(const bool *)argument;
+}
+
+void waveshare_display_set_stream_ready(bool ready) {
+  publish(set_stream_ready_locked, &ready);
+}
+
 static void set_call_active_locked(void *argument) {
   ui.call_active = *(const bool *)argument;
 }
@@ -169,6 +191,8 @@ static struct iterate_kit_conversation_visual_state face_status(void) {
   xSemaphoreTake(ui.lock, portMAX_DELAY);
   status.network = ui.link_ready ? ITERATE_KIT_NETWORK_CONNECTED
                                  : ITERATE_KIT_NETWORK_CONNECTING;
+  status.reach =
+      iterate_kit_reach_from(ui.api_ready, ui.stream_ready, ui.call_active);
   status.media_ready = ui.link_ready;
   status.media_failed = ui.fault;
   status.conversation_active = ui.call_active;

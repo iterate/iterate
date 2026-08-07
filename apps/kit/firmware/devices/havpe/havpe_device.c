@@ -1653,10 +1653,20 @@ void iterate_kit_havpe_run(void) {
      */
     {
       static bool published_link_ready = true;
-      const bool ready =
+      /*
+       * THE SAME PREDICATE, SPLIT INTO ITS RUNGS. `link_ready` is unchanged —
+       * it is the whole chain, and every producer still sits behind it. What
+       * is new is publishing the two halves separately, so the ring can say
+       * WHICH one is missing instead of going amber for both.
+       */
+      const bool api_ready =
+          runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY;
+      const bool stream_ready =
           runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
-          runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
           runtime.voicelab_generation == runtime.connection.generation;
+      const bool ready = api_ready && stream_ready;
+      havpe_ui_set_api_ready(api_ready);
+      havpe_ui_set_stream_ready(stream_ready);
       if (ready != published_link_ready) {
         published_link_ready = ready;
         havpe_ui_set_link_ready(ready);

@@ -412,6 +412,14 @@ static struct {
   enum stackchan_ui_state state;
   bool call_active;
   bool link_ready;
+  /*
+   * The two rungs beneath a call, kept apart from `link_ready` on purpose.
+   * `link_ready` is true only when the WHOLE chain is usable; these say which
+   * half of it is up, which is the difference between "wait a second" and
+   * "this will never work".
+   */
+  bool api_ready;
+  bool stream_ready;
   bool call_requested;
   /* A start-up fault this device cannot recover from; see park_with_fault. */
   bool fault;
@@ -435,6 +443,18 @@ static void stackchan_ui_set_status(const char *status) {
 static void stackchan_ui_set_call_active(bool active) {
   if (ui.call_active == active) return;
   ui.call_active = active;
+  ui.dirty = true;
+}
+
+static void stackchan_ui_set_api_ready(bool ready) {
+  if (ui.api_ready == ready) return;
+  ui.api_ready = ready;
+  ui.dirty = true;
+}
+
+static void stackchan_ui_set_stream_ready(bool ready) {
+  if (ui.stream_ready == ready) return;
+  ui.stream_ready = ready;
   ui.dirty = true;
 }
 
@@ -462,6 +482,8 @@ static void stackchan_ui_tick(void) {
   const struct iterate_kit_conversation_visual_state visual = {
     .network = ui.link_ready ? ITERATE_KIT_NETWORK_CONNECTED
                              : ITERATE_KIT_NETWORK_CONNECTING,
+    .reach =
+        iterate_kit_reach_from(ui.api_ready, ui.stream_ready, ui.call_active),
     .has_wifi_rssi = false,
     .wifi_rssi_dbm = 0,
     .conversation_active = ui.call_active,
@@ -2004,10 +2026,19 @@ void iterate_kit_stackchan_run(void) {
      */
     {
       static bool published_link_ready = true;
-      const bool ready =
+      /*
+       * THE SAME PREDICATE, SPLIT INTO ITS RUNGS. `link_ready` is unchanged —
+       * it is the whole chain, and every producer still sits behind it. What
+       * is new is publishing the two halves separately, so the lights can say
+       * WHICH one is missing instead of showing one undifferentiated amber.
+       */
+      const bool api_ready = transport.state == ITERATE_KIT_ESP_IDF_ITX_READY;
+      const bool stream_ready =
           runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
-          transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
           runtime.voicelab_generation == runtime.connection.generation;
+      const bool ready = api_ready && stream_ready;
+      stackchan_ui_set_api_ready(api_ready);
+      stackchan_ui_set_stream_ready(stream_ready);
       if (ready != published_link_ready) {
         published_link_ready = ready;
         stackchan_ui_set_link_ready(ready);

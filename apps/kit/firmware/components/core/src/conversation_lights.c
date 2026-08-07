@@ -38,6 +38,11 @@ static uint8_t pcm_peak_level(uint32_t peak) {
   return 0U;
 }
 
+static void render_microphone(
+    const struct iterate_kit_conversation_visual_state *state,
+    struct iterate_kit_rgb8
+        pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]);
+
 static void render_network(
     const struct iterate_kit_conversation_visual_state *state,
     struct iterate_kit_rgb8
@@ -59,18 +64,29 @@ static void render_network(
     return;
   }
 
-  uint8_t bars = 1U;
-  struct iterate_kit_rgb8 colour = {28U, 2U, 0U};
-  if (!state->has_wifi_rssi || state->wifi_rssi_dbm >= -60) {
-    bars = 3U;
-    colour = (struct iterate_kit_rgb8){0U, 30U, 2U};
-  } else if (state->wifi_rssi_dbm >= -70) {
-    bars = 2U;
-    colour = (struct iterate_kit_rgb8){8U, 28U, 0U};
-  } else if (state->wifi_rssi_dbm >= -80) {
-    colour = (struct iterate_kit_rgb8){30U, 10U, 0U};
+  /*
+   * THE LADDER, NOT THE SIGNAL. See `enum iterate_kit_reach`: three bars of
+   * Wi-Fi next to a board that cannot place a call is the exact confusion
+   * these pixels used to create. One green means /api, two means a stream,
+   * three means a live provider session.
+   *
+   * Rung zero is amber rather than dark: Wi-Fi is up and the device still
+   * cannot be talked to, which is a state worth showing rather than one to
+   * leave looking like an unlit ring.
+   */
+  if (state->reach == ITERATE_KIT_REACH_NONE) {
+    fill_sector(
+        pixels,
+        NETWORK_SECTOR_START,
+        1U,
+        (struct iterate_kit_rgb8){30U, 10U, 0U});
+    return;
   }
-  fill_sector(pixels, NETWORK_SECTOR_START, bars, colour);
+  fill_sector(
+      pixels,
+      NETWORK_SECTOR_START,
+      (uint8_t)state->reach,
+      (struct iterate_kit_rgb8){0U, 30U, 2U});
 }
 
 static void render_audio(
@@ -96,23 +112,30 @@ static void render_audio(
         (struct iterate_kit_rgb8){42U, 0U, 0U});
     return;
   }
+  /*
+   * LISTENING IS RENDERED BEFORE ANY OF THIS, because it starts before the
+   * call does. A press opens the microphone and queues frames while the stream
+   * and the provider are still being reached, and the person doing the
+   * pressing has to be able to see that they are already being heard —
+   * otherwise the only honest thing to do would be to tell them to wait.
+   */
+  render_microphone(state, pixels);
   if (!state->conversation_active) return;
   if (!state->media_ready) {
+    /*
+     * Only the speaker. The microphone sector is owned by the listening render
+     * above now, and painting "media pending" over it would put a meter in
+     * front of somebody the device is not recording.
+     */
     fill_sector(
         pixels,
         SPEAKER_SECTOR_START,
-        3U,
-        (struct iterate_kit_rgb8){24U, 7U, 0U});
-    fill_sector(
-        pixels,
-        MICROPHONE_SECTOR_START,
         3U,
         (struct iterate_kit_rgb8){24U, 7U, 0U});
     return;
   }
 
   const uint8_t speaker_level = pcm_peak_level(state->speaker_peak);
-  const uint8_t microphone_level = pcm_peak_level(state->microphone_peak);
   /*
    * In manual-PTT mode both sides are intentionally silent between turns. One
    * dim blue pixel means the call's media lane is ready; without it a valid
@@ -126,20 +149,41 @@ static void render_audio(
       speaker_level == 0U
           ? (struct iterate_kit_rgb8){0U, 3U, 10U}
           : (struct iterate_kit_rgb8){0U, 10U, 52U});
-  /*
-   * One dim microphone pixel means “capture is listening”, not “sound was
-   * measured”. Speech replaces that baseline with a 1–3 pixel meter. This is
-   * what lets silence remain distinguishable from an idle or dead /pcm lane.
-   */
-  if (state->microphone_listening) {
-    fill_sector(
-        pixels,
-        MICROPHONE_SECTOR_START,
-        microphone_level == 0U ? 1U : microphone_level,
-        microphone_level == 0U
-            ? (struct iterate_kit_rgb8){0U, 5U, 3U}
-            : (struct iterate_kit_rgb8){0U, 45U, 12U});
-  }
+}
+
+/*
+ * One dim microphone pixel means "capture is listening", not "sound was
+ * measured". Speech replaces that baseline with a 1-3 pixel meter. This is
+ * what lets silence remain distinguishable from an idle or dead /pcm lane.
+ *
+ * `microphone_listening` is the ONLY gate, deliberately. It is not conditioned
+ * on the call being active (a press listens before there is a call) and not on
+ * media being ready (queued frames are still being kept). Equally, nothing
+ * else may paint this sector: while the device is speaking and not listening
+ * it stays dark, because a meter moving at somebody who is not being recorded
+ * is worse than no meter at all.
+ */
+static void render_microphone(
+    const struct iterate_kit_conversation_visual_state *state,
+    struct iterate_kit_rgb8
+        pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]) {
+  if (!state->microphone_listening) return;
+  const uint8_t level = pcm_peak_level(state->microphone_peak);
+  fill_sector(
+      pixels,
+      MICROPHONE_SECTOR_START,
+      level == 0U ? 1U : level,
+      level == 0U
+          ? (struct iterate_kit_rgb8){0U, 5U, 3U}
+          : (struct iterate_kit_rgb8){0U, 45U, 12U});
+}
+
+enum iterate_kit_reach iterate_kit_reach_from(
+    bool api_ready, bool stream_ready, bool session_active) {
+  if (!api_ready) return ITERATE_KIT_REACH_NONE;
+  if (!stream_ready) return ITERATE_KIT_REACH_API;
+  if (!session_active) return ITERATE_KIT_REACH_STREAM;
+  return ITERATE_KIT_REACH_SESSION;
 }
 
 void iterate_kit_conversation_lights_render(

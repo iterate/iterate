@@ -28,6 +28,10 @@ bool waveshare_display_init(void);
 void waveshare_display_set_state(enum waveshare_ui_state state);
 void waveshare_display_set_status(const char *text);
 void waveshare_display_set_link_ready(bool ready);
+/** The first rung: the Cap'n Web session to /api is up and this device is on it. */
+void waveshare_display_set_api_ready(bool ready);
+/** The middle rung: a conversation stream exists and this device is on it. */
+void waveshare_display_set_stream_ready(bool ready);
 /**
  * Latches an unrecoverable start-up fault onto this device's status surface.
  *
