@@ -3503,7 +3503,14 @@ export const EchoContract = defineProcessorContract({
 });
 
 class EchoProcessor extends StreamProcessor {
-  constructor(deps) { super({ ...deps, contract: EchoContract }); }
+  /* A PROPERTY, not a constructor argument: StreamProcessor declares
+   * \`abstract readonly contract\`, so passing it to super() lands it in deps
+   * and leaves this.contract undefined. And plain \`contract =\`, not
+   * \`readonly contract =\` — this source is JAVASCRIPT, and the TypeScript
+   * keyword fails the worker build with "Expected ; but found contract",
+   * which surfaces as a delivery-halted event rather than anything the test
+   * can see directly. */
+  contract = EchoContract;
   reduce({ state }) { return state; }
   processEvent({ event, append }) {
     if (event === null) return;
@@ -3578,18 +3585,13 @@ async function runEphemeralEcho(
   };
 
   /*
-   * Split "the wake never happened" from "it happened and delivered nothing"
-   * BEFORE anything is appended. Without this the two failures look identical
-   * and the timeout below blames delivery for a worker that never woke.
+   * NOT a wait for a live hosted connection, though that is the obvious
+   * barrier and it is wrong: the wake opens one, delivers, and closes it as
+   * idle within seconds, so polling `runtimeState` for a hosted connection
+   * races the close and times out on a stream that worked perfectly. What
+   * the processor RECORDED is the durable proof, and that is the barrier
+   * below — the only evidence an ephemeral event can leave.
    */
-  await waitForCondition(
-    async () =>
-      runtimeState(await stream.runtimeState()).runtime.connections["eph-echo"]?.kind === "hosted",
-    {
-      description: "the userspace processor to be woken and hold a hosted connection",
-      timeoutMs: 90_000,
-    },
-  );
 
   /*
    * A durable event first, and it is not ceremony: it forces the cold worker
@@ -3598,6 +3600,12 @@ async function runEphemeralEcho(
    * compiling", and those need different fixes.
    */
   await stream.append({ type: DURABLE_POKE_TYPE, payload: {} });
+  /*
+   * A build failure in the committed worker surfaces HERE and nowhere else:
+   * it is not thrown at the caller, it lands on the stream as
+   * `subscription-delivery-halted` carrying the esbuild message. If this ever
+   * times out, read the stream — that event names the reason exactly.
+   */
   await waitForCondition(async () => (await seen()).includes(DURABLE_POKE_TYPE), {
     description: "the userspace processor to build and record a durable event",
     timeoutMs: 90_000,
