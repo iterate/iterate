@@ -76,6 +76,11 @@ itx.capabilityHost.getScriptResult(executionId, options?: { slice?: [start: numb
   start.
 - Slice validation rejects non-integer offsets loudly (repo style: validate
   assumptions rather than coerce).
+- Merged main's streams rebuild (#2395) mid-task: the capability-host DO was
+  deleted, so the options parameter threads the new facade chain instead
+  (rpc-targets → stream DO facade relay → processor facet → processor);
+  generated files regenerated, not hand-merged. All gates re-run green after
+  the merge (2746 tests, 264 files).
 - `results[N].load(itx)` preamble loaders keep calling `getScriptResult`
   optionless; `.data` on the union return collapses to `unknown`, so the
   loader's `as ResultN` cast needed no change. No stream/state/event changes
