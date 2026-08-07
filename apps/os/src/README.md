@@ -216,7 +216,9 @@ seed worker builds and answers a readiness probe, the Project processor
 atomically installs the ordinary root worker feed (starting after the creation
 request), emits terminal `project/created`, and appends the first
 `project/worker-updated` with the OS-stamped seed commit. It does not wait for
-userspace to consume either event. A config-repo or deterministic worker
+userspace to consume either event. Because the feed is installed immediately
+before those facts in the same append, `project/created` is the template's
+first userspace lifecycle hook. A config-repo or deterministic worker
 source-build failure emits terminal `project/create-failed`; transient
 infrastructure availability and in-progress builds stay open for durable
 redelivery. Agents are created separately and explicitly; a stream path alone
@@ -237,12 +239,14 @@ transient availability leave the processor cursor behind for redelivery. A
 later HEAD may satisfy an earlier commit fact, so this certifies that current
 configuration is runnable rather than activating one exact artifact.
 
-The seeded worker's literal switch exposes `project/worker-updated`,
-`project/heartbeat-triggered`, and root `stream/woken`. Each case is ordinary
-userspace TypeScript: get `itx` and make whatever calls belong to that
-lifecycle event. There is no reconciliation framework or shared hook.
-`project/create-requested` and `project/created` remain platform saga facts and
-are not userspace hooks.
+The seeded worker's literal switch exposes `project/created`,
+`project/worker-updated`, `project/heartbeat-triggered`, and root
+`stream/woken`. Each case is ordinary userspace TypeScript: get `itx` and make
+whatever calls belong to that lifecycle event. There is no reconciliation
+framework or shared hook. `project/create-requested` remains platform-only
+because it precedes the userspace feed. The default template uses
+`project/created` to create and start its onboarding agent and to navigate
+connected OS browser clients; templates can change or omit that behavior.
 
 The seeded `project/worker-updated` case calls `scheduler.set(...)` for one
 15-minute heartbeat whose script appends

@@ -64,7 +64,8 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  * `project-worker` feed and appends the terminal `project/created`
  * certificate that create() callers await plus the first
  * `project/worker-updated` lifecycle fact. The feed begins at its own
- * configuration event, after the platform's preceding creation facts.
+ * configuration event, so `project/created` is the first userspace event
+ * while the platform's preceding creation facts remain private to the saga.
  *
  * A config-repo failure or deterministic worker source-build failure closes
  * the saga with `project/create-failed`. Transient worker availability errors
@@ -251,7 +252,7 @@ export class ProjectProcessor extends StreamProcessor<
                   payload: {
                     name: "project-worker",
                     description:
-                      "Default project worker: every later root event; project creation remains platform-owned.",
+                      "Default project worker: root events from the terminal project/created certificate onward.",
                     receiver: {
                       action: "itx-call",
                       expression: ["processEventBatch"],

@@ -225,8 +225,9 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/created": {
       description:
         "The project creation saga completed: sibling processors exist, the seeded default " +
-        "project worker is reachable, and its permanent root feed is installed. This is a " +
-        "platform certificate, not a userspace lifecycle hook.",
+        "project worker is reachable, and its permanent root feed is installed. The feed " +
+        "receives this as its first userspace lifecycle hook; creation itself does not wait " +
+        "for that userspace consequence.",
       payloadSchema: projectBirthCertificateSchema(),
     },
     "events.iterate.com/project/create-failed": {

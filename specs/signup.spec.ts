@@ -29,9 +29,13 @@ test("can sign up with an email one-time passcode", async ({ page }, testInfo) =
   });
 
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    await page.getByTestId("project-dashboard").waitFor({ timeout: 60_000 });
+    // The default config template handles project/created, creates its
+    // onboarding agent, and drives the connected OS tab to the new chat.
+    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
   });
-  expect(new URL(page.url())).toMatchObject({ pathname: `/projects/${slug}` });
+  expect(new URL(page.url())).toMatchObject({
+    pathname: `/projects/${slug}/agents/streams/agents/onboarding`,
+  });
 
   // Ordinary OS entry returns to the ready project's dashboard.
   await page.goto("/");

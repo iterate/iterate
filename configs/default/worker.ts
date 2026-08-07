@@ -107,6 +107,54 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   // per-stream order.
   protected override async processEvent(event: StreamEvent): Promise<void> {
     switch (event.type) {
+      case "events.iterate.com/project/created": {
+        if (event.path !== "/") break;
+        const itx = await this.itx;
+        const instructions = await itx.repo.readFile({ path: "ONBOARDING.md" });
+        if (instructions === null) {
+          throw new Error("The default template enables onboarding but ONBOARDING.md is missing.");
+        }
+
+        const onboardingAgent = itx.agents.get("/agents/onboarding");
+        await onboardingAgent.create({ purpose: "onboarding", template: "default" });
+        await onboardingAgent.append(
+          {
+            type: "events.iterate.com/agents/context-added",
+            idempotencyKey: "iterate/config/onboarding-system-prompt:v1",
+            payload: {
+              role: "system",
+              key: "agent/system-prompt",
+              content: instructions.content,
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            },
+          },
+          {
+            type: "events.iterate.com/agents/context-added",
+            idempotencyKey: "iterate/config/onboarding-start:v1",
+            payload: {
+              role: "developer",
+              key: "config/onboarding-start",
+              content:
+                "Begin onboarding now. The project owner just created this project. Welcome them, then follow the onboarding instructions one question at a time.",
+              llmRequestPolicy: { behaviour: "after-current-request" },
+            },
+          },
+        );
+
+        const [{ slug }, clients] = await Promise.all([itx.identity(), itx.clients.list()]);
+        const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;
+        await Promise.all(
+          clients
+            .filter((client) => client.connected && client.path.startsWith("/clients/os-app/"))
+            .map((client) =>
+              itx.clients.get(client.path).invokeCapability({
+                path: ["capabilities", "browser", "navigate"],
+                args: [onboardingUrl],
+              }),
+            ),
+        );
+        break;
+      }
       case "events.iterate.com/agent/created": {
         // The birth event on the agent's own stream (copies carry
         // source.copiedFrom and must not re-target the collection stream).

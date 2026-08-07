@@ -7,6 +7,7 @@
 // the template live.
 import { afterEach, expect, test, vi } from "vitest";
 import ProjectWorker from "../../../../../configs/default/worker.ts";
+import VoiceProjectWorker from "../../../../../configs/with-voice/worker.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -16,7 +17,7 @@ function templateFile(path: string): string {
 }
 
 function deliver(
-  worker: ProjectWorker,
+  worker: { processEventBatch(batch: never): Promise<void> },
   event: {
     type: string;
     path: string;
@@ -25,6 +26,103 @@ function deliver(
 ): Promise<void> {
   return worker.processEventBatch({ events: [event] } as never);
 }
+
+test.each([
+  {
+    name: "default",
+    prompt: "Default onboarding instructions",
+    start: "The project owner just created this project.",
+    worker: (env: never) => new ProjectWorker({} as never, env),
+  },
+  {
+    name: "with-voice",
+    prompt: "Voice-specific onboarding instructions",
+    start: "The project owner just created this voice project.",
+    worker: (env: never) => new VoiceProjectWorker({} as never, env),
+  },
+])(
+  "$name template owns onboarding agent creation, startup, and connected OS client redirects",
+  async ({ name, prompt, start, worker: makeWorker }) => {
+    const create = vi.fn(async () => undefined);
+    const append = vi.fn(async () => []);
+    const invokeCapability = vi.fn(async () => undefined);
+    const project = {
+      agents: {
+        get: vi.fn(() => ({ append, create })),
+      },
+      clients: {
+        get: vi.fn(() => ({ invokeCapability })),
+        list: vi.fn(async () => [
+          {
+            path: "/clients/os-app/connected-tab",
+            connected: true,
+            lastConnectedAt: "2026-08-07T10:00:00.000Z",
+          },
+          {
+            path: "/clients/os-app/closed-tab",
+            connected: false,
+            lastConnectedAt: "2026-08-07T09:00:00.000Z",
+          },
+          {
+            path: "/clients/terminal",
+            connected: true,
+            lastConnectedAt: "2026-08-07T10:00:00.000Z",
+          },
+        ]),
+      },
+      identity: vi.fn(async () => ({ slug: "new-project" })),
+      repo: {
+        readFile: vi.fn(async () => ({ content: prompt })),
+      },
+      [Symbol.dispose]: vi.fn(),
+    };
+    const instance = makeWorker({
+      ITERATE_WORKER_VERSION: "test",
+      ITX: { get: vi.fn(async () => project) },
+    } as never);
+
+    await deliver(instance, {
+      type: "events.iterate.com/project/created",
+      path: "/",
+      payload: {
+        config: {
+          slug: "new-project",
+          configRepoTemplate: `github:iterate/iterate#main&path:configs/${name}`,
+        },
+        createRequestedAtOffset: 4,
+      },
+    });
+
+    expect(create).toHaveBeenCalledWith({ purpose: "onboarding", template: name });
+    expect(append).toHaveBeenCalledWith(
+      {
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: "iterate/config/onboarding-system-prompt:v1",
+        payload: {
+          role: "system",
+          key: "agent/system-prompt",
+          content: prompt,
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
+      },
+      expect.objectContaining({
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: "iterate/config/onboarding-start:v1",
+        payload: expect.objectContaining({
+          role: "developer",
+          key: "config/onboarding-start",
+          content: expect.stringContaining(start),
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        }),
+      }),
+    );
+    expect(project.clients.get).toHaveBeenCalledExactlyOnceWith("/clients/os-app/connected-tab");
+    expect(invokeCapability).toHaveBeenCalledExactlyOnceWith({
+      path: ["capabilities", "browser", "navigate"],
+      args: ["/projects/new-project/agents/streams/agents/onboarding"],
+    });
+  },
+);
 
 test("template ships packaged apps behind a thin router", () => {
   // Vendor SDK surfaces are NOT seeded (built-ins live at
@@ -126,10 +224,6 @@ test("project lifecycle cases directly install and handle the default heartbeat"
   const ignored = [
     {
       type: "events.iterate.com/project/create-requested",
-      path: "/",
-    },
-    {
-      type: "events.iterate.com/project/created",
       path: "/",
     },
     {
