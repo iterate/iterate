@@ -79,6 +79,22 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
     await expect.poll(() => pageTwo.url()).toMatch(new RegExp(`/projects/${slug}/repl$`));
   });
 
+  await test.step("a DUPLICATED tab (copied sessionStorage) mints its own client", async () => {
+    // Tab duplication copies sessionStorage — seed a third tab with tab two's
+    // stored key. The BroadcastChannel claim must detect the live holder and
+    // mint a fresh key: three clients, never a collapsed two.
+    const copiedKey = await pageTwo.evaluate(() =>
+      window.sessionStorage.getItem("iterate-os-app-tab-key"),
+    );
+    const pageThree = await context.newPage();
+    await pageThree.addInitScript((key) => {
+      window.sessionStorage.setItem("iterate-os-app-tab-key", key);
+    }, copiedKey);
+    await pageThree.goto(`/projects/${slug}/reactivity`);
+    await expect.poll(connectedOsAppClients, { timeout: 60_000, intervals: [500] }).toHaveLength(3);
+    await pageThree.close();
+  });
+
   await test.step("closing tab two flips exactly its client to disconnected", async () => {
     await pageTwo.close();
     await expect

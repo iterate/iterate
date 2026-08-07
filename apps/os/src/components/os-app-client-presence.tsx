@@ -3,18 +3,58 @@ import { useRouter } from "@tanstack/react-router";
 import { useIterateSession } from "iterate/sdk/itx/react";
 
 const TAB_KEY_STORAGE = "iterate-os-app-tab-key";
+const TAB_KEY_CHANNEL = "iterate-os-app-tab-keys";
+/** How long a probe waits for a live holder to answer before trusting the stored key. */
+const TAB_KEY_PROBE_MS = 150;
 
 /**
  * One stable key per BROWSER TAB: sessionStorage survives reloads within the
- * tab and is never shared across tabs, so a reload reclaims the same client
- * path while a second tab mints its own.
+ * tab (a reload reclaims the same client path) while a fresh tab mints its
+ * own. The subtlety: DUPLICATING a tab copies sessionStorage, so the stored
+ * key may already belong to a live sibling — two tabs would collapse into one
+ * client, the newer capability replacing the older. Every holder therefore
+ * answers claims on a BroadcastChannel, and a loading tab probes its stored
+ * key first: answered → duplicated tab, mint fresh; silence → reload, reuse.
  */
-function tabConnectionKey(): string {
-  const existing = window.sessionStorage.getItem(TAB_KEY_STORAGE);
-  if (existing !== null) return existing;
+async function tabConnectionKey(): Promise<string> {
+  const stored = window.sessionStorage.getItem(TAB_KEY_STORAGE);
+  if (stored !== null && !(await keyHeldByAnotherTab(stored))) {
+    holdTabKey(stored);
+    return stored;
+  }
   const minted = crypto.randomUUID().slice(0, 8);
   window.sessionStorage.setItem(TAB_KEY_STORAGE, minted);
+  holdTabKey(minted);
   return minted;
+}
+
+/** Probe the channel: does a live tab already hold this key? */
+function keyHeldByAnotherTab(key: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const channel = new BroadcastChannel(TAB_KEY_CHANNEL);
+    const timer = window.setTimeout(() => {
+      channel.close();
+      resolve(false);
+    }, TAB_KEY_PROBE_MS);
+    channel.onmessage = (event) => {
+      if (event.data?.type === "held" && event.data.key === key) {
+        window.clearTimeout(timer);
+        channel.close();
+        resolve(true);
+      }
+    };
+    channel.postMessage({ type: "probe", key });
+  });
+}
+
+/** Answer probes for this tab's key for the rest of the page's life. */
+function holdTabKey(key: string): void {
+  const channel = new BroadcastChannel(TAB_KEY_CHANNEL);
+  channel.onmessage = (event) => {
+    if (event.data?.type === "probe" && event.data.key === key) {
+      channel.postMessage({ type: "held", key });
+    }
+  };
 }
 
 /**
@@ -38,9 +78,9 @@ export function OsAppClientPresence({ slug }: { slug: string }) {
   useEffect(() => {
     let cancelled = false;
     let held: Partial<Disposable> | undefined;
-    const tabKey = tabConnectionKey();
     void (async () => {
       try {
+        const tabKey = await tabConnectionKey();
         const project = (await session.projects.connect(slug, {
           path: `/clients/os-app/${tabKey}`,
           description: `OS dashboard tab ${tabKey}`,
