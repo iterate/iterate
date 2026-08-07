@@ -4,16 +4,21 @@ import { createRoot } from "react-dom/client";
 import { expect, test } from "vitest";
 import { AgentActivityRounds } from "./agent-activity-rounds.tsx";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
+import { stringifyScriptResult, truncateScriptResult } from "~/lib/script-result-render.ts";
 
 test("a result the agent saw in full keeps the raw view as the default", async () => {
-  // The untransformed render embeds the exact stringified result, so the
-  // agent saw everything — the raw view is nicer to read and stays default.
+  // The untransformed render embeds the exact stringified result — built
+  // here through the same shared stringifyScriptResult the server render and
+  // the component's containment check both use, proving the round-trip.
+  const result = { ok: true };
   const agentRender =
-    'Your script returned:\n```json\n{\n  "ok": true\n}\n```\n' +
+    "Your script returned:\n```json\n" +
+    stringifyScriptResult(result) +
+    "\n```\n" +
     "This result is available to your next script as `results[0].data` (the preamble `results` array, newest first).";
   await using mounted = await renderRounds(
     databaseWithRenderEvent("agent-output:53", agentRender),
-    codeStep({ result: { ok: true } }),
+    codeStep({ result }),
   );
   const { host } = mounted;
   await clickResultTab(host);
@@ -36,13 +41,14 @@ test("a result the agent saw in full keeps the raw view as the default", async (
 });
 
 test("a truncated render defaults to the agent view — the raw view would misrepresent it", async () => {
-  // Inline truncation: the render carries only a slice of the stringified
-  // result plus the truncation notice, so containment fails.
+  // Inline truncation, built through the server's own shared helpers: the
+  // render carries only a slice of the stringified result plus the truncation
+  // notice, so containment fails.
   const result = { items: "item ".repeat(50).trim() };
   const truncatedRender =
     "Your script returned:\n```json\n" +
-    JSON.stringify(result, null, 2).slice(0, 80) +
-    "\n… truncated (262 chars total; up to 80 render inline — return less: slice arrays, pick fields)\n```\n" +
+    truncateScriptResult(stringifyScriptResult(result), 80) +
+    "\n```\n" +
     "This result is available to your next script as `results[0].data` (the preamble `results` array, newest first).";
   await using mounted = await renderRounds(
     databaseWithRenderEvent("agent-output:53", truncatedRender),
@@ -53,7 +59,7 @@ test("a truncated render defaults to the agent view — the raw view would misre
 
   const agentView = host.querySelector('[data-testid="script-result-agent-view"]');
   expect(agentView?.textContent).toContain("Your script returned");
-  expect(agentView?.textContent).toContain("truncated (262 chars total");
+  expect(agentView?.textContent).toContain("truncated (");
   expect(host.querySelector('[data-testid="script-result-raw"]')).toBeNull();
   // The full raw result stays one toggle away.
   const toggle = host.querySelector<HTMLButtonElement>('[data-testid="script-result-view-toggle"]');

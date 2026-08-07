@@ -16,6 +16,7 @@ import { buildRoundMetaYaml, resultYaml } from "~/lib/agent-round-meta-yaml.ts";
 import { formatClockTime, formatSeconds, formatTokens, looksLikeCode } from "~/lib/feed-format.ts";
 import { LLM_REPLAY_EVENT_TYPES, replayLlmRequest } from "~/lib/llm-request-replay.ts";
 import { MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS } from "~/lib/script-result-preview.ts";
+import { stringifyScriptResult } from "~/lib/script-result-render.ts";
 
 /** The canonical model-visible context event; script-actor instances carry the
  * settlement text `renderScriptSettlement` produced for the agent. */
@@ -426,32 +427,23 @@ function AgentRenderedRoundResult({
 
 /**
  * Did the agent see a TRANSFORMED representation of this settlement, rather
- * than the full thing? Detected structurally, coupled to the server-side
- * render (`renderScriptSettlement` in
- * apps/os/src/domains/agents/agent-processor-implementation.ts): the
- * untransformed render always embeds the exact stringified settlement
- * verbatim inside its fence — a returned string as itself, any other value
- * as `JSON.stringify(value, null, 2)` (the server's
- * `stringifyScriptResult`), a failure as its error text — while every
- * transforming path (inline truncation at the history limit, oversized
- * spills replaced by an inferred type + elided preview) necessarily drops
- * part of it. So a simple containment check distinguishes the cases without
- * matching on notice strings. The check degrades SAFELY: if the server's
- * stringification ever changes shape, containment fails and the tab defaults
+ * than the full thing? Detected structurally: the untransformed render
+ * (`renderScriptSettlement` in
+ * apps/os/src/domains/agents/agent-processor-implementation.ts) embeds the
+ * exact stringified settlement verbatim inside its fence — computed by the
+ * SAME `stringifyScriptResult` this check imports (lib/script-result-render),
+ * so the coupling is enforced by sharing the implementation, not by
+ * convention — while every transforming path (inline truncation at the
+ * history limit, oversized spills replaced by an inferred type + elided
+ * preview) necessarily drops part of it. So a containment check
+ * distinguishes the cases without matching on notice strings. Fail-safe
+ * either way: if containment breaks for any other reason, the tab defaults
  * to the agent view — which never misrepresents — rather than to a raw view
  * claiming the agent saw everything.
  */
 function renderIsTransformed(code: AgentUiCodeStep, agentText: string): boolean {
-  let full: string | null = null;
-  if (code.result !== undefined) {
-    try {
-      full = typeof code.result === "string" ? code.result : JSON.stringify(code.result, null, 2);
-    } catch {
-      full = null;
-    }
-  } else if (code.errorMessage != null) {
-    full = code.errorMessage;
-  }
+  const full =
+    code.result !== undefined ? stringifyScriptResult(code.result) : (code.errorMessage ?? null);
   if (full == null) return true;
   return !agentText.includes(full);
 }
