@@ -7,9 +7,9 @@ size: medium
 
 ## Status
 
-About 10% complete. The web surface and mobile navigation/test precedents have
-been mapped. The mobile screen, connect/disconnect flows, focused tests, preview
-proof, and reviewable PR are still missing.
+About 80% complete. The drawer route, full mobile catalogue and connection
+controls, unit coverage, and preview-shaped Playwright spec are implemented and
+pass local static/unit checks. Preview proof, PR media, and CI/review remain.
 
 ## Goal
 
@@ -18,13 +18,13 @@ dashboard's `/integrations` view, adapted to a phone-sized native UI.
 
 ## Scope
 
-- [ ] Add Integrations to the project drawer and route it to a project-scoped screen.
-- [ ] List Slack, Google/Gmail, GitHub, and Telegram connections with their current connected state and external identity.
-- [ ] Let users start Slack, Google, and GitHub browser-based connect flows and return to the mobile app.
-- [ ] Let users connect Telegram by BotFather token, including the existing explicit move confirmation when the bot belongs to another project.
-- [ ] Let users disconnect built-in connections behind an explicit confirmation.
-- [ ] Show project-provided integrations and the platform API integrations exposed by the dashboard as read-only cards.
-- [ ] Cover deterministic data shaping in Vitest and the real phone-sized route/navigation/list state in Playwright without requiring third-party credentials.
+- [x] Add Integrations to the project drawer and route it to a project-scoped screen. *Added the Expo Router screen and typed drawer destination.*
+- [x] List Slack, Google/Gmail, GitHub, and Telegram connections with their current connected state and external identity. *`listMobileIntegrations` joins catalogue journals with live status.*
+- [x] Let users start Slack, Google, and GitHub browser-based connect flows and return to the mobile app. *The signed callback URL returns through Expo Linking and handles provider errors/GitHub moves.*
+- [x] Let users connect Telegram by BotFather token, including the existing explicit move confirmation when the bot belongs to another project. *Token prompts call the existing RPC and retry with `steal: true` only after confirmation.*
+- [x] Let users disconnect built-in connections behind an explicit confirmation. *Connected rows use the shared disconnect RPC after a native/web confirm.*
+- [x] Show project-provided integrations and the platform API integrations exposed by the dashboard as read-only cards. *Both dashboard sections are rendered below connectable cards.*
+- [x] Cover deterministic data shaping in Vitest and the real phone-sized route/navigation/list state in Playwright without requiring third-party credentials. *Vitest proves status joins; Playwright signs up, opens the drawer, and asserts the real empty catalogue.*
 - [ ] Verify the mobile build/typecheck/tests and the preview deployment, with visual proof in the draft PR.
 
 ## Assumptions
@@ -49,3 +49,6 @@ dashboard's `/integrations` view, adapted to a phone-sized native UI.
   quarantined mobile Playwright skips and keeps UI assertions backed by durable
   API diagnostics; this task will follow its real signup/project navigation
   pattern while avoiding credential-dependent provider calls.
+- 2026-08-07: Implemented OAuth, Telegram, non-OAuth account, disconnect,
+  access-policy, provided-mount, and platform-capability UI. Mobile typecheck,
+  all 85 mobile unit tests, root lint, formatting, and Playwright discovery pass.
