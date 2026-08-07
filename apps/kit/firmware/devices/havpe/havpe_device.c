@@ -2208,8 +2208,10 @@ void iterate_kit_havpe_run(void) {
       if (iterate_kit_mount_watchdog_due(
               &runtime.mount_watchdog,
               iterate_kit_peer_served_dispatches(&runtime.peer),
-              !wants_call && !runtime.voicelab.call_active &&
-                  !runtime.voicelab.call_pending,
+              /* A call UP or a start in flight — NOT merely wanted. See
+               * mount_watchdog.h: wanting a call this device cannot start is
+               * the symptom of a lost mount, not a reason to keep it. */
+              runtime.voicelab.call_active || runtime.voicelab.call_pending,
               now)) {
         ESP_LOGW(tag, "nothing has called this device in a while — re-registering");
         havpe_ui_set_status("re-registering");

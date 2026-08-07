@@ -48,14 +48,24 @@ struct iterate_kit_mount_watchdog {
  * Reports whether a re-registration is due, and counts it when it is.
  *
  * `dispatches` is the device's served-dispatch total: any inbound call proves
- * the mount reachable and resets the clock. `idle` must be false whenever a
- * conversation is live, wanted or pending — a reconnect mid-call costs a
- * conversation, while an idle one costs nothing.
+ * the mount reachable and resets the clock.
+ *
+ * `call_in_flight` suppresses the remount, and is deliberately narrow: a call
+ * that is UP, or a start that has been sent and not yet answered. A reconnect
+ * costs those a conversation.
+ *
+ * IT MUST NOT INCLUDE "SOMEBODY WANTS A CALL", which is what it used to, in
+ * four identical copies. Wanting one is not having one, and a board that wants
+ * a call it cannot start is the exact board whose mount has gone — so the old
+ * predicate switched the backstop off precisely when it was needed and left
+ * the device unreachable until somebody power-cycled it. Measured on the
+ * StackChan: unreachable for ten minutes with `livenessRestarts` 0, no
+ * self-restart (`restartNote` empty), recovered only by reflashing, twice.
  */
 bool iterate_kit_mount_watchdog_due(
     struct iterate_kit_mount_watchdog *watchdog,
     uint64_t dispatches,
-    bool idle,
+    bool call_in_flight,
     uint64_t now_ms);
 
 #ifdef __cplusplus
