@@ -70,6 +70,7 @@ function DrawerButton({ project }: { project: { projectId: string; projectSlug: 
       pathname:
         | "/project/[projectId]/repos"
         | "/project/[projectId]/examples"
+        | "/project/[projectId]/integrations"
         | "/project/[projectId]/notifications",
     ) =>
     () => {
@@ -150,6 +151,10 @@ function DrawerButton({ project }: { project: { projectId: string; projectSlug: 
                     <DrawerItem
                       label="Examples"
                       onPress={() => close(projectRoute("/project/[projectId]/examples"))}
+                    />
+                    <DrawerItem
+                      label="Integrations"
+                      onPress={() => close(projectRoute("/project/[projectId]/integrations"))}
                     />
                     <DrawerItem
                       label="Notifications"
