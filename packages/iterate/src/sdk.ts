@@ -24,6 +24,7 @@ import type {
 } from "./itx-api.generated.ts";
 import type { ProcessorStream, ProcessorStreamPager } from "./processors/stream-handle.ts";
 import type {
+  ProcessorRuntimeState,
   ProcessorSnapshot,
   StreamDeliveryBatch,
   StreamProcessorWakeRequest,
@@ -507,14 +508,28 @@ type WakeRegistryLookup = (
   path: string,
 ) => Pick<StreamProcessorRegistry<object>, "wakeStreamProcessor">;
 
-/** The wake door the stream spine dials. It crosses Workers RPC as a property
- * read before its method is called, so it must be a real RpcTarget. */
+/**
+ * The worker's `processor` node: the wake door the stream spine dials PLUS
+ * the public read verbs of the standard processor contract
+ * (`StreamProcessorRpc`). The reads serve the registered runner directly, so
+ * `streams.get(path).subscriptions.get(name).processor` and the stream's
+ * `waitUntilProcessed` barrier reach an expression-placed dynamic worker's
+ * processor with no extra wiring — the stream replays those verbs onto this
+ * node (the stored wake expression minus its trailing wake step). It crosses
+ * Workers RPC as a property read before its method is called, so it must be
+ * a real RpcTarget.
+ */
 class ProcessorWakeTarget extends RpcTarget {
   readonly #registryFor: WakeRegistryLookup;
+  readonly #reads: () => Promise<RegisteredProcessorReads<object>>;
 
-  constructor(registryFor: WakeRegistryLookup) {
+  constructor(
+    registryFor: WakeRegistryLookup,
+    reads: () => Promise<RegisteredProcessorReads<object>>,
+  ) {
     super();
     this.#registryFor = registryFor;
+    this.#reads = reads;
   }
 
   async wakeStreamProcessor(
@@ -530,6 +545,24 @@ class ProcessorWakeTarget extends RpcTarget {
       request.stream.path,
     ).wakeStreamProcessor(request);
   }
+
+  /** One consistent read of the committed fold, pulled through the durable
+   * stream tail first (read-your-writes, the hosting relays' catch-up leg). */
+  async snapshot(): Promise<ProcessorSnapshot<object>> {
+    const reads = await this.#reads();
+    await reads.catchUp();
+    return await reads.snapshot();
+  }
+
+  async getRuntimeState(): Promise<ProcessorRuntimeState<object>> {
+    return await (await this.#reads()).getRuntimeState();
+  }
+
+  /** Offset barrier against the runner's committed fold. The runner's waiter
+   * self-pulls, so its timeout bounds the whole read-your-writes operation. */
+  async waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void> {
+    await (await this.#reads()).waitUntilEvent(input);
+  }
 }
 
 export type ProcessorHost<State extends object> = {
@@ -538,7 +571,10 @@ export type ProcessorHost<State extends object> = {
   registry(): Promise<StreamProcessorRegistry<State>>;
   /** One consistent read of the hosted processor's committed fold. */
   snapshot(): Promise<ProcessorSnapshot<State>>;
-  /** Assign to a `processor` getter — the wake door the stream spine dials. */
+  /** Assign to a `processor` getter — the wake door the stream spine dials,
+   * which also serves the standard read verbs (snapshot / getRuntimeState /
+   * waitUntilProcessed) so the subscriptions catalog and the stream barrier
+   * reach this processor. */
   readonly wakeProcessor: ProcessorWakeTarget;
   /** Route the Durable Object's `alarm()` here. Nothing cached means no
    * registry ever armed one, so a stray fire is a no-op. */
@@ -615,6 +651,7 @@ export function createProcessorHost<State extends object = Record<string, unknow
     snapshot: async () => await (await buildOutsideWake()).reads.snapshot(),
     wakeProcessor: new ProcessorWakeTarget(
       (projectId, path) => ensure(projectId, args.path ?? path).registry,
+      async () => (await buildOutsideWake()).reads as RegisteredProcessorReads<object>,
     ),
     async handleAlarm(alarmInfo?: AlarmInvocationInfo) {
       const projectId = args.ctx.storage.kv.get<string>(HOST_PROJECT_ID_KEY);

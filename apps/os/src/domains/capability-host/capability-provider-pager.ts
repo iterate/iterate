@@ -20,7 +20,9 @@ type LiveCapabilityRecord = Extract<CapabilityRecord, { type: "live" }>;
 /** Internal upgrade marker; no external ingress route addresses a CapabilityHost DO. */
 export const CAPABILITY_PROVIDER_PAGER_HEADER = "x-iterate-capability-provider-pager";
 
-const CAPABILITY_PROVIDER_PAGER_TAG = "capability-provider-pager";
+/** The hibernation tag Capability Provider Pagers are accepted under — hosts
+ * that multiplex several Pager lanes on one `ctx` route close/error events by it. */
+export const CAPABILITY_PROVIDER_PAGER_TAG = "capability-provider-pager";
 const PROVIDER_ATTACH_TIMEOUT_MS = 10_000;
 
 const CapabilityProviderPagerUpgrade = z

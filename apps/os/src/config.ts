@@ -257,6 +257,8 @@ export const AppConfig = z.object({
   posthog: z
     .object({
       apiKey: publicValue(z.string().trim().min(1)),
+      capture: publicValue(z.boolean().default(false)),
+      sendStreamEvents: publicValue(z.boolean().default(false)),
     })
     .optional(),
 });

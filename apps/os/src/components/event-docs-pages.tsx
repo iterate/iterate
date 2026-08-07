@@ -162,7 +162,7 @@ function variantLabel(variant: Record<string, unknown>, index: number): string {
   return `variant ${index + 1}`;
 }
 
-/** One-line payload shape summary for listings, e.g. `{ subscriptionKey, delivery, selector? }`. */
+/** One-line payload shape summary for listings, e.g. `{ name, delivery, selector? }`. */
 function payloadPreview(value: unknown): string {
   const schema = asSchemaObject(value);
   if (!schema) return "";

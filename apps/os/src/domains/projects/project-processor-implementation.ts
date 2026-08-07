@@ -136,7 +136,7 @@ export class ProjectProcessor extends StreamProcessor<
         if (
           origin?.projectId !== this.deps.itx.projectId ||
           origin.path !== CONFIG_REPO_PATH ||
-          origin.subscriptionKey !== "project-config-to-root" ||
+          origin.name !== "project-config-to-root" ||
           origin.type !== event.type ||
           state.birthCertificate !== null ||
           state.createRequest === null ||
@@ -249,7 +249,7 @@ export class ProjectProcessor extends StreamProcessor<
                   type: "events.iterate.com/stream/subscription-configured",
                   idempotencyKey: `project-worker-subscription:${this.deps.itx.projectId}`,
                   payload: {
-                    subscriptionKey: "project-worker",
+                    name: "project-worker",
                     description:
                       "Default project worker: every later root event; project creation remains platform-owned.",
                     receiver: {
@@ -283,7 +283,7 @@ export class ProjectProcessor extends StreamProcessor<
         if (
           origin?.projectId !== this.deps.itx.projectId ||
           origin.path !== CONFIG_REPO_PATH ||
-          origin.subscriptionKey !== "project-config-to-root" ||
+          origin.name !== "project-config-to-root" ||
           origin.type !== event.type ||
           state.birthCertificate === null
         ) {
@@ -476,7 +476,7 @@ export class ProjectProcessor extends StreamProcessor<
             type: "events.iterate.com/stream/subscription-configured",
             idempotencyKey: `config-repo-subscription:${this.deps.itx.projectId}`,
             payload: {
-              subscriptionKey: "project-config-to-root",
+              name: "project-config-to-root",
               description:
                 "Sends every config-repo event after the birth batch to the project root so the project processor can react when configuration changes.",
               receiver: {
@@ -676,6 +676,53 @@ export class ProjectProcessor extends StreamProcessor<
         return recordDomainObject(state, "repos", event);
       case "events.iterate.com/secret/created":
         return recordDomainObject(state, "secrets", event);
+      // The clients catalog: copied off each client scope's stream by the
+      // clients-to-root subscription that projects.connect's birth batch
+      // configures. Source-hop coordinates carry the client's path, the fact's
+      // original commit time, and — for the connected fact — the offset the
+      // matching disconnect will name in its payload.
+      case "events.iterate.com/capability-host/capability-provider-pager-connected": {
+        const source = event.source?.copiedFrom?.at(-1);
+        if (source === undefined) return state;
+        const previous = state.clients[source.path];
+        const connectedAtOffsets = [...(previous?.connectedAtOffsets ?? []), source.offset];
+        return {
+          ...state,
+          clients: {
+            ...state.clients,
+            [source.path]: {
+              path: source.path,
+              connected: true,
+              lastConnectedAt: source.createdAt,
+              ...(previous?.lastDisconnectedAt === undefined
+                ? {}
+                : { lastDisconnectedAt: previous.lastDisconnectedAt }),
+              connectedAtOffsets,
+            },
+          },
+        };
+      }
+      case "events.iterate.com/capability-host/capability-provider-pager-disconnected": {
+        const source = event.source?.copiedFrom?.at(-1);
+        if (source === undefined) return state;
+        const previous = state.clients[source.path];
+        if (previous === undefined) return state;
+        const connectedAtOffsets = previous.connectedAtOffsets.filter(
+          (offset) => offset !== event.payload.connectedAtOffset,
+        );
+        return {
+          ...state,
+          clients: {
+            ...state.clients,
+            [source.path]: {
+              ...previous,
+              connected: connectedAtOffsets.length > 0,
+              lastDisconnectedAt: source.createdAt,
+              connectedAtOffsets,
+            },
+          },
+        };
+      }
       case "events.iterate.com/project/egress-rules-configured":
         return { ...state, egressRules: event.payload.rules };
       case "events.iterate.com/project/human-approval-key-added":

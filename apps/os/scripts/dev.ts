@@ -172,6 +172,10 @@ export async function attach() {
 export const localOsDevServer = {
   readLive: () => readDevServerInfo(APP_ROOT, { requireLive: true }),
   resolveTarget: resolveLocalOsDevServerTarget,
+  /** Kill the live server iff its workerd RSS is over the limit; returns
+   * whether it was killed. The e2e lane calls this between files to recycle a
+   * bloating local server before it SIGABRTs mid-suite (see evictIfMemoryPressured). */
+  killIfMemoryPressured: evictIfMemoryPressured,
 };
 
 export const doppler = {

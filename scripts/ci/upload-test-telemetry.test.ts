@@ -5,7 +5,7 @@ import {
   writeTestTelemetryArtifact,
   type TestTelemetryArtifact,
 } from "@iterate-com/shared/test-support/ci-telemetry";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { finalizeTestTelemetry, testTelemetryEvents } from "./upload-test-telemetry.ts";
 
 const { sendPostHogEventsMock } = vi.hoisted(() => ({ sendPostHogEventsMock: vi.fn() }));
@@ -14,8 +14,12 @@ vi.mock("./posthog-events.ts", async (importOriginal) => ({
   sendPostHogEvents: sendPostHogEventsMock,
 }));
 
+beforeEach(() => {
+  process.env.CI_TELEMETRY_POSTHOG_ENABLED = "1";
+});
 afterEach(() => {
   sendPostHogEventsMock.mockReset();
+  delete process.env.CI_TELEMETRY_POSTHOG_ENABLED;
 });
 
 const artifact: TestTelemetryArtifact = {

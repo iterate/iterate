@@ -1,22 +1,17 @@
 import { DurableObject } from "cloudflare:workers";
 import { Workspace } from "@cloudflare/shell";
-import type {
-  StreamEventInput,
-  StreamProcessorWakeRequest,
-  StreamProcessorWakeResponse,
-} from "iterate/processors";
+import type { StreamEventInput } from "iterate/processors";
 import { isStreamOffsetConflictError } from "iterate/processors";
-import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import { minimatch } from "minimatch";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import {
   projectProcessorState,
   STREAM_DURABLE_OBJECT_STUB,
-  StreamProcessorRpcTarget,
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { isUnconfiguredSubscriptionError } from "../streams/utils.ts";
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
@@ -32,11 +27,9 @@ import {
   type WorkspaceConfig,
   type WorkspaceConfigPatch,
   type WorkspaceMount,
+  type WorkspaceProcessorState,
 } from "./workspace-processor-contract.ts";
-import {
-  mergeWorkspaceConfigPatch,
-  WorkspaceProcessor,
-} from "./workspace-processor-implementation.ts";
+import { mergeWorkspaceConfigPatch } from "./workspace-processor-implementation.ts";
 import {
   isVirtualDirectoryPath,
   reRoutedPaths,
@@ -51,6 +44,14 @@ import { CollabHost, type CollabPresenceFlat } from "./collab-host.ts";
 import { sqliteCollabStore } from "./collab-store.ts";
 
 const PROCESSOR_SLUG = WorkspaceProcessorContract.slug;
+
+/** The stream facade methods this DO reads its own fold through — the
+ * workspace processor runs as a facet of the workspace stream's own Durable
+ * Object (src/domains/processor-facet-durable-object.ts), not here. */
+type WorkspaceProcessorFacade = {
+  snapshot(): Promise<{ offset: number; state: WorkspaceProcessorState }>;
+  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
+};
 // Configuration appends assert their exact stream offset (no interleaved
 // append can invalidate the validated plan); a conflict re-plans against the
 // fresh state. Bounded: past this, something is genuinely storming the stream.
@@ -99,25 +100,11 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
-  readonly #registry = createStreamProcessorRegistry(this.ctx, {
-    stream: this.#stream,
-    path: this.#name.path,
-    projectId: this.#name.projectId,
-    version: workerVersion(this.env),
-  });
-  // NO recovery on purpose: WorkspaceProcessor is a pure reducer (no
-  // processEvent, no runInBackground), so an eviction can never lose
-  // consequential background work (see the registry module doc's rule).
-  readonly #workspaceProcessor = this.#registry.register(
-    new WorkspaceProcessor({
-      stream: this.#stream,
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    }),
-  );
-  // Runner-backed reads: the runner owns the cursors; every read this DO
-  // serves goes through the runner's committed progress.
-  readonly #reads = this.#registry.reads(this.#workspaceProcessor);
+  /** In-memory mirror of the facet-hosted processor's reduced config: every
+   * public op's #assertCreated() refreshes it through the stream facade, so
+   * the synchronous reads below (`#currentConfig`, the WorkspaceCore mounts
+   * thunk) serve exactly what the retired in-DO runner served. */
+  #reducedState: WorkspaceProcessorState | undefined;
 
   readonly #workspace = new Workspace({
     sql: this.ctx.storage.sql,
@@ -146,9 +133,49 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     );
   }
 
-  /** The stored OVERLAY table (reduced state) — deviations only. */
+  /** The facet-hosted workspace processor's read surface on the stream. */
+  async #processorFacade(): Promise<WorkspaceProcessorFacade> {
+    return (await this.env.STREAM.getByName(
+      DurableObjectNameCodec.stringify({
+        path: this.#name.path,
+        projectId: this.#name.projectId,
+      }),
+    ).processorFacade({
+      name: PROCESSOR_SLUG,
+      // The Stream DO's facade forwards to the facet registered for this
+      // path family; /workspaces/** registers exactly the workspace
+      // processor under this name, so its snapshot/waitUntilProcessed doors
+      // carry WorkspaceProcessorState. Double assertion because the
+      // generated stub type erases the per-name state parameter.
+    })) as unknown as WorkspaceProcessorFacade;
+  }
+
+  /** Refresh the local mirror from the facade (a catch-up-backed snapshot). */
+  async #refreshReducedState(): Promise<WorkspaceProcessorState> {
+    let state: WorkspaceProcessorState;
+    try {
+      ({ state } = await (await this.#processorFacade()).snapshot());
+    } catch (error) {
+      // UNBORN workspace: before the birth batch commits, the workspace
+      // subscription does not exist and the facade refuses the name (a read
+      // must never materialize a facet). Substitute the empty fold —
+      // #assertCreated then reports the friendly missing-workspace guidance,
+      // exactly as the retired host fabricated its pre-birth reads.
+      if (!isUnconfiguredSubscriptionError(error)) throw error;
+      state = WorkspaceProcessorContract.stateSchema.parse({}) as WorkspaceProcessorState;
+    }
+    this.#reducedState = state;
+    return state;
+  }
+
+  /** The stored OVERLAY table (reduced state) — deviations only. Synchronous
+   * against the mirror; every public op refreshes it first (#assertCreated). */
   #currentConfig(): WorkspaceConfig {
-    return this.#reads.currentState.config;
+    const state = this.#reducedState;
+    if (state === undefined) {
+      throw new Error("workspace reduced state read before its operation refreshed it");
+    }
+    return state.config;
   }
 
   /**
@@ -220,13 +247,15 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
 
   /** Pull the reduced state current and require an explicit birth certificate.
    * STRICT catch-up (throws): every public operation routes and
-   * classifies against `currentState.config`, and a swallowed catch-up failure
+   * classifies against the reduced config, and a swallowed catch-up failure
    * would let it proceed on a stale mount table — misrouting reads and commits
    * — when a committed `configured` event exists but has not reduced. Failing
-   * the operation loudly is the only safe disposition. */
+   * the operation loudly is the only safe disposition. The facade's snapshot
+   * IS the strict catch-up, and refreshing the mirror here is what keeps the
+   * synchronous `#currentConfig` reads fresh per operation. */
   async #assertCreated(): Promise<void> {
-    await this.#reads.catchUp();
-    if (this.#reads.currentState.birthCertificate !== null) return;
+    const state = await this.#refreshReducedState();
+    if (state.birthCertificate !== null) return;
     throw new Error(
       `workspace "${this.#name.path}" does not exist — create it with itx.workspaces.get(${JSON.stringify(this.#name.path)}).create({})`,
     );
@@ -254,10 +283,13 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       // plain conflict retry.
       const { maxDurableOffset, maxOffset: rawHead } =
         await this.#stream[STREAM_DURABLE_OBJECT_STUB].getMaxOffsets();
-      await this.#reads.waitUntilEvent({
+      await (
+        await this.#processorFacade()
+      ).waitUntilProcessed({
         offset: maxDurableOffset,
         timeoutMs: INGEST_WAIT_TIMEOUT_MS,
       });
+      await this.#refreshReducedState();
       const current = this.#currentConfig();
       const patch = plan(current);
       if (patch === null) return current;
@@ -277,11 +309,13 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
           }),
           offset: rawHead + 1,
         } as StreamEventInput);
-        await this.#reads.catchUp();
-        await this.#reads.waitUntilEvent({
+        await (
+          await this.#processorFacade()
+        ).waitUntilProcessed({
           offset: event!.offset,
           timeoutMs: INGEST_WAIT_TIMEOUT_MS,
         });
+        await this.#refreshReducedState();
         return this.#currentConfig();
       } catch (error) {
         if (!isStreamOffsetConflictError(error) || attempt === MAX_CONFIGURE_ATTEMPTS) throw error;
@@ -723,24 +757,5 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     const resolved =
       input.scope === undefined ? input : { ...input, scope: this.#resolvePath(input.scope) };
     return this.#core.gitLog(resolved);
-  }
-
-  // -- processor host plumbing -----------------------------------------------------
-
-  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
-    return this.#registry.wakeStreamProcessor(args);
-  }
-
-  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
-  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return this.#registry.handleAlarm(alarmInfo);
-  }
-
-  get processor() {
-    // Runner-backed reads (#reads), never the processor instance — instance
-    // reads are stale forever under runner drive.
-    return new StreamProcessorRpcTarget(this.#reads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(PROCESSOR_SLUG),
-    });
   }
 }
