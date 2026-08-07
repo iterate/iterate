@@ -220,9 +220,10 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   page,
   baseURL,
 }) => {
-  // The greeting-settle wait (up to 120s) stacks on the probe window and the
-  // two send assertions, so this lane gets the heavy ceiling.
-  test.setTimeout(300_000);
+  // The greeting-settle wait (up to 120s) stacks on the probe window, the
+  // paint wait (90s — see that step), and the two send assertions, so this
+  // lane gets the heavy ceiling.
+  test.setTimeout(360_000);
   await using fixture = await helpers.createFixture("suspend-halfopen");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
   await installSocketKillSwitch(page);
@@ -254,10 +255,20 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   // the explicit bounded waits.
   await test.step("half-open: paint greeting and settle composer", async () => {
     await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      // 90s, not 30s: on a cold preview deployment this first paint rides a
+      // freshly deployed worker plus a cold Stream DO chain, and 30s failed
+      // BOTH in-run tries on 3 of 5 preview runs during 2026-08-07 (every
+      // job-level retry passed — pure cold-start latency, and this step runs
+      // BEFORE any half-open is induced, so no resilience signal is at
+      // stake). The 120s waits around this step already assume this lane is
+      // slow. If this step keeps flaking at 90s, stop bumping and QUARANTINE
+      // the spec per docs/testing.md — at that point the lane is telling us
+      // preview first-paint has a real problem, and absorbing it here would
+      // hide it.
       await page
         .locator('[data-testid="agent-feed-message"][data-kind="assistant"]')
         .first()
-        .waitFor({ timeout: 30_000 });
+        .waitFor({ timeout: 90_000 });
       await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 });
     });
   });
