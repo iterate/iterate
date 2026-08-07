@@ -21,4 +21,5 @@ export { sessions } from "./sessions.ts";
 export { soak } from "./soak.ts";
 export { stress } from "./stress.ts";
 export { talk } from "./talk.ts";
+export { timeline } from "./timeline.ts";
 export { wire } from "./wire.ts";
