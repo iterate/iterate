@@ -498,8 +498,16 @@ static void capture_hardware_task(void *argument) {
       }
       was_playing = playing_now;
     }
+    /*
+     * `admit`, not `person_present`, and the difference is not cosmetic: only
+     * `admit` counts the decision. This site IS the decision — it is what
+     * silences an interruption — and it was calling the const, silent variant,
+     * so `gateRefused` read 0 through an entire call in which every frame was
+     * being muted. An instrument that reports zero while the thing it measures
+     * is happening is worse than no instrument, because it is believed.
+     */
     if (havpe_audio_speaker_is_playing() &&
-        !iterate_kit_barge_in_person_present(
+        !iterate_kit_barge_in_admit(
             &capture_gate, (uint64_t)(esp_timer_get_time() / 1000))) {
       memset(frame.samples, 0, sizeof(frame.samples));
       ++capture_echo_frames_muted;

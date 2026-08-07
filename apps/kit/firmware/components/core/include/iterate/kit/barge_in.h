@@ -118,13 +118,22 @@ void iterate_kit_barge_in_forget(struct iterate_kit_barge_in *gate);
  * the middle of generating. Measured before this existed: every answer came
  * back two words long, marked complete by a provider that had talked itself
  * into stopping.
+ *
+ * PREFER `iterate_kit_barge_in_admit` WHEREVER THE ANSWER IS ACTED ON. This
+ * one counts nothing, by design — it is for asking, not deciding. The uplink
+ * mute called it for months and `gateRefused` therefore read 0 through entire
+ * calls in which every frame was being silenced, which is how a 34 dB duck
+ * went unattributed. Use this only where nothing is decided by the result.
  */
 bool iterate_kit_barge_in_person_present(
     const struct iterate_kit_barge_in *gate, uint64_t now_ms);
 
 /**
- * Answers whether a speech_started should flush the speaker, and counts both
- * outcomes so a device that is still being interrupted can prove which kind.
+ * Decides, and counts the decision — the variant every acting caller wants.
+ *
+ * Answers whether a speech_started should flush the speaker, or whether a
+ * captured frame may go on the wire, and records both outcomes so a device
+ * that cannot be interrupted can prove which half is refusing.
  */
 bool iterate_kit_barge_in_admit(
     struct iterate_kit_barge_in *gate, uint64_t now_ms);
