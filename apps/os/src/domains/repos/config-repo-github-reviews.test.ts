@@ -389,7 +389,7 @@ describe("userspace GitHub pull-request routing", () => {
             eventTypes: Object.values(githubAiLinterEventTypes),
           },
           receiver: {
-            action: "processor-wake",
+            action: "wake-processor",
           },
         },
       },

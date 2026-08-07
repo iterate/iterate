@@ -3705,7 +3705,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // The connection's router processor: facet-hosted on this connection's
       // own stream. `processor` is a claimed child, not a Web API replay — it
       // is the inspection surface for the subscription the connect flow
-      // persists (placement: "facet", name "slack").
+      // persists (a facet-processor subscription named "slack").
       if (method[0] === "processor") {
         const relay = facetProcessorRelay({
           auth: this.props.auth,
@@ -4610,6 +4610,11 @@ function agentProcessorRelay(input: {
     name: AgentProcessorContract.slug,
     path: input.path,
     projectId: input.projectId,
+    // An unborn agent's pre-create `processor.snapshot()` (the examples
+    // catalogue's `agent-send-message`, and `assertAgentCreated`) must read the
+    // empty fold, not throw `subscription "agent" does not exist`, so the guard
+    // `if (birthCertificate === null) await create()` can reach create().
+    unbornState: () => AgentProcessorContract.stateSchema.parse({}),
   });
 }
 
@@ -7810,6 +7815,7 @@ export class ProcessorRelayRpcTarget<
   readonly #host: () => Host | PromiseLike<Host>;
   readonly #processorFacade: (host: Host) => PromiseLike<unknown>;
   readonly #publicState: ((state: State) => PublicState) | undefined;
+  readonly #unbornState: (() => State) | undefined;
 
   constructor(args: {
     auth: ItxAuth;
@@ -7822,12 +7828,23 @@ export class ProcessorRelayRpcTarget<
      * `hasMaterial` instead). Omitted = identity.
      */
     publicState?: (state: State) => PublicState;
+    /**
+     * Fallback fold for a `snapshot()` that reaches an UNBORN facet: before a
+     * subscription's birth batch commits, the Stream DO's facade refuses the
+     * name (a read must never materialize a facet). A domain that reads its
+     * fold before create — the agent's pre-create `processor.snapshot()` —
+     * supplies its contract's empty state here so the read degrades to the
+     * unborn shape instead of throwing, exactly as the project/secret/device
+     * reads already do. Omitted = the catalog-miss propagates.
+     */
+    unbornState?: () => State;
   }) {
     super();
     this.#auth = args.auth;
     this.#host = args.host;
     this.#processorFacade = args.processorFacade ?? ((host) => host.processor);
     this.#publicState = args.publicState;
+    this.#unbornState = args.unbornState;
   }
 
   #project(state: State): PublicState {
@@ -7939,8 +7956,18 @@ export class ProcessorRelayRpcTarget<
   }
 
   async snapshot() {
-    const snapshot = await this.#callProcessor((processor) => processor.snapshot());
-    return { offset: snapshot.offset, state: this.#project(snapshot.state) };
+    try {
+      const snapshot = await this.#callProcessor((processor) => processor.snapshot());
+      return { offset: snapshot.offset, state: this.#project(snapshot.state) };
+    } catch (error) {
+      // Unborn facet: the subscription's birth batch has not committed, so the
+      // facade refuses the name. Answer with the domain's empty fold, matching
+      // the project/secret/device reads (a read must never materialize a facet).
+      if (this.#unbornState !== undefined && isUnconfiguredSubscriptionError(error)) {
+        return { offset: 0, state: this.#project(this.#unbornState()) };
+      }
+      throw error;
+    }
   }
 
   async getRuntimeState() {
@@ -8223,12 +8250,14 @@ function facetProcessorRelay<State = unknown, PublicState = State>(input: {
   path: string;
   projectId: string | null;
   publicState?: (state: State) => PublicState;
+  unbornState?: () => State;
 }): ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState> {
   return new ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState>({
     auth: input.auth,
     host: () => streamProcessorFacade(input),
     processorFacade: (host) => Promise.resolve(host),
     ...(input.publicState === undefined ? {} : { publicState: input.publicState }),
+    ...(input.unbornState === undefined ? {} : { unbornState: input.unbornState }),
   });
 }
 

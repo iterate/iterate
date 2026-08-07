@@ -424,19 +424,15 @@ function createSubscriptionReceiverCalls(deps: {
   return {
     async wakeStreamProcessor(receiver, request, expectedDelivery) {
       let value: unknown;
-      if (receiver.placement === "facet") {
-        // Facet placement: the subscription name IS the facet name; the wake
-        // is an in-process parent→facet dial, no itx expression involved. The
-        // facet's wakeStreamProcessor returns the standard wake response, so
-        // everything downstream (retention, batching, watchdog) is shared.
+      if (receiver.action === "facet-processor") {
+        // Facet: the subscription name IS the facet name; the wake is an
+        // in-process parent→facet dial, no itx expression involved. The facet's
+        // wakeStreamProcessor returns the standard wake response, so everything
+        // downstream (retention, batching, watchdog) is shared.
         const facet = await deps.dialProcessorFacet(request.name);
         value = await facet.wakeStreamProcessor(request);
       } else {
-        if (receiver.expression === undefined) {
-          throw new Error(
-            `processor-wake subscription "${request.name}" has neither facet placement nor an expression`,
-          );
-        }
+        // wake-processor: the schema requires an expression here.
         ({ value } = await evaluateItxExpression(
           deps.createAuthorityRoot(),
           toInvocation(receiver.expression, request),
@@ -713,8 +709,12 @@ class FacetLiveStateRelayRpcTarget
 type OutboundSubscriptionReceiver =
   CoreProcessorState["subscriptions"]["outbound"]["byName"][string]["configuration"]["receiver"];
 
-/** The processor-wake variant of {@link OutboundSubscriptionReceiver}. */
-type ProcessorWakeReceiver = Extract<OutboundSubscriptionReceiver, { action: "processor-wake" }>;
+/** The hosted-processor variants (a facet or a remote wake) of
+ * {@link OutboundSubscriptionReceiver}. */
+type ProcessorWakeReceiver = Extract<
+  OutboundSubscriptionReceiver,
+  { action: "facet-processor" | "wake-processor" }
+>;
 
 /**
  * Copy an expression-evaluation result into plain data and release the
@@ -1207,8 +1207,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error(`subscription "${name}" does not exist`);
     }
     const receiver = configured.configuration.receiver;
-    if (receiver.action !== "processor-wake") {
-      throw new Error(`subscription "${name}" is not a processor-wake subscription`);
+    if (receiver.action !== "facet-processor" && receiver.action !== "wake-processor") {
+      throw new Error(`subscription "${name}" is not a hosted-processor subscription`);
     }
     return receiver;
   }
@@ -1226,8 +1226,22 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   async #dialProcessorFacet(name: string): Promise<ProcessorFacetStub> {
     const receiver = this.#requireProcessorWakeSubscription(name);
-    if (receiver.placement !== "facet") {
-      throw new Error(`subscription "${name}" does not run under facet placement`);
+    if (receiver.action !== "facet-processor") {
+      throw new Error(`subscription "${name}" does not run as a facet`);
+    }
+    if (receiver.source.kind === "userspace") {
+      // The loader plumbing mirrors StatefulWorkerDurableObject
+      // (`this.#workerRunner.loadStatefulClass(ref)` → `ctx.facets.get(name,
+      // () => ({ class }))`). What it needs before it can be turned on: the
+      // loaded userspace class must speak the facet protocol this method drives
+      // below (`configure` + the parent-proxied alarm), which the plain
+      // `StreamProcessorDurableObject` base does not yet implement. Until that
+      // lands, only built-in facets are hosted — and no birth batch configures
+      // a userspace facet subscription, so this branch is never reached at
+      // runtime today.
+      throw new Error(
+        `userspace facet "${name}" cannot be hosted yet: the loaded class must implement the facet configure/alarm protocol`,
+      );
     }
     const workerExports = this.ctx.exports as Record<string, unknown>;
     // Loose lookup on purpose: the class is the sibling ProcessorFacet export
@@ -1319,7 +1333,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       this.#coreProcessorState.subscriptions.outbound.byName,
     ).flatMap(([name, entry]) => {
       const receiver = entry.configuration.receiver;
-      return receiver.action === "processor-wake" && receiver.placement === "facet" ? [name] : [];
+      return receiver.action === "facet-processor" ? [name] : [];
     });
     // Plain copy: the platform's AlarmInvocationInfo host object does not
     // serialize across the facet hop.
@@ -1367,7 +1381,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   }): StreamProcessorFacadeRpcTarget | ExpressionProcessorFacadeRpcTarget {
     const name = z.string().trim().min(1).parse(args.name);
     const receiver = this.#requireProcessorWakeSubscription(name);
-    if (receiver.placement === "facet") {
+    if (receiver.action === "facet-processor") {
       return new StreamProcessorFacadeRpcTarget({
         name,
         dial: () => this.#dialProcessorFacet(name),
@@ -1399,13 +1413,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     call: [method: string, ...args: unknown[]],
   ): Promise<unknown> {
     const receiver = this.#requireProcessorWakeSubscription(name);
-    if (receiver.placement === "facet") {
-      throw new Error(`subscription "${name}" now runs under facet placement; re-dial its facade`);
-    }
-    if (receiver.expression === undefined) {
-      throw new Error(
-        `processor-wake subscription "${name}" has neither facet placement nor an expression`,
-      );
+    if (receiver.action === "facet-processor") {
+      throw new Error(`subscription "${name}" now runs as a facet; re-dial its facade`);
     }
     const { value } = await evaluateItxExpression(this.#createEventDeliveryAuthorityRoot(), [
       ...receiver.expression.slice(0, -1),
@@ -1658,7 +1667,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   presentAgentRuntimeTransition(args: { transition: unknown }): void {
     const entry = this.#coreProcessorState.subscriptions.outbound.byName["slack-agent"];
     const receiver = entry?.configuration.receiver;
-    if (receiver?.action !== "processor-wake" || receiver.placement !== "facet") return;
+    if (receiver?.action !== "facet-processor") return;
     this.#runInBackground(async () => {
       const facet = await this.#dialProcessorFacet("slack-agent");
       disposeAcknowledgedRpcResult(
@@ -1693,9 +1702,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         return {
           name,
           action: receiver.action,
-          ...(receiver.action === "processor-wake" && receiver.placement === "facet"
-            ? { placement: "facet" as const }
-            : {}),
+          ...(receiver.action === "facet-processor" ? { placement: "facet" as const } : {}),
           configuredAtOffset: entry.configuredAtOffset,
           status:
             row?.status ??
@@ -2827,12 +2834,12 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     const receiver = configured.configuration.receiver;
-    if (receiver.action === "processor-wake") {
-      if (receiver.placement === "facet") {
-        const facet = await this.#dialProcessorFacet(trimmedName);
-        await facet.waitUntilProcessed({ offset: args.offset, timeoutMs, name: trimmedName });
-        return;
-      }
+    if (receiver.action === "facet-processor") {
+      const facet = await this.#dialProcessorFacet(trimmedName);
+      await facet.waitUntilProcessed({ offset: args.offset, timeoutMs, name: trimmedName });
+      return;
+    }
+    if (receiver.action === "wake-processor") {
       // Swap the expression's trailing `wakeStreamProcessor` property step for
       // the public `waitUntilProcessed` verb on the same `processor` node.
       const value = await this.#callExpressionProcessorNode(trimmedName, [
@@ -2955,8 +2962,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       // does not place under facet placement. Same gate as processorFacade.
       try {
         const receiver = this.#requireProcessorWakeSubscription(lane);
-        if (receiver.placement !== "facet") {
-          throw new Error(`subscription "${lane}" does not run under facet placement`);
+        if (receiver.action !== "facet-processor") {
+          throw new Error(`subscription "${lane}" does not run as a facet`);
         }
       } catch (error) {
         return Response.json(
@@ -2981,8 +2988,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         const receiver = this.#requireProcessorWakeSubscription(
           CapabilityHostProcessorContract.slug,
         );
-        if (receiver.placement !== "facet") {
-          throw new Error("the capability-host subscription does not run under facet placement");
+        if (receiver.action !== "facet-processor") {
+          throw new Error("the capability-host subscription does not run as a facet");
         }
       } catch (error) {
         return Response.json(

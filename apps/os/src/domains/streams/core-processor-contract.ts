@@ -20,6 +20,7 @@ import {
 } from "iterate/processors";
 import { ItxExpression } from "../../itx/expression.ts";
 import { canonicalizeStreamPath } from "../durable-object-names.ts";
+import { StatefulDynamicWorkerRef } from "../workers/schemas.ts";
 import { EventFilter } from "./event-filter.ts";
 
 // Version of the persisted core reduced state ("state" in KV). Bump this when
@@ -68,7 +69,15 @@ import { EventFilter } from "./event-filter.ts";
 // one identity — two instances of one contract are future work), and the
 // receiver gains `placement: "facet"` (the subscription name IS the facet
 // name; no itx expression).
-export const CORE_STATE_VERSION = 30;
+// Version 31 splits the `processor-wake` receiver into two explicit actions:
+// `facet-processor` (hosted as a facet of this stream's own Durable Object,
+// carrying a `source`: `builtin` = resolved by the stream's path-family
+// registration, or `userspace` = a StatefulDynamicWorkerRef whose DurableObject
+// class is LOADED and hosted as a facet) and `wake-processor` (dials an itx
+// `expression`, own-DO or userspace-worker placement). Facet vs remote is now
+// the action, not a `placement` field; the wake lane survives only for
+// `wake-processor`.
+export const CORE_STATE_VERSION = 31;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -135,37 +144,45 @@ const StreamReceiverDeliveryPolicy = DeliveryPolicy.extend({
  * copy names the receiving stream directly instead of hiding it inside
  * an ITX expression.
  */
+/**
+ * Where a `facet-processor`'s DurableObject class comes from.
+ *
+ * - `builtin`: resolved by this stream's own path-family registration — the
+ *   subscription NAME is the facet name and the registered-contract selector,
+ *   so nothing else is encoded (a name matching no registered processor fails
+ *   loudly at wake with the registry's unknown-name error).
+ * - `userspace`: the class is LOADED from a {@link StatefulDynamicWorkerRef}
+ *   (any repo path + revision + entry file + `className`) and hosted as a facet
+ *   of this stream's own Durable Object.
+ */
+const FacetProcessorSource = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("builtin") }),
+  z.strictObject({ kind: z.literal("userspace"), worker: StatefulDynamicWorkerRef }),
+]);
+
 export const SubscriptionReceiver = z.discriminatedUnion("action", [
-  z
-    .strictObject({
-      // No jsonataTransform here, ever: a hosted processor's reduced state must
-      // equal folding its stream's committed events. Wake delivery feeds the
-      // processor its own log, so transforming it would break replay/rebuild
-      // determinism.
-      // The subscription NAME is the contract selector: it must equal the
-      // registered processor slug (one identity; multi-instance — two names,
-      // one slug — is deliberately future work; see
-      // docs/stream-subscription-model-redesign.md). Nothing enforces that at
-      // configure time: a name matching no registered processor fails loudly
-      // at wake with the registry's unknown-name error.
-      action: z.literal("processor-wake"),
-      /**
-       * Where the processor runs. `"facet"` hosts it as a facet of this
-       * stream's own Durable Object: the subscription name IS the facet name
-       * and delivery is an in-process parent→facet dial — no itx expression.
-       * Omitted: the wake dials `expression` (own-DO or userspace-worker
-       * placement, exactly as before).
-       */
-      placement: z.literal("facet").optional(),
-      expression: DeliveryExpression.optional(),
-    })
-    .refine(
-      (receiver) => (receiver.placement === "facet") !== (receiver.expression !== undefined),
-      {
-        message:
-          'processor-wake requires exactly one of placement: "facet" or a delivery expression',
-      },
-    ),
+  z.strictObject({
+    // No jsonataTransform, ever: a hosted processor's reduced state must equal
+    // folding its stream's committed events; wake delivery feeds the processor
+    // its own log verbatim, so transforming it would break replay/rebuild
+    // determinism. The subscription NAME is the contract selector (one
+    // identity; multi-instance is future work — see
+    // docs/stream-subscription-model-redesign.md).
+    //
+    // A facet runs IN this stream's own Durable Object: the subscription name
+    // IS the facet name and delivery is an in-process parent→facet dial — no
+    // itx expression, no wake lane. `source` chooses the class.
+    action: z.literal("facet-processor"),
+    source: FacetProcessorSource,
+  }),
+  z.strictObject({
+    // A processor hosted in ANOTHER Durable Object (own-DO placement, or a
+    // userspace worker), woken by dialing this itx expression. Same
+    // NAME-is-the-selector rule; the only difference from a facet is WHERE it
+    // runs, so this is the one processor action that keeps the wake lane.
+    action: z.literal("wake-processor"),
+    expression: DeliveryExpression,
+  }),
   z.strictObject({
     action: z.literal("copy-to-stream"),
     receivingStreamPath: StreamPath,
@@ -524,11 +541,11 @@ export const CoreProcessorContract = defineProcessorContract({
       examples: [
         {
           description:
-            "A hosted agent processor owns its checkpoint and is woken by calling its durable ITX method.",
+            "A processor hosted in another Durable Object owns its checkpoint and is woken by calling its durable ITX method.",
           payload: {
             name: "agent",
             receiver: {
-              action: "processor-wake",
+              action: "wake-processor",
               expression: [
                 "agents",
                 ["get", "/agents/onboarding"],
@@ -540,12 +557,12 @@ export const CoreProcessorContract = defineProcessorContract({
         },
         {
           description:
-            "A processor hosted as a facet of the stream's own Durable Object: the subscription name is the facet name; no expression is needed.",
+            "A built-in processor hosted as a facet of the stream's own Durable Object: the subscription name is the facet name; the stream's path-family registration resolves the class.",
           payload: {
             name: "device",
             receiver: {
-              action: "processor-wake",
-              placement: "facet",
+              action: "facet-processor",
+              source: { kind: "builtin" },
             },
           },
         },

@@ -81,7 +81,7 @@ function hostedConfig(
     description: "Focused hosted processor test",
     ...(filter === undefined ? {} : { filter }),
     receiver: {
-      action: "processor-wake",
+      action: "wake-processor",
       expression: ["agents", ["get", "/source"], "processor", "wakeStreamProcessor"],
     },
   };
