@@ -321,11 +321,7 @@ test("Agent create replays its earlier birth and setup events through its subscr
     requiredOffset(description, (event) => {
       if (event.type !== "events.iterate.com/stream/subscription-configured") return false;
       const payload = wakeSubscriptionPayload(event);
-      return (
-        payload.receiver?.action === "processor-wake" &&
-        payload.receiver.placement === "facet" &&
-        payload.name === name
-      );
+      return payload.receiver?.action === "facet-processor" && payload.name === name;
     });
   const agentSubscriptionOffset = facetWakeSubscriptionOffset(
     "agent processor subscription",
@@ -693,11 +689,11 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     );
     subscriptionCount = subscriptions.length;
     processorSlugs = subscriptions
-      .filter(
-        (event) =>
-          (event.payload as { receiver?: { action?: string } } | undefined)?.receiver?.action ===
-          "processor-wake",
-      )
+      .filter((event) => {
+        const action = (event.payload as { receiver?: { action?: string } } | undefined)?.receiver
+          ?.action;
+        return action === "facet-processor" || action === "wake-processor";
+      })
       // The subscription NAME is the contract selector (name == registered slug).
       .map((event) => (event.payload as { name?: string } | undefined)?.name)
       .filter((slug): slug is string => typeof slug === "string");
