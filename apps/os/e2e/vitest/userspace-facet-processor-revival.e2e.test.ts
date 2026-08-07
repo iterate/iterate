@@ -31,9 +31,11 @@ const WORK_REQUESTED = "events.iterate.test/slow-work/requested";
 const WORK_STARTED = "events.iterate.test/slow-work/started";
 const WORK_COMPLETED = "events.iterate.test/slow-work/completed";
 
-// "Somewhat slow": long enough that we can reliably kill the DO after the
-// attempt starts (a `…/started` event) but before it appends `…/completed`.
-const SLOW_WORK_MS = 20_000;
+// "Somewhat slow": a real multi-second side effect — long enough that, once we
+// see the attempt start (a `…/started` event, detected within a sub-second
+// poll), we can kill the DO well before it would append `…/completed`, but no
+// longer than it needs to be.
+const SLOW_WORK_MS = 8_000;
 
 /**
  * The userspace facet source, committed to the project's config repo. Plain
@@ -133,7 +135,11 @@ export class SlowFacet extends StreamProcessorFacet {
 
 test(
   "a userspace facet processor's slow side effect survives killing the Stream DO: the parent alarm revives it and finishes the work",
-  { timeout: 300_000 },
+  // Ceiling covering the two sequential waits below (cold build + revival) plus
+  // setup. The expected run is ~60-90s — dominated by the one-time cold facet
+  // build and the framework's ~10s keepalive lead, both irreducible; the
+  // deliberate slow effect itself is only 8s.
+  { timeout: 180_000 },
   async () => {
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
@@ -198,7 +204,7 @@ test(
     // and ran as a facet.
     await waitForCondition(async () => (await eventTypesOnStream(WORK_STARTED)).includes(workId), {
       description: "the userspace facet to build, wake, and start its slow attempt",
-      timeoutMs: 120_000,
+      timeoutMs: 90_000,
     });
 
     // ...and it has NOT completed yet — the slow body is still running, and the
@@ -220,7 +226,7 @@ test(
       async () => (await eventTypesOnStream(WORK_COMPLETED)).includes(workId),
       {
         description: "the alarm to revive the killed facet and finish the slow work",
-        timeoutMs: 150_000,
+        timeoutMs: 60_000,
       },
     );
 
