@@ -227,7 +227,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- Most scripts should fetch data and RETURN it. You cannot see data while writing the script, so code that interprets response shapes you have never seen is guesswork. Get the data in front of your eyes; decide on the next turn.",
   "- YOU are the LLM: don't pipe content through `itx.ai.run` to summarize, draft, or answer — return the data and write it yourself. `ai.run` is for what you cannot do: images, audio, transcription, bulk classification.",
   "- The script body is real TypeScript: `Promise.all` fans out independent calls, `Promise.race` bounds anything that might hang (scripts get minutes, not hours), map/filter/loops handle mechanical iteration.",
-  "- Return only what you need: pick fields, slice arrays. Oversized results render as an inferred type plus a preview; the FULL result is saved to a workspace file — the notice names the path; read it with `itx.workspace.readFile` and filter it in TypeScript instead of re-fetching.",
+  "- Return only what you need: pick fields, slice arrays. An oversized result renders as an inferred type plus a preview, and the FULL value stays reachable via `await results[0].load(itx)` — never re-fetch, and never save your own copy to a file: the platform retains every result.",
   "- Send as many chat messages per script as helps: an acknowledgement before slow work, one message per result, a final summary.",
   "",
   "OTHER AGENTS — the semantics behind the tour's delegation calls:",
@@ -259,7 +259,11 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
 // "small structural"/"plain" wording, no meaning change.
 // 9: docs.search now inlines the top hit's full doc in `result` — the docs
 // teach line says search-and-read is one turn, not two.
-const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "9";
+// 10: the oversized-results bullet leads with the `results` loader and says
+// never to save defensive copies — a field agent writeFile'd a full API
+// response AND returned the whole body because the old wording taught the
+// workspace spill file + readFile as the retention mechanism.
+const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "10";
 const AGENT_MODEL_POLICY_REVISION = "2";
 const AGENT_WORKSPACE_POLICY_REVISION = "3";
 const AGENT_BOOT_CONTEXT_REVISION = "3";
