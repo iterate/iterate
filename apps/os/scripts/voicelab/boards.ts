@@ -35,6 +35,17 @@ export interface BoardsOptions extends VoicelabConnectOptions {
   expect?: string;
   /** Where to write the evidence JSON. */
   out?: string;
+  /**
+   * Speak a second time OVER the first answer, and check the device reacts.
+   *
+   * The one-turn proof above cannot see the failure people actually report,
+   * which is not "the device is silent" but "it talks over me and will not
+   * stop". That needs two utterances where the second lands while the speaker
+   * is still playing the first, and it needs the DEVICE's own barge-in
+   * counters as the witness — a transcript cannot tell you whether the board
+   * stopped playing, only what the model eventually said.
+   */
+  barge?: boolean;
 }
 
 /** One board, as this harness has to drive it. */
@@ -66,6 +77,18 @@ interface BoardResult {
   verdict: string;
   callActiveMs?: number | null;
   streamPath?: string;
+  /** Second-utterance evidence, present only when --barge ran. */
+  barge?: {
+    /** Speaker writes seen at the moment the interruption was spoken. */
+    spokeOverPlaybackAt: number;
+    /** The device's own count of interruptions it acted on. */
+    bargeIns: number;
+    /** Answers the device abandoned mid-play, which is what stopping IS. */
+    superseded: number;
+    /** A second answer started after the interruption. */
+    answeredAgain: boolean;
+    verdict: string;
+  };
   deviceHeard?: string;
   deviceSaid?: string;
   before?: Record<string, unknown>;
@@ -221,6 +244,67 @@ export async function boards(options: BoardsOptions) {
         console.error(`  heard: ${JSON.stringify(record.deviceHeard)}`);
         console.error(`  said:  ${JSON.stringify(record.deviceSaid)}`);
         console.error(`  ${record.verdict}  stream=${streamPath}`);
+
+        if (options.barge === true && answered) {
+          /*
+           * THE SECOND TURN, spoken deliberately EARLY.
+           *
+           * The point is to be talking while the board is talking, so the
+           * prompt above must be one with a long answer and this must not
+           * wait for it to finish. `spkAnswerStarts` at the moment of the
+           * interruption is recorded so the evidence says whether playback
+           * was actually in flight — an interruption of silence proves
+           * nothing and must not be allowed to look like a pass.
+           */
+          const during = await healthWithRetry(kit);
+          const startsBefore = Number(during.spkAnswerStarts ?? 0);
+          const bargeInsBefore = Number(during.bargeIns ?? 0);
+          const supersededBefore = Number(during.spkSupersededMidplay ?? 0);
+
+          if (board.pushToTalk) await kit.pushToTalk.start();
+          await run("say", ["-r", "170", "Stop. Say the word pineapple instead."]);
+          if (board.pushToTalk) await kit.pushToTalk.stop();
+
+          let answeredAgain = false;
+          let bargeIns = 0;
+          let superseded = 0;
+          for (let attempt = 0; attempt < 30; attempt++) {
+            const health = await healthWithRetry(kit);
+            bargeIns = Number(health.bargeIns ?? 0) - bargeInsBefore;
+            superseded = Number(health.spkSupersededMidplay ?? 0) - supersededBefore;
+            if (Number(health.spkAnswerStarts ?? 0) > startsBefore) {
+              answeredAgain = true;
+              break;
+            }
+            await sleep(1000);
+          }
+          /*
+           * Two separate claims, kept separate. "It heard me while it was
+           * talking" is the barge-in; "it then said something new" is the
+           * second turn. A board that stops but never answers again is a
+           * different defect from one that answers without ever stopping.
+           */
+          const noticed = bargeIns > 0 || superseded > 0;
+          record.barge = {
+            spokeOverPlaybackAt: Number(during.spkWrites ?? 0),
+            bargeIns,
+            superseded,
+            answeredAgain,
+            verdict:
+              noticed && answeredAgain
+                ? "PASS"
+                : answeredAgain
+                  ? "PASS (answered again, but the device logged no interruption)"
+                  : noticed
+                    ? "FAIL: stopped for the interruption and never answered it"
+                    : "FAIL: talked straight through the interruption",
+          };
+          console.error(
+            `  barge: bargeIns+${String(bargeIns)} superseded+${String(superseded)} ` +
+              `answeredAgain=${String(answeredAgain)} — ${record.barge.verdict}`,
+          );
+          record.deviceSaid = saidBack.trim();
+        }
       } finally {
         connection.close();
       }
