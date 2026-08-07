@@ -62,7 +62,9 @@ static void fixture_init(struct fixture *fixture) {
     .context = &fixture->sensor,
     .capture = capture,
   };
-  assert(iterate_kit_camera_init(&fixture->camera, &driver) == ITERATE_KIT_OK);
+  assert(
+      iterate_kit_camera_init(&fixture->camera, &driver, "camera") ==
+      ITERATE_KIT_OK);
   fixture->module = iterate_kit_camera_module(&fixture->camera);
 }
 
@@ -82,6 +84,59 @@ static void the_module_advertises_the_two_paths_a_caller_needs(void) {
   assert(strcmp(fixture.module.methods[1].path[1], "readChunk") == 0);
   /* A session that goes away must not keep the sensor's buffer. */
   assert(fixture.module.session_ended != NULL);
+}
+
+/*
+ * TWO IMAGE SOURCES ON ONE BOARD, which is why the method table moved into the
+ * instance. StackChan has a sensor and a screen; with a `static` table shared
+ * by every camera, the second mount silently renamed the first and the board
+ * answered `screen.take` twice while `camera.take` addressed nothing.
+ */
+static void a_second_mount_does_not_rename_the_first(void) {
+  struct fixture sensor_side;
+  struct fixture screen_side;
+  fixture_init(&sensor_side);
+
+  memset(&screen_side, 0, sizeof(screen_side));
+  screen_side.sensor.buffers_available = 1;
+  const struct iterate_kit_camera_driver driver = {
+    .context = &screen_side.sensor,
+    .capture = capture,
+  };
+  assert(
+      iterate_kit_camera_init(&screen_side.camera, &driver, "screen") ==
+      ITERATE_KIT_OK);
+  screen_side.module = iterate_kit_camera_module(&screen_side.camera);
+
+  assert(strcmp(screen_side.module.methods[0].path[0], "screen") == 0);
+  assert(strcmp(sensor_side.module.methods[0].path[0], "camera") == 0);
+  /* Each dispatch reaches its OWN sensor, not whichever mounted last. */
+  assert(sensor_side.module.context == &sensor_side.camera);
+  assert(screen_side.module.context == &screen_side.camera);
+}
+
+/* An error tells the caller which method to call, under either noun. */
+static void a_stale_read_names_the_mount_it_belongs_to(void) {
+  struct fixture fixture;
+  struct capnweb_reply reply;
+  memset(&fixture, 0, sizeof(fixture));
+  fixture.sensor.buffers_available = 1;
+  const struct iterate_kit_camera_driver driver = {
+    .context = &fixture.sensor,
+    .capture = capture,
+  };
+  assert(
+      iterate_kit_camera_init(&fixture.camera, &driver, "screen") ==
+      ITERATE_KIT_OK);
+  fixture.module = iterate_kit_camera_module(&fixture.camera);
+
+  memset(&reply, 0, sizeof(reply));
+  assert(
+      fixture.module.methods[1].dispatch(
+          fixture.module.context, NULL, &reply) == CAPNWEB_OK);
+  assert(reply.kind == CAPNWEB_REPLY_ERROR);
+  assert(strstr(reply.value.error.message, "screen.take()") != NULL);
+  assert(strstr(reply.value.error.message, "camera") == NULL);
 }
 
 /* An image larger than one message is why this capability is chunked. */
@@ -212,14 +267,32 @@ static void reading_before_taking_says_which_mistake_it_was(void) {
 static void init_refuses_a_driver_that_cannot_capture(void) {
   struct iterate_kit_camera camera;
   const struct iterate_kit_camera_driver empty = {0};
+  const struct iterate_kit_camera_driver working = {
+    .context = NULL,
+    .capture = capture,
+  };
   assert(
-      iterate_kit_camera_init(&camera, &empty) == ITERATE_KIT_INVALID_ARGUMENT);
-  assert(iterate_kit_camera_init(NULL, &empty) == ITERATE_KIT_INVALID_ARGUMENT);
-  assert(iterate_kit_camera_init(&camera, NULL) == ITERATE_KIT_INVALID_ARGUMENT);
+      iterate_kit_camera_init(&camera, &empty, "camera") ==
+      ITERATE_KIT_INVALID_ARGUMENT);
+  assert(
+      iterate_kit_camera_init(NULL, &empty, "camera") ==
+      ITERATE_KIT_INVALID_ARGUMENT);
+  assert(
+      iterate_kit_camera_init(&camera, NULL, "camera") ==
+      ITERATE_KIT_INVALID_ARGUMENT);
+  /* A nameless mount would answer under ".take", which addresses nothing. */
+  assert(
+      iterate_kit_camera_init(&camera, &working, NULL) ==
+      ITERATE_KIT_INVALID_ARGUMENT);
+  assert(
+      iterate_kit_camera_init(&camera, &working, "") ==
+      ITERATE_KIT_INVALID_ARGUMENT);
 }
 
 int main(void) {
   the_module_advertises_the_two_paths_a_caller_needs();
+  a_second_mount_does_not_rename_the_first();
+  a_stale_read_names_the_mount_it_belongs_to();
   a_capture_reports_how_many_chunks_it_will_take();
   a_huge_chunk_index_can_never_name_a_valid_offset();
   a_new_capture_never_leaks_the_previous_frame();

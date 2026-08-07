@@ -109,6 +109,22 @@ struct iterate_kit_camera {
   uint32_t capture_failures;
   uint32_t chunks_read;
   uint32_t stale_chunk_requests;
+  /*
+   * THE MOUNT, per instance, because a board has more than one image to pull.
+   *
+   * StackChan has a sensor AND a screen, and reading the screen back is the
+   * only way to answer "the display is black" from off the desk — the display
+   * counters can say 5,625 transfers succeeded and still not say what was in
+   * them. Both are the same protocol (hold one frame, drain it in chunks), so
+   * the noun is data rather than a second copy of this module.
+   *
+   * The paths and the method table live in the instance because they name it:
+   * `iterate_kit_module.methods` is borrowed for the peer's lifetime, so a
+   * `static` table here would be shared by every camera on the board and the
+   * second one to mount would rename the first.
+   */
+  const char *paths[2][2];
+  struct iterate_kit_method methods[2];
 };
 
 /**
@@ -124,9 +140,17 @@ struct iterate_kit_camera {
  */
 bool iterate_kit_camera_chunk_index_is_valid(size_t length, int64_t index);
 
+/**
+ * Wire one image source to the noun it answers under.
+ *
+ * `noun` is borrowed and must outlive the peer — a string literal, in every
+ * real caller. It becomes `<noun>.take()` and `<noun>.readChunk({index})`:
+ * "camera" for a sensor, "screen" for a display read back.
+ */
 enum iterate_kit_status iterate_kit_camera_init(
     struct iterate_kit_camera *camera,
-    const struct iterate_kit_camera_driver *driver);
+    const struct iterate_kit_camera_driver *driver,
+    const char *noun);
 struct iterate_kit_module iterate_kit_camera_module(
     struct iterate_kit_camera *camera);
 

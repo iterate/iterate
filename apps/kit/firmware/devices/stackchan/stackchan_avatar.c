@@ -1247,3 +1247,55 @@ uint32_t iterate_kit_stackchan_avatar_speaker_status_peak(void) {
 bool iterate_kit_stackchan_avatar_display_active(void) {
   return __atomic_load_n(&owner.display_active, __ATOMIC_ACQUIRE) != 0U;
 }
+
+/*
+ * READING THE SCREEN BACK, which is the only honest answer to "it is black".
+ *
+ * The display counters can say `displayTransfers: 5625` with zero failures and
+ * still not say what was IN those transfers — a face rendered entirely in the
+ * background colour is a perfect success by every number this board publishes.
+ * So the source surface itself is copyable, and `screen.take()` upstairs hands
+ * it out.
+ *
+ * The 320x240 panel is never copied: the source is 160x120 and the strip
+ * scaler doubles it on the way to the glass, so this returns exactly the
+ * pixels the renderer produced and nothing the scaler invented.
+ *
+ * Byte order is undone on the way out. The surface sits in the ILI9341's
+ * big-endian wire order between frames (see swap_rgb565_bytes_for_panel), and
+ * a caller decoding RGB565 has no reason to know that — host order is what the
+ * portable renderer emits and what the host tests hash.
+ */
+esp_err_t iterate_kit_stackchan_avatar_capture(
+    uint16_t *destination,
+    size_t capacity_pixels,
+    uint16_t *width,
+    uint16_t *height) {
+  if (destination == NULL || width == NULL || height == NULL) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  if (capacity_pixels < (size_t)FACE_RENDER_PIXEL_COUNT) {
+    return ESP_ERR_INVALID_SIZE;
+  }
+  if (__atomic_load_n(&owner.ready, __ATOMIC_ACQUIRE) == 0U ||
+      owner.framebuffer == NULL || owner.framebuffer_access == NULL) {
+    return ESP_ERR_INVALID_STATE;
+  }
+  /*
+   * Waiting, unlike the render task, which skips its tick instead. A caller
+   * asking what is on screen wants an answer rather than a miss, and the
+   * longest anyone can hold this lock is one frame's render. Two visual ticks
+   * is generous and still far inside the caller's RPC deadline.
+   */
+  if (xSemaphoreTake(owner.framebuffer_access, pdMS_TO_TICKS(200)) != pdPASS) {
+    return ESP_ERR_TIMEOUT;
+  }
+  for (size_t index = 0U; index < (size_t)FACE_RENDER_PIXEL_COUNT; ++index) {
+    const uint16_t pixel = owner.framebuffer[index];
+    destination[index] = (uint16_t)((pixel << 8U) | (pixel >> 8U));
+  }
+  (void)xSemaphoreGive(owner.framebuffer_access);
+  *width = (uint16_t)FACE_RENDER_WIDTH;
+  *height = (uint16_t)FACE_RENDER_HEIGHT;
+  return ESP_OK;
+}

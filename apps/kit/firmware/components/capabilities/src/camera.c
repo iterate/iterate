@@ -11,8 +11,12 @@
  * bookkeeping in service of that, because the failure this shape prevents is
  * a sensor with no buffer left to capture into and no way to say why.
  */
-static const char *const take_path[] = {"camera", "take"};
-static const char *const read_chunk_path[] = {"camera", "readChunk"};
+/*
+ * The second segment is fixed; only the noun in front of it varies, so these
+ * are shared and the instance owns just the pair of pointers naming them.
+ */
+static const char *const take_verb = "take";
+static const char *const read_chunk_verb = "readChunk";
 
 /** Hand the frame back to the driver, once, and forget it. */
 static void release_frame(struct iterate_kit_camera *camera) {
@@ -35,6 +39,25 @@ bool iterate_kit_camera_chunk_index_is_valid(size_t length, int64_t index) {
 static size_t chunk_count(size_t length) {
   return (length + (size_t)ITERATE_KIT_CAMERA_CHUNK_BYTES - 1U) /
       (size_t)ITERATE_KIT_CAMERA_CHUNK_BYTES;
+}
+
+/*
+ * An error that names the method the caller should have called, which is not
+ * always "camera": the same module answers under "screen" on a board that can
+ * be asked what its display is showing.
+ */
+static enum capnweb_status reply_naming_the_noun(
+    struct capnweb_reply *reply,
+    const struct iterate_kit_camera *camera,
+    const char *error_name,
+    const char *format) {
+  static char message[96];
+  const int written =
+      snprintf(message, sizeof(message), format, camera->paths[0][0]);
+  if (written < 0 || (size_t)written >= sizeof(message)) {
+    return capnweb_reply_set_error(reply, error_name, format);
+  }
+  return capnweb_reply_set_error(reply, error_name, message);
 }
 
 static enum capnweb_status take(
@@ -76,7 +99,7 @@ static enum capnweb_status take(
     camera->has_frame = true;
     release_frame(camera);
     return capnweb_reply_set_error(
-        reply, "Error", "camera captured an empty frame");
+        reply, "Error", "the capture succeeded but the frame was empty");
   }
 
   camera->held = photo;
@@ -97,7 +120,7 @@ static enum capnweb_status take(
   if (written < 0 || (size_t)written >= sizeof(meta)) {
     release_frame(camera);
     return capnweb_reply_set_error(
-        reply, "RangeError", "camera metadata did not fit");
+        reply, "RangeError", "frame metadata did not fit");
   }
   return capnweb_reply_set_borrowed_expression(
       reply, meta, (size_t)written, NULL, NULL);
@@ -120,14 +143,14 @@ static enum capnweb_status read_chunk(
      * remedy is one call away. "No frame" and "index out of range" are
      * different mistakes and must not share a message.
      */
-    return capnweb_reply_set_error(
-        reply, "Error", "no frame is held — call camera.take() first");
+    return reply_naming_the_noun(
+        reply, camera, "Error", "no frame is held — call %s.take() first");
   }
   if (!iterate_kit_read_object_argument(call, &object) ||
       !iterate_kit_read_int_field(&object, "index", &index) ||
       index < 0) {
-    return capnweb_reply_set_error(
-        reply, "TypeError", "camera.readChunk needs {index}");
+    return reply_naming_the_noun(
+        reply, camera, "TypeError", "%s.readChunk needs {index}");
   }
   /*
    * BOUND BEFORE MULTIPLYING — see the predicate's own comment for the wrap it
@@ -180,24 +203,30 @@ static void session_ended(void *context) {
 
 enum iterate_kit_status iterate_kit_camera_init(
     struct iterate_kit_camera *camera,
-    const struct iterate_kit_camera_driver *driver) {
-  if (camera == NULL || driver == NULL || driver->capture == NULL) {
+    const struct iterate_kit_camera_driver *driver,
+    const char *noun) {
+  if (camera == NULL || driver == NULL || driver->capture == NULL ||
+      noun == NULL || noun[0] == '\0') {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   memset(camera, 0, sizeof(*camera));
   camera->driver = *driver;
+  camera->paths[0][0] = noun;
+  camera->paths[0][1] = take_verb;
+  camera->paths[1][0] = noun;
+  camera->paths[1][1] = read_chunk_verb;
+  camera->methods[0] =
+      (struct iterate_kit_method){camera->paths[0], 2U, take};
+  camera->methods[1] =
+      (struct iterate_kit_method){camera->paths[1], 2U, read_chunk};
   return ITERATE_KIT_OK;
 }
 
 struct iterate_kit_module iterate_kit_camera_module(
     struct iterate_kit_camera *camera) {
-  static const struct iterate_kit_method methods[] = {
-    {take_path, 2U, take},
-    {read_chunk_path, 2U, read_chunk},
-  };
   const struct iterate_kit_module module = {
-    .methods = methods,
-    .method_count = sizeof(methods) / sizeof(methods[0]),
+    .methods = camera->methods,
+    .method_count = sizeof(camera->methods) / sizeof(camera->methods[0]),
     .context = camera,
     .poll = NULL,
     .close = NULL,

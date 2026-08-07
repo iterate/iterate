@@ -2,6 +2,8 @@
 #define ITERATE_KIT_PLATFORMS_STACKCHAN_AVATAR_H
 
 #include "iterate/kit/conversation_lights.h"
+/* For FACE_RENDER_PIXEL_COUNT, which sizes a capture's destination. */
+#include "iterate/kit/avatar/face_render.h"
 
 #include "esp_err.h"
 
@@ -154,6 +156,26 @@ void iterate_kit_stackchan_avatar_metrics_snapshot(
  * counting up, and nothing it published said the display had been switched off.
  */
 bool iterate_kit_stackchan_avatar_display_active(void);
+
+/**
+ * Copy the rendered face out, so somebody off the desk can see it.
+ *
+ * `displayActive` says the panel is being driven and `displayTransfers` says
+ * how often; neither says what the pixels were, and a face drawn entirely in
+ * the background colour satisfies both. This closes that gap: the source
+ * surface as the renderer produced it, 160x120 host-order RGB565 — the panel's
+ * 320x240 is this doubled by the strip scaler, so nothing is lost by copying
+ * the smaller one.
+ *
+ * `destination` needs FACE_RENDER_PIXEL_COUNT pixels. Returns
+ * ESP_ERR_INVALID_STATE before the avatar is running and ESP_ERR_TIMEOUT if a
+ * render held the surface for two whole visual ticks.
+ */
+esp_err_t iterate_kit_stackchan_avatar_capture(
+    uint16_t *destination,
+    size_t capacity_pixels,
+    uint16_t *width,
+    uint16_t *height);
 
 #ifdef __cplusplus
 }

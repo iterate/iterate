@@ -34,13 +34,24 @@ interface DeviceCapability {
   pushToTalk: { start(): Promise<boolean>; stop(): Promise<boolean> };
   setBackground(colour: string): Promise<boolean>;
   health(): Promise<Record<string, unknown>>;
-  takeScreenshot(): Promise<{
-    width: number;
-    height: number;
-    bytes: number;
-    chunks: number;
-  }>;
-  readScreenshotChunk(index: number): Promise<ArrayBuffer>;
+  /**
+   * The screen, read back the same way the camera is: one frame held, drained
+   * in chunks that fit a control message.
+   *
+   * Both are `iterate_kit_camera` on the device — the noun is the only
+   * difference — so anything learned about one applies to the other.
+   */
+  screen: {
+    take(): Promise<{
+      width: number;
+      height: number;
+      bytes: number;
+      chunks: number;
+      chunkSize: number;
+      contentType: string;
+    }>;
+    readChunk(args: { index: number }): Promise<ArrayBuffer>;
+  };
   recording: {
     status(): Promise<Record<string, unknown>>;
     size(name: string): Promise<number>;
@@ -73,17 +84,48 @@ export async function device(options: DeviceOptions) {
   }
 
   if (action === "screenshot") {
-    const meta = await capability.takeScreenshot();
+    /*
+     * THE ANSWER TO "THE SCREEN IS BLACK", which no counter could give.
+     *
+     * displayActive, displayTransfers and displayTransferFails all measure the
+     * PIPE. A face rendered entirely in the background colour reads healthy on
+     * every one of them, so the pixels had to become fetchable before anyone
+     * could say whether the board was dark or merely drawing nothing.
+     */
+    const meta = await capability.screen.take();
     const pixels = new Uint8Array(meta.bytes);
     let offset = 0;
     for (let index = 0; index < meta.chunks; index++) {
-      const chunk = new Uint8Array(await capability.readScreenshotChunk(index));
+      const chunk = new Uint8Array(await capability.screen.readChunk({ index }));
       pixels.set(chunk, offset);
       offset += chunk.length;
     }
+    if (offset !== meta.bytes) {
+      throw new Error(
+        `the device promised ${String(meta.bytes)} bytes in ${String(meta.chunks)} chunks ` +
+          `and delivered ${String(offset)}`,
+      );
+    }
     const out = options.out ?? "device-screen.png";
     fs.writeFileSync(out, encodeRgb565Png(pixels, meta.width, meta.height));
-    console.log(`${out}: ${meta.width}x${meta.height}`);
+    /*
+     * Say whether it is uniform, because that is the actual question being
+     * asked and a PNG on disk does not answer it over a terminal.
+     */
+    const first = (pixels[1] << 8) | pixels[0];
+    let uniform = true;
+    for (let index = 2; index < pixels.length; index += 2) {
+      if (((pixels[index + 1] << 8) | pixels[index]) !== first) {
+        uniform = false;
+        break;
+      }
+    }
+    console.log(
+      `${out}: ${meta.width}x${meta.height} ${meta.contentType}` +
+        (uniform
+          ? ` — EVERY PIXEL IS 0x${first.toString(16).padStart(4, "0")}, so the panel is being sent a blank frame`
+          : " — the frame has content"),
+    );
     return;
   }
 

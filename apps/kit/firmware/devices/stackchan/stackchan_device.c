@@ -1193,13 +1193,70 @@ static uint8_t speaker_volume(void *context) {
   return stackchan_audio_volume();
 }
 
+/*
+ * The screen's own copy of the frame, because the loan outlives the dispatch.
+ *
+ * The image module borrows these bytes into a reply that is serialised after
+ * the dispatch returns, so this cannot be the avatar's live surface — the
+ * render task would be writing the next face into it mid-send. PSRAM for the
+ * same reason the source surface is there: 38.4 KiB of internal DMA memory is
+ * the pool TLS and Wi-Fi compete for, and losing that argument drops calls.
+ *
+ * Allocated on first use and kept. A screenshot is rare, but a board asked for
+ * one twice should not be able to fail the second time because the heap moved
+ * underneath it in between.
+ */
+static uint16_t *screen_pixels;
+
+static enum iterate_kit_status capture_screen(
+    void *context, struct iterate_kit_photo *photo) {
+  uint16_t width = 0U;
+  uint16_t height = 0U;
+  (void)context;
+  if (screen_pixels == NULL) {
+    screen_pixels = heap_caps_malloc(
+        (size_t)FACE_RENDER_PIXEL_COUNT * sizeof(*screen_pixels),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (screen_pixels == NULL) return ITERATE_KIT_LIMIT;
+  }
+  if (iterate_kit_stackchan_avatar_capture(
+          screen_pixels,
+          (size_t)FACE_RENDER_PIXEL_COUNT,
+          &width,
+          &height) != ESP_OK) {
+    /*
+     * The avatar is not running, or a render held the surface for two whole
+     * visual ticks. Both are worth retrying and neither is this module's to
+     * fix, so it says "busy" rather than inventing a frame.
+     */
+    return ITERATE_KIT_BACKPRESSURE;
+  }
+  photo->bytes = (const uint8_t *)screen_pixels;
+  photo->length = (size_t)FACE_RENDER_PIXEL_COUNT * sizeof(*screen_pixels);
+  photo->width = width;
+  photo->height = height;
+  /*
+   * Not a MIME type anyone will decode by name: these are raw host-order
+   * RGB565 pixels, and the caller wraps them in a PNG. Saying so beats
+   * "application/octet-stream", which would be true and useless.
+   */
+  photo->content_type = "image/x-rgb565";
+  photo->release_context = NULL;
+  photo->release = NULL;
+  return ITERATE_KIT_OK;
+}
+
 static bool initialise_connection(void) {
   static const char *const mount_path[] = {"kit", "stackchan"};
   static struct iterate_kit_servos servos;
   static struct iterate_kit_health health;
   static struct iterate_kit_camera camera;
-  /* servos, conversation, health, camera — the camera only if it comes up. */
-  static struct iterate_kit_module modules[5];
+  static struct iterate_kit_camera screen;
+  /*
+   * servos, conversation, speaker, health, camera, screen — the camera only if
+   * it comes up.
+   */
+  static struct iterate_kit_module modules[6];
   static struct iterate_kit_speaker speaker;
   size_t module_count = 0U;
   struct iterate_kit_itx_connection_options options;
@@ -1288,8 +1345,32 @@ static bool initialise_connection(void) {
   {
     const struct iterate_kit_camera_driver driver =
         iterate_kit_stackchan_camera_driver();
-    if (iterate_kit_camera_init(&camera, &driver) == ITERATE_KIT_OK) {
+    if (iterate_kit_camera_init(&camera, &driver, "camera") ==
+        ITERATE_KIT_OK) {
       modules[module_count++] = iterate_kit_camera_module(&camera);
+    }
+  }
+  /*
+   * THE SCREEN, ASKABLE, for the same reason health() is.
+   *
+   * "The StackChan's screen is black the whole time but the LEDs are green"
+   * was reported three times and could not be answered from here: every
+   * instrument this board publishes about its display measures the PIPE — is
+   * the panel active, how many transfers, how many failed — and all of them
+   * read healthy while a face drawn in the background colour would too. The
+   * pixels themselves were the one thing nobody could ask for.
+   *
+   * Same protocol as the camera, and deliberately the same code: hold one
+   * frame, drain it in chunks that fit a control message.
+   */
+  {
+    const struct iterate_kit_camera_driver driver = {
+      .context = NULL,
+      .capture = capture_screen,
+    };
+    if (iterate_kit_camera_init(&screen, &driver, "screen") ==
+        ITERATE_KIT_OK) {
+      modules[module_count++] = iterate_kit_camera_module(&screen);
     }
   }
   peer_options = (struct iterate_kit_peer_options){
