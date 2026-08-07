@@ -11,6 +11,7 @@ import {
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { isUnconfiguredSubscriptionError } from "../streams/utils.ts";
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
@@ -151,7 +152,18 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
 
   /** Refresh the local mirror from the facade (a catch-up-backed snapshot). */
   async #refreshReducedState(): Promise<WorkspaceProcessorState> {
-    const { state } = await (await this.#processorFacade()).snapshot();
+    let state: WorkspaceProcessorState;
+    try {
+      ({ state } = await (await this.#processorFacade()).snapshot());
+    } catch (error) {
+      // UNBORN workspace: before the birth batch commits, the workspace
+      // subscription does not exist and the facade refuses the name (a read
+      // must never materialize a facet). Substitute the empty fold —
+      // #assertCreated then reports the friendly missing-workspace guidance,
+      // exactly as the retired host fabricated its pre-birth reads.
+      if (!isUnconfiguredSubscriptionError(error)) throw error;
+      state = WorkspaceProcessorContract.stateSchema.parse({}) as WorkspaceProcessorState;
+    }
     this.#reducedState = state;
     return state;
   }
