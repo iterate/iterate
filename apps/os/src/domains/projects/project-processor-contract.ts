@@ -64,8 +64,11 @@ const ProjectClientRecord = z.object({
         "this set's non-emptiness.",
     }),
 });
-/** What `itx.clients.list()` returns per client. */
+/** The clients-catalog fold record (includes reducer bookkeeping). */
 export type ProjectClientRecord = z.infer<typeof ProjectClientRecord>;
+
+/** What `itx.clients.list()` returns per client: the catalog record minus reducer bookkeeping. */
+export type ProjectClientListItem = Omit<ProjectClientRecord, "connectedAtOffsets">;
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",

@@ -373,7 +373,7 @@ import { withStreamContext, type StreamContext } from "./domains/projects/stream
 import {
   parseProjectCreationTerminal,
   ProjectProcessorContract,
-  type ProjectClientRecord,
+  type ProjectClientListItem,
   type ProjectProcessorState,
 } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
@@ -2085,9 +2085,13 @@ class ClientsRpcTarget extends IterateRpcTarget<"Clients"> {
   }
 
   /** Known clients, read from the project processor's reduced catalog. */
-  async list(): Promise<ProjectClientRecord[]> {
+  async list(): Promise<ProjectClientListItem[]> {
     const state = await projectProcessorState(this.props.projectId);
-    return Object.values(state.clients);
+    // Public fields only — connectedAtOffsets is reducer bookkeeping, not
+    // contract (the agents.list posture).
+    return Object.values(state.clients).map(
+      ({ connectedAtOffsets: _bookkeeping, ...client }) => client,
+    );
   }
 }
 

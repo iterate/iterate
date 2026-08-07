@@ -719,7 +719,7 @@ export interface Clients {
   /** The client scope's capability host — the full shipped surface, no wrapper. */
   get(path: string): CapabilityHost;
   /** Known clients, read from the project processor's reduced catalog. */
-  list(): Promise<ProjectClientRecord[]>;
+  list(): Promise<ProjectClientListItem[]>;
 }
 
 /**
@@ -2960,13 +2960,12 @@ export type AgentCollectionProcessorState = {
   waitingForSinceOffsets: Record<string, number>;
 };
 
-/** What `itx.clients.list()` returns per client. */
-export type ProjectClientRecord = {
+/** What `itx.clients.list()` returns per client: the catalog record minus reducer bookkeeping. */
+export type ProjectClientListItem = {
   path: string;
   connected: boolean;
   lastConnectedAt: string;
   lastDisconnectedAt?: string | undefined;
-  connectedAtOffsets: number[];
 };
 
 /**

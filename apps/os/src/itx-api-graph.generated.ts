@@ -426,13 +426,13 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Clients",
     kind: "interface",
     sourceText:
-      "/**\n * Connected clients within one project (`itx.clients`). A client is a\n * capability-host scope — typically under `/clients/**` — that\n * `projects.connect` provided a live capability to; nothing client-specific\n * exists at the platform layer. The birth batch every connect appends\n * configures a narrow copy subscription sending the scope's\n * `capability-provider-pager-connected` / `-disconnected` facts to the\n * project root, where the project processor reduces the clients catalog\n * (`list()`). Presence is last-known but honest: the platform journals the\n * disconnect when the provider's Pager socket dies. `get(path)` returns the\n * scope's capability host — `get(path).capabilities.browser.navigate(url)`\n * invokes the live capability mounted there through the shipped capability\n * machinery (hibernating Provider Pager, no pinned Durable Objects).\n */\nexport interface Clients {\n  __describe(): Promise<Description>;\n  /** The client scope's capability host — the full shipped surface, no wrapper. */\n  get(path: string): CapabilityHost;\n  /** Known clients, read from the project processor's reduced catalog. */\n  list(): Promise<ProjectClientRecord[]>;\n}",
+      "/**\n * Connected clients within one project (`itx.clients`). A client is a\n * capability-host scope — typically under `/clients/**` — that\n * `projects.connect` provided a live capability to; nothing client-specific\n * exists at the platform layer. The birth batch every connect appends\n * configures a narrow copy subscription sending the scope's\n * `capability-provider-pager-connected` / `-disconnected` facts to the\n * project root, where the project processor reduces the clients catalog\n * (`list()`). Presence is last-known but honest: the platform journals the\n * disconnect when the provider's Pager socket dies. `get(path)` returns the\n * scope's capability host — `get(path).capabilities.browser.navigate(url)`\n * invokes the live capability mounted there through the shipped capability\n * machinery (hibernating Provider Pager, no pinned Durable Objects).\n */\nexport interface Clients {\n  __describe(): Promise<Description>;\n  /** The client scope's capability host — the full shipped surface, no wrapper. */\n  get(path: string): CapabilityHost;\n  /** Known clients, read from the project processor's reduced catalog. */\n  list(): Promise<ProjectClientListItem[]>;\n}",
     summary: "Connected clients within one project (`itx.clients`).",
     memberSummaries: {
       get: "The client scope's capability host — the full shipped surface, no wrapper.",
       list: "Known clients, read from the project processor's reduced catalog.",
     },
-    referencedTypeNames: ["Description", "CapabilityHost", "ProjectClientRecord"],
+    referencedTypeNames: ["Description", "CapabilityHost", "ProjectClientListItem"],
   },
   {
     name: "ProjectEgress",
@@ -1553,11 +1553,12 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "ProjectClientRecord",
+    name: "ProjectClientListItem",
     kind: "typeAlias",
     sourceText:
-      "/** What `itx.clients.list()` returns per client. */\nexport type ProjectClientRecord = {\n  path: string;\n  connected: boolean;\n  lastConnectedAt: string;\n  lastDisconnectedAt?: string | undefined;\n  connectedAtOffsets: number[];\n};",
-    summary: "What `itx.clients.list()` returns per client.",
+      "/** What `itx.clients.list()` returns per client: the catalog record minus reducer bookkeeping. */\nexport type ProjectClientListItem = {\n  path: string;\n  connected: boolean;\n  lastConnectedAt: string;\n  lastDisconnectedAt?: string | undefined;\n};",
+    summary:
+      "What `itx.clients.list()` returns per client: the catalog record minus reducer bookkeeping.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
