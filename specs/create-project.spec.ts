@@ -13,7 +13,7 @@ import { test } from "./test-support/test.ts";
 // freshly signed-up user, not a forged session. Creating a project mints new
 // auth claims, and only a real session can refresh its access token to pick
 // up the new project claim the post-create navigation authorizes with.
-test("config templates create and open their own onboarding agents", async ({
+test("the config template creates and opens onboarding for a new project", async ({
   baseURL,
   page,
 }, testInfo) => {
@@ -39,21 +39,16 @@ test("config templates create and open their own onboarding agents", async ({
   await expect
     .poll(
       async () => {
-        const events = await firstProject.agents.get("/agents/onboarding").stream.getEvents({});
-        return events.find(
-          (event) =>
-            event.type === "events.iterate.com/agents/context-added" &&
-            event.payload?.key === "agent/system-prompt",
-        )?.payload?.content;
+        const event = await firstProject.agents.get("/agents/onboarding").stream.getEvent({
+          idempotencyKey: "iterate/config/onboarding-system-prompt:v1",
+        });
+        return event?.payload?.content;
       },
       { timeout: 60_000, intervals: [500] },
     )
     .toContain("# Onboarding Agent");
 
   const slug = uniqueFixtureSlug("create-project");
-  // Preview orchestration exposes the exact PR head so this project seeds the
-  // template under test; main keeps the spec usable after merge and locally.
-  const templateRef = process.env.TEST_TELEMETRY_HEAD_SHA?.trim() || "main";
   // spinner-waiter is disabled through here: the /projects pending state and
   // the project page's loading state can render two spinner-matching elements
   // at once, tripping its strict-mode isVisible.
@@ -64,11 +59,8 @@ test("config templates create and open their own onboarding agents", async ({
     await page.goto("/new-project");
 
     await page.getByLabel("Slug").fill(slug, { timeout: 15_000 });
-    await page
-      .getByLabel("Config template (optional)")
-      .fill(`github:iterate/iterate#${templateRef}&path:configs/with-voice`);
     // Create resolves after the atomic birth batch, then project home shows
-    // the bootstrap saga. The userspace voice template handles project/created,
+    // the bootstrap saga. The userspace config template handles project/created,
     // creates its onboarding agent, and drives this connected OS tab to it.
     await page.getByRole("button", { name: "Create project" }).click({ timeout: 15_000 });
     await page.getByPlaceholder("Message this agent").waitFor({ timeout: 90_000 });
@@ -77,16 +69,16 @@ test("config templates create and open their own onboarding agents", async ({
     pathname: `/projects/${slug}/agents/streams/agents/onboarding`,
   });
 
-  using voiceProject = admin.projects.get(slug);
-  const voiceEvents = await voiceProject.agents.get("/agents/onboarding").stream.getEvents({});
+  using createdProject = admin.projects.get(slug);
+  const onboardingAgent = createdProject.agents.get("/agents/onboarding");
+  const [createdEvent, promptEvent] = await Promise.all([
+    onboardingAgent.stream.getEvents({ eventTypes: ["events.iterate.com/agent/created"] }),
+    onboardingAgent.stream.getEvent({
+      idempotencyKey: "iterate/config/onboarding-system-prompt:v1",
+    }),
+  ]);
   expect(
-    voiceEvents.find((event) => event.type === "events.iterate.com/agent/created")?.payload,
-  ).toEqual({ purpose: "onboarding", template: "with-voice" });
-  expect(
-    voiceEvents.find(
-      (event) =>
-        event.type === "events.iterate.com/agents/context-added" &&
-        event.payload?.key === "agent/system-prompt",
-    )?.payload?.content,
-  ).toContain("# Voice Project Onboarding");
+    createdEvent.find((event) => event.type === "events.iterate.com/agent/created")?.payload,
+  ).toEqual({ purpose: "onboarding", template: "default" });
+  expect(promptEvent?.payload?.content).toContain("# Onboarding Agent");
 });
