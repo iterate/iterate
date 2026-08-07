@@ -1035,6 +1035,36 @@ describe("AgentProcessor script execution", () => {
     expect(h.llm.calls).toHaveLength(1); // no new turn
   });
 
+  it("does not render results from an ITX execution requested outside the agent processor", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS]);
+    const itemsBefore = h.state().contextItems.length;
+    const executionId = "agent-output:999";
+
+    await h.play(
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/script-run-requested",
+          payload: {
+            executionId,
+            code: "async () => 'external result'",
+            expiresAt: h.clock.now + 60_000,
+          },
+        },
+        {
+          type: "events.iterate.com/capability-host/script-run-settled",
+          payload: { executionId, settlement: { status: "succeeded", result: "external result" } },
+        },
+      ],
+      ["advanceTime", 10_000],
+    );
+
+    expect(h.state().activeScriptExecutionIds).toEqual([]);
+    expect(h.state().contextItems).toHaveLength(itemsBefore);
+    expect(h.llm.calls).toHaveLength(0);
+  });
+
   it("spills an oversized script result to a workspace file and references it; small results stay inline", async () => {
     const written: { path: string; content: string }[] = [];
     const h = makeAgentHarness(undefined, {
@@ -1946,7 +1976,7 @@ describe("AgentProcessor stream facts", () => {
 // =============================================================================
 
 describe("AgentProcessor slash commands", () => {
-  it("a resolving /script runs deterministically and triggers NO model turn", async () => {
+  it("a resolving /script runs deterministically and delegates its result append to the script", async () => {
     const h = makeAgentHarness();
     await h.play(
       ["append", ...NEW_AGENT_EVENTS, userMessage("/script await itx.__describe()")],
@@ -1961,13 +1991,69 @@ describe("AgentProcessor slash commands", () => {
         (event.payload as { content?: string }).content?.startsWith("/script"),
       )!.offset;
     expect(scriptRequests[0]!.payload).toMatchObject({
-      code: "async (itx) => {\nreturn (await itx.__describe()\n);\n}",
-      executionId: `slash-command:${commandOffset}`,
+      executionId: `slash-command:script:${commandOffset}`,
     });
+    expect(scriptRequests[0]!.payload.code).toContain(
+      "const result = await (async () => {\nreturn await (itx.__describe()\n);\n})();",
+    );
+    expect(scriptRequests[0]!.payload.code).toContain(
+      "User ran `/script await itx.__describe()` command with the following result",
+    );
+    expect(scriptRequests[0]!.payload.code).toContain(
+      'llmRequestPolicy: { behaviour: "interrupt-current-request" }',
+    );
     // The command IS the action — the model's turn comes later, from the
-    // script result's render, not from the command message.
+    // context item appended by the script, not from the command message.
     expect(h.llm.calls).toHaveLength(0);
     expect(h.events(REQUESTED)).toHaveLength(0);
+
+    const itemsBeforeSettlement = h.state().contextItems.length;
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: {
+          executionId: `slash-command:script:${commandOffset}`,
+          settlement: { status: "succeeded", result: { projectId: "project-1" } },
+        },
+      },
+    ]);
+    // The generated script already appended this result. Its successful
+    // settlement only preserves the value for `results`; it must not append a
+    // second context item.
+    expect(h.state().contextItems).toHaveLength(itemsBeforeSettlement);
+  });
+
+  it("a resolving /example still renders its successful settlement", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("/example describe-project")]);
+
+    const scriptRequest = h.events("events.iterate.com/capability-host/script-run-requested")[0]!;
+    expect(scriptRequest.payload.executionId).toMatch(/^slash-command:example:/);
+
+    await h.play(
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/script-run-settled",
+          payload: {
+            executionId: scriptRequest.payload.executionId,
+            settlement: { status: "succeeded", result: { projectId: "project-1" } },
+          },
+        },
+      ],
+      ["advanceTime", 10_000],
+    );
+
+    const renderedResult = h
+      .state()
+      .contextItems.find(
+        (item) =>
+          item.payload.actor?.type === "script" &&
+          item.payload.actor.executionId === scriptRequest.payload.executionId,
+      );
+    expect(renderedResult?.payload.content).toContain('"projectId": "project-1"');
+    expect(h.llm.calls).toHaveLength(1);
   });
 
   it("a /script mid-turn runs as a side-band action: no interrupt, no lost command", async () => {

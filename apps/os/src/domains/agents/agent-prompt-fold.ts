@@ -276,7 +276,11 @@ function reduceAgentEventCore(input: {
                 source: state.pendingLlmRequestTrigger.source,
               },
       };
-    case "events.iterate.com/capability-host/script-run-requested":
+    case "events.iterate.com/capability-host/script-run-requested": {
+      const source = event.source?.processor;
+      if (source?.slug !== AgentProcessorContract.slug || source.stream.path !== event.path) {
+        return state;
+      }
       if (
         !event.payload.executionId.startsWith("agent-output:") &&
         !event.payload.executionId.startsWith(SLASH_COMMAND_EXECUTION_PREFIX)
@@ -288,6 +292,7 @@ function reduceAgentEventCore(input: {
         ...state,
         activeScriptExecutionIds: [...state.activeScriptExecutionIds, event.payload.executionId],
       };
+    }
     case "events.iterate.com/capability-host/script-run-settled":
       return {
         ...state,
@@ -349,7 +354,8 @@ function contextTriggerSource(payload: AgentContextAddedPayload): "external" | "
   if (payload.role === "user") {
     // A resolving slash command runs deterministically (the processor's
     // event handler appends the script request from the SAME pure resolver)
-    // — the model's turn comes later, driven by the script result's render.
+    // — the model's turn comes later, driven by the script result's context
+    // append.
     return resolveSlashCommand(payload.content) === null ? "external" : null;
   }
   const actorType = payload.actor?.type;
