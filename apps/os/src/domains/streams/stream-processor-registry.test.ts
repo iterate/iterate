@@ -281,6 +281,40 @@ describe("register", () => {
       ),
     ).toThrow(/already registered/);
   });
+
+  it("hosts two instances of one contract under distinct names, independently", async () => {
+    const h = makeHarness();
+    const instance = () =>
+      new RecorderProcessor({
+        stream: h.stream,
+        path: HOME,
+        projectId: null,
+        contract: AlphaContract,
+        hooks: {},
+      });
+
+    // A second instance of one contract collides on the shared slug...
+    expect(() => h.registry.register(instance())).toThrow(/already registered/);
+    // ...but an explicit name hosts it independently of the slug-named instance.
+    h.registry.register(instance(), { name: "alpha-proc-2" });
+    expect(h.registry.names).toContain("alpha-proc-2");
+
+    // Deliver one event to the named instance only.
+    await h.stream.append({ type: REQUESTED, payload: { id: "a" } });
+    await h.deliverPending("alpha-proc-2");
+
+    // Independent progress + fold: the named instance advanced through the
+    // event; the slug-named instance never woke, so its own cursor and folded
+    // state (keyed by its own name) are untouched.
+    expect(await h.registry.reads("alpha-proc-2").snapshot()).toEqual({
+      offset: 1,
+      state: { ids: ["a"] },
+    });
+    expect(await h.registry.reads("alpha-proc").snapshot()).toEqual({
+      offset: 0,
+      state: { ids: [] },
+    });
+  });
 });
 
 describe("catchUp", () => {

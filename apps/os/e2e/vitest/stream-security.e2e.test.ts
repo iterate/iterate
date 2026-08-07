@@ -210,12 +210,13 @@ test("a processor read for an unconfigured name does not mint a facet", async ()
   }).rejects.toThrow(/does not exist/);
 });
 
-// A repo born at a path CLAIMED by another facet family could never wake (the
+// A repo at a path CLAIMED by another facet family could never wake (the
 // composition registers the claiming family, not the repo processor), so the
-// old behaviour committed the birth batch and then hung the caller forever
-// waiting for a repos/created that could not come. The door now fails loudly
-// BEFORE committing anything.
-test("repo create refuses paths claimed by another processor family", async () => {
+// old behaviour hung the caller forever — create committed a birth batch that
+// waited for a repos/created that could not come, and a plain read returned a
+// handle that silently halted. The collection's get() door now fails loudly
+// for BOTH, before committing or dialing anything.
+test("repo create and read refuse paths claimed by another processor family", async () => {
   const marker = crypto.randomUUID();
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
@@ -227,6 +228,12 @@ test("repo create refuses paths claimed by another processor family", async () =
   await expect(async () => {
     await project.repos.get(`/secrets/${marker}`).create({ type: "empty" });
   }).rejects.toThrow(/reserved by the "secret" processor family/);
+
+  // The same door guards the READ path: a repo op at a claimed path must fail
+  // loudly rather than hang on a facet that can never wake.
+  await expect(async () => {
+    await project.repos.get(`/agents/${marker}`).whoami();
+  }).rejects.toThrow(/no repo at .*reserved by the "agent" processor family/);
 
   // Nothing was committed at the refused path.
   expect(

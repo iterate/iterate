@@ -1902,9 +1902,24 @@ class RepoCollectionRpcTarget<
 
   /** The repo at a path. */
   get(path: string): RepoRpcTarget {
+    const normalizedPath = normalizePath(path);
+    // A path CLAIMED by another facet family can never host a repo: the facet
+    // composition registers that family instead, so every repo operation at
+    // this path would silently halt (the repo facet wake fails "unknown
+    // processor name" forever). Fail loudly on the read path too, mirroring
+    // the create() guard.
+    const family = facetProcessorFamilyForPath({
+      path: normalizedPath,
+      projectId: this.props.projectId,
+    });
+    if (family !== "repo") {
+      throw new Error(
+        `no repo at "${normalizedPath}": that path is reserved by the "${family}" processor family`,
+      );
+    }
     return new RepoRpcTarget({
       auth: this.props.auth,
-      path: normalizePath(path),
+      path: normalizedPath,
       projectId: this.props.projectId,
     });
   }
