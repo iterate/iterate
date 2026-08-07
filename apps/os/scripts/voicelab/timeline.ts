@@ -7,7 +7,6 @@
 // speaker started", and that turned out to be the whole question on the HA
 // Voice PE. One row every 700ms against `speakerPlaying` made a 34 dB
 // collapse obvious in a single screen.
-import process from "node:process";
 import { spawn } from "node:child_process";
 import {
   type VoicelabConnectOptions,

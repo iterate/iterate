@@ -145,6 +145,16 @@ EXT_RAM_BSS_ATTR static uint8_t
  */
 #define STREAM_PATH_DEFAULT "/agents/voice/device"
 static char stream_path[96] = STREAM_PATH_DEFAULT;
+/*
+ * THE OTHER PATH, and it is file scope on purpose: two different functions
+ * need it. `initialise_connection` connects this board as a client here, and
+ * the voice lane sends it with every call request so the conversation can
+ * subscribe to this board's own presence.
+ *
+ * The stream path above is one CONVERSATION and is minted fresh per call.
+ * This is the DEVICE, and it never changes.
+ */
+static const char *const client_path = "/clients/home-assistant-voice-preview-edition";
 /* The path a setup call is preparing; adopted only when the server is ready. */
 static char pending_stream_path[96];
 
@@ -1025,7 +1035,6 @@ static struct iterate_kit_module aec_module(void) {
 }
 
 static bool initialise_connection(void) {
-  static const char *const client_path = "/clients/home-assistant-voice-preview-edition";
   static struct iterate_kit_module modules[5];
   static struct iterate_kit_speaker speaker;
   static struct iterate_kit_health health;
@@ -1934,6 +1943,7 @@ void iterate_kit_havpe_run(void) {
         .project_id = runtime.configuration.project_id,
         .project_api_key = runtime.configuration.project_api_key,
         .stream_path = stream_path,
+        .client_path = client_path,
         .conversation_id = CONVERSATION_ID,
         /*
          * The provider segments turns, because nothing on this device does

@@ -150,6 +150,20 @@ struct iterate_kit_voicelab_options {
   const char *project_api_key;
   /** Stream path for the call, e.g. "/voice-agent/dev-waveshare". */
   const char *stream_path;
+  /**
+   * THE OTHER PATH: this device's client scope, e.g. "/clients/stackchan".
+   *
+   * A board holds two paths that are deliberately not the same. The client
+   * path is the DEVICE — one per board, permanent, and where `projects.connect`
+   * mounts its capabilities and journals whether it is on the network. The
+   * stream path is one CONVERSATION, minted per call and disposable.
+   *
+   * It rides the call request because the conversation cannot otherwise learn
+   * which board is on it, and therefore cannot subscribe to the one fact that
+   * says the board went away. Optional: a caller with no client scope simply
+   * gets no presence copies.
+   */
+  const char *client_path;
   /** Short call identity stamped into every frame payload. */
   const char *conversation_id;
   /**

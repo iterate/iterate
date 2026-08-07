@@ -42,13 +42,6 @@ export interface ReliabilityOptions extends VoicelabConnectOptions {
   restart?: boolean;
 }
 
-interface DeviceCapability {
-  conversation: { start(): Promise<boolean>; hangUp(): Promise<boolean> };
-  pushToTalk: { start(): Promise<boolean>; stop(): Promise<boolean> };
-  restart(): Promise<boolean>;
-  health(): Promise<Record<string, unknown>>;
-}
-
 /** What one attempt is allowed to take, per step. */
 const LIMITS = {
   /** A device coming back from a reboot and re-mounting its capability. */
@@ -143,6 +136,13 @@ export async function reliability(options: ReliabilityOptions) {
         }
       },
     });
+
+  interface DeviceCapability {
+    conversation: { start(): Promise<boolean>; hangUp(): Promise<boolean> };
+    pushToTalk: { start(): Promise<boolean>; stop(): Promise<boolean> };
+    restart(): Promise<boolean>;
+    health(): Promise<Record<string, unknown>>;
+  }
 
   const device = () => {
     const capability = deviceCapability<DeviceCapability>(itxHandle, capabilityName);

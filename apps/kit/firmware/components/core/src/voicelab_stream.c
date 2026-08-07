@@ -1371,9 +1371,17 @@ enum capnweb_status iterate_kit_voicelab_start_call(
        * no clock on it, and the voice says so and keeps talking meanwhile.
        */
       "[{\"type\":\"events.iterate.com/voice-agent/conversation-requested\",\"payload\":{"
-      "\"conversationId\":\"%s\",\"colleague\":true,\"turns\":\"%s\"%s%s%s}}]",
+      "\"conversationId\":\"%s\",\"colleague\":true,\"turns\":\"%s\"%s%s%s%s%s%s}}]",
       voicelab->options.conversation_id,
       voicelab->options.turns != NULL ? voicelab->options.turns : "manual",
+      /*
+       * Which board is on this call, so the conversation can subscribe to the
+       * device's own presence. Without it the only evidence a board has gone
+       * is silence, which is indistinguishable from a quiet human.
+       */
+      voicelab->options.client_path != NULL ? ",\"client\":\"" : "",
+      voicelab->options.client_path != NULL ? voicelab->options.client_path : "",
+      voicelab->options.client_path != NULL ? "\"" : "",
       greeting != NULL ? ",\"greet\":\"" : "",
       greeting != NULL ? greeting : "",
       greeting != NULL ? "\"" : "");

@@ -355,6 +355,16 @@ EXT_RAM_BSS_ATTR static uint8_t
 #define STREAM_PATH_DEFAULT "/agents/voice/device"
 static char stream_path[96] = STREAM_PATH_DEFAULT;
 /*
+ * THE OTHER PATH, and it is file scope on purpose: two different functions
+ * need it. `initialise_connection` connects this board as a client here, and
+ * the voice lane sends it with every call request so the conversation can
+ * subscribe to this board's own presence.
+ *
+ * The stream path above is one CONVERSATION and is minted fresh per call.
+ * This is the DEVICE, and it never changes.
+ */
+static const char *const client_path = "/clients/waveshare";
+/*
  * The path a setup call is preparing. Kept apart from the live one so a setup
  * that fails leaves the device on the conversation it already had, rather than
  * pointed at a stream nobody has prepared.
@@ -1479,7 +1489,6 @@ static uint8_t speaker_volume(void *context) {
 }
 
 static bool initialise_connection(void) {
-  static const char *const client_path = "/clients/waveshare";
   static struct iterate_kit_module modules[4];
   static struct iterate_kit_speaker speaker;
   static struct iterate_kit_health health;
@@ -2589,6 +2598,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         .project_id = runtime.configuration.project_id,
         .project_api_key = runtime.configuration.project_api_key,
         .stream_path = stream_path,
+        .client_path = client_path,
         .conversation_id = CONVERSATION_ID,
         .now_ms = now_ms,
         .clock_context = NULL,

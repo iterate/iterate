@@ -1132,6 +1132,16 @@ async function ensureVoiceAgent(
  */
 const VoiceCallRequestedPayload = z.looseObject({
   conversationId: z.string().trim().min(1),
+  /**
+   * The CLIENT scope of the device placing this call, e.g.
+   * `"/clients/stackchan"` — the other half of a board's two paths.
+   *
+   * A conversation stream cannot otherwise learn which board is on it: the
+   * device connects at its client path and talks on this one, and nothing
+   * links them. It rides the request so the call can subscribe to the one
+   * fact that says the board went away.
+   */
+  client: z.string().trim().min(1).optional(),
   colleague: z.boolean().optional(),
   effort: z.enum(["none", "high"]).optional(),
   greet: z.string().optional(),
@@ -1246,6 +1256,36 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
       payloadSchema: z.looseObject({ token: z.string().trim().min(1) }),
     },
     /*
+     * THE CROSS-POST, and it is durable on purpose.
+     *
+     * A board's presence is journaled on ITS stream (`/clients/<slug>`), by
+     * the capability host, as the platform's own
+     * `capability-provider-pager-connected` / `-disconnected` facts. The call
+     * happens on a different stream, so without this the only evidence a board
+     * has gone is silence — which is exactly what a listening human also
+     * produces, and why a dropped board used to hold a call open until a ping
+     * timeout noticed.
+     *
+     * The copy subscription rewrites those facts into THIS type on the way
+     * over (a `jsonataTransform`), so the conversation reads its device in its
+     * own vocabulary and this contract owns what it consumes, rather than
+     * declaring a platform contract's event types as if they were its own.
+     *
+     * Durable, so it cross-posts at all: copy subscriptions never carry
+     * ephemeral events. That is the whole reason audio is appended straight to
+     * this stream instead of being mirrored from the device's.
+     */
+    "events.iterate.com/voice-agent/device-presence": {
+      description:
+        "The board on this call connected or disconnected, copied from its client scope.",
+      payloadSchema: z.looseObject({
+        /** False is the one that matters: the board is off the network. */
+        connected: z.boolean(),
+        /** The client scope this came from, e.g. "/clients/stackchan". */
+        client: z.string().optional(),
+      }),
+    },
+    /*
      * THE LIVE HALF. Everything above is durable and may be folded into
      * reduced state; nothing below may be. An ephemeral event's body lives
      * only in the Stream Durable Object's bounded buffer, so a restart or FIFO
@@ -1304,6 +1344,8 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/warmup",
     "events.iterate.com/voice-agent/brief-current",
+    /* Copied in from the device's own client scope — see its definition. */
+    "events.iterate.com/voice-agent/device-presence",
     /* The live half — see their definitions above. Naming them here is what
      * lets this processor own a call outright, with no second worker relaying
      * the audio to it. */
@@ -1669,6 +1711,49 @@ export class VoiceBridge extends IterateDurableObject {
       return new Response(`itx unavailable: ${String(error)}`, { status: 502 });
     }
     const stream = project.streams.get(streamPath);
+    /*
+     * CROSS-POST THE DEVICE'S PRESENCE ONTO THIS CALL.
+     *
+     * The board lives at its client path and talks here, and the two streams
+     * know nothing of each other. This is the seam: a durable copy
+     * subscription that takes the capability host's own pager facts from the
+     * device's scope and rewrites them, in flight, into this contract's
+     * `device-presence` — so the call reads its device in its own vocabulary
+     * and the platform's event types stay owned by the platform.
+     *
+     * Named after the client, so the same board reconnecting or redialling
+     * ensures the same subscription rather than accumulating one per call. It
+     * is deliberately not awaited into the dial path: a presence feed is a
+     * bonus, and a bonus must never delay or fail a call.
+     */
+    const clientPath = url.searchParams.get("client");
+    if (clientPath !== null && clientPath.startsWith("/")) {
+      this.ctx.waitUntil(
+        discardRpcResult(
+          stream.subscribeToEventsFrom({
+            sourceStreamPath: clientPath,
+            name: `voice-agent/device-presence:${clientPath}`,
+            description: `Presence of the device at ${clientPath}, for calls on this stream.`,
+            filter: {
+              eventTypes: [
+                "events.iterate.com/capability-host/capability-provider-pager-connected",
+                "events.iterate.com/capability-host/capability-provider-pager-disconnected",
+              ],
+            },
+            jsonataTransform: `{
+              "type": "events.iterate.com/voice-agent/device-presence",
+              "payload": {
+                "connected": $contains(type, "pager-connected"),
+                "client": "${clientPath}"
+              }
+            }`,
+          }),
+          "device presence subscription",
+        ).catch((error: unknown) => {
+          console.log(`device presence subscription failed: ${String(error)}`);
+        }),
+      );
+    }
     let closedDown = false;
 
     let spkSeq = 0;
@@ -3511,6 +3596,24 @@ export class VoiceBridge extends IterateDurableObject {
               payload: { bridgeId, conversationId, id: payload.id, t0: payload.t0, t1: Date.now() },
             });
             break;
+          case "events.iterate.com/voice-agent/device-presence":
+            /*
+             * THE BOARD LEFT, said out loud by the platform rather than
+             * inferred from silence.
+             *
+             * Copied here from the device's own client scope, where the
+             * capability host journals the disconnect the moment the
+             * provider's socket dies. Before this the bridge could only wait
+             * for pings to stop — and a listening human produces exactly the
+             * same silence, so the call was held open either way.
+             *
+             * Only the disconnect acts. A `connected` copy is the board
+             * arriving, which is not news to a call it is already on.
+             */
+            if (payload.connected === false) {
+              teardown(`device at ${String(payload.client ?? "its client scope")} disconnected`);
+            }
+            break;
           case "events.iterate.com/voice-agent/conversation-accepted":
             // Another bridge has taken this call over; stand down quietly.
             if (payload.conversationId === conversationId && payload.bridgeId !== bridgeId) {
@@ -3559,6 +3662,9 @@ export class VoiceBridge extends IterateDurableObject {
             "events.iterate.com/voice-agent/context-added",
             "events.iterate.com/voice-agent/conversation-ended",
             "events.iterate.com/voice-agent/conversation-accepted",
+            /* Copied in from the device's client scope; the lane filters by
+             * type, so omitting it here would silently drop every copy. */
+            "events.iterate.com/voice-agent/device-presence",
           ],
           processEventBatch: (batch) => handleEvents(batch.events),
           ...(lastSeenOffset >= 0 ? { replayAfterOffset: lastSeenOffset } : {}),
@@ -3821,6 +3927,13 @@ export interface StartCallOptions {
   path: string;
   /** Caller-chosen id; the same id ends the call via a conversation-ended event. */
   conversationId?: string;
+  /**
+   * The client scope of the device on this call, e.g. `"/clients/stackchan"`.
+   * Given, the call subscribes to that board's presence so a disconnect ends
+   * it promptly instead of waiting for a ping timeout. Omitted (a script, a
+   * browser tab, a test), nothing is subscribed and nothing is lost.
+   */
+  client?: string;
   model?: string;
   /**
    * Realtime provider endpoint. Defaults to xAI's. A test points this at a
@@ -3955,6 +4068,9 @@ async function startVoiceCall(
   if (options.greet) params.set("greet", options.greet);
   if (options.turns === "manual") params.set("turns", "manual");
   if (options.colleague) params.set("colleague", "1");
+  /* The bridge installs the presence subscription: it is the half that holds
+   * the project handle and the stream for this call's whole life. */
+  if (options.client) params.set("client", options.client);
 
   const startedAt = Date.now();
   const response = await fetchBridge(
