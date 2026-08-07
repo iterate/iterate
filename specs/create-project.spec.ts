@@ -40,7 +40,7 @@ test("the config template creates and opens onboarding for a new project", async
     .poll(
       async () => {
         const event = await firstProject.agents.get("/agents/onboarding").stream.getEvent({
-          idempotencyKey: "iterate/config/onboarding-system-prompt:v1",
+          idempotencyKey: "iterate/config/onboarding-instructions:v1",
         });
         return event?.payload?.content;
       },
@@ -74,7 +74,7 @@ test("the config template creates and opens onboarding for a new project", async
   const [createdEvent, promptEvent] = await Promise.all([
     onboardingAgent.stream.getEvents({ eventTypes: ["events.iterate.com/agent/created"] }),
     onboardingAgent.stream.getEvent({
-      idempotencyKey: "iterate/config/onboarding-system-prompt:v1",
+      idempotencyKey: "iterate/config/onboarding-instructions:v1",
     }),
   ]);
   expect(

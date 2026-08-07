@@ -15,10 +15,10 @@ export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
     await onboardingAgent.append(
       {
         type: "events.iterate.com/agents/context-added",
-        idempotencyKey: "iterate/config/onboarding-system-prompt:v1",
+        idempotencyKey: "iterate/config/onboarding-instructions:v1",
         payload: {
           role: "system",
-          key: "agent/system-prompt",
+          key: "config/onboarding-instructions",
           content: instructions.content,
           llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },

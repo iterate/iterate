@@ -428,10 +428,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        await onboardingAgent.append(\n" +
       "          {\n" +
       "            type: \"events.iterate.com/agents/context-added\",\n" +
-      "            idempotencyKey: \"iterate/config/onboarding-system-prompt:v1\",\n" +
+      "            idempotencyKey: \"iterate/config/onboarding-instructions:v1\",\n" +
       "            payload: {\n" +
       "              role: \"system\",\n" +
-      "              key: \"agent/system-prompt\",\n" +
+      "              key: \"config/onboarding-instructions\",\n" +
       "              content: instructions.content,\n" +
       "              llmRequestPolicy: { behaviour: \"dont-trigger-request\" },\n" +
       "            },\n" +
