@@ -13,6 +13,7 @@
 import type { ProcessEventArgs } from "iterate/processors";
 import { inferJsonType } from "../../lib/infer-json-type.ts";
 import { previewJson } from "../../lib/truncate-json.ts";
+import { INLINE_RESULT_PREAMBLE_LIMIT } from "../capability-host/capability-host-preamble.ts";
 import {
   appendUnlessLostIdempotencyRace,
   type AgentComponent,
@@ -21,7 +22,12 @@ import {
 } from "./agent-host.ts";
 import type { AgentProcessorContract } from "./agent-processor-contract.ts";
 import type { AgentResponseFormat } from "./agent-response-format.ts";
-import { resolveSlashCommand, SLASH_COMMAND_EXECUTION_PREFIX } from "./slash-commands.ts";
+import {
+  buildSlashCommandCode,
+  resolveSlashCommand,
+  SCRIPT_SLASH_COMMAND_EXECUTION_PREFIX,
+  SLASH_COMMAND_EXECUTION_PREFIX,
+} from "./slash-commands.ts";
 
 export class AgentCodemode implements AgentComponent {
   readonly #host: AgentHost;
@@ -33,7 +39,7 @@ export class AgentCodemode implements AgentComponent {
   }
 
   processEvent(args: ProcessEventArgs<AgentProcessorContract>): undefined {
-    const { event, state, blockProcessorWhile, append } = args;
+    const { event, previousState, state, blockProcessorWhile, append } = args;
     switch (event?.type) {
       case "events.iterate.com/agents/context-added": {
         const payload = event.payload;
@@ -50,13 +56,14 @@ export class AgentCodemode implements AgentComponent {
         if (payload.role === "user") {
           const slashCommand = resolveSlashCommand(payload.content);
           if (slashCommand !== null) {
+            const executionId = `${SLASH_COMMAND_EXECUTION_PREFIX}${slashCommand.command}:${event.offset}`;
             blockProcessorWhile(() =>
               appendUnlessLostIdempotencyRace(append, [
                 {
                   type: "events.iterate.com/capability-host/script-run-requested",
                   payload: {
-                    code: slashCommand.code,
-                    executionId: `${SLASH_COMMAND_EXECUTION_PREFIX}${event.offset}`,
+                    code: buildSlashCommandCode(slashCommand, executionId),
+                    executionId,
                     expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
                   },
                   idempotencyKey: this.#host.idempotencyKey(`slash-command@${event.offset}`),
@@ -126,11 +133,45 @@ export class AgentCodemode implements AgentComponent {
         }
         break;
       }
+      case "events.iterate.com/capability-host/preamble-set":
+      case "events.iterate.com/capability-host/preamble-removed": {
+        // Preamble changes on this agent's scope transcribe into developer
+        // context — the model can only use symbols it knows exist. Never a
+        // turn trigger: when the agent's own script set the entry, the
+        // script's settlement drives the next turn; an external set is
+        // configuration, not conversation. Blocked: per-event consequence,
+        // delivered once.
+        const isSet = event.type === "events.iterate.com/capability-host/preamble-set";
+        const content = isSet
+          ? `Preamble entry ${JSON.stringify(event.payload.key)} was set. This TypeScript is now injected above your scripts — its symbols are in scope:\n\`\`\`ts\n${event.payload.code}\n\`\`\``
+          : `Preamble entry ${JSON.stringify(event.payload.key)} was removed; its symbols are no longer available to your scripts.`;
+        blockProcessorWhile(() =>
+          appendUnlessLostIdempotencyRace(append, [
+            {
+              type: "events.iterate.com/agents/context-added",
+              payload: {
+                role: "developer",
+                content,
+                llmRequestPolicy: { behaviour: "dont-trigger-request" },
+              },
+              idempotencyKey: this.#host.idempotencyKey(`render-preamble-change@${event.offset}`),
+            },
+          ]),
+        );
+        break;
+      }
       case "events.iterate.com/capability-host/script-run-settled": {
         const { executionId, settlement } = event.payload;
+        // Settlement reduction removes the execution from `state`, so inspect
+        // the immediately preceding projection. Only a request provenance-
+        // stamped by this agent processor can enter that active set.
+        if (!previousState.activeScriptExecutionIds.includes(executionId)) break;
+        // `/script` publishes its successful result directly as interruptive
+        // context, then returns the same value so the capability host keeps it
+        // in the script-results preamble. Only its failures render here.
         if (
-          !executionId.startsWith("agent-output:") &&
-          !executionId.startsWith(SLASH_COMMAND_EXECUTION_PREFIX)
+          executionId.startsWith(SCRIPT_SLASH_COMMAND_EXECUTION_PREFIX) &&
+          settlement.status === "succeeded"
         ) {
           break;
         }
@@ -212,6 +253,18 @@ async function renderScriptSettlement(input: {
   }
   if (settlement.result === undefined) return null;
   const text = stringifyScriptResult(settlement.result);
+  // The preamble binding this exact result got: the SAME compact-JSON split
+  // the capability host applies when deriving the `results` array. NOT the
+  // spill decision below — that keys on pretty-printed length vs the
+  // configured historyLimit, so a result can spill to a file yet still be an
+  // inline `data` row (no `.load`); a recipe naming the wrong member fails
+  // typecheck in the very next script.
+  const resultsAccess =
+    JSON.stringify(settlement.result).length <= INLINE_RESULT_PREAMBLE_LIMIT ? "data" : "load";
+  const preambleNote =
+    resultsAccess === "data"
+      ? "\nThis result is available to your next script as `results[0].data` (the preamble `results` array, newest first)."
+      : "\nThe full result is available to your next script via `await results[0].load(itx)` (the preamble `results` array, newest first).";
   // String results are raw text, not JSON — the fence label, the spill
   // file's extension, and the read-it-back recipe all say so honestly.
   const isRawText = typeof settlement.result === "string";
@@ -234,13 +287,19 @@ async function renderScriptSettlement(input: {
           "```",
           text.slice(0, shownChars),
           "```",
-          rawTextSpillNotice({ path: spilledPath, shownChars, totalChars: text.length }),
+          rawTextSpillNotice({
+            path: spilledPath,
+            resultsAccess,
+            shownChars,
+            totalChars: text.length,
+          }),
         ].join("\n");
       }
       return renderOversizedJsonResult({
         historyLimit,
         path: spilledPath,
         result: settlement.result,
+        resultsAccess,
         text,
       });
     } catch (error) {
@@ -252,7 +311,7 @@ async function renderScriptSettlement(input: {
       });
     }
   }
-  return `Your script returned:\n${fence}\n${truncateScriptResult(text, historyLimit)}\n\`\`\``;
+  return `Your script returned:\n${fence}\n${truncateScriptResult(text, historyLimit)}\n\`\`\`${preambleNote}`;
 }
 
 function stringifyScriptResult(result: unknown): string {
@@ -314,6 +373,10 @@ function renderOversizedJsonResult(input: {
   historyLimit: number;
   path: string;
   result: unknown;
+  /** Which member the preamble `results` row for THIS result actually has —
+   * `data` (inline literal) or `load` (typed async loader); the recipe must
+   * name the one that exists or the next script fails typecheck. */
+  resultsAccess: "data" | "load";
   text: string;
 }): string {
   let typeText: string | null = null;
@@ -344,13 +407,16 @@ function renderOversizedJsonResult(input: {
     "```json",
     previewText,
     "```",
-    `The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain TypeScript in your next script, e.g.:`,
+    "The full result is available to your next script through the preamble `results` array — don't re-fetch:",
     "```ts",
     "async (itx) => {",
-    `  const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(input.path)}));`,
-    "  // you can now do whatever you see fit with `data`",
+    input.resultsAccess === "load"
+      ? "  const data = await results[0].load(itx); // newest first; typed — the full result"
+      : "  const data = results[0].data; // newest first; the full result, typed by its literal",
+    "  // filter/pick with plain TypeScript and return only what you need",
     "}",
     "```",
+    `(The full copy is also saved in your workspace at ${JSON.stringify(input.path)} — use itx.workspace to page a slice if that suits better.)`,
   ].join("\n");
 }
 
@@ -362,16 +428,21 @@ function renderOversizedJsonResult(input: {
  */
 function rawTextSpillNotice(input: {
   path: string;
+  /** See renderOversizedJsonResult: the member this result's preamble row has. */
+  resultsAccess: "data" | "load";
   shownChars: number;
   totalChars: number;
 }): string {
   return [
-    `…truncated: showing the first ${input.shownChars.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain TypeScript in your next script, e.g.:`,
+    `…truncated: showing the first ${input.shownChars.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full text is available to your next script through the preamble \`results\` array — don't re-fetch:`,
     "```ts",
     "async (itx) => {",
-    `  const text = await itx.workspace.readFile(${JSON.stringify(input.path)});`,
+    input.resultsAccess === "load"
+      ? "  const text = await results[0].load(itx); // newest first — the full string"
+      : "  const text = results[0].data; // newest first — the full string",
     `  return text.slice(${input.shownChars}, ${input.shownChars * 4}); // page/regex to return only what you need`,
     "}",
     "```",
+    `(The full copy is also saved in your workspace at ${JSON.stringify(input.path)}.)`,
   ].join("\n");
 }

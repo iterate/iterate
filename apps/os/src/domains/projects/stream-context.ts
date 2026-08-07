@@ -12,6 +12,17 @@ export const StreamContext = z.discriminatedUnion("kind", [
     kind: z.literal("scope"),
     scopePath: z.string().trim().startsWith("/"),
   }),
+  /**
+   * A direct external `/api` session (CLI, REPL, dashboard tab, harness).
+   * Minted server-side from the session's verified ItxAuth — never
+   * client-declared — so approval surfaces can say WHO asked instead of the
+   * anonymous "Triggered from /" scope fallback.
+   */
+  z.strictObject({
+    kind: z.literal("client-session"),
+    principal: z.string().trim().min(1),
+    admin: z.boolean(),
+  }),
 ]);
 
 export type StreamContext = z.output<typeof StreamContext>;

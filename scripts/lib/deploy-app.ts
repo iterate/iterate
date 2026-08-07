@@ -27,8 +27,8 @@ export interface SmokeProbe {
  *
  *   resolve --env → assert resources provisioned → collect secrets →
  *   app-specific prepare (migrations, seeds, config preflight) → build plus
- *   explicitly independent prerequisites → deploy code+secrets in one version →
- *   smoke-probe → ✅
+ *   explicitly independent prerequisites → final pre-deploy mutations → deploy
+ *   code+secrets in one version → smoke-probe → ✅
  *
  * Durable Object classes are declared in each app's wrangler config
  * `exports` map and reconciled by the server on every deploy — no migration
@@ -89,6 +89,15 @@ export async function deployApp<E extends DeployableEnv>(input: {
    * still running.
    */
   concurrentBuildWork?: (
+    ctx: EnvContext<E>,
+    secretValues: Record<string, string>,
+    credentials: Record<string, string>,
+  ) => Promise<void> | void;
+  /**
+   * Runs only after a successful build, immediately before code upload. Use
+   * for destructive rollout steps that must not run when the build is broken.
+   */
+  beforeDeploy?: (
     ctx: EnvContext<E>,
     secretValues: Record<string, string>,
     credentials: Record<string, string>,
@@ -157,6 +166,7 @@ export async function deployApp<E extends DeployableEnv>(input: {
     }
     builtConfig = findBuiltWranglerConfig(input.appRoot);
   }
+  await input.beforeDeploy?.(ctx, secretValues, credentials);
   extraDeployArgs.push(...(input.extraDeployArgs?.(ctx, secretValues) ?? []));
 
   await deployWithSecrets({

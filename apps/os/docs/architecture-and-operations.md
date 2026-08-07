@@ -229,6 +229,6 @@ doppler run --project os --config preview_2 -- pnpm cli itx agent-smoke \
   --project <prj_id> --agent-path /agents/onboarding --message "Reply with exactly: pong"
 ```
 
-Browser smoke with `agent-browser`:
+Browser smoke with `Playwriter`:
 
-- [Preview Agent Browser Smoke](./preview-agent-browser-smoke.md)
+- [Preview browser smoke](./preview-browser-smoke.md)

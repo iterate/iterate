@@ -8,6 +8,7 @@ import {
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
 import { streamDeliveryAuthContext } from "../../auth.ts";
+import { unconfiguredSubscriptionError } from "./utils.ts";
 
 describe("StreamRpcTarget", () => {
   it("serves liveState from the socket-fed relay engine, never the DO's liveState property", async () => {
@@ -133,7 +134,7 @@ describe("StreamRpcTarget", () => {
     const pageResult = await stream.getEvents();
     const waitedResult = await stream.waitForEvent({ afterOffset: 8, timeoutMs: 1_000 });
     const processorStateResult = await stream.getProcessorRuntimeState({
-      subscriptionKey: "project-worker",
+      name: "project-worker",
     });
     const runtimeStateResult = await stream.runtimeState();
 
@@ -623,7 +624,7 @@ describe("StreamRpcTarget", () => {
       path: "/source",
       events: [],
       streamMaxOffset: 1,
-      subscriptionKey: "test",
+      name: "test",
       cursorChangedAtSourceOffset: 1,
       deliveryId: "test",
       attempt: 1,
@@ -725,8 +726,7 @@ describe("ProcessorRelayRpcTarget", () => {
 
       await expect(
         relay.wakeStreamProcessor({
-          processorSlug: "test",
-          subscriptionKey: "test",
+          name: "test",
         } as never),
       ).rejects.toThrow("wakeStreamProcessor may be called only by trusted stream event sending");
       expect(wakeStreamProcessor).not.toHaveBeenCalled();
@@ -748,9 +748,62 @@ describe("ProcessorRelayRpcTarget", () => {
     });
 
     await expect(relay.snapshot()).resolves.toEqual({ offset: 4, state: { running: true } });
-    const request = { processorSlug: "sandbox", subscriptionKey: "sandbox-test" } as never;
+    const request = { name: "sandbox-test" } as never;
     await expect(relay.wakeStreamProcessor(request)).resolves.toEqual({ accepted: true });
     expect(wakeStreamProcessor).toHaveBeenCalledWith(request);
+  });
+
+  it("answers an unconfigured processor snapshot with its initial fold only", async () => {
+    const refusal = unconfiguredSubscriptionError("agent");
+    let configured = false;
+    const host = vi.fn(async () => {
+      if (!configured) throw refusal;
+      return {
+        processor: Promise.resolve({
+          getRuntimeState: async () => ({
+            snapshot: { offset: 3, state: { birthCertificate: { created: true } } },
+          }),
+          snapshot: async () => ({
+            offset: 3,
+            state: { birthCertificate: { created: true } },
+          }),
+          waitUntilProcessed: async () => undefined,
+        }),
+        wakeStreamProcessor: (async () => ({ accepted: true as const })) as never,
+      };
+    });
+    const relay = new ProcessorRelayRpcTarget({
+      auth: streamDeliveryAuthContext("prj_test"),
+      host,
+      initialStateWhenUnconfigured: () => ({ birthCertificate: null }),
+    });
+
+    await expect(relay.snapshot()).resolves.toEqual({
+      offset: 0,
+      state: { birthCertificate: null },
+    });
+    await expect(relay.getRuntimeState()).rejects.toBe(refusal);
+    await expect(relay.waitUntilProcessed({ offset: 1 })).rejects.toBe(refusal);
+    await expect(relay.wakeStreamProcessor({ name: "agent" } as never)).rejects.toBe(refusal);
+
+    configured = true;
+    await expect(relay.snapshot()).resolves.toEqual({
+      offset: 3,
+      state: { birthCertificate: { created: true } },
+    });
+  });
+
+  it("does not mistake an unrelated missing-subscription message for the modeled refusal", async () => {
+    const unrelated = new Error('subscription "agent" does not exist');
+    const relay = new ProcessorRelayRpcTarget({
+      auth: streamDeliveryAuthContext("prj_test"),
+      host: async () => {
+        throw unrelated;
+      },
+      initialStateWhenUnconfigured: () => ({ birthCertificate: null }),
+    });
+
+    await expect(relay.snapshot()).rejects.toBe(unrelated);
   });
 
   it("disposes the transient remote processor facade after success and failure", async () => {

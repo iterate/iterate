@@ -31,7 +31,7 @@ and component are server-safe.
    delay before editing: document/server, asset cache, JS graph, hydration, itx
    read, live subscription, or optional heavy runtime.
 2. Capture cold and warm direct navigations plus a client-side navigation. Use
-   an isolated headed `agent-browser` session, the Playwright product fixture,
+   an isolated Playwriter (or Playwright) browser session, the product fixture,
    and production or a preview—not Lighthouse against an unrepresentative dev
    server as the only evidence.
 3. Follow the repository's PostHog instructions before field queries. Load the

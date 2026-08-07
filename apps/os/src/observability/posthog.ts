@@ -37,6 +37,7 @@ export async function withPosthogExceptionCapture<T>(
 /** Report an unhandled backend exception without changing the failed operation. */
 export function schedulePosthogException(input: PosthogExceptionContext & { error: unknown }) {
   try {
+    if (input.config.posthog?.capture !== true) return;
     const apiKey = input.config.posthog?.apiKey;
     if (!apiKey || scheduledOperations.has(input.operation)) return;
     scheduledOperations.add(input.operation);

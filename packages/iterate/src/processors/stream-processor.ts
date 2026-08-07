@@ -456,6 +456,8 @@ export abstract class StreamProcessor<
     const eventDefinition = getConsumedEventDefinition({
       contract: this.contract,
       eventType: event.type,
+      // `"*"` must not sweep in ephemeral events; naming the type is the opt-in.
+      ephemeral: event.ephemeral,
     });
     if (eventDefinition === undefined) return { ok: false };
     // Rebuilding the parser from the catalog key and payload schema keeps replay

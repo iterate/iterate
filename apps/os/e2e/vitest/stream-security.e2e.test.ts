@@ -41,7 +41,6 @@ test("project users cannot reach stream test controls or the raw Durable Object"
   const hostile = userStream as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
 
   const attempts: Array<[string, unknown[]]> = [
-    ["testRunIdleTeardownNow", []],
     ["testReset", []],
     ["testAppendCoreEvents", [[{ type: "events.iterate.com/stream/paused", payload: {} }]]],
     ["testReceiveCopiedEvents", [{}]],
@@ -134,7 +133,7 @@ test("append accepts an offset assertion on a subscription configuration event",
     type: "events.iterate.com/stream/subscription-configured",
     offset: 5,
     payload: {
-      subscriptionKey: `stream-${marker}`,
+      name: `stream-${marker}`,
       receiver: {
         action: "copy-to-stream",
         receivingStreamPath: `/e2e/security/offset-assert-target/${marker}`,
@@ -189,4 +188,63 @@ test("openConnection rejects a malformed callback owner before installing the ca
   };
   // Nothing half-open from the rejected attempt.
   expect(state.runtime.connections[rejectedKey]).toBeUndefined();
+});
+
+// A processor read must never MATERIALIZE a facet: reading a subscription name
+// the committed catalog does not configure is refused at the facade door
+// rather than minting a durable facet on a typo. (Facet placement itself is
+// freely configurable — any caller trusted to append to a project's stream may
+// configure it; the guard here is purely "don't create a facet for a name that
+// isn't a real subscription".)
+test("a processor read for an unconfigured name does not mint a facet", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/security/facet-read/${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects.get(`sec-facet-${RUN_SUFFIX}-${marker}`).create({});
+  using stream = project.streams.get(streamPath);
+
+  await expect(async () => {
+    await stream.subscriptions.get(`never-configured-${marker.slice(0, 8)}`).processor.snapshot();
+  }).rejects.toThrow(/does not exist/);
+});
+
+// A repo at a path CLAIMED by another facet family could never wake (the
+// composition registers the claiming family, not the repo processor), so the
+// old behaviour hung the caller forever — create committed a birth batch that
+// waited for a repos/created that could not come, and a plain read returned a
+// handle that silently halted. The collection's get() door now fails loudly
+// for BOTH, before committing or dialing anything.
+test("repo create and read refuse paths claimed by another processor family", async () => {
+  const marker = crypto.randomUUID();
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects.get(`sec-repo-path-${RUN_SUFFIX}-${marker}`).create({});
+
+  await expect(async () => {
+    await project.repos.get(`/agents/${marker}`).create({ type: "empty" });
+  }).rejects.toThrow(/reserved by the "agent" processor family/);
+  await expect(async () => {
+    await project.repos.get(`/secrets/${marker}`).create({ type: "empty" });
+  }).rejects.toThrow(/reserved by the "secret" processor family/);
+
+  // The same door guards the READ path: a repo op at a claimed path must fail
+  // loudly rather than hang on a facet that can never wake.
+  await expect(async () => {
+    await project.repos.get(`/agents/${marker}`).whoami();
+  }).rejects.toThrow(/no repo at .*reserved by the "agent" processor family/);
+
+  // Nothing was committed at the refused path.
+  expect(
+    await project.streams.get(`/agents/${marker}`).getEvents({ limit: 50 }),
+  ).not.toContainEqual(
+    expect.objectContaining({ type: "events.iterate.com/repos/create-requested" }),
+  );
+
+  // A plain unclaimed path still creates.
+  using repo = await project.repos.get(`/examples/sec-${marker.slice(0, 8)}`).create({
+    type: "empty",
+  });
+  expect(await repo.whoami()).toContain("/examples/sec-");
 });

@@ -367,7 +367,7 @@ function telegramAgentCreationEvents(input: {
           },
         },
       }),
-      processorSlug: TelegramAgentProcessorContract.slug,
+      name: TelegramAgentProcessorContract.slug,
     },
   });
   return creation.events satisfies EmittedInput<TelegramProcessorContract>[];

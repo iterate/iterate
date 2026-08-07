@@ -385,7 +385,6 @@ await source.append({
     receiver: {
       action: "processor-wake",
       expression: ["agents", ["get", "/agents/reviewer"], "processor", "wakeStreamProcessor"],
-      processorSlug: "agent",
     },
   },
 });

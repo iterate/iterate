@@ -14,7 +14,8 @@ parallel run.
 ## Locked decisions
 
 - **Slug stays `"agent"`.** Existing agent streams carry durable
-  `subscription-configured` events naming `processorSlug: "agent"`; the
+  `subscription-configured` events named `"agent"` (the subscription NAME is
+  the contract selector); the
   registry hosts by slug, and same-slug idempotency keys make already-rendered
   per-event consequences in old journals DEDUPE instead of re-running. The
   `agent-next` slug existed only to avoid key collisions while both

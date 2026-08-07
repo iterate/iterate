@@ -17,6 +17,7 @@ const state = (overrides: Partial<ProjectProcessorState>): ProjectProcessorState
   createFailure: null,
   createRequest: { config: { slug: "test" } },
   createRequestedAtOffset: 1,
+  clients: {},
   customDomains: [],
   devices: [],
   egressRules: [],

@@ -25,6 +25,10 @@
 
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import {
+  ProjectProcessorContract,
+  type ProjectProcessorState,
+} from "../projects/project-processor-contract.ts";
 import type { SecretRefresh } from "../secrets/types.ts";
 import type {
   CompleteConnectResult,
@@ -594,9 +598,10 @@ async function recordConnection(input: {
   connectedEvent: { idempotencyKey?: string; payload: Record<string, unknown>; type: string };
   /** Arm a webhook-router processor on the connection stream (providers that
    * route inbound events). Connect time is THE arming point — connection
-   * streams are born here, not at project create. */
+   * streams are born here, not at project create. The name is the router
+   * processor contract's slug. */
   processorSubscription?: {
-    processorSlug: string;
+    name: string;
   };
   /** Claim this connection's external id in the deployment-wide directory
    * (providers with first-party webhook ingress). The generic door folds it to
@@ -632,7 +637,7 @@ async function recordConnection(input: {
           buildIntegrationRouterSubscriptionConfiguredEvent({
             connection: input.connection,
             projectId: input.projectId,
-            processorSlug: input.processorSubscription.processorSlug,
+            name: input.processorSubscription.name,
             slug: input.slug,
           }),
         ]
@@ -768,7 +773,7 @@ async function recordSlackConnection(input: {
       },
     },
     processorSubscription: {
-      processorSlug: SlackProcessorContract.slug,
+      name: SlackProcessorContract.slug,
     },
     directoryClaim: { externalId: input.teamId },
   });
@@ -1481,7 +1486,7 @@ export async function connectTelegram(input: {
       },
     },
     processorSubscription: {
-      processorSlug: TelegramProcessorContract.slug,
+      name: TelegramProcessorContract.slug,
     },
     directoryClaim: {
       externalId: bot.id,
@@ -2002,12 +2007,19 @@ async function disconnectGoogle(input: {
 export async function listIntegrationConnections(
   projectId: string,
 ): Promise<{ connection: string; integration: string; path: string }[]> {
-  const project = itxEnv.PROJECT.getByName(
+  // The project processor runs as a facet of the root stream; its facade
+  // serves the catch-up-backed snapshot.
+  const facade = await itxEnv.STREAM.getByName(
     DurableObjectNameCodec.stringify({ projectId, path: "/" }),
-  );
-  const snapshot = await (await project.processor).snapshot();
+  ).processorFacade({ name: ProjectProcessorContract.slug });
+  const snapshot = await facade.snapshot();
+  // Safe: the root stream's facet composition registers the ProjectProcessor
+  // under ProjectProcessorContract.slug, so the facade selected by that name
+  // snapshots the project contract's fold. The facade's snapshot type is
+  // untyped per name (the name is a runtime string), hence the assertion.
+  const state = snapshot.state as ProjectProcessorState;
   const entries: { connection: string; integration: string; path: string }[] = [];
-  for (const stream of snapshot.state.streams) {
+  for (const stream of state.streams) {
     const coordinates = integrationCoordinatesFromStreamPath(stream.path);
     if (coordinates === null) continue;
     entries.push({
