@@ -3420,6 +3420,61 @@ test("commands on a missing subscription key fail without appending state", asyn
   expect(committedEvents.filter((event) => event.payload?.name === missingName)).toEqual([]);
 });
 
+test("an ephemeral event reaches a hosted processor that named its type", async () => {
+  const marker = crypto.randomUUID();
+  const { seen, stream } = await runEphemeralEcho(marker, [
+    EPHEMERAL_FRAME_TYPE,
+    DURABLE_POKE_TYPE,
+  ]);
+
+  await stream.append({ type: EPHEMERAL_FRAME_TYPE, ephemeral: true, payload: {} });
+  await waitForCondition(async () => (await seen()).includes(EPHEMERAL_FRAME_TYPE), {
+    description: "the ephemeral frame to reach the processor that named it",
+    timeoutMs: 60_000,
+  });
+});
+
+/*
+ * THE RULE THAT KEEPS TODAY'S BEHAVIOUR. Every processor in the repo consumes
+ * durable types or `"*"`; none names an ephemeral one. If `"*"` swept them in,
+ * all of them would start receiving live traffic they never asked for the
+ * moment this shipped. Naming the type is the opt-in, and this is the test
+ * that says so against a real deployment.
+ */
+test("a star-consuming hosted processor still receives no ephemeral events", async () => {
+  const marker = crypto.randomUUID();
+  const { seen, stream } = await runEphemeralEcho(marker, ["*"]);
+
+  await stream.append({ type: EPHEMERAL_FRAME_TYPE, ephemeral: true, payload: {} });
+  /* A second durable event AFTER it: once this arrives, the frame's offset has
+   * certainly been scanned past, so its absence is a decision and not a race. */
+  await stream.append({ type: DURABLE_POKE_TYPE, payload: {}, idempotencyKey: `after-${marker}` });
+  await waitForCondition(
+    async () => (await seen()).filter((t) => t === DURABLE_POKE_TYPE).length > 0,
+    {
+      description: "the trailing durable event to be recorded",
+      timeoutMs: 60_000,
+    },
+  );
+  expect(await seen()).not.toContain(EPHEMERAL_FRAME_TYPE);
+});
+
+/*
+ * DOES AN EPHEMERAL EVENT ACTUALLY REACH A HOSTED PROCESSOR?
+ *
+ * The unit tests could not answer this. They drive the connection API
+ * directly, which skips the wake — the stretch where the stream dials a
+ * userspace worker, gets a callback and an announcement back, and only then
+ * decides what that connection may see. A capability can look correct in every
+ * one of those tests and deliver nothing, and this one did.
+ *
+ * So these two build the real thing: a processor written as userspace code,
+ * committed to a project's config repo, built as a dynamic worker, woken by a
+ * subscription. The processor proves receipt by appending a DURABLE event,
+ * because an ephemeral one leaves no trace by design — which is exactly what
+ * made this unobservable in the first place.
+ */
+
 async function openTestProject(marker: string) {
   const resources = new DisposableStack();
   const session = resources.adopt(withItxSession(), disposeRpc);
@@ -3458,21 +3513,6 @@ type DeliveryPolicy = {
   onFailingEvent: "halt" | "skip";
 };
 
-/*
- * DOES AN EPHEMERAL EVENT ACTUALLY REACH A HOSTED PROCESSOR?
- *
- * The unit tests could not answer this. They drive the connection API
- * directly, which skips the wake — the stretch where the stream dials a
- * userspace worker, gets a callback and an announcement back, and only then
- * decides what that connection may see. A capability can look correct in every
- * one of those tests and deliver nothing, and this one did.
- *
- * So these two build the real thing: a processor written as userspace code,
- * committed to a project's config repo, built as a dynamic worker, woken by a
- * subscription. The processor proves receipt by appending a DURABLE event,
- * because an ephemeral one leaves no trace by design — which is exactly what
- * made this unobservable in the first place.
- */
 const ephemeralEchoSource = (consumes: string[]) => `
 import { IterateDurableObject, IterateWorkerEntrypoint, createProcessorHost } from "iterate/sdk";
 import { defineProcessorContract, StreamProcessor } from "iterate/processors";
@@ -3612,45 +3652,6 @@ async function runEphemeralEcho(
   });
   return { seen, stream };
 }
-
-test("an ephemeral event reaches a hosted processor that named its type", async () => {
-  const marker = crypto.randomUUID();
-  const { seen, stream } = await runEphemeralEcho(marker, [
-    EPHEMERAL_FRAME_TYPE,
-    DURABLE_POKE_TYPE,
-  ]);
-
-  await stream.append({ type: EPHEMERAL_FRAME_TYPE, ephemeral: true, payload: {} });
-  await waitForCondition(async () => (await seen()).includes(EPHEMERAL_FRAME_TYPE), {
-    description: "the ephemeral frame to reach the processor that named it",
-    timeoutMs: 60_000,
-  });
-});
-
-/*
- * THE RULE THAT KEEPS TODAY'S BEHAVIOUR. Every processor in the repo consumes
- * durable types or `"*"`; none names an ephemeral one. If `"*"` swept them in,
- * all of them would start receiving live traffic they never asked for the
- * moment this shipped. Naming the type is the opt-in, and this is the test
- * that says so against a real deployment.
- */
-test("a star-consuming hosted processor still receives no ephemeral events", async () => {
-  const marker = crypto.randomUUID();
-  const { seen, stream } = await runEphemeralEcho(marker, ["*"]);
-
-  await stream.append({ type: EPHEMERAL_FRAME_TYPE, ephemeral: true, payload: {} });
-  /* A second durable event AFTER it: once this arrives, the frame's offset has
-   * certainly been scanned past, so its absence is a decision and not a race. */
-  await stream.append({ type: DURABLE_POKE_TYPE, payload: {}, idempotencyKey: `after-${marker}` });
-  await waitForCondition(
-    async () => (await seen()).filter((t) => t === DURABLE_POKE_TYPE).length > 0,
-    {
-      description: "the trailing durable event to be recorded",
-      timeoutMs: 60_000,
-    },
-  );
-  expect(await seen()).not.toContain(EPHEMERAL_FRAME_TYPE);
-});
 
 function subscriptionConfigured(input: {
   name: string;
