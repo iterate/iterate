@@ -3422,10 +3422,8 @@ test("commands on a missing subscription key fail without appending state", asyn
 
 test("an ephemeral event reaches a hosted processor that named its type", async () => {
   const marker = crypto.randomUUID();
-  const { seen, stream } = await runEphemeralEcho(marker, [
-    EPHEMERAL_FRAME_TYPE,
-    DURABLE_POKE_TYPE,
-  ]);
+  using echo = await runEphemeralEcho(marker, [EPHEMERAL_FRAME_TYPE, DURABLE_POKE_TYPE]);
+  const { seen, stream } = echo;
 
   await stream.append({ type: EPHEMERAL_FRAME_TYPE, ephemeral: true, payload: {} });
   await waitForCondition(async () => (await seen()).includes(EPHEMERAL_FRAME_TYPE), {
@@ -3443,16 +3441,23 @@ test("an ephemeral event reaches a hosted processor that named its type", async 
  */
 test("a star-consuming hosted processor still receives no ephemeral events", async () => {
   const marker = crypto.randomUUID();
-  const { seen, stream } = await runEphemeralEcho(marker, ["*"]);
+  using echo = await runEphemeralEcho(marker, ["*"]);
+  const { seen, stream } = echo;
 
+  const before = (await seen()).filter((type) => type === DURABLE_POKE_TYPE).length;
   await stream.append({ type: EPHEMERAL_FRAME_TYPE, ephemeral: true, payload: {} });
-  /* A second durable event AFTER it: once this arrives, the frame's offset has
-   * certainly been scanned past, so its absence is a decision and not a race. */
-  await stream.append({ type: DURABLE_POKE_TYPE, payload: {}, idempotencyKey: `after-${marker}` });
+  /*
+   * A second durable event AFTER the frame, and the barrier counts an INCREASE
+   * rather than a presence: setup already recorded one, so `> 0` would be true
+   * before this append and the wait would return without proving anything. Once
+   * the count grows, the frame's offset has certainly been scanned past, so its
+   * absence is a decision rather than a race.
+   */
+  await stream.append({ type: DURABLE_POKE_TYPE, payload: {} });
   await waitForCondition(
-    async () => (await seen()).filter((t) => t === DURABLE_POKE_TYPE).length > 0,
+    async () => (await seen()).filter((type) => type === DURABLE_POKE_TYPE).length > before,
     {
-      description: "the trailing durable event to be recorded",
+      description: "a SECOND durable event to be recorded, proving the scan passed the frame",
       timeoutMs: 60_000,
     },
   );
@@ -3552,12 +3557,23 @@ class EchoProcessor extends StreamProcessor {
    * can see directly. */
   contract = EchoContract;
   reduce({ state }) { return state; }
-  processEvent({ event, append }) {
+  processEvent({ event, append, blockProcessorWhile }) {
     if (event === null) return;
-    append({
-      type: "${SAW_TYPE}",
-      idempotencyKey: "saw:" + event.type,
-      payload: { type: event.type },
+    /*
+     * BLOCKED, because this append IS the evidence. Unblocked work is not
+     * awaited before the cursor advances, so an eviction could drop the one
+     * fact the test reads and turn a working delivery into a timeout.
+     *
+     * The key carries the OFFSET, not just the type: two durable events of
+     * the same type must produce two records, or a later one cannot be used
+     * as a scan barrier.
+     */
+    blockProcessorWhile(async () => {
+      await append({
+        type: "${SAW_TYPE}",
+        idempotencyKey: "saw:" + event.type + ":" + String(event.offset),
+        payload: { type: event.type },
+      });
     });
   }
 }
@@ -3581,8 +3597,13 @@ export default class EchoEntrypoint extends IterateWorkerEntrypoint {
 async function runEphemeralEcho(
   marker: string,
   consumes: string[],
-): Promise<{ seen: () => Promise<string[]>; stream: Stream }> {
+): Promise<{ seen: () => Promise<string[]>; stream: Stream } & Disposable> {
   const streamPath = `/eph/${marker.slice(0, 8)}`;
+  /*
+   * The project's lifetime belongs to the CALLER, which is why this returns a
+   * Disposable rather than taking `using` here: disposing at the end of this
+   * helper would close the session the returned stream still rides on.
+   */
   const testProject = await openTestProject(marker);
   const { project } = testProject;
   await project.repo.commitFiles({
@@ -3650,7 +3671,13 @@ async function runEphemeralEcho(
     description: "the userspace processor to build and record a durable event",
     timeoutMs: 90_000,
   });
-  return { seen, stream };
+  return {
+    seen,
+    stream,
+    [Symbol.dispose]() {
+      testProject[Symbol.dispose]();
+    },
+  };
 }
 
 function subscriptionConfigured(input: {

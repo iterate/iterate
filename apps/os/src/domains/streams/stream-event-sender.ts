@@ -700,6 +700,14 @@ export class StreamEventSender {
          *
          * A processor that announces nothing gets durable events only, which
          * is what every processor written before this did.
+         *
+         * TWO INDEPENDENT GUARDS ENFORCE THIS, and either alone is sufficient:
+         * this filter, and the SDK's `getConsumedEventDefinition`, which will
+         * not resolve an ephemeral event through `"*"` either. Verified by
+         * mutation — removing just one keeps the end-to-end test green, and
+         * removing both fails it. Deliberate: the stream refuses to SEND what
+         * a processor cannot fold, and the processor refuses to FOLD what it
+         * should not have been sent.
          */
         const explicitlyConsumed = new Set((consumes ?? []).filter((type) => type !== "*"));
         const connection = this.connections.openHosted({
