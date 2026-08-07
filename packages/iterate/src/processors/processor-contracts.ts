@@ -860,6 +860,20 @@ export function getConsumedEventDefinition(args: {
   if (eventDefinition == null) {
     throw new Error(`Unresolved stream processor consumes event type "${args.eventType}".`);
   }
+  /*
+   * NAMING A TYPE IS NOT THE SAME AS ACCEPTING AN EPHEMERAL COPY OF IT.
+   *
+   * A type is only ephemeral if its DEFINITION says so; the envelope flag is
+   * otherwise per-append, so anyone may append an ephemeral copy of an
+   * ordinarily-durable type. Admitting that would let it be folded into
+   * reduced state, and reduced state must equal folding the durable log —
+   * caught by an existing test that appends `scheduler/schedule-set` both
+   * ways and asserts only the durable one survives.
+   *
+   * So the contract decides on both sides: the catalogue says which types are
+   * live-only, `consumes` says which of them you want.
+   */
+  if (args.ephemeral === true && eventDefinition.ephemeral !== true) return undefined;
   return eventDefinition;
 }
 
