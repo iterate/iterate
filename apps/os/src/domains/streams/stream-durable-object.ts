@@ -55,6 +55,9 @@ import {
   parseLiveStatePagerLaneTag,
 } from "../live-state-pager.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
+import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+import { WorkerBuildFailedError } from "../workers/artifact-store.ts";
+import type { StatefulDynamicWorkerRef } from "../workers/schemas.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
 import {
   assertCoreProcessorCheckpointGrowthFits,
@@ -516,6 +519,12 @@ const PROJECT_WORKER_SUBSCRIPTION_NAME = "project-worker";
  * replays into every facet-placed subscription's facet.
  */
 const FACET_ALARM_KV_KEY = "facetAlarmAtMs";
+
+/** Per-userspace-facet marker of which loaded build the facet is running,
+ * keyed by subscription name. A changed source cacheKey (a config-repo commit)
+ * aborts the stale facet before it is re-created against the new class —
+ * mirroring StatefulWorkerDurableObject's source-change abort. */
+const FACET_SOURCE_VERSION_KV_PREFIX = "facetSourceVersion:";
 
 /** Bounded extra delay before retrying a facet's failed alarm replay. */
 const FACET_ALARM_RETRY_DELAY_MS = 1_000;
@@ -1217,8 +1226,12 @@ export class StreamDurableObject extends DurableObject<Env> {
   /**
    * Create-or-reuse the processor facet named after a subscription and make
    * sure it received its first-contact `configure` before any wake. The class
-   * is the sibling `ProcessorFacet` export from `iterate/processors/cloudflare`,
-   * re-exported as an OS worker entrypoint so `ctx.exports` carries it.
+   * is either the OS worker's own `ProcessorFacet` entrypoint (a `builtin`
+   * source, resolved by this stream's path-family registration) or a userspace
+   * DurableObject class LOADED from the subscription's `StatefulDynamicWorkerRef`
+   * (a `userspace` source) — both speak the same `ProcessorFacet` protocol
+   * (`configure` + parent-proxied alarm + `wakeStreamProcessor`/`handleAlarm`),
+   * so everything below this class-resolution seam is shared.
    *
    * THE facet-materialization choke point: every caller funnels through the
    * committed-catalog check, so no read, socket lane, alarm replay, or
@@ -1230,34 +1243,15 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (receiver.action !== "facet-processor") {
       throw new Error(`subscription "${name}" does not run as a facet`);
     }
-    if (receiver.source.kind === "userspace") {
-      // The loader plumbing mirrors StatefulWorkerDurableObject
-      // (`this.#workerRunner.loadStatefulClass(ref)` → `ctx.facets.get(name,
-      // () => ({ class }))`). What it needs before it can be turned on: the
-      // loaded userspace class must speak the facet protocol this method drives
-      // below (`configure` + the parent-proxied alarm), which the plain
-      // `StreamProcessorDurableObject` base does not yet implement. Until that
-      // lands, only built-in facets are hosted — and no birth batch configures
-      // a userspace facet subscription, so this branch is never reached at
-      // runtime today.
-      throw new Error(
-        `userspace facet "${name}" cannot be hosted yet: the loaded class must implement the facet configure/alarm protocol`,
-      );
-    }
-    const workerExports = this.ctx.exports as Record<string, unknown>;
-    // Loose lookup on purpose: the class is the sibling ProcessorFacet export
-    // from iterate/processors/cloudflare, surfaced as an OS worker entrypoint;
-    // ctx.exports carries every exported entrypoint by name.
-    const facetClass = workerExports.ProcessorFacet as DurableObjectClass | undefined;
-    if (facetClass === undefined) {
-      throw new Error(
-        'facet placement requires the OS worker to export the "ProcessorFacet" entrypoint',
-      );
-    }
+    const facetClass =
+      receiver.source.kind === "userspace"
+        ? await this.#loadUserspaceFacetClass(name, receiver.source.worker)
+        : this.#builtinFacetClass();
     // Safe: ctx.facets.get returns an untyped Fetcher stub (workerd's facet
-    // API carries no class-level typing), but the instance behind it is
-    // always the ProcessorFacet class passed in the startup callback above —
-    // ProcessorFacetStub is exactly that class's RPC surface.
+    // API carries no class-level typing), but the instance behind it is always
+    // the class passed in the startup callback — a ProcessorFacet subclass
+    // (the OS built-in or the userspace StreamProcessorFacet base), whose RPC
+    // surface ProcessorFacetStub over-approximates.
     const facet = this.ctx.facets.get(name, () => ({
       class: facetClass,
     })) as unknown as ProcessorFacetStub;
@@ -1274,6 +1268,63 @@ export class StreamDurableObject extends DurableObject<Env> {
       this.#configuredProcessorFacets.add(name);
     }
     return facet;
+  }
+
+  /** The OS worker's own facet class, surfaced as an entrypoint on `ctx.exports`
+   * (the sibling `ProcessorFacet` export from `iterate/processors/cloudflare`). */
+  #builtinFacetClass(): DurableObjectClass {
+    // Loose lookup on purpose: ctx.exports carries every exported entrypoint by
+    // name.
+    const facetClass = (this.ctx.exports as Record<string, unknown>).ProcessorFacet as
+      | DurableObjectClass
+      | undefined;
+    if (facetClass === undefined) {
+      throw new Error(
+        'facet placement requires the OS worker to export the "ProcessorFacet" entrypoint',
+      );
+    }
+    return facetClass;
+  }
+
+  /** Lazily built loader for userspace facet sources; one per incarnation so
+   * loaded isolates are keyed by a stable instance nonce (no per-dial isolate
+   * accumulation). The scope is this stream's own `{ projectId, path }`, so the
+   * loaded facet's `env.ITX` answers as this stream's scope — how it dials the
+   * alarm proxy and stream handle back. */
+  #facetWorkerRunner: DynamicWorkerRunner | undefined;
+  #workerRunnerForFacets(projectId: string): DynamicWorkerRunner {
+    return (this.#facetWorkerRunner ??= new DynamicWorkerRunner({
+      streamContext: { kind: "scope", scopePath: this.name.path },
+      exports: this.ctx.exports,
+      projectId,
+      scopePath: this.name.path,
+    }));
+  }
+
+  /** Load a userspace facet class from its source ref, rebuilding the facet
+   * against fresh source when the loaded build changes. */
+  async #loadUserspaceFacetClass(
+    name: string,
+    ref: StatefulDynamicWorkerRef,
+  ): Promise<DurableObjectClass> {
+    const projectId = this.name.projectId;
+    if (projectId === null) {
+      throw new Error(`userspace facet "${name}" requires a project stream`);
+    }
+    const loaded = await this.#workerRunnerForFacets(projectId).loadStatefulClass(ref);
+    if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
+    // A changed source cacheKey (a config-repo commit) aborts the stale facet
+    // before ctx.facets.get re-creates it against the new class, mirroring
+    // StatefulWorkerDurableObject's source-change abort.
+    const version = loaded.resolved.cacheKey;
+    const versionKey = `${FACET_SOURCE_VERSION_KV_PREFIX}${name}`;
+    const previous = this.ctx.storage.kv.get<string>(versionKey);
+    if (previous !== undefined && previous !== version) {
+      this.ctx.facets.abort(name, `userspace facet source changed for ${name}`);
+      this.#configuredProcessorFacets.delete(name);
+    }
+    if (previous !== version) this.ctx.storage.kv.put(versionKey, version);
+    return loaded.klass;
   }
 
   #readFacetAlarmAtMs(): number | null {

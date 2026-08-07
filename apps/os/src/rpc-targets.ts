@@ -612,6 +612,10 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
           "On this receiving stream, remove one named subscription from the explicitly named source stream.",
         liveState: "Watch the stream's reduced state and current send/callback measurements.",
         waitForEvent: "Block until a matching event lands.",
+        proxySetAlarm:
+          "Arm this stream's shared facet-alarm slot (min-merged); the facet-alarm proxy a userspace facet-hosted processor uses in place of a native alarm.",
+        proxyDeleteAlarm: "Clear a facet's alarm desire (no-op on the shared slot).",
+        proxyGetAlarm: "Read this stream's shared facet-alarm slot's desired fire time.",
       },
       parent: "streams.get(path)",
     });
@@ -961,6 +965,34 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void> {
     return Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].kill());
+  }
+
+  // The facet-alarm proxy over itx (the {@link ProcessorFacetAlarmProxy}
+  // shape): a userspace processor hosted as a FACET of this stream's Durable
+  // Object has no native alarm (workerd#6810), so it arms/reads/clears the
+  // parent's one real platform alarm through these three verbs — the itx twin
+  // of a stateful worker's `workers.get(ref).setAlarm`. A fire only replays
+  // `handleAlarm` into THIS stream's own facets, so project access is the gate.
+  /** Arm the stream's shared facet-alarm slot, min-merged to the earliest desired ms. */
+  async proxySetAlarm(scheduledTimeMs: number): Promise<void> {
+    await this.#read("proxySetAlarm", () =>
+      Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].proxySetAlarm(scheduledTimeMs)),
+    ).catch(rethrowStreamUnavailable);
+  }
+
+  /** Clear a facet's alarm desire (a no-op on the shared slot: no per-facet
+   * identity, and one spurious level-triggered fire is harmless). */
+  async proxyDeleteAlarm(): Promise<void> {
+    await this.#read("proxyDeleteAlarm", () =>
+      Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].proxyDeleteAlarm()),
+    ).catch(rethrowStreamUnavailable);
+  }
+
+  /** The shared facet-alarm slot's currently desired fire time, or null. */
+  async proxyGetAlarm(): Promise<number | null> {
+    return await this.#read("proxyGetAlarm", () =>
+      Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].proxyGetAlarm()),
+    ).catch(rethrowStreamUnavailable);
   }
 
   /** @internal Delete one stream and create a new lifetime on its next request. */

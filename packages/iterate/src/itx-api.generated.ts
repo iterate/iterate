@@ -1380,6 +1380,13 @@ export interface Stream {
   liveState: LiveStateRpc<StreamRuntimeDebugState>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
+  /** Arm the stream's shared facet-alarm slot, min-merged to the earliest desired ms. */
+  proxySetAlarm(scheduledTimeMs: number): Promise<void>;
+  /** Clear a facet's alarm desire (a no-op on the shared slot: no per-facet
+   * identity, and one spurious level-triggered fire is harmless). */
+  proxyDeleteAlarm(): Promise<void>;
+  /** The shared facet-alarm slot's currently desired fire time, or null. */
+  proxyGetAlarm(): Promise<number | null>;
   /**
    * Open one session-owned callback connection to this stream.
    *

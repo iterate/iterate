@@ -32,6 +32,10 @@ import type {
 } from "./processors/rpc-types.ts";
 import {
   createStreamProcessorRegistry,
+  ProcessorFacet,
+  type ProcessorFacetAlarmProxy,
+  type ProcessorFacetHost,
+  type ProcessorFacetIdentity,
   type RegisterableProcessor,
   type RegisteredProcessorReads,
   type StreamProcessorRegistry,
@@ -771,5 +775,100 @@ export abstract class StreamProcessorDurableObject<
    */
   protected registry(): Promise<StreamProcessorRegistry<State>> {
     return this.#host.registry();
+  }
+}
+
+/**
+ * Ergonomic base for a userspace stream processor hosted as a FACET of the
+ * platform's Stream Durable Object — the `facet-processor` subscription with a
+ * `userspace` source, whose `StatefulDynamicWorkerRef` names THIS class. The
+ * Stream DO loads the class from the project's source and starts it with
+ * `ctx.facets.get(name, …)`, so it runs INSIDE the stream it serves: wakes are
+ * an in-process parent→facet dial (no itx wake expression), and checkpoints /
+ * projections land in the facet's own private SQLite.
+ *
+ * Same authoring seam as {@link StreamProcessorDurableObject} — a subclass
+ * writes only `createProcessor` (and sets `recovery` when it owes background
+ * work) — so a processor forks between "its own Durable Object" and "a facet
+ * of its stream" with no change to the processor itself. The two differences a
+ * facet forces, both handled here:
+ *
+ * - **No native alarm.** workerd does not implement alarms for facets
+ *   (workerd#6810), so this base routes the registry's keepalive/recovery
+ *   alarm through the parent's real platform alarm over itx —
+ *   `streams.get(path).proxySetAlarm/proxyDeleteAlarm/proxyGetAlarm`, the
+ *   itx-channel twin of a stateful worker's `workers.get(ref).setAlarm`. The
+ *   parent fires it back as {@link ProcessorFacet.handleAlarm}. NEVER define
+ *   `alarm()` on a subclass (the base throws): a facet's native `setAlarm`
+ *   would appear to succeed, then poison its output gate.
+ * - **Identity by first-contact `configure`, not the constructor.** The Stream
+ *   DO delivers `{ parentName, projectId, path }`; the base stashes it and
+ *   rebuilds the host from that stash on every incarnation (see
+ *   {@link ProcessorFacet}).
+ *
+ * ```ts
+ * export class GuestbookFacet extends StreamProcessorFacet {
+ *   protected readonly recovery = true; // owes background work
+ *   protected createProcessor(deps: ProcessorHostDeps) {
+ *     return new GuestbookProcessor(deps);
+ *   }
+ * }
+ * ```
+ */
+export abstract class StreamProcessorFacet<
+  Env extends IterateEnv = IterateEnv,
+> extends ProcessorFacet<Env> {
+  /**
+   * Build the processor from the host-derived platform deps, wiring your own
+   * deps (clocks, clients, itx-backed capabilities) off `this.env` — the one
+   * method a facet-hosted processor app implements, identical to
+   * {@link StreamProcessorDurableObject.createProcessor}.
+   */
+  protected abstract createProcessor(deps: ProcessorHostDeps): RegisterableProcessor;
+
+  /**
+   * Post-eviction keepalive recovery, for processors that owe registered
+   * background work (the obligation pattern). Off by default.
+   */
+  protected readonly recovery: boolean = false;
+
+  /**
+   * Dial the parent stream's alarm proxy over itx, resolved PER CALL (a stub
+   * must not outlive its RPC turn), each verb opening and disposing its own
+   * session like {@link itxProjectStream}. `identity.path` is the coordinate;
+   * `parentName` is unused here (userspace facets have no `env.STREAM`).
+   */
+  protected parentAlarms(identity: ProcessorFacetIdentity): ProcessorFacetAlarmProxy {
+    const env = this.env;
+    const { path } = identity;
+    return {
+      proxySetAlarm: (scheduledTimeMs) =>
+        withProject(env, (project) => project.streams.get(path).proxySetAlarm(scheduledTimeMs)),
+      proxyDeleteAlarm: () =>
+        withProject(env, (project) => project.streams.get(path).proxyDeleteAlarm()),
+      proxyGetAlarm: () => withProject(env, (project) => project.streams.get(path).proxyGetAlarm()),
+    };
+  }
+
+  /**
+   * Build the host wiring from the stashed identity: the stream handle is the
+   * same itx-backed {@link itxProjectStream} a worker-hosted processor appends
+   * through, and the single processor is registered under this facet's name.
+   */
+  protected createHost(identity: ProcessorFacetIdentity): ProcessorFacetHost {
+    if (identity.projectId === null) {
+      throw new Error("userspace stream-processor facets require a project stream");
+    }
+    const { projectId, path } = identity;
+    const stream = itxProjectStream(this.env, path);
+    return {
+      stream,
+      version: this.env.ITERATE_WORKER_VERSION,
+      registerProcessors: (registry) => {
+        registry.register(this.createProcessor({ path, projectId, stream }), {
+          recovery: this.recovery,
+        });
+      },
+    };
   }
 }
