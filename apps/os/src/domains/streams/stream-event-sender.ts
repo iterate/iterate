@@ -687,17 +687,46 @@ export class StreamEventSender {
         const configuredFilter = compileEventFilter(current.configuration.filter);
         const announcedFilter =
           consumes === undefined ? undefined : compileEventFilter({ eventTypes: [...consumes] });
+        /*
+         * EPHEMERAL DELIVERY NEEDS BOTH SIDES TO SAY YES, and they answer
+         * different questions. The subscription's `includeEphemeral` answers
+         * "may this callback receive ephemeral bodies at all"; the processor's
+         * `consumesEphemeral` answers "which ones can it handle". Neither
+         * alone is enough: a wildcard subscription must not be able to push
+         * the microphone firehose into a processor that never named it, and a
+         * processor that can handle a type must not start receiving it from
+         * every subscription that happens to match.
+         *
+         * A processor's ephemeral vocabulary is deliberately NOT its
+         * `consumes` list. Those are durable types it may fold into reduced
+         * state, and an ephemeral event must never be folded.
+         */
+        const receiverWantsEphemeral =
+          current.configuration.receiver.action === "processor-wake" &&
+          current.configuration.receiver.includeEphemeral === true;
+        const consumesEphemeral = openedBy?.processor?.announcement.consumesEphemeral;
+        const ephemeralFilter =
+          consumesEphemeral === undefined || consumesEphemeral.length === 0
+            ? undefined
+            : compileEventFilter({ eventTypes: [...consumesEphemeral] });
+        const includeEphemeral = receiverWantsEphemeral && ephemeralFilter !== undefined;
         const connection = this.connections.openHosted({
+          includeEphemeral,
           connectionKey: name,
           expectedHostedDelivery: expectedDelivery,
           processEventBatch: response.processEventBatch,
           replayAfterOffset: response.checkpointOffset,
           filter: {
             matches(event) {
-              return (
-                configuredFilter.matches(event) &&
-                (announcedFilter === undefined || announcedFilter.matches(event))
-              );
+              if (!configuredFilter.matches(event)) return false;
+              // An ephemeral event is admitted by the EPHEMERAL vocabulary
+              // only. Falling back to `consumes` here would let a processor
+              // receive a live copy of a type it declared as durable and
+              // reduces into state — the one thing this must never do.
+              if (event.ephemeral === true) {
+                return includeEphemeral && ephemeralFilter!.matches(event);
+              }
+              return announcedFilter === undefined || announcedFilter.matches(event);
             },
           },
           openedBy,
@@ -1618,6 +1647,14 @@ type OpenConnectionArgs<Batch extends StreamEventBatch> = {
   expectedStreamId?: string | null;
   maxReplayOffsetGap?: number;
   filter?: CompiledEventFilter;
+  /**
+   * Let a HOSTED connection receive ephemeral events as well as durable ones.
+   *
+   * Ignored for session connections, which have always received both — they
+   * own no durable cursor, so an evicted body costs them nothing. Set only
+   * where both the subscription and the processor asked for it.
+   */
+  includeEphemeral?: boolean;
   events?: boolean;
   /** Per-connection ceiling on events per delivered batch (session lane). */
   maxDeliveryEvents?: number;
@@ -2183,8 +2220,13 @@ export class StreamConnections {
               deliveredThroughOffset = Math.max(deliveredThroughOffset, currentMaxOffset);
             } else {
               deliveredThroughOffset = lastOffset;
+              // Hosted delivery excludes ephemeral events unless BOTH the
+              // subscription and the processor asked for them; see
+              // `includeEphemeral` on the processor-wake receiver. Session
+              // connections have always received them — they own no durable
+              // cursor, so a hole costs them nothing.
               const visible =
-                kind === "hosted"
+                kind === "hosted" && args.includeEphemeral !== true
                   ? readEvents.filter((entry) => entry.event.ephemeral !== true)
                   : readEvents;
               const matched =

@@ -2028,6 +2028,109 @@ function connectionsHarness(
   };
 }
 
+describe("hosted delivery and ephemeral events", () => {
+  /*
+   * THE EPHEMERAL EVENT IS FIRST, on purpose. Hosted delivery hands over one
+   * batch and waits to be acked, so every assertion below is about the FIRST
+   * batch — putting the mic frame at offset 1 means one `sendQueued()` decides
+   * the question, and the test says nothing about batching it does not mean.
+   */
+  const mixed = (): StreamEvent[] => [
+    { ...streamEvent(1, "events.example.com/mic-frame"), ephemeral: true },
+    streamEvent(2, "events.example.com/conversation-requested"),
+  ];
+
+  const typesDelivered = (calls: DeliveryCall[]) =>
+    calls.flatMap((call) => (call.batch.events ?? []).map((event) => event.type));
+
+  /*
+   * THE DEFAULT, and the reason the restriction exists. A hosted processor
+   * owns a durable cursor; an ephemeral body lives only in this Durable
+   * Object's bounded buffer, so a restart leaves a permanent hole where it
+   * was. Every processor written before ephemeral delivery existed must go on
+   * seeing exactly what it saw — the frame is skipped and the durable event
+   * behind it arrives instead.
+   */
+  it("withholds ephemeral events from a hosted processor that did not ask", () => {
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({ events: mixed() });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    connection.sendQueued();
+
+    /*
+     * A differential claim, and the pair is what makes it strong: the very
+     * next test is this setup with `includeEphemeral: true` and nothing else
+     * changed, and it receives the frame. So "did not arrive" here cannot be
+     * an accident of the harness.
+     */
+    expect(typesDelivered(calls)).not.toContain("events.example.com/mic-frame");
+  });
+
+  it("delivers them once the connection opts in", () => {
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({ events: mixed() });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      includeEphemeral: true,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    connection.sendQueued();
+
+    expect(typesDelivered(calls)).toEqual(["events.example.com/mic-frame"]);
+  });
+
+  /*
+   * Opting in is not opting in to everything. The connection filter still
+   * runs, so a subscription that named only durable types keeps getting only
+   * those — otherwise this flag would quietly widen a filter somebody had
+   * already written down.
+   */
+  it("still applies the connection filter to ephemeral events", () => {
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({ events: mixed() });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      includeEphemeral: true,
+      filter: {
+        matches: (event: StreamEvent) => event.type === "events.example.com/conversation-requested",
+      },
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    connection.sendQueued();
+
+    /* Opted in, and still filtered out — the flag widened nothing. */
+    expect(typesDelivered(calls)).not.toContain("events.example.com/mic-frame");
+  });
+
+  /*
+   * Session connections are unchanged and must stay that way: they own no
+   * durable cursor, so an evicted body costs them nothing, and they have
+   * always received both kinds. A regression here would be silent — the
+   * stream viewer would simply stop showing live audio.
+   */
+  it("leaves session connections receiving both kinds, as they always have", () => {
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({ events: mixed() });
+    const connection = h.connections.openSession({
+      connectionKey: "viewer",
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    connection.sendQueued();
+
+    expect(typesDelivered(calls)).toContain("events.example.com/mic-frame");
+  });
+});
+
 describe("StreamConnections hosted delivery watchdog", () => {
   it("does not publish a hosted callback until its opened event finishes appending", () => {
     const calls: DeliveryCall[] = [];

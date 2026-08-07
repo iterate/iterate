@@ -158,6 +158,31 @@ export const SubscriptionReceiver = z.discriminatedUnion("action", [
        */
       placement: z.literal("facet").optional(),
       expression: DeliveryExpression.optional(),
+      /**
+       * Deliver this subscription's matching EPHEMERAL events too.
+       *
+       * Off by default, and deliberately only on this receiver: a hosted
+       * processor is woken and hands its batch straight to live code, whereas
+       * copy/itx-call/webhook deliveries are durable-cursor lanes whose whole
+       * contract is that a receiver can be caught up later. An ephemeral event
+       * cannot honour that — its body lives only in this Durable Object's
+       * bounded buffer, so a restart or FIFO eviction leaves a permanent hole
+       * where it was. Keeping the flag inside the discriminated receiver makes
+       * asking for it on the other three unrepresentable rather than merely
+       * discouraged. In particular the project config worker is an `itx-call`
+       * subscription and cannot opt in by accident.
+       *
+       * BOTH SIDES MUST AGREE. This says the subscription may carry them; the
+       * processor's own `consumesEphemeral` says which types it can handle,
+       * and delivery is the intersection. Turning this on for a processor that
+       * declares none therefore changes nothing, which is the safe direction.
+       *
+       * What arrives here may drive live work only. It must never become a
+       * premise of reduced state or of a side effect whose recovery depends on
+       * replaying it, because replay is exactly what an ephemeral event cannot
+       * promise.
+       */
+      includeEphemeral: z.boolean().optional(),
     })
     .refine(
       (receiver) => (receiver.placement === "facet") !== (receiver.expression !== undefined),
@@ -247,6 +272,12 @@ type MutuallyAssignable<Left, Right> = [Left] extends [Right]
  * Compile-time proof that the app's validating schema and the delivery
  * envelope's shared payload type have exactly the same fields in both
  * directions.
+ *
+ * WITH ONE BLIND SPOT WORTH KNOWING: mutual assignability does not catch an
+ * OPTIONAL property added to one side only. `{ a?: boolean; b: X }` and
+ * `{ b: X }` are assignable both ways, so a new optional field can be added to
+ * the schema here and silently never reach the envelope processors read. Add
+ * optional fields to BOTH by hand; this assertion will not remind you.
  *
  * @public — never imported; the export exists so the compiler must evaluate
  * the assertion.

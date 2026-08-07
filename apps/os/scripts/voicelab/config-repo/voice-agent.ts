@@ -1209,6 +1209,28 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/voice-agent/warmup",
     "events.iterate.com/voice-agent/brief-current",
   ],
+  /*
+   * THE LIVE HALF, and it is deliberately not part of `consumes`.
+   *
+   * Everything above may be folded into reduced state, because it is durable
+   * and can be replayed. Nothing here can: an ephemeral event's body lives
+   * only in the Stream Durable Object's bounded buffer, so a restart or FIFO
+   * eviction leaves a permanent hole where one was. Declaring a type here says
+   * "I will act on this as it happens, and my durable state will not depend on
+   * having seen it" — which is exactly right for a microphone frame and would
+   * be a bug for anything the fold reads back.
+   *
+   * Delivery is the intersection of this list and the subscription's
+   * `includeEphemeral`, so listing a type here is necessary and not
+   * sufficient. Together they are what lets this processor own a live call
+   * without a second worker relaying the audio to it.
+   */
+  consumesEphemeral: [
+    "events.iterate.com/voice-agent/mic-frame",
+    "events.iterate.com/voice-agent/turn",
+    "events.iterate.com/voice-agent/say",
+    "events.iterate.com/voice-agent/ping",
+  ],
   emits: [
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/warmup-ready",
@@ -4394,6 +4416,24 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
          */
         receiver: {
           action: "processor-wake",
+          /*
+           * `includeEphemeral: true` GOES HERE, and deliberately does not yet.
+           *
+           * It is the other half of the contract's `consumesEphemeral` above,
+           * and together they are what lets this processor own a live call
+           * without a second worker relaying the audio to it. But the flag is
+           * validated by the OS worker's schema, and this file is deployed
+           * into a project's config repo — so a project can be running this
+           * code against a deployment that predates the field, and
+           * `SubscriptionConfiguredPayload` is strict:
+           *
+           *   unrecognized_keys ["includeEphemeral"] at payload.receiver
+           *
+           * which rejects setup and leaves every device unable to place a
+           * call. That is exactly the failure that cost a night already, from
+           * the other direction. Turn this on once the platform change is
+           * deployed to the environment being tested, not before.
+           */
           expression: [
             "workers",
             ["get", voiceAgentProcessorRef(streamPath)],

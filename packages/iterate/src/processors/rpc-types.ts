@@ -207,6 +207,14 @@ export type SubscriptionConfigurationForDelivery = {
            * which registered contract runs. */
           placement?: "facet";
           expression?: Array<string | [method: string, ...args: unknown[]]>;
+          /** This subscription may carry EPHEMERAL events too, intersected
+           * with the processor's own `consumesEphemeral`. Off by default, and
+           * only on this receiver: the other three are durable-cursor lanes
+           * whose contract is that a receiver can be caught up later, which an
+           * ephemeral body cannot honour. What arrives may drive live work
+           * only — never reduced state, never a side effect whose recovery
+           * depends on replaying it. */
+          includeEphemeral?: boolean;
         }
       | {
           action: "copy-to-stream";

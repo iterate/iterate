@@ -248,12 +248,12 @@ export async function device(options: DeviceOptions) {
     };
     const shot = async (name: string) => {
       try {
-        const meta = await withTimeout("takeScreenshot", () => capability.takeScreenshot());
+        const meta = await withTimeout("screen.take", () => capability.screen.take());
         const pixels = new Uint8Array(meta.bytes);
         let offset = 0;
         for (let index = 0; index < meta.chunks; index++) {
           const chunk = new Uint8Array(
-            await withTimeout(`chunk ${index}`, () => capability.readScreenshotChunk(index)),
+            await withTimeout(`chunk ${index}`, () => capability.screen.readChunk({ index })),
           );
           pixels.set(chunk, offset);
           offset += chunk.length;

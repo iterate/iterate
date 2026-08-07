@@ -25,6 +25,7 @@ export type AnyHostedProcessor = {
     description: string;
     stateSchema: z.ZodType;
     consumes: readonly string[];
+    consumesEphemeral?: readonly string[];
     emits: readonly string[];
     events: Record<string, { description?: string; payloadSchema?: unknown }>;
   };
@@ -79,6 +80,7 @@ export function announceContract(contract: {
   version: string;
   description: string;
   consumes: readonly string[];
+  consumesEphemeral?: readonly string[];
   emits: readonly string[];
   events: Record<string, { description?: string; payloadSchema?: unknown }>;
 }): ProcessorContractAnnouncement {
@@ -87,6 +89,11 @@ export function announceContract(contract: {
     version: contract.version,
     description: contract.description,
     consumes: [...contract.consumes],
+    // Omitted rather than `[]` when a contract declares none, so the field's
+    // absence keeps meaning "this processor predates ephemeral delivery".
+    ...(contract.consumesEphemeral === undefined
+      ? {}
+      : { consumesEphemeral: [...contract.consumesEphemeral] }),
     emits: [...contract.emits],
     ownedEvents: Object.entries(contract.events).map(([type, definition]) => ({
       type,
