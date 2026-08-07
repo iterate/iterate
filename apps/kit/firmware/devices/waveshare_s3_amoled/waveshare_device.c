@@ -2423,6 +2423,8 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
      */
     {
       static uint64_t last_liveness_ms;
+      /** When the transport last stopped being ready; 0 while it is ready. */
+      static uint64_t not_ready_since_ms;
       static uint32_t last_ping_count;
       static uint64_t next_liveness_restart_at;
       if (last_liveness_ms == 0U) last_liveness_ms = now;
@@ -2439,8 +2441,34 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
        * audio, and pushing no telemetry. That is not a quiet device, it is a
        * broken one, and it must be on this clock.
        */
+      /*
+       * A TRANSPORT THAT IS NEVER READY MUST NOT DISABLE THE RESTART.
+       *
+       * Holding the liveness clock while the transport is down is right — you
+       * cannot fault a device for missing round trips it had no lane for — but
+       * it was the ONLY thing this branch did, so a transport that never came
+       * back reset the clock on every tick and the restart below could never
+       * fire. Measured on the StackChan: unreachable for ten minutes and more,
+       * no capability, no face, task watchdog fed the whole time (so the loop
+       * was alive and this branch was running), recovered only by a human
+       * pulling power. Every board here has the same shape.
+       *
+       * So the grace is bounded. Being down is forgiven; being down forever is
+       * the failure this restart exists for.
+       */
       if (runtime.transport.state != ITERATE_KIT_ESP_IDF_ITX_READY) {
         last_liveness_ms = now;
+        if (not_ready_since_ms == 0U) not_ready_since_ms = now;
+        if (iterate_kit_voice_elapsed_ms(now, not_ready_since_ms) >
+            NO_LIVENESS_RESTART_MS) {
+          ESP_LOGE(
+              tag,
+              "transport has not been ready for %us — restarting",
+              (unsigned int)(NO_LIVENESS_RESTART_MS / 1000U));
+          iterate_kit_esp_restart_with_note("transport never became ready");
+        }
+      } else {
+        not_ready_since_ms = 0U;
       }
       if (runtime.voicelab.ping_pending &&
           iterate_kit_voice_elapsed_ms(now, runtime.voicelab.ping_started_ms) > PING_TIMEOUT_MS &&

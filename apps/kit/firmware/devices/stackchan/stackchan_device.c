@@ -40,6 +40,7 @@
 #include "freertos/task.h"
 
 #include "capnweb/capnweb.h"
+#include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/audio_codec.h"
 #include "iterate/kit/conversation_launch.h"
 #include "iterate/kit/retry_gate.h"
@@ -1268,6 +1269,53 @@ static enum iterate_kit_status capture_screen(
   return ITERATE_KIT_OK;
 }
 
+/*
+ * `screen.fill({colour})` — the separator of last resort for a dark panel.
+ *
+ * Every counter this board publishes can read healthy while the glass stays
+ * dark: `screen.take()` proves the source surface holds a face, and
+ * `displayTransfers` proves bands are pushed and acknowledged. Both are true
+ * and the screen still shows nothing, so what remains is either the content
+ * arriving wrong or the panel showing nothing at all — indistinguishable from
+ * inside, and one glance from outside.
+ */
+static const char *const screen_fill_path[] = {"screen", "fill"};
+
+static enum capnweb_status screen_fill(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct capnweb_value object = {0};
+  int64_t colour = 0;
+  (void)context;
+  if (!iterate_kit_read_object_argument(call, &object) ||
+      !iterate_kit_read_int_field(&object, "colour", &colour) ||
+      colour < 0 || colour > 0xffff) {
+    return capnweb_reply_set_error(
+        reply, "TypeError", "screen.fill needs {colour} as RGB565 0..65535");
+  }
+  if (iterate_kit_stackchan_avatar_fill((uint16_t)colour) != ESP_OK) {
+    return capnweb_reply_set_error(
+        reply, "Error", "the display refused the fill");
+  }
+  return capnweb_reply_set_boolean(reply, true);
+}
+
+static struct iterate_kit_module screen_fill_module(void) {
+  static const struct iterate_kit_method methods[] = {
+    {screen_fill_path, 2U, screen_fill},
+  };
+  const struct iterate_kit_module module = {
+    .methods = methods,
+    .method_count = sizeof(methods) / sizeof(methods[0]),
+    .context = NULL,
+    .poll = NULL,
+    .close = NULL,
+    .session_ended = NULL,
+  };
+  return module;
+}
+
 static bool initialise_connection(void) {
   static const char *const mount_path[] = {"kit", "stackchan"};
   static struct iterate_kit_servos servos;
@@ -1278,7 +1326,7 @@ static bool initialise_connection(void) {
    * servos, conversation, speaker, health, camera, screen — the camera only if
    * it comes up.
    */
-  static struct iterate_kit_module modules[6];
+  static struct iterate_kit_module modules[7];
   static struct iterate_kit_speaker speaker;
   size_t module_count = 0U;
   struct iterate_kit_itx_connection_options options;
@@ -1394,6 +1442,7 @@ static bool initialise_connection(void) {
         ITERATE_KIT_OK) {
       modules[module_count++] = iterate_kit_camera_module(&screen);
     }
+    modules[module_count++] = screen_fill_module();
   }
   peer_options = (struct iterate_kit_peer_options){
     peer_description,
@@ -2147,6 +2196,8 @@ void iterate_kit_stackchan_run(void) {
      */
     {
       static uint64_t last_liveness_ms;
+      /** When the transport last stopped being ready; 0 while it is ready. */
+      static uint64_t not_ready_since_ms;
       static uint32_t last_ping_count;
       static uint64_t next_liveness_restart_at;
       if (last_liveness_ms == 0U) last_liveness_ms = now;
@@ -2154,8 +2205,34 @@ void iterate_kit_stackchan_run(void) {
         last_ping_count = runtime.voicelab.ping_count;
         last_liveness_ms = now;
       }
+      /*
+       * A TRANSPORT THAT IS NEVER READY MUST NOT DISABLE THE RESTART.
+       *
+       * Holding the liveness clock while the transport is down is right — you
+       * cannot fault a device for missing round trips it had no lane for — but
+       * it was the ONLY thing this branch did, so a transport that never came
+       * back reset the clock on every tick and the restart below could never
+       * fire. Measured on the StackChan: unreachable for ten minutes and more,
+       * no capability, no face, task watchdog fed the whole time (so the loop
+       * was alive and this branch was running), recovered only by a human
+       * pulling power. Every board here has the same shape.
+       *
+       * So the grace is bounded. Being down is forgiven; being down forever is
+       * the failure this restart exists for.
+       */
       if (transport.state != ITERATE_KIT_ESP_IDF_ITX_READY) {
         last_liveness_ms = now;
+        if (not_ready_since_ms == 0U) not_ready_since_ms = now;
+        if (iterate_kit_voice_elapsed_ms(now, not_ready_since_ms) >
+            NO_LIVENESS_RESTART_MS) {
+          ESP_LOGE(
+              tag,
+              "transport has not been ready for %us — restarting",
+              (unsigned int)(NO_LIVENESS_RESTART_MS / 1000U));
+          iterate_kit_esp_restart_with_note("transport never became ready");
+        }
+      } else {
+        not_ready_since_ms = 0U;
       }
       if (runtime.voicelab.ping_pending &&
           iterate_kit_voice_elapsed_ms(

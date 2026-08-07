@@ -1299,3 +1299,58 @@ esp_err_t iterate_kit_stackchan_avatar_capture(
   *height = (uint16_t)FACE_RENDER_HEIGHT;
   return ESP_OK;
 }
+
+/*
+ * PAINT THE WHOLE PANEL ONE COLOUR, bypassing the face entirely.
+ *
+ * The counters cannot separate the last two possibilities. `screen.take()`
+ * proves the SOURCE surface holds a face; `displayTransfers` proves bands are
+ * being pushed and acknowledged. Both are true and the glass is still dark, so
+ * what is left is either the content arriving wrong at the panel or the panel
+ * not showing anything at all — and no instrument on this device can tell
+ * those apart, because both look identical from the inside.
+ *
+ * A person looking at it can. If a solid colour appears, the panel, the
+ * backlight, the SPI path and the coordinates are all fine and the fault is in
+ * what the avatar draws. If nothing appears, it never got as far as the face.
+ *
+ * Deliberately reuses the real transfer path — same strip buffer, same
+ * band loop, same draw_region_and_wait — so a pass here exonerates exactly the
+ * machinery the face uses, rather than proving some other path works.
+ */
+esp_err_t iterate_kit_stackchan_avatar_fill(uint16_t colour) {
+  if (__atomic_load_n(&owner.ready, __ATOMIC_ACQUIRE) == 0U ||
+      owner.scaled_strip == NULL || owner.framebuffer_access == NULL) {
+    return ESP_ERR_INVALID_STATE;
+  }
+  /* The panel's wire order, matching what the renderer's swap produces. */
+  const uint16_t wire = (uint16_t)((colour << 8U) | (colour >> 8U));
+  if (xSemaphoreTake(owner.framebuffer_access, pdMS_TO_TICKS(400)) != pdPASS) {
+    return ESP_ERR_TIMEOUT;
+  }
+  esp_err_t status = ESP_OK;
+  for (uint32_t source_y = 0U; source_y < FACE_RENDER_HEIGHT;
+       source_y += STACKCHAN_AVATAR_SCALE_SOURCE_ROWS_PER_TRANSFER) {
+    const uint32_t remaining = FACE_RENDER_HEIGHT - source_y;
+    const uint32_t rows =
+        remaining < STACKCHAN_AVATAR_SCALE_SOURCE_ROWS_PER_TRANSFER
+        ? remaining
+        : STACKCHAN_AVATAR_SCALE_SOURCE_ROWS_PER_TRANSFER;
+    const size_t pixels = (size_t)rows * STACKCHAN_AVATAR_SCALE *
+        (size_t)STACKCHAN_AVATAR_SCALED_WIDTH;
+    for (size_t index = 0U; index < pixels; ++index) {
+      owner.scaled_strip[index] = wire;
+    }
+    if (!draw_region_and_wait(
+            0U,
+            source_y * STACKCHAN_AVATAR_SCALE,
+            STACKCHAN_AVATAR_SCALED_WIDTH,
+            rows * STACKCHAN_AVATAR_SCALE,
+            owner.scaled_strip)) {
+      status = ESP_FAIL;
+      break;
+    }
+  }
+  (void)xSemaphoreGive(owner.framebuffer_access);
+  return status;
+}

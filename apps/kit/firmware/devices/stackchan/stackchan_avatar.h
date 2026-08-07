@@ -171,6 +171,19 @@ bool iterate_kit_stackchan_avatar_display_active(void);
  * ESP_ERR_INVALID_STATE before the avatar is running and ESP_ERR_TIMEOUT if a
  * render held the surface for two whole visual ticks.
  */
+/**
+ * Fill the whole panel with one host-order RGB565 colour, bypassing the face.
+ *
+ * The separator of last resort: every counter can read healthy while the glass
+ * stays dark, because "the content is wrong" and "the panel shows nothing"
+ * look identical from inside the device. A person can tell them apart in one
+ * glance. Uses the real strip buffer and transfer path, so a visible fill
+ * exonerates exactly the machinery the face uses.
+ *
+ * The next rendered frame overwrites it — this paints, it does not latch.
+ */
+esp_err_t iterate_kit_stackchan_avatar_fill(uint16_t colour);
+
 esp_err_t iterate_kit_stackchan_avatar_capture(
     uint16_t *destination,
     size_t capacity_pixels,
