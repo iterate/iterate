@@ -1,6 +1,7 @@
 import { isIdempotencyConflict, StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs, StreamEvent } from "iterate/processors";
 import { inferJsonType } from "../../lib/infer-json-type.ts";
+import { stringifyScriptResult, truncateScriptResult } from "../../lib/script-result-render.ts";
 import { previewJson } from "../../lib/truncate-json.ts";
 import { INLINE_RESULT_PREAMBLE_LIMIT } from "../capability-host/capability-host-preamble.ts";
 import {
@@ -1368,25 +1369,6 @@ async function renderScriptSettlement(input: {
     }
   }
   return `Your script returned:\n${fence}\n${truncateScriptResult(text, historyLimit)}\n\`\`\`${preambleNote}`;
-}
-
-function stringifyScriptResult(result: unknown): string {
-  // A returned string renders as itself: JSON.stringify would escape every
-  // newline and quote, turning a fetched page or file into one unreadable
-  // escaped line the model pays to mentally unescape (seen live: an 8.8KB
-  // worker.ts as a single escape-riddled JSON string). Non-strings keep the
-  // pretty-printed JSON shape.
-  if (typeof result === "string") return result;
-  try {
-    return JSON.stringify(result, null, 2) ?? String(result);
-  } catch {
-    return String(result);
-  }
-}
-
-function truncateScriptResult(text: string, historyLimit: number): string {
-  if (text.length <= historyLimit) return text;
-  return `${text.slice(0, historyLimit)}\n… truncated (${text.length} chars total; up to ${historyLimit} render inline — return less: slice arrays, pick fields)`;
 }
 
 /**
