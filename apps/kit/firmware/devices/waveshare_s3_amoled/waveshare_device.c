@@ -472,6 +472,9 @@ static struct {
   struct iterate_kit_voicelab voicelab;
   /* The last refusal from start_call, and how many there have been. */
   enum capnweb_status last_start_status;
+  /* The launch seam's own answer, so a branch is named not inferred. */
+  int last_launch_step;
+  uint32_t launch_polls;
   uint32_t start_call_failures;
   struct iterate_kit_playout playout;
   uint32_t voicelab_generation;
@@ -1898,6 +1901,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
        */
       "\"hasStreamCap\":%s,\"outboxFree\":%u,\"preparing\":%s,"
       "\"lastStartStatus\":%d,\"startCallFailures\":%u,"
+      "\"lastLaunchStep\":%d,\"launchPolls\":%u,"
       "\"gateOpen\":%s,\"t\":%" PRIu64 ",\"uptimeMs\":%" PRIu64,
       iterate_kit_esp_idf_itx_transport_state_name(runtime.transport.state),
       iterate_kit_voicelab_state_name(runtime.voicelab.state),
@@ -1916,6 +1920,8 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       awaiting_fresh_stream ? "true" : "false",
       (int)runtime.last_start_status,
       (unsigned)runtime.start_call_failures,
+      runtime.last_launch_step,
+      (unsigned)runtime.launch_polls,
       gate_open ? "true" : "false",
       now,
       now);
@@ -2886,7 +2892,9 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
             .stream_used = stream_used,
             .wants_call = wants_call,
         };
-        switch (iterate_kit_launch_next_step(&launch, &launching)) {
+        runtime.last_launch_step = (int)iterate_kit_launch_next_step(&launch, &launching);
+        ++runtime.launch_polls;
+        switch ((enum iterate_kit_launch_step)runtime.last_launch_step) {
           case ITERATE_KIT_LAUNCH_PREPARE_AHEAD:
             ESP_LOGI(tag, "idle: preparing the next conversation in advance");
             preparing_ahead = begin_new_conversation();
