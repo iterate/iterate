@@ -5789,9 +5789,26 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     deltaBase64: string,
     append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
   ): void {
-    for (const payload of call.framesFor(deltaBase64, this.deps.now())) {
-      void append({ type: "events.iterate.com/voice-agent/spk-frame", ephemeral: true, payload });
-    }
+    const frames = call.framesFor(deltaBase64, this.deps.now());
+    if (frames.length === 0) return;
+    /*
+     * ONE APPEND FOR THE WHOLE DELTA, not one per frame.
+     *
+     * This was a loop of separate `append` calls — 50 a second, each its own
+     * round trip, racing each other. Measured on the host CLI: 203 gaps in 319
+     * received speaker frames and 117 starved playback buffers, which is
+     * audible as speech chopped into fragments. `append` is variadic and the
+     * stream commits a batch atomically, so the answer arrives in the order it
+     * was generated and the client's jitter buffer has something contiguous to
+     * play.
+     */
+    void append(
+      ...frames.map((payload) => ({
+        type: "events.iterate.com/voice-agent/spk-frame" as const,
+        ephemeral: true as const,
+        payload,
+      })),
+    );
   }
 
   #endCall(reason: string): void {
