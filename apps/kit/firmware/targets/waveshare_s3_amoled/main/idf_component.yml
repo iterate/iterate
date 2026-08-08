@@ -1,0 +1,10 @@
+dependencies:
+  capnweb:
+    git: https://github.com/iterate/capnweb.git
+    path: c
+    version: aee32b391063c4f5baf0aec852f38851eeeed1d9
+  # The board's own BSP: SH8601 QSPI panel, FT3168 touch behind its TCA9554
+  # expander, and esp_lvgl_port's LVGL task and lock.
+  waveshare/esp32_s3_touch_amoled_1_8: "~1.1"
+  espressif/esp_codec_dev: "~1.5.6"
+  idf: ">=5.4"

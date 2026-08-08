@@ -500,6 +500,59 @@ describe("preview workflow scope", () => {
     expect(apps.map((app) => app.slug)).toEqual(["os", "docs", "auth", "dummy-petshop"]);
   });
 
+  test("deploys the whole fleet when the comparison hits GitHub's 300-file cap", async () => {
+    // The cap truncates an ORDERED list, so a big diff loses its tail: 300
+    // firmware files that select nothing, and the `apps/os/**` changes that
+    // would have selected OS never appear in the response at all.
+    const apps = await selectPreviewAppsForPullRequest({
+      githubToken: "test-token",
+      previousState: {
+        apps: {},
+        environmentConfigLease: null,
+        notice: null,
+      },
+      pullRequestBaseSha: "base-sha",
+      pullRequestHeadSha: "current-head",
+      pullRequestNumber: 2376,
+      repositoryFullName: "iterate/iterate",
+      fetchCompare: async () => ({
+        status: "ahead",
+        changedFilenames: Array.from(
+          { length: 300 },
+          (_unused, index) => `apps/kit/firmware/components/core/src/file-${index}.c`,
+        ),
+      }),
+      probeAppServing: async () => ({ ok: true, detail: "HTTP 200" }),
+    });
+
+    expect(apps.map((app) => app.slug).sort()).toEqual(Object.keys(cloudflarePreviewApps).sort());
+  });
+
+  test("still selects by diff when the comparison is comfortably under the cap", async () => {
+    const apps = await selectPreviewAppsForPullRequest({
+      githubToken: "test-token",
+      previousState: {
+        apps: {},
+        environmentConfigLease: null,
+        notice: null,
+      },
+      pullRequestBaseSha: "base-sha",
+      pullRequestHeadSha: "current-head",
+      pullRequestNumber: 2376,
+      repositoryFullName: "iterate/iterate",
+      fetchCompare: async () => ({
+        status: "ahead",
+        changedFilenames: Array.from(
+          { length: 299 },
+          (_unused, index) => `apps/kit/firmware/components/core/src/file-${index}.c`,
+        ),
+      }),
+      probeAppServing: async () => ({ ok: true, detail: "HTTP 200" }),
+    });
+
+    expect(apps).toEqual([]);
+  });
+
   test("pins tests to every current-head deployment's exact Worker version", () => {
     const headSha = "current-head";
     const osVersion = "11111111-1111-4111-8111-111111111111";

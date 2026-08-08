@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import process from "node:process";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
@@ -10,6 +11,7 @@ export * as dev from "./dev.ts";
 export * as itx from "./itx.ts";
 export * as projectSeed from "./project-seed.ts";
 export * as session from "./session.ts";
+export * as voicelab from "./voicelab/index.ts";
 
 const DEFAULT_MCP_BASE_URL = "https://mcp.iterate.com";
 const LOCAL_DEVELOPMENT_MCP_PATH = "/api/mcp";
@@ -75,7 +77,23 @@ if (isMainModule(import.meta.url)) {
    * If not, enter Doppler without naming a project or config. Doppler then uses
    * the user's local `doppler setup` for `apps/os`, normally `dev_<user>`.
    */
-  if (!process.env.DOPPLER_CONFIG) {
+  if (!process.env.DOPPLER_CONFIG && isVoicelabTalk(args) && !isHelpRequest(args)) {
+    const environment =
+      optionValue(args, "--environment") ??
+      (await promptWithDefault("Environment", process.env.ITERATE_ENV?.trim() || "prd"));
+    spawnAndExit("doppler", [
+      "run",
+      "--project",
+      "os",
+      "--config",
+      environment,
+      "--",
+      "tsx",
+      fileURLToPath(import.meta.url),
+      ...args,
+    ]);
+  }
+  if (!process.env.DOPPLER_CONFIG && !(isVoicelabTalk(args) && isHelpRequest(args))) {
     const captureEnvironment = projectSeedCaptureEnvironment(args);
     if (captureEnvironment !== null) {
       spawnAndExit("doppler", [
@@ -102,6 +120,32 @@ if (isMainModule(import.meta.url)) {
     logger: yamlTableConsoleLogger,
     prompts: isAgent() ? undefined : createBuiltInPrompts(),
   });
+}
+
+function isVoicelabTalk(args: readonly string[]): boolean {
+  return args[0] === "voicelab" && args[1] === "talk";
+}
+
+function isHelpRequest(args: readonly string[]): boolean {
+  return args.includes("--help") || args.includes("-h");
+}
+
+function optionValue(args: readonly string[], name: string): string | undefined {
+  const equalsArgument = args.find((argument) => argument.startsWith(`${name}=`));
+  if (equalsArgument !== undefined)
+    return equalsArgument.slice(name.length + 1).trim() || undefined;
+  const flagIndex = args.indexOf(name);
+  return flagIndex === -1 ? undefined : args[flagIndex + 1]?.trim() || undefined;
+}
+
+async function promptWithDefault(label: string, defaultValue: string): Promise<string> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return defaultValue;
+  const input = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return (await input.question(`${label} [${defaultValue}]: `)).trim() || defaultValue;
+  } finally {
+    input.close();
+  }
 }
 
 function projectSeedCaptureEnvironment(args: readonly string[]): string | null {

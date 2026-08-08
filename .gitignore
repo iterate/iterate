@@ -87,3 +87,6 @@ experiments/archil-node-modules/disk-config.json
 
 # Local alchemy-era dev artifacts (local dev secrets + miniflare state); never commit.
 .alchemy/
+
+# Voicelab run evidence: audio both directions plus metrics, one dir per run.
+.voicelab-runs/

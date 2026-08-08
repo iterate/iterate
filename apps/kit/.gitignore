@@ -3,3 +3,4 @@ node_modules/
 .wrangler/
 public/firmware/
 wrangler.jsonc
+firmware/.build/

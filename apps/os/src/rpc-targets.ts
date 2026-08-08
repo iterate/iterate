@@ -347,6 +347,7 @@ import type {
   ProjectEgressInterceptor,
 } from "./domains/projects/egress.ts";
 import type {
+  FlattenedCapabilityTarget,
   ProvideCapabilityInput,
   RevokeCapabilityInput,
   SetPreambleInput,
@@ -5502,6 +5503,19 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       description: string;
       /** Live capabilities target (an RpcTarget or plain object in the caller's process). */
       capabilities?: unknown;
+      /**
+       * Route the whole dotted path to the target as ONE call instead of
+       * traversing it member by member.
+       *
+       * Required by any client whose capabilities object is a path-building
+       * proxy rather than a material object tree — every microcontroller, and
+       * anything else that answers calls from a static dispatch table. Without
+       * it the host awaits each intermediate member, so `servos.move(...)`
+       * issues an incomplete call at `servos` and never reaches `move`.
+       */
+      flattenNestedPaths?: boolean;
+      /** Optional TypeScript declaration for the mounted surface. */
+      types?: string;
     },
   ): Promise<ProjectRpcTarget> {
     if (typeof opts.path !== "string" || !opts.path.trim().startsWith("/")) {
@@ -5558,8 +5572,16 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
         await host.provideCapability({
           type: "live",
           path: ["capabilities"],
-          capability: opts.capabilities,
           instructions: opts.description,
+          ...(opts.types === undefined ? {} : { types: opts.types }),
+          // The two shapes are one input union discriminated on the flag, so
+          // the branch is what types the capability — not a cast.
+          ...(opts.flattenNestedPaths === true
+            ? {
+                flattenNestedPaths: true as const,
+                capability: opts.capabilities as FlattenedCapabilityTarget,
+              }
+            : { capability: opts.capabilities }),
         }),
       );
     }
