@@ -25,6 +25,14 @@ export interface PttLatencyOptions extends VoicelabConnectOptions {
   rounds?: number;
   /** How long the synthetic speaker holds the button. */
   speakMs?: number;
+  /**
+   * Frames per append. Twelve is what the C client sends.
+   *
+   * One append per 20 ms frame is 50 round trips a second; if they cannot
+   * keep up with real-time pacing the backlog lands AFTER the release, and
+   * every millisecond of it is added to the answer.
+   */
+  framesPerAppend?: number;
   /** Seconds of quiet between rounds, so one answer finishes before the next. */
   settleMs?: number;
   /**
@@ -107,6 +115,7 @@ export async function pttLatency(options: PttLatencyOptions) {
   const rounds = options.rounds ?? 10;
   const speakMs = options.speakMs ?? 2_500;
   const settleMs = options.settleMs ?? 6_000;
+  const batch = Math.max(1, options.framesPerAppend ?? 12);
   const spoken = options.micWav === undefined ? null : framesFromWav(options.micWav);
   if (spoken !== null) {
     console.log(`  speaking ${spoken.length} real frames from ${options.micWav}`);
@@ -134,18 +143,23 @@ export async function pttLatency(options: PttLatencyOptions) {
      */
     const frames = spoken === null ? Math.max(1, Math.round(speakMs / FRAME_MS)) : spoken.length;
     let framesSent = 0;
-    for (let index = 0; index < frames; index++) {
-      const due = pressedAt + index * FRAME_MS;
+    for (let index = 0; index < frames; index += batch) {
+      /* Wait for the LAST frame of this batch to have been captured — a batch
+       * cannot be sent before the audio in it exists. */
+      const due = pressedAt + Math.min(index + batch, frames) * FRAME_MS;
       const wait = due - Date.now();
       if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-      void stream
-        .append({
-          type: "events.iterate.com/voice-agent/mic-frame",
-          ephemeral: true,
-          payload: { seq: index, pcm: spoken === null ? syntheticFrame(index) : spoken[index]! },
-        })
-        .catch(() => undefined);
-      framesSent++;
+      const events = [];
+      for (let offset = 0; offset < batch && index + offset < frames; offset++) {
+        const seq = index + offset;
+        events.push({
+          type: "events.iterate.com/voice-agent/mic-frame" as const,
+          ephemeral: true as const,
+          payload: { seq, pcm: spoken === null ? syntheticFrame(seq) : spoken[seq]! },
+        });
+        framesSent++;
+      }
+      void stream.append(...events).catch(() => undefined);
     }
 
     const releasedAt = Date.now();
@@ -205,6 +219,7 @@ export async function pttLatency(options: PttLatencyOptions) {
     streamPath,
     rounds,
     speakMs,
+    framesPerAppend: batch,
     answeredRounds: answered.length,
     releaseToAudioMs: summarize(answered),
     handshakeMs: summarize(handshakes),
