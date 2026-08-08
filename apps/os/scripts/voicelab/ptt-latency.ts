@@ -88,6 +88,20 @@ function framesFromWav(file: string): string[] {
   return frames;
 }
 
+/** One press-speak-release round, as the report records it. */
+type Round = {
+  round: number;
+  /** Press -> the server's own record that a call is open. */
+  callStartedMs: number | null;
+  /** Press -> a usable provider session. */
+  handshakeMs: number | null;
+  /** How much captured audio the handshake made the server hold. */
+  framesBuffered: number | null;
+  /** RELEASE -> first audio back. The number a person actually feels. */
+  answerMs: number | null;
+  framesSent: number;
+};
+
 export async function pttLatency(options: PttLatencyOptions) {
   const streamPath = options.streamPath ?? "/agents/voice/ptt-1";
   const rounds = options.rounds ?? 10;
@@ -101,18 +115,6 @@ export async function pttLatency(options: PttLatencyOptions) {
   using itx = await connectProject(options);
   const stream = itx.streams.get(streamPath);
 
-  type Round = {
-    round: number;
-    /** Press -> the server's own record that a call is open. */
-    callStartedMs: number | null;
-    /** Press -> a usable provider session. */
-    handshakeMs: number | null;
-    /** How much captured audio the handshake made the server hold. */
-    framesBuffered: number | null;
-    /** RELEASE -> first audio back. The number a person actually feels. */
-    answerMs: number | null;
-    framesSent: number;
-  };
   const results: Round[] = [];
 
   for (let round = 0; round < rounds; round++) {
