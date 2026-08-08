@@ -19,6 +19,7 @@ import { compileEventFilter } from "./event-filter.ts";
 import type { RetainedProcessEventBatch } from "./retained-event-callbacks.ts";
 import { DEFAULT_DELIVERY_TIMEOUT_MS, internalStreamId } from "./stream-delivery-utils.ts";
 import {
+  hostedDeliveryLimit,
   StreamConnections,
   StreamEventSender,
   type SubscriptionReceiverCalls,
@@ -2027,6 +2028,37 @@ function connectionsHarness(
     },
   };
 }
+
+describe("hosted delivery coalesces ephemeral events", () => {
+  /*
+   * The one-at-a-time boundary exists so a slow event cannot make its
+   * already-processed siblings time out and REPLAY. An ephemeral event cannot
+   * be replayed at all, so the boundary costs a round trip and buys nothing —
+   * and at 50 frames a second that cost was measured as ~700ms of push-to-talk
+   * latency, because the lane delivered slower than audio arrived.
+   */
+  const frame = (offset: number, ephemeral: boolean) => ({
+    event: { ...streamEvent(offset, "events.example.com/f"), ...(ephemeral ? { ephemeral } : {}) },
+  });
+
+  it("takes a whole run of ephemeral events", () => {
+    expect(hostedDeliveryLimit([0, 1, 2, 3, 4].map((o) => frame(o + 1, true)))).toBe(5);
+  });
+
+  it("caps the run so one burst cannot monopolise a callback turn", () => {
+    expect(hostedDeliveryLimit(Array.from({ length: 40 }, (_u, o) => frame(o + 1, true)))).toBe(10);
+  });
+
+  it("stops at the first durable event, which keeps its own boundary", () => {
+    /* A durable event must never ride in a coalesced batch: replay protection
+     * is exactly what the one-at-a-time rule buys, and it still needs it. */
+    expect(hostedDeliveryLimit([frame(1, true), frame(2, true), frame(3, false)])).toBe(2);
+  });
+
+  it("leaves a durable-led batch at one, exactly as before", () => {
+    expect(hostedDeliveryLimit([frame(1, false), frame(2, true)])).toBe(1);
+  });
+});
 
 describe("ephemeral delivery to hosted processors", () => {
   /*

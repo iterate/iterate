@@ -151,9 +151,46 @@ const DELIVERY_BATCH_LIMIT = 1000;
  * Object's memory before that one-event boundary can help.
  */
 const HOSTED_CALLBACK_EVENT_LIMIT = 1;
+/**
+ * Ephemeral events coalesce, and the reason the one-at-a-time rule does not
+ * apply to them is the whole argument above read backwards.
+ *
+ * That rule buys a per-event acknowledgement boundary so a slow event cannot
+ * make already-processed siblings time out and REPLAY. An ephemeral event
+ * cannot be replayed at all — its body lives only in this incarnation's
+ * bounded buffer — so there is no replay to protect and no durable side effect
+ * to isolate. The boundary costs everything and buys nothing.
+ *
+ * What it cost, measured: a 50 Hz microphone lane delivered one frame per
+ * round trip, two RPC hops and two output-gated writes each, at ~25 ms per
+ * frame against a 20 ms arrival rate. The lane ran slower than real time, so a
+ * backlog built for the length of the utterance and was paid out AFTER the
+ * user let go of the button — ~700 ms of the ~1900 ms press-to-answer, against
+ * 1084 ms dialling the same provider directly.
+ *
+ * Sized to a fifth of a second of audio: enough that the lane outruns capture
+ * with margin, small enough that a burst cannot monopolise one callback turn.
+ */
+const HOSTED_EPHEMERAL_EVENT_LIMIT = 10;
 const HOSTED_SCAN_EVENT_LIMIT = 100;
 /** Briefly coalesce active bursts, then release every callback that can be re-paged or re-woken. */
 const IDLE_CONNECTION_TEARDOWN_MS = 5_000;
+
+/**
+ * How many matching events one hosted callback turn may carry.
+ *
+ * A run of ephemeral events coalesces; anything durable falls back to the
+ * one-at-a-time boundary. Deliberately decided by the FIRST event rather than
+ * by scanning: a batch that mixes the two stops at the first durable event, so
+ * a durable event never rides in a coalesced batch and never loses its own
+ * acknowledgement boundary.
+ */
+export function hostedDeliveryLimit(matched: readonly { event: StreamEvent }[]): number {
+  if (matched[0]?.event.ephemeral !== true) return HOSTED_CALLBACK_EVENT_LIMIT;
+  let count = 0;
+  while (count < matched.length && matched[count]!.event.ephemeral === true) count++;
+  return Math.min(count, HOSTED_EPHEMERAL_EVENT_LIMIT);
+}
 
 /** Soft cap on a delivery batch's payload bytes (large events shrink the batch). */
 const DELIVERY_BATCH_BYTE_LIMIT = 1024 * 1024;
@@ -2217,7 +2254,7 @@ export class StreamConnections {
                   : visible.filter((entry) => args.filter!.matches(entry.event));
               const delivered =
                 kind === "hosted"
-                  ? matched.slice(0, HOSTED_CALLBACK_EVENT_LIMIT)
+                  ? matched.slice(0, hostedDeliveryLimit(matched))
                   : capSessionDelivery(matched, args.maxDeliveryEvents, args.maxDeliveryBytes);
               // If more matching hosted work remains in the scanned window,
               // stop at the last event actually handed to the callback. The
