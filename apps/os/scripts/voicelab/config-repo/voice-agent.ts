@@ -5268,6 +5268,18 @@ class GrokCall {
 const VoiceFacetState = z.object({
   birthCertificate: z.strictObject({}).nullable().default(null),
   /**
+   * Which brief setup last marked current, folded from delivery.
+   *
+   * Held in state rather than looked up because the marker ARRIVES through
+   * this subscription, in order, ahead of the token it has to answer. Its
+   * absence therefore means this processor was genuinely never told — a
+   * failure to report, not a gap to paper over with a scan of history.
+   */
+  briefCurrent: z
+    .strictObject({ setupId: z.string(), briefKey: z.string(), contentHash: z.string() })
+    .nullable()
+    .default(null),
+  /**
    * The call this stream is on, as an OBLIGATION rather than a closure.
    *
    * A socket dies with its incarnation; this does not. `conversation-requested`
@@ -5364,6 +5376,32 @@ export const VoiceAgentFacetContract = defineProcessorContract({
       ...EPH,
       payloadSchema: z.looseObject({ id: z.string() }),
     },
+    /*
+     * THE WARM-UP HANDSHAKE. Setup blocks on this, so a facet that does not
+     * answer it cannot be installed at all — which is exactly how the first
+     * attempt failed: the types were in the subscription filter but not in
+     * `consumes`, and delivery is the INTERSECTION, so the token never arrived.
+     */
+    "events.iterate.com/voice-agent/brief-current": {
+      description: "Setup's statement of which brief is current.",
+      payloadSchema: z.looseObject({
+        setupId: z.string(),
+        briefKey: z.string(),
+        contentHash: z.string(),
+      }),
+    },
+    "events.iterate.com/voice-agent/warmup": {
+      description: "A readiness probe for this stream's processor. Starts nothing.",
+      payloadSchema: z.looseObject({ token: z.string() }),
+    },
+    "events.iterate.com/voice-agent/warmup-ready": {
+      description: "This facet is built, running, and knows its brief; echoes the token.",
+      payloadSchema: z.looseObject({ token: z.string() }),
+    },
+    "events.iterate.com/voice-agent/warmup-unresolved": {
+      description: "The facet woke for a warm-up but could not resolve its brief.",
+      payloadSchema: z.looseObject({ token: z.string() }),
+    },
   },
   consumes: [
     "events.iterate.com/voice-agent/created",
@@ -5371,6 +5409,8 @@ export const VoiceAgentFacetContract = defineProcessorContract({
     "events.iterate.com/voice-agent/conversation-ended",
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/device-presence",
+    "events.iterate.com/voice-agent/brief-current",
+    "events.iterate.com/voice-agent/warmup",
     /* The live half. Naming them is the whole opt-in — `"*"` never matches an
      * ephemeral event, so no processor gets this firehose by accident. */
     "events.iterate.com/voice-agent/mic-frame",
@@ -5383,6 +5423,8 @@ export const VoiceAgentFacetContract = defineProcessorContract({
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/spk-frame",
     "events.iterate.com/voice-agent/pong",
+    "events.iterate.com/voice-agent/warmup-ready",
+    "events.iterate.com/voice-agent/warmup-unresolved",
   ],
 });
 export type VoiceAgentFacetContract = typeof VoiceAgentFacetContract;
@@ -5408,6 +5450,15 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     switch (event.type) {
       case "events.iterate.com/voice-agent/created":
         return { ...state, birthCertificate: {} };
+      case "events.iterate.com/voice-agent/brief-current":
+        return {
+          ...state,
+          briefCurrent: {
+            setupId: event.payload.setupId,
+            briefKey: event.payload.briefKey,
+            contentHash: event.payload.contentHash,
+          },
+        };
       case "events.iterate.com/voice-agent/conversation-requested":
         return {
           ...state,
@@ -5488,6 +5539,47 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
               id: event.payload.id,
               t1: this.deps.now(),
               ready: call?.ready === true,
+            },
+          });
+        });
+        return;
+      }
+      case "events.iterate.com/voice-agent/warmup": {
+        /*
+         * BEING HERE IS THE PROOF. The old handshake had to go and warm a
+         * separate bridge worker and report how long that took; the facet IS
+         * the bridge, so a delivered warm-up means the class is already loaded
+         * and running in this stream's own Durable Object. The only thing left
+         * that can be missing is the brief.
+         */
+        const token = event.payload.token;
+        const marker = state.briefCurrent;
+        runInBackground(async () => {
+          if (marker === null) {
+            await append({
+              type: "events.iterate.com/voice-agent/warmup-unresolved",
+              payload: {
+                token,
+                streamPath: this.path,
+                reason: "no brief-current has reached this processor",
+                stage: "brief",
+              },
+            });
+            return;
+          }
+          await append({
+            type: "events.iterate.com/voice-agent/warmup-ready",
+            payload: {
+              token,
+              streamPath: this.path,
+              briefKey: marker.briefKey,
+              briefSetupId: marker.setupId,
+              briefContentHash: marker.contentHash,
+              /* Zero, and honestly so: there is no second worker to build. */
+              bridgeWarmMs: 0,
+              bridgeBuilding: false,
+              protocolRevision: WARMUP_PROTOCOL_REVISION,
+              processorSlug: VOICE_AGENT_PROCESSOR_SLUG,
             },
           });
         });
