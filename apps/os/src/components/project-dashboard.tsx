@@ -1,8 +1,6 @@
 import { useMemo } from "react";
 import { Link } from "@tanstack/react-router";
 import { useLiveState } from "iterate/sdk/itx/react";
-import { ArrowRightIcon } from "lucide-react";
-import { buttonVariants } from "@iterate-com/ui/components/button";
 import { NewAgentComposer } from "~/components/new-agent-composer.tsx";
 import {
   AGENT_DISPLAY_STATE_PRESENTATION,
@@ -12,7 +10,6 @@ import { agentTitle } from "~/components/agents/agent-tree.ts";
 import { selectRecentlyActiveAgents } from "~/components/agents/recent-agents.ts";
 import { deriveAgentDisplayState, type AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
-import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
 import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 const CLOCK_TICK_MS = 15_000;
@@ -25,11 +22,9 @@ const CLOCK_TICK_MS = 15_000;
 export function ProjectDashboard({
   projectId,
   projectSlug,
-  showContinueOnboarding = false,
 }: {
   projectId: string;
   projectSlug: string;
-  showContinueOnboarding?: boolean;
 }) {
   const agentsState = useLiveState(
     (itx) => itx.agents.liveState,
@@ -46,18 +41,6 @@ export function ProjectDashboard({
   return (
     <main className="flex min-h-full flex-1 flex-col p-4 md:p-8" data-testid="project-dashboard">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 pt-4 md:pt-8">
-        {showContinueOnboarding ? (
-          <Link
-            to="/projects/$projectSlug/agents/streams/$"
-            params={{ projectSlug, _splat: ONBOARDING_AGENT_PATH }}
-            search={{}}
-            className={buttonVariants({ size: "lg", className: "w-full sm:w-auto sm:self-start" })}
-          >
-            Continue onboarding
-            <ArrowRightIcon data-icon="inline-end" aria-hidden="true" />
-          </Link>
-        ) : null}
-
         <NewAgentComposer projectId={projectId} projectSlug={projectSlug} />
 
         {recent.length > 0 ? (

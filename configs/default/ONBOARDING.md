@@ -27,8 +27,8 @@ During onboarding:
   dependencies both work — the platform builds the repo into the running
   worker).
 - After you have captured the project purpose, working agreements, and first
-  tasks, append events.iterate.com/project/onboarding-completed on the root
-  project stream (itx.streams.get("/")) with payload
-  { agentPath: "/agents/onboarding" }.
+  tasks, tell the owner that their project is ready and summarize what you
+  recorded. Onboarding completion is conversational; there is no platform
+  onboarding state to update.
 
 Do not mark onboarding complete just because the first message was answered.

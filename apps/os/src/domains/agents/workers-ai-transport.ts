@@ -217,7 +217,7 @@ async function runByokAttempt(input: {
 
 /** Bump to invalidate every cached response at once (prompt-format overhauls,
  * masking-rule changes). */
-const CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION = "cloudflare-ai-gateway-response-cache-v1";
+const CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION = "cloudflare-ai-gateway-response-cache-v3";
 
 /**
  * The custom `cf-aig-cache-key` for one request body: a hash of the body with
@@ -240,9 +240,10 @@ export async function cloudflareAiGatewayResponseCacheKey(body: unknown): Promis
 }
 
 /** The masking half of the cache key, separated for tests. Masks: project ids,
- * agent paths, signed-URL signature/expiry params, and the OpenAI
- * `prompt_cache_key` (which is per-agent BY DESIGN — see LlmTransportConfig —
- * and would otherwise defeat the cross-fixture cache it rides inside). */
+ * agent paths, journal-projection offset prefixes, signed-URL signature/expiry
+ * params, and the OpenAI `prompt_cache_key` (which is per-agent BY DESIGN — see
+ * LlmTransportConfig — and would otherwise defeat the cross-fixture cache it
+ * rides inside). */
 export function maskCloudflareAiGatewayResponseCacheEntropy(serialized: string): string {
   return serialized
     .replace(/prj_[0-9a-f]{32}/g, "prj_MASKED")
@@ -251,6 +252,7 @@ export function maskCloudflareAiGatewayResponseCacheEntropy(serialized: string):
       /- Project: \\"(?:[^"\\]|\\.)*?\\" \(slug [^)]*\)(?: — the project worker\/website serves [^"\\]*)?/g,
       "- Project: MASKED",
     )
+    .replace(/"content":"@\d+(?= |\\n)/g, '"content":"@OFFSET')
     .replace(/\/agents\/[A-Za-z0-9._/-]*/g, "/agents/MASKED")
     .replace(/([?&](?:signature|sig|expires|exp|token|key)=)[^"&\\\s]+/gi, "$1MASKED")
     .replace(/"prompt_cache_key":"[^"]*"/g, '"prompt_cache_key":"MASKED"');

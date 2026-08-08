@@ -29,8 +29,7 @@ doppler run --project os --config prd -- pnpm cli itx run \
 ```
 
 `create` returns the project itx handle; `describe()` prints the `projectId`
-(`prj_…`) the next steps need. Creation also boots the onboarding agent at
-`/agents/onboarding`.
+(`prj_…`) the next steps need.
 
 ### 2. Run the one-turn agent smoke
 

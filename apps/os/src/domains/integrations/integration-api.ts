@@ -200,11 +200,9 @@ async function handleMcpOAuthCallback(input: {
         console.error("mcp-oauth: failed to notify", result.notify, cause);
       }
     }
-    // Land the user back in the thread that started the flow — NOT "/", which for
-    // a user still mid-onboarding resolves to the onboarding thread and loses
-    // their place. `notify` is the initiating agent's stream path (agent scopes
-    // only); fall back to "/" when there is no agent scope or the slug won't
-    // resolve.
+    // Land the user back in the thread that started the flow. `notify` is the
+    // initiating agent's stream path (agent scopes only); fall back to "/" when
+    // there is no agent scope or the slug won't resolve.
     let redirectTo = "/";
     if (result.notify?.startsWith("/agents/")) {
       const record = await readProjectById(itxEnv.PROJECT_DIRECTORY, state.projectId).catch(

@@ -27,8 +27,6 @@ function creationSteps(state: ProjectProcessorState | undefined): CreationStep[]
   // steps in projects.get(slug).create): slack routing is appended right after the root
   // saga, then the repo seeds (the slow artifact step) — so ticks appear top
   // to bottom instead of a later row completing while an earlier one spins.
-  // The onboarding agent is not a saga step: its chat page explicitly creates
-  // it before sending the first message.
   return [
     { key: "registered", label: "Registering project", done: state?.createRequest != null },
     {

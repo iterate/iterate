@@ -124,7 +124,7 @@ describe("hasNewerSharedProcessorSchema", () => {
 });
 
 describe("findNewerStreamDatabaseWriterLock", () => {
-  const stream = { projectId: "prj_1", streamPath: "/agents/onboarding" };
+  const stream = { projectId: "prj_1", streamPath: "/agents/demo" };
   const oldSchemaKey = "browser-feed@5|browser-raw-events@2";
   const newSchemaKey = "browser-feed@6|browser-raw-events@2";
   const lockName = (processorSchemaVersionKey: string) =>

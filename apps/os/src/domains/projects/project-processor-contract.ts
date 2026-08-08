@@ -111,17 +111,6 @@ export const ProjectProcessorContract = defineProcessorContract({
           "processors exist, the seeded default worker is reachable, and its permanent feed " +
           "has been committed.",
       }),
-    onboardingActive: z
-      .boolean()
-      .default(false)
-      .meta({
-        description:
-          "True while the onboarding agent flow is running for the project owner: set from " +
-          "project/create-requested, cleared by project/onboarding-completed.",
-      }),
-    onboardingCompletedAt: z.string().nullable().default(null).meta({
-      description: "createdAt of the project/onboarding-completed event; null until then.",
-    }),
     devices: z
       .array(StreamListItem)
       .default([])
@@ -236,8 +225,9 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/created": {
       description:
         "The project creation saga completed: sibling processors exist, the seeded default " +
-        "project worker is reachable, and its permanent root feed is installed. This is a " +
-        "platform certificate, not a userspace lifecycle hook.",
+        "project worker is reachable, and its permanent root feed is installed. The feed " +
+        "receives this as its first userspace lifecycle hook; creation itself does not wait " +
+        "for that userspace consequence.",
       payloadSchema: projectBirthCertificateSchema(),
     },
     "events.iterate.com/project/create-failed": {
@@ -281,14 +271,6 @@ export const ProjectProcessorContract = defineProcessorContract({
           .string()
           .min(1)
           .meta({ description: "The scheduler key whose heartbeat fired." }),
-      }),
-    },
-    "events.iterate.com/project/onboarding-completed": {
-      description: "The project owner completed the onboarding agent flow.",
-      payloadSchema: z.object({
-        agentPath: z
-          .string()
-          .meta({ description: "Stream path of the onboarding agent that finished the flow." }),
       }),
     },
     "events.iterate.com/project/custom-domain-add-requested": {
@@ -522,7 +504,6 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/custom-domain-provision-failed",
     "events.iterate.com/project/custom-domain-remove-requested",
     "events.iterate.com/project/custom-domain-removed",
-    "events.iterate.com/project/onboarding-completed",
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
@@ -595,7 +576,6 @@ function sameProjectCreationRequest(
 ): boolean {
   return (
     left.config.slug === right.config.slug &&
-    left.config.onboardingActive === right.config.onboardingActive &&
     left.config.creatorEmail === right.config.creatorEmail &&
     left.config.configRepoTemplate === right.config.configRepoTemplate
   );
@@ -697,9 +677,6 @@ function projectCreationPayloadSchema() {
         slug: z
           .string()
           .meta({ description: "The project's URL slug, unique within its organization." }),
-        onboardingActive: z.boolean().optional().meta({
-          description: "Start the onboarding agent flow for the creating user.",
-        }),
         creatorEmail: z
           .string()
           .optional()

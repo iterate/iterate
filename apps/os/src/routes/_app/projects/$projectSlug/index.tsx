@@ -6,12 +6,10 @@ import { connectIterateSession, useLiveState } from "iterate/sdk/itx/react";
 import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
 import { ProjectDashboard } from "~/components/project-dashboard.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { ONBOARDING_AGENT_PATH, isOnboardingActive } from "~/lib/onboarding-agent.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
 const HomeSearch = StreamViewSearch.extend({
-  /** Set by the create form: play the creation checklist until `created`, then
-   * hand over to the onboarding agent. */
+  /** Set by the create form: play the creation checklist until `created`. */
   welcome: z.boolean().optional().catch(undefined),
   /** The root SSR handoff could not prove/commit project birth. The welcome
    * page retries that idempotent boundary once from the browser session. */
@@ -29,8 +27,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/")({
 
 /**
  * Project home is the lightweight dashboard (new-agent composer + recent
- * agents). Welcome/create still lands here with `?welcome` and hands off to
- * the onboarding agent after bootstrap — settings live at `/settings`.
+ * agents). Welcome/create still lands here with `?welcome` while bootstrap
+ * completes — settings live at `/settings`.
  */
 function ProjectHomePage() {
   const { project } = Route.useRouteContext();
@@ -45,19 +43,14 @@ function ProjectHomePage() {
     { slug: project.id },
   );
   const created = lifecycle.value?.birthCertificate != null;
-  const inOnboarding = lifecycle.value === undefined ? false : isOnboardingActive(lifecycle.value);
   // Create lands here with `welcome` as soon as the project exists. Stay on
-  // the checklist until bootstrap commits `project/created`, then hand off to the
-  // onboarding agent so the user watches the saga rather than waiting on the
-  // create button.
-  const handOffToOnboarding = welcome === true && created && inOnboarding;
+  // the checklist until bootstrap commits `project/created` so the user
+  // watches the saga rather than waiting on the create button.
   // The checklist gates on the PROJECT's state, not the URL: any visit to a
   // not-yet-created project (second tab, bookmark) sees the creation saga, never
   // a live dashboard. Before the first push we only know we're mid-create when
-  // the create flow's `?welcome` says so; the handoff case keeps the checklist
-  // up while its navigation is in flight.
-  const showChecklist =
-    lifecycle.value === undefined ? welcome === true : !created || handOffToOnboarding;
+  // the create flow's `?welcome` says so.
+  const showChecklist = lifecycle.value === undefined ? welcome === true : !created;
 
   useEffect(() => {
     if (ensureBirth !== true || birthRecoveryStarted.current) return;
@@ -77,18 +70,6 @@ function ProjectHomePage() {
       toast.error("Project setup could not be resumed. Reload to try again.");
     });
   }, [ensureBirth, project.id, project.slug]);
-
-  useEffect(() => {
-    if (!handOffToOnboarding) return;
-    void navigate({
-      to: "/projects/$projectSlug/agents/streams/$",
-      params: { projectSlug: params.projectSlug, _splat: ONBOARDING_AGENT_PATH },
-      // Fresh view state: don't carry this page's stream params (or `welcome`)
-      // into the agent view.
-      search: {},
-      replace: true,
-    });
-  }, [handOffToOnboarding, navigate, params.projectSlug]);
 
   // Drop a leftover `?welcome` once the checklist is no longer the right UI.
   // A client-side effect (not beforeLoad) because the decision needs live
@@ -131,11 +112,5 @@ function ProjectHomePage() {
     );
   }
 
-  return (
-    <ProjectDashboard
-      projectId={project.id}
-      projectSlug={params.projectSlug}
-      showContinueOnboarding={inOnboarding}
-    />
-  );
+  return <ProjectDashboard projectId={project.id} projectSlug={params.projectSlug} />;
 }

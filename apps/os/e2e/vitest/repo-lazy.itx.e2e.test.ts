@@ -31,14 +31,14 @@ test("lazy commits, reads, and clone-lane writes share one history", async () =>
       { path: "tasks/beta.md", content: "# alpha\n" }, // identical content — one blob
       { path: "deep/nested/dir/tasks/gamma.md", content: "# gamma\n" },
       { path: "assets/pixel.bin", contentBase64: btoa(String.fromCharCode(...bytes)) },
-      { path: "ONBOARDING.md", delete: true },
+      { path: "README.md", delete: true },
     ],
   });
   expect(batch).toMatchObject({
     changedPaths: expect.arrayContaining([
       "tasks/alpha.md",
       "deep/nested/dir/tasks/gamma.md",
-      "ONBOARDING.md",
+      "README.md",
     ]),
     noChanges: false,
   });
@@ -47,7 +47,7 @@ test("lazy commits, reads, and clone-lane writes share one history", async () =>
   const [alpha, gamma, gone, pixel] = await Promise.all([
     project.repo.readFile({ path: "tasks/alpha.md" }),
     project.repo.readFile({ path: "deep/nested/dir/tasks/gamma.md" }),
-    project.repo.readFile({ path: "ONBOARDING.md" }),
+    project.repo.readFile({ path: "README.md" }),
     project.repo.readFile({ path: "assets/pixel.bin", encoding: "base64" }),
   ]);
   expect(alpha?.content).toBe("# alpha\n");
@@ -61,7 +61,7 @@ test("lazy commits, reads, and clone-lane writes share one history", async () =>
     commitOid: batch.commitOid,
     paths: expect.arrayContaining(["tasks/alpha.md", "tasks/beta.md"]),
   });
-  expect(listing.paths).not.toContain("ONBOARDING.md");
+  expect(listing.paths).not.toContain("README.md");
 
   // -- a second lazy commit stacks on the first
   const second = await project.repo.commitFiles({

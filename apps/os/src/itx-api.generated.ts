@@ -2124,7 +2124,6 @@ export type ProjectProcessorState = {
   createRequest: {
     config: {
       slug: string;
-      onboardingActive?: boolean | undefined;
       creatorEmail?: string | undefined;
       configRepoTemplate?: string | undefined;
     };
@@ -2136,7 +2135,6 @@ export type ProjectProcessorState = {
     request: {
       config: {
         slug: string;
-        onboardingActive?: boolean | undefined;
         creatorEmail?: string | undefined;
         configRepoTemplate?: string | undefined;
       };
@@ -2145,14 +2143,11 @@ export type ProjectProcessorState = {
   birthCertificate: {
     config: {
       slug: string;
-      onboardingActive?: boolean | undefined;
       creatorEmail?: string | undefined;
       configRepoTemplate?: string | undefined;
     };
     createRequestedAtOffset: number;
   } | null;
-  onboardingActive: boolean;
-  onboardingCompletedAt: string | null;
   devices: { createdAt: string; path: string }[];
   repos: { createdAt: string; path: string }[];
   secrets: { createdAt: string; path: string }[];

@@ -6290,7 +6290,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           projectId: registered.projectId,
           payload: {
             config: {
-              onboardingActive: true,
               slug: registered.slug,
               ...(creatorEmail === undefined ? {} : { creatorEmail }),
               ...(configRepoTemplate === undefined ? {} : { configRepoTemplate }),

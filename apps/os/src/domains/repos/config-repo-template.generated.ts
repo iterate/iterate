@@ -44,10 +44,19 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  deliberately a reconcile-current-config hook, not an exact per-commit\n" +
       "  activation callback. The seeded example calls\n" +
       "  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.\n" +
+      "- `project/created` is the first userspace event. The root worker subscription\n" +
+      "  is installed immediately before it in the same atomic append, so the seeded\n" +
+      "  worker receives it after the platform creation saga has completed. This\n" +
+      "  template uses it to create `/agents/onboarding`, install the template-local\n" +
+      "  `ONBOARDING.md` prompt, trigger the agent's first turn, and navigate each\n" +
+      "  connected `/clients/os-app/**` browser client that is still on the new\n" +
+      "  project's landing page to its chat. A user who has already moved elsewhere\n" +
+      "  is not interrupted by a delayed lifecycle delivery.\n" +
       "\n" +
-      "`project/create-requested` and `project/created` belong to the platform's\n" +
-      "creation saga. They are not userspace lifecycle hooks and the config worker\n" +
-      "does not handle them.\n" +
+      "`project/create-requested` remains platform-only: it precedes the userspace\n" +
+      "worker subscription. The terminal `project/created` certificate includes the\n" +
+      "birth configuration, including `config.configRepoTemplate` when the project\n" +
+      "was created from a public template.\n" +
       "\n" +
       "The heartbeat uses the Scheduler's native recurrence shape:\n" +
       "`{ every: seconds }`, `{ cron, timezone? }`, or `{ at: ISO timestamp }`. Copy\n" +
@@ -95,9 +104,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  dependencies both work — the platform builds the repo into the running\n" +
       "  worker).\n" +
       "- After you have captured the project purpose, working agreements, and first\n" +
-      "  tasks, append events.iterate.com/project/onboarding-completed on the root\n" +
-      "  project stream (itx.streams.get(\"/\")) with payload\n" +
-      "  { agentPath: \"/agents/onboarding\" }.\n" +
+      "  tasks, tell the owner that their project is ready and summarize what you\n" +
+      "  recorded. Onboarding completion is conversational; there is no platform\n" +
+      "  onboarding state to update.\n" +
       "\n" +
       "Do not mark onboarding complete just because the first message was answered.\n",
   },
@@ -140,10 +149,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  deliberately a reconcile-current-config hook, not an exact per-commit\n" +
       "  activation callback. The seeded example calls\n" +
       "  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.\n" +
+      "- `project/created` is the first userspace event. The root worker subscription\n" +
+      "  is installed immediately before it in the same atomic append, so the seeded\n" +
+      "  worker receives it after the platform creation saga has completed. This\n" +
+      "  template uses it to create `/agents/onboarding`, install the template-local\n" +
+      "  `ONBOARDING.md` prompt, trigger the agent's first turn, and navigate each\n" +
+      "  connected `/clients/os-app/**` browser client that is still on the new\n" +
+      "  project's landing page to its chat.\n" +
       "\n" +
-      "`project/create-requested` and `project/created` belong to the platform's\n" +
-      "creation saga. They are not userspace lifecycle hooks and the config worker\n" +
-      "does not handle them.\n" +
+      "`project/create-requested` remains platform-only: it precedes the userspace\n" +
+      "worker subscription. The terminal `project/created` certificate includes the\n" +
+      "birth configuration, including `config.configRepoTemplate` when the project\n" +
+      "was created from a public template.\n" +
       "\n" +
       "The heartbeat uses the Scheduler's native recurrence shape:\n" +
       "`{ every: seconds }`, `{ cron, timezone? }`, or `{ at: ISO timestamp }`. Copy\n" +
@@ -568,6 +585,65 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  // per-stream order.\n" +
       "  protected override async processEvent(event: StreamEvent): Promise<void> {\n" +
       "    switch (event.type) {\n" +
+      "      case \"events.iterate.com/project/created\": {\n" +
+      "        if (event.path !== \"/\") break;\n" +
+      "        const itx = await this.itx;\n" +
+      "        const instructions = await itx.repo.readFile({ path: \"ONBOARDING.md\" });\n" +
+      "        if (instructions === null) {\n" +
+      "          throw new Error(\"The default template enables onboarding but ONBOARDING.md is missing.\");\n" +
+      "        }\n" +
+      "\n" +
+      "        const onboardingAgent = itx.agents.get(\"/agents/onboarding\");\n" +
+      "        await onboardingAgent.create({ purpose: \"onboarding\", template: \"default\" });\n" +
+      "        await onboardingAgent.append(\n" +
+      "          {\n" +
+      "            type: \"events.iterate.com/agents/context-added\",\n" +
+      "            idempotencyKey: \"iterate/config/onboarding-instructions:v1\",\n" +
+      "            payload: {\n" +
+      "              role: \"system\",\n" +
+      "              key: \"config/onboarding-instructions\",\n" +
+      "              content: instructions.content,\n" +
+      "              llmRequestPolicy: { behaviour: \"dont-trigger-request\" },\n" +
+      "            },\n" +
+      "          },\n" +
+      "          {\n" +
+      "            type: \"events.iterate.com/agents/context-added\",\n" +
+      "            idempotencyKey: \"iterate/config/onboarding-start:v1\",\n" +
+      "            payload: {\n" +
+      "              role: \"developer\",\n" +
+      "              key: \"config/onboarding-start\",\n" +
+      "              content:\n" +
+      "                \"Begin onboarding now. The project owner just created this project. Welcome them, then follow the onboarding instructions one question at a time.\",\n" +
+      "              llmRequestPolicy: { behaviour: \"after-current-request\" },\n" +
+      "            },\n" +
+      "          },\n" +
+      "        );\n" +
+      "\n" +
+      "        const [{ slug }, clients] = await Promise.all([itx.identity(), itx.clients.list()]);\n" +
+      "        const projectHomePath = `/projects/${slug}`;\n" +
+      "        const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;\n" +
+      "        await Promise.all(\n" +
+      "          clients\n" +
+      "            .filter((client) => client.connected && client.path.startsWith(\"/clients/os-app/\"))\n" +
+      "            .map(async (client) => {\n" +
+      "              const browserClient = itx.clients.get(client.path);\n" +
+      "              const currentUrl = await browserClient.invokeCapability({\n" +
+      "                path: [\"capabilities\", \"browser\", \"url\"],\n" +
+      "              });\n" +
+      "              if (\n" +
+      "                typeof currentUrl !== \"string\" ||\n" +
+      "                new URL(currentUrl).pathname.replace(/\\/$/, \"\") !== projectHomePath\n" +
+      "              ) {\n" +
+      "                return;\n" +
+      "              }\n" +
+      "              await browserClient.invokeCapability({\n" +
+      "                path: [\"capabilities\", \"browser\", \"navigate\"],\n" +
+      "                args: [onboardingUrl],\n" +
+      "              });\n" +
+      "            }),\n" +
+      "        );\n" +
+      "        break;\n" +
+      "      }\n" +
       "      case \"events.iterate.com/agent/created\": {\n" +
       "        // The birth event on the agent's own stream (copies carry\n" +
       "        // source.copiedFrom and must not re-target the collection stream).\n" +

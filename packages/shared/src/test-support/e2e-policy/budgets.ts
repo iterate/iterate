@@ -85,13 +85,13 @@ export const E2E_TEST_TIMEOUT_MS = 120_000;
 export const E2E_HEAVY_TEST_TIMEOUT_MS = 240_000;
 
 /**
- * Watchdog on the sequential onboarding smoke that runs before the OS preview
- * suites. The smoke owns one retry and each greeting wait is bounded at 90s,
+ * Watchdog on the agent smoke that runs before the OS preview suites. The
+ * smoke owns one retry and each reply wait is bounded at 90s,
  * so 240s covers both attempts plus project setup. This outer bound catches
- * RPC calls before the greeting wait that would otherwise park the whole
+ * RPC calls before the reply wait that would otherwise park the whole
  * preview job without producing suite output.
  */
-export const OS_ONBOARDING_SMOKE_TIMEOUT_SECS = 240;
+export const OS_AGENT_SMOKE_TIMEOUT_SECS = 240;
 
 /**
  * Watchdog on the built Iterate CLI's PTY lane. The independent 55s workflows
@@ -105,7 +105,7 @@ export const OS_TUI_LANE_TIMEOUT_SECS = 180;
  * Watchdog on each preview sub-lane (`timeout N pnpm e2e` and
  * `timeout N pnpm spec` in scripts/preview/preview.ts). Kills, never
  * retries: a lane that blows this is wedged, not slow — before the specs
- * lane was bounded, a wedged onboarding agent stretched one preview test
+ * lane was bounded, a wedged agent stretched one preview test
  * step to 13 minutes (2026-07-09, run dpmddk1b75).
  *
  * "Healthy" includes one absorbed heavy-test retry: since #1826 the agent
@@ -113,7 +113,7 @@ export const OS_TUI_LANE_TIMEOUT_SECS = 180;
  * attempt eats a Workers-AI rate-limit blip legitimately takes ~190s before
  * its re-roll passes (observed on the slack-agent e2e). A 360s ceiling
  * killed an all-green lane bloated by exactly that. The Vitest, Playwright,
- * and separately bounded TUI sub-lanes run concurrently. The onboarding smoke above is bounded so a
+ * and separately bounded TUI sub-lanes run concurrently. The agent smoke above is bounded so a
  * pre-suite RPC wedge cannot consume the preview job's 10-minute ceiling.
  */
 export const OS_PREVIEW_LANE_TIMEOUT_SECS = 480;

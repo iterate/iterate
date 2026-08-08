@@ -552,12 +552,7 @@ export const CoreProcessorContract = defineProcessorContract({
             name: "agent",
             receiver: {
               action: "wake-processor",
-              expression: [
-                "agents",
-                ["get", "/agents/onboarding"],
-                "processor",
-                "wakeStreamProcessor",
-              ],
+              expression: ["agents", ["get", "/agents/demo"], "processor", "wakeStreamProcessor"],
             },
           },
         },

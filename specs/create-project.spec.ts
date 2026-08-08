@@ -6,13 +6,19 @@ import {
   startEmailOtpSignIn,
   uniqueSignupEmail,
 } from "./test-support/email-otp-signup.ts";
+import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // Deviation from the suite's forged-session fixture pattern: this spec uses a
 // freshly signed-up user, not a forged session. Creating a project mints new
 // auth claims, and only a real session can refresh its access token to pick
 // up the new project claim the post-create navigation authorizes with.
-test("a new user can create a project through the UI form", async ({ page }, testInfo) => {
+test("the config template creates and opens onboarding for a new project", async ({
+  baseURL,
+  page,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
   test.skip(
     !(await startEmailOtpSignIn(page, testInfo)),
     "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
@@ -24,22 +30,34 @@ test("a new user can create a project through the UI form", async ({ page }, tes
     testInfo,
   });
 
+  // The auth handoff can briefly render the project bootstrap page, whose
+  // overlapping progress indicators make spinner-waiter's strict locator
+  // ambiguous. Wait for either valid userspace outcome directly, as the
+  // second project flow below does for the same bootstrap transition.
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page
+      .getByTestId("project-dashboard")
+      .or(page.getByPlaceholder("Message this agent"))
+      .waitFor({ timeout: 60_000 });
+  });
+  using admin = await connectAdminItx(baseURL);
+  using firstProject = admin.projects.get(firstSlug);
+  await expect
+    .poll(
+      async () => {
+        const event = await firstProject.agents.get("/agents/onboarding").stream.getEvent({
+          idempotencyKey: "iterate/config/onboarding-instructions:v1",
+        });
+        return event?.payload?.content;
+      },
+      { timeout: 60_000, intervals: [500] },
+    )
+    .toContain("# Onboarding Agent");
+
   const slug = uniqueFixtureSlug("create-project");
   // spinner-waiter is disabled through here: the /projects pending state and
-  // the agent page's loading state both render two spinner-matching elements
+  // the project page's loading state can render two spinner-matching elements
   // at once, tripping its strict-mode isVisible.
-  await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    // Back on OS after auth first-run onboarding: a single project enters its
-    // creation flow, which hands off to the onboarding agent once ready.
-    // The composer is that route's structural chrome (renders on mount, no
-    // LLM output involved); 60s carried over from the waitForURL this
-    // replaced — cold-slot bootstrap + redirect can straggle.
-    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
-  });
-  // The composer only renders under an agent-stream route, so the URL has
-  // settled — assert we landed on the FIRST project's onboarding agent.
-  expect(page.url()).toContain(`/projects/${firstSlug}/agents/streams/agents/onboarding`);
-
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
     // /new-project is the deep-linked create sheet (sidebar + projects list
     // both link here). Navigate directly so strict-mode locators don't have
@@ -48,12 +66,25 @@ test("a new user can create a project through the UI form", async ({ page }, tes
 
     await page.getByLabel("Slug").fill(slug, { timeout: 15_000 });
     // Create resolves after the atomic birth batch, then project home shows
-    // the bootstrap saga and hands off to onboarding once ready. The composer
-    // is that destination's structural chrome; 60s covers the cold birth +
-    // saga + handoff.
+    // the bootstrap saga. The userspace config template handles project/created,
+    // creates its onboarding agent, and drives this connected OS tab to it.
     await page.getByRole("button", { name: "Create project" }).click({ timeout: 15_000 });
-    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
+    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 90_000 });
   });
-  // After the checklist completes, welcome handoff lands on onboarding.
-  expect(page.url()).toContain(`/projects/${slug}/agents/streams/agents/onboarding`);
+  expect(new URL(page.url())).toMatchObject({
+    pathname: `/projects/${slug}/agents/streams/agents/onboarding`,
+  });
+
+  using createdProject = admin.projects.get(slug);
+  const onboardingAgent = createdProject.agents.get("/agents/onboarding");
+  const [createdEvent, promptEvent] = await Promise.all([
+    onboardingAgent.stream.getEvents({ eventTypes: ["events.iterate.com/agent/created"] }),
+    onboardingAgent.stream.getEvent({
+      idempotencyKey: "iterate/config/onboarding-instructions:v1",
+    }),
+  ]);
+  expect(
+    createdEvent.find((event) => event.type === "events.iterate.com/agent/created")?.payload,
+  ).toEqual({ purpose: "onboarding", template: "default" });
+  expect(promptEvent?.payload?.content).toContain("# Onboarding Agent");
 });

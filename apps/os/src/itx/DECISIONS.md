@@ -341,9 +341,10 @@ been circling:
   After the trusted seeded config worker builds and answers a readiness probe,
   the saga atomically installs its permanent root feed (starting after the
   request), appends terminal `project/created`, and publishes the first
-  `project/worker-updated` using the OS-stamped seed commit. Userspace does not
-  consume a creation hook, and creation does not wait for it to consume the
-  worker-update. A config-repo or deterministic worker source-build failure
+  `project/worker-updated` using the OS-stamped seed commit. Same-batch ordering
+  makes `project/created` the first event delivered to the userspace worker;
+  creation does not wait for that reaction or the worker-update reaction. A
+  config-repo or deterministic worker source-build failure
   appends terminal `project/create-failed`; availability and build-in-progress
   outcomes stay open for durable redelivery. The subscription and terminal
   event keys are ordinary coordination conventions rather than a separate

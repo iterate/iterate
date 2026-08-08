@@ -64,7 +64,7 @@ test("the seeded todo app authenticates a real project member", async ({
   // project together. Its destination renders an unmarked skeleton, so wait
   // for the project route with spinner-waiter disabled, as signup.spec.ts does.
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
+    await page.getByPlaceholder("Message a new agent").waitFor({ timeout: 60_000 });
   });
 
   // The project-app origin has no session yet, even though this browser is
@@ -139,7 +139,7 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
     testInfo,
   });
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
+    await page.getByPlaceholder("Message a new agent").waitFor({ timeout: 60_000 });
   });
 
   const workspacePath = "/workspaces/agents/reviewer";
