@@ -30,10 +30,16 @@ test("the config template creates and opens onboarding for a new project", async
     testInfo,
   });
 
-  await page
-    .getByTestId("project-dashboard")
-    .or(page.getByPlaceholder("Message this agent"))
-    .waitFor({ timeout: 60_000 });
+  // The auth handoff can briefly render the project bootstrap page, whose
+  // overlapping progress indicators make spinner-waiter's strict locator
+  // ambiguous. Wait for either valid userspace outcome directly, as the
+  // second project flow below does for the same bootstrap transition.
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page
+      .getByTestId("project-dashboard")
+      .or(page.getByPlaceholder("Message this agent"))
+      .waitFor({ timeout: 60_000 });
+  });
   using admin = await connectAdminItx(baseURL);
   using firstProject = admin.projects.get(firstSlug);
   await expect
