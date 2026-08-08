@@ -1265,11 +1265,16 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
     written = snprintf(
         voicelab->args_buffer + offset,
         sizeof(voicelab->args_buffer) - offset,
+        /*
+         * NO conversationId. The client does not know which call it is on and
+         * does not need to: frames belong to whatever call its own press
+         * opened. Naming one here made the device a second source of truth for
+         * a fact only the server holds.
+         */
         "%s{\"type\":\"events.iterate.com/voice-agent/mic-frame\",\"ephemeral\":true,"
-        "\"payload\":{\"conversationId\":\"%s\",\"seq\":%" PRIu32
+        "\"payload\":{\"seq\":%" PRIu32
         ",\"t\":%" PRIu64 ",\"enc\":\"u\",\"pcm\":\"",
         index == 0U ? "" : ",",
-        voicelab->options.conversation_id,
         sequence + (uint32_t)index,
         captured_at_ms);
     if (written < 0 ||
@@ -1362,6 +1367,20 @@ static bool json_literal_contents_are_safe(const char *value) {
   return true;
 }
 
+/*
+ * THE PRESS OPENS THE CALL, so this asks for one WITHOUT naming it.
+ *
+ * This used to append `conversation-requested` carrying a device-minted
+ * conversationId, a greeting, a turn mode and a colleague flag — a device
+ * telling the server what kind of call to have. The server holds the state
+ * that decides all of that, and two sides holding one fact is how a stream
+ * wedges: the device asked for a call the server already had, nine times, and
+ * every request went unanswered in silence.
+ *
+ * `ptt-start` is the whole request now. A device with no call gets one; a
+ * device already on a call gets a fresh utterance. The client path still
+ * rides along so the conversation can subscribe to this board's presence.
+ */
 enum capnweb_status iterate_kit_voicelab_start_call(
     struct iterate_kit_voicelab *voicelab, const char *greeting) {
   int length;
@@ -1373,33 +1392,18 @@ enum capnweb_status iterate_kit_voicelab_start_call(
       voicelab->call_pending || !voicelab->has_stream_capability) {
     return CAPNWEB_E_STATE;
   }
-  if (!json_literal_contents_are_safe(greeting)) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
+  /* Greetings are the server's to decide; accepted for source compatibility
+   * with the four device loops and deliberately not sent. */
+  (void)greeting;
   length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
-      /*
-       * `colleague` gives the voice its one tool and a text agent behind it.
-       * The voice model is a mouth with a couple of hundred milliseconds to
-       * think in; anything that has to be RIGHT is asked of a colleague with
-       * no clock on it, and the voice says so and keeps talking meanwhile.
-       */
-      "[{\"type\":\"events.iterate.com/voice-agent/conversation-requested\",\"payload\":{"
-      "\"conversationId\":\"%s\",\"colleague\":true,\"turns\":\"%s\"%s%s%s%s%s%s}}]",
-      voicelab->options.conversation_id,
-      voicelab->options.turns != NULL ? voicelab->options.turns : "manual",
-      /*
-       * Which board is on this call, so the conversation can subscribe to the
-       * device's own presence. Without it the only evidence a board has gone
-       * is silence, which is indistinguishable from a quiet human.
-       */
+      "[{\"type\":\"events.iterate.com/voice-agent/ptt-start\",\"ephemeral\":true,"
+      "\"payload\":{\"t\":%" PRIu64 "%s%s%s}}]",
+      voicelab->options.now_ms(voicelab->options.clock_context),
       voicelab->options.client_path != NULL ? ",\"client\":\"" : "",
       voicelab->options.client_path != NULL ? voicelab->options.client_path : "",
-      voicelab->options.client_path != NULL ? "\"" : "",
-      greeting != NULL ? ",\"greet\":\"" : "",
-      greeting != NULL ? greeting : "",
-      greeting != NULL ? "\"" : "");
+      voicelab->options.client_path != NULL ? "\"" : "");
   if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
     return CAPNWEB_E_LIMIT;
   }
@@ -1478,10 +1482,16 @@ enum capnweb_status iterate_kit_voicelab_mark_turn(
   length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
-      "[{\"type\":\"events.iterate.com/voice-agent/turn\",\"ephemeral\":true,\"payload\":{"
-      "\"conversationId\":\"%s\",\"action\":\"%s\",\"t\":%" PRIu64 "}}]",
-      voicelab->options.conversation_id,
-      turn == ITERATE_KIT_VOICELAB_TURN_START ? "start" : "commit",
+      /*
+       * THE PRESS IS THE VERB. A start/commit pair inside one `turn` event
+       * asked the reader to decode an action before it knew what happened;
+       * two named events say it outright, and `ptt-start` is also what opens
+       * a call — so a device that has never called before needs no separate
+       * request, and one already on a call needs no special case.
+       */
+      "[{\"type\":\"events.iterate.com/voice-agent/%s\",\"ephemeral\":true,"
+      "\"payload\":{\"t\":%" PRIu64 "}}]",
+      turn == ITERATE_KIT_VOICELAB_TURN_START ? "ptt-start" : "ptt-end",
       voicelab->options.now_ms(voicelab->options.clock_context));
   if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
     return CAPNWEB_E_LIMIT;

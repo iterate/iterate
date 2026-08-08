@@ -670,19 +670,22 @@ int main(void) {
     const char *end_message = NULL;
     size_t index;
     assert(
-        iterate_kit_voicelab_start_call(&fixture.voicelab, "not \"json") ==
-        CAPNWEB_E_INVALID_ARGUMENT);
-    assert(!fixture.voicelab.call_pending);
-    assert(
         iterate_kit_voicelab_end_call(&fixture.voicelab, "not\\json") ==
         CAPNWEB_E_INVALID_ARGUMENT);
     before = fixture.captured_count;
+    /*
+     * A GREETING CANNOT REACH THE WIRE AT ALL NOW, which is a stronger
+     * guarantee than rejecting an unsafe one. This used to embed the caller's
+     * greeting in the JSON and therefore had to screen it for quotes; the
+     * press carries no greeting, so the injection it was screening for is not
+     * representable. Passing a hostile one must simply be harmless.
+     */
     assert(
-        iterate_kit_voicelab_start_call(&fixture.voicelab, "Ready.") ==
+        iterate_kit_voicelab_start_call(&fixture.voicelab, "not \"json") ==
         CAPNWEB_OK);
     assert(fixture.voicelab.call_pending);
     for (index = before; index < fixture.captured_count; ++index) {
-      if (strstr(fixture.captured[index], "conversation-requested") != NULL) {
+      if (strstr(fixture.captured[index], "ptt-start") != NULL) {
         start_message = fixture.captured[index];
       }
     }
@@ -691,12 +694,13 @@ int main(void) {
     assert(
         strstr(
             start_message,
-            "\"type\":\"events.iterate.com/voice-agent/conversation-requested\"") !=
-        NULL);
-    assert(strstr(start_message, "\"conversationId\":\"wsdev\"") != NULL);
-    assert(strstr(start_message, "\"colleague\":true") != NULL);
-    assert(strstr(start_message, "\"turns\":\"manual\"") != NULL);
-    assert(strstr(start_message, "\"greet\":\"Ready.\"") != NULL);
+            "\"type\":\"events.iterate.com/voice-agent/ptt-start\"") != NULL);
+    /* The press names no call, no turn mode and no greeting: all three are
+     * the server's, and a device asserting them was a second source of truth
+     * for state only the server holds. */
+    assert(strstr(start_message, "conversationId") == NULL);
+    assert(strstr(start_message, "greet") == NULL);
+    assert(strstr(start_message, "not \\\"json") == NULL);
     /* One start in flight at a time. */
     assert(
         iterate_kit_voicelab_start_call(&fixture.voicelab, NULL) ==
@@ -726,8 +730,13 @@ int main(void) {
      * nothing would record that the call was hung up. */
     assert(strstr(end_message, "ephemeral") == NULL);
 
-    /* An open-microphone board (StackChan) asks the provider's server VAD
-     * to segment turns; the unset default above stays "manual". */
+    /*
+     * THE TURN MODE IS NOT THE DEVICE'S TO DECLARE. A board used to announce
+     * "manual" or "vad" in its request and the server obeyed; the press is
+     * now identical either way, because the client segmenting with its own
+     * button IS manual turns and server VAD on top of that answers halfway
+     * through a sentence.
+     */
     fixture.voicelab.options.turns = "vad";
     before = fixture.captured_count;
     start_message = NULL;
@@ -735,12 +744,12 @@ int main(void) {
         iterate_kit_voicelab_start_call(&fixture.voicelab, NULL) ==
         CAPNWEB_OK);
     for (index = before; index < fixture.captured_count; ++index) {
-      if (strstr(fixture.captured[index], "conversation-requested") != NULL) {
+      if (strstr(fixture.captured[index], "ptt-start") != NULL) {
         start_message = fixture.captured[index];
       }
     }
     assert(start_message != NULL);
-    assert(strstr(start_message, "\"turns\":\"vad\"") != NULL);
+    assert(strstr(start_message, "turns") == NULL);
     receive(&fixture, "[\"resolve\",9,[{\"ok\":true}]]");
     assert(!fixture.voicelab.call_pending);
   }

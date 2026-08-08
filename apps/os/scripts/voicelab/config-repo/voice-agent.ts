@@ -4603,53 +4603,21 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
       const subscriptionPayload = {
         name: VOICE_AGENT_SUBSCRIPTION_NAME,
         description: "Wake the separately deployed voice-agent guest for call requests.",
-        filter: {
-          eventTypes: [
-            "events.iterate.com/voice-agent/created",
-            "events.iterate.com/voice-agent/conversation-requested",
-            /* The processor folds the ANSWERS too — an outstanding call request
-             * is a fact of its state, not a closure an eviction can take with
-             * it — and hosted delivery is filtered, so an event missing from
-             * this list never reaches the fold at all. */
-            "events.iterate.com/voice-agent/conversation-accepted",
-            "events.iterate.com/voice-agent/conversation-failed",
-            /*
-             * The warm-up token. Hosted delivery is FILTERED, so a type missing
-             * from this list never reaches the processor at all — which is what
-             * made the first version of this handshake unanswerable. Note the
-             * shape of that dependency: the filter lives in the payload whose
-             * contentHash IS the idempotency key, so adding a type here makes a
-             * re-setup append a new subscription-configured event under the same
-             * name, replacing the old filter rather than running two.
-             *
-             * Neither the bridge (mic-frame, ping, turn, say, conversation-ended,
-             * conversation-accepted) nor the device's downlink (speaker-frame,
-             * grok-event, conversation-ended, conversation-accepted, pong) lists this type, so
-             * the token cannot reach the provider socket or the audio path.
-             */
-            "events.iterate.com/voice-agent/warmup",
-            /* Setup's statement of which brief is current. Without this in the
-             * filter the processor would never be told, and hosted delivery is
-             * filtered — the same trap that made the first handshake silent. */
-            "events.iterate.com/voice-agent/brief-current",
-            /*
-             * THE LIVE HALF, and it has to be here for the same reason.
-             *
-             * The facet holds the provider socket itself, so the audio the
-             * bridge used to receive over its own connection now arrives as
-             * ordinary filtered delivery. Delivery is this filter INTERSECTED
-             * with the contract's `consumes`; a type missing from either side
-             * silently never arrives, which for `mic-frame` is a call where
-             * the model hears nothing at all.
-             */
-            "events.iterate.com/voice-agent/mic-frame",
-            "events.iterate.com/voice-agent/turn",
-            "events.iterate.com/voice-agent/say",
-            "events.iterate.com/voice-agent/ping",
-            "events.iterate.com/voice-agent/conversation-ended",
-            "events.iterate.com/voice-agent/device-presence",
-          ],
-        },
+        /*
+         * THE FILTER IS THE CONTRACT'S OWN `consumes`, and it must be.
+         *
+         * Delivery is this filter INTERSECTED with `consumes`, so a type in
+         * one and not the other is silently never delivered. Maintaining two
+         * hand-written lists of the same thing cost three separate debugging
+         * sessions in one day: first the audio types, then the warm-up
+         * handshake, then the press verbs — each time the symptom was total
+         * silence with nothing in any log, because a filtered-out event leaves
+         * no trace anywhere.
+         *
+         * Deriving it means the two cannot drift. Adding a type to `consumes`
+         * is now the whole change.
+         */
+        filter: { eventTypes: [...VoiceAgentFacetContract.consumes] },
         /*
          * A FACET, IN THIS STREAM'S OWN DURABLE OBJECT.
          *
@@ -5461,6 +5429,18 @@ export const VoiceAgentFacetContract = defineProcessorContract({
      * says how much was held and what the hold cost, so "did buffering earn
      * anything" is a measurement rather than an argument.
      */
+    /*
+     * WHAT THE PROVIDER SAID WENT WRONG, on the stream where it can be read.
+     *
+     * Without this the facet dropped every provider event it did not handle,
+     * so "Grok took the audio and answered nothing" and "Grok rejected the
+     * commit" were the same observation: silence. An error nobody can see
+     * costs an hour every time it happens.
+     */
+    "events.iterate.com/voice-agent/provider-error": {
+      description: "The provider reported an error, verbatim.",
+      payloadSchema: z.looseObject({ conversationId: z.string(), message: z.string() }),
+    },
     "events.iterate.com/voice-agent/buffer-flushed": {
       description: "Queued capture went to the provider; how many frames, and the handshake cost.",
       payloadSchema: z.looseObject({
@@ -5540,6 +5520,7 @@ export const VoiceAgentFacetContract = defineProcessorContract({
   emits: [
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/buffer-flushed",
+    "events.iterate.com/voice-agent/provider-error",
     "events.iterate.com/voice-agent/conversation-accepted",
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/spk-frame",
@@ -5826,6 +5807,12 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
       let provider: { type?: string; delta?: string };
       try {
         provider = JSON.parse(message.data) as { type?: string; delta?: string };
+        /* Every provider event, so a silent call can be explained from the
+         * log rather than guessed at. Audio deltas are excluded by name:
+         * there are hundreds and they say nothing the frames do not. */
+        if (provider.type !== "response.output_audio.delta") {
+          console.log(`grok <- ${String(provider.type)}`);
+        }
       } catch {
         return;
       }
@@ -5855,6 +5842,16 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
               },
             },
           );
+          return;
+        }
+        case "error": {
+          const detail = JSON.stringify(provider).slice(0, 600);
+          console.log(`grok error: ${detail}`);
+          void append({
+            type: "events.iterate.com/voice-agent/provider-error",
+            ephemeral: true,
+            payload: { conversationId: call.conversationId, message: detail },
+          });
           return;
         }
         case "response.created":
