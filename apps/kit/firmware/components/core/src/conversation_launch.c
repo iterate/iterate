@@ -17,35 +17,28 @@ enum iterate_kit_launch_step iterate_kit_launch_next_step(
     return ITERATE_KIT_LAUNCH_NOTHING;
   }
 
+  /*
+   * A STREAM IS NO LONGER A CONVERSATION, so a used one does not need
+   * replacing.
+   *
+   * Every path below used to mint a fresh `/agents/voice/<timestamp>` per
+   * call, because the stream WAS the conversation — its identity was the
+   * call's identity. The server now mints the call itself and says so with
+   * `call-started`, so one stream carries as many conversations as the device
+   * has button presses.
+   *
+   * Keeping the old behaviour is what stopped the boards calling at all:
+   * preparing a fresh stream means installing the processor facet on it, and
+   * a facet's first materialisation on a new path is measured at 45-52s
+   * against setup's own deadline. A device asked for a stream it could not get
+   * and sat at `wantsCall: true, callPending: false` forever — indefinitely
+   * "preparing", never dialling.
+   */
   if (!inputs->wants_call) {
-    /* Already holding a fresh stream: the whole point of preparing ahead. */
-    if (!inputs->stream_used) return ITERATE_KIT_LAUNCH_NOTHING;
-    if (inputs->now_ms < launch->next_prepare_ahead_ms) {
-      return ITERATE_KIT_LAUNCH_NOTHING;
-    }
-    /* Bounded: see ITERATE_KIT_LAUNCH_PREPARE_AHEAD_LIMIT. A prepare nobody is
-     * waiting on must not become a stream minted every thirty seconds. */
-    if (launch->prepares_without_call >= ITERATE_KIT_LAUNCH_PREPARE_AHEAD_LIMIT) {
-      return ITERATE_KIT_LAUNCH_NOTHING;
-    }
-    launch->prepares_without_call++;
-    launch->next_prepare_ahead_ms =
-        inputs->now_ms + ITERATE_KIT_LAUNCH_PREPARE_AHEAD_RETRY_MS;
-    return ITERATE_KIT_LAUNCH_PREPARE_AHEAD;
+    return ITERATE_KIT_LAUNCH_NOTHING;
   }
 
-  /*
-   * SOMEBODY IS WAITING FROM HERE DOWN, and neither branch reads
-   * `next_prepare_ahead_ms`. That single line is the eighteen seconds.
-   */
-  if (inputs->stream_used) {
-    if (inputs->now_ms < launch->next_prepare_ms) {
-      return ITERATE_KIT_LAUNCH_NOTHING;
-    }
-    launch->next_prepare_ms =
-        inputs->now_ms + ITERATE_KIT_LAUNCH_PREPARE_RETRY_MS;
-    return ITERATE_KIT_LAUNCH_PREPARE_NOW;
-  }
+  /* Somebody is waiting from here down. */
   if (inputs->now_ms < launch->next_place_ms) return ITERATE_KIT_LAUNCH_NOTHING;
   launch->next_place_ms = inputs->now_ms + ITERATE_KIT_LAUNCH_PLACE_RETRY_MS;
   /* Preparing ahead did its job: the count starts again from here. */
