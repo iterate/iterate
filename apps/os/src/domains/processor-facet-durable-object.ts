@@ -190,12 +190,6 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   // Doors beyond the base class's RPC surface (parent-only callers).
   // ---------------------------------------------------------------------------
 
-  /** Pull-through for read-your-writes snapshots — the facade's
-   * catch-up-before-snapshot leg (`StreamProcessorRegistry.catchUp`). */
-  async catchUp(args: { name: string }): Promise<void> {
-    await this.#requireRegistry().catchUp(args.name);
-  }
-
   // Capability-host domain doors, dispatched by identity: the retired
   // CapabilityHostDurableObject forwarded these methods onto its processor
   // instance; they live here now. Only meaningful on the facet named
