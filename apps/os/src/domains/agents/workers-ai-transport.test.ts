@@ -399,6 +399,24 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
     expect(keyA).not.toBe(keyB);
   });
 
+  it("masks journal projection offsets without masking offsets in message text", () => {
+    const bodyFor = (offset: number) =>
+      JSON.stringify({
+        messages: [
+          {
+            role: "system",
+            content: `@${offset} key="config/agents-md"\nIdentical project instructions`,
+          },
+          { role: "user", content: "@19 actor=user:web\nDiscuss @20 in the answer" },
+        ],
+      });
+    const maskedA = maskCloudflareAiGatewayResponseCacheEntropy(bodyFor(20));
+    const maskedB = maskCloudflareAiGatewayResponseCacheEntropy(bodyFor(21));
+    expect(maskedA).toBe(maskedB);
+    expect(maskedA).toContain('@OFFSET key=\\"config/agents-md\\"');
+    expect(maskedA).toContain("Discuss @20 in the answer");
+  });
+
   it("masks signed-URL signatures and expiries but keeps the file identity", () => {
     const masked = maskCloudflareAiGatewayResponseCacheEntropy(
       JSON.stringify({
