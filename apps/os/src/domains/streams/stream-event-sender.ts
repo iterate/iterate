@@ -172,6 +172,16 @@ const HOSTED_CALLBACK_EVENT_LIMIT = 1;
  * with margin, small enough that a burst cannot monopolise one callback turn.
  */
 const HOSTED_EPHEMERAL_EVENT_LIMIT = 10;
+/**
+ * How long a facet's FIRST wake may take before it counts as a failure.
+ *
+ * Generous on purpose: it covers loading a userspace class and standing up its
+ * loader isolate, which is per-incarnation work that no cache removes (the
+ * isolate bakes `env.ITX` from the scope path, so it cannot be shared across
+ * streams). Measured at over the 20s ordinary deadline, which is what made a
+ * cold start retry into itself.
+ */
+const COLD_FACET_WAKE_TIMEOUT_MS = 90_000;
 const HOSTED_SCAN_EVENT_LIMIT = 100;
 /** Briefly coalesce active bursts, then release every callback that can be re-paged or re-woken. */
 const IDLE_CONNECTION_TEARDOWN_MS = 5_000;
@@ -388,6 +398,13 @@ type StreamEventSenderHooks = {
 
 export class StreamEventSender {
   readonly #hooks: StreamEventSenderHooks;
+  /**
+   * Facet names this incarnation has already woken once.
+   *
+   * Per-incarnation on purpose: the cost it guards is materialising the facet
+   * in THIS isolate, so a fresh incarnation genuinely pays it again.
+   */
+  readonly #facetEverWoken = new Set<string>();
   /** The live-callback state machine (session + hosted callbacks); see below. */
   readonly connections: StreamConnections;
 
@@ -683,7 +700,27 @@ export class StreamEventSender {
         );
         const response = await withDeliveryTimeout(wakePromise, `wake hosted processor ${name}`, {
           onLateResolve: (late) => late.processEventBatch[Symbol.dispose](),
+          /*
+           * A COLD FACET'S FIRST WAKE IS NOT A SLOW PROCESSOR, and charging it
+           * the ordinary delivery deadline turned one slow start into three.
+           *
+           * Materialising a userspace facet — loading the class and standing
+           * up its loader isolate — happens INSIDE this promise, and is
+           * measured at longer than the 20s default. The wake then timed out,
+           * backed off, and woke again while the first materialisation was
+           * still running, so the second attempt paid the cost from scratch:
+           * 20s + 1s + 20s + 2s lands at ~43s, which is why a first setup
+           * appeared to hang for 45-52s and always succeeded on retry.
+           *
+           * Only the FIRST wake of a facet gets the longer rope. Once it is
+           * configured on this incarnation, a slow one is a slow processor
+           * again and the ordinary deadline is the right answer.
+           */
+          ...(receiver.action === "facet-processor" && !this.#facetEverWoken.has(name)
+            ? { timeoutMs: COLD_FACET_WAKE_TIMEOUT_MS }
+            : {}),
         });
+        this.#facetEverWoken.add(name);
         const current = this.#hooks.coreState().subscriptions.outbound.byName[name];
         if (
           !this.#deliveryStillMatches(name, expectedDelivery) ||
