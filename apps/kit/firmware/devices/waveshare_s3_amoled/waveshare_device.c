@@ -352,7 +352,17 @@ EXT_RAM_BSS_ATTR static uint8_t
  * voice half and the thinking half are one identity at one path. A default
  * outside /agents/ gave the device a conversation with no agent behind it.
  */
-#define STREAM_PATH_DEFAULT "/agents/voice/device"
+/*
+ * ONE CONVERSATION STREAM PER BOARD, not one shared by all of them.
+ *
+ * Every device defaulted to "/agents/voice/device". That was harmless while a
+ * call minted its own stream, because the default was only ever a starting
+ * point. Now that a stream carries many conversations, sharing one means every
+ * board presses into the same conversation and each press supersedes the last:
+ * three boards on one stream produced two call-started for a single press and
+ * an answer that never reached anybody.
+ */
+#define STREAM_PATH_DEFAULT "/agents/voice/waveshare"
 static char stream_path[96] = STREAM_PATH_DEFAULT;
 /*
  * THE OTHER PATH, and it is file scope on purpose: two different functions
