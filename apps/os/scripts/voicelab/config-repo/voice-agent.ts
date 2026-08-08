@@ -5200,6 +5200,26 @@ class GrokCall {
   get closed(): boolean {
     return this.#closed;
   }
+
+  /**
+   * Is this call still worth talking to?
+   *
+   * A socket can die without its close listener ever running — the provider
+   * goes away, the incarnation is resumed, the event is simply missed — and
+   * the call object survives as a corpse. Every later press then folds into
+   * it: `ptt-start` sees a non-null call, decides this is the same
+   * conversation, sends `input_audio_buffer.clear` into a dead socket, and
+   * nothing dials. Measured on a board: 479 microphone frames delivered to a
+   * facet that dropped every one, with no error anywhere.
+   *
+   * Ask the socket rather than trusting a flag we might never have been told
+   * to set.
+   */
+  get alive(): boolean {
+    if (this.#closed) return false;
+    if (this.#socket === null) return true; // still dialling; not dead
+    return this.#socket.readyState === WebSocket.OPEN;
+  }
   /** Milliseconds from dial to a usable session, or null while still dialing. */
   get handshakeMs(): number | null {
     return this.#readyAtMs === null ? null : this.#readyAtMs - this.#openedAtMs;
@@ -5641,7 +5661,10 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
          * somebody has said two or three seconds of anything, the session is up
          * and the audio they spoke into the handshake has already been flushed.
          */
-        if (call === null) {
+        if (call === null || !call.alive) {
+          /* A dead call is not a call. Retire it and dial a fresh one rather
+           * than folding this press into a corpse. */
+          if (call !== null) this.#endCall("provider socket is gone");
           const conversationId = crypto.randomUUID().slice(0, 8);
           this.#dial(conversationId, append, runInBackground);
           runInBackground(async () => {

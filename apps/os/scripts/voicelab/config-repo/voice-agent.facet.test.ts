@@ -43,6 +43,9 @@ function fakeGrok() {
     }
   };
   const socket = {
+    /* A real socket reports this and the facet asks it, because a close
+     * listener can be missed and a corpse must not look alive. */
+    readyState: 1 as number,
     addEventListener(kind: string, listener: (event: unknown) => void) {
       listeners.set(kind, [...(listeners.get(kind) ?? []), listener]);
     },
@@ -51,6 +54,7 @@ function fakeGrok() {
     },
     close() {
       closed = true;
+      socket.readyState = 3;
     },
   };
   return {
@@ -77,6 +81,10 @@ function fakeGrok() {
         type: "response.output_audio.delta",
         delta: btoa(String.fromCharCode(...new Uint8Array(bytes).fill(7))),
       }),
+    /** The socket goes away with no close event — the corpse case. */
+    die: () => {
+      socket.readyState = 3;
+    },
     /** How much captured audio actually reached the provider. */
     appended: () => sent.filter((message) => message.type === "input_audio_buffer.append").length,
     committed: () => sent.some((message) => message.type === "input_audio_buffer.commit"),
@@ -295,6 +303,31 @@ describe("repeated end to end", () => {
     expect(harness.events(CALL_STARTED)).toHaveLength(1);
     expect(harness.events(ACCEPTED)).toHaveLength(1);
     expect(provider.appended()).toBe(250);
+  });
+
+  it("re-dials when the held call's socket has quietly died", async () => {
+    /*
+     * A socket can die without its close listener ever running — the provider
+     * goes away, the incarnation resumes, the event is simply missed. The
+     * call object survives as a corpse and every later press folds into it.
+     * Measured on a board: 479 microphone frames handed to a facet that
+     * dropped every one, with no error anywhere.
+     */
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+    expect(harness.events(CALL_STARTED)).toHaveLength(1);
+
+    /* The socket dies WITHOUT anyone telling the facet. */
+    provider.die();
+    await harness.append({ type: PTT_START, payload: {} });
+    await harness.settle();
+
+    /* The press opens a new call rather than clearing a dead one's buffer. */
+    expect(harness.events(CALL_STARTED)).toHaveLength(2);
   });
 
   it("does not call a superseded dial a failure", async () => {
