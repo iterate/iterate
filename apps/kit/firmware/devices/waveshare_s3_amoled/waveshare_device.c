@@ -470,6 +470,9 @@ static struct {
   struct iterate_kit_push_to_talk push_to_talk;
   struct iterate_kit_conversation_control conversation_control;
   struct iterate_kit_voicelab voicelab;
+  /* The last refusal from start_call, and how many there have been. */
+  enum capnweb_status last_start_status;
+  uint32_t start_call_failures;
   struct iterate_kit_playout playout;
   uint32_t voicelab_generation;
   uint32_t frame_sequence;
@@ -1894,6 +1897,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
        * about which of three conditions refused it.
        */
       "\"hasStreamCap\":%s,\"outboxFree\":%u,\"preparing\":%s,"
+      "\"lastStartStatus\":%d,\"startCallFailures\":%u,"
       "\"gateOpen\":%s,\"t\":%" PRIu64 ",\"uptimeMs\":%" PRIu64,
       iterate_kit_esp_idf_itx_transport_state_name(runtime.transport.state),
       iterate_kit_voicelab_state_name(runtime.voicelab.state),
@@ -1910,6 +1914,8 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       runtime.voicelab.has_stream_capability ? "true" : "false",
       (unsigned)(CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots),
       awaiting_fresh_stream ? "true" : "false",
+      (int)runtime.last_start_status,
+      (unsigned)runtime.start_call_failures,
       gate_open ? "true" : "false",
       now,
       now);
@@ -2885,9 +2891,18 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
             break;
           case ITERATE_KIT_LAUNCH_PLACE_CALL:
             call_pending_since = now;
-            if (iterate_kit_voicelab_start_call(&runtime.voicelab, GREETING) ==
-                CAPNWEB_OK) {
+            /*
+             * KEEP THE REFUSAL. This discarded the status, so a start that
+             * failed was indistinguishable from one that was never attempted:
+             * a board sat wanting a call with every launch gate green and
+             * nothing anywhere said why.
+             */
+            runtime.last_start_status =
+                iterate_kit_voicelab_start_call(&runtime.voicelab, GREETING);
+            if (runtime.last_start_status == CAPNWEB_OK) {
               waveshare_display_set_status("starting call");
+            } else {
+              ++runtime.start_call_failures;
             }
             break;
           case ITERATE_KIT_LAUNCH_NOTHING:
