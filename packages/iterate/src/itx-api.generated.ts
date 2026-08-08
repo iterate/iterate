@@ -296,6 +296,19 @@ export interface ProjectCollection {
       description: string;
       /** Live capabilities target (an RpcTarget or plain object in the caller's process). */
       capabilities?: unknown;
+      /**
+       * Route the whole dotted path to the target as ONE call instead of
+       * traversing it member by member.
+       *
+       * Required by any client whose capabilities object is a path-building
+       * proxy rather than a material object tree — every microcontroller, and
+       * anything else that answers calls from a static dispatch table. Without
+       * it the host awaits each intermediate member, so `servos.move(...)`
+       * issues an incomplete call at `servos` and never reaches `move`.
+       */
+      flattenNestedPaths?: boolean;
+      /** Optional TypeScript declaration for the mounted surface. */
+      types?: string;
     },
   ): Promise<Project>;
   /**
