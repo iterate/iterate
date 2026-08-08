@@ -282,6 +282,110 @@ describe("CapabilityHostProcessor preamble verbs", () => {
       'no settled script execution "exec-nope"',
     );
   });
+
+  it("getScriptResult slices a string result's text server-side", async () => {
+    const stream = bornStream();
+    const harness = await makeProcessor({ stream });
+    const text = "the quick brown fox jumps over the lazy dog";
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-run-settled",
+      idempotencyKey: "capability-host/script-run-settled@exec-str",
+      payload: { executionId: "exec-str", settlement: { status: "succeeded", result: text } },
+    });
+    await harness.runner.catchUp();
+
+    await expect(harness.processor.getScriptResult("exec-str", { slice: [4, 9] })).resolves.toEqual(
+      {
+        executionId: "exec-str",
+        data: "quick",
+        slicedFrom: { totalChars: text.length, start: 4, end: 9 },
+      },
+    );
+    // end defaults to the end of the text
+    await expect(harness.processor.getScriptResult("exec-str", { slice: [35] })).resolves.toEqual({
+      executionId: "exec-str",
+      data: "lazy dog",
+      slicedFrom: { totalChars: text.length, start: 35, end: text.length },
+    });
+    // unsliced stays the full untouched value
+    await expect(harness.processor.getScriptResult("exec-str")).resolves.toEqual({
+      executionId: "exec-str",
+      data: text,
+    });
+  });
+
+  it("getScriptResult slices a JSON result as its pretty-printed text — the same text the workspace spill file holds", async () => {
+    const stream = bornStream();
+    const harness = await makeProcessor({ stream });
+    const result = { users: [{ name: "amy" }, { name: "bob" }] };
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-run-settled",
+      idempotencyKey: "capability-host/script-run-settled@exec-json",
+      payload: { executionId: "exec-json", settlement: { status: "succeeded", result } },
+    });
+    await harness.runner.catchUp();
+
+    const canonical = JSON.stringify(result, null, 2);
+    await expect(
+      harness.processor.getScriptResult("exec-json", { slice: [0, 20] }),
+    ).resolves.toEqual({
+      executionId: "exec-json",
+      data: canonical.slice(0, 20),
+      slicedFrom: { totalChars: canonical.length, start: 0, end: 20 },
+    });
+  });
+
+  it("getScriptResult slice clamps out-of-range and resolves negative offsets; malformed slices and failed scripts throw", async () => {
+    const stream = bornStream();
+    const harness = await makeProcessor({ stream });
+    await stream.append(
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        idempotencyKey: "capability-host/script-run-settled@exec-clamp",
+        payload: {
+          executionId: "exec-clamp",
+          settlement: { status: "succeeded", result: "0123456789" },
+        },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        idempotencyKey: "capability-host/script-run-settled@exec-fail",
+        payload: {
+          executionId: "exec-fail",
+          settlement: {
+            status: "failed",
+            error: "boom",
+            failureKind: "runtime",
+            phase: "execution",
+            executionMayHaveOccurred: true,
+            cancellation: "external-work-may-continue",
+          },
+        },
+      },
+    );
+    await harness.runner.catchUp();
+
+    // out-of-range clamps into [0, totalChars]
+    await expect(
+      harness.processor.getScriptResult("exec-clamp", { slice: [5, 999] }),
+    ).resolves.toMatchObject({ data: "56789", slicedFrom: { totalChars: 10, start: 5, end: 10 } });
+    // negatives count from the end, String.prototype.slice-style
+    await expect(
+      harness.processor.getScriptResult("exec-clamp", { slice: [-3] }),
+    ).resolves.toMatchObject({ data: "789", slicedFrom: { totalChars: 10, start: 7, end: 10 } });
+    // an inverted range serves the empty page at the resolved start
+    await expect(
+      harness.processor.getScriptResult("exec-clamp", { slice: [8, 2] }),
+    ).resolves.toMatchObject({ data: "", slicedFrom: { totalChars: 10, start: 8, end: 8 } });
+    // malformed slice tuples reject loudly instead of guessing
+    await expect(harness.processor.getScriptResult("exec-clamp", { slice: [1.5] })).rejects.toThrow(
+      '"slice" must be [start] or [start, end] with integer offsets',
+    );
+    // a failed script throws the same way sliced as unsliced
+    await expect(harness.processor.getScriptResult("exec-fail", { slice: [0, 5] })).rejects.toThrow(
+      'script execution "exec-fail" failed: boom',
+    );
+  });
 });
 
 // ------------------------------------------------------------------ fixtures

@@ -1471,17 +1471,29 @@ function rawTextSpillNotice(input: {
   shownChars: number;
   totalChars: number;
 }): string {
+  const shown = `…truncated: showing the first ${input.shownChars.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars.`;
+  // A small inline result is already in the preamble: name the binding and
+  // trust the model to slice/regex it with plain TypeScript — no recipe.
+  if (input.resultsAccess === "data") {
+    return [
+      `${shown} The full text is available to your next script as \`results[0].data\` (the preamble \`results\` array, newest first) — don't re-fetch.`,
+      `(The full copy is also saved in your workspace at ${JSON.stringify(input.path)}.)`,
+    ].join("\n");
+  }
+  // A loader-backed result pages SERVER-SIDE: getScriptResult's slice serves
+  // one string page of the stored text, so the script never holds the whole
+  // thing. Fenced example because this is a platform call the model cannot
+  // infer — the offsets show continuation from where this preview ends.
   return [
-    `…truncated: showing the first ${input.shownChars.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full text is available to your next script through the preamble \`results\` array — don't re-fetch:`,
+    `${shown} The full text is available to your next script through the preamble \`results\` array — don't re-fetch:`,
     "```ts",
     "async (itx) => {",
-    input.resultsAccess === "load"
-      ? "  const text = await results[0].load(itx); // newest first — the full string"
-      : "  const text = results[0].data; // newest first — the full string",
-    `  return text.slice(${input.shownChars}, ${input.shownChars * 4}); // page/regex to return only what you need`,
+    `  // pages server-side — only the requested chars enter the script`,
+    `  const page = await itx.capabilityHost.getScriptResult(results[0].executionId, { slice: [${input.shownChars}, ${input.shownChars * 4}] });`,
+    "  return page.data; // page.slicedFrom = { totalChars, start, end } — keep paging from there",
     "}",
     "```",
-    `(The full copy is also saved in your workspace at ${JSON.stringify(input.path)}.)`,
+    `(Need the whole string in one script? \`await results[0].load(itx)\`. The full copy is also saved in your workspace at ${JSON.stringify(input.path)}.)`,
   ].join("\n");
 }
 

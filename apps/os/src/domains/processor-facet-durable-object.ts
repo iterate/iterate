@@ -51,7 +51,12 @@ import {
   CapabilityHostProcessor,
   type CapabilityHostProcessorReads,
 } from "./capability-host/capability-host-processor-implementation.ts";
-import type { CapabilityProvidedPayload, CapabilityRecord } from "./capability-host/types.ts";
+import type {
+  CapabilityProvidedPayload,
+  CapabilityRecord,
+  GetScriptResultOptions,
+  ScriptResultSlicedFrom,
+} from "./capability-host/types.ts";
 import type { ScriptExecutionSettlement } from "./capability-host/script-execution-settlement.ts";
 import {
   checkCapabilityTypes,
@@ -245,8 +250,14 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     return this.#requireCapabilityHost().describePreamble();
   }
 
-  getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }> {
-    return this.#requireCapabilityHost().getScriptResult(executionId);
+  getScriptResult(
+    executionId: string,
+    options?: GetScriptResultOptions,
+  ): Promise<
+    | { executionId: string; data: unknown }
+    | { executionId: string; data: string; slicedFrom: ScriptResultSlicedFrom }
+  > {
+    return this.#requireCapabilityHost().getScriptResult(executionId, options);
   }
 
   /**

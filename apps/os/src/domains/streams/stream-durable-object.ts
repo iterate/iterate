@@ -46,7 +46,9 @@ import {
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
+  GetScriptResultOptions,
   RevokeCapabilityInput,
+  ScriptResultSlicedFrom,
 } from "../capability-host/types.ts";
 import {
   LiveStatePagers,
@@ -357,7 +359,13 @@ type ProcessorFacetStub = {
   setPreamble(input: { code: string; key: string }): Promise<void>;
   removePreamble(input: { key: string }): Promise<void>;
   describePreamble(): Promise<{ text: string; entries: { key: string; code: string }[] } | null>;
-  getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }>;
+  getScriptResult(
+    executionId: string,
+    options?: GetScriptResultOptions,
+  ): Promise<
+    | { executionId: string; data: unknown }
+    | { executionId: string; data: string; slicedFrom: ScriptResultSlicedFrom }
+  >;
   presentAgentRuntimeTransition(args: { transition: unknown }): Promise<unknown>;
 };
 
@@ -676,8 +684,14 @@ class StreamProcessorFacadeRpcTarget extends RpcTarget {
     return await (await this.#dial()).describePreamble();
   }
 
-  async getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }> {
-    return await (await this.#dial()).getScriptResult(executionId);
+  async getScriptResult(
+    executionId: string,
+    options?: GetScriptResultOptions,
+  ): Promise<
+    | { executionId: string; data: unknown }
+    | { executionId: string; data: string; slicedFrom: ScriptResultSlicedFrom }
+  > {
+    return await (await this.#dial()).getScriptResult(executionId, options);
   }
 }
 

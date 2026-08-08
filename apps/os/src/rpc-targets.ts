@@ -347,8 +347,10 @@ import type {
   ProjectEgressInterceptor,
 } from "./domains/projects/egress.ts";
 import type {
+  GetScriptResultOptions,
   ProvideCapabilityInput,
   RevokeCapabilityInput,
+  ScriptResultSlicedFrom,
   SetPreambleInput,
 } from "./domains/capability-host/types.ts";
 import { assertCapabilityPath } from "./domains/capability-host/capability-path.ts";
@@ -5865,9 +5867,24 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
    * executionId — the durable storage behind the preamble `results` array's
    * async `load(itx)` helpers for results too large to embed inline. Throws
    * for unknown executions and for scripts that failed.
+   *
+   * `options.slice: [start, end?]` pages a huge result server-side instead
+   * of returning it whole: `data` becomes one string page of the result's
+   * canonical text (string results as themselves, JSON results
+   * pretty-printed — the same text an oversized result's workspace spill
+   * file holds, so quoted char counts line up), and `slicedFrom` reports the
+   * resolved offsets plus `totalChars` so the caller can keep paging.
+   * `String.prototype.slice` semantics: negatives count from the end,
+   * out-of-range clamps.
    */
-  async getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }> {
-    return await (await this.#facade()).getScriptResult(executionId);
+  async getScriptResult(
+    executionId: string,
+    options?: GetScriptResultOptions,
+  ): Promise<
+    | { executionId: string; data: unknown }
+    | { executionId: string; data: string; slicedFrom: ScriptResultSlicedFrom }
+  > {
+    return await (await this.#facade()).getScriptResult(executionId, options);
   }
 
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
@@ -5899,7 +5916,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         removePreamble: "Remove a preamble entry by key.",
         getPreamble: "The assembled preamble text the next script will see, plus the entry table.",
         getScriptResult:
-          "Read one settled script result back by executionId (what results[N].load(itx) calls).",
+          "Read one settled script result back by executionId (what results[N].load(itx) calls); optional { slice: [start, end] } pages its text server-side.",
       },
       parent: `project ${this.#props.projectId}; sibling scopes via capabilityHosts.get(path)`,
       capabilities,
@@ -8460,7 +8477,13 @@ type StreamProcessorFacadeStub = ProcessorHostStub &
       text: string;
       entries: { key: string; code: string }[];
     } | null>;
-    getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }>;
+    getScriptResult(
+      executionId: string,
+      options?: GetScriptResultOptions,
+    ): Promise<
+      | { executionId: string; data: unknown }
+      | { executionId: string; data: string; slicedFrom: ScriptResultSlicedFrom }
+    >;
   };
 
 /** Dial the facade for one processor-wake subscription. The Stream DO routes
