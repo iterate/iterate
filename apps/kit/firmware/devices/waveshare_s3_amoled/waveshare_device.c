@@ -2547,14 +2547,23 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
       }
       if (runtime.voicelab.setup_failed) {
         runtime.voicelab.setup_failed = false;
-        ESP_LOGE(tag, "could not prepare %s", pending_stream_path);
-        /* The call it was for cannot happen; drop the intent rather than
-         * leaving the device retrying a stream that was never made. */
+        /*
+         * A FAILED SETUP NO LONGER CANCELS THE PRESS.
+         *
+         * This dropped the user's call intent, which was right when a call
+         * needed a freshly prepared stream: without the stream there was no
+         * call to want. Preparation is gone — the device calls on the stream
+         * it is already on — so nothing the press needs depends on this, and
+         * clearing the intent here silently ate the press.
+         *
+         * That is exactly what it did: `conversation.start()` returned true,
+         * `wantsCall` read true, and a stale setup failure from the retired
+         * prepare path cleared it before the loop could place the call.
+         * Every launch gate was green and `start_call` was never reached.
+         */
+        ESP_LOGW(tag, "a stream setup failed; the call stands");
         awaiting_fresh_stream = false;
         preparing_ahead = false;
-        waveshare_display_request_call(false);
-        waveshare_display_set_state(WAVESHARE_UI_IDLE);
-        waveshare_display_set_status("could not start a new conversation");
       }
       if (iterate_kit_voice_elapsed_ms(now, last_liveness_ms) > NO_LIVENESS_RESTART_MS) {
         ESP_LOGE(
