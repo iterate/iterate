@@ -407,6 +407,7 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
             role: "system",
             content: `@${offset} key="config/agents-md"\nIdentical project instructions`,
           },
+          { role: "assistant", content: `@${offset + 1}\nIdentical delivery receipt` },
           { role: "user", content: "@19 actor=user:web\nDiscuss @20 in the answer" },
         ],
       });
@@ -414,6 +415,7 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
     const maskedB = maskCloudflareAiGatewayResponseCacheEntropy(bodyFor(21));
     expect(maskedA).toBe(maskedB);
     expect(maskedA).toContain('@OFFSET key=\\"config/agents-md\\"');
+    expect(maskedA).toContain("@OFFSET\\nIdentical delivery receipt");
     expect(maskedA).toContain("Discuss @20 in the answer");
   });
 

@@ -217,7 +217,7 @@ async function runByokAttempt(input: {
 
 /** Bump to invalidate every cached response at once (prompt-format overhauls,
  * masking-rule changes). */
-const CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION = "cloudflare-ai-gateway-response-cache-v2";
+const CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION = "cloudflare-ai-gateway-response-cache-v3";
 
 /**
  * The custom `cf-aig-cache-key` for one request body: a hash of the body with
@@ -252,7 +252,7 @@ export function maskCloudflareAiGatewayResponseCacheEntropy(serialized: string):
       /- Project: \\"(?:[^"\\]|\\.)*?\\" \(slug [^)]*\)(?: — the project worker\/website serves [^"\\]*)?/g,
       "- Project: MASKED",
     )
-    .replace(/"content":"@\d+ /g, '"content":"@OFFSET ')
+    .replace(/"content":"@\d+(?= |\\n)/g, '"content":"@OFFSET')
     .replace(/\/agents\/[A-Za-z0-9._/-]*/g, "/agents/MASKED")
     .replace(/([?&](?:signature|sig|expires|exp|token|key)=)[^"&\\\s]+/gi, "$1MASKED")
     .replace(/"prompt_cache_key":"[^"]*"/g, '"prompt_cache_key":"MASKED"');
