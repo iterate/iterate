@@ -84,6 +84,19 @@ test(
       .get(subscriptionName)
       .processor.waitUntilProcessed({ offset: prompt.offset, timeoutMs: 90_000 });
 
+    // The kill only revives the work if the keepalive alarm is DURABLY armed on
+    // the parent before we abort. The facet arms it over itx as its attempt
+    // starts, but that hop can still be in flight when the checkpoint advances —
+    // so wait for the parent to actually hold the alarm (through the same proxy
+    // verb the facet uses) before killing. This is what makes the revival
+    // deterministic rather than a race, and it directly exercises proxyGetAlarm.
+    // (The arm is normally sub-second; were it ever slower than the 8s reply
+    // generation, the next assertion would fail red — never a false pass.)
+    await waitForCondition(async () => (await stream.proxyGetAlarm()) !== null, {
+      description: "the facet's keepalive to arm the parent's alarm over itx",
+      timeoutMs: 30_000,
+    });
+
     // Not replied yet: the generation is still running (and thus killable).
     expect(await replies()).not.toContain(promptId);
 
@@ -95,6 +108,12 @@ test(
     // Revival: the platform fires the surviving alarm in a fresh incarnation,
     // which replays it into the reloaded facet's handleAlarm; recovery re-drives
     // the still-open obligation from the committed prompt and produces the reply.
+    //
+    // This is genuinely the alarm doing the work, not the poll below: each
+    // `replies()` poll re-boots the parent Stream DO and appends a `stream/woken`
+    // lifecycle event, but the example does NOT consume `woken`, so that suffix
+    // is acked without waking the facet. Only the keepalive's `processor-revived`
+    // fact wakes it. So the reply can appear by exactly one path — the alarm.
     await waitForCondition(async () => (await replies()).includes(promptId), {
       description: "the alarm to revive the killed facet and produce the reply",
       timeoutMs: 60_000,

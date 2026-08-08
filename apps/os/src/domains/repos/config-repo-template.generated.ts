@@ -179,6 +179,14 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// only thing on show. See docs/writing-stream-processors.md for the full\n" +
       "// doctrine this condenses.\n" +
       "//\n" +
+      "// Kept intentionally minimal — a production obligation adds three things this\n" +
+      "// example omits so the recovery mechanics stay legible: an `expiresAt` on the\n" +
+      "// request so a revival long after the fact fails-closed instead of acting on a\n" +
+      "// stale intent; a single `…-settled` terminal event with a success/failure\n" +
+      "// result union (not a bare `…-produced`); and `this.idempotencyKey(...)` for\n" +
+      "// the settlement key. The doc's \"Staleness\" and \"obligation pattern\" sections\n" +
+      "// cover all three.\n" +
+      "//\n" +
       "// To host it, a project configures one `facet-processor` subscription whose\n" +
       "// `source` is `{ kind: \"userspace\", worker: <ref to this file's ExampleAgent> }`\n" +
       "// (apps/os `example-agent-recovery.e2e.test.ts` does exactly that).\n" +
