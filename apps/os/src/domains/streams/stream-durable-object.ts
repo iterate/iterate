@@ -1255,17 +1255,23 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (receiver.action !== "facet-processor") {
       throw new Error(`subscription "${name}" does not run as a facet`);
     }
-    const facetClass =
+    const resolved =
       receiver.source.kind === "userspace"
         ? await this.#loadUserspaceFacetClass(name, receiver.source.worker)
         : this.#builtinFacetClass();
+    // Rebuild the facet whenever its resolved class changed: ctx.facets.get
+    // reuses an existing facet and IGNORES a new startup class, so a source
+    // commit, a same-source className re-point, and a builtin<->userspace flip
+    // all have to abort the stale facet first. The version marker below
+    // distinguishes all three.
+    this.#abortFacetOnVersionChange(name, resolved.version);
     // Safe: ctx.facets.get returns an untyped Fetcher stub (workerd's facet
     // API carries no class-level typing), but the instance behind it is always
     // the class passed in the startup callback — a ProcessorFacet subclass
     // (the OS built-in or the userspace StreamProcessorFacet base), whose RPC
     // surface ProcessorFacetStub over-approximates.
     const facet = this.ctx.facets.get(name, () => ({
-      class: facetClass,
+      class: resolved.class,
     })) as unknown as ProcessorFacetStub;
     if (!this.#configuredProcessorFacets.has(name)) {
       const parentName = this.ctx.id.name;
@@ -1282,9 +1288,25 @@ export class StreamDurableObject extends DurableObject<Env> {
     return facet;
   }
 
+  /** Abort a facet whose resolved class changed since it was created, so the
+   * next ctx.facets.get re-creates it against the new class (it otherwise
+   * reuses the existing facet and ignores the new startup class) — the same
+   * source-change abort StatefulWorkerDurableObject does. */
+  #abortFacetOnVersionChange(name: string, version: string): void {
+    const versionKey = `${FACET_SOURCE_VERSION_KV_PREFIX}${name}`;
+    const previous = this.ctx.storage.kv.get<string>(versionKey);
+    if (previous !== undefined && previous !== version) {
+      this.ctx.facets.abort(name, `facet source changed for ${name}`);
+      this.#configuredProcessorFacets.delete(name);
+    }
+    if (previous !== version) this.ctx.storage.kv.put(versionKey, version);
+  }
+
   /** The OS worker's own facet class, surfaced as an entrypoint on `ctx.exports`
-   * (the sibling `ProcessorFacet` export from `iterate/processors/cloudflare`). */
-  #builtinFacetClass(): DurableObjectClass {
+   * (the sibling `ProcessorFacet` export from `iterate/processors/cloudflare`).
+   * Its version is a constant: the built-in class only changes on an OS deploy,
+   * which evicts every DO anyway. */
+  #builtinFacetClass(): { class: DurableObjectClass; version: string } {
     // Loose lookup on purpose: ctx.exports carries every exported entrypoint by
     // name.
     const facetClass = (this.ctx.exports as Record<string, unknown>).ProcessorFacet as
@@ -1295,7 +1317,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         'facet-processor subscriptions require the OS worker to export the "ProcessorFacet" entrypoint',
       );
     }
-    return facetClass;
+    return { class: facetClass, version: "builtin" };
   }
 
   /** Lazily built loader for userspace facet sources; one per incarnation so
@@ -1313,34 +1335,24 @@ export class StreamDurableObject extends DurableObject<Env> {
     }));
   }
 
-  /** Load a userspace facet class from its source ref, rebuilding the facet
-   * against fresh source when the loaded build changes. */
+  /** Load a userspace facet class from its source ref. The version marker is
+   * `(className, sourceCacheKey)` — the same identity StatefulWorkerDurableObject
+   * versions by — so both a config-repo commit and a same-source className
+   * re-point rebuild the facet (the shared abort in `#dialProcessorFacet`). */
   async #loadUserspaceFacetClass(
     name: string,
     ref: StatefulDynamicWorkerRef,
-  ): Promise<DurableObjectClass> {
+  ): Promise<{ class: DurableObjectClass; version: string }> {
     const projectId = this.name.projectId;
     if (projectId === null) {
       throw new Error(`userspace facet "${name}" requires a project stream`);
     }
     const loaded = await this.#workerRunnerForFacets(projectId).loadStatefulClass(ref);
     if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
-    // A changed build (a config-repo commit) OR a re-point to a different class
-    // aborts the stale facet before ctx.facets.get re-creates it against the new
-    // class — the same (className, sourceCacheKey) marker
-    // StatefulWorkerDurableObject uses for its source-change abort.
-    const version = JSON.stringify({
-      className: ref.className,
-      cacheKey: loaded.resolved.cacheKey,
-    });
-    const versionKey = `${FACET_SOURCE_VERSION_KV_PREFIX}${name}`;
-    const previous = this.ctx.storage.kv.get<string>(versionKey);
-    if (previous !== undefined && previous !== version) {
-      this.ctx.facets.abort(name, `userspace facet source changed for ${name}`);
-      this.#configuredProcessorFacets.delete(name);
-    }
-    if (previous !== version) this.ctx.storage.kv.put(versionKey, version);
-    return loaded.klass;
+    return {
+      class: loaded.klass,
+      version: JSON.stringify({ className: ref.className, cacheKey: loaded.resolved.cacheKey }),
+    };
   }
 
   #readFacetAlarmAtMs(): number | null {
