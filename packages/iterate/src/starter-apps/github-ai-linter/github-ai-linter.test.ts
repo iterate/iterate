@@ -38,7 +38,7 @@ test("a linked connection gets a hosted review processor", async () => {
         idempotencyKey: "review-bot/subscription:/:3",
         payload: {
           receiver: {
-            action: "processor-wake",
+            action: "wake-processor",
             expression: [
               "workers",
               [
@@ -141,7 +141,7 @@ test("a config worker update refreshes every linked connection processor", async
         idempotencyKey: "review-bot/subscription:/:4",
         payload: {
           receiver: {
-            action: "processor-wake",
+            action: "wake-processor",
           },
           filter: {
             eventTypes: ["events.iterate.com/github/webhook-received"],

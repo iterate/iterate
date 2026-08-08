@@ -4,6 +4,7 @@
  * These are hand-authored shapes (generics preserved) that both the public itx
  * contract and the server-side processor and connection code build against.
  */
+import type { StatefulDynamicWorkerRef } from "../itx-api.generated.ts";
 import type { StreamEvent } from "./schemas.ts";
 
 /** Source-local identity for one durable subscription that sends matching stream events. */
@@ -199,14 +200,20 @@ export type SubscriptionConfigurationForDelivery = {
     };
     receiver:
       | {
-          action: "processor-wake";
-          /** `"facet"`: the processor runs as a facet of the stream's own
-           * Durable Object (the subscription name IS the facet name and the
-           * registered contract slug; no expression). Omitted: the wake dials
-           * `expression` as before. Either way the subscription NAME selects
-           * which registered contract runs. */
-          placement?: "facet";
-          expression?: Array<string | [method: string, ...args: unknown[]]>;
+          /** The processor runs as a facet of the stream's own Durable Object:
+           * the subscription NAME is the facet name and the registered-contract
+           * selector; delivery is an in-process parent→facet dial (no wake
+           * lane). `source` chooses the class — `builtin` (resolved by the
+           * stream's path-family registration) or `userspace` (the DurableObject
+           * class is loaded from `worker` and hosted as a facet). */
+          action: "facet-processor";
+          source: { kind: "builtin" } | { kind: "userspace"; worker: StatefulDynamicWorkerRef };
+        }
+      | {
+          /** The processor runs in ANOTHER Durable Object, woken by dialing this
+           * itx expression (own-DO or userspace-worker placement). */
+          action: "wake-processor";
+          expression: Array<string | [method: string, ...args: unknown[]]>;
         }
       | {
           action: "copy-to-stream";

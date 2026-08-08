@@ -41,8 +41,8 @@ export function buildFacetProcessorSubscriptionConfiguredEvent(input: {
     payload: {
       name: input.name,
       receiver: {
-        action: "processor-wake",
-        placement: "facet",
+        action: "facet-processor",
+        source: { kind: "builtin" },
       },
     } satisfies SubscriptionConfiguredPayload,
   });
