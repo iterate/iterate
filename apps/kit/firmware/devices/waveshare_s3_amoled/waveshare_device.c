@@ -1886,6 +1886,14 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       "\"resetReason\":\"%s\",\"restartNote\":\"%s\","
       "\"connection\":\"%s\","
       "\"callActive\":%s,\"callPending\":%s,\"wantsCall\":%s,\"talking\":%s,"
+      /*
+       * WHY A PRESS DID NOT BECOME A CALL. Every input the launch seam reads,
+       * reported over the stream — because the console port reboots this
+       * board, so the only way to watch it decide is to have it say so. A
+       * board that wants a call and never places one is otherwise silent
+       * about which of three conditions refused it.
+       */
+      "\"hasStreamCap\":%s,\"outboxFree\":%u,\"preparing\":%s,"
       "\"gateOpen\":%s,\"t\":%" PRIu64 ",\"uptimeMs\":%" PRIu64,
       iterate_kit_esp_idf_itx_transport_state_name(runtime.transport.state),
       iterate_kit_voicelab_state_name(runtime.voicelab.state),
@@ -1899,6 +1907,9 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       runtime.voicelab.call_pending ? "true" : "false",
       waveshare_display_call_requested() ? "true" : "false",
       runtime.talking ? "true" : "false",
+      runtime.voicelab.has_stream_capability ? "true" : "false",
+      (unsigned)(CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots),
+      awaiting_fresh_stream ? "true" : "false",
       gate_open ? "true" : "false",
       now,
       now);
