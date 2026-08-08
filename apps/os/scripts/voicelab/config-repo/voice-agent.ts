@@ -5149,14 +5149,22 @@ class GrokCall {
   #socket: WebSocket | null = null;
   #ready = false;
   #closed = false;
-  /** Captured while the handshake was still in flight, in arrival order. */
-  #queued: ArrayBuffer[] = [];
-  /** Set when the caller asked to commit a turn before the session was up. */
-  #queuedCommit = false;
+  /**
+   * Everything to say to the provider, held until the session is configured.
+   *
+   * MESSAGES, not PCM. Queueing decoded audio meant only audio was queued:
+   * `input_audio_buffer.clear` and a text turn went straight to `send`, so
+   * before the socket existed they were dropped on the floor, and after it
+   * existed but before `session.updated` they were pushed into a session that
+   * was not configured yet. One queue orders all three for free.
+   *
+   * Null once the provider is configured — the flag and the buffer are the
+   * same thing, so they cannot disagree.
+   */
+  #pending: Record<string, unknown>[] | null = [];
   #openedAtMs: number;
   #readyAtMs: number | null = null;
   #framesQueued = 0;
-  #framesSent = 0;
   /*
    * SPEAKER FRAMING. The provider streams arbitrary-length PCM16; a client
    * plays 20 ms frames and drops anything else on the floor, which looks from
@@ -5184,9 +5192,9 @@ class GrokCall {
   get handshakeMs(): number | null {
     return this.#readyAtMs === null ? null : this.#readyAtMs - this.#openedAtMs;
   }
-  /** How much audio the handshake made us hold, and how much has gone out. */
-  get counters(): { framesQueued: number; framesSent: number } {
-    return { framesQueued: this.#framesQueued, framesSent: this.#framesSent };
+  /** How much captured audio the handshake made us hold. */
+  get framesQueued(): number {
+    return this.#framesQueued;
   }
 
   attach(socket: WebSocket): void {
@@ -5229,7 +5237,21 @@ class GrokCall {
     return frames;
   }
 
+  /** Say this to the provider, or hold it until the session is configured. */
   send(message: Record<string, unknown>): void {
+    if (this.#closed) return;
+    if (this.#pending !== null) {
+      this.#pending.push(message);
+      return;
+    }
+    this.sendNow(message);
+  }
+
+  /**
+   * Bypass the queue. Exactly one caller: `session.update` is the message that
+   * ENDS the queue, so queueing it would deadlock the handshake.
+   */
+  sendNow(message: Record<string, unknown>): void {
     if (this.#socket === null || this.#closed) return;
     try {
       this.#socket.send(JSON.stringify(message));
@@ -5239,26 +5261,19 @@ class GrokCall {
   }
 
   /**
-   * Hand one decoded PCM16 frame to the provider, or hold it if the session is
-   * not up yet. Never awaits: this is called straight off the delivery lane.
+   * Hand one decoded PCM16 frame to the provider. Never awaits: this is called
+   * straight off the delivery lane, and the only work is a base64 encode.
    */
   offer(pcm: ArrayBuffer): void {
-    if (this.#closed) return;
-    if (!this.#ready) {
-      this.#framesQueued++;
-      this.#queued.push(pcm);
-      return;
-    }
-    this.#append(pcm);
+    if (this.#pending !== null) this.#framesQueued++;
+    this.send({
+      type: "input_audio_buffer.append",
+      audio: bytesToBase64(new Uint8Array(pcm)),
+    });
   }
 
-  /** Mark the turn complete, or remember to once the session is up. */
+  /** The turn is complete: commit what was captured and ask for an answer. */
   commit(): void {
-    if (this.#closed) return;
-    if (!this.#ready) {
-      this.#queuedCommit = true;
-      return;
-    }
     this.send({ type: "input_audio_buffer.commit" });
     this.send({ type: "response.create" });
   }
@@ -5273,29 +5288,23 @@ class GrokCall {
     if (this.#ready || this.#closed) return;
     this.#ready = true;
     this.#readyAtMs = now;
-    for (const frame of this.#queued.splice(0)) this.#append(frame);
-    if (this.#queuedCommit) {
-      this.#queuedCommit = false;
-      this.send({ type: "input_audio_buffer.commit" });
-      this.send({ type: "response.create" });
-    }
+    /* Drain in arrival order, and close the queue FIRST so a message sent from
+     * inside this loop cannot be appended to a list already being drained. */
+    const held = this.#pending ?? [];
+    this.#pending = null;
+    for (const message of held) this.sendNow(message);
   }
 
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
-    this.#queued.length = 0;
+    this.#pending = null;
     try {
       this.#socket?.close();
     } catch {
       /* Already gone. */
     }
     this.#socket = null;
-  }
-
-  #append(pcm: ArrayBuffer): void {
-    this.#framesSent++;
-    this.send({ type: "input_audio_buffer.append", audio: bytesToBase64(new Uint8Array(pcm)) });
   }
 }
 
@@ -5326,8 +5335,6 @@ const VoiceFacetState = z.object({
     .object({
       /** Server-minted, and stamped on everything belonging to this call. */
       conversationId: z.string(),
-      /** Offset of the press that opened it — deterministic under replay. */
-      openedAtOffset: z.number(),
     })
     .nullable()
     .default(null),
@@ -5374,10 +5381,6 @@ export const VoiceAgentFacetContract = defineProcessorContract({
     "events.iterate.com/voice-agent/created": {
       description: "The voice-agent facet exists on this stream.",
       payloadSchema: z.strictObject({}),
-    },
-    "events.iterate.com/voice-agent/conversation-requested": {
-      description: "A listener asked this stream to open a call.",
-      payloadSchema: VoiceCallRequestedPayload,
     },
     "events.iterate.com/voice-agent/conversation-accepted": {
       description: "The provider accepted the session; the call is live.",
@@ -5453,11 +5456,6 @@ export const VoiceAgentFacetContract = defineProcessorContract({
       description: "One frame of the answer, for the device's speaker.",
       ...EPH,
       payloadSchema: AudioFrame,
-    },
-    "events.iterate.com/voice-agent/turn": {
-      description: "The device opening or closing its half of a turn.",
-      ...EPH,
-      payloadSchema: z.looseObject({ conversationId: z.string(), action: z.string() }),
     },
     "events.iterate.com/voice-agent/say": {
       description: "A turn made of text rather than speech.",
@@ -5566,10 +5564,7 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
          * replay because the id was minted INTO the event, not here. */
         return {
           ...state,
-          call: {
-            conversationId: event.payload.conversationId,
-            openedAtOffset: event.offset,
-          },
+          call: { conversationId: event.payload.conversationId },
         };
       case "events.iterate.com/voice-agent/conversation-ended":
       case "events.iterate.com/voice-agent/conversation-failed":
@@ -5820,12 +5815,12 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         case "session.created":
           /* The ONLY edge that makes us configure the session; miss it and the
            * handshake never completes and the call hangs, silently. */
-          call.send(grokSessionUpdate());
+          call.sendNow(grokSessionUpdate());
           return;
         case "session.updated": {
           /* Usable. Everything the handshake made us hold goes now. */
           call.markReady(this.deps.now());
-          const { framesQueued } = call.counters;
+          const framesQueued = call.framesQueued;
           void append(
             {
               type: "events.iterate.com/voice-agent/conversation-accepted",
@@ -5847,9 +5842,11 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         case "error": {
           const detail = JSON.stringify(provider).slice(0, 600);
           console.log(`grok error: ${detail}`);
+          /* Durable, as its declaration says: the whole point is that a
+           * silent call can be explained later, and an ephemeral one is gone
+           * as soon as the buffer rolls. */
           void append({
             type: "events.iterate.com/voice-agent/provider-error",
-            ephemeral: true,
             payload: { conversationId: call.conversationId, message: detail },
           });
           return;

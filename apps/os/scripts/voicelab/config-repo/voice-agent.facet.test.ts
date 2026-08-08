@@ -171,6 +171,39 @@ describe("audio spoken into the handshake", () => {
     expect(provider.committed()).toBe(true);
   });
 
+  it("holds a barge-in clear and a text turn too, not just audio", async () => {
+    /*
+     * THE BUG THIS EXISTS FOR. The queue used to hold decoded PCM, so only
+     * audio was held: `input_audio_buffer.clear` and a text turn went straight
+     * to the socket. Before it existed they were dropped on the floor; after
+     * it existed but before `session.updated` they were pushed into a session
+     * that was not configured yet. Both are invisible failures — the model
+     * simply answers something slightly wrong.
+     */
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    // Still mid-handshake: a second press (barge-in) and a text turn.
+    await harness.append({ type: PTT_START, payload: {} });
+    await harness.append({
+      type: "events.iterate.com/voice-agent/say",
+      payload: { text: "hello" },
+    });
+    expect(provider.sent).toHaveLength(0);
+
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+
+    const types = provider.sent.map((message) => message.type);
+    expect(types).toContain("input_audio_buffer.clear");
+    expect(types).toContain("conversation.item.create");
+    /* And in the order they happened: the clear before the text it precedes. */
+    expect(types.indexOf("input_audio_buffer.clear")).toBeLessThan(
+      types.indexOf("conversation.item.create"),
+    );
+  });
+
   it("sends straight through once the session is up, holding nothing", async () => {
     const provider = fakeGrok();
     const harness = harnessWith(provider);
