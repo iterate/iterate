@@ -151,13 +151,25 @@ const WARMUP_PROTOCOL_REVISION = "warmup/4-marked-brief";
  * Deliberately generous, and deliberately NOT the 15s a call has to go live in.
  * Those are opposite bounds: the call gate is a promise to the person holding
  * the device, while this is setup volunteering to pay a cost so the call does
- * not. Two cold dynamic-worker builds sit inside it — the guest out of the
- * config repo, measured at 13.6s, and the bridge worker it warms, whose own
- * build budget is 30s — and a run that timed out here at 15s would push both
- * back into the first call, which is the defect this whole handshake exists to
- * remove.
+ * not. A run that times out here pushes that cost back into the first call,
+ * which is the defect this whole handshake exists to remove.
+ *
+ * NINETY SECONDS BECAUSE 45 WAS MEASURABLY TOO SHORT, and not for the reason
+ * it looks like. The build artifact is a KV HIT on a new stream — the build
+ * key (build-key.ts) is content-addressed and carries no path, and setup is
+ * itself running inside a dynamic worker built from the byte-identical
+ * source, so the bundler cannot be in this window. What IS in it is loader
+ * isolate instantiation, which is genuinely per-incarnation: `loaderIdentity`
+ * (worker-loader.ts) includes `scopePath` because the isolate bakes `env.ITX`
+ * from it, so two stream paths sharing one isolate would be privilege
+ * confusion rather than a saving.
+ *
+ * Measured: a brand-new stream path with byte-identical source took 52s and
+ * failed here; the immediate retry warmed in ~350ms. So the cost is real,
+ * paid once per incarnation, and the only thing 45s bought was a first setup
+ * that always failed and always worked on the second run.
  */
-const WARMUP_DEADLINE_MS = 45_000;
+const WARMUP_DEADLINE_MS = 90_000;
 /**
  * The subscription's name, which at CORE_STATE_VERSION 30 must EQUAL the
  * processor slug.
