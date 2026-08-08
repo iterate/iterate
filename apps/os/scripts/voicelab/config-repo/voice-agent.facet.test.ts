@@ -297,6 +297,29 @@ describe("repeated end to end", () => {
     expect(provider.appended()).toBe(250);
   });
 
+  it("does not call a superseded dial a failure", async () => {
+    /*
+     * Being replaced is a tidy hand-over, not a fault. This wrote
+     * `conversation-failed` with an EMPTY reason, because the superseded
+     * branch fell through to the obituary with no failure set — and two of
+     * those landed on the boards' stream the first time they successfully
+     * called, which reads as a broken dial.
+     */
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    /* End the call, then press again: the first dial is now superseded. */
+    const first = harness.events(CALL_STARTED)[0]!.payload.conversationId;
+    await harness.append({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { conversationId: first },
+    });
+    await harness.append({ type: PTT_START, payload: {} });
+    await harness.settle();
+
+    expect(harness.events("events.iterate.com/voice-agent/conversation-failed")).toHaveLength(0);
+  });
+
   it("re-dials after an eviction, from the fold alone", async () => {
     const provider = fakeGrok();
     const harness = harnessWith(provider);

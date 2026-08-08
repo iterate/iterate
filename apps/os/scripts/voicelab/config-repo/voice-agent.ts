@@ -5778,8 +5778,18 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
       try {
         const socket = await this.deps.dialGrok();
         if (socket === null) failure = "provider refused the websocket upgrade";
-        else if (call.closed) socket.close();
-        else {
+        else if (call.closed) {
+          /*
+           * BEING SUPERSEDED IS NOT FAILING. This fell through to the obituary
+           * below with `failure` still null, so a call that was deliberately
+           * replaced — a second press, a revival — wrote
+           * `conversation-failed` with an EMPTY reason. Two of those appeared
+           * on the boards' stream the first time they successfully called,
+           * which reads as a broken dial rather than a tidy hand-over.
+           */
+          socket.close();
+          return;
+        } else {
           call.attach(socket);
           this.#listen(call, socket, append);
           return;
