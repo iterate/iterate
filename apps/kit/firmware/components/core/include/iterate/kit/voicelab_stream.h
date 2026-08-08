@@ -102,6 +102,17 @@ typedef void (*iterate_kit_voicelab_control_fn)(
     void *context, enum iterate_kit_voicelab_control control);
 
 /**
+ * Every downlink event, by type, as it arrives — the observability seam.
+ *
+ * The typed callbacks above say what the device should DO. This says what
+ * actually came down the wire, which is a different question and the one you
+ * need when the answer is "nothing happened". `type` is borrowed and not
+ * NUL-terminated; `length` bounds it.
+ */
+typedef void (*iterate_kit_voicelab_seen_fn)(
+    void *context, const char *type, size_t length);
+
+/**
  * A line of conversation as it arrives. `from_user` distinguishes what the
  * device's microphone was heard saying from what the assistant replied;
  * `final` marks the completed line (assistant text streams in as deltas, so
@@ -187,6 +198,8 @@ struct iterate_kit_voicelab_options {
   iterate_kit_voicelab_transcript_fn on_transcript;
   /** NULL when this device has no face; the subscription still asks. */
   iterate_kit_voicelab_viseme_fn on_viseme;
+  /** Optional: every event type seen on the downlink, for logging. */
+  iterate_kit_voicelab_seen_fn on_event_seen;
   void *downlink_context;
 };
 

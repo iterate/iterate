@@ -135,6 +135,10 @@ static void cli_main_on_speaker(
 static void cli_main_on_control(
     void *context, enum iterate_kit_voicelab_control control);
 
+/* Logs every downlink event type as it arrives, with its arrival time. */
+static void cli_main_on_event_seen(
+    void *context, const char *type, size_t length);
+
 /* Logs final user and assistant transcripts. */
 static void cli_main_on_transcript(
     void *context, bool from_user, const char *text, bool final);
@@ -953,8 +957,8 @@ static bool cli_main_init_runtime(struct cli_runtime *runtime)
   iterate_kit_playout_reset(&runtime->playout, CLI_MAIN_INITIAL_PLAYOUT_SEQUENCE);
   iterate_kit_voice_playback_clock_init(&runtime->playback_clock);
   cli_runtime_log(
-      "info", "iterate-kit-cli ready mount=kit.%s stream=%s staticBytes=%zu outbox=%u",
-      runtime->options.name, runtime->options.stream_path, sizeof(*runtime),
+      "info", "iterate-kit-cli ready client=%s stream=%s staticBytes=%zu outbox=%u",
+      runtime->client_path, runtime->options.stream_path, sizeof(*runtime),
       ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS);
   return true;
 }
@@ -1027,6 +1031,7 @@ static void cli_main_start_voicelab(struct cli_runtime *runtime)
     .now_ms = cli_runtime_now_ms,
     .on_speaker = cli_main_on_speaker,
     .on_control = cli_main_on_control,
+    .on_event_seen = cli_main_on_event_seen,
     .on_transcript = cli_main_on_transcript,
     .clock_context = NULL,
     .downlink_context = runtime,
@@ -1121,6 +1126,35 @@ static void cli_main_on_speaker(
         runtime, out.frames[slot].pcm, out.frames[slot].bytes,
         &out.frames[slot].identity);
   }
+}
+
+/*
+ * WHAT ACTUALLY CAME DOWN THE WIRE.
+ *
+ * The state lines above say what the client is doing; this says what the
+ * server sent, which is the question you have when the answer is "nothing
+ * happened". Types are logged with only their last segment — the
+ * `events.iterate.com/voice-agent/` prefix is on every one of them and
+ * repeating it forty times a second buries the part that differs.
+ */
+static void cli_main_on_event_seen(
+    void *context, const char *type, size_t length)
+{
+  struct cli_runtime *runtime = context;
+  const char *leaf = type;
+  size_t index;
+  assert(runtime != NULL);
+  for (index = 0U; index < length; ++index) {
+    if (type[index] == '/') {
+      leaf = type + index + 1U;
+    }
+  }
+  /* Speaker frames arrive fifty times a second; counting them is useful and
+   * printing each one is not. The pulse line already reports rx/gaps. */
+  if (strncmp(leaf, "spk-frame", sizeof("spk-frame") - 1U) == 0) {
+    return;
+  }
+  cli_runtime_log("info", "event %.*s", (int)(length - (size_t)(leaf - type)), leaf);
 }
 
 static void cli_main_on_control(

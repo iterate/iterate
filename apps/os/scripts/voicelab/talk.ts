@@ -212,9 +212,21 @@ export async function talk(options: TalkOptions = {}) {
   }
 
   const binary = buildHostCli(kitDir);
-  const stamp = new Date().toISOString().replace(/\D/g, "").slice(8, 14);
-  const playback = `/tmp/iterate-talk-${stamp}-speaker.wav`;
-  const micRecord = `/tmp/iterate-talk-${stamp}-mic.wav`;
+  const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 15);
+  /*
+   * EVERY RUN LEAVES ITS EVIDENCE BEHIND, in the repo, without being asked.
+   *
+   * These used to land in /tmp under six-digit names, which meant the only way
+   * to discuss a bad call was to paste terminal scrollback — and scrollback
+   * does not contain the audio. One directory per run, gitignored, holding
+   * both directions plus the metrics, so "listen to it" and "read the numbers"
+   * are both just a path.
+   */
+  const runDir = path.join(voicelabRunsDir(), `${stamp}-${path.basename(setup.streamPath)}`);
+  fs.mkdirSync(runDir, { recursive: true });
+  const playback = path.join(runDir, "speaker.wav");
+  const micRecord = path.join(runDir, "mic.wav");
+  const reportJson = path.join(runDir, "report.json");
 
   console.log(`\n  ${baseUrl} · ${project}`);
   if (options.converse === undefined) {
@@ -226,9 +238,8 @@ export async function talk(options: TalkOptions = {}) {
   } else {
     console.log(`\n  unattended: ${String(options.converse)} minutes, taking its own turns.`);
   }
-  console.log(`\n  recorded both directions, so a failure can be listened to:`);
-  console.log(`    speaker ${playback}`);
-  console.log(`    mic     ${micRecord}\n`);
+  console.log(`\n  this run's evidence (gitignored):`);
+  console.log(`    ${runDir}\n`);
 
   runInherited(
     binary,
@@ -251,7 +262,7 @@ export async function talk(options: TalkOptions = {}) {
       "--mic-record",
       micRecord,
       "--report-json",
-      `/tmp/iterate-talk-${stamp}.json`,
+      reportJson,
     ],
     {
       ...process.env,
@@ -464,6 +475,18 @@ async function promptWithDefault(label: string, defaultValue: string): Promise<s
  * `stdio: "inherit"` is load-bearing rather than a convenience: the C puts the
  * terminal into raw mode for hold-to-talk and cannot do that through a pipe.
  */
+/**
+ * Where a run's artifacts go: `.voicelab-runs/` at the repo root, gitignored.
+ *
+ * At the ROOT rather than under apps/os, because a run is about the whole
+ * system — the C client, the stream, the facet — and burying it under one app
+ * implies it belongs to that app.
+ */
+function voicelabRunsDir(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, "../../../../.voicelab-runs");
+}
+
 function runInherited(command: string, args: string[], env = process.env): void {
   const result = spawnSync(command, args, { env, stdio: "inherit" });
   if (result.error) throw result.error;

@@ -650,6 +650,21 @@ static enum capnweb_status batch_dispatch(
      */
     voicelab->last_bridge_ms =
         voicelab->options.now_ms(voicelab->options.clock_context);
+    /* Report the type before dispatching, so an event nothing handles is still
+     * visible — "arrived and was ignored" and "never arrived" are different
+     * bugs and used to look identical from outside. */
+    if (voicelab->options.on_event_seen != NULL) {
+      /* Bounded stack copy: a type is a short constant, and the observability
+       * path must not be able to allocate or to outlive the value it read. */
+      char seen_type[96];
+      size_t seen_length = 0U;
+      if (capnweb_value_copy_string(
+              &type_value, seen_type, sizeof(seen_type), &seen_length) ==
+          CAPNWEB_OK) {
+        voicelab->options.on_event_seen(
+            voicelab->options.downlink_context, seen_type, seen_length);
+      }
+    }
     if (capnweb_value_string_equals(
             &type_value, "events.iterate.com/voice-agent/spk-frame")) {
       handle_spk_frame(voicelab, &payload);
