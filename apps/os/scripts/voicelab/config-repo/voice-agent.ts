@@ -3908,6 +3908,22 @@ export const voiceBridgeRef = {
   type: "stateful",
 } satisfies StatefulDynamicWorkerRef;
 
+/** Where the loader finds the facet class: this file, in the project's config repo. */
+function voiceAgentFacetRef(streamPath: string) {
+  return {
+    className: "VoiceAgentFacet",
+    durableWorkerKey: "voice-agent-facet",
+    path: streamPath,
+    source: {
+      createWorker: {
+        entryPoint: "voice-agent.ts",
+        files: { repoPath: "/repos/config", type: "repo" },
+      },
+    },
+    type: "stateful",
+  } satisfies StatefulDynamicWorkerRef;
+}
+
 function voiceAgentProcessorRef(streamPath: string) {
   return {
     className: "VoiceAgentProcessorHost",
@@ -4602,48 +4618,44 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
              * filter the processor would never be told, and hosted delivery is
              * filtered — the same trap that made the first handshake silent. */
             "events.iterate.com/voice-agent/brief-current",
+            /*
+             * THE LIVE HALF, and it has to be here for the same reason.
+             *
+             * The facet holds the provider socket itself, so the audio the
+             * bridge used to receive over its own connection now arrives as
+             * ordinary filtered delivery. Delivery is this filter INTERSECTED
+             * with the contract's `consumes`; a type missing from either side
+             * silently never arrives, which for `mic-frame` is a call where
+             * the model hears nothing at all.
+             */
+            "events.iterate.com/voice-agent/mic-frame",
+            "events.iterate.com/voice-agent/turn",
+            "events.iterate.com/voice-agent/say",
+            "events.iterate.com/voice-agent/ping",
+            "events.iterate.com/voice-agent/conversation-ended",
+            "events.iterate.com/voice-agent/device-presence",
           ],
         },
         /*
-         * AN EXPRESSION, AND IT IS NOW THE OLD LANE.
+         * A FACET, IN THIS STREAM'S OWN DURABLE OBJECT.
          *
-         * This used to be forced: a facet was dialled by name out of the
-         * composition in processor-facet-durable-object.ts, whose arms are
-         * chosen purely from the stream path, so a facet contract had to be
-         * one the OS worker itself registers. This contract is defined here,
-         * in a file that lives in the project's config repo, so it could not
-         * be in that composition and the processor could not be a facet.
+         * This could not be done until #2455: a facet used to be dialled by
+         * name out of the composition in processor-facet-durable-object.ts,
+         * whose arms are chosen purely from the stream path, so a facet
+         * contract had to be one the OS worker itself registers. This contract
+         * is defined here, in the project's config repo, so it could not be in
+         * that composition. `source: userspace` LOADS the class from the repo
+         * instead, which removes that restriction entirely.
          *
-         * That is no longer true. `facet-processor` with a `userspace` source
-         * LOADS the class from the config repo and hosts it as a facet of the
-         * stream's own Durable Object. `VoiceAgentFacet` at the bottom of this
-         * file is that class, and moving to it deletes a Durable Object hop
-         * from every 20 ms microphone frame in both directions.
-         *
-         * The switchover is deliberately not made here yet: the facet
-         * processor is written and typechecked but unproven against real
-         * hardware, and this expression is what four boards are currently
-         * calling through. Flipping it is a one-line change to `receiver`
-         * (see the userspace-facet e2e for the exact payload shape).
+         * What it buys is a hop per frame. The old expression lane woke a
+         * SECOND Durable Object that held the provider socket, so every 20 ms
+         * of microphone crossed a DO boundary on the way out and every 20 ms
+         * of answer crossed it coming back. In-facet, delivery is a function
+         * call and the socket is the only network boundary left.
          */
         receiver: {
-          action: "processor-wake",
-          /*
-           * NOTHING HERE TURNS EPHEMERAL DELIVERY ON, and that is the point of
-           * the shipped design: the contract's `consumes` is the only opt-in,
-           * so this subscription payload is the same shape it was before live
-           * audio existed. That matters because this file is deployed into a
-           * project's config repo and `SubscriptionConfiguredPayload` is
-           * strict — a receiver field this deployment predates rejects setup
-           * outright and leaves every device unable to place a call. A design
-           * that needs no new field here cannot fail that way.
-           */
-          expression: [
-            "workers",
-            ["get", voiceAgentProcessorRef(streamPath)],
-            "processor",
-            "wakeStreamProcessor",
-          ],
+          action: "facet-processor",
+          source: { kind: "userspace", worker: voiceAgentFacetRef(streamPath) },
         },
       };
       const subscriptionKeyPrefix = `voice-agent/subscription-configured:${streamPath}`;
@@ -5289,8 +5301,11 @@ const AudioFrame = z.looseObject({
  * state (briefs, warm-up tokens) belonged to the worker that no longer exists.
  */
 export const VoiceAgentFacetContract = defineProcessorContract({
-  slug: "voice-agent-facet",
-  version: "1.0.0",
+  /* The subscription NAME selects the contract, and the live subscription is
+   * named for this slug. They are one identity; drifting them apart is the
+   * failure that took every board offline on the v30 flag day. */
+  slug: VOICE_AGENT_PROCESSOR_SLUG,
+  version: "2.0.0",
   description: "Runs a voice call in the stream's own Durable Object, holding the Grok socket.",
   stateSchema: VoiceFacetState,
   events: {
