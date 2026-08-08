@@ -77,8 +77,11 @@ async function discardRpcResult(result: Promise<unknown>, label: string): Promis
 // pinned origin.
 
 const XAI_SECRET = "/secrets/xai";
-/** The real provider. Overridable per call with `grokBaseUrl` — see dialGrok. */
+/* The provider the facet dials. Fixed here rather than per-request: the key
+ * goes to x.ai and nowhere else, and a caller-chosen URL would carry it. */
 const GROK_REALTIME_URL = "https://api.x.ai/v1/realtime";
+const GROK_MODEL = "grok-voice-think-fast-2.0";
+const GROK_VOICE = "eve";
 /**
  * A call with no mic frames and no Grok traffic for this long is over.
  * Pings deliberately do NOT count: a device pinging into an empty room is
@@ -5096,9 +5099,14 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
 }
 
 /** The provider URL + credential rule, in one place. The xAI key goes to x.ai and nowhere else. */
-async function dialGrokSocket(request: ProcessorRequest): Promise<WebSocket | null> {
-  const target = new URL(request.grokBaseUrl ?? "https://api.x.ai/v1/realtime");
-  target.searchParams.set("model", request.model ?? "grok-voice-think-fast-2.0");
+/**
+ * Dial the provider. Takes nothing: the call is the server's, so there is no
+ * per-request endpoint or model to thread through — and a caller-chosen base
+ * URL was a bearer token waiting to follow it somewhere it should not go.
+ */
+async function dialGrokSocket(): Promise<WebSocket | null> {
+  const target = new URL(GROK_REALTIME_URL);
+  target.searchParams.set("model", GROK_MODEL);
   const headers: Record<string, string> = { Upgrade: "websocket" };
   if (target.hostname === "api.x.ai" || target.hostname.endsWith(".x.ai")) {
     headers.Authorization = `Bearer getSecret("${XAI_SECRET}")`;
@@ -5112,7 +5120,7 @@ async function dialGrokSocket(request: ProcessorRequest): Promise<WebSocket | nu
 }
 
 /** The one `session.update` this facet sends, on the `session.created` edge. */
-function grokSessionUpdate(request: ProcessorRequest): Record<string, unknown> {
+function grokSessionUpdate(): Record<string, unknown> {
   return {
     type: "session.update",
     session: {
@@ -5122,11 +5130,12 @@ function grokSessionUpdate(request: ProcessorRequest): Record<string, unknown> {
           format: { type: "audio/pcm", rate: 16_000 },
           /* Manual turns: a push-to-talk board segments its own turns, and
            * server VAD on top of that answers halfway through a sentence. */
-          turn_detection: request.turns === "vad" ? { type: "server_vad" } : null,
+          /* Manual turns always: the client segments with its own button, and
+           * server VAD on top of that answers halfway through a sentence. */
+          turn_detection: null,
         },
-        output: { format: { type: "audio/pcm", rate: 16_000 }, voice: request.voice ?? "eve" },
+        output: { format: { type: "audio/pcm", rate: 16_000 }, voice: GROK_VOICE },
       },
-      ...(request.instructions === undefined ? {} : { instructions: request.instructions }),
     },
   };
 }
@@ -5347,16 +5356,31 @@ const VoiceFacetState = z.object({
    */
   call: z
     .object({
+      /** Server-minted, and stamped on everything belonging to this call. */
       conversationId: z.string(),
-      requestedAtMs: z.number(),
-      /** Verbatim, so a revived incarnation can re-dial exactly this call. */
-      request: VoiceCallRequestedPayload,
+      /** Offset of the press that opened it — deterministic under replay. */
+      openedAtOffset: z.number(),
     })
     .nullable()
     .default(null),
 });
 
 const EPH = { ephemeral: true as const };
+/**
+ * One frame of captured audio.
+ *
+ * `seq` is the CLIENT's own counter and the only ordering this trusts. There
+ * is deliberately no conversationId: the client does not know which call it is
+ * on and does not need to — frames belong to whatever call the press opened,
+ * and asking the client to name one made it a second source of truth for a
+ * fact only the server holds.
+ */
+const MicFrame = z.looseObject({
+  seq: z.number().optional(),
+  pcm: z.string(),
+  enc: z.string().optional(),
+});
+/** One frame of the answer, stamped with the call the server minted. */
 const AudioFrame = z.looseObject({
   conversationId: z.string(),
   pcm: z.string(),
@@ -5404,10 +5428,46 @@ export const VoiceAgentFacetContract = defineProcessorContract({
         "The board on this call connected or disconnected, copied from its client scope.",
       payloadSchema: z.looseObject({ connected: z.boolean(), client: z.string().optional() }),
     },
-    "events.iterate.com/voice-agent/mic-frame": {
-      description: "One capture frame from the device's microphone.",
+    /*
+     * THREE VERBS, and that is the whole client contract: the button went
+     * down, here is audio, the button came up. Whether a call exists, what it
+     * is called and when it ends are the SERVER's, because the server is the
+     * only side that can know them. Having the client ask for a call as well
+     * was a second source of truth for one fact, and the two disagreeing is
+     * what a wedged stream looks like.
+     */
+    "events.iterate.com/voice-agent/ptt-start": {
+      description: "The user began speaking. Opens a call if one is not already up.",
       ...EPH,
-      payloadSchema: AudioFrame,
+      payloadSchema: z.looseObject({}),
+    },
+    "events.iterate.com/voice-agent/mic-frame": {
+      description: "One 20 ms capture frame, in the client's own sequence.",
+      ...EPH,
+      payloadSchema: MicFrame,
+    },
+    "events.iterate.com/voice-agent/ptt-end": {
+      description: "The user stopped speaking; the turn is complete.",
+      ...EPH,
+      payloadSchema: z.looseObject({}),
+    },
+    "events.iterate.com/voice-agent/call-started": {
+      description: "The server opened a call, and what it is called.",
+      payloadSchema: z.looseObject({ conversationId: z.string() }),
+    },
+    /*
+     * THE NUMBER THIS DESIGN EXISTS FOR. Audio captured while the provider was
+     * still being dialled is held and flushed the instant it is usable; this
+     * says how much was held and what the hold cost, so "did buffering earn
+     * anything" is a measurement rather than an argument.
+     */
+    "events.iterate.com/voice-agent/buffer-flushed": {
+      description: "Queued capture went to the provider; how many frames, and the handshake cost.",
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+        frames: z.number(),
+        handshakeMs: z.number(),
+      }),
     },
     "events.iterate.com/voice-agent/spk-frame": {
       description: "One frame of the answer, for the device's speaker.",
@@ -5463,7 +5523,7 @@ export const VoiceAgentFacetContract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/voice-agent/created",
-    "events.iterate.com/voice-agent/conversation-requested",
+    "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/conversation-ended",
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/device-presence",
@@ -5471,12 +5531,15 @@ export const VoiceAgentFacetContract = defineProcessorContract({
     "events.iterate.com/voice-agent/warmup",
     /* The live half. Naming them is the whole opt-in — `"*"` never matches an
      * ephemeral event, so no processor gets this firehose by accident. */
+    "events.iterate.com/voice-agent/ptt-start",
     "events.iterate.com/voice-agent/mic-frame",
-    "events.iterate.com/voice-agent/turn",
+    "events.iterate.com/voice-agent/ptt-end",
     "events.iterate.com/voice-agent/say",
     "events.iterate.com/voice-agent/ping",
   ],
   emits: [
+    "events.iterate.com/voice-agent/call-started",
+    "events.iterate.com/voice-agent/buffer-flushed",
     "events.iterate.com/voice-agent/conversation-accepted",
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/spk-frame",
@@ -5496,7 +5559,7 @@ export type VoiceAgentFacetContract = typeof VoiceAgentFacetContract;
  */
 export class VoiceAgentFacetProcessor extends StreamProcessor<
   VoiceAgentFacetContract,
-  { now(): number; dialGrok(request: ProcessorRequest): Promise<WebSocket | null> }
+  { now(): number; dialGrok(): Promise<WebSocket | null> }
 > {
   readonly contract = VoiceAgentFacetContract;
   /** The live call, or null. Empty after an eviction — deliberately. */
@@ -5517,13 +5580,14 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
             contentHash: event.payload.contentHash,
           },
         };
-      case "events.iterate.com/voice-agent/conversation-requested":
+      case "events.iterate.com/voice-agent/call-started":
+        /* The server's own record that a call is up. Deterministic under
+         * replay because the id was minted INTO the event, not here. */
         return {
           ...state,
           call: {
             conversationId: event.payload.conversationId,
-            requestedAtMs: event.offset,
-            request: event.payload,
+            openedAtOffset: event.offset,
           },
         };
       case "events.iterate.com/voice-agent/conversation-ended":
@@ -5573,27 +5637,50 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
        * churn a live socket.
        */
       this.#endCall("superseded by a newer call on this stream");
-      this.#openCall(wanted.request, wanted.requestedAtMs, append, runInBackground);
+      this.#dial(wanted.conversationId, append, runInBackground);
     }
     if (event === null) return;
     const call = this.#call;
     switch (event.type) {
+      case "events.iterate.com/voice-agent/ptt-start": {
+        /*
+         * THE PRESS IS THE ONLY TRIGGER, and it does two things at once: opens
+         * a call if none is up, and tells a provider that already is that a
+         * fresh utterance starts here.
+         *
+         * Dialling begins NOW, in the background, while the user is already
+         * talking. That overlap is the entire latency design: by the time
+         * somebody has said two or three seconds of anything, the session is up
+         * and the audio they spoke into the handshake has already been flushed.
+         */
+        if (call === null) {
+          const conversationId = crypto.randomUUID().slice(0, 8);
+          this.#dial(conversationId, append, runInBackground);
+          runInBackground(async () => {
+            await append({
+              type: "events.iterate.com/voice-agent/call-started",
+              payload: { conversationId },
+            });
+          });
+          return;
+        }
+        /* Whatever the provider still holds is from a turn that never
+         * committed; prepending it would answer a blend of two utterances. */
+        call.send({ type: "input_audio_buffer.clear" });
+        return;
+      }
       case "events.iterate.com/voice-agent/mic-frame": {
-        /* The hot path, and it stays this short on purpose. */
-        if (call === null || call.conversationId !== event.payload.conversationId) return;
+        /* The hot path, and it stays this short on purpose: one decode, one
+         * send, no await. Held instead if the session is not up — see
+         * GrokCall.offer. */
+        if (call === null) return;
         const bytes = base64ToBytes(event.payload.pcm);
         call.offer(event.payload.enc === "u" ? mulawToPcm16(bytes) : bytes);
         return;
       }
-      case "events.iterate.com/voice-agent/turn": {
-        if (call === null || call.conversationId !== event.payload.conversationId) return;
-        if (event.payload.action === "start") {
-          /* Whatever the provider still holds is from a turn that never
-           * committed; prepending it would answer a blend of two utterances. */
-          call.send({ type: "input_audio_buffer.clear" });
-          return;
-        }
-        if (event.payload.action === "commit") call.commit();
+      case "events.iterate.com/voice-agent/ptt-end": {
+        if (call === null) return;
+        call.commit();
         return;
       }
       case "events.iterate.com/voice-agent/say": {
@@ -5691,23 +5778,22 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
    * is the point of `GrokCall`'s queue — so the call object exists BEFORE the
    * socket does and starts collecting frames straight away.
    */
-  #openCall(
-    request: ProcessorRequest,
-    requestedAtMs: number,
+  #dial(
+    conversationId: string,
     append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgentFacetContract>["runInBackground"],
   ): void {
-    const call = new GrokCall(request.conversationId, this.deps.now());
+    const call = new GrokCall(conversationId, this.deps.now());
     this.#call = call;
     runInBackground(async () => {
       let failure: string | null = null;
       try {
-        const socket = await this.deps.dialGrok(request);
+        const socket = await this.deps.dialGrok();
         if (socket === null) failure = "provider refused the websocket upgrade";
         else if (call.closed) socket.close();
         else {
           call.attach(socket);
-          this.#listen(call, socket, request, append);
+          this.#listen(call, socket, append);
           return;
         }
       } catch (error) {
@@ -5719,10 +5805,8 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
       call.close();
       await append({
         type: "events.iterate.com/voice-agent/conversation-failed",
-        idempotencyKey: this.idempotencyKey(
-          `conversation-failed:${request.conversationId}:${requestedAtMs}`,
-        ),
-        payload: { conversationId: request.conversationId, reason: (failure ?? "").slice(0, 500) },
+        idempotencyKey: this.idempotencyKey(`failed:${conversationId}`),
+        payload: { conversationId, reason: (failure ?? "").slice(0, 500) },
       });
     });
   }
@@ -5731,7 +5815,6 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
   #listen(
     call: GrokCall,
     socket: WebSocket,
-    request: ProcessorRequest,
     append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
   ): void {
     socket.addEventListener("close", () => {
@@ -5750,23 +5833,28 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         case "session.created":
           /* The ONLY edge that makes us configure the session; miss it and the
            * handshake never completes and the call hangs, silently. */
-          call.send(grokSessionUpdate(request));
+          call.send(grokSessionUpdate());
           return;
         case "session.updated": {
           /* Usable. Everything the handshake made us hold goes now. */
           call.markReady(this.deps.now());
-          const { framesQueued, framesSent } = call.counters;
-          void append({
-            type: "events.iterate.com/voice-agent/conversation-accepted",
-            idempotencyKey: this.idempotencyKey(`accepted:${call.conversationId}`),
-            payload: {
-              conversationId: call.conversationId,
-              /* The number that says whether buffering earned anything. */
-              handshakeMs: call.handshakeMs ?? 0,
-              framesQueued,
-              framesSent,
+          const { framesQueued } = call.counters;
+          void append(
+            {
+              type: "events.iterate.com/voice-agent/conversation-accepted",
+              idempotencyKey: this.idempotencyKey(`accepted:${call.conversationId}`),
+              payload: { conversationId: call.conversationId },
             },
-          });
+            {
+              type: "events.iterate.com/voice-agent/buffer-flushed",
+              idempotencyKey: this.idempotencyKey(`flushed:${call.conversationId}`),
+              payload: {
+                conversationId: call.conversationId,
+                frames: framesQueued,
+                handshakeMs: call.handshakeMs ?? 0,
+              },
+            },
+          );
           return;
         }
         case "response.created":
@@ -5831,7 +5919,7 @@ export class VoiceAgentFacet extends StreamProcessorFacet {
     return new VoiceAgentFacetProcessor({
       ...deps,
       now: () => Date.now(),
-      dialGrok: (request) => dialGrokSocket(request),
+      dialGrok: () => dialGrokSocket(),
     });
   }
 }
