@@ -139,7 +139,7 @@ export function CorePrettyState({
                   ? `copy → ${receiver.receivingStreamPath}`
                   : kind === "webhook-post" && typeof receiver?.url === "string"
                     ? `POST ${receiver.url}`
-                    : receiver?.placement === "facet"
+                    : receiver?.action === "facet-processor"
                       ? // The subscription name IS the contract slug and facet name.
                         `facet · ${name}`
                       : formatItxExpressionHint(receiver?.expression);

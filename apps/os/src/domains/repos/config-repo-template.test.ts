@@ -162,6 +162,10 @@ test("template ships packaged apps behind a thin router", () => {
 
   const appPaths = paths.filter((path) => path.startsWith("apps/"));
   expect(appPaths).toEqual([
+    // A worked example of a userspace processor hosted as a facet, with
+    // recovery — see the app's own header and example-agent-recovery.e2e.test.ts.
+    "apps/example-agent/example-agent.ts",
+    "apps/example-agent/tsconfig.json",
     "apps/guestbook/client.tsx",
     "apps/guestbook/server.tsx",
     "apps/guestbook/tsconfig.json",

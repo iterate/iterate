@@ -142,7 +142,7 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
     payload: {
       name: "guestbook",
       receiver: {
-        action: "processor-wake",
+        action: "wake-processor",
         expression: ["workers", ["get", guestbookAppRef], "processor", "wakeStreamProcessor"],
       },
     },

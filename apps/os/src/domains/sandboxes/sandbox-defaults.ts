@@ -59,7 +59,7 @@ export function sandboxCreationEvents(input: {
       payload: {
         name: SandboxProcessorContract.slug,
         receiver: {
-          action: "processor-wake",
+          action: "wake-processor",
           expression: ["sandboxes", ["get", path], "processor", "wakeStreamProcessor"],
         },
       } satisfies SubscriptionConfiguredPayload,
