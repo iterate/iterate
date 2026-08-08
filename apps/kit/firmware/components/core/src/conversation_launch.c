@@ -38,7 +38,27 @@ enum iterate_kit_launch_step iterate_kit_launch_next_step(
     return ITERATE_KIT_LAUNCH_NOTHING;
   }
 
-  /* Somebody is waiting from here down. */
+  /*
+   * Somebody is waiting from here down.
+   *
+   * A DEADLINE FURTHER OUT THAN ONE INTERVAL IS NOT A DEADLINE, it is a clock
+   * that moved. `next_place_ms` is only ever set to `now + PLACE_RETRY_MS`, so
+   * a value more than that ahead of `now` cannot have been produced by this
+   * function reading the same clock — it means `now` has gone backwards, or
+   * was written from a different base. Left alone it never arrives, and the
+   * device refuses every press for the rest of its life while every other
+   * input reads healthy.
+   *
+   * Measured exactly that way: 2018 consecutive polls with the button held,
+   * `wants_call` and `link_ready` both true as the seam itself saw them, no
+   * call active or pending, and NOTHING returned every time.
+   *
+   * Treat it as stale and let the press through. The worst case is one extra
+   * attempt; the alternative is a board that never calls again.
+   */
+  if (launch->next_place_ms > inputs->now_ms + ITERATE_KIT_LAUNCH_PLACE_RETRY_MS) {
+    launch->next_place_ms = 0U;
+  }
   if (inputs->now_ms < launch->next_place_ms) return ITERATE_KIT_LAUNCH_NOTHING;
   launch->next_place_ms = inputs->now_ms + ITERATE_KIT_LAUNCH_PLACE_RETRY_MS;
   /* Preparing ahead did its job: the count starts again from here. */

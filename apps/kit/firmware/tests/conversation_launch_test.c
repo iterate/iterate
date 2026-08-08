@@ -124,6 +124,29 @@ static void retry_now_clears_the_deadline(void) {
   assert(iterate_kit_launch_next_step(&launch, &inputs) == ITERATE_KIT_LAUNCH_PLACE_CALL);
 }
 
+/*
+ * A DEADLINE FROM ANOTHER CLOCK MUST NOT SILENCE THE BUTTON.
+ *
+ * `next_place_ms` is only ever `now + PLACE_RETRY_MS`, so anything further out
+ * came from a clock that moved. Measured on a Waveshare: 2018 consecutive
+ * polls with the press held, every input green as the seam itself saw them,
+ * and NOTHING returned every time — a board that never calls again.
+ */
+static void a_deadline_from_another_clock_is_ignored(void) {
+  struct iterate_kit_launch launch = {0};
+  struct iterate_kit_launch_inputs inputs = pressed(1000U);
+  launch.next_place_ms = 5U * 60U * 1000U; /* minutes away; unreachable */
+  assert(iterate_kit_launch_next_step(&launch, &inputs) == ITERATE_KIT_LAUNCH_PLACE_CALL);
+}
+
+/* An ordinary deadline, one interval out, is still honoured. */
+static void an_ordinary_deadline_still_holds(void) {
+  struct iterate_kit_launch launch = {0};
+  struct iterate_kit_launch_inputs inputs = pressed(1000U);
+  launch.next_place_ms = 1000U + ITERATE_KIT_LAUNCH_PLACE_RETRY_MS;
+  assert(iterate_kit_launch_next_step(&launch, &inputs) == ITERATE_KIT_LAUNCH_NOTHING);
+}
+
 /* Never dereferenced blind: a null seam refuses rather than crashing a board. */
 static void nothing_is_dereferenced_blind(void) {
   struct iterate_kit_launch launch = {0};
@@ -141,6 +164,8 @@ int main(void) {
   a_link_that_cannot_carry_it_costs_nothing();
   placing_has_its_own_deadline();
   retry_now_clears_the_deadline();
+  a_deadline_from_another_clock_is_ignored();
+  an_ordinary_deadline_still_holds();
   nothing_is_dereferenced_blind();
   return 0;
 }

@@ -475,6 +475,17 @@ static struct {
   /* The launch seam's own answer, so a branch is named not inferred. */
   int last_launch_step;
   uint32_t launch_polls;
+  /*
+   * What the seam SAW, captured in the same poll as its answer.
+   *
+   * Reading these separately through health() reads them at different
+   * instants, so a latch that is true when health asks and false when the
+   * loop asks looks like an impossibility: every input green and the answer
+   * still NOTHING. Captured together, the paradox resolves itself.
+   */
+  bool saw_wants_call;
+  bool saw_link_ready;
+  uint32_t wants_call_polls;
   uint32_t start_call_failures;
   struct iterate_kit_playout playout;
   uint32_t voicelab_generation;
@@ -1902,6 +1913,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       "\"hasStreamCap\":%s,\"outboxFree\":%u,\"preparing\":%s,"
       "\"lastStartStatus\":%d,\"startCallFailures\":%u,"
       "\"lastLaunchStep\":%d,\"launchPolls\":%u,"
+      "\"sawWantsCall\":%s,\"sawLinkReady\":%s,\"wantsCallPolls\":%u,"
       "\"gateOpen\":%s,\"t\":%" PRIu64 ",\"uptimeMs\":%" PRIu64,
       iterate_kit_esp_idf_itx_transport_state_name(runtime.transport.state),
       iterate_kit_voicelab_state_name(runtime.voicelab.state),
@@ -1922,6 +1934,9 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       (unsigned)runtime.start_call_failures,
       runtime.last_launch_step,
       (unsigned)runtime.launch_polls,
+      runtime.saw_wants_call ? "true" : "false",
+      runtime.saw_link_ready ? "true" : "false",
+      (unsigned)runtime.wants_call_polls,
       gate_open ? "true" : "false",
       now,
       now);
@@ -2894,6 +2909,9 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         };
         runtime.last_launch_step = (int)iterate_kit_launch_next_step(&launch, &launching);
         ++runtime.launch_polls;
+        runtime.saw_wants_call = launching.wants_call;
+        runtime.saw_link_ready = launching.link_ready;
+        if (launching.wants_call) ++runtime.wants_call_polls;
         switch ((enum iterate_kit_launch_step)runtime.last_launch_step) {
           case ITERATE_KIT_LAUNCH_PREPARE_AHEAD:
             ESP_LOGI(tag, "idle: preparing the next conversation in advance");
