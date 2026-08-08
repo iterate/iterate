@@ -6,6 +6,8 @@ import {
   type Stream,
   type StreamConnectionHandle,
   createProcessorHost,
+  StreamProcessorFacet,
+  type ProcessorHostDeps,
 } from "iterate/sdk";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import {
@@ -4603,28 +4605,26 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
           ],
         },
         /*
-         * AN EXPRESSION, NOT `placement: "facet"`, and that is not a leftover.
+         * AN EXPRESSION, AND IT IS NOW THE OLD LANE.
          *
-         * Version 30 offers two placements for a processor-wake, and they are
-         * not interchangeable. `placement: "facet"` runs the processor as a
-         * facet of the stream's OWN Durable Object, which means the contract
-         * has to be one the OS worker itself registers: the facet is dialled
-         * by name out of `ProcessorFacet`'s composition
-         * (processor-facet-durable-object.ts), whose arms are chosen purely
-         * from the stream path (processor-facet-families.ts). A voice stream
-         * lives at `/agents/voice/…`, so its facet composition is the AGENT
-         * family plus the capability host — there is no `voice-agent` contract
-         * in it and there cannot be, because this contract is defined here, in
-         * a file that lives in the project's config repo.
+         * This used to be forced: a facet was dialled by name out of the
+         * composition in processor-facet-durable-object.ts, whose arms are
+         * chosen purely from the stream path, so a facet contract had to be
+         * one the OS worker itself registers. This contract is defined here,
+         * in a file that lives in the project's config repo, so it could not
+         * be in that composition and the processor could not be a facet.
          *
-         * So the voice agent processor CANNOT be a facet without moving it
-         * into the OS worker, which would stop it being userspace code. The
-         * expression placement it uses instead is the supported lane for
-         * exactly this — version 30 kept it, in the schema's own words, for
-         * "own-DO or userspace-worker placement, exactly as before" — and the
-         * stream evaluates it as an itx expression against this project's
-         * dynamic worker. Everything downstream (retention, batching, the
-         * delivery watchdog) is shared with the facet lane.
+         * That is no longer true. `facet-processor` with a `userspace` source
+         * LOADS the class from the config repo and hosts it as a facet of the
+         * stream's own Durable Object. `VoiceAgentFacet` at the bottom of this
+         * file is that class, and moving to it deletes a Durable Object hop
+         * from every 20 ms microphone frame in both directions.
+         *
+         * The switchover is deliberately not made here yet: the facet
+         * processor is written and typechecked but unproven against real
+         * hardware, and this expression is what four boards are currently
+         * calling through. Flipping it is a one-line change to `receiver`
+         * (see the userspace-facet e2e for the exact payload shape).
          */
         receiver: {
           action: "processor-wake",
@@ -5068,6 +5068,568 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
     if (app) return new Response(`unknown app: ${app}`, { status: 404 });
     return new Response("voicelab project worker — voice app at voice--<host>", {
       headers: { "content-type": "text/plain" },
+    });
+  }
+}
+
+/** The provider URL + credential rule, in one place. The xAI key goes to x.ai and nowhere else. */
+async function dialGrokSocket(request: ProcessorRequest): Promise<WebSocket | null> {
+  const target = new URL(request.grokBaseUrl ?? "https://api.x.ai/v1/realtime");
+  target.searchParams.set("model", request.model ?? "grok-voice-think-fast-2.0");
+  const headers: Record<string, string> = { Upgrade: "websocket" };
+  if (target.hostname === "api.x.ai" || target.hostname.endsWith(".x.ai")) {
+    headers.Authorization = `Bearer getSecret("${XAI_SECRET}")`;
+  }
+  const response = await fetch(target.toString(), { headers });
+  const socket = response.webSocket;
+  if (socket === null) return null;
+  socket.binaryType = "arraybuffer"; // before accept(): the post-2025-03-17 default is Blob
+  socket.accept();
+  return socket;
+}
+
+/** The one `session.update` this facet sends, on the `session.created` edge. */
+function grokSessionUpdate(request: ProcessorRequest): Record<string, unknown> {
+  return {
+    type: "session.update",
+    session: {
+      type: "realtime",
+      audio: {
+        input: {
+          format: { type: "audio/pcm", rate: 16_000 },
+          /* Manual turns: a push-to-talk board segments its own turns, and
+           * server VAD on top of that answers halfway through a sentence. */
+          turn_detection: request.turns === "vad" ? { type: "server_vad" } : null,
+        },
+        output: { format: { type: "audio/pcm", rate: 16_000 }, voice: request.voice ?? "eve" },
+      },
+      ...(request.instructions === undefined ? {} : { instructions: request.instructions }),
+    },
+  };
+}
+
+/*
+ * ============================================================================
+ * THE VOICE AGENT AS A FACET
+ * ============================================================================
+ *
+ * One processor, hosted in the Stream Durable Object that owns the call's own
+ * stream, that happens to hold a Grok socket open behind it.
+ *
+ * WHY THIS IS FASTER, and it is the whole point. The bridge above is a second
+ * Durable Object: every 20 ms microphone frame was appended here, delivered
+ * over RPC to that worker, decoded there, and pushed to Grok — one extra hop,
+ * every frame, in both directions. A facet runs INSIDE this stream's own
+ * incarnation, so delivery is a function call. The socket is the only network
+ * boundary left between a device's microphone and the model.
+ *
+ * The shape is deliberately boring: `reduce` is one switch and is pure,
+ * `processEvent` is one switch and never blocks the lane. Everything slow —
+ * dialing Grok, waiting for a session, playing audio back — happens in
+ * background work owned by the incarnation, and the fold is what recovers it.
+ */
+
+/**
+ * The live Grok session for ONE call, owned by one processor incarnation.
+ *
+ * Deliberately not durable and deliberately not in reduced state: a socket
+ * cannot be folded. What survives an eviction is the stream's own record that
+ * a call was requested and not yet ended, and the at-head pass re-dials from
+ * that. This class is therefore free to be plain mutable state.
+ *
+ * FRAMES ARRIVING BEFORE THE SESSION IS UP ARE BUFFERED, NOT DROPPED. A device
+ * starts talking the instant its button goes down — that is the entire latency
+ * budget — and the handshake takes as long as it takes. Audio captured during
+ * the handshake is exactly the audio the user cared about most, so it queues
+ * here and is flushed in order the moment the provider is ready.
+ */
+class GrokCall {
+  readonly conversationId: string;
+  /** Null until `session.updated`; queued PCM is flushed on that edge. */
+  #socket: WebSocket | null = null;
+  #ready = false;
+  #closed = false;
+  /** Captured while the handshake was still in flight, in arrival order. */
+  #queued: ArrayBuffer[] = [];
+  /** Set when the caller asked to commit a turn before the session was up. */
+  #queuedCommit = false;
+  #openedAtMs: number;
+  #readyAtMs: number | null = null;
+  #framesQueued = 0;
+  #framesSent = 0;
+
+  constructor(conversationId: string, now: number) {
+    this.conversationId = conversationId;
+    this.#openedAtMs = now;
+  }
+
+  get ready(): boolean {
+    return this.#ready;
+  }
+  get closed(): boolean {
+    return this.#closed;
+  }
+  /** Milliseconds from dial to a usable session, or null while still dialing. */
+  get handshakeMs(): number | null {
+    return this.#readyAtMs === null ? null : this.#readyAtMs - this.#openedAtMs;
+  }
+  /** How much audio the handshake made us hold, and how much has gone out. */
+  get counters(): { framesQueued: number; framesSent: number } {
+    return { framesQueued: this.#framesQueued, framesSent: this.#framesSent };
+  }
+
+  attach(socket: WebSocket): void {
+    this.#socket = socket;
+  }
+
+  send(message: Record<string, unknown>): void {
+    if (this.#socket === null || this.#closed) return;
+    try {
+      this.#socket.send(JSON.stringify(message));
+    } catch {
+      /* The socket is going away; teardown follows from its close event. */
+    }
+  }
+
+  /**
+   * Hand one decoded PCM16 frame to the provider, or hold it if the session is
+   * not up yet. Never awaits: this is called straight off the delivery lane.
+   */
+  offer(pcm: ArrayBuffer): void {
+    if (this.#closed) return;
+    if (!this.#ready) {
+      this.#framesQueued++;
+      this.#queued.push(pcm);
+      return;
+    }
+    this.#append(pcm);
+  }
+
+  /** Mark the turn complete, or remember to once the session is up. */
+  commit(): void {
+    if (this.#closed) return;
+    if (!this.#ready) {
+      this.#queuedCommit = true;
+      return;
+    }
+    this.send({ type: "input_audio_buffer.commit" });
+    this.send({ type: "response.create" });
+  }
+
+  /**
+   * The session is usable. Flush everything the handshake made us hold, in
+   * order, before anything newer can reach the provider — and if the user
+   * already let go of the button, commit that turn immediately rather than
+   * waiting for another frame to notice.
+   */
+  markReady(now: number): void {
+    if (this.#ready || this.#closed) return;
+    this.#ready = true;
+    this.#readyAtMs = now;
+    for (const frame of this.#queued.splice(0)) this.#append(frame);
+    if (this.#queuedCommit) {
+      this.#queuedCommit = false;
+      this.send({ type: "input_audio_buffer.commit" });
+      this.send({ type: "response.create" });
+    }
+  }
+
+  close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#queued.length = 0;
+    try {
+      this.#socket?.close();
+    } catch {
+      /* Already gone. */
+    }
+    this.#socket = null;
+  }
+
+  #append(pcm: ArrayBuffer): void {
+    this.#framesSent++;
+    this.send({ type: "input_audio_buffer.append", audio: bytesToBase64(new Uint8Array(pcm)) });
+  }
+}
+
+/** What the facet processor folds: one call at a time, and whether it is open. */
+const VoiceFacetState = z.object({
+  birthCertificate: z.strictObject({}).nullable().default(null),
+  /**
+   * The call this stream is on, as an OBLIGATION rather than a closure.
+   *
+   * A socket dies with its incarnation; this does not. `conversation-requested`
+   * opens it, `conversation-ended` closes it, and the at-head pass re-dials
+   * anything still open — which is what makes an eviction mid-call recoverable
+   * without anybody having to notice it happened.
+   */
+  call: z
+    .object({
+      conversationId: z.string(),
+      requestedAtMs: z.number(),
+      /** Verbatim, so a revived incarnation can re-dial exactly this call. */
+      request: VoiceCallRequestedPayload,
+    })
+    .nullable()
+    .default(null),
+});
+
+const EPH = { ephemeral: true as const };
+const AudioFrame = z.looseObject({
+  conversationId: z.string(),
+  pcm: z.string(),
+  enc: z.string().optional(),
+});
+
+/**
+ * The facet's own contract, and it is deliberately not the bridge's.
+ *
+ * A different processor with a different fold: this one holds ONE call as an
+ * obligation and nothing else, because everything the bridge kept in reduced
+ * state (briefs, warm-up tokens) belonged to the worker that no longer exists.
+ */
+export const VoiceAgentFacetContract = defineProcessorContract({
+  slug: "voice-agent-facet",
+  version: "1.0.0",
+  description: "Runs a voice call in the stream's own Durable Object, holding the Grok socket.",
+  stateSchema: VoiceFacetState,
+  events: {
+    "events.iterate.com/voice-agent/created": {
+      description: "The voice-agent facet exists on this stream.",
+      payloadSchema: z.strictObject({}),
+    },
+    "events.iterate.com/voice-agent/conversation-requested": {
+      description: "A listener asked this stream to open a call.",
+      payloadSchema: VoiceCallRequestedPayload,
+    },
+    "events.iterate.com/voice-agent/conversation-accepted": {
+      description: "The provider accepted the session; the call is live.",
+      payloadSchema: z.looseObject({ conversationId: z.string() }),
+    },
+    "events.iterate.com/voice-agent/conversation-failed": {
+      description: "The call is not happening, and why.",
+      payloadSchema: z.looseObject({ conversationId: z.string(), reason: z.string() }),
+    },
+    "events.iterate.com/voice-agent/conversation-ended": {
+      description: "The call is over.",
+      payloadSchema: z.looseObject({ conversationId: z.string() }),
+    },
+    "events.iterate.com/voice-agent/device-presence": {
+      description:
+        "The board on this call connected or disconnected, copied from its client scope.",
+      payloadSchema: z.looseObject({ connected: z.boolean(), client: z.string().optional() }),
+    },
+    "events.iterate.com/voice-agent/mic-frame": {
+      description: "One capture frame from the device's microphone.",
+      ...EPH,
+      payloadSchema: AudioFrame,
+    },
+    "events.iterate.com/voice-agent/spk-frame": {
+      description: "One frame of the answer, for the device's speaker.",
+      ...EPH,
+      payloadSchema: AudioFrame,
+    },
+    "events.iterate.com/voice-agent/turn": {
+      description: "The device opening or closing its half of a turn.",
+      ...EPH,
+      payloadSchema: z.looseObject({ conversationId: z.string(), action: z.string() }),
+    },
+    "events.iterate.com/voice-agent/say": {
+      description: "A turn made of text rather than speech.",
+      ...EPH,
+      payloadSchema: z.looseObject({ text: z.string() }),
+    },
+    "events.iterate.com/voice-agent/ping": {
+      description: "Liveness probe; answered with pong.",
+      ...EPH,
+      payloadSchema: z.looseObject({ id: z.string() }),
+    },
+    "events.iterate.com/voice-agent/pong": {
+      description: "This incarnation's proof of life.",
+      ...EPH,
+      payloadSchema: z.looseObject({ id: z.string() }),
+    },
+  },
+  consumes: [
+    "events.iterate.com/voice-agent/created",
+    "events.iterate.com/voice-agent/conversation-requested",
+    "events.iterate.com/voice-agent/conversation-ended",
+    "events.iterate.com/voice-agent/conversation-failed",
+    "events.iterate.com/voice-agent/device-presence",
+    /* The live half. Naming them is the whole opt-in — `"*"` never matches an
+     * ephemeral event, so no processor gets this firehose by accident. */
+    "events.iterate.com/voice-agent/mic-frame",
+    "events.iterate.com/voice-agent/turn",
+    "events.iterate.com/voice-agent/say",
+    "events.iterate.com/voice-agent/ping",
+  ],
+  emits: [
+    "events.iterate.com/voice-agent/conversation-accepted",
+    "events.iterate.com/voice-agent/conversation-failed",
+    "events.iterate.com/voice-agent/spk-frame",
+    "events.iterate.com/voice-agent/pong",
+  ],
+});
+export type VoiceAgentFacetContract = typeof VoiceAgentFacetContract;
+
+/**
+ * The voice agent. Two switches: `reduce` folds, `processEvent` acts.
+ *
+ * Nothing here awaits the provider on the delivery lane. A microphone frame
+ * costs one decode and one `send`, which is the floor — anything more would
+ * put the model's round trip inside the audio path.
+ */
+export class VoiceAgentFacetProcessor extends StreamProcessor<
+  VoiceAgentFacetContract,
+  { now(): number; dialGrok(request: ProcessorRequest): Promise<WebSocket | null> }
+> {
+  readonly contract = VoiceAgentFacetContract;
+  /** The live call, or null. Empty after an eviction — deliberately. */
+  #call: GrokCall | null = null;
+
+  /* ------------------------------------------------------------------ fold */
+
+  reduce({ state, event }: ReduceArgs<VoiceAgentFacetContract>) {
+    switch (event.type) {
+      case "events.iterate.com/voice-agent/created":
+        return { ...state, birthCertificate: {} };
+      case "events.iterate.com/voice-agent/conversation-requested":
+        return {
+          ...state,
+          call: {
+            conversationId: event.payload.conversationId,
+            requestedAtMs: event.offset,
+            request: event.payload,
+          },
+        };
+      case "events.iterate.com/voice-agent/conversation-ended":
+      case "events.iterate.com/voice-agent/conversation-failed":
+        /* Only the call named in the payload closes; a stale obituary for a
+         * call that has already been replaced must not close its successor. */
+        return state.call?.conversationId === event.payload.conversationId
+          ? { ...state, call: null }
+          : state;
+      default:
+        /* Ephemeral audio NEVER reaches the fold. Its body lives only in this
+         * incarnation's buffer, so folding one would make reduced state depend
+         * on something a restart cannot replay. */
+        return state;
+    }
+  }
+
+  /* ----------------------------------------------------------------- react */
+
+  processEvent(args: ProcessEventArgs<VoiceAgentFacetContract>): undefined {
+    const { state, event, delivery, append, runInBackground } = args;
+    /*
+     * THE AT-HEAD PASS IS THE RECOVERY. An eventless caught-up delivery is how
+     * a revived incarnation learns it owes a call, so this runs before the
+     * event switch and is the only thing that ever dials.
+     */
+    if (delivery.caughtUp && state.call !== null && this.#call === null) {
+      this.#openCall(state.call.request, state.call.requestedAtMs, append, runInBackground);
+    }
+    if (event === null) return;
+    const call = this.#call;
+    switch (event.type) {
+      case "events.iterate.com/voice-agent/mic-frame": {
+        /* The hot path, and it stays this short on purpose. */
+        if (call === null || call.conversationId !== event.payload.conversationId) return;
+        const bytes = base64ToBytes(event.payload.pcm);
+        call.offer(event.payload.enc === "u" ? mulawToPcm16(bytes) : bytes);
+        return;
+      }
+      case "events.iterate.com/voice-agent/turn": {
+        if (call === null || call.conversationId !== event.payload.conversationId) return;
+        if (event.payload.action === "start") {
+          /* Whatever the provider still holds is from a turn that never
+           * committed; prepending it would answer a blend of two utterances. */
+          call.send({ type: "input_audio_buffer.clear" });
+          return;
+        }
+        if (event.payload.action === "commit") call.commit();
+        return;
+      }
+      case "events.iterate.com/voice-agent/say": {
+        if (call === null) return;
+        const text = event.payload.text.trim();
+        if (text.length === 0 || text.length > 4096) return;
+        call.send({
+          type: "conversation.item.create",
+          item: { type: "message", role: "user", content: [{ type: "input_text", text }] },
+        });
+        call.send({ type: "response.create" });
+        return;
+      }
+      case "events.iterate.com/voice-agent/ping": {
+        /* The only event a device gets during a silent call, and the only
+         * honest proof this incarnation is alive. */
+        runInBackground(async () => {
+          await append({
+            type: "events.iterate.com/voice-agent/pong",
+            ephemeral: true,
+            payload: {
+              conversationId: call?.conversationId ?? "",
+              id: event.payload.id,
+              t1: this.deps.now(),
+              ready: call?.ready === true,
+            },
+          });
+        });
+        return;
+      }
+      case "events.iterate.com/voice-agent/device-presence": {
+        /* The board left, said out loud rather than inferred from silence. */
+        if (event.payload.connected === false) this.#endCall("device disconnected");
+        return;
+      }
+      case "events.iterate.com/voice-agent/conversation-ended": {
+        if (call?.conversationId === event.payload.conversationId) {
+          this.#endCall("conversation-ended event");
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  /* --------------------------------------------------------------- private */
+
+  /**
+   * Dial Grok for a call the fold says is open.
+   *
+   * Runs in background work and returns immediately, so a cold provider never
+   * sits on the delivery lane. The device may already be sending audio — that
+   * is the point of `GrokCall`'s queue — so the call object exists BEFORE the
+   * socket does and starts collecting frames straight away.
+   */
+  #openCall(
+    request: ProcessorRequest,
+    requestedAtMs: number,
+    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgentFacetContract>["runInBackground"],
+  ): void {
+    const call = new GrokCall(request.conversationId, this.deps.now());
+    this.#call = call;
+    runInBackground(async () => {
+      let failure: string | null = null;
+      try {
+        const socket = await this.deps.dialGrok(request);
+        if (socket === null) failure = "provider refused the websocket upgrade";
+        else if (call.closed) socket.close();
+        else {
+          call.attach(socket);
+          this.#listen(call, socket, request, append);
+          return;
+        }
+      } catch (error) {
+        failure = String(error);
+      }
+      /* Say so on the stream. A device that hears nothing cannot tell "still
+       * connecting" from "never going to happen", and used to wait forever. */
+      if (this.#call === call) this.#call = null;
+      call.close();
+      await append({
+        type: "events.iterate.com/voice-agent/conversation-failed",
+        idempotencyKey: this.idempotencyKey(
+          `conversation-failed:${request.conversationId}:${requestedAtMs}`,
+        ),
+        payload: { conversationId: request.conversationId, reason: (failure ?? "").slice(0, 500) },
+      });
+    });
+  }
+
+  /** Wire the provider's events to the stream. Nothing here blocks delivery. */
+  #listen(
+    call: GrokCall,
+    socket: WebSocket,
+    request: ProcessorRequest,
+    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
+  ): void {
+    socket.addEventListener("close", () => {
+      if (this.#call === call) this.#call = null;
+      call.close();
+    });
+    socket.addEventListener("message", (message: MessageEvent) => {
+      if (typeof message.data !== "string") return;
+      let provider: { type?: string; delta?: string };
+      try {
+        provider = JSON.parse(message.data) as { type?: string; delta?: string };
+      } catch {
+        return;
+      }
+      switch (provider.type) {
+        case "session.created":
+          /* The ONLY edge that makes us configure the session; miss it and the
+           * handshake never completes and the call hangs, silently. */
+          call.send(grokSessionUpdate(request));
+          return;
+        case "session.updated": {
+          /* Usable. Everything the handshake made us hold goes now. */
+          call.markReady(this.deps.now());
+          const { framesQueued, framesSent } = call.counters;
+          void append({
+            type: "events.iterate.com/voice-agent/conversation-accepted",
+            idempotencyKey: this.idempotencyKey(`accepted:${call.conversationId}`),
+            payload: {
+              conversationId: call.conversationId,
+              /* The number that says whether buffering earned anything. */
+              handshakeMs: call.handshakeMs ?? 0,
+              framesQueued,
+              framesSent,
+            },
+          });
+          return;
+        }
+        case "response.output_audio.delta":
+          if (typeof provider.delta === "string") this.#speak(call, provider.delta, append);
+          return;
+        default:
+          return;
+      }
+    });
+  }
+
+  /** Provider audio out to the device, as ephemeral speaker frames. */
+  #speak(
+    call: GrokCall,
+    deltaBase64: string,
+    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
+  ): void {
+    void append({
+      type: "events.iterate.com/voice-agent/spk-frame",
+      ephemeral: true,
+      payload: {
+        conversationId: call.conversationId,
+        t: this.deps.now(),
+        enc: "p",
+        pcm: deltaBase64,
+      },
+    });
+  }
+
+  #endCall(reason: string): void {
+    const call = this.#call;
+    if (call === null) return;
+    this.#call = null;
+    console.log(`voice call ${call.conversationId} ended: ${reason}`);
+    call.close();
+  }
+}
+
+/**
+ * The whole userspace facet: recovery on (this processor owes a live call it
+ * must re-dial after an eviction) and one factory. Everything else — the itx
+ * alarm proxy, the stream handle, configure/handleAlarm — is the base.
+ */
+export class VoiceAgentFacet extends StreamProcessorFacet {
+  protected readonly recovery = true;
+  protected createProcessor(deps: ProcessorHostDeps) {
+    return new VoiceAgentFacetProcessor({
+      ...deps,
+      now: () => Date.now(),
+      dialGrok: (request) => dialGrokSocket(request),
     });
   }
 }
