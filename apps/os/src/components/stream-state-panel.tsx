@@ -771,7 +771,12 @@ function readSubscriptionRow(
   const configured = readRuntimeRecord(value);
   const payload = readRuntimeRecord(configured?.configuration);
   const receiver = readRuntimeRecord(payload?.receiver);
-  const kind = receiver?.action;
+  // The v31 model split `processor-wake` into `facet-processor` and
+  // `wake-processor`; this panel still renders both as one "processor-wake"
+  // kind, distinguished by the `facet` flag below.
+  const action = receiver?.action;
+  const kind =
+    action === "facet-processor" || action === "wake-processor" ? "processor-wake" : action;
   if (
     kind !== "processor-wake" &&
     kind !== "copy-to-stream" &&
@@ -799,7 +804,7 @@ function readSubscriptionRow(
     (candidate) => candidate.kind === "hosted" && candidate.name === name,
   );
 
-  const facet = receiver?.placement === "facet";
+  const facet = action === "facet-processor";
   const delivery = readRuntimeRecord(receiver?.delivery);
   const deliveryLabel =
     kind === "webhook-post"
