@@ -1928,26 +1928,7 @@ export class VoiceBridge extends IterateDurableObject {
      * second against the 50 realtime needs, and concealing the shortfall.
      * ~950 bytes per 20ms frame becomes ~520.
      */
-    const mulawFromPcm16 = (pcm: Uint8Array): Uint8Array => {
-      const BIAS = 0x84;
-      const CLIP = 32635;
-      const samples = pcm.length >> 1;
-      const out = new Uint8Array(samples);
-      for (let index = 0; index < samples; index++) {
-        let sample = ((pcm[index * 2]! | (pcm[index * 2 + 1]! << 8)) << 16) >> 16;
-        const sign = sample < 0 ? 0x80 : 0;
-        if (sample < 0) sample = -sample;
-        if (sample > CLIP) sample = CLIP;
-        sample += BIAS;
-        let exponent = 7;
-        for (let mask = 0x4000; (sample & mask) === 0 && exponent > 0; exponent--) {
-          mask >>= 1;
-        }
-        const mantissa = (sample >> (exponent + 3)) & 0x0f;
-        out[index] = ~(sign | (exponent << 4) | mantissa) & 0xff;
-      }
-      return out;
-    };
+    const mulawFromPcm16 = encodeMulawFromPcm16;
 
     const appendSpkPcm = (bytes: Uint8Array, tGrok: number) => {
       /*
@@ -3852,6 +3833,36 @@ function mulawToPcm16(mulaw: ArrayBuffer): ArrayBuffer {
   return output.buffer;
 }
 
+/**
+ * PCM16 to G.711 mu-law. Shared, because the facet and the retiring bridge both
+ * encode the downlink and two copies of this would be two subtly different
+ * voices.
+ *
+ * Halving the bytes is what lets a microcontroller RECEIVE speech at all: the
+ * device was measured taking 9-31 frames a second against the 50 realtime
+ * needs, and concealing the shortfall. ~950 bytes per 20 ms becomes ~520.
+ */
+function encodeMulawFromPcm16(pcm: Uint8Array): Uint8Array {
+  const BIAS = 0x84;
+  const CLIP = 32635;
+  const samples = pcm.length >> 1;
+  const out = new Uint8Array(samples);
+  for (let index = 0; index < samples; index++) {
+    let sample = ((pcm[index * 2]! | (pcm[index * 2 + 1]! << 8)) << 16) >> 16;
+    const sign = sample < 0 ? 0x80 : 0;
+    if (sample < 0) sample = -sample;
+    if (sample > CLIP) sample = CLIP;
+    sample += BIAS;
+    let exponent = 7;
+    for (let mask = 0x4000; (sample & mask) === 0 && exponent > 0; exponent--) {
+      mask >>= 1;
+    }
+    const mantissa = (sample >> (exponent + 3)) & 0x0f;
+    out[index] = ~(sign | (exponent << 4) | mantissa) & 0xff;
+  }
+  return out;
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   const chunk = 0x8000;
@@ -5169,6 +5180,17 @@ class GrokCall {
   #readyAtMs: number | null = null;
   #framesQueued = 0;
   #framesSent = 0;
+  /*
+   * SPEAKER FRAMING. The provider streams arbitrary-length PCM16; a client
+   * plays 20 ms frames and drops anything else on the floor, which looks from
+   * the outside exactly like a model that said nothing. These carry the
+   * leftover bytes between deltas and the numbering a client uses to tell a
+   * superseded answer from the current one.
+   */
+  #spkRemainder = new Uint8Array(0);
+  #spkSeq = 0;
+  #answerSeq = 0;
+  #answerFrames = 0;
 
   constructor(conversationId: string, now: number) {
     this.conversationId = conversationId;
@@ -5192,6 +5214,42 @@ class GrokCall {
 
   attach(socket: WebSocket): void {
     this.#socket = socket;
+  }
+
+  /** A new answer begins: number it, and restart its frame count at zero. */
+  beginAnswer(): void {
+    this.#answerSeq++;
+    this.#answerFrames = 0;
+    this.#spkRemainder = new Uint8Array(0);
+  }
+
+  /**
+   * Cut one provider delta into the frames a client can actually play.
+   *
+   * 640 bytes is 320 PCM16 samples is 20 ms at 16 kHz — the frame every board
+   * and the host CLI expect. Mu-law halves the bytes, which is what lets a
+   * microcontroller receive speech at all.
+   */
+  framesFor(deltaBase64: string, now: number) {
+    const bytes = new Uint8Array(base64ToBytes(deltaBase64));
+    const joined = new Uint8Array(this.#spkRemainder.length + bytes.length);
+    joined.set(this.#spkRemainder, 0);
+    joined.set(bytes, this.#spkRemainder.length);
+    const whole = joined.length - (joined.length % 640);
+    this.#spkRemainder = joined.slice(whole);
+    const frames = [];
+    for (let offset = 0; offset < whole; offset += 640) {
+      frames.push({
+        conversationId: this.conversationId,
+        answer: this.#answerSeq,
+        frame: this.#answerFrames++,
+        seq: this.#spkSeq++,
+        t: now,
+        enc: "u",
+        pcm: bytesToBase64(encodeMulawFromPcm16(joined.slice(offset, offset + 640))),
+      });
+    }
+    return frames;
   }
 
   send(message: Record<string, unknown>): void {
@@ -5492,8 +5550,30 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
      * a revived incarnation learns it owes a call, so this runs before the
      * event switch and is the only thing that ever dials.
      */
-    if (delivery.caughtUp && state.call !== null && this.#call === null) {
-      this.#openCall(state.call.request, state.call.requestedAtMs, append, runInBackground);
+    const wanted = state.call;
+    if (
+      delivery.caughtUp &&
+      wanted !== null &&
+      this.#call?.conversationId !== wanted.conversationId
+    ) {
+      /*
+       * A NEWER CALL SUPERSEDES THE ONE IN FLIGHT, and getting this wrong
+       * wedges the stream completely.
+       *
+       * The guard used to be `this.#call === null`, which reads as "only dial
+       * when idle" and is really "dial once, ever". Nothing ends a call except
+       * an explicit hang-up, so ONE test call that was never hung up made this
+       * incarnation refuse every later request in silence — nine consecutive
+       * requests on one stream without a single acceptance between them, which
+       * from the client looks exactly like a server that is not there.
+       *
+       * Comparing the id makes the rule the honest one: whatever the fold says
+       * the current call is, that is the call this incarnation holds. A repeat
+       * of the SAME id is still a no-op, so a redelivery or a revival does not
+       * churn a live socket.
+       */
+      this.#endCall("superseded by a newer call on this stream");
+      this.#openCall(wanted.request, wanted.requestedAtMs, append, runInBackground);
     }
     if (event === null) return;
     const call = this.#call;
@@ -5689,6 +5769,11 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
           });
           return;
         }
+        case "response.created":
+          /* Numbering the answer makes a barge-in a comparison: a client
+           * holding frames from answer 3 drops them on seeing a 4. */
+          call.beginAnswer();
+          return;
         case "response.output_audio.delta":
           if (typeof provider.delta === "string") this.#speak(call, provider.delta, append);
           return;
@@ -5704,16 +5789,9 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     deltaBase64: string,
     append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
   ): void {
-    void append({
-      type: "events.iterate.com/voice-agent/spk-frame",
-      ephemeral: true,
-      payload: {
-        conversationId: call.conversationId,
-        t: this.deps.now(),
-        enc: "p",
-        pcm: deltaBase64,
-      },
-    });
+    for (const payload of call.framesFor(deltaBase64, this.deps.now())) {
+      void append({ type: "events.iterate.com/voice-agent/spk-frame", ephemeral: true, payload });
+    }
   }
 
   #endCall(reason: string): void {
