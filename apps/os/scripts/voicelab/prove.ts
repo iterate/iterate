@@ -2504,15 +2504,24 @@ function colourDistance(
 /**
  * Watch a stream for the device's own telemetry.
  *
- * Used across a reboot: `voicelab/dev-stats` reappearing on the SAME path is
- * the host-visible form of the boot log's `resuming remembered conversation`,
- * which is stored in NVS and can otherwise only be read over serial.
+ * Used across a reboot: the board re-OPENING its connection on the SAME path
+ * is the host-visible form of the boot log's `resuming remembered
+ * conversation`, which is stored in NVS and can otherwise only be read over
+ * serial.
+ *
+ * This used to watch for `dev-stats` reappearing, which was a five-second
+ * heartbeat every board published unconditionally. That heartbeat is gone —
+ * it kept the stream's Durable Object awake forever, for numbers `health()`
+ * already answers on demand — and watching for an event nobody emits is a
+ * check that passes by never running. A connection opening is emitted by the
+ * platform, needs nothing of the device, and is the thing actually being
+ * asked about: did the board come back.
  */
 async function watchStream(itx: Awaited<ReturnType<typeof connectProject>>, path: string) {
   let seen = 0;
   const connection = await itx.streams.get(path).openConnection({
     connectionKey: `prove-restart-${Date.now()}`,
-    eventTypes: ["events.iterate.com/voice-agent/dev-stats"],
+    eventTypes: ["events.iterate.com/stream/connection-opened"],
     processEventBatch: (batch: { events: unknown[] }) => {
       seen += batch.events.length;
     },
