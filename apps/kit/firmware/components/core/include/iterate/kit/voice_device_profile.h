@@ -167,6 +167,13 @@ enum {
   ITERATE_KIT_VOICE_CONNECTION_OPEN_TIMEOUT_MS = 10000,
   ITERATE_KIT_VOICE_CONTROL_POLL_MS = 25,
   ITERATE_KIT_VOICE_STATS_INTERVAL_MS = 5000,
+  /*
+   * How often a board with a mouth asks the processor what that mouth is
+   * doing — and ONLY while its speaker queue is non-empty, which is what
+   * keeps an idle board silent on the wire. A face rendered at 10 Hz looks
+   * fine and the classifier's output is sparser than that.
+   */
+  ITERATE_KIT_VOICE_FACE_POLL_MS = 100,
   ITERATE_KIT_VOICE_UNHEALTHY_RESTART_MS = 120000,
   /*
    * `PING_INTERVAL_MS`, `PING_TIMEOUT_MS` and `BRIDGE_SILENCE_MS` were here.

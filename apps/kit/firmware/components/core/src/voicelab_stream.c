@@ -1125,6 +1125,99 @@ static void start_call_completed(
   }
 }
 
+/* --- the face, pulled out of the processor's own runtime bag ------------- */
+
+static const char *const runtime_state_path[] = {"getProcessorRuntimeState"};
+
+/**
+ * `{ snapshot, runtime }`, and `runtime.face` is what this is for.
+ *
+ * `face` is NULL until the mouth has first moved, which is the normal state at
+ * the opening of every answer — so a missing field is not a failure and is not
+ * counted as one.
+ */
+static void face_poll_completed(
+    void *context, const struct capnweb_result *result) {
+  struct iterate_kit_voicelab *voicelab = context;
+  struct capnweb_value runtime_bag = {0};
+  struct capnweb_value face = {0};
+  struct capnweb_value field = {0};
+  int64_t answer = 0;
+  int64_t playout_samples = 0;
+  int64_t viseme = 0;
+  int64_t confidence = 0;
+  int64_t at = 0;
+
+  voicelab->face_poll_pending = false;
+  if (result->kind != CAPNWEB_RESULT_VALUE || result->status != CAPNWEB_OK) {
+    return;
+  }
+  if (!capnweb_value_object_get(&result->value, "runtime", &runtime_bag) ||
+      !capnweb_value_object_get(&runtime_bag, "face", &face)) {
+    return;
+  }
+  if (!capnweb_value_object_get(&face, "answer", &field) ||
+      !capnweb_value_get_int64(&field, &answer) ||
+      !capnweb_value_object_get(&face, "playoutSamples", &field) ||
+      !capnweb_value_get_int64(&field, &playout_samples) ||
+      !capnweb_value_object_get(&face, "viseme", &field) ||
+      !capnweb_value_get_int64(&field, &viseme) ||
+      !capnweb_value_object_get(&face, "at", &field) ||
+      !capnweb_value_get_int64(&field, &at)) {
+    return;
+  }
+  /* Confidence is the one field the classifier may legitimately omit. */
+  if (capnweb_value_object_get(&face, "confidence", &field)) {
+    (void)capnweb_value_get_int64(&field, &confidence);
+  }
+  if (answer < 0 || playout_samples < 0 || viseme < 0 || viseme > 14 ||
+      at <= 0) {
+    return;
+  }
+  /*
+   * THE SAME SHAPE COMES BACK UNTIL THE MOUTH MOVES, because this is state and
+   * not an event stream. Forwarding it every poll would feed the avatar's
+   * queue ten identical changes a second and make its ledger count shapes that
+   * never happened.
+   */
+  if ((uint64_t)at == voicelab->last_face_at_ms) return;
+  voicelab->last_face_at_ms = (uint64_t)at;
+  ++voicelab->face_updates;
+  if (voicelab->options.on_face != NULL) {
+    voicelab->options.on_face(
+        voicelab->options.downlink_context,
+        (uint32_t)answer,
+        (uint32_t)playout_samples,
+        (uint8_t)viseme,
+        confidence < 0 ? 0U : (uint8_t)(confidence > 255 ? 255 : confidence));
+  }
+}
+
+enum capnweb_status iterate_kit_voicelab_poll_face(
+    struct iterate_kit_voicelab *voicelab) {
+  static const char args[] = "[{\"name\":\"voice-agent\"}]";
+  enum capnweb_status status;
+  if (voicelab == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
+  if (voicelab->state != ITERATE_KIT_VOICELAB_READY ||
+      !voicelab->has_stream_capability || voicelab->face_poll_pending) {
+    return CAPNWEB_E_STATE;
+  }
+  status = capnweb_session_call_path(
+      voicelab->options.session,
+      voicelab->stream_capability,
+      runtime_state_path,
+      sizeof(runtime_state_path) / sizeof(runtime_state_path[0]),
+      args,
+      sizeof(args) - 1U,
+      face_poll_completed,
+      voicelab);
+  if (status == CAPNWEB_OK) {
+    voicelab->face_poll_pending = true;
+    ++voicelab->face_polls;
+  }
+  return status;
+}
+
 static bool json_literal_contents_are_safe(const char *value) {
   const unsigned char *cursor = (const unsigned char *)value;
   if (value == NULL) {

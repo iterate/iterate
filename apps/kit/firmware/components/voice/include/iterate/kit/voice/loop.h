@@ -173,6 +173,21 @@ enum iterate_kit_voice_answer_note_kind {
   ITERATE_KIT_VOICE_ANSWER_ADMITTED,
   /** Everything queued is gone; forget what nobody will hear. */
   ITERATE_KIT_VOICE_ANSWER_ABANDONED,
+  /**
+   * A mouth shape, scheduled against a position in this answer.
+   *
+   * This kind was deleted with the `viseme` EVENT and is back because the fact
+   * came back by another route: the face is reduced state in the processor's
+   * runtime bag now, and the loop polls it while audio is playing. What it
+   * carries is unchanged — the same 0-14 id at the same sample offset — which
+   * is why the avatar's queue took it without modification.
+   *
+   * It rides `observe_answer` rather than an op of its own for the reason the
+   * struct exists at all: admitted, abandoned and scheduled must reach the
+   * board on the SAME task in the SAME order, or the face animates audio
+   * nobody will hear.
+   */
+  ITERATE_KIT_VOICE_ANSWER_VISEME,
 };
 
 /**
@@ -192,6 +207,12 @@ struct iterate_kit_voice_answer_note {
   uint32_t answer;
   /** ADMITTED only. */
   size_t sample_count;
+  /** VISEME only: position within `answer`, in 16 kHz samples from its first. */
+  uint32_t offset_samples;
+  /** VISEME only: the 0-14 firmware id; 14 is silence. */
+  uint8_t viseme;
+  /** VISEME only. */
+  uint8_t confidence;
 };
 
 /**

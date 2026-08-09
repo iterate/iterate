@@ -1053,6 +1053,31 @@ static void on_control(
   }
 }
 
+/*
+ * THE MOUTH, FROM THE PROCESSOR'S OWN REDUCED STATE.
+ *
+ * Runs on the app task, which is where the voicelab completions land, so it is
+ * serialized against ADMITTED and ABANDONED exactly as the viseme ledger
+ * requires. The dedupe by `at` lives in the stream, so anything reaching here
+ * is a shape the mouth actually moved to.
+ */
+static void on_face(
+    void *context,
+    uint32_t answer,
+    uint32_t offset_samples,
+    uint8_t viseme,
+    uint8_t confidence) {
+  const struct iterate_kit_voice_answer_note note = {
+    .kind = ITERATE_KIT_VOICE_ANSWER_VISEME,
+    .answer = answer,
+    .offset_samples = offset_samples,
+    .viseme = viseme,
+    .confidence = confidence,
+  };
+  (void)context;
+  board_answer(&note);
+}
+
 static bool playback_apply_reprime(
     struct iterate_kit_voice_playback_clock *playout_clock) {
   if (!atomic_exchange_explicit(
@@ -2054,6 +2079,17 @@ static size_t health_json(char *out, size_t capacity) {
     {"spkSupersededMidplay", runtime.playout.superseded_midplay},
     {"spkWaitPriming", runtime.speaker_waits_priming},
     {"spkAnswerDrains", runtime.speaker_waits_dry},
+    /*
+     * THE FACE LANE, AND WHICH HALF OF IT IS DARK.
+     *
+     * Two numbers because they fail apart: `facePolls` standing still means
+     * the gate never opened (no audio, or no mouth on this board), and
+     * `facePolls` climbing while `faceUpdates` does not means the processor is
+     * being asked and has no face to report. A frozen mouth was diagnosed from
+     * source once because there was no counter to look at.
+     */
+    {"facePolls", runtime.voicelab.face_polls},
+    {"faceUpdates", runtime.voicelab.face_updates},
     {"bargeIns", runtime.barge_in_flushes},
     /*
      * Refused for want of evidence: high here means the room, not a person.
@@ -2954,6 +2990,13 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         .clock_context = NULL,
         .on_speaker = on_speaker_pcm,
         .on_control = on_control,
+        /*
+         * Only where there is a mouth. A board with no `observe_answer` has
+         * nowhere to put a viseme, and offering the callback would make the
+         * poll below look worth doing on a board that can never use it.
+         */
+        .on_face =
+            runtime.board->observe_answer != NULL ? on_face : NULL,
         .downlink_context = NULL,
       };
       const enum capnweb_status started =
@@ -3490,6 +3533,35 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
           runtime.flush_frames_left = runtime.flush_frames_left > take
               ? runtime.flush_frames_left - (uint32_t)take
               : 0U;
+        }
+      }
+      /*
+       * THE FACE, ASKED FOR ONLY WHILE THERE IS AUDIO TO MOVE A MOUTH FOR.
+       *
+       * The mouth is reduced state in the voice-agent processor's runtime bag
+       * — `{answer, playoutSamples, viseme, confidence, at}` — and there is no
+       * push path for a facet's contributed bag, so it has to be asked for.
+       * That makes the GATE the whole design rather than a detail: a face
+       * cannot change while nothing is playing, so the condition is the
+       * speaker queue being non-empty, and an idle board therefore makes this
+       * call exactly zero times. A poll on a plain timer would be the same
+       * defect as the five-second telemetry heartbeat that was deleted to let
+       * these Durable Objects hibernate.
+       *
+       * 100 ms, because a face rendered at 10 Hz looks fine and the
+       * classifier's own output is sparser than that. It stops the moment the
+       * queue drains — the tail of an answer is a resting mouth, which the
+       * avatar already knows how to hold.
+       *
+       * Gated on outbox headroom like every other producer, and the stream
+       * refuses a second poll while one is in flight.
+       */
+      if (runtime.board->observe_answer != NULL && outbox_free >= 4U &&
+          speaker_queued_bytes() > 0U) {
+        static uint64_t next_face_poll_at;
+        if (now >= next_face_poll_at) {
+          next_face_poll_at = now + ITERATE_KIT_VOICE_FACE_POLL_MS;
+          (void)iterate_kit_voicelab_poll_face(&runtime.voicelab);
         }
       }
       /*

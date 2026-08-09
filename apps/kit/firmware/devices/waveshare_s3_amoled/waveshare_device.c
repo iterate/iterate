@@ -129,13 +129,24 @@ static void observe_answer(
     case ITERATE_KIT_VOICE_ANSWER_ABANDONED:
       waveshare_avatar_note_abandoned();
       /*
-       * The mouth track dies with the audio it was scheduled against. Its
-       * INTAKE is currently unfed — the viseme event is deleted from the
-       * contract and the face becomes liveState-published state — so this
-       * clears a queue nothing is filling yet. Kept, not deleted, because the
-       * queue and its reset are the half that survives that change.
+       * The mouth track dies with the audio it was scheduled against: a mouth
+       * saying words nobody will hear is the exact lie this lane exists to
+       * avoid. Its intake was unfed for a while — the `viseme` event was
+       * deleted before the state that replaced it was wired — and the queue
+       * and this reset are the half that survived that gap.
        */
       waveshare_avatar_viseme_reset();
+      break;
+    case ITERATE_KIT_VOICE_ANSWER_VISEME:
+      /*
+       * From the processor's runtime bag rather than an event, and in the
+       * same coordinates the event used: a 0-14 shape at a sample offset
+       * inside `answer`. The queue schedules it against audio the DAC has
+       * actually accepted, so a shape whose answer was abandoned above is
+       * already gone by the time it would have played.
+       */
+      waveshare_avatar_note_viseme(
+          note->answer, note->offset_samples, note->viseme, note->confidence);
       break;
   }
 }

@@ -146,6 +146,21 @@ enum iterate_kit_voicelab_failure {
   ITERATE_KIT_VOICELAB_FAILURE_SESSION_ENDED,
 };
 
+/**
+ * The mouth, as the processor's own reduced state describes it.
+ *
+ * `offset_samples` positions the shape inside `answer`, in 16 kHz samples from
+ * that answer's first — the same coordinates the deleted `viseme` EVENT used,
+ * so the avatar's queue takes it unchanged. `viseme` is the 0-14 firmware id
+ * and 14 is silence.
+ */
+typedef void (*iterate_kit_voicelab_face_fn)(
+    void *context,
+    uint32_t answer,
+    uint32_t offset_samples,
+    uint8_t viseme,
+    uint8_t confidence);
+
 struct iterate_kit_voicelab_options {
   struct capnweb_session *session;
   const char *project_id;
@@ -188,6 +203,8 @@ struct iterate_kit_voicelab_options {
   iterate_kit_voicelab_control_fn on_control;
   /** Optional: every event type seen on the downlink, for logging. */
   iterate_kit_voicelab_seen_fn on_event_seen;
+  /** Optional: the mouth, when the poll below finds it has moved. */
+  iterate_kit_voicelab_face_fn on_face;
   void *downlink_context;
 };
 
@@ -234,6 +251,18 @@ struct iterate_kit_voicelab {
   bool call_active;
   uint32_t call_starts;
   uint32_t call_failures;
+  /** One face poll in flight at a time; see iterate_kit_voicelab_poll_face. */
+  bool face_poll_pending;
+  uint32_t face_polls;
+  uint32_t face_updates;
+  /**
+   * The `at` of the last face this device forwarded.
+   *
+   * The poll returns CURRENT state, so the same shape comes back until the
+   * mouth moves; without this the avatar's queue would take the same change
+   * ten times a second and the ledger would count shapes that never happened.
+   */
+  uint64_t last_face_at_ms;
   /*
    * When the BRIDGE was last heard from, by its own events — not by ours
    * being accepted. A detached call lives in a Durable Object this device
@@ -390,6 +419,28 @@ bool iterate_kit_voicelab_needs_recycle(
     const struct iterate_kit_voicelab *voicelab);
 
 /** Open the successor connection; the old one is released on success. */
+/**
+ * Ask the voice-agent processor what its face is doing, once.
+ *
+ * A POLL, AND THAT IS A LIMITATION RATHER THAN A DESIGN. The platform has a
+ * push path for a STREAM's debug state but none for a FACET's contributed
+ * runtime bag, which is where the face lives — so there is no way to be told,
+ * only to ask. If a push path appears this should become one; nothing about
+ * the callback or the avatar's intake would change.
+ *
+ * THE CALLER MUST GATE THIS ON THERE BEING AUDIO TO MOVE A MOUTH FOR. A face
+ * cannot change while nothing is playing, so an idle board must make this call
+ * zero times: every call wakes the Durable Object that owns the stream, and a
+ * poll running on an idle timer is the same defect as the telemetry heartbeat
+ * that was deleted for it. See the call site in the voice loop.
+ *
+ * At most one is in flight; a second while the first is outstanding returns
+ * CAPNWEB_E_STATE rather than queueing, because a face two round trips old is
+ * worth nothing and the reply slots are a fixed table.
+ */
+enum capnweb_status iterate_kit_voicelab_poll_face(
+    struct iterate_kit_voicelab *voicelab);
+
 enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab);
 
