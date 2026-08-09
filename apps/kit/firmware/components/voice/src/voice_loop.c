@@ -589,6 +589,25 @@ static void board_answer(const struct iterate_kit_voice_answer_note *note) {
   }
 }
 
+/*
+ * MOVE THE HALF-DUPLEX FENCE, or do nothing on a board that has none.
+ *
+ * On the one board that is half duplex the ES8311's ADC and DAC share
+ * MCLK/BCLK/WS, so capture requires DELETING the playback channel: the
+ * microphone physically cannot run while the speaker does. Asynchronous —
+ * `playout_fenced_out` is how the playback step learns the fence has settled.
+ *
+ * The SEQUENCING is the loop's and stays below, because it is policy and not a
+ * driver: the pins are taken only after the turn marker is on the wire AND the
+ * speaker queue has been emptied, and they are given back at the RELEASE edge
+ * rather than at the commit, so the answer can play the moment it arrives.
+ */
+static void board_fence(bool microphone_owns_pins) {
+  if (runtime.board->capture_fence != NULL) {
+    runtime.board->capture_fence(runtime.board_context, microphone_owns_pins);
+  }
+}
+
 static void board_playout(const int16_t *pcm, size_t samples) {
   if (runtime.board->observe_playout != NULL) {
     runtime.board->observe_playout(runtime.board_context, pcm, samples);
@@ -995,6 +1014,19 @@ void iterate_kit_voice_loop_playback_step(void) {
    * rather than concealed — see the read and the dry branch below.
    */
   size_t received;
+
+  /*
+   * FENCED OUT. While the microphone owns the shared pins — or the fence is
+   * moving in either direction — this step must not pull frames it can only
+   * fail to write. Frames stay queued; the fence drops within milliseconds of
+   * the turn committing, long before an answer.
+   */
+  if (runtime.board->playout_fenced_out != NULL &&
+      runtime.board->playout_fenced_out(runtime.board_context)) {
+    board_phase(ITERATE_KIT_VOICE_PHASE_WAITING);
+    DELAY_MS(5);
+    return;
+  }
 
   (void)playback_apply_reprime(&runtime.playout_clock);
   if (atomic_exchange_explicit(
@@ -2617,7 +2649,9 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       ESP_LOGW(tag, "turn abandoned: session or call went away");
       runtime.talking = false;
       runtime.flushing_turn = false;
-      runtime.remote_talk = (false);
+      runtime.remote_talk = false;
+      /* Give the pins back: the answer path needs them. */
+      board_fence(false);
       runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
       runtime.view.status = runtime.facts->call_hint;
     }
@@ -2872,7 +2906,8 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       if (runtime.talking && !runtime.flushing_turn &&
           iterate_kit_voice_elapsed_ms(now, runtime.turn_started_ms) > TURN_MAX_MS) {
         ESP_LOGW(tag, "turn exceeded %ums — ending it", (unsigned)TURN_MAX_MS);
-        runtime.remote_talk = (false);
+        runtime.remote_talk = false;
+        board_fence(false);
         runtime.flushing_turn = true;
         runtime.flush_frames_left = 0U;
         runtime.flush_deadline_ms = now;
@@ -2895,6 +2930,13 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
           runtime.talking = true;
           runtime.turn_started_ms = now;
           runtime.flushing_turn = false;
+          /*
+           * THE HANDOFF: only now, with the turn marker on the wire and the
+           * speaker queue emptied by the abandon above, may the microphone
+           * take the pins. If the marker failed, nothing is taken and no turn
+           * opens — which is the whole reason this sits inside the branch.
+           */
+          board_fence(true);
           ESP_LOGI(tag, "turn start");
           /*
            * The face attends and shuts its mouth. Told rather than inferred from
@@ -2928,7 +2970,14 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         runtime.flush_frames_left =
             (uint32_t)uxQueueMessagesWaiting(runtime.mic_queue);
         runtime.flush_deadline_ms = now + TURN_FLUSH_TIMEOUT_MS;
-        runtime.view.status = ("sending");
+        /*
+         * The microphone's job ended at the RELEASE edge, so give the pins
+         * back now rather than at the commit below — the answer can then play
+         * the moment it arrives. Queued frames still flush; the fence only
+         * stops NEW capture.
+         */
+        board_fence(false);
+        runtime.view.status = "sending";
       }
       if (runtime.flushing_turn &&
           (runtime.flush_frames_left == 0U ||

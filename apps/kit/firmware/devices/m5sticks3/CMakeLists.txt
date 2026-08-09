@@ -11,6 +11,7 @@ idf_component_register(
     capnweb
     capabilities
     core
+    voice
     iterate_esp_idf
     esp_timer
     esp_wifi
