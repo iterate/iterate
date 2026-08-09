@@ -2476,8 +2476,23 @@ bool iterate_kit_voice_loop_init(
       (unsigned int)heap_caps_get_free_size(MALLOC_CAP_DMA),
       (unsigned int)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
       (unsigned int)esp_get_free_heap_size());
-  runtime.mic_queue =
-      xQueueCreate(MIC_QUEUE_DEPTH, sizeof(struct mic_frame));
+  /*
+   * PSRAM, like the speaker queue beside it and for the same reasons.
+   *
+   * 32 frames of 640 bytes is 20 KiB, and three of the four boards were
+   * spending that in INTERNAL RAM — the only kind TLS, Wi-Fi and DMA can use.
+   * The fourth already knew better: the board with a camera, LVGL and esp-sr
+   * put its microphone queue in PSRAM, and it is also the board that dropped
+   * its socket mid-sentence with "esp-aes: Failed to allocate memory" while
+   * `heapFree` read 5,800,196. Unifying to internal would have taken 20 KiB
+   * back from exactly the board that has already proved it cannot spare it.
+   *
+   * Safe for the same reason the speaker queue is: an item is one indivisible
+   * 20 ms frame, FreeRTOS copies on send and receive, and this is never a DMA
+   * target. It is touched at 50 Hz by two tasks that already touch PSRAM.
+   */
+  runtime.mic_queue = xQueueCreateWithCaps(
+      MIC_QUEUE_DEPTH, sizeof(struct mic_frame), MALLOC_CAP_SPIRAM);
   /*
    * PSRAM, not internal. Each queue item is one indivisible 20 ms frame plus
    * its answer generation. FreeRTOS synchronizes reset with receive, while the
