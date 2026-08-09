@@ -1,14 +1,16 @@
 /*
- * Waveshare ESP32-S3 Touch AMOLED 1.8 — the Iterate voice device.
+ * The Iterate voice device, once, for every board that is one.
  *
- * The whole product is here: an on-screen Iterate UI (start call / hang up),
- * a live capability at kit.waveshare so an agent can drive the screen and the
- * call, and the voice pipe itself.
+ * The whole product is here: a UI (start call / hang up), a live capability at
+ * kit.<board> so an agent can drive the screen and the call, and the voice pipe
+ * itself. What a board physically IS arrives through
+ * `struct iterate_kit_board_ops`; voice/loop.h says why that surface is the
+ * size it is, and what four copies of this file cost before it existed.
  *
  * ONE Cap'n Web WebSocket to /api carries everything, exactly like the
  * TypeScript voicelab client: authenticate -> projects.get -> streams.get,
  * then 50 Hz one-way appends of ephemeral events.iterate.com/voice-agent/mic-frame events (real
- * ES8311 microphone), and a live openConnection callback delivering
+ * microphone), and a live openConnection callback delivering
  * events.iterate.com/voice-agent/spk-frame events (decoded to the speaker) plus grok-events
  * (speech_started = barge-in flush, response.done = end of answer).
  *
@@ -17,18 +19,20 @@
  * worker holds the Grok session detached. No laptop bridge, no second
  * connection.
  *
- * Turn taking is MANUAL, like the M5StickS3: no VAD anywhere. BOOT toggles
- * the call, PWR is held while speaking. Nothing is sent from the microphone
- * unless PWR is down, which is also the whole echo story on a board with no
- * AEC reference — the speaker is never live into an open microphone, and
- * pressing PWR cancels an answer in flight instead of talking over it.
+ * Turn taking is a per-board FACT, not a per-board program. A board with no
+ * echo cancellation holds a control while speaking and sends nothing from the
+ * microphone unless it is down — the whole echo story there, since the speaker
+ * is never live into an open microphone and pressing to talk cancels an answer
+ * in flight instead of talking over it. A board that cancels its own speaker
+ * leaves the microphone open and lets the far end segment turns. Both are
+ * below, chosen by `facts->turns`.
  *
- * Observability is the stream itself (durable events.iterate.com/voice-agent/dev-stats every 5s);
- * opening the USB console resets the board.
+ * Observability is the stream itself (events.iterate.com/voice-agent/dev-stats every 5s);
+ * opening the USB console resets some of these boards.
  *
  * DELIBERATE DEPARTURE from the dual-WebSocket decision in
- * docs/fable-v2-plan/DECISIONS.md — this target is the single-socket
- * measurement that decision asked for.
+ * docs/fable-v2-plan/DECISIONS.md — this is the single-socket measurement that
+ * decision asked for.
  */
 #include <inttypes.h>
 #include <stdatomic.h>
@@ -87,11 +91,8 @@ static uint32_t abandon_speaker_audio(void);
 #include "iterate/kit/spsc_ring.h"
 #include "iterate/kit/voicelab_stream.h"
 #include "iterate/kit/voice_device_profile.h"
+#include "iterate/kit/voice/loop.h"
 #include "iterate/kit/voice_playback_clock.h"
-#include "waveshare_audio.h"
-#include "waveshare_avatar.h"
-#include "waveshare_buttons.h"
-#include "waveshare_display.h"
 
 static const char tag[] = "iterate-voicelab";
 
@@ -230,12 +231,6 @@ enum {
   /* Whole-frame queueing makes replacement atomic at frame boundaries. */
   SPEAKER_QUEUE_DEPTH = SPEAKER_BUFFER_BYTES / FRAME_BYTES,
   /*
-   * How long the playback task waits for a frame before treating the source
-   * as dry. Two thirds of the 90 ms I2S DMA ring (6 descriptors x 240
-   * frames at 16 kHz); see the argument at the read itself.
-   */
-  SPEAKER_DRY_WAIT_MS = 60,
-  /*
    * Playback will not start, or resume after starving, until this much audio
    * is queued. Without it the first frame starts the speaker with zero margin
    * and the DMA's 90 ms is the only tolerance the whole path has.
@@ -282,8 +277,8 @@ enum {
   TURN_FLUSH_TIMEOUT_MS = ITERATE_KIT_VOICE_TURN_FLUSH_TIMEOUT_MS,
   /* Longest a single spoken turn may run before it is closed regardless. */
   TURN_MAX_MS = ITERATE_KIT_VOICE_TURN_MAX_MS,
-  /* Button scan cadence; each scan costs an I2C transaction. */
-  BUTTON_POLL_MS = ITERATE_KIT_VOICE_CONTROL_POLL_MS,
+  /* Control scan cadence; on one board each scan costs an I2C transaction. */
+  CONTROL_POLL_MS = ITERATE_KIT_VOICE_CONTROL_POLL_MS,
   STATS_INTERVAL_MS = ITERATE_KIT_VOICE_STATS_INTERVAL_MS,
   /* How long the transport may stay FAILED before the device reboots itself. */
   UNHEALTHY_RESTART_MS = ITERATE_KIT_VOICE_UNHEALTHY_RESTART_MS,
@@ -321,53 +316,25 @@ EXT_RAM_BSS_ATTR static uint8_t
     outbox_storage_psram[CONTROL_OUTBOX_SLOTS][CONTROL_OUTBOX_SLOT_CAPACITY];
 
 /*
- * A fresh path. The previous one accumulated durable events (dev-stats every
- * 5s, plus every call lifecycle event) until its Durable Object took ~1s per
- * append — measured against a fresh stream's 72ms. Every handshake step is
- * one append, so the device took 20s to come up and calls felt glacial.
- * dev-stats is ephemeral now, so this path stays fast.
- */
-/*
- * The stream this device mounts, as a runtime value.
+ * The stream this device mounts, as a runtime value seeded from the board's
+ * `facts->stream_path`.
  *
- * It was a compile-time constant, which is exactly why "start a fresh
+ * A fresh path per conversation, and mutable. The old shared one accumulated
+ * durable events until its Durable Object took ~1s per append — measured
+ * against a fresh stream's 72ms — and since every handshake step is one append,
+ * the device took 20s to come up and calls felt glacial.
+ *
+ * Mutable because a compile-time constant is exactly why "start a fresh
  * conversation" could not be expressed: one device, one stream, forever, and
  * every reboot resumed a context that might be days old. The path IS the
  * conversation's identity, so choosing it is choosing whether to continue or
  * begin — no other mechanism is needed.
  *
- * The default is the historical one, so a device that has never been asked for
- * anything else behaves exactly as it did.
+ * Its per-board DEFAULT, its /agents/voice/ prefix, and the client path beside
+ * it are all constants and live in `struct iterate_kit_board_facts`; the notes
+ * on why each is what it is went with them.
  */
-/*
- * Under /agents/voice/ because the conversation's stream IS its agent: the
- * voice half and the thinking half are one identity at one path. A default
- * outside /agents/ gave the device a conversation with no agent behind it.
- */
-/*
- * ONE CONVERSATION STREAM PER BOARD, not one shared by all of them.
- *
- * Every device defaulted to "/agents/voice/device". That was harmless while a
- * call minted its own stream, because the default was only ever a starting
- * point. Now that a stream carries many conversations, sharing one means every
- * board presses into the same conversation and each press supersedes the last:
- * three boards on one stream produced two call-started for a single press and
- * an answer that never reached anybody.
- */
-#define STREAM_PATH_DEFAULT "/agents/voice/waveshare"
-static char stream_path[96] = STREAM_PATH_DEFAULT;
-/*
- * THE OTHER PATH, and it is file scope on purpose: two different functions
- * need it. `initialise_connection` connects this board as a client here, and
- * the voice lane sends it with every call request so the conversation can
- * subscribe to this board's own presence.
- *
- * The stream path above is one CONVERSATION and is minted fresh per call.
- * This is the DEVICE, and it never changes.
- */
-static const char *const client_path = "/clients/waveshare";
-#define CONVERSATION_ID "wsdev"
-#define GREETING "Hi, I am your Iterate device. What can I do for you?"
+static char stream_path[96];
 
 /*
  * pdMS_TO_TICKS() truncates, so any wait shorter than one tick becomes zero —
@@ -398,6 +365,34 @@ _Static_assert(
     "speaker capacity must contain whole PCM frames");
 
 static struct {
+  /*
+   * WHAT THIS BOARD IS. Held rather than passed, because the voicelab
+   * callbacks and both audio tasks are reached through function pointers the
+   * platform calls with contexts of their own choosing.
+   */
+  const struct iterate_kit_board_ops *board;
+  const struct iterate_kit_board_facts *facts;
+  void *board_context;
+  /*
+   * WHAT THE PERSON IS TOLD, as one value, pushed once per pass.
+   *
+   * Assembled here and published by `present`. Eight setters used to write
+   * this from 48 places; see voice/loop.h for the state that cost.
+   */
+  struct iterate_kit_voice_view view;
+  /*
+   * INTENT, which is now the loop's rather than a panel driver's.
+   *
+   * `view.wants_call` and `view.talk_held` are the two flags a physical
+   * control and an RPC both land on, so remote and local control cannot
+   * disagree about what the device is doing. `remote_talk` is the RPC half of
+   * the second one, kept apart so releasing the button does not cancel a hold
+   * an agent is still asking for, and vice versa.
+   */
+  bool remote_talk;
+  /** What the board's controls last said. Edges are consumed once, on the pass
+   * that resolves them; `talk_held` is a level and is read every pass. */
+  struct iterate_kit_voice_intent intent;
   struct iterate_kit_audio_codec codec;
   struct iterate_kit_audio_processor processor;
   struct iterate_kit_configuration configuration;
@@ -468,6 +463,13 @@ static struct {
   QueueHandle_t speaker_queue;
   atomic_uint speaker_generation;
   atomic_uint_fast64_t speaker_last_write_ms;
+  /*
+   * The playback step's two persistent locals. They were locals of a `for(;;)`
+   * that never returned; a step returns every pass, so they live here with the
+   * rest of the speaker's state. Written only by the playback task.
+   */
+  struct iterate_kit_voice_playback_clock playout_clock;
+  uint64_t last_write_ms;
   uint32_t mic_frames_captured;
   uint32_t mic_frames_dropped;
   uint32_t mic_process_failures;
@@ -567,37 +569,53 @@ static struct {
   uint64_t turn_started_ms;
 } runtime;
 
+/*
+ * THE BOARD, OR NOTHING.
+ *
+ * Every op below `start` and `present` is optional — a NULL pointer is a board
+ * saying it has no such hardware. Funnelling the checks through four one-line
+ * thunks keeps that fact in one place instead of at each of the ~110 call sites
+ * the four device files used to spread it over.
+ */
+static void board_phase(enum iterate_kit_voice_phase phase) {
+  if (runtime.board->phase != NULL) {
+    runtime.board->phase(runtime.board_context, phase);
+  }
+}
+
+static void board_answer(const struct iterate_kit_voice_answer_note *note) {
+  if (runtime.board->observe_answer != NULL) {
+    runtime.board->observe_answer(runtime.board_context, note);
+  }
+}
+
+static void board_playout(const int16_t *pcm, size_t samples) {
+  if (runtime.board->observe_playout != NULL) {
+    runtime.board->observe_playout(runtime.board_context, pcm, samples);
+  }
+}
+
+/*
+ * Show the current view. Unconditional, once per app-loop pass: the board
+ * decides whether anything changed, under the one lock it already holds, which
+ * is cheaper than the nine lock round trips the setters cost.
+ */
+static void present(void) {
+  runtime.board->present(runtime.board_context, &runtime.view);
+}
+
 static uint32_t speaker_queued_bytes(void) {
   if (runtime.speaker_queue == NULL) return 0U;
   return (uint32_t)uxQueueMessagesWaiting(runtime.speaker_queue) * FRAME_BYTES;
 }
 
-/* What `itx.kit.waveshare` looks like to whoever holds the capability. */
 /*
- * What an agent is told this device is, and how to use it. See the note at the
- * assignment in initialise_connection() for why this string rather than
- * peer_description is the model-facing one.
+ * The two strings that describe this device to whoever holds the capability
+ * are `facts->instructions` and `facts->peer_description`. They are per-board
+ * prose — one board says "the upper button is push-to-talk", another says
+ * "speak whenever you like" — and voice/loop.h records which of the two a
+ * model actually reads, which is not the one you would guess.
  */
-static const char instructions[] =
-    "Waveshare AMOLED: a voice endpoint with a touch screen showing a face. "
-    "The upper button is push-to-talk; the lower button hangs up. "
-    "conversation.start() and conversation.end() begin and end a call. "
-    "health() returns this device's full diagnostics, the same document it "
-    "pushes as dev-stats — start there when it seems unwell. "
-    "speaker.setVolume({percent}) sets how loud it plays, 0-100, clamped to a "
-    "ceiling this board has a measured reason for; speaker.volume() reads it "
-    "back. Both answer {percent,ceiling}. "    "pushToTalk.start() and pushToTalk.stop() hold its microphone open, "
-    "joining the physical button as a wired-OR: it has no echo cancellation, "
-    "so it only listens while one of them is held. "    "Audio and lifecycle events share this stream connection.";
-static const char peer_description[] =
-    "{\"instructions\":\"Waveshare voice endpoint. "
-    "conversation.start() / conversation.end() begin and end a call; "
-    "pushToTalk.start() / pushToTalk.stop() hold its microphone open the way "
-    "speaker.setVolume({percent}) sets how loud it plays, 0-100; it clamps "
-    "to a ceiling this board has a measured reason for and answers with "
-    "{percent,ceiling}, which speaker.volume() also returns. "
-    "the upper button does. health() returns the same diagnostics document "
-    "the device pushes as dev-stats.\",\"children\":{}}";
 
 static void on_session_ended(void *context) {
   (void)context;
@@ -635,7 +653,7 @@ static bool publish_turn_marker(enum iterate_kit_voicelab_turn turn) {
    */
   runtime.voicelab_generation = 0U;
   iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
-  waveshare_display_set_status("reconnecting");
+  runtime.view.status = ("reconnecting");
   return false;
 }
 
@@ -696,7 +714,7 @@ static void on_speaker_pcm(
    * half-word being clipped or missing. Enabling it here spends the playout
    * prefill (160 ms) as settle time, which costs nothing.
    */
-  waveshare_audio_amplifier(true);
+  board_phase(ITERATE_KIT_VOICE_PHASE_ARRIVED);
   atomic_store_explicit(
       &runtime.speaker_answer_done, false, memory_order_release);
   /*
@@ -710,7 +728,7 @@ static void on_speaker_pcm(
    * all; a frame the playout accepted is the honest signal, and the setter
    * is idempotent so paying for it per frame costs one compare.
    */
-  waveshare_display_set_state(WAVESHARE_UI_SPEAKING);
+  runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_SPEAKING;
   /*
    * Audio arriving within a second of a starve means the answer was still
    * going: the pipe genuinely ran dry mid-speech, and that is audible.
@@ -735,7 +753,14 @@ static void on_speaker_pcm(
   }
   /* Counted only for frames actually admitted: the viseme ledger must see
    * exactly the samples the analyzer will eventually be fed. */
-  waveshare_avatar_note_accepted(identity->answer, pcm_length / 2U);
+  {
+    const struct iterate_kit_voice_answer_note note = {
+      .kind = ITERATE_KIT_VOICE_ANSWER_ADMITTED,
+      .answer = identity->answer,
+      .sample_count = pcm_length / 2U,
+    };
+    board_answer(&note);
+  }
 }
 
 /* Scheduled mouth shapes ride the same lane as the audio they describe. */
@@ -743,7 +768,14 @@ static void on_viseme(
     void *context, uint32_t answer, uint32_t offset_samples,
     uint8_t viseme, uint8_t confidence) {
   (void)context;
-  waveshare_avatar_note_viseme(answer, offset_samples, viseme, confidence);
+  const struct iterate_kit_voice_answer_note note = {
+    .kind = ITERATE_KIT_VOICE_ANSWER_VISEME,
+    .answer = answer,
+    .offset_samples = offset_samples,
+    .viseme = viseme,
+    .confidence = confidence,
+  };
+  board_answer(&note);
 }
 
 /*
@@ -766,8 +798,7 @@ static void on_viseme(
  * before that lock was taken is rejected by generation.
  */
 static uint32_t abandon_speaker_audio(void) {
-  waveshare_audio_dma_watch(false);
-  waveshare_audio_note_flush();
+  board_phase(ITERATE_KIT_VOICE_PHASE_FLUSHED);
   const uint32_t bytes = speaker_queued_bytes();
   (void)atomic_fetch_add_explicit(
       &runtime.speaker_generation, 1U, memory_order_acq_rel);
@@ -778,11 +809,19 @@ static uint32_t abandon_speaker_audio(void) {
       memory_order_relaxed);
   atomic_store_explicit(
       &runtime.speaker_reprime, true, memory_order_release);
-  /* The face was animating this audio; it must forget what nobody will hear. */
-  waveshare_avatar_note_abandoned();
-  /* And the mouth track scheduled against it dies with it. All abandon
-   * sites run on the app task, which is what the viseme ledger requires. */
-  waveshare_avatar_viseme_reset();
+  /*
+   * The face was animating this audio and must forget what nobody will hear,
+   * and the mouth track scheduled against it dies with it. One note for both,
+   * because they have to be serialized against the ADMITTED notes above — all
+   * abandon sites run on the app task, which is what the viseme ledger
+   * requires.
+   */
+  {
+    const struct iterate_kit_voice_answer_note note = {
+      .kind = ITERATE_KIT_VOICE_ANSWER_ABANDONED,
+    };
+    board_answer(&note);
+  }
   return bytes;
 }
 
@@ -810,7 +849,7 @@ static void on_control(
      */
     iterate_kit_playout_interrupt(&runtime.playout);
     ++runtime.barge_in_flushes;
-    waveshare_display_set_state(WAVESHARE_UI_LISTENING);
+    runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_LISTENING;
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
     /*
      * The answer is finished, so a dry buffer from here is not a deficit —
@@ -837,8 +876,8 @@ static void on_control(
      * reset.
      */
     /* The answer is complete: back to waiting for the next turn. */
-    waveshare_display_set_state(WAVESHARE_UI_IDLE);
-    waveshare_display_set_status("hold the upper button to talk");
+    runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
+    runtime.view.status = runtime.facts->talk_hint;
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED) {
     /*
      * A NEW CALL IS A NEW SENDER. RESET THE PLAYOUT, HERE.
@@ -865,11 +904,10 @@ static void on_control(
     atomic_store_explicit(
         &runtime.answer_declared_done, false, memory_order_release);
     ESP_LOGI(tag, "new call accepted: playout reset for a fresh sender");
-    waveshare_display_set_call_active(true);
+    runtime.view.call_active = (true);
     /* The viseme lane owns the mouth for the duration of the call. */
-    waveshare_avatar_set_call_active(true);
-    waveshare_display_set_state(WAVESHARE_UI_IDLE);
-    waveshare_display_set_status("hold the upper button to talk");
+    runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
+    runtime.view.status = runtime.facts->talk_hint;
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
     /*
      * Drop whatever is still queued. The ring holds thirty seconds, so a call
@@ -903,12 +941,10 @@ static void on_control(
      * it false BEFORE announcing the end, so the bridge's echo arrives to a
      * device that already agrees. Anything else is a call to reopen.
      */
-    waveshare_display_set_call_active(false);
+    runtime.view.call_active = (false);
     /* Envelope mouth returns for whatever local life the face has next. */
-    waveshare_avatar_set_call_active(false);
-    waveshare_display_set_state(WAVESHARE_UI_IDLE);
-    waveshare_display_set_status(
-        waveshare_display_call_requested() ? "reconnecting" : "call ended");
+    runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
+    runtime.view.status = (runtime.view.wants_call ? "reconnecting" : "call ended");
   }
 }
 
@@ -931,7 +967,16 @@ static bool playback_apply_reprime(
   return true;
 }
 
-static void playback_task(void *argument) {
+/*
+ * ONE PASS OF THE SPEAKER, so that it is a function rather than a `for(;;)`.
+ *
+ * A step can be called, and therefore tested, and therefore driven by a host
+ * that has one thread where a board has three. Nothing else about it changed:
+ * every `continue` in the body below became a `return`, and the two locals
+ * that had to survive an iteration — the playout clock and the last write —
+ * moved into the runtime beside the state they already describe.
+ */
+void iterate_kit_voice_loop_playback_step(void) {
   static struct speaker_frame frame;
   /*
    * The writer NEVER stops. That is the whole design.
@@ -949,423 +994,426 @@ static void playback_task(void *argument) {
    * wait long enough that a late frame is absorbed by the hardware cushion
    * rather than concealed — see the read and the dry branch below.
    */
-  struct iterate_kit_voice_playback_clock playout_clock;
-  uint64_t last_write_ms = 0U;
-  iterate_kit_voice_playback_clock_init(&playout_clock);
-  (void)argument;
-  for (;;) {
-    size_t received;
+  size_t received;
 
-    (void)playback_apply_reprime(&playout_clock);
-    if (atomic_exchange_explicit(
-            &runtime.speaker_answer_done, false, memory_order_acq_rel)) {
-      iterate_kit_voice_playback_clock_answer_done(&playout_clock);
-    }
-    if (!iterate_kit_voice_playback_clock_ready(
-            &playout_clock, speaker_queued_bytes())) {
-      /*
-       * NOT FEEDING, SO NOT WATCHING.
-       *
-       * The watch means "we are handing the DAC audio right now". This branch
-       * decides not to, while the clock builds its prefill — and leaving the
-       * watch armed across it made the DAC's correct silence read as
-       * starvation at every boundary that re-primes: a cold first turn, a turn
-       * after idle, the refill after a barge-in, and teardown. That was the
-       * whole of the systematic DMA ledger deficits, and it is one missing disarm
-       * rather than four separate causes.
-       */
-      waveshare_audio_dma_watch(false);
-      ++runtime.speaker_waits_priming;
-      /* Idle, not starving: nothing is playing, so write nothing. */
-      if (last_write_ms != 0U &&
-          iterate_kit_voice_elapsed_ms(now_ms(NULL), last_write_ms) > SPEAKER_IDLE_POWERDOWN_MS) {
-        waveshare_audio_amplifier(false);
-      }
-      DELAY_MS(5);
-      continue;
-    }
-
+  (void)playback_apply_reprime(&runtime.playout_clock);
+  if (atomic_exchange_explicit(
+          &runtime.speaker_answer_done, false, memory_order_acq_rel)) {
+    iterate_kit_voice_playback_clock_answer_done(&runtime.playout_clock);
+  }
+  if (!iterate_kit_voice_playback_clock_ready(
+          &runtime.playout_clock, speaker_queued_bytes())) {
     /*
-     * WAIT AS LONG AS THE HARDWARE CUSHION ALLOWS.
+     * NOT FEEDING, SO NOT WATCHING.
      *
-     * This was 20 ms — one frame — against a 90 ms I2S DMA ring, which made
-     * this the least patient playout loop of any comparable firmware by a
-     * factor of two to infinity (ESPHome waits half its DMA depth; esp-adf
-     * waits 225 ms against 58.5 ms; xiaozhi-esp32 blocks indefinitely).
-     *
-     * The impatience was invisible because of where it is measured. By the
-     * time this call is reached, the preceding esp_codec_dev_write has
-     * returned — and it returns only once i2s_channel_write has copied into
-     * the DMA descriptors, back-pressured by the driver's free-buffer queue.
-     * So at the instant this loop declares itself "dry", roughly 60 ms of
-     * real audio is still queued and the DAC is in no danger at all. Waiting
-     * is free; splicing silence is not, because silence written into the ring
-     * occupies playout time and can never be taken back.
-     *
-     * Two thirds of the cushion, so a late frame is absorbed rather than
-     * concealed, while the remaining third still bounds how long this task
-     * can sit before the ring genuinely empties.
+     * The watch means "we are handing the DAC audio right now". This branch
+     * decides not to, while the clock builds its prefill — and leaving the
+     * watch armed across it made the DAC's correct silence read as
+     * starvation at every boundary that re-primes: a cold first turn, a turn
+     * after idle, the refill after a barge-in, and teardown. That was the
+     * whole of the systematic DMA ledger deficits, and it is one missing disarm
+     * rather than four separate causes.
      */
+    board_phase(ITERATE_KIT_VOICE_PHASE_WAITING);
+    ++runtime.speaker_waits_priming;
+    /* Idle, not starving: nothing is playing, so write nothing. */
+    if (runtime.last_write_ms != 0U &&
+        iterate_kit_voice_elapsed_ms(now_ms(NULL), runtime.last_write_ms) > SPEAKER_IDLE_POWERDOWN_MS) {
+      board_phase(ITERATE_KIT_VOICE_PHASE_QUIET);
+    }
+    DELAY_MS(5);
+    return;
+  }
+
+  /*
+   * WAIT AS LONG AS THE HARDWARE CUSHION ALLOWS.
+   *
+   * This was 20 ms — one frame — against a 90 ms I2S DMA ring, which made
+   * this the least patient playout loop of any comparable firmware by a
+   * factor of two to infinity (ESPHome waits half its DMA depth; esp-adf
+   * waits 225 ms against 58.5 ms; xiaozhi-esp32 blocks indefinitely).
+   *
+   * The impatience was invisible because of where it is measured. By the
+   * time this call is reached, the preceding esp_codec_dev_write has
+   * returned — and it returns only once i2s_channel_write has copied into
+   * the DMA descriptors, back-pressured by the driver's free-buffer queue.
+   * So at the instant this loop declares itself "dry", roughly 60 ms of
+   * real audio is still queued and the DAC is in no danger at all. Waiting
+   * is free; splicing silence is not, because silence written into the ring
+   * occupies playout time and can never be taken back.
+   *
+   * Two thirds of the cushion, so a late frame is absorbed rather than
+   * concealed, while the remaining third still bounds how long this task
+   * can sit before the ring genuinely empties.
+   */
+  /*
+   * ARMED ACROSS THE WAIT UNLESS THE ANSWER IS OVER.
+   *
+   * The window that matters is between one frame and the next: the ring holds
+   * 90ms, this receive blocks for up to 60ms, and if the source fails to
+   * deliver inside that the DAC really does run dry and the listener really
+   * does hear it. So the watch stays ARMED across the wait — disarming here
+   * unconditionally (which I tried) makes every inter-feed gap invisible and
+   * buys a clean run by blinding the detector.
+   *
+   * The one case where a dry ring is legitimate is an answer that is OVER:
+   * the sender said `response.done` and the tail is draining. That is exactly
+   * `answer_declared_done`, latched until the drain completes, so it is the
+   * only condition that disarms.
+   *
+   * Arming happens at the write. Between a write and the next one the watch is
+   * on; past a declared end it is off; during priming, a reprime flush or a
+   * fully skipped frame it is off because we are deliberately not feeding.
+   */
+  if (atomic_load_explicit(
+          &runtime.answer_declared_done, memory_order_acquire)) {
+    board_phase(ITERATE_KIT_VOICE_PHASE_DRAINING);
+  }
+  received = xQueueReceive(
+                 runtime.speaker_queue,
+                 &frame,
+                 pdMS_TO_TICKS(runtime.facts->speaker_dry_wait_ms)) ==
+                     pdTRUE
+      ? FRAME_BYTES
+      : 0U;
+
+  /*
+   * A REPRIME REQUESTED WHILE WE WERE BLOCKED STILL COUNTS.
+   *
+   * The receive above waits up to 60 ms, and a new answer's first frame
+   * routinely arrives inside that window — REPLACE sets speaker_reprime and
+   * pushes the frame, and this loop then wakes holding it. Checking the
+   * flag only at the top of the loop played that frame with priming already
+   * cancelled, so ~20 ms of the first phoneme escaped, the reprime was
+   * honoured on the NEXT iteration, and the rest of the answer waited out a
+   * full prefill behind it. That is the clipped first word.
+   */
+  if (received > 0U && playback_apply_reprime(&runtime.playout_clock)) {
     /*
-     * ARMED ACROSS THE WAIT UNLESS THE ANSWER IS OVER.
+     * A replacement can wake the blocked receive with its first frame. Put
+     * that whole tagged frame back at the head so opening prefill includes
+     * it. If another replacement raced this one, its generation is already
+     * stale and it must not be reintroduced after the newer queue reset.
+     */
+    if (frame.generation == atomic_load_explicit(
+                                &runtime.speaker_generation,
+                                memory_order_acquire)) {
+      if (xQueueSendToFront(runtime.speaker_queue, &frame, 0) != pdTRUE) {
+        (void)atomic_fetch_add_explicit(
+            &runtime.speaker_overflow_drops, 1U, memory_order_relaxed);
+      }
+    } else {
+      (void)atomic_fetch_add_explicit(
+          &runtime.speaker_discarded_frames, 1U, memory_order_relaxed);
+    }
+    return;
+  }
+
+  if (received == 0U) {
+    /*
+     * DRY. WRITE NOTHING AND COME BACK.
      *
-     * The window that matters is between one frame and the next: the ring holds
-     * 90ms, this receive blocks for up to 60ms, and if the source fails to
-     * deliver inside that the DAC really does run dry and the listener really
-     * does hear it. So the watch stays ARMED across the wait — disarming here
-     * unconditionally (which I tried) makes every inter-feed gap invisible and
-     * buys a clean run by blinding the detector.
+     * This used to splice a frame of silence into the DMA ring, on the
+     * theory that a ring kept topped up cannot starve the DAC. That has it
+     * backwards. Silence written into the ring is indistinguishable from
+     * audio: it occupies playout time, can never be taken back, and so
+     * PERMANENTLY puts the rest of the answer 20 ms further behind. Do it
+     * 149 times in one answer — measured — and the listener hears three
+     * seconds of chopping, while every frame that ever arrived is still
+     * faithfully played, just late and in pieces.
      *
-     * The one case where a dry ring is legitimate is an answer that is OVER:
-     * the sender said `response.done` and the tail is draining. That is exactly
-     * `answer_declared_done`, latched until the drain completes, so it is the
-     * only condition that disarms.
+     * Not writing costs nothing, because the ring is not empty when this
+     * branch is reached: the preceding write returned only once the driver
+     * had copied into the DMA descriptors, so tens of milliseconds of real
+     * audio are still queued and the DAC is in no danger. And an actually
+     * empty ring already clocks out clean zeros — auto_clear is set — so
+     * concealment was never buying the silence it claimed to provide.
      *
-     * Arming happens at the write. Between a write and the next one the watch is
-     * on; past a declared end it is off; during priming, a reprime flush or a
-     * fully skipped frame it is off because we are deliberately not feeding.
+     * This is what xiaozhi-esp32, ESPHome's speaker and esp-adf all do:
+     * when the source is dry, stop calling write. None of them conceals.
+     */
+    /* Nothing to play: the zeros the DAC now sends are correct. */
+    board_phase(ITERATE_KIT_VOICE_PHASE_WAITING);
+    /*
+     * The answer has finished being HEARD — but ONLY if the sender had
+     * already declared it complete.
+     *
+     * A dry buffer mid-answer is starvation, not an ending, and clearing the
+     * flag for it would forgive a supersede that really did cut a live answer
+     * off. Both facts are required: `response.done` arrived (latched in
+     * answer_declared_done) AND there is nothing left to play.
      */
     if (atomic_load_explicit(
             &runtime.answer_declared_done, memory_order_acquire)) {
-      waveshare_audio_dma_draining();
-      waveshare_audio_dma_watch(false);
+      iterate_kit_playout_mark_drained(&runtime.playout);
     }
-    received = xQueueReceive(
-                   runtime.speaker_queue,
-                   &frame,
-                   pdMS_TO_TICKS(SPEAKER_DRY_WAIT_MS)) == pdTRUE
-        ? FRAME_BYTES
-        : 0U;
-
-    /*
-     * A REPRIME REQUESTED WHILE WE WERE BLOCKED STILL COUNTS.
-     *
-     * The receive above waits up to 60 ms, and a new answer's first frame
-     * routinely arrives inside that window — REPLACE sets speaker_reprime and
-     * pushes the frame, and this loop then wakes holding it. Checking the
-     * flag only at the top of the loop played that frame with priming already
-     * cancelled, so ~20 ms of the first phoneme escaped, the reprime was
-     * honoured on the NEXT iteration, and the rest of the answer waited out a
-     * full prefill behind it. That is the clipped first word.
-     */
-    if (received > 0U && playback_apply_reprime(&playout_clock)) {
-      /*
-       * A replacement can wake the blocked receive with its first frame. Put
-       * that whole tagged frame back at the head so opening prefill includes
-       * it. If another replacement raced this one, its generation is already
-       * stale and it must not be reintroduced after the newer queue reset.
-       */
-      if (frame.generation == atomic_load_explicit(
-                                  &runtime.speaker_generation,
-                                  memory_order_acquire)) {
-        if (xQueueSendToFront(runtime.speaker_queue, &frame, 0) != pdTRUE) {
-          (void)atomic_fetch_add_explicit(
-              &runtime.speaker_overflow_drops, 1U, memory_order_relaxed);
-        }
-      } else {
-        (void)atomic_fetch_add_explicit(
-            &runtime.speaker_discarded_frames, 1U, memory_order_relaxed);
-      }
-      continue;
+    ++runtime.speaker_waits_dry;
+    if (iterate_kit_voice_playback_clock_empty(
+            &runtime.playout_clock, now_ms(NULL)) ==
+        ITERATE_KIT_VOICE_PLAYBACK_CONCEAL) {
+      /* Kept as telemetry: how often the source could not keep up. It no
+       * longer costs the listener anything. */
+      ++runtime.speaker_conceal_frames;
+      atomic_store_explicit(
+          &runtime.starve_at_ms, now_ms(NULL), memory_order_release);
     }
+    return;
+  }
 
-    if (received == 0U) {
+  if (frame.generation != atomic_load_explicit(
+                              &runtime.speaker_generation,
+                              memory_order_acquire)) {
+    /* A replacement raced this frame after it left the synchronized queue. */
+    (void)atomic_fetch_add_explicit(
+        &runtime.speaker_discarded_frames, 1U, memory_order_relaxed);
+    board_phase(ITERATE_KIT_VOICE_PHASE_WAITING);
+    return;
+  }
+
+  /*
+   * Flooded: skip this frame to catch up.
+   *
+   * The bridge paces off its own wall clock and the device consumes off
+   * the I2S clock; the two are independent, so a small rate difference
+   * accumulates without bound. Left alone the buffer fills and frames are
+   * discarded ON ARRIVAL — which punches a hole in the middle of speech.
+   * Dropping one 20ms frame here instead, only when there is most of a
+   * second of backlog, is the same total loss placed where it is least
+   * audible, and it bounds playout latency as a side effect.
+   *
+   * This is the symmetric counterpart to concealment: conceal when
+   * starved, skip when flooded, and count both honestly.
+   */
+  {
+    const enum iterate_kit_voice_playback_action action =
+        iterate_kit_voice_playback_clock_frame(
+            &runtime.playout_clock,
+            speaker_queued_bytes(),
+            runtime.speaker_frames_played,
+            iterate_kit_voice_playout_lag_ms(
+                atomic_load_explicit(
+                    &runtime.answer_started_ms, memory_order_acquire),
+                atomic_load_explicit(
+                    &runtime.answer_emitted_ms, memory_order_acquire),
+                now_ms(NULL)),
+            now_ms(NULL));
+    if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP) {
       /*
-       * DRY. WRITE NOTHING AND COME BACK.
+       * A SKIPPED FRAME STILL SPENT ITS PLACE IN THE TIMELINE.
        *
-       * This used to splice a frame of silence into the DMA ring, on the
-       * theory that a ring kept topped up cannot starve the DAC. That has it
-       * backwards. Silence written into the ring is indistinguishable from
-       * audio: it occupies playout time, can never be taken back, and so
-       * PERMANENTLY puts the rest of the answer 20 ms further behind. Do it
-       * 149 times in one answer — measured — and the listener hears three
-       * seconds of chopping, while every frame that ever arrived is still
-       * faithfully played, just late and in pieces.
+       * Skipping recovers lag only if the timeline advances as the frame is
+       * discarded. Leave the counter alone and the computed lag never
+       * falls, so the loop keeps deciding it is late and skips again — it
+       * drains the whole backlog and the listener hears half the answer
+       * missing. Measured exactly that: 78 of 162 frames skipped.
        *
-       * Not writing costs nothing, because the ring is not empty when this
-       * branch is reached: the preceding write returned only once the driver
-       * had copied into the DMA descriptors, so tens of milliseconds of real
-       * audio are still queued and the DAC is in no danger. And an actually
-       * empty ring already clocks out clean zeros — auto_clear is set — so
-       * concealment was never buying the silence it claimed to provide.
-       *
-       * This is what xiaozhi-esp32, ESPHome's speaker and esp-adf all do:
-       * when the source is dry, stop calling write. None of them conceals.
+       * Advancing here is what makes "skip until level" terminate at the
+       * point it is level, which is the entire safety of the mechanism.
        */
-      /* Nothing to play: the zeros the DAC now sends are correct. */
-      waveshare_audio_dma_watch(false);
-      /*
-       * The answer has finished being HEARD — but ONLY if the sender had
-       * already declared it complete.
-       *
-       * A dry buffer mid-answer is starvation, not an ending, and clearing the
-       * flag for it would forgive a supersede that really did cut a live answer
-       * off. Both facts are required: `response.done` arrived (latched in
-       * answer_declared_done) AND there is nothing left to play.
-       */
-      if (atomic_load_explicit(
-              &runtime.answer_declared_done, memory_order_acquire)) {
-        iterate_kit_playout_mark_drained(&runtime.playout);
-      }
-      ++runtime.speaker_waits_dry;
-      if (iterate_kit_voice_playback_clock_empty(
-              &playout_clock, now_ms(NULL)) ==
-          ITERATE_KIT_VOICE_PLAYBACK_CONCEAL) {
-        /* Kept as telemetry: how often the source could not keep up. It no
-         * longer costs the listener anything. */
-        ++runtime.speaker_conceal_frames;
-        atomic_store_explicit(
-            &runtime.starve_at_ms, now_ms(NULL), memory_order_release);
-      }
-      continue;
+      ++runtime.speaker_catchup_frames;
+      (void)atomic_fetch_add_explicit(
+          &runtime.answer_emitted_ms,
+          (uint32_t)(received / (FRAME_BYTES / FRAME_MS)),
+          memory_order_acq_rel);
+      return;
     }
+  }
 
-    if (frame.generation != atomic_load_explicit(
+  const uint64_t write_started_ms = now_ms(NULL);
+  board_phase(ITERATE_KIT_VOICE_PHASE_FEEDING);
+  /*
+   * Admission is nonblocking. The hardware-owner task reserves the DMA
+   * ledger immediately before its blocking write; this task waits at most
+   * five frame periods for bounded queue headroom and keeps running the
+   * stream protocol independently of the codec driver's pacing.
+   */
+  enum iterate_kit_status write_status;
+  const uint64_t write_deadline_ms = now_ms(NULL) + 100U;
+  do {
+    if (atomic_load_explicit(
+            &runtime.speaker_reprime, memory_order_acquire) ||
+        frame.generation != atomic_load_explicit(
                                 &runtime.speaker_generation,
                                 memory_order_acquire)) {
-      /* A replacement raced this frame after it left the synchronized queue. */
-      (void)atomic_fetch_add_explicit(
-          &runtime.speaker_discarded_frames, 1U, memory_order_relaxed);
-      waveshare_audio_dma_watch(false);
-      continue;
+      /* A replacement answer arrived while this stale frame waited. */
+      write_status = ITERATE_KIT_UNAVAILABLE;
+      break;
     }
+    write_status = iterate_kit_audio_codec_write(
+        &runtime.codec, frame.samples, received / 2U);
+    if (write_status == ITERATE_KIT_BACKPRESSURE) {
+      DELAY_MS(1);
+    }
+  } while (write_status == ITERATE_KIT_BACKPRESSURE &&
+           now_ms(NULL) < write_deadline_ms);
 
+  if (write_status == ITERATE_KIT_OK) {
+    ++runtime.speaker_frames_played;
     /*
-     * Flooded: skip this frame to catch up.
+     * The mouth, from audio the DAC has accepted rather than audio that
+     * arrived. This is the only place on the device where those two are the
+     * same thing, which is why the tap is here and not on the receive path:
+     * see waveshare_avatar.h for what the delay line does with it.
+     */
+    board_playout(frame.samples, received / 2U);
+    /*
+     * HOW FAR BEHIND REALTIME THIS ANSWER HAS FALLEN.
      *
-     * The bridge paces off its own wall clock and the device consumes off
-     * the I2S clock; the two are independent, so a small rate difference
-     * accumulates without bound. Left alone the buffer fills and frames are
-     * discarded ON ARRIVAL — which punches a hole in the middle of speech.
-     * Dropping one 20ms frame here instead, only when there is most of a
-     * second of backlog, is the same total loss placed where it is least
-     * audible, and it bounds playout latency as a side effect.
+     * Frame N of an answer belongs 20N ms after the first one played. The
+     * gap between that and the wall clock is lag, and it only grows when
+     * playback stalls — never from the sender running ahead, which is why
+     * this is measured against the audio timeline rather than queue depth.
      *
-     * This is the symmetric counterpart to concealment: conceal when
-     * starved, skip when flooded, and count both honestly.
+     * Recorded rather than acted on. Paying it back means deleting speech,
+     * and this device has already shipped one mechanism that did exactly
+     * that; the number has to exist before anyone can argue about whether
+     * being late is worse than being clipped.
      */
     {
-      const enum iterate_kit_voice_playback_action action =
-          iterate_kit_voice_playback_clock_frame(
-              &playout_clock,
-              speaker_queued_bytes(),
-              runtime.speaker_frames_played,
-              iterate_kit_voice_playout_lag_ms(
-                  atomic_load_explicit(
-                      &runtime.answer_started_ms, memory_order_acquire),
-                  atomic_load_explicit(
-                      &runtime.answer_emitted_ms, memory_order_acquire),
-                  now_ms(NULL)),
-              now_ms(NULL));
-      if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP) {
-        /*
-         * A SKIPPED FRAME STILL SPENT ITS PLACE IN THE TIMELINE.
-         *
-         * Skipping recovers lag only if the timeline advances as the frame is
-         * discarded. Leave the counter alone and the computed lag never
-         * falls, so the loop keeps deciding it is late and skips again — it
-         * drains the whole backlog and the listener hears half the answer
-         * missing. Measured exactly that: 78 of 162 frames skipped.
-         *
-         * Advancing here is what makes "skip until level" terminate at the
-         * point it is level, which is the entire safety of the mechanism.
-         */
-        ++runtime.speaker_catchup_frames;
-        (void)atomic_fetch_add_explicit(
-            &runtime.answer_emitted_ms,
-            (uint32_t)(received / (FRAME_BYTES / FRAME_MS)),
-            memory_order_acq_rel);
-        continue;
-      }
-    }
-
-    const uint64_t write_started_ms = now_ms(NULL);
-    waveshare_audio_dma_watch(true);
-    /*
-     * Admission is nonblocking. The hardware-owner task reserves the DMA
-     * ledger immediately before its blocking write; this task waits at most
-     * five frame periods for bounded queue headroom and keeps running the
-     * stream protocol independently of the codec driver's pacing.
-     */
-    enum iterate_kit_status write_status;
-    const uint64_t write_deadline_ms = now_ms(NULL) + 100U;
-    do {
-      if (atomic_load_explicit(
-              &runtime.speaker_reprime, memory_order_acquire) ||
-          frame.generation != atomic_load_explicit(
-                                  &runtime.speaker_generation,
-                                  memory_order_acquire)) {
-        /* A replacement answer arrived while this stale frame waited. */
-        write_status = ITERATE_KIT_UNAVAILABLE;
-        break;
-      }
-      write_status = iterate_kit_audio_codec_write(
-          &runtime.codec, frame.samples, received / 2U);
-      if (write_status == ITERATE_KIT_BACKPRESSURE) {
-        DELAY_MS(1);
-      }
-    } while (write_status == ITERATE_KIT_BACKPRESSURE &&
-             now_ms(NULL) < write_deadline_ms);
-
-    if (write_status == ITERATE_KIT_OK) {
-      ++runtime.speaker_frames_played;
       /*
-       * The mouth, from audio the DAC has accepted rather than audio that
-       * arrived. This is the only place on the device where those two are the
-       * same thing, which is why the tap is here and not on the receive path:
-       * see waveshare_avatar.h for what the delay line does with it.
-       */
-      waveshare_avatar_observe_playout(frame.samples, received / 2U);
-      /*
-       * HOW FAR BEHIND REALTIME THIS ANSWER HAS FALLEN.
+       * STAMPED BEFORE THE WRITE, NOT AFTER.
        *
-       * Frame N of an answer belongs 20N ms after the first one played. The
-       * gap between that and the wall clock is lag, and it only grows when
-       * playback stalls — never from the sender running ahead, which is why
-       * this is measured against the audio timeline rather than queue depth.
-       *
-       * Recorded rather than acted on. Paying it back means deleting speech,
-       * and this device has already shipped one mechanism that did exactly
-       * that; the number has to exist before anyone can argue about whether
-       * being late is worse than being clipped.
+       * codec admission may wait for bounded queue headroom. Stamping after
+       * that wait folds hardware pacing into the measurement,
+       * so a perfectly punctual loop reports itself progressively later and
+       * the catch-up rule then deletes speech to fix a delay that only
+       * existed in the metric. Measured that way: 1089 ms of "lag" while
+       * the ring held 1620 ms of audio, which is the signature of a
+       * consumer that is keeping up.
        */
+      const uint64_t played_at = write_started_ms;
+      uint64_t answer_started = atomic_load_explicit(
+          &runtime.answer_started_ms, memory_order_acquire);
+      if (answer_started == 0U) {
+        atomic_store_explicit(
+            &runtime.answer_started_ms, played_at, memory_order_release);
+        atomic_store_explicit(
+            &runtime.answer_emitted_ms, 0U, memory_order_release);
+        answer_started = played_at;
+      }
       {
-        /*
-         * STAMPED BEFORE THE WRITE, NOT AFTER.
-         *
-         * codec admission may wait for bounded queue headroom. Stamping after
-         * that wait folds hardware pacing into the measurement,
-         * so a perfectly punctual loop reports itself progressively later and
-         * the catch-up rule then deletes speech to fix a delay that only
-         * existed in the metric. Measured that way: 1089 ms of "lag" while
-         * the ring held 1620 ms of audio, which is the signature of a
-         * consumer that is keeping up.
-         */
-        const uint64_t played_at = write_started_ms;
-        uint64_t answer_started = atomic_load_explicit(
-            &runtime.answer_started_ms, memory_order_acquire);
-        if (answer_started == 0U) {
-          atomic_store_explicit(
-              &runtime.answer_started_ms, played_at, memory_order_release);
-          atomic_store_explicit(
-              &runtime.answer_emitted_ms, 0U, memory_order_release);
-          answer_started = played_at;
+        const uint32_t lag = iterate_kit_voice_playout_lag_ms(
+            answer_started,
+            atomic_load_explicit(
+                &runtime.answer_emitted_ms, memory_order_acquire),
+            played_at);
+        if (lag > runtime.speaker_lag_max_ms) {
+          runtime.speaker_lag_max_ms = lag;
         }
-        {
-          const uint32_t lag = iterate_kit_voice_playout_lag_ms(
-              answer_started,
-              atomic_load_explicit(
-                  &runtime.answer_emitted_ms, memory_order_acquire),
-              played_at);
-          if (lag > runtime.speaker_lag_max_ms) {
-            runtime.speaker_lag_max_ms = lag;
-          }
-        }
-        /* Milliseconds actually emitted, so a short read advances the
-         * timeline by what it played and not by a whole frame. */
-        (void)atomic_fetch_add_explicit(
-            &runtime.answer_emitted_ms,
-            (uint32_t)(received / (FRAME_BYTES / FRAME_MS)),
-            memory_order_acq_rel);
       }
-    } else if (write_status == ITERATE_KIT_UNAVAILABLE &&
-               atomic_load_explicit(
-                   &runtime.speaker_reprime, memory_order_acquire)) {
-      /* Intentional replacement, not a codec failure. */
+      /* Milliseconds actually emitted, so a short read advances the
+       * timeline by what it played and not by a whole frame. */
       (void)atomic_fetch_add_explicit(
-          &runtime.speaker_discarded_frames,
-          (uint32_t)(received / (FRAME_SAMPLES * sizeof(int16_t))),
-          memory_order_relaxed);
-    } else {
-      /* The bounded hardware path did not admit this frame. */
-      ++runtime.speaker_write_failures;
+          &runtime.answer_emitted_ms,
+          (uint32_t)(received / (FRAME_BYTES / FRAME_MS)),
+          memory_order_acq_rel);
     }
-
-    {
-      const uint32_t margin_ms = speaker_queued_bytes() / 32U;
-      ++runtime.speaker_writes;
-      if (runtime.speaker_writes == 1U ||
-          margin_ms < runtime.speaker_margin_min_ms) {
-        runtime.speaker_margin_min_ms = margin_ms;
-      }
-      if (margin_ms > runtime.speaker_margin_max_ms) {
-        runtime.speaker_margin_max_ms = margin_ms;
-      }
-    }
-    last_write_ms = now_ms(NULL);
-    atomic_store_explicit(
-        &runtime.speaker_last_write_ms, last_write_ms, memory_order_release);
+  } else if (write_status == ITERATE_KIT_UNAVAILABLE &&
+             atomic_load_explicit(
+                 &runtime.speaker_reprime, memory_order_acquire)) {
+    /* Intentional replacement, not a codec failure. */
+    (void)atomic_fetch_add_explicit(
+        &runtime.speaker_discarded_frames,
+        (uint32_t)(received / (FRAME_SAMPLES * sizeof(int16_t))),
+        memory_order_relaxed);
+  } else {
+    /* The bounded hardware path did not admit this frame. */
+    ++runtime.speaker_write_failures;
   }
+
+  {
+    const uint32_t margin_ms = speaker_queued_bytes() / 32U;
+    ++runtime.speaker_writes;
+    if (runtime.speaker_writes == 1U ||
+        margin_ms < runtime.speaker_margin_min_ms) {
+      runtime.speaker_margin_min_ms = margin_ms;
+    }
+    if (margin_ms > runtime.speaker_margin_max_ms) {
+      runtime.speaker_margin_max_ms = margin_ms;
+    }
+  }
+  runtime.last_write_ms = now_ms(NULL);
+  atomic_store_explicit(
+    &runtime.speaker_last_write_ms, runtime.last_write_ms,
+    memory_order_release);
 }
 
 /* --- microphone path ------------------------------------------------------ */
 
-static void capture_task(void *argument) {
+/** One pass of the microphone. See the note on the playback step. */
+void iterate_kit_voice_loop_capture_step(void) {
   static struct mic_frame near_frame;
   static struct mic_frame processed_frame;
-  (void)argument;
-  for (;;) {
-    size_t sample_count = 0U;
-    const enum iterate_kit_status read_status = iterate_kit_audio_codec_read(
-        &runtime.codec,
-        near_frame.samples,
-        NULL,
-        FRAME_SAMPLES,
-        &sample_count);
-    if (read_status == ITERATE_KIT_UNAVAILABLE) {
-      DELAY_MS(1);
-      continue;
-    }
-    if (read_status != ITERATE_KIT_OK || sample_count != FRAME_SAMPLES) {
-      ++runtime.mic_process_failures;
-      DELAY_MS(1);
-      continue;
-    }
-    const struct iterate_kit_audio_processor_frame process_frame = {
-      .near = near_frame.samples,
-      .reference = NULL,
-      .playout_activity = NULL,
-      .output = processed_frame.samples,
-      .sample_count = sample_count,
-    };
-    if (iterate_kit_audio_processor_process(
-            &runtime.processor, &process_frame) != ITERATE_KIT_OK) {
-      /* The wrapper silences output; fail closed and transmit nothing. */
-      ++runtime.mic_process_failures;
-      continue;
-    }
-    ++runtime.mic_frames_captured;
-    /*
-     * NOBODY IS LISTENING, SO DO NOT QUEUE.
-     *
-     * Capture runs continuously — the codec is full duplex and stopping it
-     * between turns costs a settle on every press — but frames only LEAVE the
-     * queue while a turn is open. Queueing regardless filled it within a
-     * second of boot and then churned it forever: 7941 of 8804 frames
-     * "dropped" in one session, none of which was speech anybody said.
-     *
-     * The number mattered more than the wasted work. A drop counter at 90%
-     * is indistinguishable from a device losing the customer's words, so the
-     * one measurement that would show a real uplink fault was buried in room
-     * noise nobody wanted.
-     *
-     * Frames captured while idle are counted and discarded here, without
-     * touching the queue, so the queue holds only what a turn will send.
-     */
-    if (!runtime.talking) {
-      ++runtime.mic_frames_idle;
-      continue;
-    }
-    if (xQueueSend(runtime.mic_queue, &processed_frame, 0) != pdTRUE) {
-      /* Freshest wins: discard the OLDEST frame, keep this one. Stale
-       * speech after a network hiccup is worse than a gap — and it is the
-       * only way a backlog can never delay what the customer says next. */
-      struct mic_frame discarded;
-      (void)xQueueReceive(runtime.mic_queue, &discarded, 0);
-      (void)xQueueSend(runtime.mic_queue, &processed_frame, 0);
-      ++runtime.mic_frames_dropped;
-    }
+  size_t sample_count = 0U;
+  const enum iterate_kit_status read_status = iterate_kit_audio_codec_read(
+      &runtime.codec,
+      near_frame.samples,
+      NULL,
+      FRAME_SAMPLES,
+      &sample_count);
+  if (read_status == ITERATE_KIT_UNAVAILABLE) {
+    DELAY_MS(1);
+    return;
   }
+  if (read_status != ITERATE_KIT_OK || sample_count != FRAME_SAMPLES) {
+    ++runtime.mic_process_failures;
+    DELAY_MS(1);
+    return;
+  }
+  const struct iterate_kit_audio_processor_frame process_frame = {
+    .near = near_frame.samples,
+    .reference = NULL,
+    .playout_activity = NULL,
+    .output = processed_frame.samples,
+    .sample_count = sample_count,
+  };
+  if (iterate_kit_audio_processor_process(
+          &runtime.processor, &process_frame) != ITERATE_KIT_OK) {
+    /* The wrapper silences output; fail closed and transmit nothing. */
+    ++runtime.mic_process_failures;
+    return;
+  }
+  ++runtime.mic_frames_captured;
+  /*
+   * NOBODY IS LISTENING, SO DO NOT QUEUE.
+   *
+   * Capture runs continuously — the codec is full duplex and stopping it
+   * between turns costs a settle on every press — but frames only LEAVE the
+   * queue while a turn is open. Queueing regardless filled it within a
+   * second of boot and then churned it forever: 7941 of 8804 frames
+   * "dropped" in one session, none of which was speech anybody said.
+   *
+   * The number mattered more than the wasted work. A drop counter at 90%
+   * is indistinguishable from a device losing the customer's words, so the
+   * one measurement that would show a real uplink fault was buried in room
+   * noise nobody wanted.
+   *
+   * Frames captured while idle are counted and discarded here, without
+   * touching the queue, so the queue holds only what a turn will send.
+   */
+  if (!runtime.talking) {
+    ++runtime.mic_frames_idle;
+    return;
+  }
+  if (xQueueSend(runtime.mic_queue, &processed_frame, 0) != pdTRUE) {
+    /* Freshest wins: discard the OLDEST frame, keep this one. Stale
+     * speech after a network hiccup is worse than a gap — and it is the
+     * only way a backlog can never delay what the customer says next. */
+    struct mic_frame discarded;
+    (void)xQueueReceive(runtime.mic_queue, &discarded, 0);
+  (void)xQueueSend(runtime.mic_queue, &processed_frame, 0);
+  ++runtime.mic_frames_dropped;
+  }
+}
+
+static void playback_task(void *argument) {
+  (void)argument;
+  for (;;) iterate_kit_voice_loop_playback_step();
+}
+
+static void capture_task(void *argument) {
+  (void)argument;
+  for (;;) iterate_kit_voice_loop_capture_step();
 }
 
 /* --- boot wiring ----------------------------------------------------------- */
@@ -1395,16 +1443,16 @@ static enum iterate_kit_status handle_device_event(
   (void)context;
   switch ((enum iterate_kit_device_event_type)event->type) {
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
-      waveshare_display_hold_talk(true);
+      runtime.remote_talk = (true);
       return ITERATE_KIT_OK;
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
-      waveshare_display_hold_talk(false);
+      runtime.remote_talk = (false);
       return ITERATE_KIT_OK;
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
-      waveshare_display_request_call(true);
+      runtime.view.wants_call = (true);
       return ITERATE_KIT_OK;
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:
-      waveshare_display_request_call(false);
+      runtime.view.wants_call = (false);
       return ITERATE_KIT_OK;
     case ITERATE_KIT_DEVICE_EVENT_TYPE_COUNT:
       break;
@@ -1412,24 +1460,17 @@ static enum iterate_kit_status handle_device_event(
   return ITERATE_KIT_INVALID_ARGUMENT;
 }
 
-/* Defined beside waveshare_health_json, which it adapts. */
+/* Defined beside health_json, which it adapts. */
 static size_t render_health(void *context, char *out, size_t capacity);
 
 
-/* The one board-specific fact the portable speaker capability needs. */
-static enum iterate_kit_status speaker_set_volume(
-    void *context, uint8_t percent, uint8_t *applied) {
-  (void)context;
-  return waveshare_audio_set_volume(percent, applied);
-}
-
-static uint8_t speaker_volume(void *context) {
-  (void)context;
-  return waveshare_audio_volume();
-}
-
 static bool initialise_connection(void) {
-  static struct iterate_kit_module modules[4];
+  /*
+   * Four shared (push-to-talk, conversation control, speaker, health) plus
+   * whatever the board has of its own: an AEC stage, servos, a camera, a screen
+   * to fill. The busiest board mounts seven.
+   */
+  static struct iterate_kit_module modules[12];
   static struct iterate_kit_speaker speaker;
   static struct iterate_kit_health health;
   size_t module_count = 0U;
@@ -1454,8 +1495,18 @@ static bool initialise_connection(void) {
             ITERATE_KIT_OK) {
       return false;
     }
-    modules[module_count++] =
-        iterate_kit_push_to_talk_module(&runtime.push_to_talk);
+    /*
+     * MOUNTED ONLY WHERE IT MEANS SOMETHING. A board whose microphone is open
+     * for the whole call has no push-to-talk to offer, and offering it anyway
+     * gives an agent a method that would silently mute live audio. Two boards
+     * already refused these events by hand in `handle_device_event`, one
+     * returning "invalid" and one "state error"; not mounting the module says
+     * the same thing once, before anybody can call it.
+     */
+    if (runtime.facts->turns == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK) {
+      modules[module_count++] =
+          iterate_kit_push_to_talk_module(&runtime.push_to_talk);
+    }
     modules[module_count++] =
         iterate_kit_conversation_control_module(&runtime.conversation_control);
   }
@@ -1465,13 +1516,8 @@ static bool initialise_connection(void) {
    * too quiet. The driver keeps its ceiling; the knob is now a call away.
    */
   {
-    const struct iterate_kit_speaker_driver driver = {
-      .context = NULL,
-      .set_volume = speaker_set_volume,
-      .volume = speaker_volume,
-      .ceiling = WAVESHARE_AUDIO_VOLUME_CEILING,
-    };
-    if (iterate_kit_speaker_init(&speaker, &driver) == ITERATE_KIT_OK) {
+    if (iterate_kit_speaker_init(&speaker, &runtime.facts->speaker) ==
+        ITERATE_KIT_OK) {
       modules[module_count++] = iterate_kit_speaker_module(&speaker);
     }
   }
@@ -1495,8 +1541,8 @@ static bool initialise_connection(void) {
     }
   }
   peer_options = (struct iterate_kit_peer_options){
-    peer_description,
-    sizeof(peer_description) - 1U,
+    runtime.facts->peer_description,
+    strlen(runtime.facts->peer_description),
     modules,
     module_count,
   };
@@ -1519,21 +1565,21 @@ static bool initialise_connection(void) {
   options.send_text_context = &runtime.transport;
   options.project_id = runtime.configuration.project_id;
   options.project_api_key = runtime.configuration.project_api_key;
-  options.client_path = client_path;
+  options.client_path = runtime.facts->client_path;
   options.capability = iterate_kit_peer_capability(&runtime.peer);
   /*
    * THE ONLY DESCRIPTION A MODEL EVER SEES.
    *
-   * Not peer_description above — the capability host flattens this mount and
+   * Not `facts->peer_description` — the capability host flattens this mount and
    * reports `children: {}` because sub-paths are routes the device interprets,
-   * not members the host can list. So peer_description documents the device for
+   * not members the host can list. So `peer_description` documents it for
    * people reading this file, and THIS string is what an agent discovers in
    * itx.__describe().capabilities. It was one 46-character line, which is why a
    * back-office agent asked for the device's metrics went looking through
    * telemetry streams instead of calling health(): nothing told it the call
    * existed.
    */
-  options.description = instructions;
+  options.description = runtime.facts->instructions;
   options.session_ended = on_session_ended;
   options.session_ended_context = NULL;
   if (iterate_kit_itx_connection_init(&runtime.connection, &options) !=
@@ -1555,7 +1601,7 @@ static bool initialise_connection(void) {
  * and the health() anyone can pull. They were never allowed to disagree —
  * the state worth diagnosing is the one where the push has stopped.
  */
-size_t waveshare_health_json(char *out, size_t capacity) {
+static size_t health_json(char *out, size_t capacity) {
   /*
    * PURE. This serializes local statistics and records nothing.
    *
@@ -1623,8 +1669,6 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"micCaptured", runtime.mic_frames_captured},
     {"micDropped", runtime.mic_frames_dropped},
     {"micProcessFailures", runtime.mic_process_failures},
-    {"codecCaptureOverruns", waveshare_audio_capture_overruns()},
-    {"codecCaptureFailures", waveshare_audio_capture_driver_failures()},
     {"micIdle", runtime.mic_frames_idle},
     {"spkFrames", runtime.voicelab.spk_frames_received},
     {"spkPlayed", runtime.speaker_frames_played},
@@ -1633,29 +1677,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
          &runtime.speaker_overflow_drops, memory_order_relaxed)},
     /* Audio arriving just after a software-dry tick. Same signal, one step on. */
     {"spkSoftDryRefills", runtime.speaker_underruns},
-    /*
-     * NOT A STARVATION MEASURE — an epoch-relative ledger deficit, kept for
-     * diagnosis and named so nobody gates on it again.
-     *
-     * The ISR credits audio per feeding epoch and debits a descriptor per send.
-     * An intentional cut discards the software buffer but NOT the DMA ring, so
-     * the ring keeps sending descriptors credited in the PREVIOUS epoch while
-     * the re-arm has reset the ledger to zero. Measured across one barge-in:
-     * written fell 380ms -> 20ms and eleven such descriptors arrived; they were
-     * charged to dmaOpening that time and to this counter (+4, +2) on an earlier
-     * run, differing only in how much new audio had been credited when they
-     * landed. The same physical event under two names is not a gate.
-     *
-     * spkStarvedMs is the authoritative one: wall-clock lateness against an
-     * absolute audio-empty deadline, which stayed at 0 through both cuts.
-     */
-    {"dmaLedgerDeficit", waveshare_audio_dma_underruns()},
-    {"dmaOpening", waveshare_audio_dma_underruns_opening()},
-    /* Normal answer-end drain, kept apart from the ledger deficit on purpose. */
-    {"dmaDraining", waveshare_audio_dma_sends_draining()},
     /* The task-side starvation measure: ms the ring was empty, and how often. */
-    {"spkStarvedMs", waveshare_audio_starved_ms()},
-    {"spkStarveEvents", waveshare_audio_starve_events()},
     /*
      * SOFTWARE-BUFFER LATENESS, absorbed by the hardware ring — not an audible
      * gap, and named so nobody gates on it. The 90ms DMA ring sits between this
@@ -1665,8 +1687,6 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"spkSoftDryTicks", runtime.speaker_conceal_frames},
     {"spkCatchup", runtime.speaker_catchup_frames},
     {"spkWriteFailures", runtime.speaker_write_failures},
-    {"codecPlaybackFailures", waveshare_audio_playback_driver_failures()},
-    {"lowerReadFailures", waveshare_buttons_lower_read_failures()},
     {"spkMarginMaxMs", runtime.speaker_margin_max_ms},
     {"spkLagMaxMs", runtime.speaker_lag_max_ms},
     {"spkMarginMinMs", runtime.speaker_margin_min_ms},
@@ -1706,9 +1726,6 @@ size_t waveshare_health_json(char *out, size_t capacity) {
      * apart. The frozen-pose bug was diagnosed from source because there was no
      * counter to look at; there is one now.
      */
-    {"faceFrames", waveshare_avatar_frames_analysed()},
-    {"faceDropped", waveshare_avatar_dropped_samples()},
-    {"faceRenderFails", waveshare_avatar_render_failures()},
     {"batches", runtime.voicelab.batches_on_connection},
     {"connGeneration", runtime.voicelab.connection_generation},
     {"idleRemounts", runtime.mount_watchdog.remounts},
@@ -1825,7 +1842,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       iterate_kit_itx_connection_state_name(runtime.connection.state),
       runtime.voicelab.call_active ? "true" : "false",
       runtime.voicelab.call_pending ? "true" : "false",
-      waveshare_display_call_requested() ? "true" : "false",
+      runtime.view.wants_call ? "true" : "false",
       runtime.talking ? "true" : "false",
       runtime.voicelab.has_stream_capability ? "true" : "false",
       (unsigned)(CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots),
@@ -1862,6 +1879,26 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     }
     used += (size_t)written;
   }
+  /*
+   * AND THE BOARD'S OWN, in the same shape and under the same rule.
+   *
+   * A dozen of the fields above were a particular board's hardware — DMA
+   * ledgers, codec overruns, an I2C button's read failures, a face's frame
+   * count — and the four device files each carried their own dozen. They are
+   * the board's to name, so the board appends them, and a board that overflows
+   * fails the same way the shared table does: nothing is sent, because a
+   * truncated stats line is not a shorter document, it is no document.
+   */
+  if (runtime.board->health != NULL) {
+    const size_t appended =
+        runtime.board->health(runtime.board_context, out + used, capacity - used);
+    if (appended == 0U) {
+      ESP_LOGE(tag, "health json full in the board's fields (%u bytes)",
+               (unsigned int)capacity);
+      return 0U;
+    }
+    used += appended;
+  }
   if (used + 2U >= capacity) return 0U;
   out[used++] = '}';
   out[used] = '\0';
@@ -1870,7 +1907,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
 
 static size_t render_health(void *context, char *out, size_t capacity) {
   (void)context;
-  return waveshare_health_json(out, capacity);
+  return health_json(out, capacity);
 }
 
 static void append_stats(uint64_t now) {
@@ -1880,7 +1917,7 @@ static void append_stats(uint64_t now) {
   size_t body;
   (void)now;
   memcpy(runtime.stats_buffer, prefix, prefix_length);
-  body = waveshare_health_json(
+  body = health_json(
       runtime.stats_buffer + prefix_length,
       sizeof(runtime.stats_buffer) - prefix_length - 3U);
   if (body == 0U) {
@@ -1952,18 +1989,69 @@ static bool clock_slug(char *out, size_t capacity) {
  */
 static void park_with_fault(const char *what) {
   ESP_LOGE(tag, "fatal: %s", what);
-  waveshare_display_set_fault();
-  waveshare_display_set_link_ready(false);
-  waveshare_display_set_status(what);
+  runtime.view.fault = true;
+  runtime.view.link_ready = false;
+  runtime.view.status = what;
   for (;;) {
     (void)esp_task_wdt_reset();
-    /* LVGL's own timer owns this panel, so there is nothing to pump. */
+    /*
+     * Present inside the park. One panel is driven by LVGL's own timer and
+     * needs nothing, but three are pumped by their caller — and a board that
+     * parks without pumping shows the fault to nobody, which is the whole
+     * reason parking beats returning.
+     */
+    present();
     vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 
-void iterate_kit_waveshare_s3_amoled_run(void) {
+/*
+ * Power the board and check that what it handed back can carry a conversation.
+ *
+ * PARKS RATHER THAN RETURNS on failure — that is the caller's job, but it is
+ * why this is a function: two of the four boards `return`ed from here with the
+ * task watchdog already subscribed, which is a reboot loop, and from across a
+ * room a board rebooting every twenty seconds is indistinguishable from a dead
+ * one and cannot be asked what went wrong.
+ *
+ * The order INSIDE `start` is the board's own: one must raise its panel before
+ * its codec because both resets hang off a single TCA9554, and doing it the
+ * other way round resets a configured codec. WHEN this runs relative to the
+ * radio is the loop's, and that is `facts->radio_before_codec`.
+ */
+static bool start_board(void) {
+  struct iterate_kit_board_audio audio;
+  memset(&audio, 0, sizeof(audio));
+  if (!runtime.board->start(runtime.board_context, &audio)) return false;
+  runtime.codec = audio.codec;
+  runtime.processor = audio.processor;
+  return iterate_kit_audio_codec_validate(&runtime.codec) == ITERATE_KIT_OK &&
+      iterate_kit_audio_processor_validate(&runtime.processor) ==
+          ITERATE_KIT_OK &&
+      runtime.codec.properties->capture_sample_rate_hz ==
+          runtime.processor.properties->sample_rate_hz &&
+      runtime.processor.properties->frame_samples ==
+          runtime.facts->processing_frame_samples &&
+      (!runtime.processor.properties->requires_reference_channel ||
+       runtime.codec.properties->has_reference_channel) &&
+      iterate_kit_audio_processor_reset(&runtime.processor) == ITERATE_KIT_OK;
+}
+
+bool iterate_kit_voice_loop_init(
+    const struct iterate_kit_board_ops *ops,
+    const struct iterate_kit_board_facts *facts,
+    void *context) {
   TaskHandle_t capture_task_handle = NULL;
+  if (ops == NULL || facts == NULL || ops->start == NULL ||
+      ops->present == NULL) {
+    return false;
+  }
+  runtime.board = ops;
+  runtime.facts = facts;
+  runtime.board_context = context;
+  (void)snprintf(
+      stream_path, sizeof(stream_path), "%s", facts->stream_path);
+  iterate_kit_voice_playback_clock_init(&runtime.playout_clock);
   /*
    * The app task is the sole consumer of the control inbox and therefore the
    * producer of every speaker frame: it parses the delivery batch, base64
@@ -2007,7 +2095,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         "device is not provisioned: storage=%s",
         iterate_kit_esp_configuration_status_name(
             configuration_result.status));
-    return;
+    return false;
   }
   /*
    * Subscribe only after provisioning succeeds. An intentionally unprovisioned
@@ -2016,35 +2104,11 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
    * so a stall must still reboot loudly.
    */
   (void)esp_task_wdt_add(NULL);
-  /*
-   * Display first: its bring-up pulses the board's shared reset lines (the
-   * panel, the touch controller and their neighbours hang off one TCA9554),
-   * and doing that after the codec is configured would reset the codec.
-   */
-  if (!waveshare_display_init()) {
-    ESP_LOGE(tag, "display bring-up failed");
-    return;
+  if (!runtime.facts->radio_before_codec && !start_board()) {
+    park_with_fault("board bring-up failed");
   }
-  if (!waveshare_audio_init()) {
-    ESP_LOGE(tag, "audio bring-up failed");
-    return;
-  }
-  runtime.codec = waveshare_audio_codec();
-  runtime.processor = iterate_kit_audio_processor_passthrough();
-  if (iterate_kit_audio_codec_validate(&runtime.codec) != ITERATE_KIT_OK ||
-      iterate_kit_audio_processor_validate(&runtime.processor) !=
-          ITERATE_KIT_OK ||
-      runtime.codec.properties->capture_sample_rate_hz !=
-          runtime.processor.properties->sample_rate_hz ||
-      runtime.processor.properties->frame_samples != FRAME_SAMPLES ||
-      (runtime.processor.properties->requires_reference_channel &&
-       !runtime.codec.properties->has_reference_channel) ||
-      iterate_kit_audio_processor_reset(&runtime.processor) != ITERATE_KIT_OK) {
-    park_with_fault("incompatible codec and audio processor");
-  }
-  (void)waveshare_buttons_init();
-  waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
-  waveshare_display_set_status("connecting to iterate");
+  runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_CONNECTING;
+  runtime.view.status = ("connecting to iterate");
   ESP_LOGI(
       tag,
       /*
@@ -2087,17 +2151,34 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         tag,
         "transport start failed: platform=%ld — retrying",
         (long)runtime.transport.last_platform_error);
-    waveshare_display_set_status("network start failed — retrying");
+    runtime.view.status = "network start failed — retrying";
     for (int wait = 0; wait < 50; ++wait) {
       (void)esp_task_wdt_reset();
-      /* LVGL's own timer owns this panel, so there is nothing to pump. */
+      /*
+       * Present inside the wait. One panel is driven by LVGL's own timer and
+       * needs nothing here, but three are pumped by their caller — and this
+       * five-second loop is exactly where a board that is retrying looks
+       * frozen if nobody pumps it.
+       */
+      present();
       vTaskDelay(pdMS_TO_TICKS(100));
     }
+  }
+  /*
+   * ...AND THE CODEC NOW, on the board that asked for it, while the radio is
+   * off doing its own waiting. Its XMOS + AIC3204 bring-up is 6.2 s measured
+   * and it used to run to completion BEFORE Wi-Fi was even started, so two
+   * waits ran back to back for no reason: that board reached a ready mount at
+   * ~14 s where the others managed ~8. Nothing in the transport needs the
+   * codec, and only the two tasks below do.
+   */
+  if (runtime.facts->radio_before_codec && !start_board()) {
+    park_with_fault("board bring-up failed");
   }
   if (xTaskCreatePinnedToCore(
           capture_task,
           "vl-capture",
-          4096,
+          runtime.facts->capture_stack_bytes,
           NULL,
           16,
           &capture_task_handle,
@@ -2111,24 +2192,41 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
   }
   ESP_LOGI(
       tag,
-      "voicelab voice client ready: static_bytes=%u stream=/voice-agent/dev-waveshare",
-      (unsigned int)sizeof(runtime));
+      "voicelab voice client ready: static_bytes=%u stream=%s",
+      (unsigned int)sizeof(runtime),
+      stream_path);
+  return true;
+}
 
-  uint64_t next_stats_at = 0;
-  uint64_t next_button_poll_at = 0;
-
-  for (;;) {
+/*
+ * ONE PASS OF THE DEVICE.
+ *
+ * `now_ms` is a parameter rather than a call, because a step that is handed
+ * its clock can be driven by a virtual one — and a device whose every deadline
+ * is measured against a clock it fetches itself cannot be tested at all.
+ */
+void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
+  static uint64_t next_stats_at;
+  static uint64_t next_control_poll_at;
+  (void)now_ms_value;
+  {
     (void)esp_task_wdt_reset();
     (void)iterate_kit_esp_idf_itx_transport_poll(&runtime.transport, 16U);
     /*
-     * The talk button lives on the TCA9554, so every poll is an I2C
-     * transaction on the bus the codec and touch controller share. At the
-     * loop's 5 ms cadence that was 200 reads a second of pure contention;
-     * 25 ms is still far faster than a human can press.
+     * The controls, at a human cadence rather than the loop's.
+     *
+     * One board's talk button hangs off a TCA9554, so every read is an I2C
+     * transaction on the bus the codec and the touch controller share: at the
+     * loop's 5 ms that was 200 reads a second of pure contention. 25 ms is
+     * still far faster than a person can press, and a board with cheaper
+     * controls loses nothing by being asked at the same rate.
      */
-    if (now_ms(NULL) >= next_button_poll_at) {
-      next_button_poll_at = now_ms(NULL) + BUTTON_POLL_MS;
-      waveshare_buttons_poll();
+    if (now_ms(NULL) >= next_control_poll_at) {
+      next_control_poll_at = now_ms(NULL) + CONTROL_POLL_MS;
+      memset(&runtime.intent, 0, sizeof(runtime.intent));
+      if (runtime.board->poll != NULL) {
+        runtime.board->poll(runtime.board_context, &runtime.intent);
+      }
     }
     /*
      * ...and drain what those methods queued. A capability that accepts an
@@ -2166,34 +2264,46 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
           runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
           runtime.voicelab_generation == runtime.connection.generation;
       const bool ready = api_ready && stream_ready;
-      waveshare_display_set_api_ready(api_ready);
-      waveshare_display_set_stream_ready(stream_ready);
+      runtime.view.api_ready = api_ready;
+      runtime.view.stream_ready = stream_ready;
       if (ready != published_link_ready) {
         published_link_ready = ready;
-        waveshare_display_set_link_ready(ready);
+        runtime.view.link_ready = ready;
       }
     }
     /*
-     * Let the face's delay line drain on this task, which is the only one that
-     * writes to the analyzer. Without it the last 90ms of every answer would
-     * never be animated and the mouth would stop open — see waveshare_avatar.h.
+     * INTENT IS THE LOOP'S, and this is the only place a control changes it.
+     *
+     * Three of the four boards have ONE control and expressed a call toggle;
+     * one has two and expressed separate edges. Both arrive here, and the
+     * toggle is resolved against the intent the loop holds — which is why it
+     * has to be resolved here and not in the board, now that the board can no
+     * longer read what the intent currently is.
      */
-    waveshare_avatar_tick();
-    if (waveshare_buttons_take_lower_press()) {
-      waveshare_display_request_call(false);
-      ESP_LOGI(tag, "lower button: ending call");
+    if (runtime.intent.end_call) {
+      runtime.view.wants_call = false;
+      ESP_LOGI(tag, "control: ending call");
     }
-    if (waveshare_buttons_take_upper_press() &&
-        !runtime.voicelab.call_active) {
-      waveshare_display_request_call(true);
-      ESP_LOGI(tag, "upper button: starting call");
+    if (runtime.intent.start_call && !runtime.voicelab.call_active) {
+      runtime.view.wants_call = true;
+      ESP_LOGI(tag, "control: starting call");
     }
+    if (runtime.intent.toggle_call) {
+      runtime.view.wants_call = !runtime.view.wants_call;
+      ESP_LOGI(
+          tag, "control: %s call",
+          runtime.view.wants_call ? "starting" : "ending");
+    }
+    runtime.intent.start_call = false;
+    runtime.intent.end_call = false;
+    runtime.intent.toggle_call = false;
     {
       static bool talk_logged;
-      const bool talk = waveshare_buttons_upper_held();
-      if (talk != talk_logged) {
-        talk_logged = talk;
-        ESP_LOGI(tag, "PWR %s", talk ? "down (talking)" : "up (commit)");
+      if (runtime.intent.talk_held != talk_logged) {
+        talk_logged = runtime.intent.talk_held;
+        ESP_LOGI(
+            tag, "talk %s",
+            talk_logged ? "down (talking)" : "up (commit)");
       }
     }
 
@@ -2238,8 +2348,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
          * the UI state, and a one-shot "offline" survived only until the next of
          * them ran.
          */
-        waveshare_display_set_status(
-            iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
+        runtime.view.status = (iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
         iterate_kit_esp_idf_itx_transport_metrics(&runtime.transport, &metrics);
         ESP_LOGE(
             tag,
@@ -2417,8 +2526,8 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         .project_id = runtime.configuration.project_id,
         .project_api_key = runtime.configuration.project_api_key,
         .stream_path = stream_path,
-        .client_path = client_path,
-        .conversation_id = CONVERSATION_ID,
+        .client_path = runtime.facts->client_path,
+        .conversation_id = runtime.facts->conversation_id,
         .now_ms = now_ms,
         .clock_context = NULL,
         .on_speaker = on_speaker_pcm,
@@ -2476,21 +2585,20 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
           iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
       runtime.last_voicelab_state = runtime.voicelab.state;
       if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY) {
-        waveshare_display_set_state(WAVESHARE_UI_IDLE);
+        runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
         /*
          * NOTHING. The menu's headline is the path and its context line already
          * carries the connection state, so "ready" here was the same word twice
          * on adjacent rows. The status line is for transients — "reconnecting",
          * "call ended" — and being empty is the honest steady state.
          */
-        waveshare_display_set_status("");
+        runtime.view.status = ("");
       } else if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_FAILED) {
         /* A dead session takes the call with it; the button starts over. */
-        waveshare_display_request_call(false);
-        waveshare_display_set_call_active(false);
-        waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
-        waveshare_display_set_status(
-            iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
+        runtime.view.wants_call = (false);
+        runtime.view.call_active = (false);
+        runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_CONNECTING;
+        runtime.view.status = (iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
       }
     }
 
@@ -2509,9 +2617,9 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
       ESP_LOGW(tag, "turn abandoned: session or call went away");
       runtime.talking = false;
       runtime.flushing_turn = false;
-      waveshare_display_hold_talk(false);
-      waveshare_display_set_state(WAVESHARE_UI_IDLE);
-      waveshare_display_set_status("connection lost — press upper to call");
+      runtime.remote_talk = (false);
+      runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
+      runtime.view.status = runtime.facts->call_hint;
     }
 
     if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
@@ -2541,7 +2649,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
        * disagree about what the device is doing (the M5StickS3 does the same
        * through its device-event queue).
        */
-      const bool wants_call = waveshare_display_call_requested();
+      const bool wants_call = runtime.view.wants_call;
       /*
        * SILENCE ONLY COUNTS ONCE SOMETHING IS EXPECTED. The downlink watchdog
        * below measures time since the last delivered batch, and nothing is
@@ -2555,8 +2663,21 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         if (wants_call && !wanted_previously) runtime.voicelab.last_batch_ms = now;
         wanted_previously = wants_call;
       }
-      const bool wants_talk = wants_call &&
-          (waveshare_buttons_upper_held() || waveshare_display_talk_held());
+      /*
+       * A WIRED-OR, and then a turn policy on top of it.
+       *
+       * A physical control and an RPC hold the microphone open the same way,
+       * so either is enough. On a board whose far end segments turns there is
+       * no control to hold at all and the microphone rides the open call —
+       * requesting the manual default there produces an accepted call and a
+       * deaf assistant, so the policy is a fact rather than a guess.
+       */
+      const bool wants_talk =
+          runtime.facts->turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD
+          ? runtime.voicelab.call_active
+          : (wants_call &&
+             (runtime.intent.talk_held || runtime.remote_talk));
+      runtime.view.talk_held = wants_talk;
 
       /*
        * THE BRIDGE-SILENCE WATCHDOG WAS HERE, AND ITS EVIDENCE IS GONE.
@@ -2681,9 +2802,10 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
              * nothing anywhere said why.
              */
             runtime.last_start_status =
-                iterate_kit_voicelab_start_call(&runtime.voicelab, GREETING);
+                iterate_kit_voicelab_start_call(
+                    &runtime.voicelab, runtime.facts->greeting);
             if (runtime.last_start_status == CAPNWEB_OK) {
-              waveshare_display_set_status("starting call");
+              runtime.view.status = ("starting call");
             } else {
               ++runtime.start_call_failures;
             }
@@ -2703,10 +2825,10 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
          * every hang-up-mid-answer — send index 44 in the run that showed it.
          * Ours, intended, and declared at the moment we cause it.
          */
-        waveshare_audio_dma_watch(false);
+        board_phase(ITERATE_KIT_VOICE_PHASE_WAITING);
         (void)iterate_kit_voicelab_end_call(&runtime.voicelab, "button");
-        waveshare_display_set_status("call ended");
-        waveshare_display_set_state(WAVESHARE_UI_IDLE);
+        runtime.view.status = ("call ended");
+        runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
       }
       if (runtime.voicelab.call_active &&
           runtime.voicelab.call_active != call_active_shown) {
@@ -2715,22 +2837,21 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
       }
       if (runtime.voicelab.call_active != call_active_shown) {
         call_active_shown = runtime.voicelab.call_active;
-        waveshare_display_set_call_active(call_active_shown);
+        runtime.view.call_active = (call_active_shown);
         /*
          * Belt to on_control's braces: a call forgotten for lost liveness
          * never sends CALL_ENDED, and the envelope mouth must not stay gated
          * on a call that no longer exists. Idempotent when on_control already
          * flipped it.
          */
-        waveshare_avatar_set_call_active(call_active_shown);
         if (call_active_shown) {
           /*
            * Display only. The playout reset for a new call lives in on_control's
            * CALL_ACCEPTED branch, on the receive path that classifies frames —
            * this observation runs later and could follow the call's first frame.
            */
-          waveshare_display_set_state(WAVESHARE_UI_IDLE);
-          waveshare_display_set_status("hold the upper button to talk");
+          runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
+          runtime.view.status = runtime.facts->talk_hint;
         }
       }
 
@@ -2751,7 +2872,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
       if (runtime.talking && !runtime.flushing_turn &&
           iterate_kit_voice_elapsed_ms(now, runtime.turn_started_ms) > TURN_MAX_MS) {
         ESP_LOGW(tag, "turn exceeded %ums — ending it", (unsigned)TURN_MAX_MS);
-        waveshare_display_hold_talk(false);
+        runtime.remote_talk = (false);
         runtime.flushing_turn = true;
         runtime.flush_frames_left = 0U;
         runtime.flush_deadline_ms = now;
@@ -2781,9 +2902,9 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
            * without this the last shape of the interrupted word would sit on the
            * face for the whole time the person is speaking.
            */
-          waveshare_avatar_set_listening(true);
-          waveshare_display_set_state(WAVESHARE_UI_LISTENING);
-          waveshare_display_set_status("listening — release to send");
+          runtime.view.listening = (true);
+          runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_LISTENING;
+          runtime.view.status = ("listening — release to send");
         }
       }
       /*
@@ -2807,7 +2928,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         runtime.flush_frames_left =
             (uint32_t)uxQueueMessagesWaiting(runtime.mic_queue);
         runtime.flush_deadline_ms = now + TURN_FLUSH_TIMEOUT_MS;
-        waveshare_display_set_status("sending");
+        runtime.view.status = ("sending");
       }
       if (runtime.flushing_turn &&
           (runtime.flush_frames_left == 0U ||
@@ -2817,10 +2938,10 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         runtime.flushing_turn = false;
         ESP_LOGI(tag, "turn commit%s", timed_out ? " (tail dropped)" : "");
         /* Done listening: the face waits for the answer rather than for us. */
-        waveshare_avatar_set_listening(false);
+        runtime.view.listening = (false);
         if (publish_turn_marker(ITERATE_KIT_VOICELAB_TURN_COMMIT)) {
-          waveshare_display_set_state(WAVESHARE_UI_SPEAKING);
-          waveshare_display_set_status("thinking");
+          runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_SPEAKING;
+          runtime.view.status = ("thinking");
         }
       }
 
@@ -2838,7 +2959,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
               runtime.voicelab.call_active || runtime.voicelab.call_pending,
               now)) {
         ESP_LOGW(tag, "nothing has called this device in a while — re-registering");
-        waveshare_display_set_status("re-registering");
+        runtime.view.status = ("re-registering");
         iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
       }
 
@@ -2967,6 +3088,37 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
     }
 
     ++runtime.loop_count;
+  }
+  /*
+   * SHOW IT, LAST AND ALWAYS.
+   *
+   * Everything above assembles one view; this is the single place it reaches
+   * the hardware. Unconditional, because the board's own comparison is cheaper
+   * than the nine lock round trips the setters used to cost, and because three
+   * of the four panels are pumped by their caller and this is that pump.
+   */
+  present();
+}
+
+void iterate_kit_voice_loop_run(
+    const struct iterate_kit_board_ops *ops,
+    const struct iterate_kit_board_facts *facts,
+    void *context) {
+  if (!iterate_kit_voice_loop_init(ops, facts, context)) {
+    /*
+     * Nothing is up yet — no panel, no watchdog subscription — so there is
+     * nowhere to park and nothing to park on. The caller returns to its setup
+     * path, which is what an unprovisioned board is supposed to do.
+     */
+    ESP_LOGE(tag, "voice loop refused its board");
+    return;
+  }
+  for (;;) {
+    iterate_kit_voice_loop_step(now_ms(NULL));
     DELAY_MS(5);
   }
+}
+
+const char *iterate_kit_voice_loop_stream_path(void) {
+  return stream_path;
 }

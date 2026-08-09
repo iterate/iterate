@@ -57,7 +57,7 @@ _Static_assert(FACE_HEIGHT < DISPLAY_HEIGHT, "face must leave room for status");
 
 static struct {
   SemaphoreHandle_t lock;
-  enum waveshare_ui_state state;
+  enum iterate_kit_voice_screen state;
   char status[STATUS_CAPACITY];
   bool link_ready;
   /*
@@ -69,7 +69,7 @@ static struct {
   bool call_active;
   bool call_requested;
   bool talk_held;
-  /* Unrecoverable start-up fault; see waveshare_display_set_fault. */
+  /* Unrecoverable start-up fault; latched by present() and never cleared. */
   bool fault;
 } ui;
 
@@ -84,104 +84,30 @@ static uint64_t now_ms(void) {
   return (uint64_t)(esp_timer_get_time() / 1000);
 }
 
-static void publish(void (*mutate)(void *), void *argument) {
-  if (ui.lock == NULL) return;
+/*
+ * ONE PUBLICATION, UNDER ONE LOCK.
+ *
+ * The loop hands over the complete view once per pass; the renderer reads this
+ * snapshot on LVGL's own timer. Copying it wholesale is both simpler and
+ * cheaper than the nine lock round trips the setters cost, and it removes the
+ * class of bug where one setter erased what another had just published.
+ */
+void waveshare_display_present(const struct iterate_kit_voice_view *view) {
+  if (ui.lock == NULL || view == NULL) return;
   xSemaphoreTake(ui.lock, portMAX_DELAY);
-  mutate(argument);
-  xSemaphoreGive(ui.lock);
-}
-
-static void set_state_locked(void *argument) {
-  ui.state = *(const enum waveshare_ui_state *)argument;
-}
-
-void waveshare_display_set_state(enum waveshare_ui_state state) {
-  publish(set_state_locked, &state);
-}
-
-static void set_status_locked(void *argument) {
-  const char *text = argument;
+  ui.state = view->screen;
   (void)snprintf(
-      ui.status, sizeof(ui.status), "%s", text == NULL ? "" : text);
-}
-
-void waveshare_display_set_status(const char *text) {
-  publish(set_status_locked, (void *)(uintptr_t)text);
-}
-
-static void set_link_ready_locked(void *argument) {
-  ui.link_ready = *(const bool *)argument;
-}
-
-static void set_fault_locked(void *argument) {
-  (void)argument;
-  ui.fault = true;
-}
-
-void waveshare_display_set_fault(void) {
-  publish(set_fault_locked, NULL);
-}
-
-void waveshare_display_set_link_ready(bool ready) {
-  publish(set_link_ready_locked, &ready);
-}
-
-static void set_api_ready_locked(void *argument) {
-  ui.api_ready = *(const bool *)argument;
-}
-
-void waveshare_display_set_api_ready(bool ready) {
-  publish(set_api_ready_locked, &ready);
-}
-
-static void set_stream_ready_locked(void *argument) {
-  ui.stream_ready = *(const bool *)argument;
-}
-
-void waveshare_display_set_stream_ready(bool ready) {
-  publish(set_stream_ready_locked, &ready);
-}
-
-static void set_call_active_locked(void *argument) {
-  ui.call_active = *(const bool *)argument;
-}
-
-void waveshare_display_set_call_active(bool active) {
-  publish(set_call_active_locked, &active);
-}
-
-static void set_call_requested_locked(void *argument) {
-  ui.call_requested = *(const bool *)argument;
-}
-
-void waveshare_display_request_call(bool requested) {
-  publish(set_call_requested_locked, &requested);
-}
-
-bool waveshare_display_call_requested(void) {
-  bool requested = false;
-  if (ui.lock == NULL) return false;
-  xSemaphoreTake(ui.lock, portMAX_DELAY);
-  requested = ui.call_requested;
+      ui.status, sizeof(ui.status), "%s",
+      view->status == NULL ? "" : view->status);
+  ui.link_ready = view->link_ready;
+  ui.api_ready = view->api_ready;
+  ui.stream_ready = view->stream_ready;
+  ui.call_active = view->call_active;
+  ui.call_requested = view->wants_call;
+  ui.talk_held = view->talk_held;
+  /* Latching, not copied: nothing clears a fault but a reboot. */
+  if (view->fault) ui.fault = true;
   xSemaphoreGive(ui.lock);
-  return requested;
-}
-
-static void set_talk_held_locked(void *argument) {
-  ui.talk_held = *(const bool *)argument;
-}
-
-void waveshare_display_hold_talk(bool held) {
-  publish(set_talk_held_locked, &held);
-}
-
-bool waveshare_display_talk_held(void) {
-  bool held = false;
-  if (ui.lock == NULL) return false;
-  xSemaphoreTake(ui.lock, portMAX_DELAY);
-  held = ui.talk_held;
-  xSemaphoreGive(ui.lock);
-  return held;
 }
 
 /* The shared snapshot: this panel's labels and the twelve-light rail must
@@ -197,8 +123,8 @@ static struct iterate_kit_conversation_visual_state face_status(void) {
   status.media_failed = ui.fault;
   status.conversation_active = ui.call_active;
   status.microphone_listening =
-      ui.talk_held || ui.state == WAVESHARE_UI_LISTENING;
-  status.speaker_peak = ui.state == WAVESHARE_UI_SPEAKING ? 4096U : 0U;
+      ui.talk_held || ui.state == ITERATE_KIT_VOICE_SCREEN_LISTENING;
+  status.speaker_peak = ui.state == ITERATE_KIT_VOICE_SCREEN_SPEAKING ? 4096U : 0U;
   xSemaphoreGive(ui.lock);
   return status;
 }
@@ -375,7 +301,7 @@ static void build_ui(void) {
 bool waveshare_display_init(void) {
   ui.lock = xSemaphoreCreateMutex();
   if (ui.lock == NULL) return false;
-  ui.state = WAVESHARE_UI_CONNECTING;
+  ui.state = ITERATE_KIT_VOICE_SCREEN_CONNECTING;
   (void)snprintf(ui.status, sizeof(ui.status), "starting");
 
   /* Display first is a correctness condition, not cosmetic ordering. */

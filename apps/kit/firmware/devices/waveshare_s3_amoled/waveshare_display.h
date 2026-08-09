@@ -3,16 +3,11 @@
 
 #include <stdbool.h>
 
+#include "iterate/kit/voice/loop.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-enum waveshare_ui_state {
-  WAVESHARE_UI_CONNECTING = 0,
-  WAVESHARE_UI_IDLE,
-  WAVESHARE_UI_LISTENING,
-  WAVESHARE_UI_SPEAKING,
-};
 
 /**
  * Start the vendor SH8601/LVGL stack and the shared avatar renderer.
@@ -24,29 +19,18 @@ enum waveshare_ui_state {
  */
 bool waveshare_display_init(void);
 
-/** Thread-safe UI publications. No caller other than this module touches LVGL. */
-void waveshare_display_set_state(enum waveshare_ui_state state);
-void waveshare_display_set_status(const char *text);
-void waveshare_display_set_link_ready(bool ready);
-/** The first rung: the Cap'n Web session to /api is up and this device is on it. */
-void waveshare_display_set_api_ready(bool ready);
-/** The middle rung: a conversation stream exists and this device is on it. */
-void waveshare_display_set_stream_ready(bool ready);
 /**
- * Latches an unrecoverable start-up fault onto this device's status surface.
+ * Publish the whole view. Thread-safe; no caller other than this module
+ * touches LVGL.
  *
- * Distinct from "not connected": a device that is still trying looks like one
- * that is trying, and a device that will never work must not. Nothing clears
- * this — the only exit is a reboot, which is the truth.
+ * ONE CALL, NOT NINE. This was eight setters plus two intent accessors, called
+ * 48 times from one device file and read back through the mutex three times a
+ * pass. They were not ten facts, they were one fact written ten ways — and
+ * writing it in pieces is how this panel came to read "ready" while the server
+ * was refusing the device every three seconds. The intent half moved into the
+ * loop, which is where a board with no panel could also keep it.
  */
-void waveshare_display_set_fault(void);
-void waveshare_display_set_call_active(bool active);
-
-/** Local call and push-to-talk intent shared with the application task. */
-bool waveshare_display_call_requested(void);
-void waveshare_display_request_call(bool requested);
-bool waveshare_display_talk_held(void);
-void waveshare_display_hold_talk(bool held);
+void waveshare_display_present(const struct iterate_kit_voice_view *view);
 
 #ifdef __cplusplus
 }
