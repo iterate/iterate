@@ -296,6 +296,9 @@ static const struct iterate_kit_board_facts facts = {
    */
   .speaker_dry_wait_ms = 60,
   .processing_frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
+  /* This codec hands over one whole 20 ms frame per read, so the bridge's
+   * three cadences are all 320 and it degenerates to a pass-through. */
+  .capture_chunk_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
   .capture_stack_bytes = 4096,
   .turns = ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK,
   /*

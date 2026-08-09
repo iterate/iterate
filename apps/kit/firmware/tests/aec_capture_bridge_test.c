@@ -488,7 +488,194 @@ static void reading_metrics_does_not_mutate_the_bridge(void) {
       snapshot.egress_samples_copied + wire_samples);
 }
 
+/* --- the degenerate cadence, which is now three of the four boards -------- */
+
+/*
+ * THE SHARED CAPTURE STEP RUNS EVERY BOARD THROUGH THIS BRIDGE, so the claim
+ * that a board whose DMA grain, DSP frame and wire frame are all 320 is
+ * unaffected has to be a test rather than an argument. Same fixture shape, one
+ * cadence.
+ */
+enum { flat_samples = 320 };
+
+struct flat_fixture {
+  struct iterate_kit_aec_capture_bridge bridge;
+  int16_t near[flat_samples];
+  int16_t reference[flat_samples];
+  int16_t playout[flat_samples];
+  int16_t clean[flat_samples];
+  int16_t egress[flat_samples];
+  int16_t emitted[maximum_emitted_frames][flat_samples];
+  size_t process_calls;
+  size_t copied_frames;
+  size_t fail_process_call;
+};
+
+static enum iterate_kit_status flat_process(
+    void *context,
+    const int16_t *near,
+    const int16_t *reference,
+    const int16_t *playout,
+    int16_t *clean,
+    size_t sample_count) {
+  struct flat_fixture *fixture = context;
+  (void)reference;
+  (void)playout;
+  fixture->process_calls++;
+  TEST_ASSERT(sample_count == flat_samples);
+  /* What the passthrough processor does: near, verbatim. */
+  memcpy(clean, near, sample_count * sizeof(*clean));
+  if (fixture->process_calls == fixture->fail_process_call) {
+    return ITERATE_KIT_IO_ERROR;
+  }
+  return ITERATE_KIT_OK;
+}
+
+static enum iterate_kit_status flat_reset(void *context) {
+  (void)context;
+  return ITERATE_KIT_OK;
+}
+
+static enum iterate_kit_status flat_copy(
+    void *context,
+    const int16_t *samples,
+    size_t sample_count,
+    uint32_t sample_rate_hz,
+    uint64_t captured_through_at_us) {
+  struct flat_fixture *fixture = context;
+  (void)sample_rate_hz;
+  (void)captured_through_at_us;
+  TEST_ASSERT(sample_count == flat_samples);
+  TEST_ASSERT(fixture->copied_frames < maximum_emitted_frames);
+  memcpy(
+      fixture->emitted[fixture->copied_frames],
+      samples,
+      sample_count * sizeof(*samples));
+  fixture->copied_frames++;
+  return ITERATE_KIT_OK;
+}
+
+static void flat_initialise(struct flat_fixture *fixture) {
+  const struct iterate_kit_aec_capture_bridge_options options = {
+    .sample_rate_hz = 16000U,
+    .processing_frame_samples = flat_samples,
+    .egress_frame_samples = flat_samples,
+    .near_frame = fixture->near,
+    .reference_frame = fixture->reference,
+    .playout_frame = fixture->playout,
+    .clean_frame = fixture->clean,
+    .processing_frame_capacity = flat_samples,
+    .egress_frame = fixture->egress,
+    .egress_frame_capacity = flat_samples,
+    .processor_context = fixture,
+    .process = flat_process,
+    .reset_processor = flat_reset,
+    .egress_context = fixture,
+    .copy_egress = flat_copy,
+  };
+  TEST_ASSERT(
+      iterate_kit_aec_capture_bridge_init(&fixture->bridge, &options) ==
+      ITERATE_KIT_OK);
+}
+
+static enum iterate_kit_status flat_push(
+    struct flat_fixture *fixture, uint32_t sequence, size_t first_sample) {
+  int16_t near[flat_samples];
+  int16_t reference[flat_samples];
+  int16_t playout[flat_samples];
+  for (size_t index = 0U; index < flat_samples; ++index) {
+    near[index] = (int16_t)(first_sample + index);
+    reference[index] = 0;
+    playout[index] = 0;
+  }
+  return iterate_kit_aec_capture_bridge_push_aligned(
+      &fixture->bridge,
+      sequence,
+      (uint64_t)(sequence + 1U) * 20000U,
+      near,
+      reference,
+      playout,
+      flat_samples);
+}
+
+/*
+ * ONE CHUNK IN, ONE IDENTICAL FRAME OUT, NOTHING RETAINED.
+ *
+ * The whole cost of routing a board that never needed reframing through the
+ * bridge: four memcpys and the same processor call. If this ever stops being
+ * exact, three boards' uplinks changed and nothing else would say so.
+ */
+static void flat_cadence_is_an_exact_passthrough(void) {
+  struct flat_fixture fixture = {0};
+  flat_initialise(&fixture);
+
+  for (uint32_t sequence = 0U; sequence < 5U; ++sequence) {
+    TEST_ASSERT(
+        flat_push(&fixture, sequence, (size_t)sequence * flat_samples) ==
+        ITERATE_KIT_OK);
+    /* Emitted on the same call that accepted it: no frame is ever held. */
+    TEST_ASSERT(fixture.copied_frames == (size_t)sequence + 1U);
+    TEST_ASSERT(fixture.process_calls == (size_t)sequence + 1U);
+  }
+  for (size_t frame = 0U; frame < 5U; ++frame) {
+    for (size_t sample = 0U; sample < flat_samples; ++sample) {
+      TEST_ASSERT(
+          fixture.emitted[frame][sample] ==
+          (int16_t)(frame * flat_samples + sample));
+    }
+  }
+  const struct iterate_kit_aec_capture_bridge_metrics *metrics =
+      iterate_kit_aec_capture_bridge_metrics(&fixture.bridge);
+  TEST_ASSERT(metrics->input_partial_samples == 0U);
+  TEST_ASSERT(metrics->egress_partial_samples == 0U);
+  TEST_ASSERT(metrics->input_samples_discarded == 0U);
+  TEST_ASSERT(metrics->clean_samples_discarded == 0U);
+  TEST_ASSERT(metrics->sequence_discontinuities == 0U);
+  TEST_ASSERT(metrics->timestamp_regressions == 0U);
+}
+
+/*
+ * THE ONE DIVERGENCE FROM THE DIRECT PATH, PINNED.
+ *
+ * The capture step used to return early on a failed process, so the wire
+ * timeline simply skipped 20 ms. The bridge writes a complete silent frame
+ * instead. A fixed-size frame is the less surprising contract — every consumer
+ * downstream assumes 20 ms, and a silently missing frame gets diagnosed as a
+ * network fault — and it can never substitute raw microphone.
+ *
+ * Unreachable behind a passthrough processor, which is why the three boards
+ * that gained the bridge cannot observe it. Pinned anyway, because "cannot
+ * fail" is a property of today's processor and not of this seam.
+ */
+static void flat_process_failure_emits_silence_not_a_hole(void) {
+  struct flat_fixture fixture = {0};
+  fixture.fail_process_call = 2U;
+  flat_initialise(&fixture);
+
+  TEST_ASSERT(flat_push(&fixture, 0U, 0U) == ITERATE_KIT_OK);
+  TEST_ASSERT(flat_push(&fixture, 1U, flat_samples) == ITERATE_KIT_IO_ERROR);
+  TEST_ASSERT(flat_push(&fixture, 2U, 2U * flat_samples) == ITERATE_KIT_OK);
+
+  /* Three frames, not two: the failed one is silence and still on the wire. */
+  TEST_ASSERT(fixture.copied_frames == 3U);
+  for (size_t sample = 0U; sample < flat_samples; ++sample) {
+    TEST_ASSERT(fixture.emitted[1][sample] == 0);
+  }
+  /* And the frame after it is the real audio, not a shifted timeline. */
+  for (size_t sample = 0U; sample < flat_samples; ++sample) {
+    TEST_ASSERT(
+        fixture.emitted[2][sample] ==
+        (int16_t)(2U * flat_samples + sample));
+  }
+  const struct iterate_kit_aec_capture_bridge_metrics *metrics =
+      iterate_kit_aec_capture_bridge_metrics(&fixture.bridge);
+  TEST_ASSERT(metrics->processor_failures == 1U);
+  TEST_ASSERT(metrics->processor_silence_samples == flat_samples);
+}
+
 int main(void) {
+  flat_cadence_is_an_exact_passthrough();
+  flat_process_failure_emits_silence_not_a_hole();
   preserves_distinct_reference_and_playout_timelines();
   reframes_without_loss_or_drift();
   sequence_gap_resets_every_partial_epoch();

@@ -382,6 +382,19 @@ struct iterate_kit_board_facts {
    */
   uint16_t processing_frame_samples;
   /**
+   * Samples the CODEC hands over per read — its DMA grain, not the wire's.
+   *
+   * 320 (one whole 20 ms frame) on three boards; 128 (8 ms) on the one whose
+   * I2S completion is that size. It is a fact rather than a codec property
+   * because the codec seam describes rates and channels, not scheduling: two
+   * boards could share a driver and be reserved differently.
+   *
+   * The bridge reconciles this with `processing_frame_samples` and the wire's
+   * 320. All three being equal is the degenerate pass-through case, which is
+   * what the other three boards get.
+   */
+  uint16_t capture_chunk_samples;
+  /**
    * The capture task's stack. 4 KiB is enough for a passthrough; the board with
    * a real AEC needs 8, because `aec_process` on a 4 KiB stack trips the canary
    * on the first frame.

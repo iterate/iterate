@@ -65,6 +65,7 @@
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/capabilities/push_to_talk.h"
 #include "iterate/kit/capabilities/speaker.h"
+#include "iterate/kit/aec_capture_bridge.h"
 #include "iterate/kit/audio_playout.h"
 #include "iterate/kit/audio_processor.h"
 
@@ -396,6 +397,14 @@ static struct {
   struct iterate_kit_voice_intent intent;
   struct iterate_kit_audio_codec codec;
   struct iterate_kit_audio_processor processor;
+  /*
+   * The one owner of the capture cadence conversion. Touched only by the
+   * capture task, which is why it holds no atomics and why the counters it
+   * publishes are mirrored out through ones that do.
+   */
+  struct iterate_kit_aec_capture_bridge capture_bridge;
+  /** Synthesised for a board with no `capture_meta`; see the capture step. */
+  uint32_t capture_sequence;
   struct iterate_kit_configuration configuration;
   struct iterate_kit_itx_connection connection;
   struct capnweb_pending_call pending_calls[PENDING_CALL_CAPACITY];
@@ -503,6 +512,18 @@ static struct {
    */
   struct iterate_kit_barge_in barge_in;
   uint32_t barge_in_rejected;
+  /*
+   * THE BRIDGE'S OWN CENSUS, MIRRORED BY THE TASK THAT OWNS IT.
+   *
+   * `metrics()` is a const reader now, so the app task could call it — but the
+   * bridge holds no atomics and a multi-word counter read from another task
+   * can still tear. Mirroring here is the same shape the uplink selector uses.
+   */
+  atomic_uint aec_bridge_failures;
+  atomic_uint aec_bridge_reset_failures;
+  atomic_uint aec_sequence_discontinuities;
+  atomic_uint aec_clock_regressions;
+  atomic_uint aec_egress_copy_failures;
   uint32_t speaker_frames_played;
   /* Written by both the app producer and playback consumer. */
   atomic_uint speaker_overflow_drops;
@@ -1404,61 +1425,94 @@ void iterate_kit_voice_loop_playback_step(void) {
 
 /* --- microphone path ------------------------------------------------------ */
 
-/** One pass of the microphone. See the note on the playback step. */
-void iterate_kit_voice_loop_capture_step(void) {
-  static struct mic_frame near_frame;
-  static struct mic_frame processed_frame;
-  size_t sample_count = 0U;
-  const enum iterate_kit_status read_status = iterate_kit_audio_codec_read(
-      &runtime.codec,
-      near_frame.samples,
-      NULL,
-      FRAME_SAMPLES,
-      &sample_count);
-  if (read_status == ITERATE_KIT_UNAVAILABLE) {
-    DELAY_MS(1);
-    return;
-  }
-  if (read_status != ITERATE_KIT_OK || sample_count != FRAME_SAMPLES) {
-    ++runtime.mic_process_failures;
-    DELAY_MS(1);
-    return;
-  }
-  const struct iterate_kit_audio_processor_frame process_frame = {
-    .near = near_frame.samples,
-    .reference = NULL,
-    .playout_activity = NULL,
-    .output = processed_frame.samples,
+/*
+ * ONE CAPTURE PATH, THROUGH THE BRIDGE, ON EVERY BOARD.
+ *
+ * Three of the four boards read a whole 20 ms wire frame, hand it to a
+ * passthrough and queue it. The fourth reads 8 ms DMA chunks, runs esp-sr's
+ * VOIP engine over 16 ms frames and owes the wire 20 ms — three cadences that
+ * no amount of whole-frame FIFO can reconcile without a beat pattern. The
+ * bridge is that reconciliation, and it is already board-generic: separate
+ * `processing_frame_samples` and `egress_frame_samples`, one owner, no task,
+ * lock, allocation or hidden capacity.
+ *
+ * At 320 in / 320 processed / 320 out it degenerates to an exact pass-through
+ * — four memcpys and the same `iterate_kit_audio_processor_process` call the
+ * direct path made — with ONE real semantic change, which is the reason this
+ * is a commit of its own:
+ *
+ *   A FAILED PROCESS NOW EMITS 320 SAMPLES OF SILENCE INSTEAD OF DROPPING THE
+ *   FRAME. The direct path returned early and sent nothing, so the wire
+ *   timeline skipped 20 ms; the bridge fails closed by writing a complete
+ *   silent frame, which keeps the timeline deterministic and can never
+ *   substitute raw microphone. Unreachable under a passthrough processor,
+ *   which cannot fail once its near and output planes are non-NULL — so on
+ *   three boards this is a contract change with no reachable behaviour behind
+ *   it, and on the fourth it is what its own AEC already did.
+ *
+ * A fixed-size frame is the less surprising contract: every consumer
+ * downstream of here assumes 20 ms, and a silently missing frame is the kind
+ * of hole that gets diagnosed as a network fault.
+ */
+static enum iterate_kit_status bridge_process(
+    void *context,
+    const int16_t *near_samples,
+    const int16_t *reference_samples,
+    const int16_t *playout_samples,
+    int16_t *clean_samples,
+    size_t sample_count) {
+  const struct iterate_kit_audio_processor_frame frame = {
+    .near = near_samples,
+    .reference = reference_samples,
+    .playout_activity = playout_samples,
+    .output = clean_samples,
     .sample_count = sample_count,
   };
-  if (iterate_kit_audio_processor_process(
-          &runtime.processor, &process_frame) != ITERATE_KIT_OK) {
-    /* The wrapper silences output; fail closed and transmit nothing. */
+  (void)context;
+  return iterate_kit_audio_processor_process(&runtime.processor, &frame);
+}
+
+static enum iterate_kit_status bridge_reset_processor(void *context) {
+  (void)context;
+  return iterate_kit_audio_processor_reset(&runtime.processor);
+}
+
+/*
+ * ONE COMPLETE WIRE FRAME, and everything that is true once per wire frame.
+ *
+ * The peak and the barge-in observation live here rather than beside the
+ * codec read because THIS is the 20 ms frame: on the board whose DSP works in
+ * 16 ms there is no other place where a wire frame exists, and on the three
+ * where the two coincide it is the identical buffer the direct path measured.
+ */
+static enum iterate_kit_status bridge_copy_egress(
+    void *context,
+    const int16_t *samples,
+    size_t sample_count,
+    uint32_t sample_rate_hz,
+    uint64_t captured_through_at_us) {
+  (void)context;
+  (void)sample_rate_hz;
+  (void)captured_through_at_us;
+  if (sample_count != FRAME_SAMPLES) {
     ++runtime.mic_process_failures;
-    return;
+    return ITERATE_KIT_INVALID_ARGUMENT;
   }
   ++runtime.mic_frames_captured;
   /*
    * HOW LOUD THE ROOM IS, ONCE PER FRAME.
    *
-   * `view.microphone_peak` was declared in the vtable and computed nowhere,
-   * which made every board's meter read zero. Without it a board with no
-   * screen looks identical whether it is listening or deaf — which is exactly
-   * how one was reported.
-   *
-   * Measured on the PROCESSED frame and BEFORE the `talking` gate, which is
+   * Measured on the PROCESSED plane and BEFORE the `talking` gate, which is
    * what the board this came from did: the peak has to keep moving while the
    * device is idle (that is when a person is checking whether it hears them),
-   * and it has to be the CANCELLED plane, because the barge-in gate below
-   * reads the same number and amplifying a residual first is exactly how an
-   * echo gets mistaken for a voice.
-   *
-   * One pass over a 20 ms frame on the task that already owns the samples.
+   * and it has to be the CANCELLED plane, because the barge-in gate reads the
+   * same number and amplifying a residual first is exactly how an echo gets
+   * mistaken for a voice.
    */
   {
     int32_t peak = 0;
     for (size_t index = 0U; index < FRAME_SAMPLES; ++index) {
-      const int32_t sample = processed_frame.samples[index];
+      const int32_t sample = samples[index];
       const int32_t magnitude = sample < 0 ? -sample : sample;
       if (magnitude > peak) peak = magnitude;
     }
@@ -1482,31 +1536,146 @@ void iterate_kit_voice_loop_capture_step(void) {
    * NOBODY IS LISTENING, SO DO NOT QUEUE.
    *
    * Capture runs continuously — the codec is full duplex and stopping it
-   * between turns costs a settle on every press — but frames only LEAVE the
-   * queue while a turn is open. Queueing regardless filled it within a
-   * second of boot and then churned it forever: 7941 of 8804 frames
-   * "dropped" in one session, none of which was speech anybody said.
+   * between turns costs a settle on every press, and an adaptive canceller
+   * must keep seeing far-end-only audio — but frames only LEAVE the queue
+   * while a turn is open. Queueing regardless filled it within a second of
+   * boot and then churned it forever: 7941 of 8804 frames "dropped" in one
+   * session, none of which was speech anybody said.
    *
-   * The number mattered more than the wasted work. A drop counter at 90%
-   * is indistinguishable from a device losing the customer's words, so the
-   * one measurement that would show a real uplink fault was buried in room
-   * noise nobody wanted.
-   *
-   * Frames captured while idle are counted and discarded here, without
-   * touching the queue, so the queue holds only what a turn will send.
+   * The number mattered more than the wasted work. A drop counter at 90% is
+   * indistinguishable from a device losing the customer's words, so the one
+   * measurement that would show a real uplink fault was buried in room noise
+   * nobody wanted.
    */
   if (!runtime.talking) {
     ++runtime.mic_frames_idle;
-    return;
+    return ITERATE_KIT_OK;
   }
-  if (xQueueSend(runtime.mic_queue, &processed_frame, 0) != pdTRUE) {
+  /*
+   * Sent straight from the bridge's egress frame: `struct mic_frame` is
+   * exactly FRAME_SAMPLES of PCM16 and xQueueSend copies, so a staging frame
+   * here would be one memcpy and 640 bytes of .bss to say the same thing.
+   */
+  if (xQueueSend(runtime.mic_queue, samples, 0) != pdTRUE) {
     /* Freshest wins: discard the OLDEST frame, keep this one. Stale
      * speech after a network hiccup is worse than a gap — and it is the
      * only way a backlog can never delay what the customer says next. */
     struct mic_frame discarded;
     (void)xQueueReceive(runtime.mic_queue, &discarded, 0);
-  (void)xQueueSend(runtime.mic_queue, &processed_frame, 0);
-  ++runtime.mic_frames_dropped;
+    (void)xQueueSend(runtime.mic_queue, samples, 0);
+    ++runtime.mic_frames_dropped;
+  }
+  return ITERATE_KIT_OK;
+}
+
+/** One pass of the microphone. See the note on the playback step. */
+void iterate_kit_voice_loop_capture_step(void) {
+  /*
+   * The codec's own grain, whatever it is. Sized for the largest a board
+   * declares; `facts->capture_chunk_samples` is how many of it are asked for.
+   */
+  static int16_t near_chunk[FRAME_SAMPLES];
+  static int16_t reference_chunk[FRAME_SAMPLES];
+  static int16_t activity_chunk[FRAME_SAMPLES];
+  struct iterate_kit_voice_capture_meta meta;
+  size_t sample_count = 0U;
+  const size_t chunk_samples = runtime.facts->capture_chunk_samples;
+  /*
+   * A reference plane exactly when the codec advertises one — the seam's own
+   * rule. Where there is none the plane stays the zeroed static it started
+   * as, which is the honest reading: this board reports no loudspeaker
+   * feedback, rather than a fabricated one.
+   */
+  const enum iterate_kit_status read_status = iterate_kit_audio_codec_read(
+      &runtime.codec,
+      near_chunk,
+      runtime.codec.properties->has_reference_channel ? reference_chunk : NULL,
+      chunk_samples,
+      &sample_count);
+  if (read_status == ITERATE_KIT_UNAVAILABLE) {
+    DELAY_MS(1);
+    return;
+  }
+  if (read_status != ITERATE_KIT_OK || sample_count != chunk_samples) {
+    ++runtime.mic_process_failures;
+    DELAY_MS(1);
+    return;
+  }
+  memset(&meta, 0, sizeof(meta));
+  if (runtime.board->capture_meta != NULL) {
+    runtime.board->capture_meta(runtime.board_context, &meta);
+  } else {
+    /*
+     * A board that cannot say gets a synthesised timeline, which is exactly
+     * what the three boards with no bridge did implicitly. Monotonic by
+     * construction, so the bridge's discontinuity and regression detectors
+     * cannot fire on them — and if they ever did it would be a real defect.
+     */
+    meta.sequence = ++runtime.capture_sequence;
+    meta.captured_through_at_us = (uint64_t)esp_timer_get_time();
+  }
+  /*
+   * A BROKEN CAPTURE TIMELINE RESTARTS THE FILTER ON CURRENT AUDIO. Asked
+   * after the read rather than before it, which is one chunk FRESHER than the
+   * board that donated this: a reset latched while the read was in flight is
+   * honoured for the chunk it actually invalidated instead of the next one.
+   */
+  if (meta.epoch_reset &&
+      iterate_kit_aec_capture_bridge_reset(&runtime.capture_bridge) !=
+          ITERATE_KIT_OK) {
+    ++runtime.mic_process_failures;
+  }
+  {
+    /*
+     * The far-active plane is a POLICY signal the codec samples, never the
+     * analogue reference: noise must not select an uplink branch. Refilled
+     * only when it changes, because it is constant for whole answers and
+     * constantly zero on a board that cannot report it.
+     */
+    static int16_t activity_level;
+    const int16_t level = meta.playback_content_active ? 1 : 0;
+    if (level != activity_level) {
+      activity_level = level;
+      for (size_t index = 0U; index < FRAME_SAMPLES; ++index) {
+        activity_chunk[index] = level;
+      }
+    }
+  }
+  if (iterate_kit_aec_capture_bridge_push_aligned(
+          &runtime.capture_bridge,
+          meta.sequence,
+          meta.captured_through_at_us,
+          near_chunk,
+          reference_chunk,
+          activity_chunk,
+          chunk_samples) != ITERATE_KIT_OK) {
+    ++runtime.mic_process_failures;
+  }
+  {
+    const struct iterate_kit_aec_capture_bridge_metrics *bridge =
+        iterate_kit_aec_capture_bridge_metrics(&runtime.capture_bridge);
+    if (bridge != NULL) {
+      atomic_store_explicit(
+          &runtime.aec_bridge_failures,
+          bridge->processor_failures,
+          memory_order_relaxed);
+      atomic_store_explicit(
+          &runtime.aec_bridge_reset_failures,
+          bridge->processor_reset_failures,
+          memory_order_relaxed);
+      atomic_store_explicit(
+          &runtime.aec_sequence_discontinuities,
+          bridge->sequence_discontinuities,
+          memory_order_relaxed);
+      atomic_store_explicit(
+          &runtime.aec_clock_regressions,
+          bridge->timestamp_regressions,
+          memory_order_relaxed);
+      atomic_store_explicit(
+          &runtime.aec_egress_copy_failures,
+          bridge->egress_copy_failures,
+          memory_order_relaxed);
+    }
   }
 }
 
@@ -1774,6 +1943,27 @@ static size_t health_json(char *out, size_t capacity) {
     {"micDropped", runtime.mic_frames_dropped},
     {"micProcessFailures", runtime.mic_process_failures},
     {"micIdle", runtime.mic_frames_idle},
+    /*
+     * THE CAPTURE BRIDGE'S OWN CENSUS: refused frames, and the two ways its
+     * input can lie about being one continuous timeline. On a board where all
+     * three cadences are 320 these can only move if something is genuinely
+     * wrong — the timeline is synthesised from a monotonic counter and clock,
+     * so a discontinuity or a regression there is a defect, not a chunk grain.
+     */
+    {"aecBridgeFailures",
+     atomic_load_explicit(&runtime.aec_bridge_failures, memory_order_relaxed)},
+    {"aecBridgeResetFailures",
+     atomic_load_explicit(
+         &runtime.aec_bridge_reset_failures, memory_order_relaxed)},
+    {"aecSeqDiscontinuities",
+     atomic_load_explicit(
+         &runtime.aec_sequence_discontinuities, memory_order_relaxed)},
+    {"aecClockRegressions",
+     atomic_load_explicit(
+         &runtime.aec_clock_regressions, memory_order_relaxed)},
+    {"aecEgressCopyFailures",
+     atomic_load_explicit(
+         &runtime.aec_egress_copy_failures, memory_order_relaxed)},
     /*
      * WHETHER THIS DEVICE CAN HEAR ANYTHING AT ALL, and the loudest it ever
      * has. A deaf board and a quiet room are indistinguishable from every
@@ -2141,21 +2331,64 @@ static void park_with_fault(const char *what) {
  * radio is the loop's, and that is `facts->radio_before_codec`.
  */
 static bool start_board(void) {
+  /*
+   * The bridge's five buffers, caller-owned for its whole life and sized for
+   * the largest cadence any board declares. Internal RAM on purpose: four of
+   * them are what a board's DSP reads and writes every frame, and the one
+   * board with a real canceller runs esp-sr over them inline.
+   */
+  static int16_t bridge_near[ITERATE_KIT_VOICE_FRAME_SAMPLES];
+  static int16_t bridge_reference[ITERATE_KIT_VOICE_FRAME_SAMPLES];
+  static int16_t bridge_playout[ITERATE_KIT_VOICE_FRAME_SAMPLES];
+  static int16_t bridge_clean[ITERATE_KIT_VOICE_FRAME_SAMPLES];
+  static int16_t bridge_egress[ITERATE_KIT_VOICE_FRAME_SAMPLES];
   struct iterate_kit_board_audio audio;
   memset(&audio, 0, sizeof(audio));
   if (!runtime.board->start(runtime.board_context, &audio)) return false;
   runtime.codec = audio.codec;
   runtime.processor = audio.processor;
-  return iterate_kit_audio_codec_validate(&runtime.codec) == ITERATE_KIT_OK &&
-      iterate_kit_audio_processor_validate(&runtime.processor) ==
-          ITERATE_KIT_OK &&
-      runtime.codec.properties->capture_sample_rate_hz ==
-          runtime.processor.properties->sample_rate_hz &&
-      runtime.processor.properties->frame_samples ==
-          runtime.facts->processing_frame_samples &&
-      (!runtime.processor.properties->requires_reference_channel ||
-       runtime.codec.properties->has_reference_channel) &&
-      iterate_kit_audio_processor_reset(&runtime.processor) == ITERATE_KIT_OK;
+  if (iterate_kit_audio_codec_validate(&runtime.codec) != ITERATE_KIT_OK ||
+      iterate_kit_audio_processor_validate(&runtime.processor) !=
+          ITERATE_KIT_OK ||
+      runtime.codec.properties->capture_sample_rate_hz !=
+          runtime.processor.properties->sample_rate_hz ||
+      /*
+       * The processor is checked against the BRIDGE cadence, not the wire's:
+       * on the board whose DSP frame is 256 those are different numbers, and
+       * checking the wire's would reject a correct composition.
+       */
+      runtime.processor.properties->frame_samples !=
+          runtime.facts->processing_frame_samples ||
+      runtime.facts->capture_chunk_samples == 0U ||
+      runtime.facts->capture_chunk_samples >
+          ITERATE_KIT_VOICE_FRAME_SAMPLES ||
+      (runtime.processor.properties->requires_reference_channel &&
+       !runtime.codec.properties->has_reference_channel) ||
+      iterate_kit_audio_processor_reset(&runtime.processor) !=
+          ITERATE_KIT_OK) {
+    return false;
+  }
+  {
+    const struct iterate_kit_aec_capture_bridge_options bridge_options = {
+      .sample_rate_hz = ITERATE_KIT_VOICE_SAMPLE_RATE_HZ,
+      .processing_frame_samples = runtime.facts->processing_frame_samples,
+      .egress_frame_samples = FRAME_SAMPLES,
+      .near_frame = bridge_near,
+      .reference_frame = bridge_reference,
+      .playout_frame = bridge_playout,
+      .clean_frame = bridge_clean,
+      .processing_frame_capacity = ITERATE_KIT_VOICE_FRAME_SAMPLES,
+      .egress_frame = bridge_egress,
+      .egress_frame_capacity = ITERATE_KIT_VOICE_FRAME_SAMPLES,
+      .processor_context = NULL,
+      .process = bridge_process,
+      .reset_processor = bridge_reset_processor,
+      .egress_context = NULL,
+      .copy_egress = bridge_copy_egress,
+    };
+    return iterate_kit_aec_capture_bridge_init(
+               &runtime.capture_bridge, &bridge_options) == ITERATE_KIT_OK;
+  }
 }
 
 bool iterate_kit_voice_loop_init(
