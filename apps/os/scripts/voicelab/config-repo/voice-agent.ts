@@ -1784,6 +1784,26 @@ const OPEN_MIC_CLIENTS = new Set([
  * the handshake is exactly the audio the user cared about most, so it queues
  * here and is flushed in order the moment the provider is ready.
  */
+
+/** One frame of the answer, as the speaker lane ships it. */
+interface SpkFramePayload {
+  /* The contract's schema is loose, so the lane's own shape has to admit the
+   * same open record or the two types cannot meet. */
+  [key: string]: unknown;
+  conversationId: string;
+  answer: number;
+  /** Position within this answer; a client uses it to hear a gap. */
+  frame: number;
+  seq: number;
+  t: number;
+  enc: "u";
+  /** Discard anything still queued before playing this one. */
+  drop?: boolean;
+  /** The answer ends here: drain, and stop waiting for more. */
+  last: boolean;
+  pcm: string;
+}
+
 class GrokCall {
   readonly conversationId: string;
   /** Null until `session.updated`; queued PCM is flushed on that edge. */
@@ -1965,24 +1985,37 @@ class GrokCall {
    * and the host CLI expect. Mu-law halves the bytes, which is what lets a
    * microcontroller receive speech at all.
    */
-  framesFor(deltaBase64: string, now: number) {
+  framesFor(deltaBase64: string, now: number): SpkFramePayload[] {
     const bytes = new Uint8Array(base64ToBytes(deltaBase64));
     const joined = new Uint8Array(this.#spkRemainder.length + bytes.length);
     joined.set(this.#spkRemainder, 0);
     joined.set(bytes, this.#spkRemainder.length);
     const whole = joined.length - (joined.length % 640);
     this.#spkRemainder = joined.slice(whole);
-    const frames = [];
+    const frames: SpkFramePayload[] = [];
     for (let offset = 0; offset < whole; offset += 640) {
       frames.push({
         conversationId: this.conversationId,
         answer: this.#answerSeq,
-        frame: this.#answerFrames++,
+        frame: this.#answerFrames,
         seq: this.#spkSeq++,
         t: now,
         enc: "u",
+        /*
+         * THE BUFFER VERB TRAVELS WITH THE AUDIO IT INVALIDATES.
+         *
+         * A client holding the tail of a superseded answer has to drop it
+         * before playing this one, and it used to learn that by watching the
+         * provider's own event stream for a speech edge — one bit of
+         * information bought with a subscription to everything xAI says. The
+         * first frame of a new answer says it instead, and being IN the audio
+         * lane it cannot be reordered against the audio it is about.
+         */
+        ...(this.#answerFrames === 0 ? { drop: true } : {}),
+        last: false,
         pcm: bytesToBase64(encodeMulawFromPcm16(joined.slice(offset, offset + 640))),
       });
+      this.#answerFrames++;
     }
     return frames;
   }
@@ -2005,6 +2038,36 @@ class GrokCall {
   /** The answer is over, so the mouth closes. SIL, once. */
   closeMouth() {
     return this.#visemes.end(this.#answerSeq);
+  }
+
+  /**
+   * The last frame of the answer, and the only one that says so.
+   *
+   * Two jobs. It carries `last`, which lets a client drain and release its
+   * half-duplex fence on a fact rather than on a timeout — the other bit it
+   * used to read off the provider's firehose. And it flushes `#spkRemainder`:
+   * the provider's final delta almost never lands on a 640-byte boundary, so
+   * up to 20 ms of every answer's tail was being carried into a next delta
+   * that never came, and silently lost.
+   *
+   * Zero-length audio is a legitimate frame here. A client that has already
+   * played everything still needs to be told the answer ended.
+   */
+  closeAnswer(now: number): SpkFramePayload {
+    const remainder = this.#spkRemainder;
+    this.#spkRemainder = new Uint8Array(0);
+    const padded = new Uint8Array(640);
+    padded.set(remainder.subarray(0, 640));
+    return {
+      conversationId: this.conversationId,
+      answer: this.#answerSeq,
+      frame: this.#answerFrames++,
+      seq: this.#spkSeq++,
+      t: now,
+      enc: "u",
+      last: true,
+      pcm: remainder.length === 0 ? "" : bytesToBase64(encodeMulawFromPcm16(padded)),
+    };
   }
 
   /** A new turn's gaps are its own; the silence since the last one is not one. */
@@ -2211,6 +2274,18 @@ const AudioFrame = z.looseObject({
   conversationId: z.string(),
   pcm: z.string(),
   enc: z.string().optional(),
+  /*
+   * THE TWO BITS A CLIENT NEEDS TO MANAGE ITS SPEAKER, carried by the audio
+   * rather than alongside it. Both used to be read off the provider's own
+   * event firehose — a subscription to everything xAI says, for two bits.
+   * Riding the frames means they cannot be reordered against the audio they
+   * are about, and a board's whole buffer policy becomes: drop on `drop`,
+   * release on `last`, and otherwise play what arrives.
+   */
+  /** Discard anything still queued before playing this one. */
+  drop: z.boolean().optional(),
+  /** The answer ends here: drain, and stop waiting for more. */
+  last: z.boolean().optional(),
 });
 
 /**
@@ -2872,6 +2947,8 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
            * last shape it was given, so the board sits there mid-syllable
            * until the next answer — which reads as a crash, not a pause. */
           this.#foldFace(call.closeMouth());
+          /* Behind whatever the pacer still holds, so it arrives last. */
+          this.#speakFrames(call, [call.closeAnswer(this.deps.now())], append, runInBackground);
           return;
         }
         default:
@@ -3019,7 +3096,17 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
      * playback rate, and a barge-in clears the queue via beginAnswer rather
      * than making the interrupter wait behind audio nobody will hear.
      */
-    const immediate = call.pace(frames, now);
+    this.#speakFrames(call, frames, append, runInBackground);
+  }
+
+  /** Admit frames to the paced lane and keep the drain loop alive. */
+  #speakFrames(
+    call: GrokCall,
+    frames: SpkFramePayload[],
+    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgentFacetContract>["runInBackground"],
+  ): void {
+    const immediate = call.pace(frames, this.deps.now());
     if (immediate.length > 0) {
       void append(...immediate.map(asSpkFrame));
     }

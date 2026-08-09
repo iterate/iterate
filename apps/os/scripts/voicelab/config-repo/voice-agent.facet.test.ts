@@ -233,6 +233,79 @@ describe("audio spoken into the handshake", () => {
   });
 });
 
+describe("the speaker lane's buffer verbs", () => {
+  /*
+   * A BOARD SHOULD NOT PARSE A PROVIDER SCHEMA TO MANAGE ITS OWN RING.
+   *
+   * Dropping a superseded answer and knowing an answer has ended are two bits
+   * of information, and boards bought both by subscribing to `grok-event` —
+   * every message xAI sends, which is the firehose that killed the host CLI's
+   * receive buffer. They ride the frames now: `drop` cannot be reordered
+   * against the audio it invalidates, because it IS that audio.
+   */
+  it("marks the first frame of an answer as a drop point", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+
+    provider.speak(1920); // three whole frames
+    await harness.settle();
+
+    const frames = harness.events(SPK_FRAME);
+    expect(frames[0]!.payload.drop).toBe(true);
+    expect(frames.slice(1).every((f) => f.payload.drop === undefined)).toBe(true);
+  });
+
+  it("ends the answer with a frame that says so, and keeps the tail", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+
+    /* 700 bytes is one whole frame and 60 left over — the ordinary case, since
+     * a provider's final delta almost never lands on a 640-byte boundary. */
+    provider.speak(700);
+    await harness.settle();
+    expect(harness.events(SPK_FRAME)).toHaveLength(1);
+
+    provider.finishAudio();
+    await harness.settle();
+
+    const frames = harness.events(SPK_FRAME);
+    expect(frames).toHaveLength(2);
+    /* The remainder is PLAYED, not dropped. It used to be carried into a next
+     * delta that never came, losing up to 20 ms off every answer's tail. */
+    expect(frames[1]!.payload.pcm).not.toBe("");
+    expect(frames[1]!.payload.last).toBe(true);
+    expect(frames.slice(0, -1).every((f) => f.payload.last === false)).toBe(true);
+  });
+
+  it("still ends the answer when the audio divided evenly", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+    provider.speak(1280); // exactly two frames, no remainder
+    await harness.settle();
+
+    provider.finishAudio();
+    await harness.settle();
+
+    /* Zero-length audio is a legitimate frame: a client that has played
+     * everything still has to be told the answer is over. */
+    const last = harness.events(SPK_FRAME).at(-1)!;
+    expect(last.payload.last).toBe(true);
+    expect(last.payload.pcm).toBe("");
+  });
+});
+
 describe("the face", () => {
   /*
    * THE MOUTH IS THE SERVER'S, and it had stopped moving.
