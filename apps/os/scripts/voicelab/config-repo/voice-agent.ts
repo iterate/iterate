@@ -2186,13 +2186,24 @@ class GrokCall {
    * over: streams are not meant to hibernate between button presses, and a
    * push-to-talk caller ended up re-dialling the provider on every press.
    *
-   * A DO awake DURING a conversation is correct — somebody is talking to it,
-   * and the provider socket is what keeps it up. So an ordinary timer is
-   * enough: there is no window in which this has to fire inside a sleeping
-   * object, and an eviction takes the call with it (the at-head pass owns what
-   * happens next). One timer at a time, restarted by {@link spoke} on every
-   * message in either direction and cancelled by {@link close}, so a call that
-   * has already ended can never fire a second hang-up.
+   * A DO awake DURING a conversation is correct — somebody is talking to it —
+   * so this is an ordinary `setTimeout`: restarted by {@link spoke} on every
+   * message in either direction, cancelled by {@link close}, which is what
+   * makes it impossible for a call that has already ended to fire a second
+   * hang-up. Nothing durable, nothing on a heartbeat.
+   *
+   * IT ONLY FIRES WHILE THE OBJECT IS ALIVE, and that is the honest limit of
+   * it. MEASURED on preview-3: a held provider socket does NOT keep a stream's
+   * Durable Object up through a silence — a 5-second deadline fired, a
+   * 30-second one never did, and neither a `waitUntil` hold nor registering
+   * the wait as keepalive-backed background work changed that. So in practice
+   * eviction usually ends a forgotten call before this does, taking the
+   * provider socket with it; the fold still names the call until the next
+   * press, whose at-head pass re-dials or supersedes it. Both routes are the
+   * recovery this processor already had. What this countdown guarantees is the
+   * case that matters: a call nobody has abandoned — the object alive, the
+   * socket up, xAI's meter running — does not sit there for the provider's own
+   * fifteen-minute timeout.
    */
   #startIdleTimer: (() => () => void) | null = null;
   #cancelIdleTimer: (() => void) | null = null;
@@ -2204,16 +2215,26 @@ class GrokCall {
    * its own `clearTimeout`; `fire` is what happens when a whole minute passes
    * with nothing said. Called once, at the dial.
    */
-  watchIdle(startTimer: (ms: number, fire: () => void) => () => void, fire: () => void): void {
+  watchIdle(
+    startTimer: (ms: number, fire: () => Promise<void>) => () => void,
+    fire: () => Promise<void>,
+  ): void {
     this.#startIdleTimer = () => startTimer(IDLE_TIMEOUT_MS, fire);
     this.spoke();
   }
 
-  /** Something was said, whichever way round: the minute starts again. */
+  /**
+   * Something was said, whichever way round: the minute starts again.
+   *
+   * The replacement is armed BEFORE the old one is dropped, deliberately, so
+   * there is never an instant with no countdown on a live call — this runs
+   * fifty times a second while somebody is speaking.
+   */
   spoke(): void {
     if (this.#closed || this.#startIdleTimer === null) return;
-    this.#cancelIdleTimer?.();
+    const previous = this.#cancelIdleTimer;
     this.#cancelIdleTimer = this.#startIdleTimer();
+    previous?.();
   }
 
   /** The turn is complete: commit what was captured and ask for an answer. */
@@ -2255,8 +2276,9 @@ class GrokCall {
     this.#closed = true;
     /* EVERY route out of a call comes through here — the idle hang-up, a
      * device's own, a provider close, a failed dial, being superseded — so
-     * this one line is what guarantees a spent call cannot fire a countdown
-     * at a conversation that has already moved on. */
+     * these lines are what guarantee a spent call cannot fire a countdown at a
+     * conversation that has already moved on, and what let the Durable Object
+     * hibernate the moment the last call on it is over. */
     this.#cancelIdleTimer?.();
     this.#cancelIdleTimer = null;
     this.#startIdleTimer = null;
@@ -2550,8 +2572,11 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
      * conversation that replaced it — which the plain `sleep` above cannot do.
      * Injected rather than called directly so a sixty-second deadline can be
      * tested on a virtual clock instead of by waiting a minute.
+     *
+     * `fire` is awaited, so the host can keep itself alive until the hang-up
+     * it triggers has actually been written.
      */
-    setTimer(ms: number, fire: () => void): () => void;
+    setTimer(ms: number, fire: () => Promise<void>): () => void;
   }
 > {
   readonly contract = VoiceAgentFacetContract;
@@ -2869,8 +2894,17 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     const call = new GrokCall(conversationId, this.deps.now());
     call.serverVad = serverVad;
     this.#call = call;
-    /* The countdown starts with the call, so a dial that neither completes nor
-     * errors ages out on the same clock as a silence rather than never. */
+    /*
+     * The countdown starts with the call, so a dial that neither completes nor
+     * errors ages out on the same clock as a silence rather than never.
+     *
+     * Deliberately NOT registered as `runInBackground` work: a promise that
+     * stays in flight for the life of a call arms the runner's keepalive every
+     * ten seconds and REVIVES the processor after an eviction, whose at-head
+     * pass re-dials the call and starts the minute again — an idle call kept
+     * alive forever by the machinery meant to rescue it. That is the eternal
+     * re-dial loop this stream has already been wedged by once.
+     */
     call.watchIdle(this.deps.setTimer, () => this.#hangUpIdle(call));
     runInBackground(async () => {
       let failure: string | null = null;
@@ -3265,24 +3299,26 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
    * all keep working unchanged, rather than needing a second copy of the same
    * reasoning for an expiry that is not special.
    */
-  #hangUpIdle(call: GrokCall): void {
+  async #hangUpIdle(call: GrokCall): Promise<void> {
     /* Superseded or already gone: the countdown belongs to a call this
      * processor no longer holds, and burying it would bury its successor. */
     if (call.closed || this.#call !== call) return;
-    void this.append({
-      type: "events.iterate.com/voice-agent/conversation-ended",
-      payload: {
-        conversationId: call.conversationId,
-        reason: `no utterance from either side for ${IDLE_TIMEOUT_MS / 1000}s`,
-      },
-    }).catch((error: unknown) => {
+    try {
+      await this.append({
+        type: "events.iterate.com/voice-agent/conversation-ended",
+        payload: {
+          conversationId: call.conversationId,
+          reason: `no utterance from either side for ${IDLE_TIMEOUT_MS / 1000}s`,
+        },
+      });
+    } catch (error) {
       /* The countdown is spent and the call is still up, so nothing else would
        * ever end it. Start another minute rather than leak the conversation. */
       console.log(
         `voice call ${call.conversationId} idle hang-up failed to append: ${String(error)}`,
       );
       call.spoke();
-    });
+    }
   }
 
   /**
@@ -3341,12 +3377,11 @@ export class VoiceAgentFacet extends StreamProcessorFacet {
       now: () => Date.now(),
       sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
       dialGrok: () => dialGrokSocket(),
-      /* A plain timer is enough for the idle countdown: while a call is up its
-       * provider socket keeps this Durable Object awake, so there is no window
-       * in which the deadline would have to fire inside a sleeping object —
-       * and if the DO is evicted the call goes with it. */
-      setTimer: (ms: number, fire: () => void) => {
-        const handle = setTimeout(fire, ms);
+      /* Plain `setTimeout`/`clearTimeout`. What keeps it alive across the
+       * silence it is measuring is the processor registering the call as
+       * background work, not anything here — see `#dial`. */
+      setTimer: (ms: number, fire: () => Promise<void>) => {
+        const handle = setTimeout(() => void fire(), ms);
         return () => clearTimeout(handle);
       },
     });

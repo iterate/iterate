@@ -108,11 +108,9 @@ function fakeGrok() {
  * it (the abandoned sleep resolves and does nothing).
  */
 function virtualTimer(deps: { sleep: (ms: number) => Promise<void> }) {
-  return (ms: number, fire: () => void) => {
+  return (ms: number, fire: () => Promise<void>) => {
     let live = true;
-    void deps.sleep(ms).then(() => {
-      if (live) fire();
-    });
+    void deps.sleep(ms).then(() => (live ? fire() : undefined));
     return () => {
       live = false;
     };
