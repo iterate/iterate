@@ -78,6 +78,22 @@ const PACE_FLUSH_MS = 400;
 /** Ceiling per drain batch, so one append never dwarfs a delivery budget. */
 const PACE_MAX_BATCH = 50;
 /**
+ * A CALL WITH NO UTTERANCE FROM EITHER SIDE FOR THIS LONG IS OVER.
+ *
+ * A conversation is one call across many presses, so this is the only clock
+ * that ends an idle one. Both directions count: what goes to the provider and
+ * what comes back from it, so a long answer cannot age a call out and neither
+ * can somebody who pauses to think and then speaks again. Anything either way
+ * restarts the minute.
+ *
+ * What deliberately does NOT count is liveness. The retiring bridge made the
+ * same distinction for the same reason — a device pinging into an empty room
+ * is exactly the case this exists to end — and it still holds now that those
+ * pings are gone: presence, warm-ups and brief markers are traffic about the
+ * stream, not somebody talking on it.
+ */
+const IDLE_TIMEOUT_MS = 60_000;
+/**
  * The agent that does the actual thinking. Grok is a mouth and a pair of
  * ears with a ~200ms budget; anything that needs reading a repo, calling a
  * tool, or being RIGHT belongs to a text model with no clock on it.
@@ -2059,6 +2075,11 @@ class GrokCall {
   /** Say this to the provider, or hold it until the session is configured. */
   send(message: Record<string, unknown>): void {
     if (this.#closed) return;
+    /* EVERY send is the client's half of "either side": audio frames, the
+     * buffer verbs a press writes, a text turn. Restarting here rather than at
+     * each call site is what makes it impossible to add a new send and forget
+     * that it keeps the call alive. */
+    this.spoke();
     if (this.#pending !== null) {
       this.#pending.push(message);
       return;
@@ -2152,24 +2173,48 @@ class GrokCall {
    * provider's own to segment, and gating them would deafen the board.
    */
   turnClosed = false;
-  /*
-   * HANG UP SO THE DURABLE OBJECT CAN SLEEP.
-   *
-   * A provider socket held open keeps this stream's DO awake, and xAI only
-   * drops an idle session after 900 seconds — so one press used to pin a DO,
-   * and burn a provider session, for fifteen minutes of silence afterwards.
-   * Nothing else about the design allows a device to be quiet: the boards no
-   * longer heartbeat, the facet runs no timer while idle, and the face is read
-   * rather than pushed. This was the last thing keeping the lights on.
-   *
-   * Set when a push-to-talk answer finishes, acted on when the paced queue
-   * drains — which is exactly the moment the answer has been fully handed
-   * over. An open-mic call is exempt: it has no press to re-dial on, and a
-   * board streaming continuously is legitimately busy.
-   */
-  hangUpWhenDrained = false;
   /** Frames refused by that rule, so "rare" is a number and not a hope. */
   droppedAfterEnd = 0;
+
+  /*
+   * THE IDLE COUNTDOWN, and the only clock that ends a quiet call.
+   *
+   * A provider socket held open keeps this stream's Durable Object awake, and
+   * xAI only drops an idle session after 900 seconds — so a call nobody ends
+   * pins a DO, and burns a provider session, for fifteen minutes of silence.
+   * The wrong fix for that was hanging up as soon as an answer had been handed
+   * over: streams are not meant to hibernate between button presses, and a
+   * push-to-talk caller ended up re-dialling the provider on every press.
+   *
+   * A DO awake DURING a conversation is correct — somebody is talking to it,
+   * and the provider socket is what keeps it up. So an ordinary timer is
+   * enough: there is no window in which this has to fire inside a sleeping
+   * object, and an eviction takes the call with it (the at-head pass owns what
+   * happens next). One timer at a time, restarted by {@link spoke} on every
+   * message in either direction and cancelled by {@link close}, so a call that
+   * has already ended can never fire a second hang-up.
+   */
+  #startIdleTimer: (() => () => void) | null = null;
+  #cancelIdleTimer: (() => void) | null = null;
+
+  /**
+   * Begin watching this call for silence.
+   *
+   * `startTimer` is the processor's injected `setTimeout`, which hands back
+   * its own `clearTimeout`; `fire` is what happens when a whole minute passes
+   * with nothing said. Called once, at the dial.
+   */
+  watchIdle(startTimer: (ms: number, fire: () => void) => () => void, fire: () => void): void {
+    this.#startIdleTimer = () => startTimer(IDLE_TIMEOUT_MS, fire);
+    this.spoke();
+  }
+
+  /** Something was said, whichever way round: the minute starts again. */
+  spoke(): void {
+    if (this.#closed || this.#startIdleTimer === null) return;
+    this.#cancelIdleTimer?.();
+    this.#cancelIdleTimer = this.#startIdleTimer();
+  }
 
   /** The turn is complete: commit what was captured and ask for an answer. */
   commit(now: number): void {
@@ -2208,6 +2253,13 @@ class GrokCall {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    /* EVERY route out of a call comes through here — the idle hang-up, a
+     * device's own, a provider close, a failed dial, being superseded — so
+     * this one line is what guarantees a spent call cannot fire a countdown
+     * at a conversation that has already moved on. */
+    this.#cancelIdleTimer?.();
+    this.#cancelIdleTimer = null;
+    this.#startIdleTimer = null;
     this.#pending = null;
     this.#paced.length = 0;
     try {
@@ -2486,7 +2538,21 @@ function asSpkFrame(payload: ReturnType<GrokCall["framesFor"]>[number]) {
 
 export class VoiceAgentFacetProcessor extends StreamProcessor<
   VoiceAgentFacetContract,
-  { now(): number; sleep(ms: number): Promise<void>; dialGrok(): Promise<WebSocket | null> }
+  {
+    now(): number;
+    sleep(ms: number): Promise<void>;
+    dialGrok(): Promise<WebSocket | null>;
+    /**
+     * `setTimeout`, and the returned function is its `clearTimeout`.
+     *
+     * The idle countdown must be CANCELLABLE — a call that ends by any other
+     * route has to take its timer with it, or a spent countdown fires at the
+     * conversation that replaced it — which the plain `sleep` above cannot do.
+     * Injected rather than called directly so a sixty-second deadline can be
+     * tested on a virtual clock instead of by waiting a minute.
+     */
+    setTimer(ms: number, fire: () => void): () => void;
+  }
 > {
   readonly contract = VoiceAgentFacetContract;
   /** The live call, or null. Empty after an eviction — deliberately. */
@@ -2644,7 +2710,9 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
           return;
         }
         /* Whatever the provider still holds is from a turn that never
-         * committed; prepending it would answer a blend of two utterances. */
+         * committed; prepending it would answer a blend of two utterances.
+         * (And, being a send, it is also what restarts this call's idle
+         * countdown for a caller who paused to think and then pressed again.) */
         call.send({ type: "input_audio_buffer.clear" });
         /* A fresh utterance starts here, so the frame count that measures
          * whether this facet keeps up with the microphone starts here too —
@@ -2679,6 +2747,10 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
          * send, no await. Held instead if the session is not up — see
          * GrokCall.offer. */
         if (call === null) return;
+        /* A frame is somebody talking whatever we then do with it, so this is
+         * BEFORE the refusal below on purpose: a client that keeps streaming
+         * past its own release is still a client on this call. */
+        call.spoke();
         /* Straggling audio from a turn that has already been committed would
          * read to the provider as a barge-in and cancel the answer. */
         if (call.turnClosed && !call.serverVad) {
@@ -2797,6 +2869,9 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     const call = new GrokCall(conversationId, this.deps.now());
     call.serverVad = serverVad;
     this.#call = call;
+    /* The countdown starts with the call, so a dial that neither completes nor
+     * errors ages out on the same clock as a silence rather than never. */
+    call.watchIdle(this.deps.setTimer, () => this.#hangUpIdle(call));
     runInBackground(async () => {
       let failure: string | null = null;
       try {
@@ -2868,9 +2943,19 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
       }
       call.close();
       if (wasLive) {
+        /* CAUGHT, for the reason `#endCall` spells out: a socket close is the
+         * last thing that happens before this Durable Object is allowed to go
+         * quiet, so a bare rejection here is an unhandled rejection racing the
+         * eviction it just permitted. Losing the obituary costs a fold that
+         * names a dead call until the next press; `#retiredId` above already
+         * stops the at-head pass resurrecting it in the meantime. */
         void append({
           type: "events.iterate.com/voice-agent/conversation-ended",
           payload: { conversationId: call.conversationId, reason: "provider socket closed" },
+        }).catch((error: unknown) => {
+          console.log(
+            `voice call ${call.conversationId} obituary failed to append: ${String(error)}`,
+          );
         });
       }
     });
@@ -2888,6 +2973,16 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
       } catch {
         return;
       }
+      /*
+       * THE OTHER HALF OF "EITHER SIDE". A ninety-second answer is the model
+       * talking, and ageing the call out from under it would cut the reply off
+       * mid-sentence; the provider's own turn edges and transcripts are the
+       * same conversation. xAI sends nothing on an idle session — it drops one
+       * after 900 seconds of quiet rather than pinging it — so there is no
+       * liveness traffic here to mistake for somebody speaking. Should that
+       * ever change, a keepalive event must be excluded by name.
+       */
+      call.spoke();
       /* The verbatim lane first, unconditionally — deltas included. */
       this.#forwardGrokEvent(call, provider as Record<string, unknown>, append);
       switch (provider.type) {
@@ -2952,10 +3047,13 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
            * last shape it was given, so the board sits there mid-syllable
            * until the next answer — which reads as a crash, not a pause. */
           this.#foldFace(call.closeMouth());
-          /* A push-to-talk call re-dials on the next press, and dialling
-           * starts the moment the button goes down — so the handshake hides
-           * behind the speaking rather than in front of the answer. */
-          call.hangUpWhenDrained = !call.serverVad;
+          /*
+           * AND THE CALL STAYS UP. This used to hang up the provider socket
+           * here, on every push-to-talk answer, so the next press re-dialled —
+           * which is a new conversation per button press rather than one
+           * conversation across many. The socket now goes when the call does:
+           * a minute after the last utterance, or when either side ends it.
+           */
           /* Behind whatever the pacer still holds, so it arrives last. */
           this.#speakFrames(call, [call.closeAnswer(this.deps.now())], append, runInBackground);
           return;
@@ -3138,11 +3236,10 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     if (immediate.length > 0) {
       void append(...immediate.map(asSpkFrame));
     }
-    if (call.pacedEmpty) {
-      /* Nothing held back, so the answer is already fully handed over. */
-      this.#hangUpIfDue(call, append);
-      return;
-    }
+    /* Nothing held back means the answer is already fully handed over, and
+     * that is all it means: the drain loop exits and the facet goes quiet
+     * until somebody speaks or the idle deadline fires. */
+    if (call.pacedEmpty) return;
     if (!call.pacerRunning) {
       call.pacerRunning = true;
       runInBackground(async () => {
@@ -3153,23 +3250,39 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
           await this.deps.sleep(PACE_FLUSH_MS);
         }
         call.pacerRunning = false;
-        this.#hangUpIfDue(call, append);
       });
     }
   }
 
   /**
-   * The answer is out of the door, so let go of the provider.
+   * A whole minute with nothing said either way: end the call.
    *
-   * Called at the one instant that means "fully handed over": the paced queue
-   * is empty. Holding the socket past here keeps this stream's Durable Object
-   * awake and a provider session alive for xAI's whole 900-second idle
-   * timeout, which is fifteen minutes of nobody saying anything.
+   * Deliberately an APPEND of the ORDINARY `conversation-ended` — the same
+   * event a device writes when somebody presses the hang-up button and the
+   * same one the assistant's own hang-up tool writes. There is one way to end
+   * a call and three things that can decide to: the person, the model, and the
+   * clock. So the fold, the `#retiredId` guard and the provider-close handling
+   * all keep working unchanged, rather than needing a second copy of the same
+   * reasoning for an expiry that is not special.
    */
-  #hangUpIfDue(call: GrokCall, append: ProcessEventArgs<VoiceAgentFacetContract>["append"]): void {
-    if (!call.hangUpWhenDrained || call.closed) return;
-    call.hangUpWhenDrained = false;
-    this.#endCall("answer delivered; idle sockets keep the stream awake", append);
+  #hangUpIdle(call: GrokCall): void {
+    /* Superseded or already gone: the countdown belongs to a call this
+     * processor no longer holds, and burying it would bury its successor. */
+    if (call.closed || this.#call !== call) return;
+    void this.append({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: {
+        conversationId: call.conversationId,
+        reason: `no utterance from either side for ${IDLE_TIMEOUT_MS / 1000}s`,
+      },
+    }).catch((error: unknown) => {
+      /* The countdown is spent and the call is still up, so nothing else would
+       * ever end it. Start another minute rather than leak the conversation. */
+      console.log(
+        `voice call ${call.conversationId} idle hang-up failed to append: ${String(error)}`,
+      );
+      call.spoke();
+    });
   }
 
   /**
@@ -3188,15 +3301,14 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     this.#call = null;
     this.#retiredId = call.conversationId;
     console.log(`voice call ${call.conversationId} ended: ${reason}`);
+    /* Takes the idle countdown with it — see GrokCall.close. */
     call.close();
     if (append !== undefined) {
       /*
-       * CAUGHT, because this is now the LAST thing the facet does before going
+       * CAUGHT, because this is the LAST thing the facet does before going
        * quiet, and an uncaught rejection here is an unhandled rejection inside
-       * the Durable Object at the exact moment it is allowed to hibernate.
-       * That was survivable while a hang-up was a rare event; a push-to-talk
-       * answer hangs up on every press, so a fire-and-forget append races the
-       * eviction it has just permitted, every single turn.
+       * the Durable Object at the exact moment it is allowed to hibernate —
+       * a fire-and-forget append racing the eviction it has just permitted.
        *
        * Losing the obituary is not fatal. The call is already retired in
        * memory and `#retiredId` stops the at-head pass re-dialling it, so the
@@ -3229,6 +3341,14 @@ export class VoiceAgentFacet extends StreamProcessorFacet {
       now: () => Date.now(),
       sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
       dialGrok: () => dialGrokSocket(),
+      /* A plain timer is enough for the idle countdown: while a call is up its
+       * provider socket keeps this Durable Object awake, so there is no window
+       * in which the deadline would have to fire inside a sleeping object —
+       * and if the DO is evicted the call goes with it. */
+      setTimer: (ms: number, fire: () => void) => {
+        const handle = setTimeout(fire, ms);
+        return () => clearTimeout(handle);
+      },
     });
   }
 }

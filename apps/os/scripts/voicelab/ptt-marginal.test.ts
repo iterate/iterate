@@ -1,14 +1,19 @@
 // The one rule in `ptt-marginal` that can report a working server as a dead
 // one: which speaker frame is the answer to THIS press.
 //
-// It earned a test the hard way. The facet's hang-up — let go of the provider
-// when the answer is handed over, so an idle stream's Durable Object can
-// sleep — shipped with three green unit tests and was reverted off preview the
-// same hour, because rounds two to five "never answered". They had all
-// answered. The probe was waiting for a speaker frame numbered above the
-// highest `answer` it had ever seen, and `answer` counts responses within one
-// `GrokCall`: hanging up after every press means every answer is numbered 1,
-// so from round two the comparison could never be satisfied.
+// It earned a test the hard way. A facet that hung up as soon as an answer had
+// been handed over — so an idle stream's Durable Object could sleep — shipped
+// with three green unit tests and was reverted off preview the same hour,
+// because rounds two to five "never answered". They had all answered. The
+// probe was waiting for a speaker frame numbered above the highest `answer` it
+// had ever seen, and `answer` counts responses within one `GrokCall`: a call
+// per press means every answer is numbered 1, so from round two the comparison
+// could never be satisfied.
+//
+// A conversation is one call again, so the numbers usually run on — but a call
+// still ends (a minute of silence, a device hanging up, an eviction) and the
+// next one starts over at 1. Scoping the comparison to the conversation is
+// what makes the rule true either way.
 //
 // The facet was never wrong, and no test of the facet could have caught it.
 // This is the test that could.
@@ -55,10 +60,10 @@ describe("which frame answers this press", () => {
   it("hears an answer numbered 1 again, because the call is a new one", () => {
     /*
      * THE REGRESSION, PINNED. Round one's answer is call `aaaaaaaa` answer 1;
-     * the facet hangs up; round two's answer is call `bbbbbbbb` answer 1. A
-     * rule that compares numbers alone sees 1 against a high-water mark of 1
-     * and waits out its deadline. Scoped to the conversation, the pair is new
-     * and the frame is the answer.
+     * that call ends and the next press dials `bbbbbbbb`, whose answer is 1
+     * again. A rule that compares numbers alone sees 1 against a high-water
+     * mark of 1 and waits out its deadline. Scoped to the conversation, the
+     * pair is new and the frame is the answer.
      */
     const roundOne = frame(150, "aaaaaaaa", 1);
     const roundTwo = frame(900, "bbbbbbbb", 1);

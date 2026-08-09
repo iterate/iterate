@@ -107,17 +107,17 @@ interface Turn {
   /**
    * Whether this round measured a healthy turn, and so counts in the medians.
    *
-   * This used to be `warm`: true unless any call-lifecycle event arrived while
-   * the turn was in flight. That was the right rule while a call was dialled
-   * once and held — a `call-started` mid-run meant something had gone wrong
-   * and been re-dialled. It is the wrong rule now that the facet hangs up
-   * after every push-to-talk answer: a `call-started` and a
-   * `conversation-ended` per round are the design, so the old rule discarded
-   * EVERY round, emptied every median, and made a run of eight perfect turns
-   * report no measurement and exit non-zero.
+   * This used to be `warm`: true unless ANY call-lifecycle event arrived while
+   * the turn was in flight. That briefly became wrong when the facet hung up
+   * after every answer — a `call-started` per round was then the design, so
+   * the rule discarded every round, emptied every median, and made a run of
+   * eight perfect turns report no measurement and exit non-zero.
    *
-   * A round is dirty when the stream says something went wrong —
-   * `conversation-failed` or `provider-error` — and not before.
+   * A conversation is one call again, so a mid-run `call-started` really does
+   * mean something was re-dialled. It is still not what makes a round DIRTY:
+   * the count is reported on its own (`callsStarted` below — one for a whole
+   * run is the healthy shape), and a round is dirty only when the stream says
+   * something went wrong, `conversation-failed` or `provider-error`.
    */
   clean: boolean;
 }
@@ -364,10 +364,11 @@ export async function pttMarginal(options: PttMarginalOptions) {
           continue;
         }
         /*
-         * `call-started` and `conversation-ended` land here, and both are the
-         * ORDINARY course now: the facet hangs up when the answer is handed
-         * over and the next press dials again. Only the stream saying the call
-         * went wrong makes a round unusable.
+         * `call-started` and `conversation-ended` land here to be COUNTED, not
+         * to condemn a round: one call-started for a whole run is the healthy
+         * shape (a conversation is one call across many presses) and the count
+         * is reported at the end. Only the stream saying the call went wrong
+         * makes a round unusable.
          */
         if (event.type === "events.iterate.com/voice-agent/conversation-failed") {
           console.log(`  conversation failed: ${String(payload.reason).slice(0, 200)}`);
@@ -562,12 +563,11 @@ export async function pttMarginal(options: PttMarginalOptions) {
     await direct.ready;
 
     /*
-     * A WARM-UP TURN THAT IS NOT MEASURED, and it no longer warms the provider
-     * — the facet hangs up after every answer, so round one's socket is as
-     * fresh as round six's. What it warms is everything one-off around them: a
-     * cold Durable Object, a facet class being materialised for the first
-     * time, a subscription's first delivery. Those cost seconds and belong to
-     * no round.
+     * A WARM-UP TURN THAT IS NOT MEASURED. It warms everything one-off around
+     * the rounds: a cold Durable Object, a facet class being materialised for
+     * the first time, a subscription's first delivery, and — now that a
+     * conversation is one call across many presses — the provider handshake
+     * every later round rides on. Those cost seconds and belong to no round.
      */
     console.log("  warming the stream's Durable Object (unmeasured)...");
     const warm = await streamTurn();
@@ -667,13 +667,25 @@ export async function pttMarginal(options: PttMarginalOptions) {
      * answered nothing: every round times out and every stream number is null.
      * They are opposite diagnoses and the report used to give them the same
      * words. MEASURED, twice, on preview-3 immediately after a run that passed
-     * 6/6: the stream's own log held a `call-started`, a `conversation-accepted`
-     * and a `conversation-ended: answer delivered` for every press, with no
+     * 6/6: the stream's own log held a `call-started` and a
+     * `conversation-accepted` for every press, with no
      * `connection-opened` for this probe anywhere in the window — the facet had
      * answered all of them and nothing reached here. Warming the stream (a
      * `talk --setup-only`) immediately before the run made it register again.
      */
     deliveredNothing: delivered.size === 0,
+    /**
+     * HOW MANY CALLS THIS RUN TOOK, and the headline number for the change
+     * that made a conversation one call across many presses.
+     *
+     * One — the warm-up's — for the whole run is healthy. One per press is
+     * what the facet used to do, and it is what a caller feels as a provider
+     * handshake sitting in front of every answer. More than one and fewer
+     * than one-per-press means something was re-dialled mid-run: read
+     * `conversation-ended` on the stream for why.
+     */
+    callsStarted: delivered.get("events.iterate.com/voice-agent/call-started") ?? 0,
+    callsEnded: delivered.get("events.iterate.com/voice-agent/conversation-ended") ?? 0,
     streamTurns,
     directTurns,
   };
@@ -711,12 +723,17 @@ export async function pttMarginal(options: PttMarginalOptions) {
   if (report.marginalMs !== null) {
     console.log(`\n  MARGINAL OVERHEAD  ${report.marginalMs > 0 ? "+" : ""}${report.marginalMs}ms`);
   }
+  console.log(
+    `\n  CALLS  ${report.callsStarted} started, ${report.callsEnded} ended, ` +
+      `for ${rounds + 1} presses` +
+      `${report.callsStarted === 1 ? "  (one conversation, as designed)" : "  [RE-DIALLED MID-RUN]"}`,
+  );
   if (report.deliveredNothing) {
     console.log(
       "\n  NOTHING WAS MEASURED. This probe's connection received no events at all,\n" +
         "  so every stream number above is missing for want of a listener rather than\n" +
         "  for want of an answer. Read the stream's own log before blaming the facet:\n" +
-        `  a \`call-started\` and a \`conversation-ended\` per press means it answered.\n` +
+        `  a \`call-started\` and a \`conversation-accepted\` per press means it answered.\n` +
         "  Warm the stream first (voicelab talk --setup-only) and run again.",
     );
   }

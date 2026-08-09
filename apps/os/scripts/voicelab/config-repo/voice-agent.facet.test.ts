@@ -98,6 +98,27 @@ function fakeGrok() {
   };
 }
 
+/**
+ * `setTimeout`/`clearTimeout` on the harness's VIRTUAL clock.
+ *
+ * The idle countdown is a minute long, so waiting one out is not a test.
+ * `advanceTime` releases the harness's sleeps, which is what makes the whole
+ * deadline observable in a millisecond; `cancel` is honoured exactly as
+ * `clearTimeout` is, so a call that ends early really does take its timer with
+ * it (the abandoned sleep resolves and does nothing).
+ */
+function virtualTimer(deps: { sleep: (ms: number) => Promise<void> }) {
+  return (ms: number, fire: () => void) => {
+    let live = true;
+    void deps.sleep(ms).then(() => {
+      if (live) fire();
+    });
+    return () => {
+      live = false;
+    };
+  };
+}
+
 function harnessWith(provider: ReturnType<typeof fakeGrok>, dialMs = 0) {
   return makeProcessorHarness<VoiceAgentFacetContract, VoiceAgentFacetProcessor>({
     path: "/agents/voice/harness",
@@ -105,6 +126,7 @@ function harnessWith(provider: ReturnType<typeof fakeGrok>, dialMs = 0) {
       new VoiceAgentFacetProcessor({
         ...deps,
         now: deps.now,
+        setTimer: virtualTimer(deps),
         dialGrok: async () => {
           if (dialMs > 0) await deps.sleep(dialMs);
           return provider.socket;
@@ -116,13 +138,13 @@ function harnessWith(provider: ReturnType<typeof fakeGrok>, dialMs = 0) {
 /**
  * A harness that hands every dial its OWN provider, as the network does.
  *
- * `harnessWith` returns the same fake socket on every dial, which was honest
- * while a call was dialled once and held for the session. It stopped being
- * honest the moment a push-to-talk answer started hanging up: the second press
- * then talks into the socket the first press closed, so a test can watch a
- * second call be OPENED but can never watch one ANSWER. That gap is exactly
- * where the first attempt at the hang-up went wrong — three green unit tests,
- * and rounds two onwards silent on preview.
+ * `harnessWith` returns the same fake socket on every dial, which is honest
+ * while a call is dialled once and held. It stops being honest the moment a
+ * test wants to watch a SECOND call: the re-dial would talk into the socket
+ * the first call closed, so a test could watch a second call be OPENED but
+ * never watch one ANSWER. That gap is exactly where the first attempt at
+ * ending calls went wrong — three green unit tests, and rounds two onwards
+ * silent on preview.
  */
 function harnessWithFreshProviders() {
   const providers: ReturnType<typeof fakeGrok>[] = [];
@@ -132,6 +154,7 @@ function harnessWithFreshProviders() {
       new VoiceAgentFacetProcessor({
         ...deps,
         now: deps.now,
+        setTimer: virtualTimer(deps),
         dialGrok: async () => {
           const provider = fakeGrok();
           providers.push(provider);
@@ -142,18 +165,27 @@ function harnessWithFreshProviders() {
   return { harness, providers };
 }
 
-/** Drive one whole press-to-answer turn against the provider it dials. */
+/**
+ * Drive one whole press-to-answer turn.
+ *
+ * The greeting is only for a provider that has not had one: a conversation is
+ * ONE call across many presses, so from the second turn on this is talking to
+ * the session the first turn opened.
+ */
 async function takeTurn(
   harness: ReturnType<typeof harnessWithFreshProviders>["harness"],
   providers: ReturnType<typeof harnessWithFreshProviders>["providers"],
   audioBytes = 1280,
 ) {
+  const before = providers.length;
   await harness.append({ type: PTT_START, payload: {} });
   await harness.settle();
   const provider = providers.at(-1)!;
-  provider.greet();
-  provider.ready();
-  await harness.settle();
+  if (providers.length > before) {
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+  }
   await harness.append({ type: PTT_END, payload: {} });
   provider.speak(audioBytes);
   provider.finishAudio();
@@ -354,15 +386,18 @@ describe("the speaker lane's buffer verbs", () => {
   });
 });
 
-describe("letting the Durable Object sleep", () => {
+describe("one call across many presses", () => {
   /*
-   * A held provider socket keeps the stream's DO awake, and xAI only drops an
-   * idle session after 900 seconds — so one press used to pin a DO, and burn a
-   * provider session, for fifteen minutes of silence. Everything else in the
-   * design lets an idle device be quiet; this was the last thing keeping the
-   * lights on.
+   * A CONVERSATION IS ONE CALL, and the button is not what starts or ends it.
+   *
+   * This used to hang up the provider socket the instant an answer had been
+   * fully handed over — every single turn — so a push-to-talk caller re-dialled
+   * on every press. The intent behind it was right (an idle stream must be
+   * able to hibernate; nothing on a timer or a heartbeat while nobody is
+   * interacting) and the means were wrong: a Durable Object awake DURING a
+   * conversation is correct, because somebody is talking to it.
    */
-  it("hangs up a push-to-talk call once the answer has been handed over", async () => {
+  it("does not hang up when the answer has been handed over", async () => {
     const provider = fakeGrok();
     const harness = harnessWith(provider);
     await harness.append({ type: PTT_START, payload: {} });
@@ -370,83 +405,24 @@ describe("letting the Durable Object sleep", () => {
     provider.ready();
     await harness.settle();
     provider.speak(1280);
-    await harness.settle();
-    expect(provider.closed).toBe(false);
-
-    provider.finishAudio();
-    await harness.settle();
-
-    expect(provider.closed).toBe(true);
-    expect(
-      harness.events("events.iterate.com/voice-agent/conversation-ended").at(-1)?.payload,
-    ).toMatchObject({ reason: "answer delivered; idle sockets keep the stream awake" });
-  });
-
-  it("keeps an open-mic call, which has no press to re-dial on", async () => {
-    const provider = fakeGrok();
-    const harness = harnessWith(provider);
-    await harness.append({ type: PTT_START, payload: { client: "/clients/stackchan" } });
-    provider.greet();
-    provider.ready();
-    await harness.settle();
-    provider.speak(1280);
-    await harness.settle();
-
     provider.finishAudio();
     await harness.settle();
 
     expect(provider.closed).toBe(false);
+    expect(harness.events("events.iterate.com/voice-agent/conversation-ended")).toHaveLength(0);
+    expect(harness.state().call).not.toBeNull();
   });
 
-  it("re-dials on the next press, so hanging up costs a caller nothing", async () => {
-    const provider = fakeGrok();
-    const harness = harnessWith(provider);
-    await harness.append({ type: PTT_START, payload: {} });
-    provider.greet();
-    provider.ready();
-    await harness.settle();
-    provider.speak(1280);
-    provider.finishAudio();
-    await harness.settle();
-    expect(harness.events(CALL_STARTED)).toHaveLength(1);
-
-    await harness.append({ type: PTT_START, payload: {} });
-    await harness.settle();
-
-    /* Dialling begins on the press, so the handshake hides behind the
-     * speaking rather than sitting in front of the answer. */
-    expect(harness.events(CALL_STARTED)).toHaveLength(2);
-  });
-
-  /*
-   * FIVE PRESSES, FIVE CALLS, FIVE ANSWERS — and the trap that hid in them.
-   *
-   * The first attempt at this hang-up shipped with the three tests above and
-   * was reverted off preview the same hour: rounds two to five produced
-   * `call-started` and, so the harness reported, no answer. The facet was
-   * innocent. `ptt-marginal` waited for a speaker frame numbered ABOVE the
-   * highest answer it had ever seen — a comparison that only holds inside one
-   * call, because `answer` is a counter on `GrokCall` and a hung-up call takes
-   * its counter with it. Every re-dial answers "1" again, so from round two on
-   * the harness was waiting for a number that would never come.
-   *
-   * Hanging up turns that from an edge case into the normal case: one call per
-   * press means answer 1 arrives over and over. So the numbering is pinned
-   * here, deliberately as a fact about the wire rather than an implementation
-   * detail — the firmware relies on the same fact (a lower answer at frame
-   * zero means the sender restarted, `audio_playout.c`), and any instrument
-   * that compares answer numbers must scope the comparison to a conversation.
-   */
-  it("answers every press, and numbers each new call's answers from one again", async () => {
+  it("keeps the SAME call over five presses, and numbers its answers 1..5", async () => {
     const { harness, providers } = harnessWithFreshProviders();
     const rounds = 5;
     const answered: { conversationId: string; answer: number; frame: number }[] = [];
 
     for (let round = 0; round < rounds; round++) {
-      let seen = harness.events(SPK_FRAME).length;
+      const seen = harness.events(SPK_FRAME).length;
       const provider = await takeTurn(harness, providers);
-      /* The socket the answer came out of is let go before the next press. */
-      expect(provider.closed).toBe(true);
+      /* The socket the first press opened is still the one answering. */
+      expect(provider.closed).toBe(false);
       const fresh = harness.events(SPK_FRAME).slice(seen);
       expect(fresh.length).toBeGreaterThan(0);
       const first = fresh[0]!.payload;
@@ -455,16 +431,153 @@ describe("letting the Durable Object sleep", () => {
         answer: Number(first.answer),
         frame: Number(first.frame),
       });
-      seen += fresh.length;
     }
 
-    expect(providers).toHaveLength(rounds);
-    expect(harness.events(CALL_STARTED)).toHaveLength(rounds);
-    /* A distinct call each time... */
-    expect(new Set(answered.map((round) => round.conversationId)).size).toBe(rounds);
-    /* ...whose answer numbering starts over, at the frame index that says so. */
-    expect(answered.map((round) => round.answer)).toEqual(Array(rounds).fill(1));
+    /* ONE dial, ONE `call-started`, for five presses — the whole difference. */
+    expect(providers).toHaveLength(1);
+    expect(harness.events(CALL_STARTED)).toHaveLength(1);
+    expect(new Set(answered.map((round) => round.conversationId)).size).toBe(1);
+    /*
+     * The answer counter runs on for the life of the call, and each answer
+     * still starts at frame zero. Both halves are wire facts the firmware
+     * depends on (a LOWER answer at frame zero means the sender restarted,
+     * `audio_playout.c`), and any instrument comparing answer numbers must
+     * scope the comparison to a conversation — reading it as a run-wide clock
+     * is what made the previous design look like a dead server.
+     */
+    expect(answered.map((round) => round.answer)).toEqual([1, 2, 3, 4, 5]);
     expect(answered.map((round) => round.frame)).toEqual(Array(rounds).fill(0));
+  });
+});
+
+describe("letting the Durable Object sleep", () => {
+  /*
+   * A held provider socket keeps the stream's DO awake, and xAI only drops an
+   * idle session after 900 seconds — so a call nobody ends pins a DO, and
+   * burns a provider session, for fifteen minutes of silence. The call ends a
+   * minute after the last utterance from EITHER side instead, which is the one
+   * rule that lets a conversation run as long as it likes and still lets an
+   * idle stream hibernate.
+   */
+  const ENDED = "events.iterate.com/voice-agent/conversation-ended";
+  const IDLE_REASON = "no utterance from either side for 60s";
+
+  it("hangs up a minute after the last thing either side said", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+    provider.speak(1280);
+    provider.finishAudio();
+    await harness.settle();
+
+    /* A second short of the minute the call is still up... */
+    await harness.advanceTime(59_000);
+    expect(provider.closed).toBe(false);
+    expect(harness.state().call).not.toBeNull();
+
+    /* ...and a second later it is over, said out loud on the stream. */
+    await harness.advanceTime(1_000);
+    expect(harness.events(ENDED).at(-1)?.payload).toMatchObject({ reason: IDLE_REASON });
+    expect(harness.state().call).toBeNull();
+    expect(provider.closed).toBe(true);
+  });
+
+  it("does not age out somebody who paused to think and then spoke again", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+
+    /* Fifty seconds of thinking, then the button again: the minute restarts,
+     * so the call the second press folds into is the call the first opened. */
+    await harness.advanceTime(50_000);
+    await harness.append({ type: PTT_START, payload: {} });
+    await harness.advanceTime(50_000);
+
+    expect(harness.events(CALL_STARTED)).toHaveLength(1);
+    expect(harness.state().call).not.toBeNull();
+    expect(provider.closed).toBe(false);
+  });
+
+  it("does not age out a long answer, which is the provider talking", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+    await harness.append({ type: PTT_END, payload: {} });
+
+    /* Nothing from the client for two minutes; the model is mid-sentence the
+     * whole time. Only the PROVIDER's half of "either side" saves this. */
+    provider.speak(1280);
+    for (let chunk = 0; chunk < 4; chunk++) {
+      await harness.advanceTime(40_000);
+      provider.speakMore(1280);
+      await harness.settle();
+    }
+
+    expect(harness.events(ENDED)).toHaveLength(0);
+    expect(provider.closed).toBe(false);
+  });
+
+  it("never ages out a board that streams continuously", async () => {
+    /* An open-mic call has no press to re-dial on, so the sixty-second rule
+     * has to be harmless to one: its audio is continuous, and every frame is
+     * the client speaking. */
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: { client: "/clients/stackchan" } });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+
+    for (let second = 0; second < 180; second++) {
+      await harness.append(micFrame(second));
+      await harness.advanceTime(1_000);
+    }
+
+    expect(harness.events(ENDED)).toHaveLength(0);
+    expect(provider.closed).toBe(false);
+    expect(harness.events(CALL_STARTED)).toHaveLength(1);
+  });
+
+  it("leaves nothing running once the call is over", async () => {
+    /*
+     * The point of ending an idle call: the stream must be able to hibernate.
+     * The pacer's drain loop breaks the instant its queue empties and the idle
+     * countdown goes with the call it belonged to, so once the socket is let
+     * go there is nothing left for the Durable Object to stay awake for.
+     */
+    const { harness, providers } = harnessWithFreshProviders();
+    await takeTurn(harness, providers, 64_000); /* two seconds of audio, paced */
+    await harness.advanceTime(60_000);
+
+    expect(harness.state().call).toBeNull();
+    expect(providers[0]!.closed).toBe(true);
+    /* Nothing is left ticking, so more time passing appends nothing at all. */
+    const quiet = harness.events().length;
+    await harness.advanceTime(300_000);
+    expect(harness.events().length).toBe(quiet);
+  });
+
+  it("re-dials on the press after an idle hang-up, so it costs a caller nothing", async () => {
+    const { harness, providers } = harnessWithFreshProviders();
+    await takeTurn(harness, providers);
+    await harness.advanceTime(60_000);
+    expect(harness.state().call).toBeNull();
+
+    await takeTurn(harness, providers);
+
+    expect(providers).toHaveLength(2);
+    const started = harness.events(CALL_STARTED);
+    expect(started).toHaveLength(2);
+    expect(started[1]!.payload.conversationId).not.toBe(started[0]!.payload.conversationId);
   });
 
   /*
@@ -481,16 +594,17 @@ describe("letting the Durable Object sleep", () => {
    *
    * Refusing the append is how the window is held open long enough to see.
    */
-  it("does not re-dial a call it has just hung up, before the log agrees", async () => {
+  it("does not re-dial a call it has just buried, before the log agrees", async () => {
     const { harness, providers } = harnessWithFreshProviders();
-    harness.stream.failAppendsOfType = "events.iterate.com/voice-agent/conversation-ended";
-
+    harness.stream.failAppendsOfType = ENDED;
     await takeTurn(harness, providers);
-    expect(providers[0]!.closed).toBe(true);
-    /* The fold never heard, so it still believes this call is up. */
-    expect(harness.state().call).not.toBeNull();
 
+    /* The provider goes away and the obituary cannot be written. */
+    providers[0]!.drop();
     await harness.settle();
+    /* The fold never heard, so it still believes this call is up... */
+    expect(harness.state().call).not.toBeNull();
+    /* ...and the at-head pass still refuses to resurrect it. */
     expect(providers).toHaveLength(1);
 
     /* And the press that follows opens its OWN call rather than folding into
@@ -503,23 +617,33 @@ describe("letting the Durable Object sleep", () => {
     expect(started[1]!.payload.conversationId).not.toBe(started[0]!.payload.conversationId);
   });
 
-  it("leaves nothing running once the answer is out of the door", async () => {
-    /*
-     * The point of the hang-up: an idle stream must be able to hibernate. The
-     * pacer's drain loop is the facet's only timer and it breaks the instant
-     * its queue empties, so with the socket let go there is nothing left for
-     * the Durable Object to stay awake for.
-     */
-    const { harness, providers } = harnessWithFreshProviders();
-    await takeTurn(harness, providers, 64_000); /* two seconds of audio, paced */
+  /*
+   * THE CLOCK ENDS A CALL THE SAME WAY A PERSON DOES: by appending the
+   * ordinary `conversation-ended`. That is what keeps the fold, the
+   * just-buried guard above and the provider-close handling all working
+   * unchanged — but it also means the hang-up can be REFUSED, and the
+   * countdown that would have retried it has already been spent.
+   */
+  it("starts another minute when the idle hang-up cannot be written", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
     await harness.settle();
 
-    expect(harness.state().call).toBeNull();
-    expect(providers[0]!.closed).toBe(true);
-    /* Nothing arms an alarm, and time passing appends nothing further. */
-    const quiet = harness.events().length;
+    harness.stream.failAppendsOfType = ENDED;
     await harness.advanceTime(60_000);
-    expect(harness.events().length).toBe(quiet);
+    /* Nothing was written, so nothing ended — and the call is still HELD
+     * rather than orphaned with no clock on it. */
+    expect(harness.events(ENDED)).toHaveLength(0);
+    expect(harness.state().call).not.toBeNull();
+    expect(provider.closed).toBe(false);
+
+    harness.stream.failAppendsOfType = undefined;
+    await harness.advanceTime(60_000);
+    expect(harness.events(ENDED).at(-1)?.payload).toMatchObject({ reason: IDLE_REASON });
+    expect(provider.closed).toBe(true);
   });
 });
 
