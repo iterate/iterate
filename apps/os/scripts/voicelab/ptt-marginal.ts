@@ -138,17 +138,6 @@ interface StreamTurn extends Turn {
   maxFrameGapMs: number | null;
 }
 
-/** The facet's stamps for one turn, all on the facet's own clock. */
-interface TurnMarks {
-  endSeenT: number;
-  commitSentT: number | null;
-  committedAckT: number | null;
-  firstDeltaT: number;
-  firstFrameT: number | null;
-  micFrames: number;
-  maxFrameGapMs: number;
-}
-
 /** A direct turn, measured on the socket it was spoken into. */
 interface DirectTurn extends Turn {
   /** The provider's ack of the commit -> its first audio delta. Think time. */
@@ -208,6 +197,17 @@ async function dialProvider(baseUrl: string, model: string, apiKey: string) {
   };
 }
 
+/** The facet's stamps for one turn, all on the facet's own clock. */
+interface TurnMarks {
+  endSeenT: number;
+  commitSentT: number | null;
+  committedAckT: number | null;
+  firstDeltaT: number;
+  firstFrameT: number | null;
+  micFrames: number;
+  maxFrameGapMs: number;
+}
+
 export async function pttMarginal(options: PttMarginalOptions) {
   const apiKey = process.env.APP_CONFIG_X_AI_API_KEY?.trim() ?? "";
   if (apiKey === "") throw new Error("APP_CONFIG_X_AI_API_KEY is required for the direct half.");
@@ -245,11 +245,8 @@ export async function pttMarginal(options: PttMarginalOptions) {
    */
   let lastAnswerSeen = -1;
   let lastSpkAt = 0;
-  /** The facet's four stamps for the turn in flight, if it has reported them. */
-  let timing: TurnMarks | null = null;
-  /* Read through a call so control-flow analysis cannot narrow away a value
-   * that only ever arrives inside the delivery callback. */
-  const currentMarks = (): TurnMarks | null => timing;
+  /** The facet's stamps for the turn in flight; at most one per turn. */
+  const timing: TurnMarks[] = [];
   const pongs = new Map<string, { at: number; facetT: number }>();
   let redialledThisTurn = false;
   /* Lifetime counts, so "no answer" can be told apart from "no delivery". */
@@ -286,7 +283,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
           continue;
         }
         if (event.type === "events.iterate.com/voice-agent/turn-timing") {
-          timing = {
+          timing.push({
             endSeenT: Number(payload.endSeenT),
             commitSentT: payload.commitSentT === null ? null : Number(payload.commitSentT),
             committedAckT: payload.committedAckT === null ? null : Number(payload.committedAckT),
@@ -294,7 +291,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
             firstFrameT: payload.firstFrameT === null ? null : Number(payload.firstFrameT),
             micFrames: Number(payload.micFrames ?? 0),
             maxFrameGapMs: Number(payload.maxFrameGapMs ?? 0),
-          };
+          });
           continue;
         }
         if (event.type === "events.iterate.com/voice-agent/pong") {
@@ -420,7 +417,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
     appendRttMs: number | null = null,
   ): Promise<StreamTurn> {
     spkAt = [];
-    timing = null;
+    timing.length = 0;
     redialledThisTurn = false;
     const answerBefore = lastAnswerSeen;
     const pressedAt = Date.now();
@@ -440,7 +437,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
       if (heard !== undefined) break;
       await sleep(5);
     }
-    const marks = currentMarks();
+    const marks = timing.at(-1) ?? null;
     const span = (from: number | null | undefined, to: number | null | undefined) =>
       from === null || from === undefined || to === null || to === undefined
         ? null
