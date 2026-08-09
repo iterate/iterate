@@ -58,6 +58,25 @@ iterate_kit_add_core_test(iterate-kit-websocket-rx-test websocket_rx_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-text-test websocket_text_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-tx-test websocket_tx_test.c)
 
+# THE SHARED LOOP, ON A LAPTOP. Four boards run components/voice and nothing
+# outside a flash had ever compiled it, so the mapping from a press to an
+# intent was verified only by diffing against the device files it replaced.
+# The pretend ESP-IDF it links is tests/fakes/esp_idf; see the README there.
+add_executable(iterate-kit-voice-loop-intent-test voice_loop_intent_test.c)
+target_compile_features(iterate-kit-voice-loop-intent-test PRIVATE c_std_11)
+target_compile_options(iterate-kit-voice-loop-intent-test PRIVATE
+  -UNDEBUG
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic)
+target_link_libraries(iterate-kit-voice-loop-intent-test PRIVATE
+  iterate-kit-voice
+  iterate-kit-esp-idf-fakes)
+add_test(
+  NAME iterate-kit-voice-loop-intent-test
+  COMMAND iterate-kit-voice-loop-intent-test)
+
 add_executable(iterate-kit-audio-seams-test audio_seams_test.c)
 target_compile_features(iterate-kit-audio-seams-test PRIVATE c_std_99)
 target_compile_options(iterate-kit-audio-seams-test PRIVATE
