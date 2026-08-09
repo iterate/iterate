@@ -2759,6 +2759,13 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       runtime.remote_talk = false;
       /* Give the pins back: the answer path needs them. */
       board_fence(false);
+      /*
+       * AND STOP ATTENDING. Every other path out of a turn clears this at the
+       * commit; this one bypasses the commit entirely, so a face left here
+       * held its listening pose until the next turn opened. Reachable on any
+       * board — an open-mic board takes it on every call end.
+       */
+      runtime.view.listening = false;
       runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
       runtime.view.status = runtime.facts->call_hint;
     }
@@ -2997,11 +3004,44 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       }
 
       /*
-       * Turn edges. Pressing talk cancels whatever is playing — locally by
-       * dropping the queued speaker audio, and at the bridge by asking it to
-       * cancel the response — so the microphone never opens into a live
-       * speaker. Releasing commits the turn and asks for the answer.
+       * TURN EDGES ARE PUSH-TO-TALK'S, AND ONLY PUSH-TO-TALK'S.
+       *
+       * A marker is not a notification, it is an instruction: `ptt-start`
+       * tells the far side `input_audio_buffer.clear` and re-accepts the call,
+       * and `ptt-end` sends `input_audio_buffer.commit` + `response.create`
+       * with no server-VAD guard on either. On a board whose microphone rides
+       * the open call that is wrong twice — the call request ALREADY sent the
+       * one `ptt-start` such a board owes, carrying the client path that is
+       * what selects server VAD on the far side, so a second one throws away
+       * audio the provider had buffered mid-conversation; and a commit forces
+       * an answer to a turn the provider's own VAD is responsible for closing.
+       *
+       * Neither open-mic board published either marker before it ran this
+       * loop, and the whole edge machine below — the maximum-length bound, the
+       * press, the release, the tail flush — is the same shape: it describes a
+       * BUTTON. An open-mic board has none, so its `talking` follows the call
+       * and nothing else.
        */
+      const bool marks_turns =
+          runtime.facts->turns == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK;
+      if (!marks_turns) {
+        /*
+         * The microphone rides the call, so this is one edge, not two, and it
+         * carries no wire traffic at all. The queue reset is the one thing the
+         * press did that still applies: room noise captured before the call
+         * came up is not part of it.
+         */
+        if (runtime.talking != wants_talk) {
+          runtime.talking = wants_talk;
+          runtime.view.listening = wants_talk;
+          if (wants_talk) {
+            (void)xQueueReset(runtime.mic_queue); /* pre-call room noise */
+            runtime.frame_sequence = 0U;
+            runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_LISTENING;
+            runtime.view.status = ("listening");
+          }
+        }
+      }
       /*
        * A turn is bounded no matter what. The talk button is read over a
        * shared I2C bus and the UI can request a turn remotely; either can
@@ -3010,7 +3050,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        * for a minute straight, and a wedged turn is worse than a truncated
        * one because nothing is ever sent for an answer.
        */
-      if (runtime.talking && !runtime.flushing_turn &&
+      if (marks_turns && runtime.talking && !runtime.flushing_turn &&
           iterate_kit_voice_elapsed_ms(now, runtime.turn_started_ms) > TURN_MAX_MS) {
         ESP_LOGW(tag, "turn exceeded %ums — ending it", (unsigned)TURN_MAX_MS);
         runtime.remote_talk = false;
@@ -3019,8 +3059,8 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         runtime.flush_frames_left = 0U;
         runtime.flush_deadline_ms = now;
       }
-      if (wants_talk && !runtime.talking && runtime.voicelab.call_active &&
-          outbox_free >= 3U) {
+      if (marks_turns && wants_talk && !runtime.talking &&
+          runtime.voicelab.call_active && outbox_free >= 3U) {
         /*
          * Pressing to talk abandons whatever is still playing, which is an
          * intentional flush like any other — and this site never disarmed the
@@ -3065,7 +3105,8 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        * passes, so a stalled uplink cannot hang the turn forever), and only
        * then is the commit sent.
        */
-      if (!wants_talk && runtime.talking && !runtime.flushing_turn) {
+      if (marks_turns && !wants_talk && runtime.talking &&
+          !runtime.flushing_turn) {
         /*
          * Flush exactly what was captured UP TO the release, and no more.
          * Waiting for the queue to empty could not work: the capture task
