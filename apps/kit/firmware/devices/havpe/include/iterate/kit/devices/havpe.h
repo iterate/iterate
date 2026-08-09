@@ -9,7 +9,7 @@ extern "C" {
  * Run the Home Assistant Voice Preview Edition voice device: provision,
  * bring up the XMOS/AIC3204 audio path (failing closed on an unverified
  * DSP), mount itx.kit.homeAssistantVoicePreviewEdition over one Cap'n Web
- * /api socket, and serve the push-to-talk conversation loop forever.
+ * /api socket, and serve the open-mic conversation loop forever.
  */
 void iterate_kit_havpe_run(void);
 
