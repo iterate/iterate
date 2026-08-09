@@ -6244,29 +6244,31 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
   ): void {
     /*
-     * THE TIMELINE, NOT A SECOND COPY OF THE AUDIO.
+     * THE TIMELINE, AND NOT ONE FRAME OF THE AUDIO.
      *
-     * Forwarding provider events verbatim meant forwarding `delta` — tens of
-     * kilobytes of base64 per audio chunk, dozens per answer, to every
-     * subscriber. The host CLI died on it: `protoFail=10 recvFail=10`, the
-     * `/api` socket torn down and re-dialled every few seconds through a whole
-     * conversation, because an embedded client reassembles a batch into a
-     * fixed buffer and a delta does not fit. The boards would do the same.
+     * Forwarding provider events verbatim meant forwarding `delta`: tens of
+     * kilobytes of base64 per chunk, hundreds of chunks per answer, to every
+     * subscriber. The host CLI died on it — `protoFail=10 recvFail=10`, the
+     * `/api` socket torn down and re-dialled every few seconds for a whole
+     * conversation — because an embedded client reassembles a delivery batch
+     * into a fixed buffer and a delta does not fit.
      *
-     * What this lane is FOR is knowing what the provider sent and when. The
-     * bytes are already on the `spk-frame` lane, paced and framed for a
-     * speaker; here their length says everything their content would.
+     * Replacing the bytes with their length fixed the buffer and left the
+     * worse half of the problem: hundreds of EVENTS an answer, each competing
+     * for a slot in a board's sixteen-event batch against the speaker frames
+     * that are the point. So the audio delta does not ride this lane at all.
+     * It is the one provider event whose content is already here, paced and
+     * framed, on `spk-frame` — and `turn-timing` says when the first one
+     * landed, which is the only thing its timestamp was ever read for.
+     *
+     * Everything else stays verbatim, because a silent call is diagnosed from
+     * the transitions: this lane is what proved a barge-in one millisecond
+     * after `response.created` was cancelling four answers in six.
      */
-    const event: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(provider)) {
-      event[key] =
-        (key === "delta" || key === "audio") && typeof value === "string"
-          ? `<${value.length} chars>`
-          : value;
-    }
+    if (provider.type === "response.output_audio.delta") return;
     void append({
       type: "events.iterate.com/voice-agent/grok-event",
-      payload: { conversationId: call.conversationId, t: this.deps.now(), event },
+      payload: { conversationId: call.conversationId, t: this.deps.now(), event: provider },
     });
   }
 
