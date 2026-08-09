@@ -1895,12 +1895,27 @@ class GrokCall {
    */
   #spkRemainder = new Uint8Array(0);
   #spkSeq = 0;
+  /*
+   * THE MOUTH IS THE SERVER'S, not the board's.
+   *
+   * Boards have subscribed to `viseme` since the sprite work landed, and the
+   * facet has never emitted one — every reference to the emitter lived in the
+   * bridge, so lip-sync has been silently off for the whole facet era. The
+   * classifier is unchanged and still covered by its own tests; all that was
+   * missing was a caller on this side.
+   *
+   * It rides the speaker lane deliberately: a viseme is a claim about a
+   * position in the answer's audio, so it has to be ordered against the frames
+   * it describes, and appending it in the same batch makes that free.
+   */
+  #visemes: ReturnType<typeof createVisemeEmitter>;
   #answerSeq = 0;
   #answerFrames = 0;
 
   constructor(conversationId: string, now: number) {
     this.conversationId = conversationId;
     this.#openedAtMs = now;
+    this.#visemes = createVisemeEmitter(conversationId);
   }
 
   get ready(): boolean {
@@ -1970,6 +1985,7 @@ class GrokCall {
     this.#paced.length = 0;
     this.#pacedSent = 0;
     this.#answerStartedAtMs = now;
+    this.#visemes.reset();
   }
 
   /*
@@ -2049,6 +2065,26 @@ class GrokCall {
       });
     }
     return frames;
+  }
+
+  /**
+   * The mouth shapes for this delta's audio, if any.
+   *
+   * Read from the PCM16 the speaker will actually play, before the mu-law
+   * encode — a companding curve is not speech and the classifier would read
+   * its quantisation steps as one.
+   */
+  visemesFor(pcm: Uint8Array) {
+    if (pcm.length < 2) return [];
+    return this.#visemes.push(
+      new Int16Array(pcm.buffer, pcm.byteOffset, pcm.length >> 1),
+      this.#answerSeq,
+    );
+  }
+
+  /** The answer is over, so the mouth closes. SIL, once. */
+  closeMouth() {
+    return this.#visemes.end(this.#answerSeq);
   }
 
   /** A new turn's gaps are its own; the silence since the last one is not one. */
@@ -2358,6 +2394,17 @@ export const VoiceAgentFacetContract = defineProcessorContract({
       ...EPH,
       payloadSchema: z.looseObject({ conversationId: z.string(), t: z.number() }),
     },
+    "events.iterate.com/voice-agent/viseme": {
+      description: "One mouth shape and where in the answer's audio it belongs.",
+      ...EPH,
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+        answer: z.number(),
+        playoutSamples: z.number(),
+        viseme: z.number(),
+        confidence: z.number(),
+      }),
+    },
     "events.iterate.com/voice-agent/turn-timing": {
       description:
         "Where this turn's time went, on the facet's clock: end seen, commit, ack, delta.",
@@ -2444,6 +2491,7 @@ export const VoiceAgentFacetContract = defineProcessorContract({
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/spk-frame",
     "events.iterate.com/voice-agent/grok-event",
+    "events.iterate.com/voice-agent/viseme",
     "events.iterate.com/voice-agent/turn-timing",
     "events.iterate.com/voice-agent/pong",
     "events.iterate.com/voice-agent/warmup-ready",
@@ -2911,6 +2959,14 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
             this.#speak(call, provider.delta, append, runInBackground);
           }
           return;
+        case "response.output_audio.done": {
+          /* THE MOUTH MUST CLOSE. Without a closing SIL the face holds the
+           * last shape it was given, so the board sits there mid-syllable
+           * until the next answer — which reads as a crash, not a pause. */
+          const closing = call.closeMouth();
+          if (closing.length > 0) void append(...closing);
+          return;
+        }
         default:
           /* Already on the verbatim lane above; nothing else to do. */
           return;
@@ -2997,7 +3053,19 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgentFacetContract>["runInBackground"],
   ): void {
-    const frames = call.framesFor(deltaBase64, this.deps.now());
+    const now = this.deps.now();
+    /* The PCM the classifier reads is the PCM the speaker will play, so it is
+     * taken here, before `framesFor` spends it on a mu-law encode. */
+    const pcm = new Uint8Array(base64ToBytes(deltaBase64));
+    const frames = call.framesFor(deltaBase64, now);
+    /*
+     * The mouth moves even when no whole frame came out of this delta. A
+     * remainder carried into the next delta is still audio the classifier has
+     * seen, and holding its shapes back would make the face lag the voice by
+     * however long the provider took to send the rest.
+     */
+    const visemes = call.visemesFor(pcm);
+    if (visemes.length > 0) void append(...visemes);
     if (frames.length === 0) return;
     /*
      * ONE APPEND FOR THE WHOLE DELTA, not one per frame — and PACED, not
@@ -3009,7 +3077,7 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
      * playback rate, and a barge-in clears the queue via beginAnswer rather
      * than making the interrupter wait behind audio nobody will hear.
      */
-    const immediate = call.pace(frames, this.deps.now());
+    const immediate = call.pace(frames, now);
     if (immediate.length > 0) {
       void append(...immediate.map(asSpkFrame));
     }

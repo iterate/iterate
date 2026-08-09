@@ -18,6 +18,7 @@ const CALL_STARTED = "events.iterate.com/voice-agent/call-started";
 const ACCEPTED = "events.iterate.com/voice-agent/conversation-accepted";
 const FLUSHED = "events.iterate.com/voice-agent/buffer-flushed";
 const SPK_FRAME = "events.iterate.com/voice-agent/spk-frame";
+const VISEME = "events.iterate.com/voice-agent/viseme";
 
 /** 20 ms of 16 kHz PCM16, base64 — the shape a client actually sends. */
 const micFrame = (seq: number) => ({
@@ -81,6 +82,8 @@ function fakeGrok() {
         type: "response.output_audio.delta",
         delta: btoa(String.fromCharCode(...new Uint8Array(bytes).fill(7))),
       }),
+    /** The provider finishes speaking — the edge that closes the mouth. */
+    finishAudio: () => emit({ type: "response.output_audio.done" }),
     /** The socket goes away with no close event — the corpse case. */
     die: () => {
       socket.readyState = 3;
@@ -228,6 +231,55 @@ describe("audio spoken into the handshake", () => {
     for (let seq = 0; seq < 10; seq++) await harness.append(micFrame(seq));
     expect(provider.appended()).toBe(10);
     expect(harness.events(FLUSHED)[0]!.payload.frames).toBe(0);
+  });
+});
+
+describe("the face", () => {
+  /*
+   * THE MOUTH IS THE SERVER'S, and it had stopped moving.
+   *
+   * Boards have subscribed to `viseme` since the sprite work landed, and the
+   * classifier has had its own tests all along — but every caller lived in the
+   * retiring bridge, so across the whole facet era the facet emitted none and
+   * lip-sync was silently off. Nothing failed: a client can subscribe to a
+   * type nobody emits and the only symptom is a still face.
+   */
+  it("drives the mouth from the answer's audio", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+
+    provider.speak(6400); // 200 ms of audio: enough for the tracker to move
+    await harness.settle();
+
+    const shapes = harness.events(VISEME);
+    expect(shapes.length).toBeGreaterThan(0);
+    /* Positioned against the answer the frames carry, or the mouth drifts. */
+    expect(
+      shapes.every((s) => s.payload.answer === harness.events(SPK_FRAME)[0]!.payload.answer),
+    ).toBe(true);
+    expect(shapes.every((s) => s.payload.viseme >= 0 && s.payload.viseme <= 14)).toBe(true);
+  });
+
+  it("closes the mouth when the answer ends", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+    provider.speak(6400);
+    await harness.settle();
+
+    provider.finishAudio();
+    await harness.settle();
+
+    /* SIL is 14, and it must be last: a face left mid-syllable reads as a
+     * crashed board rather than a pause. */
+    expect(harness.events(VISEME).at(-1)!.payload.viseme).toBe(14);
   });
 });
 
