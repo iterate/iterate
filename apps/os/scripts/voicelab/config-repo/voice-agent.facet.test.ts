@@ -370,3 +370,48 @@ describe("repeated end to end", () => {
     expect(harness.events(CALL_STARTED)).toHaveLength(1);
   });
 });
+
+describe("the hang-up", () => {
+  const ENDED = "events.iterate.com/voice-agent/conversation-ended";
+
+  it("a self-named end retires the call, and the next press opens a new one", async () => {
+    /*
+     * The firmware ends calls under its own name ("scdev", "havpedev"), not
+     * the worker-minted 8-hex id. When that obituary folded to nothing,
+     * `state.call` was immortal: every incarnation's at-head pass re-dialled
+     * the corpse and every later press folded into it in silence — both
+     * open-mic boards were wedged exactly this way on hardware.
+     */
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+
+    await harness.append({
+      type: ENDED,
+      payload: { conversationId: "havpedev", reason: "button" },
+    });
+    expect(harness.state().call).toBeNull();
+
+    await harness.append({ type: PTT_START, payload: {} });
+    await harness.settle();
+    expect(harness.events(CALL_STARTED)).toHaveLength(2);
+  });
+
+  it("a stale obituary for a predecessor does not close the successor", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+    const live = harness.state().call?.conversationId;
+
+    /* A worker-shaped id that is not the live call: somebody ending the call
+     * that was already replaced. The successor must survive it. */
+    await harness.append({ type: ENDED, payload: { conversationId: "deadbee1", reason: "late" } });
+    expect(harness.state().call?.conversationId).toBe(live);
+  });
+});

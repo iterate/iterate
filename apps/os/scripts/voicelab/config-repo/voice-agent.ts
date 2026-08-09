@@ -5622,9 +5622,22 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         };
       case "events.iterate.com/voice-agent/conversation-ended":
       case "events.iterate.com/voice-agent/conversation-failed":
-        /* Only the call named in the payload closes; a stale obituary for a
-         * call that has already been replaced must not close its successor. */
-        return state.call?.conversationId === event.payload.conversationId
+        /*
+         * An obituary closes the call it NAMES — and a mis-named one still
+         * closes the current call. Worker-minted ids are eight hex chars, so a
+         * matching 8-hex id closes its call, a MISMATCHED 8-hex id is a stale
+         * obituary for a predecessor and must not close the successor, and an
+         * id that is not 8-hex at all cannot possibly name a predecessor: it
+         * is the device ending the one call it is on, under its own name
+         * ("scdev", "havpedev" — the firmware does not yet echo the real id).
+         * The old exact-match rule made those self-named hang-ups fold to
+         * nothing, which left `state.call` IMMORTAL: every fresh incarnation's
+         * at-head pass re-dialled the corpse, and every press folded into it
+         * in silence. Both open-mic boards were wedged exactly this way.
+         */
+        return state.call !== null &&
+          (state.call.conversationId === event.payload.conversationId ||
+            !/^[0-9a-f]{8}$/.test(String(event.payload.conversationId)))
           ? { ...state, call: null }
           : state;
       default:
@@ -5797,21 +5810,20 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
       }
       case "events.iterate.com/voice-agent/conversation-ended": {
         /*
-         * ANY end retires the live call, matching id or not. A stream holds at
-         * most one call, and the device's hang-up currently names itself
-         * ("scdev", "havpedev") rather than the worker-minted conversationId —
-         * so an id-gated retire left a corpse behind EVERY device hang-up, and
-         * with `alive` treating a rehydrated socketless call as "still
-         * dialling", every later press folded into it in silence. Measured on
-         * both open-mic boards' streams tonight (de4b8117, 03c959e8). The id
-         * still matters for the log: a mismatch is recorded so the firmware
-         * defect stays visible until the device echoes the real id.
+         * Same rule as the fold: a matching id ends its call, a non-8-hex id
+         * is the device ending the call it is on under its own name, and only
+         * a MISMATCHED worker-shaped id is a stale obituary to ignore. The log
+         * keeps the firmware defect visible until the device echoes the real
+         * id.
          */
         if (call !== null) {
-          if (call.conversationId !== event.payload.conversationId) {
+          const named = String(event.payload.conversationId);
+          const closes = call.conversationId === named || !/^[0-9a-f]{8}$/.test(named);
+          if (!closes) return;
+          if (call.conversationId !== named) {
             console.log(
-              `conversation-ended id mismatch: live=${call.conversationId} ` +
-                `event=${String(event.payload.conversationId)} — retiring anyway`,
+              `conversation-ended self-named: live=${call.conversationId} ` +
+                `event=${named} — retiring the live call`,
             );
           }
           this.#endCall("conversation-ended event");
