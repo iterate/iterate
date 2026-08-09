@@ -5450,6 +5450,8 @@ class GrokCall {
    * provider's own to segment, and gating them would deafen the board.
    */
   turnClosed = false;
+  /** Frames refused by that rule, so "rare" is a number and not a hope. */
+  droppedAfterEnd = 0;
 
   /** The turn is complete: commit what was captured and ask for an answer. */
   commit(now: number): void {
@@ -5669,6 +5671,8 @@ export const VoiceAgentFacetContract = defineProcessorContract({
         micFrames: z.number(),
         /** Longest silence between two frames: a stall, as against a drift. */
         maxFrameGapMs: z.number(),
+        /** Frames that arrived after the release and were refused, lifetime. */
+        droppedAfterEnd: z.number(),
       }),
     },
     "events.iterate.com/voice-agent/say": {
@@ -5925,7 +5929,10 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         if (call === null) return;
         /* Straggling audio from a turn that has already been committed would
          * read to the provider as a barge-in and cancel the answer. */
-        if (call.turnClosed && !call.serverVad) return;
+        if (call.turnClosed && !call.serverVad) {
+          call.droppedAfterEnd++;
+          return;
+        }
         const bytes = base64ToBytes(event.payload.pcm);
         call.offer(event.payload.enc === "u" ? mulawToPcm16(bytes) : bytes, this.deps.now());
         return;
@@ -6216,9 +6223,30 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     provider: Record<string, unknown>,
     append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
   ): void {
+    /*
+     * THE TIMELINE, NOT A SECOND COPY OF THE AUDIO.
+     *
+     * Forwarding provider events verbatim meant forwarding `delta` — tens of
+     * kilobytes of base64 per audio chunk, dozens per answer, to every
+     * subscriber. The host CLI died on it: `protoFail=10 recvFail=10`, the
+     * `/api` socket torn down and re-dialled every few seconds through a whole
+     * conversation, because an embedded client reassembles a batch into a
+     * fixed buffer and a delta does not fit. The boards would do the same.
+     *
+     * What this lane is FOR is knowing what the provider sent and when. The
+     * bytes are already on the `spk-frame` lane, paced and framed for a
+     * speaker; here their length says everything their content would.
+     */
+    const event: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(provider)) {
+      event[key] =
+        (key === "delta" || key === "audio") && typeof value === "string"
+          ? `<${value.length} chars>`
+          : value;
+    }
     void append({
       type: "events.iterate.com/voice-agent/grok-event",
-      payload: { conversationId: call.conversationId, t: this.deps.now(), event: provider },
+      payload: { conversationId: call.conversationId, t: this.deps.now(), event },
     });
   }
 
@@ -6248,6 +6276,7 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         firstFrameT: call.firstFrameAtMs,
         micFrames: call.framesThisTurn,
         maxFrameGapMs: call.maxFrameGapMs,
+        droppedAfterEnd: call.droppedAfterEnd,
       },
     });
   }
