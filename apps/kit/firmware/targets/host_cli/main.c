@@ -247,13 +247,8 @@ static void cli_main_reconcile_call(
 static void cli_main_supervise_transport(
     struct cli_runtime *runtime, uint64_t now_ms);
 
-/* Supervises ping progress and requests a bounded transport restart. */
-static void cli_main_supervise_liveness(
-    struct cli_runtime *runtime, uint64_t now_ms);
 
 /* Drops a call whose provider bridge has gone silent. */
-static void cli_main_supervise_bridge(
-    struct cli_runtime *runtime, uint64_t now_ms);
 
 /* Recycles a silent delivery lane, escalating repeated failures to transport. */
 static void cli_main_supervise_downlink(
@@ -282,7 +277,7 @@ static void cli_main_poll_ready(
     uint64_t now_ms,
     const struct iterate_kit_spsc_ring_metrics *outbox);
 
-/* Advances ping and stats schedules without starving mandatory replies. */
+/* Advances the stats schedule without starving mandatory replies. */
 static void cli_main_poll_periodic(
     struct cli_runtime *runtime, uint64_t now_ms, size_t outbox_free);
 
@@ -1760,59 +1755,24 @@ static void cli_main_supervise_transport(
   cli_capabilities_request_restart(runtime, now_ms);
 }
 
-static void cli_main_supervise_liveness(
-    struct cli_runtime *runtime, uint64_t now_ms)
-{
-  assert(runtime != NULL);
-  if (runtime->last_liveness_ms == 0U) runtime->last_liveness_ms = now_ms;
-  if (runtime->voicelab.ping_count != runtime->last_ping_count) {
-    runtime->last_ping_count = runtime->voicelab.ping_count;
-    runtime->last_liveness_ms = now_ms;
-  }
-  if (runtime->transport.state != ITERATE_KIT_POSIX_ITX_READY) {
-    runtime->last_liveness_ms = now_ms;
-  }
-  const bool ping_timed_out = runtime->voicelab.ping_pending &&
-      iterate_kit_voice_elapsed_ms(now_ms, runtime->voicelab.ping_started_ms) >
-          ITERATE_KIT_VOICE_PING_TIMEOUT_MS;
-  if (ping_timed_out && now_ms >= runtime->next_liveness_restart_at_ms) {
-    runtime->next_liveness_restart_at_ms =
-        now_ms + ITERATE_KIT_VOICE_PING_TIMEOUT_MS;
-    ++runtime->liveness_restarts;
-    ++runtime->transport_restarts;
-    iterate_kit_posix_itx_transport_request_restart(&runtime->transport);
-  }
-  if (iterate_kit_voice_elapsed_ms(now_ms, runtime->last_liveness_ms) >
-      ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS) {
-    cli_capabilities_request_restart(runtime, now_ms);
-  }
-}
-
-static void cli_main_supervise_bridge(
-    struct cli_runtime *runtime, uint64_t now_ms)
-{
-  assert(runtime != NULL);
-  if (runtime->voicelab.state != ITERATE_KIT_VOICELAB_READY ||
-      !runtime->voicelab.call_active ||
-      runtime->voicelab.last_bridge_ms == 0U) return;
-  const uint64_t bridge_age = iterate_kit_voice_elapsed_ms(
-      now_ms, runtime->voicelab.last_bridge_ms);
-  if (bridge_age <= ITERATE_KIT_VOICE_BRIDGE_SILENCE_MS) return;
-  const uint64_t batch_age = runtime->voicelab.last_batch_ms == 0U
-      ? 0U
-      : iterate_kit_voice_elapsed_ms(
-            now_ms, runtime->voicelab.last_batch_ms);
-  cli_runtime_log(
-      "warn",
-      "call dropped: no bridge event for %" PRIu64
-      "ms (bridgeAge=%" PRIu64 " batchAge=%" PRIu64 " batches=%u rtt=%u)",
-      (uint64_t)ITERATE_KIT_VOICE_BRIDGE_SILENCE_MS, bridge_age, batch_age,
-      runtime->voicelab.batches_on_connection, runtime->voicelab.last_rtt_ms);
-  ++runtime->bridge_losses;
-  ++runtime->calls_lost;
-  iterate_kit_voicelab_forget_call(&runtime->voicelab);
-  runtime->next_call_attempt_at_ms = 0U;
-}
+/*
+ * BOTH SUPERVISORS THAT LIVED HERE ARE GONE, WITH THE PROBE THEY RAN ON.
+ *
+ * `cli_main_supervise_liveness` restarted the process when no application-level
+ * round trip had completed for three minutes, and `cli_main_supervise_bridge`
+ * dropped a call whose bridge had not been heard from for twenty seconds. Both
+ * keyed on the pulled `voice-agent/ping` append and the `voice-agent/pong` it
+ * earned back, and that pair is deleted: a WebSocket already carries its own
+ * PING/PONG and the platform exposes a connection-layer probe, so this was a
+ * third liveness mechanism above the two that measure it honestly.
+ *
+ * Neither could be re-keyed. Every remaining signal is inbound-only and stops
+ * on a healthy idle device, and the pong was the only bridge-sourced event that
+ * arrived during a SILENT call — so re-keying the first would restart idle
+ * processes on a timer, and the second would drop a live call on any pause in
+ * the conversation. What still acts is `cli_main_supervise_downlink`, which
+ * fires on silence only when traffic is expected.
+ */
 
 static void cli_main_supervise_downlink(
     struct cli_runtime *runtime, uint64_t now_ms, size_t outbox_free)
@@ -1849,8 +1809,6 @@ static void cli_main_supervise(
 {
   assert(runtime != NULL);
   cli_main_supervise_transport(runtime, now_ms);
-  cli_main_supervise_liveness(runtime, now_ms);
-  cli_main_supervise_bridge(runtime, now_ms);
   cli_main_supervise_downlink(runtime, now_ms, outbox_free);
 }
 
@@ -1997,14 +1955,9 @@ static void cli_main_poll_periodic(
     struct cli_runtime *runtime, uint64_t now_ms, size_t outbox_free)
 {
   assert(runtime != NULL);
-  if (runtime->next_ping_at_ms == 0U) {
-    runtime->next_ping_at_ms = now_ms + CLI_MAIN_PULSE_INTERVAL_MS;
+  /* Seed the telemetry clock on the first pass. */
+  if (runtime->next_stats_at_ms == 0U) {
     runtime->next_stats_at_ms = now_ms + ITERATE_KIT_VOICE_STATS_INTERVAL_MS;
-  }
-  if (now_ms >= runtime->next_ping_at_ms &&
-      outbox_free >= CLI_MAIN_CALL_OUTBOX_SLOTS) {
-    (void)iterate_kit_voicelab_ping(&runtime->voicelab);
-    runtime->next_ping_at_ms = now_ms + ITERATE_KIT_VOICE_PING_INTERVAL_MS;
   }
   if (now_ms >= runtime->next_stats_at_ms &&
       outbox_free >= CLI_MAIN_CALL_OUTBOX_SLOTS) {

@@ -1,7 +1,7 @@
 /*
  * voicelab_stream: single-WebSocket device end of the voicelab protocol —
  * authenticate -> projects.get -> streams.get, then one-way mic-frame
- * appends (base64 PCM16, ephemeral) and a pulled ping append as RTT probe.
+ * appends (base64 PCM16, ephemeral).
  */
 #include "iterate/kit/voicelab_stream.h"
 
@@ -290,10 +290,11 @@ static void downlink_flow(void) {
     assert(open_message != NULL);
     assert(strstr(open_message, "\"connectionKey\":\"wsdev-cb-g1\"") != NULL);
     /*
-     * A quiet call still needs one positive liveness observation. The bridge's
-     * durable pong event is therefore part of the same bounded subscription as
-     * audio and lifecycle events; omitting it here previously let the wire
-     * contract change while the native suite stayed stale.
+     * The subscription IS the wire contract, so it is pinned literally rather
+     * than checked for membership: a type quietly added or dropped upstream
+     * must fail here and not on a bench. `voice-agent/pong` used to be in this
+     * list to give a quiet call one positive liveness observation; the ping
+     * that earned it is gone (see voicelab_stream.h) and so is the pong.
      */
     assert(
         strstr(
@@ -303,7 +304,6 @@ static void downlink_flow(void) {
             "\"events.iterate.com/voice-agent/grok-event\","
             "\"events.iterate.com/voice-agent/conversation-ended\","
             "\"events.iterate.com/voice-agent/conversation-accepted\","
-            "\"events.iterate.com/voice-agent/pong\","
             "\"events.iterate.com/voice-agent/viseme\"]]") !=
         NULL);
     assert(strstr(open_message, "\"maxDeliveryEvents\":16") != NULL);
@@ -491,7 +491,7 @@ static void mount_with_downlink(struct fixture *fixture, int *next_id) {
  * the second re-mount filled it — the export was refused, the voicelab latched
  * failed underneath a perfectly ready transport and connection, and nothing
  * recovered it but the 180-second liveness restart of the whole chip. Measured
- * on the HA Voice PE at exports 4/4, imports 0/16, pings frozen at zero.
+ * on the HA Voice PE at exports 4/4, imports 0/16, nothing delivered.
  *
  * What is asserted is what this side controls: a re-mount says `release` for
  * the previous mount before it asks for anything new. Whether the peer then
@@ -553,24 +553,6 @@ int main(void) {
   assert(strstr(fixture.captured[before + 1U], "[\"release\",") != NULL);
   assert(fixture.voicelab.frames_sent == 1U);
   assert(fixture.voicelab.frame_send_failures == 0U);
-
-  /* Ping is pulled; completion measures RTT with the injected clock. */
-  before = fixture.captured_count;
-  fixture.clock_ms = 2000U;
-  assert(iterate_kit_voicelab_ping(&fixture.voicelab) == CAPNWEB_OK);
-  assert(fixture.voicelab.ping_pending);
-  assert(strstr(
-      fixture.captured[before],
-      "{\"type\":\"events.iterate.com/voice-agent/ping\",\"ephemeral\":true,"
-      "\"payload\":{\"id\":\"wsdev-0\",\"t0\":2000}}") != NULL);
-  /* Second probe while pending is refused. */
-  assert(
-      iterate_kit_voicelab_ping(&fixture.voicelab) == CAPNWEB_E_STATE);
-  fixture.clock_ms = 2087U;
-  receive(&fixture, "[\"resolve\",5,[[]]]");
-  assert(!fixture.voicelab.ping_pending);
-  assert(fixture.voicelab.ping_count == 1U);
-  assert(fixture.voicelab.last_rtt_ms == 87U);
 
   /* A full 640-byte frame fits the args buffer and one outbox slot. */
   {
@@ -636,7 +618,7 @@ int main(void) {
     assert(
         iterate_kit_voicelab_start_call(&fixture.voicelab, NULL) ==
         CAPNWEB_E_STATE);
-    receive(&fixture, "[\"resolve\",7,[{\"ok\":true}]]");
+    receive(&fixture, "[\"resolve\",6,[{\"ok\":true}]]");
     assert(!fixture.voicelab.call_pending);
     assert(fixture.voicelab.call_starts == 1U);
     /* The reply does not make the call live — the stream's conversation-accepted
@@ -681,7 +663,7 @@ int main(void) {
     }
     assert(start_message != NULL);
     assert(strstr(start_message, "turns") == NULL);
-    receive(&fixture, "[\"resolve\",9,[{\"ok\":true}]]");
+    receive(&fixture, "[\"resolve\",8,[{\"ok\":true}]]");
     assert(!fixture.voicelab.call_pending);
   }
 

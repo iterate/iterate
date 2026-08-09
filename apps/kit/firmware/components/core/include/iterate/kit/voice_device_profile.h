@@ -168,9 +168,17 @@ enum {
   ITERATE_KIT_VOICE_CONTROL_POLL_MS = 25,
   ITERATE_KIT_VOICE_STATS_INTERVAL_MS = 5000,
   ITERATE_KIT_VOICE_UNHEALTHY_RESTART_MS = 120000,
-  ITERATE_KIT_VOICE_PING_INTERVAL_MS = 5000,
-  ITERATE_KIT_VOICE_PING_TIMEOUT_MS = 20000,
-  ITERATE_KIT_VOICE_BRIDGE_SILENCE_MS = 20000,
+  /*
+   * `PING_INTERVAL_MS`, `PING_TIMEOUT_MS` and `BRIDGE_SILENCE_MS` were here.
+   * All three served an application-level ping/pong that has been deleted: a
+   * WebSocket carries its own PING/PONG and the transport already answers it,
+   * and the platform exposes a connection-layer probe that returns t0/t1/t2.
+   * The bridge-silence deadline went with them because the pong was its only
+   * evidence during a silent call — without it, the watchdog would have
+   * dropped every call in which nobody spoke for twenty seconds.
+   *
+   * What is left is the deadline on the lane that has no other proof.
+   */
   ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS = 10000,
   ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS = 180000,
   /*
@@ -194,12 +202,11 @@ enum {
    * How long an IDLE device may hold a mount nobody is answering before it
    * replaces the session.
    *
-   * Every other watchdog here needs a call in progress, and the one that does
-   * not keys on pings — which ride the SOCKET, not the mount. So a device
-   * whose capability has gone offline server-side while its TCP connection
-   * stays perfectly healthy is watched by nothing at all: it loops, it pings,
-   * it reports itself ready, and every RPC to it fails with "capability is
-   * offline" until somebody power-cycles it.
+   * Every other watchdog here needs a call in progress. So a device whose
+   * capability has gone offline server-side while its TCP connection stays
+   * perfectly healthy is watched by nothing at all: it loops, it reports
+   * itself ready, and every RPC to it fails with "capability is offline"
+   * until somebody power-cycles it.
    *
    * Measured: after eighteen turns the soak's calls ended, the capability
    * went offline, and the device sat there for minutes — rx and played both
@@ -208,11 +215,12 @@ enum {
    *
    * THREE MINUTES WAS WRONG, and the sentence that justified it was too: it
    * said "a mounted device exchanges a ping every five [seconds]", so silence
-   * on this counter would mean something real. But the ping is OUTBOUND — the
-   * device pings the platform — while this watchdog counts dispatches served
-   * TO the device. On an idle board nothing is served, so the counter never
+   * on this counter would mean something real. But that ping was OUTBOUND —
+   * the device appended it — while this watchdog counts dispatches served TO
+   * the device. On an idle board nothing is served, so the counter never
    * moves and the watchdog fires on a schedule, forever, on a device that is
-   * working perfectly.
+   * working perfectly. (The ping itself is gone now; the reasoning error it
+   * illustrates is why this paragraph stays.)
    *
    * What it does when it fires is not cheap either: it replaces the whole
    * transport — TLS, socket, session and mount. Measured on an idle M5StickS3,

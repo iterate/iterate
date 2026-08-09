@@ -488,9 +488,6 @@ static enum capnweb_status batch_dispatch(
                    &type_value, "events.iterate.com/voice-agent/viseme")) {
       handle_viseme(voicelab, &payload);
     } else if (capnweb_value_string_equals(
-                   &type_value, "events.iterate.com/voice-agent/pong")) {
-      /* Liveness only; the RTT number comes from the append's own echo. */
-    } else if (capnweb_value_string_equals(
                    &type_value, "events.iterate.com/voice-agent/conversation-accepted")) {
       /*
        * The stream is what says a call is live, not the startCall reply: the
@@ -619,7 +616,7 @@ bool iterate_kit_voicelab_needs_recycle(
 enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab) {
   static const char *const open_path[] = {"openConnection"};
-  struct capnweb_expression event_type_items[6];
+  struct capnweb_expression event_type_items[5];
   struct capnweb_expression event_types;
   struct capnweb_expression connection_key;
   struct capnweb_expression max_events;
@@ -692,20 +689,8 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
       sizeof("events.iterate.com/voice-agent/conversation-accepted") - 1U,
     }},
   };
-  /*
-   * The pong exists to be heard, not read: it is the only bridge-sourced
-   * event that arrives during a SILENT call, and silence is exactly when a
-   * dead bridge is indistinguishable from a patient one.
-   */
-  event_type_items[4] = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {
-      "events.iterate.com/voice-agent/pong",
-      sizeof("events.iterate.com/voice-agent/pong") - 1U,
-    }},
-  };
   /* The mouth track rides the same lane as the audio it describes. */
-  event_type_items[5] = (struct capnweb_expression){
+  event_type_items[4] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
     {.string = {
       "events.iterate.com/voice-agent/viseme",
@@ -714,7 +699,7 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
   };
   event_types = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_ARRAY,
-    {.array = {event_type_items, 6U}},
+    {.array = {event_type_items, 5U}},
   };
   connection_key = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
@@ -979,7 +964,7 @@ enum capnweb_status iterate_kit_voicelab_start(
    * second re-mount filled it, `capnweb_session_export_capability` refused,
    * and the voicelab latched failed with a ready transport and a ready
    * connection under it. Measured on the HA Voice PE: exports 4/4, imports
-   * 0/16, pings frozen at 0, every call request ignored for the three minutes
+   * 0/16, nothing delivered, every call request ignored for the three minutes
    * it took the liveness watchdog to restart the whole chip.
    *
    * A zeroed struct — a static on its first mount — has no session and no
@@ -1317,58 +1302,6 @@ enum capnweb_status iterate_kit_voicelab_mark_turn(
       (size_t)length);
 }
 
-static void ping_completed(
-    void *context, const struct capnweb_result *result) {
-  struct iterate_kit_voicelab *voicelab = context;
-  uint64_t now;
-  voicelab->ping_pending = false;
-  if (result->kind == CAPNWEB_RESULT_VALUE && result->status == CAPNWEB_OK) {
-    now = voicelab->options.now_ms(voicelab->options.clock_context);
-    voicelab->last_rtt_ms = (uint32_t)(now - voicelab->ping_started_ms);
-    ++voicelab->ping_count;
-  } else {
-    ++voicelab->ping_failures;
-  }
-}
-
-enum capnweb_status iterate_kit_voicelab_ping(
-    struct iterate_kit_voicelab *voicelab) {
-  int length;
-  enum capnweb_status status;
-  if (voicelab == NULL) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  if (voicelab->state != ITERATE_KIT_VOICELAB_READY ||
-      voicelab->ping_pending) {
-    return CAPNWEB_E_STATE;
-  }
-  voicelab->ping_started_ms =
-      voicelab->options.now_ms(voicelab->options.clock_context);
-  length = snprintf(
-      voicelab->args_buffer,
-      sizeof(voicelab->args_buffer),
-      "[{\"type\":\"events.iterate.com/voice-agent/ping\",\"ephemeral\":true,"
-      "\"payload\":{\"id\":\"%s-%" PRIu32 "\",\"t0\":%" PRIu64 "}}]",
-      voicelab->options.conversation_id,
-      voicelab->ping_count,
-      voicelab->ping_started_ms);
-  if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
-    return CAPNWEB_E_LIMIT;
-  }
-  status = capnweb_session_call_path(
-      voicelab->options.session,
-      voicelab->stream_capability,
-      append_path,
-      1U,
-      voicelab->args_buffer,
-      (size_t)length,
-      ping_completed,
-      voicelab);
-  if (status == CAPNWEB_OK) {
-    voicelab->ping_pending = true;
-  }
-  return status;
-}
 enum capnweb_status iterate_kit_voicelab_close(
     struct iterate_kit_voicelab *voicelab) {
   enum capnweb_status first_error = CAPNWEB_OK;

@@ -173,10 +173,14 @@ enum {
   MIC_OUTBOX_RESERVE = ITERATE_KIT_VOICE_MIC_OUTBOX_RESERVE,
   FRAME_MS = ITERATE_KIT_VOICE_FRAME_MS,
   FRAME_SAMPLES = ITERATE_KIT_VOICE_FRAME_SAMPLES,
-  /* One frame of speaker audio, in milliseconds. */
-  SPEAKER_FRAME_MS = 20,
-  /* One hardware ring of credited audio: the point an answer is under way. */
-  DMA_RING_CREDIT_MS = 90,
+  /*
+   * `SPEAKER_FRAME_MS` and `DMA_RING_CREDIT_MS` were here, and on all four
+   * boards, and read by nobody on any of them — 20 everywhere, and 40/60/90/120
+   * respectively. A constant no code reads is a claim no measurement checks, so
+   * they are deleted rather than promoted to per-board facts. The ring depth
+   * that DOES matter survives as `facts->speaker_dry_wait_ms`, which is derived
+   * from it and is read on every dry wait.
+   */
   FRAME_BYTES = ITERATE_KIT_VOICE_FRAME_BYTES,
   MIC_QUEUE_DEPTH = ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH,
   MIC_FRAMES_PER_APPEND = ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND,
@@ -283,26 +287,16 @@ enum {
   STATS_INTERVAL_MS = ITERATE_KIT_VOICE_STATS_INTERVAL_MS,
   /* How long the transport may stay FAILED before the device reboots itself. */
   UNHEALTHY_RESTART_MS = ITERATE_KIT_VOICE_UNHEALTHY_RESTART_MS,
-  PING_INTERVAL_MS = ITERATE_KIT_VOICE_PING_INTERVAL_MS,
   /*
-   * A ping whose append never resolves within this long means the session is
-   * not carrying traffic in BOTH directions, whatever the socket believes.
-   * Well clear of the worst RTT ever measured here (~400 ms) and of a
-   * connection recycle, so a healthy device never trips it.
-   */
-  PING_TIMEOUT_MS = ITERATE_KIT_VOICE_PING_TIMEOUT_MS,
-  /*
-   * A call with no event from its bridge for this long is a call whose bridge
-   * is gone. Pings run every 5 s and each one earns a pong, so this is three
-   * missed round trips — not a network hiccup.
-   */
-  BRIDGE_SILENCE_MS = ITERATE_KIT_VOICE_BRIDGE_SILENCE_MS,
-  /*
-   * With a call wanted there is always a bridge pinging back, so this long
-   * without ANY batch on the delivery lane means the lane itself is gone.
-   * Deliberately shorter than BRIDGE_SILENCE_MS: recycling the connection is
-   * one round trip and keeps the call, whereas giving up on the call throws
-   * away a live Grok session.
+   * With a call wanted there is a live answer coming, so this long without ANY
+   * batch on the delivery lane means the lane itself is gone. The remedy is a
+   * recycle — one round trip that keeps the call — rather than giving up on it
+   * and throwing away a live Grok session.
+   *
+   * This is now the ONLY application-level liveness deadline the device has.
+   * It is also the only one that ever had honest evidence behind it: it fires
+   * on silence when traffic is EXPECTED, which is the single condition under
+   * which silence means anything at all.
    */
   DOWNLINK_SILENCE_MS = ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS,
   /*
@@ -529,11 +523,7 @@ static struct {
   uint32_t speaker_writes;
   uint32_t speaker_bad_frames;
   uint32_t barge_in_flushes;
-  /* Transports torn down because a ping went unanswered. */
-  uint32_t liveness_restarts;
   struct iterate_kit_mount_watchdog mount_watchdog;
-  /* Calls abandoned because their bridge stopped proving it existed. */
-  uint32_t bridge_losses;
   /* Connections replaced because nothing was being delivered on them. */
   uint32_t downlink_recycles;
   /* How many of those in a row have not yet produced a batch. */
@@ -1721,15 +1711,10 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"faceRenderFails", waveshare_avatar_render_failures()},
     {"batches", runtime.voicelab.batches_on_connection},
     {"connGeneration", runtime.voicelab.connection_generation},
-    {"rttMs", runtime.voicelab.last_rtt_ms},
-    {"pings", runtime.voicelab.ping_count},
-    {"pingFailures", runtime.voicelab.ping_failures},
-    {"livenessRestarts", runtime.liveness_restarts},
     {"idleRemounts", runtime.mount_watchdog.remounts},
     /* Inbound capability dispatches served. This is the liveness proof the idle
      * watchdog keys on — telemetry publishing does not move it. */
     {"servedDispatches", iterate_kit_peer_served_dispatches(&runtime.peer)},
-    {"bridgeLosses", runtime.bridge_losses},
     {"bridgeAgeMs",
      runtime.voicelab.last_bridge_ms == 0U
          ? 0U
@@ -2130,7 +2115,6 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
       (unsigned int)sizeof(runtime));
 
   uint64_t next_stats_at = 0;
-  uint64_t next_ping_at = 0;
   uint64_t next_button_poll_at = 0;
 
   for (;;) {
@@ -2306,42 +2290,36 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
     }
 
     /*
-     * LIVENESS, not optimism.
+     * A TRANSPORT THAT NEVER COMES BACK.
      *
-     * FAILED is the honest failure, and the block above handles it. The one
-     * that cost a whole night is the dishonest one: the socket stays open,
-     * the transport stays READY, and nothing moves in either direction — a
-     * half-open TCP connection is indistinguishable from a quiet one from
-     * this end. The device went on believing it had a session and a call,
-     * lit "listening" and "speaking" at the user, and sent every word into
-     * a void for hours.
+     * FAILED is the honest failure and the block above handles it. This one is
+     * quieter: the transport sits in some non-ready state indefinitely, so
+     * every producer's gate stays shut while the loop runs perfectly. The
+     * device answers nothing, starts no calls, sends no audio and pushes no
+     * telemetry — not a quiet device, a broken one.
      *
-     * A one-way append cannot detect this, and by design never will. The
-     * ping is the only pulled call on this lane, so its resolution is the
-     * device's single proof that the far end is still processing what it
-     * sends. Two remedies, in order of violence: replace the transport, and
-     * if even that has not restored a round trip, restart the chip.
+     * THERE USED TO BE A SECOND WATCHDOG HERE, and its evidence is gone.
+     *
+     * It restarted the chip when no application-level round trip had completed
+     * for three minutes on a READY transport — the half-open TCP case, where
+     * the socket stays open and nothing moves in either direction. Its only
+     * proof was the pulled `voice-agent/ping` append, and that has been deleted
+     * as a duplicate of the WebSocket's own PING/PONG (see voicelab_stream.h).
+     *
+     * It is DELETED rather than re-keyed, because every candidate replacement
+     * is inbound-only: delivery batches and served dispatches both stop on a
+     * perfectly healthy IDLE board, so re-keying would have rebooted every idle
+     * device every three minutes. That failure mode is not hypothetical — the
+     * mount watchdog made exactly this mistake, and the note in
+     * voice_device_profile.h explains what it cost.
+     *
+     * So half-open detection now belongs to the socket layer, which is where
+     * the PING it needs actually lives. What remains here is the one deadline
+     * whose evidence is local and always available: the transport's own state.
      */
     {
-      static uint64_t last_liveness_ms;
       /** When the transport last stopped being ready; 0 while it is ready. */
       static uint64_t not_ready_since_ms;
-      static uint32_t last_ping_count;
-      static uint64_t next_liveness_restart_at;
-      if (last_liveness_ms == 0U) last_liveness_ms = now;
-      if (runtime.voicelab.ping_count != last_ping_count) {
-        last_ping_count = runtime.voicelab.ping_count;
-        last_liveness_ms = now;
-      }
-      /*
-       * Not being CONNECTED is a different fault, and the block above owns
-       * it. But a transport that is READY while the voicelab mount is not is
-       * nobody's fault by that reckoning — and it is the worst state the
-       * device has: every producer sits behind one gate, so the device goes
-       * on answering RPCs perfectly while starting no calls, sending no
-       * audio, and pushing no telemetry. That is not a quiet device, it is a
-       * broken one, and it must be on this clock.
-       */
       /*
        * A TRANSPORT THAT IS NEVER READY MUST NOT DISABLE THE RESTART.
        *
@@ -2358,7 +2336,6 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
        * the failure this restart exists for.
        */
       if (runtime.transport.state != ITERATE_KIT_ESP_IDF_ITX_READY) {
-        last_liveness_ms = now;
         if (not_ready_since_ms == 0U) not_ready_since_ms = now;
         if (iterate_kit_voice_elapsed_ms(now, not_ready_since_ms) >
             NO_LIVENESS_RESTART_MS) {
@@ -2370,25 +2347,6 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         }
       } else {
         not_ready_since_ms = 0U;
-      }
-      if (runtime.voicelab.ping_pending &&
-          iterate_kit_voice_elapsed_ms(now, runtime.voicelab.ping_started_ms) > PING_TIMEOUT_MS &&
-          now >= next_liveness_restart_at) {
-        next_liveness_restart_at = now + PING_TIMEOUT_MS;
-        ++runtime.liveness_restarts;
-        ESP_LOGE(
-            tag,
-            "no answer to a ping in %us — replacing the transport",
-            (unsigned int)(PING_TIMEOUT_MS / 1000U));
-        waveshare_display_set_status("reconnecting");
-        iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
-      }
-      if (iterate_kit_voice_elapsed_ms(now, last_liveness_ms) > NO_LIVENESS_RESTART_MS) {
-        ESP_LOGE(
-            tag,
-            "no round trip in %us despite a ready transport — restarting",
-            (unsigned int)(NO_LIVENESS_RESTART_MS / 1000U));
-        iterate_kit_esp_restart_with_note("no round trip on a ready transport");
       }
     }
 
@@ -2601,36 +2559,26 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
           (waveshare_buttons_upper_held() || waveshare_display_talk_held());
 
       /*
-       * The bridge holds the call in a Durable Object this device cannot
-       * see, and it can stop — evicted, redeployed, or simply gone — without
-       * appending the conversation-ended that would say so. Overnight that left the
-       * device holding a call that had not existed for hours.
+       * THE BRIDGE-SILENCE WATCHDOG WAS HERE, AND ITS EVIDENCE IS GONE.
        *
-       * So the call is believed only while its bridge keeps proving it is
-       * there. Every bridge-sourced event counts, and the pong answering our
-       * own ping is the one that arrives when nobody is speaking. Losing the
-       * proof drops the BELIEF, never the INTENT: wants_call is still true,
-       * so the reconcile immediately below opens a fresh call and the user's
-       * next press finds a working device.
+       * The bridge holds the call in a Durable Object this device cannot see,
+       * and it can stop — evicted, redeployed, or simply gone — without
+       * appending the conversation-ended that would say so. Overnight that left
+       * a device holding a call that had not existed for hours, so the call was
+       * believed only while its bridge kept proving it was there.
+       *
+       * The proof was the pong answering this device's own ping: the ONE
+       * bridge-sourced event that arrives while nobody is speaking. With the
+       * ping deleted, twenty seconds of a person thinking is indistinguishable
+       * from a dead bridge, and the watchdog would have dropped a live call on
+       * every thoughtful pause. A watchdog that fires on the normal case is
+       * worse than none.
+       *
+       * `bridgeAgeMs` still reports the age, so the fact is visible to whoever
+       * is looking. What replaced the ACTION is the downlink deadline below,
+       * which fires on silence only when traffic is expected — and whose remedy
+       * (recycle the connection, keep the call) was always the gentler one.
        */
-      if (runtime.voicelab.call_active &&
-          runtime.voicelab.last_bridge_ms != 0U &&
-          iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_bridge_ms) > BRIDGE_SILENCE_MS) {
-        ++runtime.bridge_losses;
-        ESP_LOGE(
-            tag,
-            "no word from the bridge in %us — that call is gone",
-            (unsigned int)(BRIDGE_SILENCE_MS / 1000U));
-        iterate_kit_voicelab_forget_call(&runtime.voicelab);
-        runtime.talking = false;
-        runtime.flushing_turn = false;
-        waveshare_display_hold_talk(false);
-        waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
-        waveshare_display_set_status(
-            wants_call ? "call dropped — reconnecting" : "call dropped");
-        /* Reconnect now, not on the old backoff. */
-        iterate_kit_launch_retry_now(&launch);
-      }
 
       /*
        * THE DOWNLINK NEEDS ITS OWN PROOF.
@@ -2638,17 +2586,17 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
        * Everything above trusts that if the bridge appends something, this
        * device hears it. That is one lane, held by the platform as a
        * callback registration inside the stream's Durable Object, and it can
-       * be lost on its own: measured here, a device pinging happily every
-       * five seconds (uplink resolving, RTT 130ms) while eight conversation-accepted
-       * events and eleven pongs were appended by live bridges and NOT ONE of
+       * be lost on its own: measured here, a device whose uplink was resolving
+       * happily while eight conversation-accepted events and eleven more
+       * besides were appended by live bridges and NOT ONE of
        * them arrived. Its batch counter did not move for 68 seconds. The UI
        * said "starting call" the whole time, which is exactly what a person
        * sees, and nothing in the device was ever going to notice: the socket
        * was fine, the session was fine, the appends were fine.
        *
        * Silence is only evidence when traffic is expected. It is expected
-       * whenever a call is wanted: a live bridge pongs every ping, so ten
-       * seconds without a single batch means the lane is dead, not quiet.
+       * whenever a call is wanted: an accepted call answers, so ten seconds
+       * without a single batch means the lane is dead, not quiet.
        * The cure is the recycle that already exists — make-before-break, one
        * round trip — and if three of those change nothing then it is not the
        * connection that is broken, it is the session under it.
@@ -2965,14 +2913,8 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
           (void)iterate_kit_voicelab_recycle_connection(&runtime.voicelab);
         }
       }
-      if (next_ping_at == 0U) {
-        next_ping_at = now + 1000U;
-        next_stats_at = now + STATS_INTERVAL_MS;
-      }
-      if (now >= next_ping_at && outbox_free >= 3U) {
-        (void)iterate_kit_voicelab_ping(&runtime.voicelab);
-        next_ping_at = now + PING_INTERVAL_MS;
-      }
+      /* Seed the telemetry clock the first time the gate opens. */
+      if (next_stats_at == 0U) next_stats_at = now + STATS_INTERVAL_MS;
       /*
        * A one-second pulse while a turn is open. When the device freezes
        * mid-turn nothing else can be read out of it — health() is answered by

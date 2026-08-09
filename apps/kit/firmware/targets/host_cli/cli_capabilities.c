@@ -269,8 +269,7 @@ static void cli_capabilities_write_health_audio(
       "\"talkReadFailures\":0,\"spkMarginMaxMs\":%u,"
       "\"spkBadFrames\":%u,\"spkSeqGaps\":%u,"
       "\"spkDecodeFailures\":%u,\"bargeIns\":%u,\"batches\":%u,"
-      "\"connGeneration\":%u,\"rttMs\":%u,\"pings\":%u,"
-      "\"pingFailures\":%u,\"livenessRestarts\":%u,\"bridgeLosses\":%u,"
+      "\"connGeneration\":%u,"
       "\"bridgeAgeMs\":%u,\"downlinkRecycles\":%u,\"batchAgeMs\":%u,"
       "\"uptimeMs\":%" PRIu64,
       runtime->speaker_underruns, runtime->speaker_conceal_frames,
@@ -279,9 +278,7 @@ static void cli_capabilities_write_health_audio(
       runtime->speaker_bad_frames, runtime->playout.gaps,
       runtime->voicelab.spk_decode_failures, runtime->barge_in_flushes,
       runtime->voicelab.batches_on_connection,
-      runtime->voicelab.connection_generation, runtime->voicelab.last_rtt_ms,
-      runtime->voicelab.ping_count, runtime->voicelab.ping_failures,
-      runtime->liveness_restarts, runtime->bridge_losses, bridge_age,
+      runtime->voicelab.connection_generation, bridge_age,
       runtime->downlink_recycles, batch_age,
       iterate_kit_voice_elapsed_ms(now_ms, runtime->started_ms));
 }

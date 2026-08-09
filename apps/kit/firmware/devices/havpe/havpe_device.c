@@ -124,9 +124,6 @@ enum {
   BUTTON_POLL_MS = ITERATE_KIT_VOICE_CONTROL_POLL_MS,
   STATS_INTERVAL_MS = ITERATE_KIT_VOICE_STATS_INTERVAL_MS,
   UNHEALTHY_RESTART_MS = ITERATE_KIT_VOICE_UNHEALTHY_RESTART_MS,
-  PING_INTERVAL_MS = ITERATE_KIT_VOICE_PING_INTERVAL_MS,
-  PING_TIMEOUT_MS = ITERATE_KIT_VOICE_PING_TIMEOUT_MS,
-  BRIDGE_SILENCE_MS = ITERATE_KIT_VOICE_BRIDGE_SILENCE_MS,
   DOWNLINK_SILENCE_MS = ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS,
   NO_LIVENESS_RESTART_MS = ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS,
 };
@@ -267,11 +264,7 @@ static struct {
   uint32_t speaker_writes;
   uint32_t speaker_bad_frames;
   uint32_t barge_in_flushes;
-  /* Transports torn down because a ping went unanswered. */
-  uint32_t liveness_restarts;
   struct iterate_kit_mount_watchdog mount_watchdog;
-  /* Calls abandoned because their bridge stopped proving it existed. */
-  uint32_t bridge_losses;
   /* Connections replaced because nothing was being delivered on them. */
   uint32_t downlink_recycles;
   uint32_t downlink_recycles_running;
@@ -1213,14 +1206,9 @@ static size_t health_json(char *out, size_t capacity) {
     {"turnMarkerFailures", runtime.turn_marker_failures},
     {"batches", runtime.voicelab.batches_on_connection},
     {"connGeneration", runtime.voicelab.connection_generation},
-    {"rttMs", runtime.voicelab.last_rtt_ms},
-    {"pings", runtime.voicelab.ping_count},
-    {"pingFailures", runtime.voicelab.ping_failures},
-    {"livenessRestarts", runtime.liveness_restarts},
     {"idleRemounts", runtime.mount_watchdog.remounts},
     /* Inbound capability dispatches served: the liveness proof. */
     {"servedDispatches", iterate_kit_peer_served_dispatches(&runtime.peer)},
-    {"bridgeLosses", runtime.bridge_losses},
     {"bridgeAgeMs",
      runtime.voicelab.last_bridge_ms == 0U
          ? 0U
@@ -1556,7 +1544,6 @@ void iterate_kit_havpe_run(void) {
       (unsigned int)sizeof(runtime));
 
   uint64_t next_stats_at = 0;
-  uint64_t next_ping_at = 0;
   uint64_t next_button_poll_at = 0;
 
   for (;;) {
@@ -1694,23 +1681,24 @@ void iterate_kit_havpe_run(void) {
     }
 
     /*
-     * LIVENESS, not optimism: a half-open TCP connection is indistinguishable
-     * from a quiet one from this end. The ping is the only pulled call on
-     * this lane, so its resolution is the single proof the far end is still
-     * processing. Two remedies, in order of violence: replace the transport,
-     * and if even that has not restored a round trip, restart the chip.
+     * A TRANSPORT THAT NEVER COMES BACK.
+     *
+     * THERE USED TO BE A SECOND WATCHDOG HERE, and its evidence is gone. It
+     * restarted the chip when no application-level round trip had completed for
+     * three minutes on a READY transport — the half-open TCP case, where the
+     * socket stays open and nothing moves in either direction. Its only proof
+     * was the pulled `voice-agent/ping` append, deleted as a duplicate of the
+     * WebSocket's own PING/PONG (see voicelab_stream.h).
+     *
+     * DELETED rather than re-keyed: every candidate replacement is inbound
+     * only, and delivery batches and served dispatches both stop on a perfectly
+     * healthy IDLE board, so re-keying would have rebooted every idle device
+     * every three minutes. Half-open detection belongs to the socket layer now,
+     * which is where the PING it needs actually lives.
      */
     {
-      static uint64_t last_liveness_ms;
       /** When the transport last stopped being ready; 0 while it is ready. */
       static uint64_t not_ready_since_ms;
-      static uint32_t last_ping_count;
-      static uint64_t next_liveness_restart_at;
-      if (last_liveness_ms == 0U) last_liveness_ms = now;
-      if (runtime.voicelab.ping_count != last_ping_count) {
-        last_ping_count = runtime.voicelab.ping_count;
-        last_liveness_ms = now;
-      }
       /*
        * A TRANSPORT THAT IS NEVER READY MUST NOT DISABLE THE RESTART.
        *
@@ -1727,7 +1715,6 @@ void iterate_kit_havpe_run(void) {
        * the failure this restart exists for.
        */
       if (runtime.transport.state != ITERATE_KIT_ESP_IDF_ITX_READY) {
-        last_liveness_ms = now;
         if (not_ready_since_ms == 0U) not_ready_since_ms = now;
         if (iterate_kit_voice_elapsed_ms(now, not_ready_since_ms) >
             NO_LIVENESS_RESTART_MS) {
@@ -1740,27 +1727,6 @@ void iterate_kit_havpe_run(void) {
       } else {
         not_ready_since_ms = 0U;
       }
-      if (runtime.voicelab.ping_pending &&
-          iterate_kit_voice_elapsed_ms(
-              now, runtime.voicelab.ping_started_ms) > PING_TIMEOUT_MS &&
-          now >= next_liveness_restart_at) {
-        next_liveness_restart_at = now + PING_TIMEOUT_MS;
-        ++runtime.liveness_restarts;
-        ESP_LOGE(
-            tag,
-            "no answer to a ping in %us — replacing the transport",
-            (unsigned int)(PING_TIMEOUT_MS / 1000U));
-        havpe_ui_set_status("reconnecting");
-        iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
-      }
-      if (iterate_kit_voice_elapsed_ms(now, last_liveness_ms) >
-          NO_LIVENESS_RESTART_MS) {
-        ESP_LOGE(
-            tag,
-            "no round trip in %us despite a ready transport — restarting",
-            (unsigned int)(NO_LIVENESS_RESTART_MS / 1000U));
-        iterate_kit_esp_restart_with_note("no round trip on a ready transport");
-      }
     }
 
     /*
@@ -1769,7 +1735,7 @@ void iterate_kit_havpe_run(void) {
      * `fail()` latches, and the only thing that re-mounts is a CONNECTION
      * generation change — so a mount that failed while the transport stayed
      * perfectly ready sat failed forever. Measured on the HA Voice PE:
-     * voicelab=failed, failure=open-call, transport=ready, pings frozen at 0,
+     * voicelab=failed, failure=open-call, transport=ready, nothing delivered,
      * every later call request ignored, until the 180-second liveness watchdog
      * restarted the whole chip. Three minutes of a device that answers nothing
      * and then reboots, from one transient refusal.
@@ -1937,34 +1903,21 @@ void iterate_kit_havpe_run(void) {
       }
 
       /*
-       * The bridge holds the call in a Durable Object this device cannot
-       * see, and it can stop without appending the conversation-ended that would say
-       * so. The call is believed only while its bridge keeps proving it is
-       * there; losing the proof drops the BELIEF, never the INTENT.
+       * THE BRIDGE-SILENCE WATCHDOG WAS HERE, AND ITS EVIDENCE IS GONE. Its
+       * proof that a detached call still existed was the pong answering this
+       * device's own ping — the one bridge-sourced event that arrives while
+       * nobody is speaking. With the ping deleted, twenty seconds of a person
+       * thinking is indistinguishable from a dead bridge, so the watchdog would
+       * have dropped a live call on every thoughtful pause. `bridgeAgeMs` still
+       * reports the age; the downlink deadline below is what still acts, and it
+       * fires only when traffic is expected.
        */
-      if (runtime.voicelab.call_active &&
-          runtime.voicelab.last_bridge_ms != 0U &&
-          iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_bridge_ms) >
-              BRIDGE_SILENCE_MS) {
-        ++runtime.bridge_losses;
-        ESP_LOGE(
-            tag,
-            "no word from the bridge in %us — that call is gone",
-            (unsigned int)(BRIDGE_SILENCE_MS / 1000U));
-        iterate_kit_voicelab_forget_call(&runtime.voicelab);
-        runtime.talking = false;
-        havpe_ui_set_state(HAVPE_UI_CONNECTING);
-        havpe_ui_set_status(
-            wants_call ? "call dropped — reconnecting" : "call dropped");
-        /* Reconnect now, not on the old backoff. */
-        iterate_kit_launch_retry_now(&launch);
-      }
 
       /*
-       * THE DOWNLINK NEEDS ITS OWN PROOF: a device can ping happily while
-       * the delivery lane is dead. Silence is only evidence when traffic is
-       * expected — a live bridge pongs every ping, so ten seconds without a
-       * single batch means the lane is dead, not quiet.
+       * THE DOWNLINK NEEDS ITS OWN PROOF: the uplink can be resolving happily
+       * while the delivery lane is dead. Silence is only evidence when traffic
+       * is expected — an accepted call answers, so ten seconds without a single
+       * batch means the lane is dead, not quiet.
        */
       if (wants_call &&
           runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
@@ -2173,14 +2126,8 @@ void iterate_kit_havpe_run(void) {
           (void)iterate_kit_voicelab_recycle_connection(&runtime.voicelab);
         }
       }
-      if (next_ping_at == 0U) {
-        next_ping_at = now + 1000U;
-        next_stats_at = now + STATS_INTERVAL_MS;
-      }
-      if (now >= next_ping_at && outbox_free >= 3U) {
-        (void)iterate_kit_voicelab_ping(&runtime.voicelab);
-        next_ping_at = now + PING_INTERVAL_MS;
-      }
+      /* Seed the telemetry clock the first time the gate opens. */
+      if (next_stats_at == 0U) next_stats_at = now + STATS_INTERVAL_MS;
       /*
        * A one-second pulse while a turn or answer is live: when the device
        * freezes mid-turn nothing else can be read out of it, so this is the

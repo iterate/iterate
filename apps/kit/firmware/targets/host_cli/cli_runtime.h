@@ -137,15 +137,11 @@ struct cli_runtime {
   uint64_t next_mic_at_ms;
   uint64_t next_playback_at_ms;
   uint64_t next_stats_at_ms;
-  uint64_t next_ping_at_ms;
   uint64_t next_call_attempt_at_ms;
   uint64_t call_pending_since_ms;
   uint64_t unhealthy_since_ms;
-  uint64_t last_liveness_ms;
-  uint64_t next_liveness_restart_at_ms;
   uint64_t last_pulse_ms;
   uint64_t started_ms;
-  uint32_t last_ping_count;
   uint32_t downlink_recycles_running;
   uint32_t stats_sequence;
   uint32_t loop_count;

@@ -175,7 +175,7 @@ struct iterate_kit_voicelab_options {
    * requests manual turns gets a provider that never listens.
    */
   const char *turns;
-  /** Monotonic clock in milliseconds; drives ping RTT measurement. */
+  /** Monotonic clock in milliseconds; stamps every frame and every deadline. */
   uint64_t (*now_ms)(void *clock_context);
   void *clock_context;
   /**
@@ -196,9 +196,16 @@ struct iterate_kit_voicelab_options {
  * The device end of the voicelab stream protocol over ONE Cap'n Web session:
  * authenticate(project-secret) -> projects.get -> streams.get(path), then
  * high-frequency one-way `append` calls carrying ephemeral
- * `events.iterate.com/voice-agent/mic-frame` events (base64 PCM16), with a
- * low-rate pulled `events.iterate.com/voice-agent/ping` append as the
- * RTT/health probe (one-way appends never report peer-side errors by design).
+ * `events.iterate.com/voice-agent/mic-frame` events (base64 PCM16).
+ *
+ * There WAS a low-rate pulled `voice-agent/ping` append here as an RTT and
+ * health probe, answered by a `voice-agent/pong` the bridge appended back. It
+ * is gone. A WebSocket already carries its own PING/PONG and the transport
+ * already answers it (see websocket_tx.h), and the platform exposes a real
+ * connection-layer probe that returns t0/t1/t2 — so this was a third liveness
+ * mechanism, one level above the two that measure the thing honestly, and it
+ * cost two event types on a lane we are reducing to almost nothing. Every
+ * device woke a processor twelve times a minute to be told it was awake.
  *
  * Single-owner, callback-driven, no internal retry — the enclosing
  * connection owns reconnect policy, mirroring iterate_kit_itx_mount.
@@ -228,39 +235,35 @@ struct iterate_kit_voicelab {
   bool call_active;
   uint32_t call_starts;
   uint32_t call_failures;
-  bool ping_pending;
-  uint64_t ping_started_ms;
-  uint32_t ping_count;
-  uint32_t ping_failures;
-  uint32_t last_rtt_ms;
   /*
    * When the BRIDGE was last heard from, by its own events — not by ours
    * being accepted. A detached call lives in a Durable Object this device
    * cannot see: it can be evicted, redeployed, or simply stop, and none of
-   * those append the conversation-ended this device waits for. Left to trust its own
-   * flags the device then sits on a call that no longer exists, showing
-   * "listening" and "speaking" to a listener no one is on the other end of —
-   * observed after an overnight run, and the reason this field exists.
+   * those append the conversation-ended this device waits for.
    *
-   * So call_active is EVIDENCE WITH A DEADLINE: the pong that answers our
-   * ping proves the whole loop (device -> platform -> bridge -> platform ->
-   * device), and any other bridge-sourced event proves it just as well.
+   * TELEMETRY NOW, NOT A DEADLINE. It used to arm a 20-second watchdog that
+   * dropped the call, and that was only sound while the pong existed: the pong
+   * was the one bridge-sourced event that arrived during a SILENT call, and
+   * silence is exactly when a dead bridge is indistinguishable from a patient
+   * one. With the pong deleted the watchdog would have fired on any twenty
+   * seconds of nobody speaking, so it went with it. What remains is the age
+   * itself, reported as `bridgeAgeMs`, which is the evidence a person needs
+   * without being a rule the device acts on alone.
    */
   uint64_t last_bridge_ms;
   /*
    * When a BATCH last arrived on this connection — any batch, empty or not,
    * stamped before anything in it is looked at.
    *
-   * The uplink proves itself: a ping is an append whose resolution comes
-   * back, so a dead send path is noticed in seconds. The downlink had NO
-   * such proof, and it is a separate lane: the platform holds the callback
-   * capability in the stream's Durable Object, and that registration can be
-   * lost — eviction, redeploy, a connection closed at the far end — without
+   * This is now the device's ONLY application-level proof that anything is
+   * reaching it, and it is a separate lane from the socket: the platform holds
+   * the callback capability in the stream's Durable Object, and that
+   * registration can be lost — eviction, redeploy, a connection closed at the far end — without
    * the socket closing, without an error, and without this device being told
    * anything at all.
    *
    * Measured: 68 seconds in which the bridge appended eight conversation-accepted
-   * events and eleven pongs, every one of them visible to another
+   * events and eleven more besides, every one of them visible to another
    * subscriber, while this device's batch counter sat frozen at 77 and it
    * cheerfully started a ninth call. That is the "stuck on starting call"
    * and the answer that stops after half a sentence: not a stall, a lane
@@ -377,15 +380,6 @@ enum iterate_kit_voicelab_turn {
 enum capnweb_status iterate_kit_voicelab_mark_turn(
     struct iterate_kit_voicelab *voicelab,
     enum iterate_kit_voicelab_turn turn);
-
-/**
- * Pulled append of a tiny durable events.iterate.com/voice-agent/ping event.
- * The resolution echo is small (no PCM), so it is safe inside the bounded
- * inbox and token
- * budget; completion updates last_rtt_ms. One probe in flight at a time.
- */
-enum capnweb_status iterate_kit_voicelab_ping(
-    struct iterate_kit_voicelab *voicelab);
 
 /**
  * True when the live connection has taken enough delivery batches that the
