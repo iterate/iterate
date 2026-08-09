@@ -5349,6 +5349,11 @@ class GrokCall {
     return frames;
   }
 
+  /** A new turn's gaps are its own; the silence since the last one is not one. */
+  resetFrameClock(): void {
+    this.#lastFrameAtMs = null;
+  }
+
   /** Say this to the provider, or hold it until the session is configured. */
   send(message: Record<string, unknown>): void {
     if (this.#closed) return;
@@ -5376,18 +5381,88 @@ class GrokCall {
    * Hand one decoded PCM16 frame to the provider. Never awaits: this is called
    * straight off the delivery lane, and the only work is a base64 encode.
    */
-  offer(pcm: ArrayBuffer): void {
+  offer(pcm: ArrayBuffer, now: number): void {
     if (this.#pending !== null) this.#framesQueued++;
+    if (this.framesThisTurn === 0) this.firstFrameAtMs = now;
+    if (this.#lastFrameAtMs !== null) {
+      this.maxFrameGapMs = Math.max(this.maxFrameGapMs, now - this.#lastFrameAtMs);
+    }
+    this.#lastFrameAtMs = now;
+    this.framesThisTurn++;
     this.send({
       type: "input_audio_buffer.append",
       audio: bytesToBase64(new Uint8Array(pcm)),
     });
   }
 
+  /*
+   * WHERE THE TURN'S TIME WENT, on the only clock that can see all of it.
+   *
+   * Press-to-answer is measured at the client, and from there the middle of it
+   * is one opaque number: an answer that took 1.1s says nothing about whether
+   * the delay was reaching us, us reaching the provider, or the model
+   * thinking. These four stamps split it, and cost one tiny ephemeral event
+   * per turn — as against reading the same thing off the verbatim `grok-event`
+   * lane, which would ship every audio delta to the observer and inflate the
+   * very measurement it was opened to take.
+   */
+  endSeenAtMs: number | null = null;
+  commitSentAtMs: number | null = null;
+  committedAckAtMs: number | null = null;
+  /** Cleared per answer, so exactly one timing event is emitted per turn. */
+  timingReported = false;
+  /*
+   * DID THE FACET KEEP UP WITH THE MICROPHONE?
+   *
+   * The delivery lane hands ephemeral events to a facet in bounded batches. If
+   * a turn's frames arrive faster than the lane drains them, the backlog is
+   * paid AFTER the button comes up — the release waits behind audio the person
+   * has already finished speaking. These two turn the question into
+   * arithmetic: the facet's own span from first frame to release, against the
+   * span the client actually spoke.
+   */
+  firstFrameAtMs: number | null = null;
+  framesThisTurn = 0;
+  /**
+   * The longest silence between two consecutive frames of one turn.
+   *
+   * A lane that is merely slow drifts; a lane that STALLS shows one large gap
+   * and nothing else. Measured on this stream: seven turns in eight arrived
+   * ahead of real time, and the eighth arrived 1.9 seconds late — which is a
+   * stall to find, not a throughput to tune.
+   */
+  maxFrameGapMs = 0;
+  #lastFrameAtMs: number | null = null;
+
+  /**
+   * NO AUDIO AFTER THE RELEASE, until the next press.
+   *
+   * A frame that lands after the commit is audio the provider's own VAD reads
+   * as the user starting to talk again — and a barge-in one millisecond after
+   * `response.created` cancels the answer before a single delta is generated.
+   * Measured on this stream: four turns in six, `response.created` immediately
+   * followed by `input_audio_buffer.speech_started` and then nothing at all,
+   * forever. The client races its own frames (a fire-and-forget append can
+   * overtake the release that follows it), and a device on a lossy link will
+   * reorder too, so the rule belongs here rather than in any one client.
+   *
+   * Open-mic calls are exempt: they have no release, their turns are the
+   * provider's own to segment, and gating them would deafen the board.
+   */
+  turnClosed = false;
+
   /** The turn is complete: commit what was captured and ask for an answer. */
-  commit(): void {
+  commit(now: number): void {
+    this.turnClosed = true;
+    this.endSeenAtMs = now;
+    this.committedAckAtMs = null;
+    this.timingReported = false;
     this.send({ type: "input_audio_buffer.commit" });
     this.send({ type: "response.create" });
+    /* AFTER the sends, deliberately: what this stamps is the moment the
+     * messages were handed to the socket, which is where the facet's own
+     * contribution to the turn ends. */
+    this.commitSentAtMs = this.#pending === null ? now : null;
   }
 
   /**
@@ -5405,6 +5480,9 @@ class GrokCall {
     const held = this.#pending ?? [];
     this.#pending = null;
     for (const message of held) this.sendNow(message);
+    /* A turn that ended during the handshake had its commit held with
+     * everything else; this flush is when it actually left. */
+    if (this.endSeenAtMs !== null && this.commitSentAtMs === null) this.commitSentAtMs = now;
   }
 
   close(): void {
@@ -5576,6 +5654,23 @@ export const VoiceAgentFacetContract = defineProcessorContract({
       ...EPH,
       payloadSchema: z.looseObject({ conversationId: z.string(), t: z.number() }),
     },
+    "events.iterate.com/voice-agent/turn-timing": {
+      description:
+        "Where this turn's time went, on the facet's clock: end seen, commit, ack, delta.",
+      ...EPH,
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+        endSeenT: z.number(),
+        commitSentT: z.number().nullable(),
+        committedAckT: z.number().nullable(),
+        firstDeltaT: z.number(),
+        /** First frame of the turn as the FACET saw it, and how many arrived. */
+        firstFrameT: z.number().nullable(),
+        micFrames: z.number(),
+        /** Longest silence between two frames: a stall, as against a drift. */
+        maxFrameGapMs: z.number(),
+      }),
+    },
     "events.iterate.com/voice-agent/say": {
       description: "A turn made of text rather than speech.",
       ...EPH,
@@ -5643,6 +5738,7 @@ export const VoiceAgentFacetContract = defineProcessorContract({
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/spk-frame",
     "events.iterate.com/voice-agent/grok-event",
+    "events.iterate.com/voice-agent/turn-timing",
     "events.iterate.com/voice-agent/pong",
     "events.iterate.com/voice-agent/warmup-ready",
     "events.iterate.com/voice-agent/warmup-unresolved",
@@ -5794,6 +5890,14 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         /* Whatever the provider still holds is from a turn that never
          * committed; prepending it would answer a blend of two utterances. */
         call.send({ type: "input_audio_buffer.clear" });
+        /* A fresh utterance starts here, so the frame count that measures
+         * whether this facet keeps up with the microphone starts here too —
+         * and audio is welcome again. */
+        call.turnClosed = false;
+        call.framesThisTurn = 0;
+        call.firstFrameAtMs = null;
+        call.maxFrameGapMs = 0;
+        call.resetFrameClock();
         /*
          * SAY YES AGAIN. The device latches call_active from
          * `conversation-accepted` on its live connection, and the original
@@ -5819,13 +5923,16 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
          * send, no await. Held instead if the session is not up — see
          * GrokCall.offer. */
         if (call === null) return;
+        /* Straggling audio from a turn that has already been committed would
+         * read to the provider as a barge-in and cancel the answer. */
+        if (call.turnClosed && !call.serverVad) return;
         const bytes = base64ToBytes(event.payload.pcm);
-        call.offer(event.payload.enc === "u" ? mulawToPcm16(bytes) : bytes);
+        call.offer(event.payload.enc === "u" ? mulawToPcm16(bytes) : bytes, this.deps.now());
         return;
       }
       case "events.iterate.com/voice-agent/ptt-end": {
         if (call === null) return;
-        call.commit();
+        call.commit(this.deps.now());
         return;
       }
       case "events.iterate.com/voice-agent/say": {
@@ -6073,6 +6180,12 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
           });
           return;
         }
+        case "input_audio_buffer.committed":
+          /* The provider has the turn. Everything before this stamp is ours
+           * and the wire; everything after it until the first delta is the
+           * model. */
+          call.committedAckAtMs = this.deps.now();
+          return;
         case "response.created":
           /* Numbering the answer makes a barge-in a comparison: a client
            * holding frames from answer 3 drops them on seeing a 4. */
@@ -6080,6 +6193,7 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
           return;
         case "response.output_audio.delta":
           if (typeof provider.delta === "string") {
+            this.#reportTurnTiming(call, append);
             this.#speak(call, provider.delta, append, runInBackground);
           }
           return;
@@ -6105,6 +6219,36 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     void append({
       type: "events.iterate.com/voice-agent/grok-event",
       payload: { conversationId: call.conversationId, t: this.deps.now(), event: provider },
+    });
+  }
+
+  /**
+   * The turn's four facet-side stamps, once, as the answer's first byte lands.
+   *
+   * Read against a client's own release time (aligned with a `ping`/`pong`
+   * round trip) this turns press-to-answer into four terms that can each be
+   * attacked separately: reaching the facet, the facet's own work, the facet's
+   * round trip to the provider, and the model thinking.
+   */
+  #reportTurnTiming(
+    call: GrokCall,
+    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
+  ): void {
+    if (call.timingReported || call.endSeenAtMs === null) return;
+    call.timingReported = true;
+    void append({
+      type: "events.iterate.com/voice-agent/turn-timing",
+      ephemeral: true,
+      payload: {
+        conversationId: call.conversationId,
+        endSeenT: call.endSeenAtMs,
+        commitSentT: call.commitSentAtMs,
+        committedAckT: call.committedAckAtMs,
+        firstDeltaT: this.deps.now(),
+        firstFrameT: call.firstFrameAtMs,
+        micFrames: call.framesThisTurn,
+        maxFrameGapMs: call.maxFrameGapMs,
+      },
     });
   }
 

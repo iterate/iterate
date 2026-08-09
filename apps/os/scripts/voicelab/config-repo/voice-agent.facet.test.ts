@@ -231,6 +231,56 @@ describe("audio spoken into the handshake", () => {
   });
 });
 
+describe("the release", () => {
+  /*
+   * A FRAME THAT ARRIVES AFTER THE RELEASE MUST NOT REACH THE PROVIDER.
+   *
+   * Its VAD reads late audio as the user starting to speak again, and a
+   * barge-in a millisecond after `response.created` cancels the answer before
+   * one delta exists. Measured against xAI: four turns in six died exactly
+   * that way, `response.created` then `speech_started` then silence forever.
+   * Clients race their own appends and lossy links reorder, so the rule lives
+   * here and not in any one client.
+   */
+  it("ignores audio that arrives after the turn was committed", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+
+    await harness.append(micFrame(0));
+    await harness.append({ type: PTT_END, payload: {} });
+    await harness.append(micFrame(1)); // the straggler
+    await harness.settle();
+
+    const appended = provider.sent.filter((m) => m.type === "input_audio_buffer.append");
+    expect(appended).toHaveLength(1);
+    /* And the next press opens the gate again, or the call goes deaf. */
+    await harness.append({ type: PTT_START, payload: {} });
+    await harness.append(micFrame(2));
+    await harness.settle();
+    expect(provider.sent.filter((m) => m.type === "input_audio_buffer.append")).toHaveLength(2);
+  });
+
+  /* An open-mic board never releases, so the gate must never close on it. */
+  it("keeps taking audio on an open-mic call, which has no release", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: { client: "/clients/stackchan" } });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+
+    await harness.append({ type: PTT_END, payload: {} });
+    await harness.append(micFrame(0));
+    await harness.settle();
+
+    expect(provider.sent.filter((m) => m.type === "input_audio_buffer.append")).toHaveLength(1);
+  });
+});
+
 describe("the answer", () => {
   it("arrives as whole 20 ms frames in one batch per delta", async () => {
     const provider = fakeGrok();
