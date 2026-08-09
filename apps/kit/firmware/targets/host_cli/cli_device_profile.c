@@ -65,8 +65,16 @@ enum {
   CLI_DEVICE_PROFILE_S3_LEAD_FRAMES = 4,
   /* ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES: 30 s of PSRAM, not a cushion. */
   CLI_DEVICE_PROFILE_S3_RING_BYTES = 960000,
-  /* ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES: 300 ms acoustic + 90 ms I2S. */
-  CLI_DEVICE_PROFILE_S3_PREFILL_BYTES = 12480,
+  /*
+   * The firmware's prefill, not a transcription of it.
+   *
+   * This was the literal 12480, with a comment naming the constant it
+   * copied — and a test asserting the two agree, which is the tell that a
+   * copy was never wanted. Cutting the firmware's prefill from 390 ms to
+   * 150 ms broke that test rather than the rig, which is the good outcome,
+   * but the second copy should not have existed to break.
+   */
+  CLI_DEVICE_PROFILE_S3_PREFILL_BYTES = ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES,
   /* One frame every ITERATE_KIT_VOICE_FRAME_MS, both directions. */
   CLI_DEVICE_PROFILE_S3_CAPTURE_FPS = 50,
 };

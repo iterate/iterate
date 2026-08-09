@@ -101,19 +101,27 @@ enum {
    */
   ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES = 960000,
   /*
-   * 300 ms of true cushion, plus one hardware ring.
+   * 60 ms of cushion, plus one hardware ring. DOWN FROM 300.
    *
-   * Raised to 1000 ms on the theory that a bigger cushion would stop the
+   * Raised to 1000 ms once on the theory that a bigger cushion would stop the
    * holes. It did not: measured on the CLI, concealment went 1.06% -> 1.24%,
    * slightly WORSE, because the holes were never starvation. The real causes
    * were a ring too small to hold an answer and a debt mechanism deleting
-   * frames, both since fixed.
+   * frames, both since fixed. 300 was the retreat from that, and it was still
+   * sized for a danger that no longer exists.
    *
-   * So this goes back down, because prefill is pure added latency before the
-   * first word and buys nothing once the sender ships whole answers. The
-   * device holds a 30 s ring; it does not need to wait a second to start.
+   * THIS IS PAID ON EVERY ANSWER, not once per call: the first frame of an
+   * answer always REPLACEs, which reprimes the clock. At 300 ms it was 390 ms
+   * of silence before every first word — four times the entire measured cost
+   * of the server round trip it sits behind (48 ms up, 46 ms down).
+   *
+   * And it buys nothing the sender is not already buying. The facet's pacer
+   * releases an opening burst of 150 frames — three seconds of audio — the
+   * instant an answer begins, so the frames behind the first one are already
+   * in flight when it lands. Two cushions for one hazard, and only this one
+   * costs the listener.
    */
-  ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 300 * 32 + 2880,
+  ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 60 * 32 + 2880,
   ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS = 400,
   /*
    * Backlog beyond which a frame is skipped to catch up — effectively never,

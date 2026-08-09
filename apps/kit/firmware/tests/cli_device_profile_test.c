@@ -38,12 +38,18 @@ enum {
   DEVICE_MS_PER_SECOND = 1000,
   DEVICE_BYTES_PER_SAMPLE = 2,
   /*
-   * voice_device_profile.h states its prefill as "300 ms acoustic lead plus
-   * the 90 ms I2S DMA lead" and compiles only the SUM, so the two halves are
+   * voice_device_profile.h states its prefill as an acoustic lead plus the
+   * 90 ms I2S DMA lead, and compiles only the SUM, so the two halves are
    * spelled here and the sum is checked against the constant below. The I2S
    * half is what the board's output peripheral holds ahead of the speaker.
+   *
+   * The acoustic half went 300 -> 60 when the prefill was cut: it is paid on
+   * every answer, not once per call, and 390 ms of silence before every first
+   * word was four times the whole measured cost of the round trip it sits
+   * behind. Measured on the host CLI across eleven turns: first audio 1550 ms
+   * -> 1212 ms, with concealment and underruns both still zero.
    */
-  DEVICE_ACOUSTIC_LEAD_MS = 300,
+  DEVICE_ACOUSTIC_LEAD_MS = 60,
   DEVICE_I2S_LEAD_MS = 90,
 };
 
