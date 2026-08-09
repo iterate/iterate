@@ -23,5 +23,6 @@ export { stress } from "./stress.ts";
 export { talk } from "./talk.ts";
 export { pttBaseline } from "./ptt-baseline.ts";
 export { pttLatency } from "./ptt-latency.ts";
+export { pttMarginal } from "./ptt-marginal.ts";
 export { timeline } from "./timeline.ts";
 export { wire } from "./wire.ts";

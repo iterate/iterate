@@ -82,6 +82,14 @@ const XAI_SECRET = "/secrets/xai";
 const GROK_REALTIME_URL = "https://api.x.ai/v1/realtime";
 const GROK_MODEL = "grok-voice-think-fast-2.0";
 const GROK_VOICE = "eve";
+/** One speaker frame is 20 ms — the unit every pacing sum below counts in. */
+const GROK_FRAME_MS = 20;
+/** The opening burst: enough buffered downstream to survive jitter, no more. */
+const PACE_BURST_FRAMES = 150;
+/** How often the facet's drain loop wakes to release the next paced batch. */
+const PACE_FLUSH_MS = 400;
+/** Ceiling per drain batch, so one append never dwarfs a delivery budget. */
+const PACE_MAX_BATCH = 50;
 /**
  * A call with no mic frames and no Grok traffic for this long is over.
  * Pings deliberately do NOT count: a device pinging into an empty room is
@@ -5249,10 +5257,67 @@ class GrokCall {
   }
 
   /** A new answer begins: number it, and restart its frame count at zero. */
-  beginAnswer(): void {
+  beginAnswer(now: number): void {
     this.#answerSeq++;
     this.#answerFrames = 0;
     this.#spkRemainder = new Uint8Array(0);
+    /* Whatever of the PREVIOUS answer was still queued for pacing is dead the
+     * moment a new one begins — the client drops those frames on sight of the
+     * new number anyway, and pacing them out first would delay the answer the
+     * person actually interrupted for. */
+    this.#paced.length = 0;
+    this.#pacedSent = 0;
+    this.#answerStartedAtMs = now;
+  }
+
+  /*
+   * THE SPEAK LANE IS PACED, because the provider is not.
+   *
+   * Grok pushes a whole answer as fast as the wire takes it: a count to one
+   * hundred is ~90 seconds of audio arriving in a handful of seconds. Nothing
+   * downstream can hold that — the host CLI's ring pegged at its 30-second
+   * cap with 265 sequence gaps, a board's speaker queue is smaller still, and
+   * what the listener hears is the tail chopped and sped up as the playout
+   * clock claws its way back. Both were measured tonight, on the CLI and on
+   * the HA Voice PE, with the same prompt.
+   *
+   * So frames leave this call at roughly the rate they play: an opening burst
+   * covers latency and jitter, and the rest drains on the clock. The budget is
+   * arithmetic on the answer's own timeline — no timers live here; the facet
+   * owns the one drain loop.
+   */
+  #paced: ReturnType<GrokCall["framesFor"]> = [];
+  #pacedSent = 0;
+  #answerStartedAtMs: number | null = null;
+  /** Set while the facet's drain loop is alive for this call. */
+  pacerRunning = false;
+
+  /** How many more frames may leave right now without outrunning playback. */
+  #paceAllowance(now: number): number {
+    const started = this.#answerStartedAtMs ?? now;
+    const realtime = Math.floor((now - started) / GROK_FRAME_MS);
+    return PACE_BURST_FRAMES + realtime - this.#pacedSent;
+  }
+
+  /** Admit frames to the lane: returns what may go NOW, queues the rest. */
+  pace(frames: ReturnType<GrokCall["framesFor"]>, now: number): typeof frames {
+    if (this.#answerStartedAtMs === null) this.#answerStartedAtMs = now;
+    const take = Math.max(0, Math.min(frames.length, this.#paceAllowance(now)));
+    if (take < frames.length) this.#paced.push(...frames.slice(take));
+    this.#pacedSent += take;
+    return frames.slice(0, take);
+  }
+
+  /** The drain side: the next batch the clock permits. */
+  dequeuePaced(now: number, maxFrames: number): ReturnType<GrokCall["framesFor"]> {
+    const take = Math.max(0, Math.min(this.#paced.length, maxFrames, this.#paceAllowance(now)));
+    const batch = this.#paced.splice(0, take);
+    this.#pacedSent += batch.length;
+    return batch;
+  }
+
+  get pacedEmpty(): boolean {
+    return this.#paced.length === 0;
   }
 
   /**
@@ -5346,6 +5411,7 @@ class GrokCall {
     if (this.#closed) return;
     this.#closed = true;
     this.#pending = null;
+    this.#paced.length = 0;
     try {
       this.#socket?.close();
     } catch {
@@ -5591,9 +5657,18 @@ export type VoiceAgentFacetContract = typeof VoiceAgentFacetContract;
  * costs one decode and one `send`, which is the floor — anything more would
  * put the model's round trip inside the audio path.
  */
+/** One paced speaker frame, shaped for the append lane. */
+function asSpkFrame(payload: ReturnType<GrokCall["framesFor"]>[number]) {
+  return {
+    type: "events.iterate.com/voice-agent/spk-frame" as const,
+    ephemeral: true as const,
+    payload,
+  };
+}
+
 export class VoiceAgentFacetProcessor extends StreamProcessor<
   VoiceAgentFacetContract,
-  { now(): number; dialGrok(): Promise<WebSocket | null> }
+  { now(): number; sleep(ms: number): Promise<void>; dialGrok(): Promise<WebSocket | null> }
 > {
   readonly contract = VoiceAgentFacetContract;
   /** The live call, or null. Empty after an eviction — deliberately. */
@@ -5891,7 +5966,7 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
           return;
         } else {
           call.attach(socket);
-          this.#listen(call, socket, append);
+          this.#listen(call, socket, append, runInBackground);
           return;
         }
       } catch (error) {
@@ -5914,6 +5989,7 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     call: GrokCall,
     socket: WebSocket,
     append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgentFacetContract>["runInBackground"],
   ): void {
     socket.addEventListener("close", () => {
       /*
@@ -5955,6 +6031,8 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
       } catch {
         return;
       }
+      /* The verbatim lane first, unconditionally — deltas included. */
+      this.#forwardGrokEvent(call, provider as Record<string, unknown>, append);
       switch (provider.type) {
         case "session.created":
           /* The ONLY edge that makes us configure the session; miss it and the
@@ -5998,34 +6076,35 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         case "response.created":
           /* Numbering the answer makes a barge-in a comparison: a client
            * holding frames from answer 3 drops them on seeing a 4. */
-          call.beginAnswer();
+          call.beginAnswer(this.deps.now());
           return;
         case "response.output_audio.delta":
-          if (typeof provider.delta === "string") this.#speak(call, provider.delta, append);
-          return;
-        default: {
-          /*
-           * The VAD/transcript subset rides down as `grok-event`, the shape the
-           * firmware already parses: `speech_started` is the barge-in signal
-           * every board's flush path waits for, and the transcripts are what
-           * lets an instrument say what the microphone actually delivered.
-           * Everything else stays local to the log.
-           */
-          const type = String(provider.type ?? "");
-          if (
-            type === "input_audio_buffer.speech_started" ||
-            type === "input_audio_buffer.speech_stopped" ||
-            type === "response.done" ||
-            type.includes("transcript")
-          ) {
-            void append({
-              type: "events.iterate.com/voice-agent/grok-event",
-              payload: { conversationId: call.conversationId, t: this.deps.now(), event: provider },
-            });
+          if (typeof provider.delta === "string") {
+            this.#speak(call, provider.delta, append, runInBackground);
           }
           return;
-        }
+        default:
+          /* Already on the verbatim lane above; nothing else to do. */
+          return;
       }
+    });
+  }
+
+  /**
+   * The provider's timeline, verbatim, as ephemeral `grok-event`s — audio
+   * deltas included. The paced `spk-frame` lane says what the device was
+   * GIVEN; this lane says what the provider SENT and when. They deliberately
+   * need not match: consuming both off one stream is the whole buffer-
+   * management debugging story, no device in hand.
+   */
+  #forwardGrokEvent(
+    call: GrokCall,
+    provider: Record<string, unknown>,
+    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
+  ): void {
+    void append({
+      type: "events.iterate.com/voice-agent/grok-event",
+      payload: { conversationId: call.conversationId, t: this.deps.now(), event: provider },
     });
   }
 
@@ -6034,27 +6113,36 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     call: GrokCall,
     deltaBase64: string,
     append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgentFacetContract>["runInBackground"],
   ): void {
     const frames = call.framesFor(deltaBase64, this.deps.now());
     if (frames.length === 0) return;
     /*
-     * ONE APPEND FOR THE WHOLE DELTA, not one per frame.
-     *
-     * This was a loop of separate `append` calls — 50 a second, each its own
-     * round trip, racing each other. Measured on the host CLI: 203 gaps in 319
-     * received speaker frames and 117 starved playback buffers, which is
-     * audible as speech chopped into fragments. `append` is variadic and the
-     * stream commits a batch atomically, so the answer arrives in the order it
-     * was generated and the client's jitter buffer has something contiguous to
-     * play.
+     * ONE APPEND FOR THE WHOLE DELTA, not one per frame — and PACED, not
+     * relayed. The provider generates a 90-second answer in a handful of
+     * seconds; unpaced, that burst pegged the host CLI's 30-second ring with
+     * 265 sequence gaps and made both it and the HA Voice PE play the tail of
+     * a count-to-one-hundred chopped and sped up. The call's pace() admits an
+     * opening burst and holds the rest; the drain loop below releases it at
+     * playback rate, and a barge-in clears the queue via beginAnswer rather
+     * than making the interrupter wait behind audio nobody will hear.
      */
-    void append(
-      ...frames.map((payload) => ({
-        type: "events.iterate.com/voice-agent/spk-frame" as const,
-        ephemeral: true as const,
-        payload,
-      })),
-    );
+    const immediate = call.pace(frames, this.deps.now());
+    if (immediate.length > 0) {
+      void append(...immediate.map(asSpkFrame));
+    }
+    if (!call.pacedEmpty && !call.pacerRunning) {
+      call.pacerRunning = true;
+      runInBackground(async () => {
+        while (!call.closed) {
+          const batch = call.dequeuePaced(this.deps.now(), PACE_MAX_BATCH);
+          if (batch.length > 0) await append(...batch.map(asSpkFrame));
+          if (call.pacedEmpty) break; /* flag cleared below, atomically. */
+          await this.deps.sleep(PACE_FLUSH_MS);
+        }
+        call.pacerRunning = false;
+      });
+    }
   }
 
   #endCall(reason: string): void {
@@ -6077,6 +6165,7 @@ export class VoiceAgentFacet extends StreamProcessorFacet {
     return new VoiceAgentFacetProcessor({
       ...deps,
       now: () => Date.now(),
+      sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
       dialGrok: () => dialGrokSocket(),
     });
   }
