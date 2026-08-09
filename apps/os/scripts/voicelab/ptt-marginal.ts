@@ -1,13 +1,23 @@
-// MARGINAL overhead: with the provider ALREADY connected, how much longer
-// does an answer take because our stream is in the middle?
+// MARGINAL overhead: how much longer does an answer take because our stream
+// is in the middle?
 //
 // `ptt-latency` and `ptt-baseline` each answer half of this, in separate runs,
 // minutes apart, against a provider whose own think time wanders by hundreds
 // of milliseconds between rounds. Subtracting two such numbers measures the
 // provider's mood as much as our plumbing. This runs BOTH halves in one
 // process, alternating turn by turn, speaking the identical audio at identical
-// pacing into a socket that is warm in both cases — so the difference between
-// the two medians is ours and not the weather.
+// pacing — so the difference between the two medians is ours and not the
+// weather.
+//
+// THE TWO HALVES NO LONGER HOLD THE SAME KIND OF SOCKET, and that is the
+// measurement rather than a flaw in it. The direct half keeps one provider
+// session up for the whole run. The facet HANGS UP as soon as an answer is
+// handed over, because a held socket keeps the stream's Durable Object awake
+// for xAI's whole 900-second idle timeout — so the stream half dials afresh on
+// every press. The claim under test is that this costs a caller nothing:
+// dialling starts the instant the button goes down, so the handshake runs
+// underneath the person speaking instead of in front of the answer. A negative
+// result looks like the marginal number growing by about a handshake.
 //
 //   doppler run --config preview_3 -- pnpm cli voicelab ptt-marginal \
 //     --project facet-proof-8 --stream-path /agents/voice/ptt-1 \
@@ -94,8 +104,22 @@ function median(values: number[]): number | null {
 interface Turn {
   /** Release -> first answer audio at this process. What a person feels. */
   totalMs: number | null;
-  /** Whether the provider session was already up when the press happened. */
-  warm: boolean;
+  /**
+   * Whether this round measured a healthy turn, and so counts in the medians.
+   *
+   * This used to be `warm`: true unless any call-lifecycle event arrived while
+   * the turn was in flight. That was the right rule while a call was dialled
+   * once and held — a `call-started` mid-run meant something had gone wrong
+   * and been re-dialled. It is the wrong rule now that the facet hangs up
+   * after every push-to-talk answer: a `call-started` and a
+   * `conversation-ended` per round are the design, so the old rule discarded
+   * EVERY round, emptied every median, and made a run of eight perfect turns
+   * report no measurement and exit non-zero.
+   *
+   * A round is dirty when the stream says something went wrong —
+   * `conversation-failed` or `provider-error` — and not before.
+   */
+  clean: boolean;
 }
 
 /** A stream turn, with the facet's own clock folded in. */
@@ -192,6 +216,51 @@ async function dialProvider(baseUrl: string, model: string, apiKey: string) {
   };
 }
 
+/** One speaker frame, as much of it as a latency probe needs. */
+export interface HeardFrame {
+  /** When it reached this process. */
+  at: number;
+  /** The facet's own stamp on it. */
+  facetT: number;
+  /** The call it belongs to. Answer numbers only mean anything inside one. */
+  conversationId: string;
+  /** Which answer of that call. Restarts at 1 for every call. */
+  answer: number;
+}
+
+/** An answer's identity on the wire: a call, and a number within it. */
+export const answerKey = (frame: Pick<HeardFrame, "conversationId" | "answer">) =>
+  `${frame.conversationId}:${frame.answer}`;
+
+/**
+ * The first frame that can only belong to the answer this press asked for.
+ *
+ * THE ANSWER NUMBER IS NOT A RUN-WIDE CLOCK, and reading it as one is what
+ * made the first attempt at the facet's hang-up look like a dead server. The
+ * rule was "a frame numbered above the highest answer seen so far", which is
+ * sound inside one call and meaningless across two: `answer` counts responses
+ * on a `GrokCall`, and a call that hangs up takes its counter with it. Once
+ * every press dialled its own call, every answer was numbered 1 — so from
+ * round two onwards the probe sat for its full 30-second deadline waiting for
+ * a 2 that no longer existed, and reported five silent rounds against a facet
+ * that had answered all five.
+ *
+ * Scoping the comparison to the conversation is what makes it true again, and
+ * it is still the honest match for the thing this guards against: the facet
+ * paces a long answer out over its whole playing time, so frames of the
+ * PREVIOUS answer are still arriving when the next button goes down. Those
+ * carry a pair this turn has already seen; the answer it is waiting for cannot.
+ */
+export function firstFrameOfNewAnswer(
+  frames: readonly HeardFrame[],
+  seenBeforeThePress: ReadonlySet<string>,
+  releasedAt: number,
+): HeardFrame | undefined {
+  return frames.find(
+    (frame) => frame.at >= releasedAt && !seenBeforeThePress.has(answerKey(frame)),
+  );
+}
+
 /** The facet's stamps for one turn, all on the facet's own clock. */
 interface TurnMarks {
   endSeenT: number;
@@ -227,23 +296,19 @@ export async function pttMarginal(options: PttMarginalOptions) {
    * delta, so subscribing to it roughly doubles the downlink this probe
    * receives and inflates the number the probe exists to measure.
    */
-  let spkAt: { at: number; facetT: number; answer: number }[] = [];
+  let spkAt: HeardFrame[] = [];
   /*
-   * THE ANSWER NUMBER IS THE ONLY HONEST MATCH.
-   *
-   * The facet paces a long answer out over its whole playing time, so frames
-   * from the PREVIOUS answer are still arriving when the next button goes
-   * down. Taking "the first frame after the release" would have timed those,
-   * reporting a latency of a few milliseconds for an answer that had not been
-   * generated yet. Every frame carries the answer it belongs to; a turn waits
-   * for a number it has not seen before.
+   * Every (call, answer) pair this run has heard, for the whole run rather
+   * than the turn: `spkAt` is cleared per turn, so a straggler from the
+   * previous answer arrives into an empty list and would otherwise look new.
+   * See `firstFrameOfNewAnswer` for why the pair, and not the number alone.
    */
-  let lastAnswerSeen = -1;
+  const answersSeen = new Set<string>();
   let lastSpkAt = 0;
   /** The facet's stamps for the turn in flight; at most one per turn. */
   const timing: TurnMarks[] = [];
   const pongs = new Map<string, { at: number; facetT: number }>();
-  let redialledThisTurn = false;
+  let faultThisTurn = false;
   /* Lifetime counts, so "no answer" can be told apart from "no delivery". */
   const delivered = new Map<string, number>();
   const connection = await stream.openConnection({
@@ -263,18 +328,20 @@ export async function pttMarginal(options: PttMarginalOptions) {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
         delivered.set(event.type, (delivered.get(event.type) ?? 0) + 1);
         if (event.type === "events.iterate.com/voice-agent/spk-frame") {
-          const answer = typeof payload.answer === "number" ? payload.answer : -1;
           lastSpkAt = at;
-          lastAnswerSeen = Math.max(lastAnswerSeen, answer);
-          spkAt.push({
+          const frame: HeardFrame = {
             at,
             facetT: typeof payload.t === "number" ? payload.t : Number.NaN,
-            answer,
-          });
+            conversationId: String(payload.conversationId ?? ""),
+            answer: typeof payload.answer === "number" ? payload.answer : -1,
+          };
+          spkAt.push(frame);
+          answersSeen.add(answerKey(frame));
           continue;
         }
         if (event.type === "events.iterate.com/voice-agent/provider-error") {
           console.log(`  provider error: ${String(payload.message).slice(0, 200)}`);
+          faultThisTurn = true;
           continue;
         }
         if (event.type === "events.iterate.com/voice-agent/turn-timing") {
@@ -296,9 +363,16 @@ export async function pttMarginal(options: PttMarginalOptions) {
           });
           continue;
         }
-        /* A call that had to be re-opened pays a handshake this run is
-         * explicitly not measuring; the round is kept but marked cold. */
-        redialledThisTurn = true;
+        /*
+         * `call-started` and `conversation-ended` land here, and both are the
+         * ORDINARY course now: the facet hangs up when the answer is handed
+         * over and the next press dials again. Only the stream saying the call
+         * went wrong makes a round unusable.
+         */
+        if (event.type === "events.iterate.com/voice-agent/conversation-failed") {
+          console.log(`  conversation failed: ${String(payload.reason).slice(0, 200)}`);
+          faultThisTurn = true;
+        }
       }
     },
   });
@@ -394,8 +468,8 @@ export async function pttMarginal(options: PttMarginalOptions) {
   async function streamTurn(appendRttMs: number | null = null): Promise<StreamTurn> {
     spkAt = [];
     timing.length = 0;
-    redialledThisTurn = false;
-    const answerBefore = lastAnswerSeen;
+    faultThisTurn = false;
+    const answersBefore = new Set(answersSeen);
     const pressedAt = Date.now();
     await discardRpcResult(
       stream.append({
@@ -407,9 +481,9 @@ export async function pttMarginal(options: PttMarginalOptions) {
     const releasedAt = await speakToStream(pressedAt);
 
     const deadline = Date.now() + 30_000;
-    let heard: { at: number; facetT: number; answer: number } | undefined;
+    let heard: HeardFrame | undefined;
     while (Date.now() < deadline) {
-      heard = spkAt.find((frame) => frame.answer > answerBefore && frame.at >= releasedAt);
+      heard = firstFrameOfNewAnswer(spkAt, answersBefore, releasedAt);
       if (heard !== undefined) break;
       await sleep(5);
     }
@@ -432,7 +506,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
       maxFrameGapMs: marks?.maxFrameGapMs ?? null,
     };
     if (heard === undefined) {
-      return { totalMs: null, ourMs: null, appendRttMs, warm: true, ...facetSide };
+      return { totalMs: null, ourMs: null, appendRttMs, clean: !faultThisTurn, ...facetSide };
     }
     const totalMs = heard.at - releasedAt;
     const provider =
@@ -443,7 +517,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
       totalMs,
       ourMs: provider === null ? null : totalMs - provider,
       appendRttMs,
-      warm: !redialledThisTurn,
+      clean: !faultThisTurn,
       ...facetSide,
     };
   }
@@ -476,7 +550,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
       totalMs: audioAt === null ? null : audioAt - releasedAt,
       providerMs: audioAt === null || committedAt === null ? null : audioAt - committedAt,
       providerRttMs: committedAt === null ? null : committedAt - releasedAt,
-      warm: true,
+      clean: true,
     };
   }
 
@@ -488,12 +562,14 @@ export async function pttMarginal(options: PttMarginalOptions) {
     await direct.ready;
 
     /*
-     * A WARM-UP TURN THAT IS NOT MEASURED. The question is explicitly about a
-     * provider that is already connected, and the facet only dials on the
-     * first press — so measuring round one would measure the handshake this
-     * run is trying to exclude.
+     * A WARM-UP TURN THAT IS NOT MEASURED, and it no longer warms the provider
+     * — the facet hangs up after every answer, so round one's socket is as
+     * fresh as round six's. What it warms is everything one-off around them: a
+     * cold Durable Object, a facet class being materialised for the first
+     * time, a subscription's first delivery. Those cost seconds and belong to
+     * no round.
      */
-    console.log("  warming the facet's provider socket (unmeasured)...");
+    console.log("  warming the stream's Durable Object (unmeasured)...");
     const warm = await streamTurn();
     console.log(`  warm-up ${warm.totalMs === null ? "TIMEOUT" : `${warm.totalMs}ms`}\n`);
     await settle();
@@ -517,7 +593,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
           `frames ${String(viaStream.micFramesSeen ?? "-")}]  ` +
           `direct ${show(viaDirect.totalMs)} = xai-rtt ${show(viaDirect.providerRttMs)} + ` +
           `think ${show(viaDirect.providerMs)}` +
-          `${viaStream.warm ? "" : "  [re-dialled]"}`,
+          `${viaStream.clean ? "" : "  [FAULT]"}`,
       );
 
       if (round + 1 < rounds) await settle();
@@ -533,8 +609,8 @@ export async function pttMarginal(options: PttMarginalOptions) {
     direct.socket.close();
   }
 
-  const warmStream = streamTurns.filter((turn) => turn.warm);
-  const streamTotals = warmStream.map((t) => t.totalMs).filter((v): v is number => v !== null);
+  const cleanStream = streamTurns.filter((turn) => turn.clean);
+  const streamTotals = cleanStream.map((t) => t.totalMs).filter((v): v is number => v !== null);
   const directTotals = directTurns.map((t) => t.totalMs).filter((v): v is number => v !== null);
   const streamP50 = median(streamTotals);
   const directP50 = median(directTotals);
@@ -554,34 +630,50 @@ export async function pttMarginal(options: PttMarginalOptions) {
     /** The headline: what the stream costs on top of talking to xAI ourselves. */
     marginalMs: streamP50 === null || directP50 === null ? null : streamP50 - directP50,
     /** Everything that is ours, clocks cancelled. */
-    ourMs: summarize(warmStream.map((t) => t.ourMs).filter((v): v is number => v !== null)),
+    ourMs: summarize(cleanStream.map((t) => t.ourMs).filter((v): v is number => v !== null)),
     /** The facet's own work, end seen to commit sent. */
-    facetMs: summarize(warmStream.map((t) => t.facetMs).filter((v): v is number => v !== null)),
+    facetMs: summarize(cleanStream.map((t) => t.facetMs).filter((v): v is number => v !== null)),
     /** Commit -> ack, from the facet's colo and from this Mac, for comparison. */
     providerRttFromFacetMs: summarize(
-      warmStream.map((t) => t.providerRttMs).filter((v): v is number => v !== null),
+      cleanStream.map((t) => t.providerRttMs).filter((v): v is number => v !== null),
     ),
     providerRttFromHereMs: summarize(
       directTurns.map((t) => t.providerRttMs).filter((v): v is number => v !== null),
     ),
     /** Ack -> first delta, as the facet saw it. */
     providerThinkFromFacetMs: summarize(
-      warmStream.map((t) => t.providerThinkMs).filter((v): v is number => v !== null),
+      cleanStream.map((t) => t.providerThinkMs).filter((v): v is number => v !== null),
     ),
     /** The worst single stall in the delivery lane during an utterance. */
     maxFrameGapMs: summarize(
-      warmStream.map((t) => t.maxFrameGapMs).filter((v): v is number => v !== null),
+      cleanStream.map((t) => t.maxFrameGapMs).filter((v): v is number => v !== null),
     ),
     /** How far the delivery lane fell behind the microphone. */
-    backlogMs: summarize(warmStream.map((t) => t.backlogMs).filter((v): v is number => v !== null)),
+    backlogMs: summarize(
+      cleanStream.map((t) => t.backlogMs).filter((v): v is number => v !== null),
+    ),
     /** Just reaching the Durable Object and back, with no delivery lane in it. */
     appendRttMs: summarize(
-      warmStream.map((t) => t.appendRttMs).filter((v): v is number => v !== null),
+      cleanStream.map((t) => t.appendRttMs).filter((v): v is number => v !== null),
     ),
     /** The model's own time, measured where nothing of ours can colour it. */
     providerThinkMs: summarize(
       directTurns.map((t) => t.providerMs).filter((v): v is number => v !== null),
     ),
+    /**
+     * Did this process hear ANYTHING from the stream?
+     *
+     * A run whose connection never registered looks exactly like a facet that
+     * answered nothing: every round times out and every stream number is null.
+     * They are opposite diagnoses and the report used to give them the same
+     * words. MEASURED, twice, on preview-3 immediately after a run that passed
+     * 6/6: the stream's own log held a `call-started`, a `conversation-accepted`
+     * and a `conversation-ended: answer delivered` for every press, with no
+     * `connection-opened` for this probe anywhere in the window — the facet had
+     * answered all of them and nothing reached here. Warming the stream (a
+     * `talk --setup-only`) immediately before the run made it register again.
+     */
+    deliveredNothing: delivered.size === 0,
     streamTurns,
     directTurns,
   };
@@ -618,6 +710,15 @@ export async function pttMarginal(options: PttMarginalOptions) {
   line("  append to DO only", report.appendRttMs);
   if (report.marginalMs !== null) {
     console.log(`\n  MARGINAL OVERHEAD  ${report.marginalMs > 0 ? "+" : ""}${report.marginalMs}ms`);
+  }
+  if (report.deliveredNothing) {
+    console.log(
+      "\n  NOTHING WAS MEASURED. This probe's connection received no events at all,\n" +
+        "  so every stream number above is missing for want of a listener rather than\n" +
+        "  for want of an answer. Read the stream's own log before blaming the facet:\n" +
+        `  a \`call-started\` and a \`conversation-ended\` per press means it answered.\n` +
+        "  Warm the stream first (voicelab talk --setup-only) and run again.",
+    );
   }
   console.log(`  ${out}\n`);
   if (streamTotals.length < rounds || directTotals.length < rounds) process.exitCode = 1;
