@@ -28,6 +28,14 @@
 // deliberately relay-local so ping() reflects the logical subscription rather
 // than the current RPC leg — never observes the cycle.
 //
+// Hibernation keeps the Pager socket; a Durable Object RESET does not (workerd
+// closes every hibernatable socket when an incarnation is aborted). A lost
+// Pager is therefore not the subscription's death: this relay still owns the
+// retained callbacks and the delivered cursor, so it re-attaches a Pager and
+// resumes the leg from that cursor against the next incarnation. Nothing else
+// can: the caller holds an already-resolved handle whose only distress signal
+// is a `ping()` it has to poll for.
+//
 // Delete this module (and stream-subscriber-pager.ts) when hibernatable RPC ships.
 
 import type {
@@ -105,6 +113,8 @@ export async function openRelayedStreamConnection(input: {
   let active = true;
   let closedByOwner = false;
   let dialing = false;
+  /** A lost Pager is being re-attached; the relay is not Pager-less for good. */
+  let recoveringPager = false;
   let currentHandle: StreamConnectionHandle | undefined;
   let subscriberPager: WebSocket | undefined;
   let deliveredThroughOffset = args.replayAfterOffset;
@@ -176,23 +186,26 @@ export async function openRelayedStreamConnection(input: {
     disposeRetained();
   };
 
-  // Best-effort: without a Pager the connection simply keeps today's
-  // semantics — never idle-closed, pinned for the session's life.
-  try {
-    subscriberPager = await dialHibernatablePager({
-      headerName: STREAM_SUBSCRIBER_PAGER_HEADER,
-      headerValue: { connectionKey, pagerId: subscriberPagerId },
-      stub: input.stub(),
-      url: "https://stream-subscriber-pager.internal/",
-    });
-  } catch (error) {
-    console.warn("stream Subscriber Pager unavailable; session connection will stay pinned", {
-      connectionKey,
-      error,
-    });
-  }
+  /** Re-dial the RPC leg from the exact delivered cursor and adopt it. */
+  const resumeLeg = async () => {
+    const previous = currentHandle;
+    currentHandle = undefined;
+    disposeStub(previous);
+    const fresh = await dial(deliveredThroughOffset, true);
+    if (!active) {
+      // The relay reached a terminal state while this dial was in flight;
+      // adopting the fresh leg now would resurrect a closed subscription as a
+      // socketless, permanently pinned connection.
+      void Promise.resolve()
+        .then(() => fresh.close())
+        .catch(() => undefined)
+        .finally(() => disposeStub(fresh));
+      return;
+    }
+    currentHandle = fresh;
+  };
 
-  subscriberPager?.addEventListener("message", (event) => {
+  const onPage = (event: MessageEvent) => {
     if (!active) return;
     const page = parseHibernatablePage(event.data, StreamSubscriberPage);
     if (page === undefined) return;
@@ -220,42 +233,98 @@ export async function openRelayedStreamConnection(input: {
           // frame a no-op instead of a spurious replace.
           if ((await probeLeg(previous)) === true || currentHandle !== previous) return;
         }
-        currentHandle = undefined;
-        disposeStub(previous);
-        const fresh = await dial(deliveredThroughOffset, true);
-        if (!active) {
-          // The relay reached a terminal state while this dial was in
-          // flight; adopting the fresh leg now would resurrect a closed
-          // subscription as a socketless, permanently pinned connection.
-          void Promise.resolve()
-            .then(() => fresh.close())
-            .catch(() => undefined)
-            .finally(() => disposeStub(fresh));
-          return;
-        }
-        currentHandle = fresh;
+        await resumeLeg();
       } catch (error) {
         teardown({ reason: "Pager re-dial failed", socketCode: 1011, warn: error });
       } finally {
         dialing = false;
       }
     })();
-  });
-  subscriberPager?.addEventListener("close", () => {
-    subscriberPager = undefined;
-    if (!active || closedByOwner) return;
-    void (async () => {
-      // While the RPC leg is live the Pager was only a future optimization:
-      // degrade to pinned mode (the DO's Pager scan already sees it gone). A
-      // dead Pager while dormant means Pages can no longer arrive —
-      // break, and the owner's watchdog re-subscribes.
-      const handle = currentHandle;
-      const live = handle === undefined ? false : await probeLeg(handle);
-      if (live !== true) {
-        teardown({ reason: "Subscriber Pager closed while dormant", socketCode: 1000 });
+  };
+
+  /**
+   * The Pager socket died with the Stream DO incarnation that accepted it.
+   *
+   * A hibernating DO keeps its sockets; a RESET one does not — workerd closes
+   * every hibernatable socket when the incarnation is aborted (deploy, memory
+   * limit, a fault in another lane). The subscription is not over: this relay
+   * still holds the caller's retained callbacks and the exact delivered
+   * cursor, and the next incarnation reads the same durable log. So a lost
+   * Pager is a RESUME, not a departure — measured live on preview, a Stream DO
+   * reset a second after open otherwise left the caller with a resolved handle
+   * that never delivered another event and never announced its own death.
+   *
+   * Only a Pager that cannot be re-attached is terminal.
+   */
+  const attachPager = async () => {
+    const socket = await dialHibernatablePager({
+      headerName: STREAM_SUBSCRIBER_PAGER_HEADER,
+      headerValue: { connectionKey, pagerId: subscriberPagerId },
+      stub: input.stub(),
+      url: "https://stream-subscriber-pager.internal/",
+    });
+    if (!active) {
+      try {
+        socket.close(1000, "relay closed");
+      } catch {
+        // Already closing.
       }
-    })();
-  });
+      return;
+    }
+    subscriberPager = socket;
+    socket.addEventListener("message", onPage);
+    socket.addEventListener("close", () => {
+      // A late close from a socket this relay already replaced says nothing
+      // about the current one.
+      if (subscriberPager !== socket) return;
+      subscriberPager = undefined;
+      if (!active || closedByOwner) return;
+      recoveringPager = true;
+      void (async () => {
+        try {
+          // While the RPC leg is live the Pager was only a future
+          // optimization: degrade to pinned mode (the DO's Pager scan already
+          // sees it gone). That also keeps the bind-time attachment degrade —
+          // an oversized filter closes the socket on every bind — from
+          // re-attaching in a loop.
+          const handle = currentHandle;
+          if (handle !== undefined && (await probeLeg(handle)) === true) return;
+          // A dial already owns the leg (the initial open, or a Page re-dial).
+          // It will finish against the DO with no Pager: pinned, not blind.
+          if (dialing) return;
+          dialing = true;
+          try {
+            // One unit: the resume re-binds this exact Pager id, so the socket
+            // must exist before the leg re-opens, or the connection comes back
+            // permanently pinned and idle-ineligible.
+            await attachPager();
+            await resumeLeg();
+          } finally {
+            dialing = false;
+          }
+        } catch (error) {
+          teardown({
+            reason: "Subscriber Pager closed and could not be resumed",
+            socketCode: 1011,
+            warn: error,
+          });
+        } finally {
+          recoveringPager = false;
+        }
+      })();
+    });
+  };
+
+  // Best-effort: without a Pager the connection simply keeps today's
+  // semantics — never idle-closed, pinned for the session's life.
+  try {
+    await attachPager();
+  } catch (error) {
+    console.warn("stream Subscriber Pager unavailable; session connection will stay pinned", {
+      connectionKey,
+      error,
+    });
+  }
 
   // The dialing guard also covers this initial dial: a Page for a just-bound
   // Pager must not race a second openConnection under it.
@@ -310,7 +379,8 @@ export async function openRelayedStreamConnection(input: {
     isLive: () => {
       if (!active) return false;
       const handle = currentHandle;
-      // Dormant: the Pager carries liveness (its close breaks the relay).
+      // Dormant: the Pager carries liveness (a Pager it cannot re-attach
+      // breaks the relay).
       if (handle === undefined) return true;
       return probeLeg(handle).then((live) => {
         if (live === true || currentHandle !== handle) return active;
@@ -319,7 +389,7 @@ export async function openRelayedStreamConnection(input: {
         // connection is absent, stamped or not).
         currentHandle = undefined;
         disposeStub(handle);
-        if (subscriberPager === undefined) {
+        if (subscriberPager === undefined && !recoveringPager) {
           teardown({ reason: "rpc leg gone with no Subscriber Pager", socketCode: 1000 });
         }
         return active;
