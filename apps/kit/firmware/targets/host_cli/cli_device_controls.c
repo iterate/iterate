@@ -48,8 +48,12 @@ enum iterate_kit_status cli_device_controls_init(
   };
   status = iterate_kit_device_event_queue_init(&controls->events, &options);
   if (status != ITERATE_KIT_OK) return status;
+  /*
+   * NULL: the CLI has no call gate to consult, so it reports `accepted` and
+   * omits `latched` rather than guessing at it.
+   */
   return iterate_kit_push_to_talk_init(
-      &controls->push_to_talk, &controls->events);
+      &controls->push_to_talk, &controls->events, NULL);
 }
 
 struct iterate_kit_module cli_device_controls_module(

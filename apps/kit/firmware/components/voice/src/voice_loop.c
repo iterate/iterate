@@ -1794,6 +1794,39 @@ static enum iterate_kit_status handle_device_event(
 /* Defined beside health_json, which it adapts. */
 static size_t render_health(void *context, char *out, size_t capacity);
 
+/*
+ * WOULD A TALK REQUEST ARRIVING RIGHT NOW ACTUALLY OPEN THE MICROPHONE?
+ *
+ * The exact condition the turn machine applies to `remote_talk`, and it has to
+ * be exact or the answer is a second opinion rather than the truth: a
+ * push-to-talk board reads the latch only inside `wants_call && ...`, so a
+ * remote press with no call is latched and then never read. Nothing later can
+ * report that — the press is not dropped, it is simply never consulted — which
+ * is why the honest moment to say so is the reply.
+ *
+ * `wants_call` and not `call_active`: pressing talk while a call is still
+ * being placed is legitimate and will be honoured the moment it lands, so
+ * answering "no" there would be the opposite lie.
+ */
+static bool talk_would_be_honoured(void *context) {
+  (void)context;
+  if (runtime.facts == NULL) return false;
+  /*
+   * On an open-mic board the microphone rides the call and there is no latch
+   * to set — which is why those boards do not mount this capability at all.
+   * Answering honestly here costs nothing and keeps the predicate true to its
+   * name if that ever changes.
+   */
+  if (runtime.facts->turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD) {
+    return runtime.voicelab.call_active;
+  }
+  return runtime.view.wants_call;
+}
+
+static const struct iterate_kit_push_to_talk_driver push_to_talk_driver = {
+  .context = NULL,
+  .would_be_honoured = talk_would_be_honoured,
+};
 
 static bool initialise_connection(void) {
   /*
@@ -1819,8 +1852,8 @@ static bool initialise_connection(void) {
     if (iterate_kit_device_event_queue_init(
             &runtime.device_events, &event_options) != ITERATE_KIT_OK ||
         iterate_kit_push_to_talk_init(
-            &runtime.push_to_talk, &runtime.device_events) !=
-            ITERATE_KIT_OK ||
+            &runtime.push_to_talk, &runtime.device_events,
+            &push_to_talk_driver) != ITERATE_KIT_OK ||
         iterate_kit_conversation_control_init(
             &runtime.conversation_control, &runtime.device_events) !=
             ITERATE_KIT_OK) {
