@@ -184,6 +184,17 @@ struct iterate_kit_esp_idf_websocket_connection {
   uint32_t receive_dropped;
   uint32_t pings_received;
   uint32_t pongs_received;
+  /*
+   * WHEN THE HOP LAST CARRIED A BYTE, EACH WAY.
+   *
+   * A keepalive is only informative when the socket is otherwise silent: a
+   * connection carrying audio proves itself continuously, and probing it would
+   * spend a control frame to learn what the last data frame already said. Both
+   * directions must be quiet, because a hop that is only receiving is still a
+   * hop that works.
+   */
+  int64_t last_inbound_us;
+  int64_t last_outbound_us;
   uint32_t control_backpressure;
   uint32_t transport_failure_incidents;
   uint32_t last_failure_operation;

@@ -180,6 +180,16 @@ enum {
    * What is left is the deadline on the lane that has no other proof.
    */
   ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS = 10000,
+  /*
+   * How long the WebSocket hop must be quiet BOTH ways before this device
+   * sends its own PING.
+   *
+   * Comfortably inside NO_LIVENESS_RESTART_MS below, so a healthy idle board
+   * completes several round trips before that watchdog could ever fire, and
+   * long enough that a device in a call — which proves the hop continuously
+   * with data frames — never sends one at all.
+   */
+  ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS = 15000,
   ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS = 180000,
   /*
    * Re-mounting a voicelab that failed under a healthy connection.

@@ -1722,6 +1722,12 @@ void iterate_kit_esp_idf_itx_transport_metrics(
       __atomic_load_n(
           &transport->last_websocket_close_status_code,
           __ATOMIC_ACQUIRE);
+  {
+    struct iterate_kit_esp_idf_websocket_connection_metrics websocket;
+    iterate_kit_esp_idf_websocket_connection_metrics(
+        &transport->websocket, &websocket);
+    metrics->websocket_pongs_received = websocket.pongs_received;
+  }
   /*
    * spsc_ring_init() already constrains slot_count below UINT32_MAX / 2. The
    * capacities are immutable after prepare(), so these casts are exact and add

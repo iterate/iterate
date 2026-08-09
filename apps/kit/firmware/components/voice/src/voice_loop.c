@@ -1745,6 +1745,8 @@ static size_t health_json(char *out, size_t capacity) {
      */
     {"batches", runtime.voicelab.batches_on_connection},
     {"connGeneration", runtime.voicelab.connection_generation},
+    /* Hop liveness only — never application delivery credit. */
+    {"wsPongs", metrics.websocket_pongs_received},
     {"idleRemounts", runtime.mount_watchdog.remounts},
     /* Inbound capability dispatches served. This is the liveness proof the idle
      * watchdog keys on — telemetry publishing does not move it. */
@@ -2416,52 +2418,63 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
     }
 
     /*
-     * A TRANSPORT THAT NEVER COMES BACK.
+     * LIVENESS, not optimism.
      *
      * FAILED is the honest failure and the block above handles it. This one is
-     * quieter: the transport sits in some non-ready state indefinitely, so
-     * every producer's gate stays shut while the loop runs perfectly. The
-     * device answers nothing, starts no calls, sends no audio and pushes no
-     * telemetry — not a quiet device, a broken one.
+     * the dishonest failure: the socket stays open, the transport stays READY,
+     * and nothing moves in either direction — a half-open TCP connection is
+     * indistinguishable from a quiet one from this end. The device goes on
+     * believing it has a session and a call, lights "listening" and "speaking"
+     * at the user, and sends every word into a void for hours.
      *
-     * THERE USED TO BE A SECOND WATCHDOG HERE, and its evidence is gone.
+     * THE EVIDENCE IS A WEBSOCKET PONG, and it took two tries to get right.
      *
-     * It restarted the chip when no application-level round trip had completed
-     * for three minutes on a READY transport — the half-open TCP case, where
-     * the socket stays open and nothing moves in either direction. Its only
-     * proof was the pulled `voice-agent/ping` append, and that has been deleted
-     * as a duplicate of the WebSocket's own PING/PONG (see voicelab_stream.h).
+     * It was a pulled application-level `voice-agent/ping` append, which was a
+     * third liveness mechanism above the two that measure the hop honestly, and
+     * it woke a processor twelve times a minute to be told it was awake. That
+     * went. But deleting it left NOTHING watching this failure, because both
+     * ends of the connection answered pings and neither asked — so the device
+     * now originates a WebSocket PING when the hop has been quiet both ways
+     * (see the keepalive in websocket_connection.c) and this watches the PONGs.
      *
-     * It is DELETED rather than re-keyed, because every candidate replacement
-     * is inbound-only: delivery batches and served dispatches both stop on a
-     * perfectly healthy IDLE board, so re-keying would have rebooted every idle
-     * device every three minutes. That failure mode is not hypothetical — the
-     * mount watchdog made exactly this mistake, and the note in
-     * voice_device_profile.h explains what it cost.
+     * WHY NOT ANY INBOUND APPLICATION SIGNAL: delivery batches and served
+     * dispatches both stop on a perfectly healthy IDLE board, so re-keying on
+     * them would restart every idle device on a timer. The mount watchdog made
+     * exactly that mistake; the note in voice_device_profile.h is what it cost.
+     * A PONG keeps arriving on an idle board, which is the whole point.
      *
-     * So half-open detection now belongs to the socket layer, which is where
-     * the PING it needs actually lives. What remains here is the one deadline
-     * whose evidence is local and always available: the transport's own state.
+     * A PONG IS NOT DELIVERY CREDIT. It proves the hop parsed a frame in order
+     * and nothing more — the rule at iterate_kit_websocket_tx_queue_control is
+     * unchanged and this must never become an application acknowledgement. It
+     * is read here, by a watchdog asking whether the hop is alive at all, and
+     * nowhere else.
      */
     {
+      static uint64_t last_liveness_ms;
       /** When the transport last stopped being ready; 0 while it is ready. */
       static uint64_t not_ready_since_ms;
+      static uint32_t last_pong_count;
+      struct iterate_kit_esp_idf_itx_transport_metrics liveness;
+      iterate_kit_esp_idf_itx_transport_metrics(&runtime.transport, &liveness);
+      if (last_liveness_ms == 0U) last_liveness_ms = now;
+      if (liveness.websocket_pongs_received != last_pong_count) {
+        last_pong_count = liveness.websocket_pongs_received;
+        last_liveness_ms = now;
+      }
       /*
        * A TRANSPORT THAT IS NEVER READY MUST NOT DISABLE THE RESTART.
        *
        * Holding the liveness clock while the transport is down is right — you
        * cannot fault a device for missing round trips it had no lane for — but
-       * it was the ONLY thing this branch did, so a transport that never came
-       * back reset the clock on every tick and the restart below could never
-       * fire. Measured on the StackChan: unreachable for ten minutes and more,
-       * no capability, no face, task watchdog fed the whole time (so the loop
-       * was alive and this branch was running), recovered only by a human
-       * pulling power. Every board here has the same shape.
-       *
-       * So the grace is bounded. Being down is forgiven; being down forever is
-       * the failure this restart exists for.
+       * it was once the ONLY thing this branch did, so a transport that never
+       * came back reset the clock every tick and the restart could never fire.
+       * Measured on the StackChan: unreachable for ten minutes and more, no
+       * capability, no face, task watchdog fed the whole time, recovered only
+       * by a human pulling power. So the grace is bounded: being down is
+       * forgiven, being down forever is the failure this restart exists for.
        */
       if (runtime.transport.state != ITERATE_KIT_ESP_IDF_ITX_READY) {
+        last_liveness_ms = now;
         if (not_ready_since_ms == 0U) not_ready_since_ms = now;
         if (iterate_kit_voice_elapsed_ms(now, not_ready_since_ms) >
             NO_LIVENESS_RESTART_MS) {
@@ -2473,6 +2486,14 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         }
       } else {
         not_ready_since_ms = 0U;
+      }
+      if (iterate_kit_voice_elapsed_ms(now, last_liveness_ms) >
+          NO_LIVENESS_RESTART_MS) {
+        ESP_LOGE(
+            tag,
+            "no pong in %us despite a ready transport — restarting",
+            (unsigned int)(NO_LIVENESS_RESTART_MS / 1000U));
+        iterate_kit_esp_restart_with_note("hop dead on a ready transport");
       }
     }
 

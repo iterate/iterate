@@ -497,6 +497,128 @@ static void partially_written_data_cannot_be_cancelled(void) {
   CHECK(tx.frame.frame_offset == 1U);
 }
 
+/*
+ * OUR OWN PING REACHES THE WIRE — the one thing this state machine refused to
+ * do, and the reason a half-open connection was invisible to both ends.
+ *
+ * Opcode 0x89, masked like every client frame. The refusal that used to live
+ * here rested on a rule that is still true and still enforced (a PONG is not
+ * application delivery credit); what it got wrong was concluding that a probe
+ * proving only hop liveness proves nothing worth having.
+ */
+static void a_client_ping_is_written(void) {
+  static const uint8_t payload[] = {0x2aU};
+  static const uint8_t expected[] = {
+    0x89U, 0x81U,
+    0x01U, 0x02U, 0x03U, 0x04U,
+    0x2bU,
+  };
+  uint8_t storage[16];
+  uint8_t next_random = 1U;
+  struct fake_raw_writer raw = {.maximum_write = sizeof(raw.bytes)};
+  struct iterate_kit_websocket_tx tx;
+
+  initialize(&tx, storage, sizeof(storage), &raw, &next_random);
+  CHECK(iterate_kit_websocket_tx_queue_control(
+      &tx, ITERATE_KIT_WEBSOCKET_PING, payload, sizeof(payload)) ==
+      ITERATE_KIT_OK);
+  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+      ITERATE_KIT_WEBSOCKET_TX_SENT);
+  CHECK(raw.byte_count == sizeof(expected));
+  CHECK(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
+}
+
+/*
+ * THE PEER'S DEADLINE BEATS OUR CURIOSITY. A reply PONG the peer is timing
+ * goes first; our probe waits one frame and loses nothing by it. Both are in
+ * their slots at once, so this pins the ORDER rather than the mere presence.
+ */
+static void a_reply_pong_outranks_our_own_ping(void) {
+  static const uint8_t ping_payload[] = {0x2aU};
+  static const uint8_t pong_payload[] = {0x07U};
+  uint8_t storage[16];
+  uint8_t next_random = 1U;
+  struct fake_raw_writer raw = {.maximum_write = sizeof(raw.bytes)};
+  struct iterate_kit_websocket_tx tx;
+
+  initialize(&tx, storage, sizeof(storage), &raw, &next_random);
+  CHECK(iterate_kit_websocket_tx_queue_control(
+      &tx, ITERATE_KIT_WEBSOCKET_PING, ping_payload, sizeof(ping_payload)) ==
+      ITERATE_KIT_OK);
+  CHECK(iterate_kit_websocket_tx_queue_control(
+      &tx, ITERATE_KIT_WEBSOCKET_PONG, pong_payload, sizeof(pong_payload)) ==
+      ITERATE_KIT_OK);
+  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+      ITERATE_KIT_WEBSOCKET_TX_SENT);
+  /* PONG first. */
+  CHECK(raw.bytes[0] == 0x8aU);
+  raw.byte_count = 0U;
+  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+      ITERATE_KIT_WEBSOCKET_TX_SENT);
+  /* ...and only then ours. */
+  CHECK(raw.bytes[0] == 0x89U);
+  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+      ITERATE_KIT_WEBSOCKET_TX_IDLE);
+}
+
+/*
+ * A CLOSE DISCARDS AN UNSENT PING, exactly as it already discarded an unsent
+ * PONG: once shutdown is requested, asking whether the hop is alive cannot
+ * restore the generation and would only delay a bounded close.
+ */
+static void close_discards_an_unsent_ping(void) {
+  static const uint8_t ping_payload[] = {0x2aU};
+  uint8_t storage[16];
+  uint8_t next_random = 1U;
+  struct fake_raw_writer raw = {.maximum_write = sizeof(raw.bytes)};
+  struct iterate_kit_websocket_tx tx;
+
+  initialize(&tx, storage, sizeof(storage), &raw, &next_random);
+  CHECK(iterate_kit_websocket_tx_queue_control(
+      &tx, ITERATE_KIT_WEBSOCKET_PING, ping_payload, sizeof(ping_payload)) ==
+      ITERATE_KIT_OK);
+  CHECK(iterate_kit_websocket_tx_queue_control(
+      &tx, ITERATE_KIT_WEBSOCKET_CLOSE, NULL, 0U) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+      ITERATE_KIT_WEBSOCKET_TX_SENT);
+  CHECK(raw.bytes[0] == 0x88U);
+  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+      ITERATE_KIT_WEBSOCKET_TX_IDLE);
+}
+
+/*
+ * A NEWER PING REPLACES AN OLDER UNSENT ONE. The slot is the whole reason a
+ * stalled socket cannot become memory growth, so the superseded payload must
+ * not be able to reach the wire behind the newer one.
+ */
+static void newest_pending_ping_replaces_the_older_payload(void) {
+  static const uint8_t first[] = {1U};
+  static const uint8_t second[] = {2U};
+  static const uint8_t expected[] = {
+    0x89U, 0x81U,
+    0x01U, 0x02U, 0x03U, 0x04U,
+    0x03U,
+  };
+  uint8_t storage[16];
+  uint8_t next_random = 1U;
+  struct fake_raw_writer raw = {.maximum_write = sizeof(raw.bytes)};
+  struct iterate_kit_websocket_tx tx;
+
+  initialize(&tx, storage, sizeof(storage), &raw, &next_random);
+  CHECK(iterate_kit_websocket_tx_queue_control(
+      &tx, ITERATE_KIT_WEBSOCKET_PING, first, sizeof(first)) ==
+      ITERATE_KIT_OK);
+  CHECK(iterate_kit_websocket_tx_queue_control(
+      &tx, ITERATE_KIT_WEBSOCKET_PING, second, sizeof(second)) ==
+      ITERATE_KIT_OK);
+  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+      ITERATE_KIT_WEBSOCKET_TX_SENT);
+  CHECK(raw.byte_count == sizeof(expected));
+  CHECK(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
+  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+      ITERATE_KIT_WEBSOCKET_TX_IDLE);
+}
+
 int main(void) {
   partial_writes_and_would_block_resume_one_frame();
   pong_waits_until_the_data_frame_boundary();
@@ -506,5 +628,9 @@ int main(void) {
   pending_wire_bytes_track_partial_data_and_control();
   unwritten_data_can_be_cancelled_without_losing_pong();
   partially_written_data_cannot_be_cancelled();
+  a_client_ping_is_written();
+  a_reply_pong_outranks_our_own_ping();
+  close_discards_an_unsent_ping();
+  newest_pending_ping_replaces_the_older_payload();
   return 0;
 }

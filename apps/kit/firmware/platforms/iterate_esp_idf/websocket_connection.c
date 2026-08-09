@@ -1,3 +1,6 @@
+#include "esp_timer.h"
+
+#include "iterate/kit/voice_device_profile.h"
 #include "iterate/kit/platforms/esp_idf_websocket_connection.h"
 
 #include "iterate/kit/atomic.h"
@@ -518,6 +521,14 @@ iterate_kit_esp_idf_websocket_connection_open(
    */
   iterate_kit_websocket_rx_reset(&connection->rx);
   iterate_kit_websocket_tx_reset(&connection->tx);
+  /*
+   * Start the quiet clocks NOW rather than at zero. Zero means "nothing has
+   * ever moved", which the keepalive treats as not-yet-idle — otherwise a
+   * freshly upgraded socket would be probed before the handshake traffic it is
+   * about to carry.
+   */
+  connection->last_inbound_us = esp_timer_get_time();
+  connection->last_outbound_us = connection->last_inbound_us;
   return ITERATE_KIT_OK;
 }
 
@@ -606,6 +617,13 @@ iterate_kit_esp_idf_websocket_connection_receive(
       classification == ITERATE_KIT_WEBSOCKET_RX_PARTIAL) {
     return ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_IDLE;
   }
+  /*
+   * A COMPLETE FRAME ARRIVED, of any kind, so the hop is demonstrably carrying
+   * bytes this way and the keepalive in service_control has nothing to learn.
+   * Stamped after the idle/partial returns above, because a zero-byte read is
+   * not evidence of anything.
+   */
+  connection->last_inbound_us = esp_timer_get_time();
   if (classification == ITERATE_KIT_WEBSOCKET_RX_DROPPED) {
     iterate_kit_atomic_saturating_increment_relaxed_u32(
         &connection->receive_dropped);
@@ -656,6 +674,13 @@ iterate_kit_esp_idf_websocket_connection_receive(
         (uint8_t)ITERATE_KIT_WEBSOCKET_PONG) {
       iterate_kit_atomic_saturating_increment_relaxed_u32(
           &connection->pongs_received);
+      /*
+       * HOP LIVENESS, AND NOTHING ELSE. This counter proves the far end parsed
+       * a frame in order. It must never be read as an application message
+       * delivered, acknowledged or admitted — see the rule at
+       * iterate_kit_websocket_tx_queue_control. Its one legitimate reader is
+       * the liveness watchdog.
+       */
       return
           ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_CONTROL;
     }
@@ -695,6 +720,8 @@ iterate_kit_esp_idf_websocket_connection_send(
       connection->peer_close_pending) {
     return ITERATE_KIT_WEBSOCKET_TX_DISCONNECTED;
   }
+  /* Bytes going out are proof this way too; see the keepalive below. */
+  connection->last_outbound_us = esp_timer_get_time();
   return iterate_kit_websocket_tx_send(
       &connection->tx, opcode, payload, payload_size);
 }
@@ -706,6 +733,42 @@ iterate_kit_esp_idf_websocket_connection_service_control(
       !connection->initialized ||
       !connection->connected) {
     return ITERATE_KIT_WEBSOCKET_TX_DISCONNECTED;
+  }
+  /*
+   * ASK, WHEN NOBODY HAS SAID ANYTHING FOR A WHILE.
+   *
+   * Both ends of this connection answered pings and neither asked, so a
+   * half-open TCP connection — socket open, transport READY, nothing moving in
+   * either direction — was invisible to everybody. This is the one thing that
+   * makes it visible, and the PONG it earns is the only evidence a liveness
+   * watchdog can key on that still moves on a perfectly IDLE board.
+   *
+   * Only when the hop is quiet BOTH ways: a connection carrying audio proves
+   * itself continuously, and probing it would spend a control frame to learn
+   * what the last data frame already said.
+   *
+   * Queued, never written here, for the same reason the reply PONG is: a data
+   * frame may already be partially on the wire, and the bounded slot coalesces
+   * rather than growing. A probe that cannot be queued is simply skipped —
+   * pressure on that slot is itself evidence the socket is not idle.
+   */
+  {
+    const int64_t now_us = esp_timer_get_time();
+    const int64_t quiet_us =
+        (int64_t)ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS * 1000;
+    if (connection->last_inbound_us != 0 &&
+        connection->last_outbound_us != 0 &&
+        now_us - connection->last_inbound_us > quiet_us &&
+        now_us - connection->last_outbound_us > quiet_us) {
+      if (iterate_kit_websocket_tx_queue_control(
+              &connection->tx,
+              ITERATE_KIT_WEBSOCKET_PING,
+              NULL,
+              0U) == ITERATE_KIT_OK) {
+        /* Stamped as outbound so one quiet period yields one probe. */
+        connection->last_outbound_us = now_us;
+      }
+    }
   }
   return iterate_kit_websocket_tx_poll_control(
       &connection->tx);
