@@ -184,13 +184,50 @@ enum {
    * How long the WebSocket hop must be quiet BOTH ways before this device
    * sends its own PING.
    *
-   * Comfortably inside NO_LIVENESS_RESTART_MS below, so a healthy idle board
-   * completes several round trips before that watchdog could ever fire, and
-   * long enough that a device in a call — which proves the hop continuously
-   * with data frames — never sends one at all.
+   * 120 s, AND THE COST IS REAL RATHER THAN FREE. It was 15 s, which is the
+   * interval a liveness probe wants. It is not the interval a HIBERNATING
+   * Durable Object can survive: nothing on the platform side calls
+   * `setWebSocketAutoResponse`, so a control-frame PING is not answered by the
+   * runtime — it wakes the object that owns the socket. Four boards probing
+   * every fifteen seconds is four objects that never sleep, forever, whether
+   * or not anybody is in the room.
+   *
+   * WHAT IS TRADED: a half-open socket now goes unnoticed for up to two
+   * minutes of idleness instead of fifteen seconds. That is accepted because
+   * the cost of a stale socket while nobody is talking is zero, and the cost
+   * of never hibernating is paid continuously. It is NOT accepted for the
+   * moment that matters — see below.
+   *
+   * THE FIRST PRESS AFTER A LONG IDLE MUST NOT WAIT THIS OUT, and it does not.
+   * A press restamps `last_batch_ms` and then arms DOWNLINK_SILENCE_MS above:
+   * ten seconds with a call wanted and no batch delivered is read as a dead
+   * lane and answered with a make-before-break recycle, and three of those
+   * escalate to replacing the session. So a press into a socket that died
+   * silently is noticed on the press's own clock, not on the probe's.
+   *
+   * THESE TWO MOVE TOGETHER, which is why the one below moved with it.
    */
-  ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS = 15000,
-  ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS = 180000,
+  ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS = 120000,
+  /*
+   * Last resort: no PONG for this long on a READY transport and the chip
+   * restarts, because a half-open TCP connection looks perfectly healthy from
+   * this end and no in-process recovery has worked.
+   *
+   * 420 s, RAISED FROM 180 BECAUSE THE PROBE ABOVE SLOWED DOWN. At a 15 s
+   * probe, 180 s was eleven chances to be answered; at a 120 s probe it is
+   * ONE, and the arithmetic is not close — a probe goes out at 120 s, and if
+   * that single PONG is lost the restart fires at 180 s, sixty seconds before
+   * the next probe is even sent. One dropped packet on an idle board would
+   * reboot it, and a lossy access point would reboot it repeatedly.
+   *
+   * 420 gives three probes (120, 240, 360) and a minute of slack, so a
+   * restart means three consecutive losses rather than one. The cost is that
+   * a genuinely dead hop on an IDLE board is now carried for up to seven
+   * minutes — which costs nothing, because the board is idle, and because the
+   * case anybody can notice is a PRESS, and a press is recovered by
+   * DOWNLINK_SILENCE_MS above on its own ten-second clock.
+   */
+  ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS = 420000,
   /*
    * Re-mounting a voicelab that failed under a healthy connection.
    *

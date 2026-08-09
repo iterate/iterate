@@ -27,8 +27,9 @@
  * leaves the microphone open and lets the far end segment turns. Both are
  * below, chosen by `facts->turns`.
  *
- * Observability is the stream itself (events.iterate.com/voice-agent/dev-stats every 5s);
- * opening the USB console resets some of these boards.
+ * Observability is the `health()` capability, PULLED — opening the USB
+ * console resets some of these boards, so it is the instrument of record.
+ * Nothing is pushed on a timer; see the note where append_stats used to be.
  *
  * DELIBERATE DEPARTURE from the dual-WebSocket decision in
  * docs/fable-v2-plan/DECISIONS.md — this is the single-socket measurement that
@@ -281,7 +282,6 @@ enum {
   TURN_MAX_MS = ITERATE_KIT_VOICE_TURN_MAX_MS,
   /* Control scan cadence; on one board each scan costs an I2C transaction. */
   CONTROL_POLL_MS = ITERATE_KIT_VOICE_CONTROL_POLL_MS,
-  STATS_INTERVAL_MS = ITERATE_KIT_VOICE_STATS_INTERVAL_MS,
   /* How long the transport may stay FAILED before the device reboots itself. */
   UNHEALTHY_RESTART_MS = ITERATE_KIT_VOICE_UNHEALTHY_RESTART_MS,
   /*
@@ -1903,9 +1903,11 @@ static bool initialise_connection(void) {
 }
 
 /*
- * ONE description of how the device is, used by both the telemetry it pushes
- * and the health() anyone can pull. They were never allowed to disagree —
- * the state worth diagnosing is the one where the push has stopped.
+ * HOW THIS DEVICE IS, AS ONE DOCUMENT, ANSWERED ONLY WHEN SOMEBODY ASKS.
+ *
+ * It used to be two things — this, and a copy pushed on a timer — and they
+ * were never allowed to disagree. There is only the pull now, which is the
+ * same document and none of the traffic.
  */
 static size_t health_json(char *out, size_t capacity) {
   /*
@@ -1913,14 +1915,15 @@ static size_t health_json(char *out, size_t capacity) {
    *
    * It used to stamp "somebody asked us something" here, on the reasoning that
    * answering an RPC is the only proof the mount is still reachable — which is
-   * true, and was defeated by the placement: `append_stats` calls this every
-   * five seconds to build the dev-stats telemetry body, so the device renewed
+   * true, and was defeated by the placement: the deleted `append_stats` called
+   * this every five seconds to build the telemetry body, so the device renewed
    * its own liveness lease twelve times a minute by talking to itself. On
    * 2026-08-04 that left the pinned board unreachable for over seven minutes
    * with a 90s watchdog armed and a server holding zero connections.
    *
-   * Reachability now comes from `iterate_kit_peer_served_dispatches` — INBOUND
-   * dispatches, which no amount of outbound telemetry can inflate.
+   * Reachability comes from `iterate_kit_peer_served_dispatches` — INBOUND
+   * dispatches, which no amount of outbound telemetry can inflate. Keeping
+   * this pure is what makes that true, and it outlived the push that broke it.
    */
   /*
    * NAME AND VALUE TRAVEL TOGETHER.
@@ -2254,27 +2257,19 @@ static size_t render_health(void *context, char *out, size_t capacity) {
   return health_json(out, capacity);
 }
 
-static void append_stats(uint64_t now) {
-  static const char prefix[] =
-      "[{\"type\":\"events.iterate.com/voice-agent/dev-stats\",\"ephemeral\":true,\"payload\":";
-  const size_t prefix_length = sizeof(prefix) - 1U;
-  size_t body;
-  (void)now;
-  memcpy(runtime.stats_buffer, prefix, prefix_length);
-  body = health_json(
-      runtime.stats_buffer + prefix_length,
-      sizeof(runtime.stats_buffer) - prefix_length - 3U);
-  if (body == 0U) {
-    ESP_LOGE(tag, "stats line does not fit — telemetry is dark");
-    return;
-  }
-  runtime.stats_buffer[prefix_length + body] = '}';
-  runtime.stats_buffer[prefix_length + body + 1U] = ']';
-  (void)iterate_kit_voicelab_append_raw(
-      &runtime.voicelab, runtime.stats_buffer, prefix_length + body + 2U);
-  /* prefix is `[{...,"payload":`, body closes its own object, so one `}`
-   * closes the event and `]` closes the array. */
-}
+/*
+ * `append_stats` WAS HERE, AND IT IS WHY NOTHING COULD EVER SLEEP.
+ *
+ * It pushed this same document onto the conversation stream every five
+ * seconds, unconditionally, from inside the "everything ready" gate — so four
+ * idle boards were four Durable Objects woken twelve times a minute each,
+ * forever, whether or not anybody was in the room. A heartbeat is the one
+ * thing a hibernating object cannot tolerate, and this one was declared in no
+ * contract and duplicated `health()` exactly.
+ *
+ * The numbers did not go anywhere: `render_health` above is the same document,
+ * and a capability call costs nothing when nobody asks. State, not a pulse.
+ */
 
 /*
  * A CLOCK, KEPT ONLY SO A CONVERSATION CAN BE NAMED AFTER WHEN IT HAPPENED.
@@ -2615,7 +2610,6 @@ bool iterate_kit_voice_loop_init(
  * is measured against a clock it fetches itself cannot be tested at all.
  */
 void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
-  static uint64_t next_stats_at;
   static uint64_t next_control_poll_at;
   (void)now_ms_value;
   {
@@ -3519,8 +3513,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
           (void)iterate_kit_voicelab_recycle_connection(&runtime.voicelab);
         }
       }
-      /* Seed the telemetry clock the first time the gate opens. */
-      if (next_stats_at == 0U) next_stats_at = now + STATS_INTERVAL_MS;
       /*
        * A one-second pulse while a turn is open. When the device freezes
        * mid-turn nothing else can be read out of it — health() is answered by
@@ -3565,10 +3557,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
               runtime.speaker_underruns,
               (unsigned int)(speaker_queued_bytes() / 32U));
         }
-      }
-      if (now >= next_stats_at && outbox_free >= 3U) {
-        append_stats(now);
-        next_stats_at = now + STATS_INTERVAL_MS;
       }
     }
 
