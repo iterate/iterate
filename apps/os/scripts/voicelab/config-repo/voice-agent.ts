@@ -1,11 +1,8 @@
 import {
-  IterateDurableObject,
   IterateWorkerEntrypoint,
   type Agent,
   type StatefulDynamicWorkerRef,
   type Stream,
-  type StreamConnectionHandle,
-  createProcessorHost,
   StreamProcessorFacet,
   type ProcessorHostDeps,
 } from "iterate/sdk";
@@ -81,41 +78,6 @@ const PACE_FLUSH_MS = 400;
 /** Ceiling per drain batch, so one append never dwarfs a delivery budget. */
 const PACE_MAX_BATCH = 50;
 /**
- * A call with no mic frames and no Grok traffic for this long is over.
- * Pings deliberately do NOT count: a device pinging into an empty room is
- * exactly the case this is here to end.
- */
-const IDLE_TIMEOUT_MS = 600_000;
-/**
- * Backstop so a wedged detached call can never hold a DO forever. The goal
- * is hour-long conversations, so this is not the thing that should end one:
- * a device losing its bridge now notices within 20s and opens another, but
- * an hour of talking should not need that to happen at all.
- */
-const MAX_CALL_MS = 3_900_000;
-/**
- * How long a call gets to come up at all before it is a failed call.
- *
- * `startCall` resolves when the provider accepts the session, so anything
- * that stops the handshake completing blocks the CALLER — and a device whose
- * call button does nothing has no way to tell "still connecting" from
- * "never going to". Deliberately generous against the ~750ms a healthy dial
- * takes, and deliberately far below the ten-minute idle timeout that used to
- * be the only thing that ended such a call.
- */
-const HANDSHAKE_TIMEOUT_MS = 15_000;
-/**
- * How long a starting call will wait to find out what its device can do.
- *
- * The answer decides which direct tools the model is offered, and it is asked
- * for on the path to `session.update` — so it is time somebody is standing
- * there for. A healthy `__describe` is a single round trip inside the
- * deployment; this is the bound past which a call goes ahead with fewer tools
- * rather than going up late, and it is deliberately a small fraction of the
- * fifteen seconds the whole handshake gets.
- */
-const DEVICE_DISCOVERY_TIMEOUT_MS = 3_000;
-/**
  * The agent that does the actual thinking. Grok is a mouth and a pair of
  * ears with a ~200ms budget; anything that needs reading a repo, calling a
  * tool, or being RIGHT belongs to a text model with no clock on it.
@@ -188,7 +150,6 @@ const WARMUP_DEADLINE_MS = 90_000;
  * conversation, not a setup failure anyone is watching.
  */
 const VOICE_AGENT_SUBSCRIPTION_NAME = VOICE_AGENT_PROCESSOR_SLUG;
-const CALL_REQUEST_FRESHNESS_MS = 30_000;
 /**
  * What the voice model is told it is.
  *
@@ -525,45 +486,6 @@ export const DIRECT_TOOLS: readonly DirectTool[] = [
   },
 ];
 
-/**
- * The one SLOW tool, and deliberately not in the table above.
- *
- * Everything in DIRECT_TOOLS is a reflex the voice half performs itself. This
- * is the opposite: it reaches the thinking half, it is offered only when a call
- * has one (`colleague=1`), and it needs no device at all — so deriving it from
- * a device's mount instructions would be deriving it from the wrong thing.
- *
- * NAMED FOR THE FICTION, because the tool name is part of the prompt. It was
- * `message_back_office`, and a model holding a tool by that name says "let me
- * message the back office" out loud however firmly the instructions forbid it.
- * `note_to_self` describes the same call in the frame the customer is meant to
- * hear: one assistant, thinking something over properly.
- */
-const NOTE_TO_SELF_TOOL = {
-  description:
-    "Put something to the careful, slower part of yourself — the part " +
-    "that reads the customer's systems, works things out properly, and " +
-    "acts in the world. Use it to think something through, to answer a " +
-    "question it put to you, or to pass anything along. It returns " +
-    "immediately: the thinking has only started. Keep talking to the " +
-    "customer meanwhile. Conclusions come back to you as your own " +
-    "thoughts, whenever they are ready, in any number.",
-  name: "note_to_self",
-  parameters: {
-    properties: {
-      text: {
-        description:
-          "What to think about. The conversation is already known, but " +
-          "write it so it stands on its own.",
-        type: "string",
-      },
-    },
-    required: ["text"],
-    type: "object",
-  },
-  type: "function" as const,
-};
-
 /** One live capability mount, as both the prompt and the tool table read it. */
 export interface LiveCapability {
   /**
@@ -650,8 +572,6 @@ const SPK_FRAME_MS = 20;
  * arithmetic that has gone wrong, not a very long goodbye.
  */
 const MAX_PLAYOUT_WAIT_MS = 30_000;
-/** A little for the wire, so the last frame is played and not merely sent. */
-const PLAYOUT_MARGIN_MS = 400;
 /**
  * How long a hang-up waits for the floor before it happens anyway.
  *
