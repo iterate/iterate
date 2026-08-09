@@ -90,3 +90,6 @@ experiments/archil-node-modules/disk-config.json
 
 # Voicelab run evidence: audio both directions plus metrics, one dir per run.
 .voicelab-runs/
+
+# The host CLI's default playback file: an artifact of running it, not source.
+iterate-kit-playback.wav
