@@ -306,6 +306,71 @@ describe("the speaker lane's buffer verbs", () => {
   });
 });
 
+describe("letting the Durable Object sleep", () => {
+  /*
+   * A held provider socket keeps the stream's DO awake, and xAI only drops an
+   * idle session after 900 seconds — so one press used to pin a DO, and burn a
+   * provider session, for fifteen minutes of silence. Everything else in the
+   * design lets an idle device be quiet; this was the last thing keeping the
+   * lights on.
+   */
+  it("hangs up a push-to-talk call once the answer has been handed over", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+    provider.speak(1280);
+    await harness.settle();
+    expect(provider.closed).toBe(false);
+
+    provider.finishAudio();
+    await harness.settle();
+
+    expect(provider.closed).toBe(true);
+    expect(
+      harness.events("events.iterate.com/voice-agent/conversation-ended").at(-1)?.payload,
+    ).toMatchObject({ reason: "answer delivered; idle sockets keep the stream awake" });
+  });
+
+  it("keeps an open-mic call, which has no press to re-dial on", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: { client: "/clients/stackchan" } });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+    provider.speak(1280);
+    await harness.settle();
+
+    provider.finishAudio();
+    await harness.settle();
+
+    expect(provider.closed).toBe(false);
+  });
+
+  it("re-dials on the next press, so hanging up costs a caller nothing", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+    provider.speak(1280);
+    provider.finishAudio();
+    await harness.settle();
+    expect(harness.events(CALL_STARTED)).toHaveLength(1);
+
+    await harness.append({ type: PTT_START, payload: {} });
+    await harness.settle();
+
+    /* Dialling begins on the press, so the handshake hides behind the
+     * speaking rather than sitting in front of the answer. */
+    expect(harness.events(CALL_STARTED)).toHaveLength(2);
+  });
+});
+
 describe("the face", () => {
   /*
    * THE MOUTH IS THE SERVER'S, and it had stopped moving.

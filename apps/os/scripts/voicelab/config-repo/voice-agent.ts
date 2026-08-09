@@ -2152,6 +2152,22 @@ class GrokCall {
    * provider's own to segment, and gating them would deafen the board.
    */
   turnClosed = false;
+  /*
+   * HANG UP SO THE DURABLE OBJECT CAN SLEEP.
+   *
+   * A provider socket held open keeps this stream's DO awake, and xAI only
+   * drops an idle session after 900 seconds — so one press used to pin a DO,
+   * and burn a provider session, for fifteen minutes of silence afterwards.
+   * Nothing else about the design allows a device to be quiet: the boards no
+   * longer heartbeat, the facet runs no timer while idle, and the face is read
+   * rather than pushed. This was the last thing keeping the lights on.
+   *
+   * Set when a push-to-talk answer finishes, acted on when the paced queue
+   * drains — which is exactly the moment the answer has been fully handed
+   * over. An open-mic call is exempt: it has no press to re-dial on, and a
+   * board streaming continuously is legitimately busy.
+   */
+  hangUpWhenDrained = false;
   /** Frames refused by that rule, so "rare" is a number and not a hope. */
   droppedAfterEnd = 0;
 
@@ -2899,6 +2915,10 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
            * last shape it was given, so the board sits there mid-syllable
            * until the next answer — which reads as a crash, not a pause. */
           this.#foldFace(call.closeMouth());
+          /* A push-to-talk call re-dials on the next press, and dialling
+           * starts the moment the button goes down — so the handshake hides
+           * behind the speaking rather than in front of the answer. */
+          call.hangUpWhenDrained = !call.serverVad;
           /* Behind whatever the pacer still holds, so it arrives last. */
           this.#speakFrames(call, [call.closeAnswer(this.deps.now())], append, runInBackground);
           return;
@@ -3081,7 +3101,12 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     if (immediate.length > 0) {
       void append(...immediate.map(asSpkFrame));
     }
-    if (!call.pacedEmpty && !call.pacerRunning) {
+    if (call.pacedEmpty) {
+      /* Nothing held back, so the answer is already fully handed over. */
+      this.#hangUpIfDue(call, append);
+      return;
+    }
+    if (!call.pacerRunning) {
       call.pacerRunning = true;
       runInBackground(async () => {
         while (!call.closed) {
@@ -3091,8 +3116,23 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
           await this.deps.sleep(PACE_FLUSH_MS);
         }
         call.pacerRunning = false;
+        this.#hangUpIfDue(call, append);
       });
     }
+  }
+
+  /**
+   * The answer is out of the door, so let go of the provider.
+   *
+   * Called at the one instant that means "fully handed over": the paced queue
+   * is empty. Holding the socket past here keeps this stream's Durable Object
+   * awake and a provider session alive for xAI's whole 900-second idle
+   * timeout, which is fifteen minutes of nobody saying anything.
+   */
+  #hangUpIfDue(call: GrokCall, append: ProcessEventArgs<VoiceAgentFacetContract>["append"]): void {
+    if (!call.hangUpWhenDrained || call.closed) return;
+    call.hangUpWhenDrained = false;
+    this.#endCall("answer delivered; idle sockets keep the stream awake", append);
   }
 
   /**
