@@ -2314,17 +2314,6 @@ export const VoiceAgentFacetContract = defineProcessorContract({
       ...EPH,
       payloadSchema: z.looseObject({ conversationId: z.string(), t: z.number() }),
     },
-    "events.iterate.com/voice-agent/viseme": {
-      description: "One mouth shape and where in the answer's audio it belongs.",
-      ...EPH,
-      payloadSchema: z.looseObject({
-        conversationId: z.string(),
-        answer: z.number(),
-        playoutSamples: z.number(),
-        viseme: z.number(),
-        confidence: z.number(),
-      }),
-    },
     "events.iterate.com/voice-agent/turn-timing": {
       description:
         "Where this turn's time went, on the facet's clock: end seen, commit, ack, delta.",
@@ -2411,7 +2400,6 @@ export const VoiceAgentFacetContract = defineProcessorContract({
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/spk-frame",
     "events.iterate.com/voice-agent/grok-event",
-    "events.iterate.com/voice-agent/viseme",
     "events.iterate.com/voice-agent/turn-timing",
     "events.iterate.com/voice-agent/pong",
     "events.iterate.com/voice-agent/warmup-ready",
@@ -2883,8 +2871,7 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
           /* THE MOUTH MUST CLOSE. Without a closing SIL the face holds the
            * last shape it was given, so the board sits there mid-syllable
            * until the next answer — which reads as a crash, not a pause. */
-          const closing = call.closeMouth();
-          if (closing.length > 0) void append(...closing);
+          this.#foldFace(call.closeMouth());
           return;
         }
         default:
@@ -2966,6 +2953,42 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     });
   }
 
+  /*
+   * THE FACE IS A VALUE, NOT A STREAM.
+   *
+   * Mouth shapes arrive tens of times a second, and sending each as an event
+   * would put a second firehose on the lane we just cleared of the first —
+   * every shape competing with the speaker frames it describes for a slot in
+   * a board's delivery batch, to deliver something that is stale the instant
+   * the next one exists. Audio is a stream because every sample matters and a
+   * gap is audible. A face is the opposite: only the latest matters, and a
+   * missed intermediate pose is invisible.
+   *
+   * So the shapes fold here and are published through `liveState`, which
+   * coalesces by nature — a client that falls behind gets the current pose
+   * rather than a backlog of positions the mouth has already left. It is
+   * deliberately not durable: after a restart the mouth should be shut, not
+   * restored to whatever shape it held when the incarnation died.
+   */
+  #face: { viseme: number; answer: number; playoutSamples: number; at: number } | null = null;
+
+  #foldFace(
+    shapes: readonly { payload: { viseme: number; answer: number; playoutSamples: number } }[],
+  ): void {
+    const latest = shapes.at(-1);
+    if (latest === undefined) return;
+    this.#face = { ...latest.payload, at: this.deps.now() };
+  }
+
+  /**
+   * What a face-rendering client watches. `liveState` pins this against the
+   * runner's snapshot, so a board reads one consistent picture of the call and
+   * the mouth rather than two that can disagree.
+   */
+  override async getRuntimeState() {
+    return { runtime: { face: this.#face, conversationId: this.#call?.conversationId ?? null } };
+  }
+
   /** Provider audio out to the device, as ephemeral speaker frames. */
   #speak(
     call: GrokCall,
@@ -2984,8 +3007,7 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
      * seen, and holding its shapes back would make the face lag the voice by
      * however long the provider took to send the rest.
      */
-    const visemes = call.visemesFor(pcm);
-    if (visemes.length > 0) void append(...visemes);
+    this.#foldFace(call.visemesFor(pcm));
     if (frames.length === 0) return;
     /*
      * ONE APPEND FOR THE WHOLE DELTA, not one per frame — and PACED, not

@@ -18,7 +18,6 @@ const CALL_STARTED = "events.iterate.com/voice-agent/call-started";
 const ACCEPTED = "events.iterate.com/voice-agent/conversation-accepted";
 const FLUSHED = "events.iterate.com/voice-agent/buffer-flushed";
 const SPK_FRAME = "events.iterate.com/voice-agent/spk-frame";
-const VISEME = "events.iterate.com/voice-agent/viseme";
 
 /** 20 ms of 16 kHz PCM16, base64 — the shape a client actually sends. */
 const micFrame = (seq: number) => ({
@@ -238,12 +237,22 @@ describe("the face", () => {
   /*
    * THE MOUTH IS THE SERVER'S, and it had stopped moving.
    *
-   * Boards have subscribed to `viseme` since the sprite work landed, and the
-   * classifier has had its own tests all along — but every caller lived in the
-   * retiring bridge, so across the whole facet era the facet emitted none and
-   * lip-sync was silently off. Nothing failed: a client can subscribe to a
-   * type nobody emits and the only symptom is a still face.
+   * Boards have subscribed to a face lane since the sprite work landed, and
+   * the classifier has had its own tests all along — but every caller lived in
+   * the retiring bridge, so across the whole facet era the facet drove nothing
+   * and lip-sync was silently off. Nothing failed: a client can watch for a
+   * thing nobody publishes, and the only symptom is a still face.
+   *
+   * It is STATE, not events. Shapes arrive tens of times a second and only the
+   * latest one is worth anything, so they fold into the runtime bag that
+   * `liveState` publishes rather than competing with the speaker frames they
+   * describe for room in a delivery batch.
    */
+  /** The pose `liveState` publishes; null until the mouth has moved. */
+  type FacePose = { viseme: number; answer: number; playoutSamples: number; at: number } | null;
+  const face = async (harness: { processor: () => VoiceAgentFacetProcessor }) =>
+    ((await harness.processor().getRuntimeState()) as { runtime: { face: FacePose } }).runtime.face;
+
   it("drives the mouth from the answer's audio", async () => {
     const provider = fakeGrok();
     const harness = harnessWith(provider);
@@ -251,17 +260,17 @@ describe("the face", () => {
     provider.greet();
     provider.ready();
     await harness.settle();
+    expect(await face(harness)).toBeNull();
 
     provider.speak(6400); // 200 ms of audio: enough for the tracker to move
     await harness.settle();
 
-    const shapes = harness.events(VISEME);
-    expect(shapes.length).toBeGreaterThan(0);
+    const pose = await face(harness);
+    expect(pose).not.toBeNull();
+    expect(pose!.viseme).toBeGreaterThanOrEqual(0);
+    expect(pose!.viseme).toBeLessThanOrEqual(14);
     /* Positioned against the answer the frames carry, or the mouth drifts. */
-    expect(
-      shapes.every((s) => s.payload.answer === harness.events(SPK_FRAME)[0]!.payload.answer),
-    ).toBe(true);
-    expect(shapes.every((s) => s.payload.viseme >= 0 && s.payload.viseme <= 14)).toBe(true);
+    expect(pose!.answer).toBe(harness.events(SPK_FRAME)[0]!.payload.answer);
   });
 
   it("closes the mouth when the answer ends", async () => {
@@ -277,9 +286,14 @@ describe("the face", () => {
     provider.finishAudio();
     await harness.settle();
 
-    /* SIL is 14, and it must be last: a face left mid-syllable reads as a
-     * crashed board rather than a pause. */
-    expect(harness.events(VISEME).at(-1)!.payload.viseme).toBe(14);
+    /* SIL is 14. A face left mid-syllable reads as a crashed board, not a
+     * pause — and unlike an event, the last state is what a client sees. */
+    expect((await face(harness))!.viseme).toBe(14);
+  });
+
+  it("publishes no face before anything has been said", async () => {
+    const harness = harnessWith(fakeGrok());
+    expect(await face(harness)).toBeNull();
   });
 });
 
