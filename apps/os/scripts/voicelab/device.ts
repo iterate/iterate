@@ -74,9 +74,10 @@ export async function device(options: DeviceOptions) {
     /*
      * The first thing to run when the device "isn't working". Every producer
      * on the device sits behind one gate, and when that gate is shut it goes
-     * on answering calls like this one while starting no calls, sending no
-     * audio and pushing no telemetry — so gateOpen is usually the whole
-     * answer, and dev-stats cannot tell you because dev-stats is behind it.
+     * on answering calls like this one while starting no calls and sending no
+     * audio — so gateOpen is usually the whole answer, and it is legible ONLY
+     * from here: everything else the device could have told you is behind the
+     * same gate.
      */
     console.log(JSON.stringify(await capability.health(), null, 2));
     return;
