@@ -5100,7 +5100,7 @@ async function dialGrokSocket(): Promise<WebSocket | null> {
 }
 
 /** The one `session.update` this facet sends, on the `session.created` edge. */
-function grokSessionUpdate(): Record<string, unknown> {
+function grokSessionUpdate(serverVad: boolean): Record<string, unknown> {
   return {
     type: "session.update",
     session: {
@@ -5108,17 +5108,29 @@ function grokSessionUpdate(): Record<string, unknown> {
       audio: {
         input: {
           format: { type: "audio/pcm", rate: 16_000 },
-          /* Manual turns: a push-to-talk board segments its own turns, and
-           * server VAD on top of that answers halfway through a sentence. */
-          /* Manual turns always: the client segments with its own button, and
-           * server VAD on top of that answers halfway through a sentence. */
-          turn_detection: null,
+          /* A push-to-talk board segments its own turns with its button, and
+           * server VAD on top of that answers halfway through a sentence. An
+           * open-mic board has no button at all: without server VAD nothing
+           * ever commits its audio and the call is silent forever. The board's
+           * echo story decides which it is (the SKILL's
+           * capture_is_echo_cancelled rule), carried here per client. */
+          turn_detection: serverVad ? { type: "server_vad" } : null,
         },
         output: { format: { type: "audio/pcm", rate: 16_000 }, voice: GROK_VOICE },
       },
     },
   };
 }
+
+/**
+ * Clients whose microphone rides the whole call open (hardware/tuned echo
+ * cancellation, no talk button). Their turns belong to server VAD; everyone
+ * else segments manually with ptt-start/ptt-end.
+ */
+const OPEN_MIC_CLIENTS = new Set([
+  "/clients/stackchan",
+  "/clients/home-assistant-voice-preview-edition",
+]);
 
 /*
  * ============================================================================
@@ -5220,6 +5232,9 @@ class GrokCall {
     if (this.#socket === null) return true; // still dialling; not dead
     return this.#socket.readyState === WebSocket.OPEN;
   }
+
+  /** Whether this call's session asks the provider to run server VAD. */
+  serverVad = false;
   /** Milliseconds from dial to a usable session, or null while still dialing. */
   get handshakeMs(): number | null {
     return this.#readyAtMs === null ? null : this.#readyAtMs - this.#openedAtMs;
@@ -5489,6 +5504,12 @@ export const VoiceAgentFacetContract = defineProcessorContract({
       ...EPH,
       payloadSchema: AudioFrame,
     },
+    "events.iterate.com/voice-agent/grok-event": {
+      description:
+        "The provider's VAD/transcript subset: speech edges for barge-in, transcripts for instruments.",
+      ...EPH,
+      payloadSchema: z.looseObject({ conversationId: z.string(), t: z.number() }),
+    },
     "events.iterate.com/voice-agent/say": {
       description: "A turn made of text rather than speech.",
       ...EPH,
@@ -5554,6 +5575,7 @@ export const VoiceAgentFacetContract = defineProcessorContract({
     "events.iterate.com/voice-agent/conversation-accepted",
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/spk-frame",
+    "events.iterate.com/voice-agent/grok-event",
     "events.iterate.com/voice-agent/pong",
     "events.iterate.com/voice-agent/warmup-ready",
     "events.iterate.com/voice-agent/warmup-unresolved",
@@ -5666,7 +5688,12 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
            * than folding this press into a corpse. */
           if (call !== null) this.#endCall("provider socket is gone");
           const conversationId = crypto.randomUUID().slice(0, 8);
-          this.#dial(conversationId, append, runInBackground);
+          this.#dial(
+            conversationId,
+            append,
+            runInBackground,
+            OPEN_MIC_CLIENTS.has(String(event.payload.client ?? "")),
+          );
           runInBackground(async () => {
             await append({
               type: "events.iterate.com/voice-agent/call-started",
@@ -5769,7 +5796,24 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         return;
       }
       case "events.iterate.com/voice-agent/conversation-ended": {
-        if (call?.conversationId === event.payload.conversationId) {
+        /*
+         * ANY end retires the live call, matching id or not. A stream holds at
+         * most one call, and the device's hang-up currently names itself
+         * ("scdev", "havpedev") rather than the worker-minted conversationId —
+         * so an id-gated retire left a corpse behind EVERY device hang-up, and
+         * with `alive` treating a rehydrated socketless call as "still
+         * dialling", every later press folded into it in silence. Measured on
+         * both open-mic boards' streams tonight (de4b8117, 03c959e8). The id
+         * still matters for the log: a mismatch is recorded so the firmware
+         * defect stays visible until the device echoes the real id.
+         */
+        if (call !== null) {
+          if (call.conversationId !== event.payload.conversationId) {
+            console.log(
+              `conversation-ended id mismatch: live=${call.conversationId} ` +
+                `event=${String(event.payload.conversationId)} — retiring anyway`,
+            );
+          }
           this.#endCall("conversation-ended event");
         }
         return;
@@ -5793,8 +5837,10 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     conversationId: string,
     append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgentFacetContract>["runInBackground"],
+    serverVad = false,
   ): void {
     const call = new GrokCall(conversationId, this.deps.now());
+    call.serverVad = serverVad;
     this.#call = call;
     runInBackground(async () => {
       let failure: string | null = null;
@@ -5860,7 +5906,7 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         case "session.created":
           /* The ONLY edge that makes us configure the session; miss it and the
            * handshake never completes and the call hangs, silently. */
-          call.sendNow(grokSessionUpdate());
+          call.sendNow(grokSessionUpdate(call.serverVad));
           return;
         case "session.updated": {
           /* Usable. Everything the handshake made us hold goes now. */
@@ -5904,8 +5950,28 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         case "response.output_audio.delta":
           if (typeof provider.delta === "string") this.#speak(call, provider.delta, append);
           return;
-        default:
+        default: {
+          /*
+           * The VAD/transcript subset rides down as `grok-event`, the shape the
+           * firmware already parses: `speech_started` is the barge-in signal
+           * every board's flush path waits for, and the transcripts are what
+           * lets an instrument say what the microphone actually delivered.
+           * Everything else stays local to the log.
+           */
+          const type = String(provider.type ?? "");
+          if (
+            type === "input_audio_buffer.speech_started" ||
+            type === "input_audio_buffer.speech_stopped" ||
+            type === "response.done" ||
+            type.includes("transcript")
+          ) {
+            void append({
+              type: "events.iterate.com/voice-agent/grok-event",
+              payload: { conversationId: call.conversationId, t: this.deps.now(), event: provider },
+            });
+          }
           return;
+        }
       }
     });
   }
