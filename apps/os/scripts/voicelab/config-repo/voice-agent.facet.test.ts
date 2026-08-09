@@ -387,6 +387,46 @@ describe("repeated end to end", () => {
     expect(harness.events(CALL_STARTED)).toHaveLength(2);
   });
 
+  it("re-dials when a handshake never finishes, rather than waiting forever", async () => {
+    /*
+     * The quieter corpse. `alive` treated anything still dialling as alive, so
+     * a dial that neither completed nor errored made the call immortal.
+     * Measured on a preview stream: a provider socket closed after 32 minutes,
+     * the next press dialled, and no acceptance and no failure ever followed —
+     * four consecutive presses folded into a handshake that was never going to
+     * end, with nothing on the stream to say so.
+     */
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    await harness.settle();
+    expect(harness.events(CALL_STARTED)).toHaveLength(1);
+
+    /* The socket is attached and open, but the provider never greets. */
+    await harness.advanceTime(10_000);
+    await harness.append({ type: PTT_START, payload: {} });
+    await harness.settle();
+
+    expect(harness.events(CALL_STARTED)).toHaveLength(2);
+    /* And it says why, so a silent stream is never the only evidence. */
+    expect(
+      harness.events("events.iterate.com/voice-agent/conversation-ended").at(-1)?.payload,
+    ).toMatchObject({ reason: "provider handshake never completed" });
+  });
+
+  it("leaves a handshake still inside its deadline alone", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    await harness.settle();
+
+    await harness.advanceTime(2_000);
+    await harness.append({ type: PTT_START, payload: {} });
+    await harness.settle();
+
+    expect(harness.events(CALL_STARTED)).toHaveLength(1);
+  });
+
   it("does not call a superseded dial a failure", async () => {
     /*
      * Being replaced is a tidy hand-over, not a fault. This wrote

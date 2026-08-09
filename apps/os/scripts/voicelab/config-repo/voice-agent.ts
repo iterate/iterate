@@ -82,6 +82,8 @@ const XAI_SECRET = "/secrets/xai";
 const GROK_REALTIME_URL = "https://api.x.ai/v1/realtime";
 const GROK_MODEL = "grok-voice-think-fast-2.0";
 const GROK_VOICE = "eve";
+/** How long a dial may go without becoming usable before it counts as dead. */
+const GROK_HANDSHAKE_DEADLINE_MS = 10_000;
 /** One speaker frame is 20 ms — the unit every pacing sum below counts in. */
 const GROK_FRAME_MS = 20;
 /** The opening burst: enough buffered downstream to survive jitter, no more. */
@@ -5235,9 +5237,22 @@ class GrokCall {
    * Ask the socket rather than trusting a flag we might never have been told
    * to set.
    */
-  get alive(): boolean {
+  alive(now: number): boolean {
     if (this.#closed) return false;
-    if (this.#socket === null) return true; // still dialling; not dead
+    /*
+     * A HANDSHAKE THAT NEVER FINISHES IS ALSO A CORPSE, and a quieter one:
+     * this returned true for anything still dialling, so a dial that neither
+     * completed nor errored made the call immortal. Measured on this stream: a
+     * provider socket closed after 32 minutes, the next press dialled
+     * `057e8469`, and no acceptance and no failure ever followed it — four
+     * consecutive presses folded into a handshake that was never going to end,
+     * with nothing on the stream to say so.
+     *
+     * A usable session takes about a second. Ten is not a tuning parameter,
+     * it is the point past which waiting is worse than dialling again.
+     */
+    if (!this.#ready) return now - this.#openedAtMs < GROK_HANDSHAKE_DEADLINE_MS;
+    if (this.#socket === null) return true;
     return this.#socket.readyState === WebSocket.OPEN;
   }
 
@@ -5872,10 +5887,15 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
          * somebody has said two or three seconds of anything, the session is up
          * and the audio they spoke into the handshake has already been flushed.
          */
-        if (call === null || !call.alive) {
+        if (call === null || !call.alive(this.deps.now())) {
           /* A dead call is not a call. Retire it and dial a fresh one rather
            * than folding this press into a corpse. */
-          if (call !== null) this.#endCall("provider socket is gone");
+          if (call !== null) {
+            this.#endCall(
+              call.ready ? "provider socket is gone" : "provider handshake never completed",
+              append,
+            );
+          }
           const conversationId = crypto.randomUUID().slice(0, 8);
           this.#dial(
             conversationId,
@@ -6318,12 +6338,28 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     }
   }
 
-  #endCall(reason: string): void {
+  /**
+   * Retire the live call, and SAY SO on the stream.
+   *
+   * The obituary used to come only from the socket's close listener, which
+   * means a call whose socket never opened produced none at all: the fold went
+   * on believing a call was open, and the at-head recovery re-dialled that
+   * same dead id on every caught-up delivery, forever. Emitting it here covers
+   * both — the listener's own append is guarded on still being the live call,
+   * so a close that follows this one cannot duplicate it.
+   */
+  #endCall(reason: string, append?: ProcessEventArgs<VoiceAgentFacetContract>["append"]): void {
     const call = this.#call;
     if (call === null) return;
     this.#call = null;
     console.log(`voice call ${call.conversationId} ended: ${reason}`);
     call.close();
+    if (append !== undefined) {
+      void append({
+        type: "events.iterate.com/voice-agent/conversation-ended",
+        payload: { conversationId: call.conversationId, reason },
+      });
+    }
   }
 }
 
