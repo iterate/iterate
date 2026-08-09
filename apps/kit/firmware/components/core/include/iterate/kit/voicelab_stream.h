@@ -69,8 +69,22 @@ enum iterate_kit_voicelab_state {
 
 /** Downlink control moments the device reacts to. */
 enum iterate_kit_voicelab_control {
-  /** Barge-in: the user is speaking — flush local playback immediately. */
+  /**
+   * Barge-in: flush local playback immediately.
+   *
+   * Raised from `drop` on the first frame of a replacing answer, so it arrives
+   * IN ORDER with the audio it invalidates. It used to be a `speech_started`
+   * on a second event type, where nothing decided which lane won.
+   */
   ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED = 0,
+  /**
+   * The sender has no more audio for this answer.
+   *
+   * Raised from `last` on the final frame, AFTER that frame is delivered. It
+   * used to be a `response.done` that routinely overtook the audio it was
+   * about; the note in handle_spk_frame records what treating that as "the
+   * answer is over" cost.
+   */
   ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE,
   /** The bridge hung up (our own hangup, its idle timeout, or Grok's close). */
   ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED,
@@ -111,19 +125,6 @@ typedef void (*iterate_kit_voicelab_control_fn)(
  */
 typedef void (*iterate_kit_voicelab_seen_fn)(
     void *context, const char *type, size_t length);
-
-/**
- * One scheduled assistant mouth shape, decoded from an
- * events.iterate.com/voice-agent/viseme event.
- * `offset_samples` counts 16 kHz samples from the first sample of
- * `answer`, so the shape belongs to a position in the audio rather than to a
- * moment on any clock — the same identity rule spk-frames already live by,
- * which is what lets a superseded answer take its mouth track down with it.
- * `viseme` is a FACE_VISEME_* id (0..14); `confidence` is 0..255.
- */
-typedef void (*iterate_kit_voicelab_viseme_fn)(
-    void *context, uint32_t answer, uint32_t offset_samples,
-    uint8_t viseme, uint8_t confidence);
 
 enum iterate_kit_voicelab_failure {
   ITERATE_KIT_VOICELAB_FAILURE_NONE = 0,
@@ -180,13 +181,11 @@ struct iterate_kit_voicelab_options {
   void *clock_context;
   /**
    * Downlink: when set, the mount also opens a live connection on the
-   * stream (spk-frame + grok-event, capped to what one inbox slot holds)
-   * and delivers decoded speaker PCM here. NULL = uplink-only probe.
+   * stream (spk-frame, capped to what one inbox slot holds) and delivers
+   * decoded speaker PCM here. NULL = uplink-only probe.
    */
   iterate_kit_voicelab_speaker_fn on_speaker;
   iterate_kit_voicelab_control_fn on_control;
-  /** NULL when this device has no face; the subscription still asks. */
-  iterate_kit_voicelab_viseme_fn on_viseme;
   /** Optional: every event type seen on the downlink, for logging. */
   iterate_kit_voicelab_seen_fn on_event_seen;
   void *downlink_context;

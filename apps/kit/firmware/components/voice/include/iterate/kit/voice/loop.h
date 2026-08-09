@@ -171,8 +171,6 @@ enum iterate_kit_voice_phase {
 enum iterate_kit_voice_answer_note_kind {
   /** Samples the playout accepted into the speaker queue. */
   ITERATE_KIT_VOICE_ANSWER_ADMITTED,
-  /** A mouth shape scheduled against an offset in the admitted audio. */
-  ITERATE_KIT_VOICE_ANSWER_VISEME,
   /** Everything queued is gone; forget what nobody will hear. */
   ITERATE_KIT_VOICE_ANSWER_ABANDONED,
 };
@@ -180,23 +178,20 @@ enum iterate_kit_voice_answer_note_kind {
 /**
  * The answer's timeline, for a board with a face.
  *
- * One op rather than four because all three notes must arrive on the SAME task
- * in the SAME order the audio did — the viseme ledger is only correct if
- * ADMITTED, VISEME and ABANDONED are serialized against each other. Splitting
- * them into separate ops would have made that requirement invisible.
+ * One op rather than several because the notes must arrive on the SAME task in
+ * the SAME order the audio did: a face that is told what was admitted and what
+ * was abandoned out of order animates audio nobody will hear.
+ *
+ * There was a third kind, VISEME, carrying scheduled mouth shapes off their own
+ * event type. The face is reduced state published through `liveState` now, so
+ * the event and this kind went together.
  */
 struct iterate_kit_voice_answer_note {
   enum iterate_kit_voice_answer_note_kind kind;
   /** Which answer, so a note that outlived its audio can be refused. */
   uint32_t answer;
-  /** VISEME only. */
-  uint32_t offset_samples;
   /** ADMITTED only. */
   size_t sample_count;
-  /** VISEME only. */
-  uint8_t viseme;
-  /** VISEME only. */
-  uint8_t confidence;
 };
 
 /**

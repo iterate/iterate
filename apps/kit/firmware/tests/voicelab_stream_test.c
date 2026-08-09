@@ -196,6 +196,22 @@ static size_t spoken_length;
 static int64_t spoken_sequence = -1;
 static int speech_started_count;
 static int response_done_count;
+/*
+ * WHAT HAPPENED IN WHICH ORDER, not just how often.
+ *
+ * `drop` and `last` ride the audio they are about, and their whole advantage
+ * over the two event types they replace is that they CANNOT be reordered
+ * against it. A count cannot tell a barge-in that flushed BEFORE its replacing
+ * frame from one that flushed after and threw that frame away, and those are
+ * the working case and the bug. Same at the other end: `last` must land after
+ * the final frame, or the owner marks an answer drained that still has audio
+ * to play and the drain is recorded as starvation.
+ */
+static char order_log[64];
+static size_t order_length;
+static void note_order(char mark) {
+  if (order_length + 1U < sizeof(order_log)) order_log[order_length++] = mark;
+}
 
 static uint32_t spoken_answer;
 
@@ -216,6 +232,7 @@ static void record_speaker(
   }
   spoken_sequence = identity == NULL ? -1 : (int64_t)identity->frame;
   spoken_answer = identity == NULL ? 0U : identity->answer;
+  note_order('f');
 }
 
 static void record_control(
@@ -223,26 +240,11 @@ static void record_control(
   (void)context;
   if (control == ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED) {
     ++speech_started_count;
+    note_order('d');
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
     ++response_done_count;
+    note_order('l');
   }
-}
-
-static int viseme_count;
-static uint32_t viseme_answer;
-static uint32_t viseme_offset_samples;
-static uint8_t viseme_id;
-static uint8_t viseme_confidence;
-
-static void record_viseme(
-    void *context, uint32_t answer, uint32_t offset_samples,
-    uint8_t viseme, uint8_t confidence) {
-  (void)context;
-  ++viseme_count;
-  viseme_answer = answer;
-  viseme_offset_samples = offset_samples;
-  viseme_id = viseme;
-  viseme_confidence = confidence;
 }
 
 /*
@@ -265,7 +267,6 @@ static void downlink_flow(void) {
       .clock_context = &fixture,
       .on_speaker = record_speaker,
       .on_control = record_control,
-      .on_viseme = record_viseme,
       .downlink_context = NULL,
     };
     assert(
@@ -292,19 +293,20 @@ static void downlink_flow(void) {
     /*
      * The subscription IS the wire contract, so it is pinned literally rather
      * than checked for membership: a type quietly added or dropped upstream
-     * must fail here and not on a bench. `voice-agent/pong` used to be in this
-     * list to give a quiet call one positive liveness observation; the ping
-     * that earned it is gone (see voicelab_stream.h) and so is the pong.
+     * must fail here and not on a bench.
+     *
+     * THREE, down from six. `pong` went with the ping that earned it;
+     * `grok-event` carried two facts that now ride `spk-frame` as `drop` and
+     * `last`; `viseme` is deleted from the contract because the face is
+     * reduced state published through `liveState`.
      */
     assert(
         strstr(
             open_message,
             "\"eventTypes\":[["
             "\"events.iterate.com/voice-agent/spk-frame\","
-            "\"events.iterate.com/voice-agent/grok-event\","
             "\"events.iterate.com/voice-agent/conversation-ended\","
-            "\"events.iterate.com/voice-agent/conversation-accepted\","
-            "\"events.iterate.com/voice-agent/viseme\"]]") !=
+            "\"events.iterate.com/voice-agent/conversation-accepted\"]]") !=
         NULL);
     assert(strstr(open_message, "\"maxDeliveryEvents\":16") != NULL);
     assert(strstr(open_message, "\"maxDeliveryBytes\":13000") != NULL);
@@ -324,35 +326,54 @@ static void downlink_flow(void) {
       "\"path\":\"/voice-agent/dev-test\",\"streamId\":\"sid\",\"events\":[["
       "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":40,"
       "\"payload\":{\"seq\":0,\"pcm\":\"QUJDRA\"}},"
-      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":41,"
-      "\"payload\":{\"event\":{\"type\":\"input_audio_buffer.speech_started\"}}}"
+      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":41,"
+      "\"payload\":{\"seq\":1,\"answer\":1,\"frame\":0,\"drop\":true,"
+      "\"pcm\":\"RUZHSA\"}}"
       "]],\"scannedAfterOffset\":39,\"scannedThroughOffset\":41,"
       "\"streamMaxOffset\":41,\"state\":null}]]]");
   receive(&fixture, "[\"release\",1,1]");
-  assert(fixture.voicelab.spk_frames_received == 1U);
+  assert(fixture.voicelab.spk_frames_received == 2U);
   assert(spoken_length == 4U);
-  assert(memcmp(spoken, "ABCD", 4U) == 0);
-  assert(spoken_sequence == 0);
+  assert(memcmp(spoken, "EFGH", 4U) == 0);
+  assert(spoken_answer == 1U);
   assert(speech_started_count == 1);
+  /*
+   * THE ORDER, WHICH IS THE POINT. The flush is announced BEFORE the frame
+   * that replaces what it flushed — 'f' then 'd' then 'f' — so the owner has
+   * emptied its queue by the time the new answer's first frame is classified
+   * into it. The old `grok-event` lane could deliver these either way round.
+   */
+  assert(order_length == 3U);
+  assert(memcmp(order_log, "fdf", 3U) == 0);
   assert(fixture.voicelab.last_event_offset == 41);
 
   /*
-   * CLIENTS DO NOT RECEIVE TRANSCRIPTS. This used to be four pushes proving
-   * assistant deltas accumulated, the authoritative `.done` line won over
-   * them, and one spoken turn produced one user line however many events
-   * described it. All of that text is gone from the device protocol; what
-   * still has to survive is the CONTROL edge that shared those events'
-   * envelope, because a `response.done` that stops arriving is an answer the
-   * playout never learns has ended.
+   * THE END OF AN ANSWER, ON ITS LAST FRAME.
+   *
+   * This used to be a `response.done` on the `grok-event` lane — one small text
+   * event against hundreds of large audio events, so it routinely overtook them
+   * and a device that treated it as "the answer is over" received 258 frames
+   * and played none. `last` cannot overtake anything: it IS the final frame,
+   * and it carries the padded remainder that used to be dropped.
+   *
+   * The edge is announced AFTER that frame is delivered — 'f' then 'l' — so the
+   * buffer the owner is about to call drained already holds everything it will
+   * ever hold. Announced first, the owner marks an answer drained with audio
+   * still queued and the normal end of every answer is recorded as starvation.
    */
+  order_length = 0U;
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":43,"
-      "\"payload\":{\"event\":{\"type\":\"response.done\"}}}"
+      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":43,"
+      "\"payload\":{\"seq\":2,\"answer\":1,\"frame\":1,\"last\":true,"
+      "\"pcm\":\"SUpLTA\"}}"
       "]],\"scannedThroughOffset\":43,\"state\":null}]]]");
   receive(&fixture, "[\"release\",2,1]");
   assert(response_done_count == 1);
+  assert(memcmp(spoken, "IJKL", 4U) == 0);
+  assert(order_length == 2U);
+  assert(memcmp(order_log, "fl", 2U) == 0);
 
   /* conversation-accepted on the stream is what makes a call live. */
   assert(!fixture.voicelab.call_active);
@@ -366,44 +387,27 @@ static void downlink_flow(void) {
   assert(fixture.voicelab.call_active);
 
   /*
-   * The mouth track: a well-formed viseme reaches the callback with the
-   * identity it carried; a shape with an out-of-range viseme id or a missing
-   * position is dropped whole rather than clamped into a confidently wrong
-   * mouth.
+   * Redelivery of the same offsets (recycle overlap) is deduped; every
+   * invocation is push + release, and pending slots must recycle.
+   *
+   * The dedupe matters more now that the control edges ride the audio: a
+   * re-delivered final frame that got past the offset filter would raise a
+   * SECOND end-of-answer against an answer already drained.
    */
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"events.iterate.com/voice-agent/viseme\",\"offset\":51,"
-      "\"payload\":{\"conversationId\":\"wsdev\",\"answer\":3,"
-      "\"playoutSamples\":6400,\"viseme\":9,\"confidence\":204}},"
-      "{\"type\":\"events.iterate.com/voice-agent/viseme\",\"offset\":52,"
-      "\"payload\":{\"conversationId\":\"wsdev\",\"answer\":3,"
-      "\"playoutSamples\":9600,\"viseme\":15,\"confidence\":204}},"
-      "{\"type\":\"events.iterate.com/voice-agent/viseme\",\"offset\":53,"
-      "\"payload\":{\"conversationId\":\"wsdev\",\"answer\":3,\"viseme\":2,"
-      "\"confidence\":100}}"
-      "]],\"scannedThroughOffset\":53,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",4,1]");
-  assert(viseme_count == 1);
-  assert(viseme_answer == 3U);
-  assert(viseme_offset_samples == 6400U);
-  assert(viseme_id == 9U);
-  assert(viseme_confidence == 204U);
-
-  /* Redelivery of the same offsets (recycle overlap) is deduped; every
-   * invocation is push + release, and pending slots must recycle. */
+  order_length = 0U;
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
       "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":40,"
       "\"payload\":{\"seq\":0,\"pcm\":\"QUJDRA\"}},"
-      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":42,"
-      "\"payload\":{\"event\":{\"type\":\"response.done\"}}}"
-      "]],\"scannedThroughOffset\":42,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",5,1]");
-  assert(fixture.voicelab.spk_frames_received == 1U);
+      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":43,"
+      "\"payload\":{\"seq\":2,\"answer\":1,\"frame\":1,\"last\":true,"
+      "\"pcm\":\"SUpLTA\"}}"
+      "]],\"scannedThroughOffset\":43,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",4,1]");
+  assert(fixture.voicelab.spk_frames_received == 3U);
   assert(response_done_count == 1);
+  assert(order_length == 0U);
   assert(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
   {
     size_t occupied = 0U;
@@ -463,7 +467,6 @@ static void mount_with_downlink(struct fixture *fixture, int *next_id) {
     .clock_context = fixture,
     .on_speaker = record_speaker,
     .on_control = record_control,
-    .on_viseme = record_viseme,
     .downlink_context = NULL,
   };
   char message[64];

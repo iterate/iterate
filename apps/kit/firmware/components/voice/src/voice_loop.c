@@ -782,21 +782,6 @@ static void on_speaker_pcm(
   }
 }
 
-/* Scheduled mouth shapes ride the same lane as the audio they describe. */
-static void on_viseme(
-    void *context, uint32_t answer, uint32_t offset_samples,
-    uint8_t viseme, uint8_t confidence) {
-  (void)context;
-  const struct iterate_kit_voice_answer_note note = {
-    .kind = ITERATE_KIT_VOICE_ANSWER_VISEME,
-    .answer = answer,
-    .offset_samples = offset_samples,
-    .viseme = viseme,
-    .confidence = confidence,
-  };
-  board_answer(&note);
-}
-
 /*
  * ONE FUNNEL FOR THROWING QUEUED SPEAKER AUDIO AWAY.
  *
@@ -2564,7 +2549,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         .clock_context = NULL,
         .on_speaker = on_speaker_pcm,
         .on_control = on_control,
-        .on_viseme = on_viseme,
         .downlink_context = NULL,
       };
       const enum capnweb_status started =

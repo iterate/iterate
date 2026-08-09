@@ -323,6 +323,30 @@ static void handle_spk_frame(
     }
   }
   ++voicelab->spk_frames_received;
+  /*
+   * BARGE-IN RIDES THE AUDIO IT INVALIDATES.
+   *
+   * This was a separate `grok-event` carrying `speech_started`, on its own
+   * event type, and it could arrive either side of the frames it was supposed
+   * to invalidate — two lanes, one ordering question, no answer. `drop` is set
+   * on the FIRST frame of a replacing answer, so it cannot be reordered
+   * against that audio: it IS that audio.
+   *
+   * Announced BEFORE the frame is handed over, so the owner has emptied the
+   * queue by the time this frame is classified into it.
+   */
+  {
+    struct capnweb_value flag;
+    bool drop = false;
+    if (capnweb_value_object_get(payload, "drop", &flag)) {
+      (void)capnweb_value_get_boolean(&flag, &drop);
+    }
+    if (drop && voicelab->options.on_control != NULL) {
+      voicelab->options.on_control(
+          voicelab->options.downlink_context,
+          ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED);
+    }
+  }
   if (voicelab->options.on_speaker != NULL) {
     identity.call = 1U;
     identity.answer = answer < 0 ? 0U : (uint32_t)answer;
@@ -335,74 +359,45 @@ static void handle_spk_frame(
         pcm_length,
         &identity);
   }
-}
-
-static void handle_viseme(
-    struct iterate_kit_voicelab *voicelab,
-    const struct capnweb_value *payload) {
-  struct capnweb_value field;
-  int64_t answer = 0;
-  int64_t offset_samples = -1;
-  int64_t viseme = -1;
-  int64_t confidence = -1;
-  if (voicelab->options.on_viseme == NULL) {
-    return;
-  }
-  if (capnweb_value_object_get(payload, "answer", &field)) {
-    (void)capnweb_value_get_int64(&field, &answer);
-  }
-  if (capnweb_value_object_get(payload, "playoutSamples", &field)) {
-    (void)capnweb_value_get_int64(&field, &offset_samples);
-  }
-  if (capnweb_value_object_get(payload, "viseme", &field)) {
-    (void)capnweb_value_get_int64(&field, &viseme);
-  }
-  if (capnweb_value_object_get(payload, "confidence", &field)) {
-    (void)capnweb_value_get_int64(&field, &confidence);
-  }
   /*
-   * A malformed shape is dropped whole rather than clamped: a clamped wrong
-   * viseme would render as a confidently wrong mouth, where a missing one
-   * merely leaves the previous shape to expire.
+   * AND THE END OF THE ANSWER RIDES ITS LAST FRAME.
+   *
+   * This was `response.done` on the `grok-event` lane, and the ordering hazard
+   * ran the other way: one small text event against hundreds of large audio
+   * events, all sent as fast as the wire takes them, so the completion
+   * routinely arrived FIRST. The comment at the old handler records what that
+   * cost when someone treated it as "the answer is over" — 258 frames received,
+   * none played, and a transcript proving the model had spoken.
+   *
+   * `last` cannot arrive early, because it is set on the final frame and that
+   * frame also carries the padded remainder that used to be dropped. Announced
+   * AFTER the frame is handed over, so the buffer the owner is about to call
+   * drained already contains everything it will ever contain.
    */
-  if (answer < 0 || offset_samples < 0 || viseme < 0 || viseme > 14 ||
-      confidence < 0 || confidence > 255) {
-    return;
-  }
-  voicelab->options.on_viseme(
-      voicelab->options.downlink_context,
-      (uint32_t)answer,
-      (uint32_t)offset_samples,
-      (uint8_t)viseme,
-      (uint8_t)confidence);
-}
-static void handle_grok_event(
-    struct iterate_kit_voicelab *voicelab,
-    const struct capnweb_value *payload) {
-  struct capnweb_value event_value;
-  struct capnweb_value type_value;
-  if (!capnweb_value_object_get(payload, "event", &event_value) ||
-      !capnweb_value_object_get(&event_value, "type", &type_value)) {
-    return;
-  }
-  if (capnweb_value_string_equals(
-          &type_value, "input_audio_buffer.speech_started")) {
-    if (voicelab->options.on_control != NULL) {
-      voicelab->options.on_control(
-          voicelab->options.downlink_context,
-          ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED);
+  {
+    struct capnweb_value flag;
+    bool last = false;
+    if (capnweb_value_object_get(payload, "last", &flag)) {
+      (void)capnweb_value_get_boolean(&flag, &last);
     }
-    return;
-  }
-  if (capnweb_value_string_equals(&type_value, "response.done")) {
-    if (voicelab->options.on_control != NULL) {
+    if (last && voicelab->options.on_control != NULL) {
       voicelab->options.on_control(
           voicelab->options.downlink_context,
           ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE);
     }
-    return;
   }
 }
+
+/*
+ * `handle_viseme` and `handle_grok_event` were here.
+ *
+ * The face is no longer an event: it is reduced state in the facet's runtime
+ * bag, published through `liveState`, and the `viseme` type is deleted from
+ * the contract. `grok-event` carried exactly two facts this device acted on,
+ * `speech_started` and `response.done`, and both now ride the `spk-frame` that
+ * they are about — see the two notes in `handle_spk_frame` for why that is not
+ * merely tidier but removes an ordering question neither lane could answer.
+ */
 
 static enum capnweb_status batch_dispatch(
     void *context,
@@ -481,12 +476,6 @@ static enum capnweb_status batch_dispatch(
     if (capnweb_value_string_equals(
             &type_value, "events.iterate.com/voice-agent/spk-frame")) {
       handle_spk_frame(voicelab, &payload);
-    } else if (capnweb_value_string_equals(
-                   &type_value, "events.iterate.com/voice-agent/grok-event")) {
-      handle_grok_event(voicelab, &payload);
-    } else if (capnweb_value_string_equals(
-                   &type_value, "events.iterate.com/voice-agent/viseme")) {
-      handle_viseme(voicelab, &payload);
     } else if (capnweb_value_string_equals(
                    &type_value, "events.iterate.com/voice-agent/conversation-accepted")) {
       /*
@@ -616,7 +605,7 @@ bool iterate_kit_voicelab_needs_recycle(
 enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab) {
   static const char *const open_path[] = {"openConnection"};
-  struct capnweb_expression event_type_items[5];
+  struct capnweb_expression event_type_items[3];
   struct capnweb_expression event_types;
   struct capnweb_expression connection_key;
   struct capnweb_expression max_events;
@@ -671,35 +660,20 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
   event_type_items[1] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
     {.string = {
-      "events.iterate.com/voice-agent/grok-event",
-      sizeof("events.iterate.com/voice-agent/grok-event") - 1U,
-    }},
-  };
-  event_type_items[2] = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {
       "events.iterate.com/voice-agent/conversation-ended",
       sizeof("events.iterate.com/voice-agent/conversation-ended") - 1U,
     }},
   };
-  event_type_items[3] = (struct capnweb_expression){
+  event_type_items[2] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
     {.string = {
       "events.iterate.com/voice-agent/conversation-accepted",
       sizeof("events.iterate.com/voice-agent/conversation-accepted") - 1U,
     }},
   };
-  /* The mouth track rides the same lane as the audio it describes. */
-  event_type_items[4] = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {
-      "events.iterate.com/voice-agent/viseme",
-      sizeof("events.iterate.com/voice-agent/viseme") - 1U,
-    }},
-  };
   event_types = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_ARRAY,
-    {.array = {event_type_items, 5U}},
+    {.array = {event_type_items, 3U}},
   };
   connection_key = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,

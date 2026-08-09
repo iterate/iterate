@@ -1804,7 +1804,6 @@ void iterate_kit_havpe_run(void) {
         .clock_context = NULL,
         .on_speaker = on_speaker_pcm,
         .on_control = on_control,
-        .on_viseme = NULL,
         .downlink_context = NULL,
       };
       const enum capnweb_status started =

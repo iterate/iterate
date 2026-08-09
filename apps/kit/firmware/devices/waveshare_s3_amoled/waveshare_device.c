@@ -126,12 +126,15 @@ static void observe_answer(
        * see exactly the samples the analyzer will eventually be fed. */
       waveshare_avatar_note_accepted(note->answer, note->sample_count);
       break;
-    case ITERATE_KIT_VOICE_ANSWER_VISEME:
-      waveshare_avatar_note_viseme(
-          note->answer, note->offset_samples, note->viseme, note->confidence);
-      break;
     case ITERATE_KIT_VOICE_ANSWER_ABANDONED:
       waveshare_avatar_note_abandoned();
+      /*
+       * The mouth track dies with the audio it was scheduled against. Its
+       * INTAKE is currently unfed — the viseme event is deleted from the
+       * contract and the face becomes liveState-published state — so this
+       * clears a queue nothing is filling yet. Kept, not deleted, because the
+       * queue and its reset are the half that survives that change.
+       */
       waveshare_avatar_viseme_reset();
       break;
   }
