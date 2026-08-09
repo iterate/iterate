@@ -5573,6 +5573,7 @@ export const VoiceAgentFacetContract = defineProcessorContract({
     "events.iterate.com/voice-agent/buffer-flushed",
     "events.iterate.com/voice-agent/provider-error",
     "events.iterate.com/voice-agent/conversation-accepted",
+    "events.iterate.com/voice-agent/conversation-ended",
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/spk-frame",
     "events.iterate.com/voice-agent/grok-event",
@@ -5718,6 +5719,24 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         /* Whatever the provider still holds is from a turn that never
          * committed; prepending it would answer a blend of two utterances. */
         call.send({ type: "input_audio_buffer.clear" });
+        /*
+         * SAY YES AGAIN. The device latches call_active from
+         * `conversation-accepted` on its live connection, and the original
+         * accept was emitted once, under this call's idempotency key, possibly
+         * hours ago to a connection that no longer exists. A press that folds
+         * into a live call therefore produced NOTHING the presser could see:
+         * the call was up, the device never learned it, the face slept on.
+         * Re-accepting per press (keyed by the press's own clock so a
+         * redelivery cannot duplicate it) closes the loop for every press, not
+         * just the one that dialled.
+         */
+        void append({
+          type: "events.iterate.com/voice-agent/conversation-accepted",
+          idempotencyKey: this.idempotencyKey(
+            `accepted:${call.conversationId}:press:${String(event.payload.t ?? "-")}`,
+          ),
+          payload: { conversationId: call.conversationId },
+        });
         return;
       }
       case "events.iterate.com/voice-agent/mic-frame": {
@@ -5897,8 +5916,30 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
   ): void {
     socket.addEventListener("close", () => {
-      if (this.#call === call) this.#call = null;
+      /*
+       * A PROVIDER-SIDE CLOSE MUST REACH THE FOLD, not just this incarnation's
+       * memory. Only the in-memory call was retired here, so an abandoned call
+       * (opened, never spoken into, never hung up) stayed open in `state.call`
+       * forever — and the at-head recovery re-dialled it on every caught-up
+       * delivery. Measured on two boards' streams: the same conversationId
+       * collecting a "timed out after 900.0 seconds due to inactivity" error
+       * every ~15 minutes, all night — an eternal re-dial loop burning one
+       * provider session per lap, with every fresh press folding into the
+       * loop's "alive" call instead of opening its own.
+       *
+       * The supersede path also lands here after it retires a call; its end is
+       * a mismatched 8-hex obituary by then, which the fold ignores — so this
+       * cannot close a successor.
+       */
+      const wasLive = this.#call === call;
+      if (wasLive) this.#call = null;
       call.close();
+      if (wasLive) {
+        void append({
+          type: "events.iterate.com/voice-agent/conversation-ended",
+          payload: { conversationId: call.conversationId, reason: "provider socket closed" },
+        });
+      }
     });
     socket.addEventListener("message", (message: MessageEvent) => {
       if (typeof message.data !== "string") return;

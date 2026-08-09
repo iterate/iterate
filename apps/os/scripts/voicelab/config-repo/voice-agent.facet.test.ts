@@ -85,6 +85,11 @@ function fakeGrok() {
     die: () => {
       socket.readyState = 3;
     },
+    /** The provider closes properly — the close listener DOES run. */
+    drop: () => {
+      socket.readyState = 3;
+      for (const listener of listeners.get("close") ?? []) listener({});
+    },
     /** How much captured audio actually reached the provider. */
     appended: () => sent.filter((message) => message.type === "input_audio_buffer.append").length,
     committed: () => sent.some((message) => message.type === "input_audio_buffer.commit"),
@@ -287,7 +292,7 @@ describe("repeated end to end", () => {
     const harness = harnessWith(provider);
 
     for (let round = 0; round < 50; round++) {
-      await harness.append({ type: PTT_START, payload: {} });
+      await harness.append({ type: PTT_START, payload: { t: round * 1000 } });
       if (round === 0) {
         provider.greet();
         provider.ready();
@@ -299,9 +304,11 @@ describe("repeated end to end", () => {
     await harness.settle();
 
     /* One call, 250 frames, and every turn committed — no wedge, no re-dial,
-     * no silently dropped audio. */
+     * no silently dropped audio. Every press is ANSWERED, though: each one
+     * re-appends the accept its presser's device latches call_active from —
+     * the once-ever accept is what kept faces asleep on live calls. */
     expect(harness.events(CALL_STARTED)).toHaveLength(1);
-    expect(harness.events(ACCEPTED)).toHaveLength(1);
+    expect(harness.events(ACCEPTED)).toHaveLength(50);
     expect(provider.appended()).toBe(250);
   });
 
@@ -398,6 +405,44 @@ describe("the hang-up", () => {
     await harness.append({ type: PTT_START, payload: {} });
     await harness.settle();
     expect(harness.events(CALL_STARTED)).toHaveLength(2);
+  });
+
+  it("a provider-side close reaches the fold, so the call does not resurrect", async () => {
+    /*
+     * Only the in-memory call was retired on socket close, so an abandoned
+     * call stayed open in state.call forever and the at-head recovery
+     * re-dialled it on every caught-up delivery — the same conversationId
+     * collecting a 900-second inactivity timeout every ~15 minutes all night,
+     * with every fresh press folding into the loop instead of dialling.
+     */
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+    expect(harness.state().call).not.toBeNull();
+
+    provider.drop();
+    await harness.settle();
+    expect(harness.state().call).toBeNull();
+  });
+
+  it("a press folding into a live call re-accepts, so the presser's device can latch", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: { t: 1000 } });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+    expect(harness.events(ACCEPTED)).toHaveLength(1);
+
+    /* Second press, same live call: no new dial, but the accept must be said
+     * again — the first one went to a connection that may be long gone. */
+    await harness.append({ type: PTT_START, payload: { t: 2000 } });
+    await harness.settle();
+    expect(harness.events(CALL_STARTED)).toHaveLength(1);
+    expect(harness.events(ACCEPTED)).toHaveLength(2);
   });
 
   it("a stale obituary for a predecessor does not close the successor", async () => {
