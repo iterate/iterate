@@ -13,13 +13,13 @@
 //     --project facet-proof-8 --stream-path /agents/voice/ptt-1 \
 //     --mic-wav /tmp/utterance.wav --rounds 8
 //
-// Attribution, not just a total: each stream turn also reports where its time
-// went, using the facet's own clock. Every `spk-frame` carries `t`, the
-// facet's timestamp for the provider delta it was cut from, and `pong` carries
-// the facet's clock against a client-measured round trip — so the two clocks
-// can be aligned and the answer split into "before the facet had the audio"
-// and "after", without shipping the provider's delta firehose to this process
-// and perturbing the very thing being measured.
+// Attribution, not just a total, and WITHOUT aligning two clocks. The facet
+// emits one tiny `turn-timing` event per turn holding its own stamps, and the
+// two provider terms in it — the round trip to xAI and the model's think time
+// — are facet-clock DURATIONS. Subtracting them from a locally measured total
+// leaves everything that is ours, with the skew cancelled out. That is both
+// simpler and tighter than estimating an offset and splitting the answer into
+// an uplink and a downlink either side of it.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -53,8 +53,8 @@ export interface PttMarginalOptions extends VoicelabConnectOptions {
 const FRAME_MS = 20;
 /** 20 ms of 16 kHz PCM16 = 320 samples = 640 bytes. */
 const FRAME_SAMPLES = 320;
-/** Clock-alignment probes per round; the median of three beats any one. */
-const SKEW_PROBES = 3;
+/** Round-trip probes per round; the median of three beats any one. */
+const APPEND_PROBES = 3;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -101,21 +101,16 @@ interface Turn {
 /** A stream turn, with the facet's own clock folded in. */
 interface StreamTurn extends Turn {
   /**
-   * Release -> the facet holding the answer's first byte, on the client clock.
+   * Everything that is OURS, with the clocks cancelled out.
    *
-   * Everything upstream of us plus everything inside the provider: the
-   * `ptt-end` append, the facet's commit, the model, and the delta coming
-   * back to the facet.
+   * `totalMs` is measured here and the provider's two terms are facet-clock
+   * durations, so the remainder is the append reaching the facet, the facet's
+   * own work, and the answer's first frame reaching this process — with no
+   * clock alignment and therefore no error bars from one.
    */
-  toFacetMs: number | null;
-  /** The facet holding a frame -> this process hearing it. Purely our downlink. */
-  downlinkMs: number | null;
-  /** Round-trip through the whole plumbing for a minimal event. */
-  pingRttMs: number | null;
+  ourMs: number | null;
   /** Round-trip to the Durable Object alone, with no delivery lane in it. */
   appendRttMs: number | null;
-  /** Release -> the facet seeing `ptt-end`. Our uplink, and nothing else. */
-  uplinkMs: number | null;
   /** The facet's own work between seeing the end and sending the commit. */
   facetMs: number | null;
   /** The facet's round trip to the provider: commit sent -> commit acked. */
@@ -309,49 +304,34 @@ export async function pttMarginal(options: PttMarginalOptions) {
   });
 
   /**
-   * How far the facet's clock is ahead of ours, and what a minimal round trip
-   * through the plumbing costs.
+   * What a round trip to the Durable Object costs, and nothing else.
    *
-   * `pong` is the smallest thing the facet can be asked to produce, so its
-   * round trip is the floor for anything the facet says. Assuming the two legs
-   * are symmetric, the facet's stamp should sit at the midpoint of the trip.
+   * This used to append a `ping` and wait for the facet to append a `pong`
+   * carrying its clock, so the answer could be split into an uplink and a
+   * downlink. Both the ping pair and the clock alignment are gone: a
+   * WebSocket already knows whether it is alive, and the split was never
+   * worth its error bars — a skew estimate assumes symmetric legs, so it
+   * carried +/-50ms that the SUM of the two halves did not.
+   *
+   * The honest number needs no clock alignment at all. `totalMs` is measured
+   * here, and `turn-timing`'s provider RTT and think time are facet-clock
+   * DURATIONS, so subtracting them leaves everything that is ours with the
+   * skew cancelled out.
    */
-  async function probeClock(): Promise<{
-    skewMs: number | null;
-    rttMs: number | null;
-    appendMs: number | null;
-  }> {
-    const skews: number[] = [];
-    const rtts: number[] = [];
-    /*
-     * THE APPEND'S OWN ROUND TRIP, separately.
-     *
-     * `append` resolves when the Stream Durable Object has committed the
-     * event, so it measures this process to the DO and back with none of the
-     * delivery lane in it. Subtracting it from the ping round trip says
-     * whether the uplink is geography (reaching the DO at all) or machinery
-     * (what happens between the DO committing an event and a facet seeing it).
-     */
-    const appends: number[] = [];
-    for (let probe = 0; probe < SKEW_PROBES; probe++) {
-      const id = `skew-${Date.now()}-${probe}`;
-      const sentAt = Date.now();
+  async function probeAppendRtt(): Promise<number | null> {
+    const trips: number[] = [];
+    for (let probe = 0; probe < APPEND_PROBES; probe++) {
+      const at = Date.now();
       await discardRpcResult(
         stream.append({
-          type: "events.iterate.com/voice-agent/ping",
+          type: "events.iterate.com/voice-agent/mic-frame",
           ephemeral: true,
-          payload: { id },
+          payload: { seq: -1 - probe, pcm: "" },
         }),
       );
-      appends.push(Date.now() - sentAt);
-      const deadline = Date.now() + 5_000;
-      while (Date.now() < deadline && !pongs.has(id)) await sleep(5);
-      const pong = pongs.get(id);
-      if (pong === undefined || Number.isNaN(pong.facetT)) continue;
-      rtts.push(pong.at - sentAt);
-      skews.push(pong.facetT - (sentAt + pong.at) / 2);
+      trips.push(Date.now() - at);
     }
-    return { skewMs: median(skews), rttMs: median(rtts), appendMs: median(appends) };
+    return median(trips);
   }
 
   /**
@@ -411,11 +391,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
     return Date.now();
   }
 
-  async function streamTurn(
-    skewMs: number | null,
-    rttMs: number | null,
-    appendRttMs: number | null = null,
-  ): Promise<StreamTurn> {
+  async function streamTurn(appendRttMs: number | null = null): Promise<StreamTurn> {
     spkAt = [];
     timing.length = 0;
     redialledThisTurn = false;
@@ -443,10 +419,6 @@ export async function pttMarginal(options: PttMarginalOptions) {
         ? null
         : Math.round(to - from);
     const facetSide = {
-      /* Cross-clock, so it needs the skew; the rest are facet-to-facet spans
-       * and are immune to it. */
-      uplinkMs:
-        skewMs === null || marks === null ? null : Math.round(marks.endSeenT - skewMs - releasedAt),
       facetMs: span(marks?.endSeenT, marks?.commitSentT),
       providerRttMs: span(marks?.commitSentT, marks?.committedAckT),
       providerThinkMs: span(marks?.committedAckT, marks?.firstDeltaT),
@@ -460,24 +432,16 @@ export async function pttMarginal(options: PttMarginalOptions) {
       maxFrameGapMs: marks?.maxFrameGapMs ?? null,
     };
     if (heard === undefined) {
-      return {
-        totalMs: null,
-        toFacetMs: null,
-        downlinkMs: null,
-        pingRttMs: rttMs,
-        appendRttMs,
-        warm: true,
-        ...facetSide,
-      };
+      return { totalMs: null, ourMs: null, appendRttMs, warm: true, ...facetSide };
     }
-    /* The facet's stamp, moved onto this process's clock. */
-    const facetHadItAt =
-      skewMs === null || Number.isNaN(heard.facetT) ? null : heard.facetT - skewMs;
+    const totalMs = heard.at - releasedAt;
+    const provider =
+      facetSide.providerRttMs === null || facetSide.providerThinkMs === null
+        ? null
+        : facetSide.providerRttMs + facetSide.providerThinkMs;
     return {
-      totalMs: heard.at - releasedAt,
-      toFacetMs: facetHadItAt === null ? null : Math.round(facetHadItAt - releasedAt),
-      downlinkMs: facetHadItAt === null ? null : Math.round(heard.at - facetHadItAt),
-      pingRttMs: rttMs,
+      totalMs,
+      ourMs: provider === null ? null : totalMs - provider,
       appendRttMs,
       warm: !redialledThisTurn,
       ...facetSide,
@@ -530,13 +494,12 @@ export async function pttMarginal(options: PttMarginalOptions) {
      * run is trying to exclude.
      */
     console.log("  warming the facet's provider socket (unmeasured)...");
-    const warm = await streamTurn(null, null);
+    const warm = await streamTurn();
     console.log(`  warm-up ${warm.totalMs === null ? "TIMEOUT" : `${warm.totalMs}ms`}\n`);
     await settle();
 
     for (let round = 0; round < rounds; round++) {
-      const clock = await probeClock();
-      const viaStream = await streamTurn(clock.skewMs, clock.rttMs, clock.appendMs);
+      const viaStream = await streamTurn(await probeAppendRtt());
       streamTurns.push(viaStream);
       await settle();
 
@@ -547,9 +510,9 @@ export async function pttMarginal(options: PttMarginalOptions) {
         value === null ? "     -" : `${String(value).padStart(4)}${unit}`;
       console.log(
         `  round ${String(round + 1).padStart(2)}  ` +
-          `stream ${show(viaStream.totalMs)} = up ${show(viaStream.uplinkMs)} + ` +
-          `facet ${show(viaStream.facetMs)} + xai-rtt ${show(viaStream.providerRttMs)} + ` +
-          `think ${show(viaStream.providerThinkMs)} + down ${show(viaStream.downlinkMs)} ` +
+          `stream ${show(viaStream.totalMs)} = ours ${show(viaStream.ourMs)} + ` +
+          `xai-rtt ${show(viaStream.providerRttMs)} + think ${show(viaStream.providerThinkMs)} ` +
+          `(facet ${show(viaStream.facetMs)}) ` +
           `[backlog ${show(viaStream.backlogMs)}, gap ${show(viaStream.maxFrameGapMs)}, ` +
           `frames ${String(viaStream.micFramesSeen ?? "-")}]  ` +
           `direct ${show(viaDirect.totalMs)} = xai-rtt ${show(viaDirect.providerRttMs)} + ` +
@@ -590,10 +553,8 @@ export async function pttMarginal(options: PttMarginalOptions) {
     directReleaseToAudioMs: summarize(directTotals),
     /** The headline: what the stream costs on top of talking to xAI ourselves. */
     marginalMs: streamP50 === null || directP50 === null ? null : streamP50 - directP50,
-    /** Release -> the facet holding the answer's first byte. */
-    toFacetMs: summarize(warmStream.map((t) => t.toFacetMs).filter((v): v is number => v !== null)),
-    /** Release -> the facet seeing the release. Purely our uplink. */
-    uplinkMs: summarize(warmStream.map((t) => t.uplinkMs).filter((v): v is number => v !== null)),
+    /** Everything that is ours, clocks cancelled. */
+    ourMs: summarize(warmStream.map((t) => t.ourMs).filter((v): v is number => v !== null)),
     /** The facet's own work, end seen to commit sent. */
     facetMs: summarize(warmStream.map((t) => t.facetMs).filter((v): v is number => v !== null)),
     /** Commit -> ack, from the facet's colo and from this Mac, for comparison. */
@@ -613,12 +574,6 @@ export async function pttMarginal(options: PttMarginalOptions) {
     ),
     /** How far the delivery lane fell behind the microphone. */
     backlogMs: summarize(warmStream.map((t) => t.backlogMs).filter((v): v is number => v !== null)),
-    /** Facet holds a frame -> this process hears it. */
-    downlinkMs: summarize(
-      warmStream.map((t) => t.downlinkMs).filter((v): v is number => v !== null),
-    ),
-    /** A minimal event's round trip through the same plumbing. */
-    pingRttMs: summarize(warmStream.map((t) => t.pingRttMs).filter((v): v is number => v !== null)),
     /** Just reaching the Durable Object and back, with no delivery lane in it. */
     appendRttMs: summarize(
       warmStream.map((t) => t.appendRttMs).filter((v): v is number => v !== null),
@@ -652,16 +607,14 @@ export async function pttMarginal(options: PttMarginalOptions) {
   };
   console.log("");
   line("stream release→audio", report.streamReleaseToAudioMs);
-  line("  1 uplink to facet", report.uplinkMs);
+  line("  of which ours", report.ourMs);
   line("    incl. backlog", report.backlogMs);
-  line("  2 facet's own work", report.facetMs);
-  line("  3 facet→xAI→facet", report.providerRttFromFacetMs);
-  line("  4 model thinking", report.providerThinkFromFacetMs);
-  line("  5 downlink to here", report.downlinkMs);
+  line("  facet's own work", report.facetMs);
+  line("  facet→xAI→facet", report.providerRttFromFacetMs);
+  line("  model thinking", report.providerThinkFromFacetMs);
   line("direct release→audio", report.directReleaseToAudioMs);
   line("  mac→xAI→mac", report.providerRttFromHereMs);
   line("  model thinking", report.providerThinkMs);
-  line("ping round trip", report.pingRttMs);
   line("  append to DO only", report.appendRttMs);
   if (report.marginalMs !== null) {
     console.log(`\n  MARGINAL OVERHEAD  ${report.marginalMs > 0 ? "+" : ""}${report.marginalMs}ms`);

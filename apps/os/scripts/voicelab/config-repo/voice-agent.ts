@@ -1625,25 +1625,6 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
     }
   }
 
-  /** Hang up. Equivalent to appending conversation-ended yourself; here for callers
-   * that would rather not build the event. */
-  async endCall(options: { path: string; conversationId: string; reason?: string }): Promise<void> {
-    const project = await this.env.ITX.get();
-    const stream = project.streams.get(options.path);
-    try {
-      await discardRpcResult(
-        stream.append({
-          type: "events.iterate.com/voice-agent/conversation-ended",
-          payload: { conversationId: options.conversationId, reason: options.reason ?? "hangup" },
-        }),
-        "endCall append result",
-      );
-    } finally {
-      disposeRpcStub(stream, "endCall stream");
-      disposeRpcStub(project, "endCall ITX project");
-    }
-  }
-
   /** Spike diagnostic: dial Grok realtime through the egress lane, report timings. */
   async probeGrok(): Promise<Record<string, unknown>> {
     const t0 = Date.now();
@@ -2413,16 +2394,6 @@ export const VoiceAgentFacetContract = defineProcessorContract({
       ...EPH,
       payloadSchema: z.looseObject({ text: z.string() }),
     },
-    "events.iterate.com/voice-agent/ping": {
-      description: "Liveness probe; answered with pong.",
-      ...EPH,
-      payloadSchema: z.looseObject({ id: z.string() }),
-    },
-    "events.iterate.com/voice-agent/pong": {
-      description: "This incarnation's proof of life.",
-      ...EPH,
-      payloadSchema: z.looseObject({ id: z.string() }),
-    },
     /*
      * THE WARM-UP HANDSHAKE. Setup blocks on this, so a facet that does not
      * answer it cannot be installed at all — which is exactly how the first
@@ -2464,7 +2435,6 @@ export const VoiceAgentFacetContract = defineProcessorContract({
     "events.iterate.com/voice-agent/mic-frame",
     "events.iterate.com/voice-agent/ptt-end",
     "events.iterate.com/voice-agent/say",
-    "events.iterate.com/voice-agent/ping",
   ],
   emits: [
     "events.iterate.com/voice-agent/call-started",
@@ -2476,7 +2446,6 @@ export const VoiceAgentFacetContract = defineProcessorContract({
     "events.iterate.com/voice-agent/spk-frame",
     "events.iterate.com/voice-agent/grok-event",
     "events.iterate.com/voice-agent/turn-timing",
-    "events.iterate.com/voice-agent/pong",
     "events.iterate.com/voice-agent/warmup-ready",
     "events.iterate.com/voice-agent/warmup-unresolved",
   ],
@@ -2689,23 +2658,6 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
           item: { type: "message", role: "user", content: [{ type: "input_text", text }] },
         });
         call.send({ type: "response.create" });
-        return;
-      }
-      case "events.iterate.com/voice-agent/ping": {
-        /* The only event a device gets during a silent call, and the only
-         * honest proof this incarnation is alive. */
-        runInBackground(async () => {
-          await append({
-            type: "events.iterate.com/voice-agent/pong",
-            ephemeral: true,
-            payload: {
-              conversationId: call?.conversationId ?? "",
-              id: event.payload.id,
-              t1: this.deps.now(),
-              ready: call?.ready === true,
-            },
-          });
-        });
         return;
       }
       case "events.iterate.com/voice-agent/warmup": {
@@ -3063,7 +3015,26 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
    * the mouth rather than two that can disagree.
    */
   override async getRuntimeState() {
-    return { runtime: { face: this.#face, conversationId: this.#call?.conversationId ?? null } };
+    return {
+      runtime: {
+        face: this.#face,
+        conversationId: this.#call?.conversationId ?? null,
+        ready: this.#call?.ready === true,
+        /*
+         * THE CLOCK, WHICH IS WHY `ping`/`pong` ARE GONE.
+         *
+         * Those two event types existed to prove this incarnation was alive
+         * and to let a caller align its clock with it. Both were duplicates: a
+         * WebSocket has its own ping/pong and already knows whether it is
+         * alive, the platform hands the stream a real connection-layer ping
+         * (t0/t1/t2) for transport RTT, and reading THIS bag is itself proof
+         * that the facet is loaded and answering. A read that has to happen
+         * anyway is a better liveness probe than two event types on the lane
+         * we are trying to reduce to almost nothing.
+         */
+        now: this.deps.now(),
+      },
+    };
   }
 
   /** Provider audio out to the device, as ephemeral speaker frames. */

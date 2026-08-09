@@ -8,8 +8,6 @@ export { device } from "./device.ts";
 export { direct } from "./direct.ts";
 export { loudness } from "./loudness.ts";
 export { matrix } from "./matrix.ts";
-export { pressure } from "./pressure.ts";
-export { probe } from "./probe.ts";
 export { prove } from "./prove.ts";
 export { reveal } from "./reveal.ts";
 export { reliability } from "./reliability.ts";
