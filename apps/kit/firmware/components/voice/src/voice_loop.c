@@ -55,6 +55,7 @@
 
 #include "capnweb/capnweb.h"
 #include "iterate/kit/audio_codec.h"
+#include "iterate/kit/barge_in.h"
 #include "iterate/kit/conversation_launch.h"
 #include "iterate/kit/retry_gate.h"
 #include "iterate/kit/platforms/esp_idf_reset_reason.h"
@@ -475,6 +476,33 @@ static struct {
   uint32_t mic_process_failures;
   /** Captured with no turn open: room noise, never sent, never queued. */
   uint32_t mic_frames_idle;
+  /*
+   * THE LOUDEST SAMPLE IN THE NEWEST FRAME, and the loudest ever seen.
+   *
+   * Written by the CAPTURE task, read by the app task, so they are atomics
+   * rather than plain words — `view.microphone_peak` stays app-task-owned and
+   * is refreshed from here once per pass, which keeps the view a value one
+   * task assembles instead of a struct two tasks write.
+   *
+   * `mic_peak_max` exists because the barge-in floor below has to be argued
+   * about from measured numbers rather than from a plausible-looking constant:
+   * see barge_in.h, where 300 is defended by exactly two such measurements.
+   */
+  atomic_uint mic_peak;
+  atomic_uint mic_peak_max;
+  /*
+   * WHETHER THE PROVIDER SAYING "SOMEBODY STARTED SPEAKING" SHOULD BE BELIEVED.
+   *
+   * Only on an open-mic board, which is why it is keyed on `turns` and not on
+   * a board op: the provider's VAD listens to what the device SENDS, and
+   * during an answer that is whatever the echo canceller did not remove.
+   * Measured on the HA Voice PE: six barge-ins across four short answers with
+   * nobody in the room, and 236 frames of a 140-frame answer thrown away. A
+   * push-to-talk board cannot have this problem — its microphone is shut while
+   * the speaker runs — and gating one would REFUSE barge-ins that are real.
+   */
+  struct iterate_kit_barge_in barge_in;
+  uint32_t barge_in_rejected;
   uint32_t speaker_frames_played;
   /* Written by both the app producer and playback consumer. */
   atomic_uint speaker_overflow_drops;
@@ -833,8 +861,27 @@ static void on_control(
     void *context, enum iterate_kit_voicelab_control control) {
   (void)context;
   if (control == ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED) {
-    /* With manual turns this only fires if something re-enables VAD, but
-     * flushing playback on it is still the right response. */
+    /*
+     * THE PROVIDER IS NOT THE ONLY WITNESS, ON THE BOARDS WHERE IT IS NOT A
+     * RELIABLE ONE.
+     *
+     * On an open-mic board the provider's VAD hears whatever this device sent,
+     * which during an answer is the echo the canceller missed; it fires on
+     * that, the device flushes, and the answer stops mid-word. The device can
+     * see its OWN microphone, so it corroborates before throwing audio away —
+     * see barge_in.h for the two measurements that set the floor, and for why
+     * that floor is honest about being out of room.
+     *
+     * PUSH-TO-TALK BOARDS ARE NOT GATED, deliberately. Their microphone is shut
+     * while the speaker runs, so they cannot produce the false positive this
+     * exists for — and their `barge_in` gate would never have observed a loud
+     * frame, so admitting through it would refuse every real barge-in instead.
+     */
+    if (runtime.facts->turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD &&
+        !iterate_kit_barge_in_admit(&runtime.barge_in, now_ms(NULL))) {
+      ++runtime.barge_in_rejected;
+      return;
+    }
     /* Barge-in: atomically invalidate and reset every queued frame. */
     /* Ordering-safe: the watch comes off before the audio does. */
     (void)abandon_speaker_audio();
@@ -1392,6 +1439,46 @@ void iterate_kit_voice_loop_capture_step(void) {
   }
   ++runtime.mic_frames_captured;
   /*
+   * HOW LOUD THE ROOM IS, ONCE PER FRAME.
+   *
+   * `view.microphone_peak` was declared in the vtable and computed nowhere,
+   * which made every board's meter read zero. Without it a board with no
+   * screen looks identical whether it is listening or deaf — which is exactly
+   * how one was reported.
+   *
+   * Measured on the PROCESSED frame and BEFORE the `talking` gate, which is
+   * what the board this came from did: the peak has to keep moving while the
+   * device is idle (that is when a person is checking whether it hears them),
+   * and it has to be the CANCELLED plane, because the barge-in gate below
+   * reads the same number and amplifying a residual first is exactly how an
+   * echo gets mistaken for a voice.
+   *
+   * One pass over a 20 ms frame on the task that already owns the samples.
+   */
+  {
+    int32_t peak = 0;
+    for (size_t index = 0U; index < FRAME_SAMPLES; ++index) {
+      const int32_t sample = processed_frame.samples[index];
+      const int32_t magnitude = sample < 0 ? -sample : sample;
+      if (magnitude > peak) peak = magnitude;
+    }
+    atomic_store_explicit(
+        &runtime.mic_peak, (unsigned int)peak, memory_order_relaxed);
+    if ((unsigned int)peak >
+        atomic_load_explicit(&runtime.mic_peak_max, memory_order_relaxed)) {
+      atomic_store_explicit(
+          &runtime.mic_peak_max, (unsigned int)peak, memory_order_relaxed);
+    }
+    /*
+     * The same peak, kept as the evidence a barge-in has to point at. Only
+     * where the provider needs corroborating; see on_control.
+     */
+    if (runtime.facts->turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD) {
+      iterate_kit_barge_in_observe(
+          &runtime.barge_in, (uint32_t)peak, now_ms(NULL));
+    }
+  }
+  /*
    * NOBODY IS LISTENING, SO DO NOT QUEUE.
    *
    * Capture runs continuously — the codec is full duplex and stopping it
@@ -1687,6 +1774,15 @@ static size_t health_json(char *out, size_t capacity) {
     {"micDropped", runtime.mic_frames_dropped},
     {"micProcessFailures", runtime.mic_process_failures},
     {"micIdle", runtime.mic_frames_idle},
+    /*
+     * WHETHER THIS DEVICE CAN HEAR ANYTHING AT ALL, and the loudest it ever
+     * has. A deaf board and a quiet room are indistinguishable from every
+     * other counter here — micCaptured climbs identically for both.
+     */
+    {"micPeak",
+     atomic_load_explicit(&runtime.mic_peak, memory_order_relaxed)},
+    {"micPeakMax",
+     atomic_load_explicit(&runtime.mic_peak_max, memory_order_relaxed)},
     {"spkFrames", runtime.voicelab.spk_frames_received},
     {"spkPlayed", runtime.speaker_frames_played},
     {"spkOverflow",
@@ -1733,6 +1829,12 @@ static size_t health_json(char *out, size_t capacity) {
     {"spkWaitPriming", runtime.speaker_waits_priming},
     {"spkAnswerDrains", runtime.speaker_waits_dry},
     {"bargeIns", runtime.barge_in_flushes},
+    /*
+     * Refused for want of evidence: high here means the room, not a person.
+     * Always 0 on a push-to-talk board, which is the truth — that gate is not
+     * armed there, because a shut microphone cannot produce a false barge-in.
+     */
+    {"bargeInsRejected", runtime.barge_in_rejected},
     {"turnMarkerFailures", runtime.turn_marker_failures},
     /*
      * THE FACE, AND THE ONE NUMBER THAT SAYS IT IS ALIVE.
@@ -3143,6 +3245,14 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
 
     ++runtime.loop_count;
   }
+  /*
+   * The meter, carried across from the capture task exactly here — one
+   * relaxed load per pass, on the task that owns the view, immediately before
+   * the view is shown. Anywhere earlier and a board renders a peak one whole
+   * app-loop pass old for no reason.
+   */
+  runtime.view.microphone_peak =
+      atomic_load_explicit(&runtime.mic_peak, memory_order_relaxed);
   /*
    * SHOW IT, LAST AND ALWAYS.
    *
