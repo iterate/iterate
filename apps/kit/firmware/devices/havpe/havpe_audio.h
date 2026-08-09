@@ -81,7 +81,6 @@ void havpe_audio_reserve_write(uint32_t ms);
 void havpe_audio_rollback_write(uint32_t ms);
 uint32_t havpe_audio_starved_ms(void);
 uint32_t havpe_audio_starve_events(void);
-uint32_t havpe_audio_written_ms(void);
 
 /** Whether the hardware ring still holds audio due out of the speaker. */
 bool havpe_audio_speaker_is_playing(void);
@@ -137,9 +136,6 @@ uint32_t havpe_audio_barge_in_refused(void);
  * reason interruptions do not work.
  */
 uint32_t havpe_audio_loudest_refused(void);
-void havpe_audio_inject_starvation(uint32_t ms);
-bool havpe_audio_starvation_pending(void);
-uint32_t havpe_audio_take_injected_starvation(void);
 
 #ifdef __cplusplus
 }

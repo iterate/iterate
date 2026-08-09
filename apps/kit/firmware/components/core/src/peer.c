@@ -249,11 +249,6 @@ enum capnweb_status iterate_kit_peer_init(
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
   peer->options = *options;
-  peer->last_poll_result = (struct iterate_kit_poll_result){
-    ITERATE_KIT_POLL_OK,
-    CAPNWEB_OK,
-  };
-  peer->subscription_callback_rejections = 0U;
   peer->served_dispatches = 0U;
   peer->initialized = true;
   return CAPNWEB_OK;
@@ -267,56 +262,6 @@ struct capnweb_capability iterate_kit_peer_capability(
     NULL,
   };
   return capability;
-}
-
-struct iterate_kit_poll_result iterate_kit_peer_poll(
-    struct iterate_kit_peer *peer, uint64_t now_ms) {
-  size_t index;
-  struct iterate_kit_poll_result lifecycle_result = {
-    ITERATE_KIT_POLL_OK,
-    CAPNWEB_OK,
-  };
-  const struct iterate_kit_poll_result state_error = {
-    ITERATE_KIT_POLL_CAPNWEB_ERROR,
-    CAPNWEB_E_STATE,
-  };
-  if (peer == NULL || !peer->initialized) {
-    return state_error;
-  }
-  for (index = 0U; index < peer->options.module_count; ++index) {
-    const struct iterate_kit_module *module = &peer->options.modules[index];
-    if (module->poll != NULL) {
-      const struct iterate_kit_poll_result result =
-          module->poll(module->context, now_ms);
-      if (result.status == ITERATE_KIT_POLL_CALLBACK_REJECTED) {
-        /*
-         * Cap'n Web has already resolved and released the rejected remote
-         * callback before a module reports this result. Treating that normal
-         * subscription endpoint like a driver fault used to skip every later
-         * module for one cooperative owner-loop turn and print a false device
-         * error. Continue bounded polling, while retaining a saturating count
-         * so userspace can explain exactly why the subscription disappeared.
-         */
-        if (peer->subscription_callback_rejections < UINT32_MAX) {
-          ++peer->subscription_callback_rejections;
-        }
-        lifecycle_result = result;
-      } else if (result.status != ITERATE_KIT_POLL_OK) {
-        peer->last_poll_result = result;
-        return result;
-      }
-    }
-  }
-  peer->last_poll_result = lifecycle_result;
-  return peer->last_poll_result;
-}
-
-uint32_t iterate_kit_peer_subscription_callback_rejections(
-    const struct iterate_kit_peer *peer) {
-  if (peer == NULL || !peer->initialized) {
-    return 0U;
-  }
-  return peer->subscription_callback_rejections;
 }
 
 uint32_t iterate_kit_peer_served_dispatches(
@@ -365,6 +310,5 @@ struct iterate_kit_poll_result iterate_kit_peer_close(
     }
   }
   peer->initialized = false;
-  peer->last_poll_result = result;
   return result;
 }

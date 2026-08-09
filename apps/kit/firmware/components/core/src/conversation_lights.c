@@ -47,14 +47,6 @@ static void render_network(
     const struct iterate_kit_conversation_visual_state *state,
     struct iterate_kit_rgb8
         pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]) {
-  if (state->network == ITERATE_KIT_NETWORK_DISCONNECTED) {
-    fill_sector(
-        pixels,
-        NETWORK_SECTOR_START,
-        3U,
-        (struct iterate_kit_rgb8){32U, 0U, 0U});
-    return;
-  }
   if (state->network == ITERATE_KIT_NETWORK_CONNECTING) {
     fill_sector(
         pixels,

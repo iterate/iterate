@@ -300,11 +300,6 @@ const COUNTER_POLICY: readonly CounterPolicy[] = [
     why: "the playout skipped ahead to pay off lag: heard as a stutter, so never acceptable on a clean turn.",
   },
   {
-    key: "spkDebtPaid",
-    tier: "cut-only",
-    why: "the other half of catch-up accounting; same reasoning.",
-  },
-  {
     key: "spkAnswerDrains",
     tier: "noted",
     why:

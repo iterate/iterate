@@ -96,10 +96,8 @@ enum iterate_kit_status iterate_kit_spsc_ring_init(
   return ITERATE_KIT_OK;
 }
 
-enum iterate_kit_status
-iterate_kit_spsc_ring_write_acquire_reserving(
+enum iterate_kit_status iterate_kit_spsc_ring_write_acquire(
     struct iterate_kit_spsc_ring *ring,
-    size_t reserved_slots,
     void **data,
     size_t *capacity) {
   uint32_t producer;
@@ -114,8 +112,7 @@ iterate_kit_spsc_ring_write_acquire_reserving(
   if (ring == NULL ||
       !ring->initialized ||
       data == NULL ||
-      capacity == NULL ||
-      reserved_slots >= ring->slot_count) {
+      capacity == NULL) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   if (ring->write_acquired) {
@@ -124,8 +121,7 @@ iterate_kit_spsc_ring_write_acquire_reserving(
 
   producer = atomic_load_relaxed(&ring->producer_sequence);
   consumer = atomic_load_acquire(&ring->consumer_sequence);
-  if ((uint32_t)(producer - consumer) >=
-      ring->slot_count - reserved_slots) {
+  if ((uint32_t)(producer - consumer) >= ring->slot_count) {
     atomic_saturating_increment(&ring->producer_backpressure);
     return ITERATE_KIT_BACKPRESSURE;
   }
@@ -135,14 +131,6 @@ iterate_kit_spsc_ring_write_acquire_reserving(
   *data = ring->storage + ((size_t)index * ring->slot_size);
   *capacity = ring->slot_size;
   return ITERATE_KIT_OK;
-}
-
-enum iterate_kit_status iterate_kit_spsc_ring_write_acquire(
-    struct iterate_kit_spsc_ring *ring,
-    void **data,
-    size_t *capacity) {
-  return iterate_kit_spsc_ring_write_acquire_reserving(
-      ring, 0U, data, capacity);
 }
 
 enum iterate_kit_status iterate_kit_spsc_ring_write_publish(

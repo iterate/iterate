@@ -1,14 +1,34 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#include "iterate/kit/avatar/face_driver.h"
 #include "iterate/kit/avatar/face_pose.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/*
+ * The conversation turn, as the face needs to know it.
+ *
+ * These used to live in `face_driver.h` beside a vtable that let a caller swap
+ * animation algorithms at runtime. Nothing ever swapped one — the envelope
+ * animator is called directly from all four boards — so the indirection went
+ * and the events moved here, to their only consumer.
+ */
+typedef enum {
+    FACE_STREAM_USER_SPEECH_STARTED = 0,
+    FACE_STREAM_USER_SPEECH_STOPPED,
+    FACE_STREAM_ASSISTANT_RESPONSE_STARTED,
+    FACE_STREAM_ASSISTANT_AUDIO_DONE,
+    FACE_STREAM_ASSISTANT_RESPONSE_DONE,
+} face_stream_event_type_t;
+
+typedef struct {
+    face_stream_event_type_t type;
+} face_stream_event_t;
 
 typedef struct {
     uint16_t speech_floor;
@@ -35,7 +55,6 @@ typedef struct {
 } face_animator_t;
 
 extern const face_envelope_config_t FACE_ENVELOPE_DEFAULT_CONFIG;
-extern const face_algorithm_t FACE_ALGORITHM_ENVELOPE;
 
 void face_animator_init(face_animator_t *animator, uint32_t sample_rate);
 bool face_animator_init_with_config(

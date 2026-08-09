@@ -10,104 +10,10 @@
  * A partial RPC message is never dropped and parsing resumed on the same
  * connection. Any ordering, size, transport, or queue error becomes terminal
  * until explicit reset/reconnect, because guessing the next boundary could
- * splice stale JSON into a later capability call. Direct egress is synchronous;
- * inbox/outbox variants bridge the network and capability tasks through an
- * SPSC ring without blocking or allocation.
+ * splice stale JSON into a later capability call. The inbox/outbox pair
+ * bridges the network and capability tasks through an SPSC ring without
+ * blocking or allocation.
  */
-static enum capnweb_status egress_fail(
-    struct iterate_kit_websocket_text_egress *egress,
-    enum capnweb_status status) {
-  /*
-   * Once BEGIN or DATA has escaped, no local rollback can retract the partial
-   * RFC 6455 message. Latching the first failure forces the owner to replace
-   * the connection instead of accidentally emitting a new message mid-frame.
-   */
-  egress->terminal_status = status;
-  egress->message_open = false;
-  egress->sent_data = false;
-  return status;
-}
-
-void iterate_kit_websocket_text_egress_init(
-    struct iterate_kit_websocket_text_egress *egress,
-    iterate_kit_websocket_send_frame_fn send_frame,
-    void *context) {
-  if (egress == NULL) {
-    return;
-  }
-  *egress = (struct iterate_kit_websocket_text_egress){
-    send_frame,
-    context,
-    false,
-    false,
-    CAPNWEB_OK,
-  };
-}
-
-enum capnweb_status iterate_kit_websocket_text_egress_send(
-    void *context,
-    enum capnweb_text_fragment_kind kind,
-    const char *data,
-    size_t length) {
-  struct iterate_kit_websocket_text_egress *egress = context;
-  enum iterate_kit_websocket_text_frame_kind frame_kind;
-  enum capnweb_status status;
-  if (egress == NULL || egress->send_frame == NULL) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  if (egress->terminal_status != CAPNWEB_OK) {
-    return egress->terminal_status;
-  }
-  if (kind == CAPNWEB_TEXT_BEGIN) {
-    if (egress->message_open || data != NULL || length != 0U) {
-      return egress_fail(egress, CAPNWEB_E_STATE);
-    }
-    egress->message_open = true;
-    egress->sent_data = false;
-    return CAPNWEB_OK;
-  }
-  if (kind == CAPNWEB_TEXT_DATA) {
-    if (!egress->message_open || data == NULL || length == 0U) {
-      return egress_fail(egress, CAPNWEB_E_STATE);
-    }
-    frame_kind = egress->sent_data
-        ? ITERATE_KIT_WEBSOCKET_TEXT_CONTINUATION_PARTIAL
-        : ITERATE_KIT_WEBSOCKET_TEXT_FIRST_PARTIAL;
-    status = egress->send_frame(
-        egress->context, frame_kind, data, length);
-    if (status != CAPNWEB_OK) {
-      return egress_fail(egress, CAPNWEB_E_TRANSPORT);
-    }
-    egress->sent_data = true;
-    return CAPNWEB_OK;
-  }
-  if (kind == CAPNWEB_TEXT_END) {
-    if (!egress->message_open ||
-        !egress->sent_data ||
-        data != NULL ||
-        length != 0U) {
-      return egress_fail(egress, CAPNWEB_E_STATE);
-    }
-    status = egress->send_frame(
-        egress->context,
-        ITERATE_KIT_WEBSOCKET_TEXT_FINISH,
-        NULL,
-        0U);
-    /*
-     * Cap'n Web's END carries no bytes, but RFC 6455 still needs FIN. Sending
-     * one empty continuation avoids copying or holding back the final DATA
-     * fragment merely to discover whether it was last.
-     */
-    if (status != CAPNWEB_OK) {
-      return egress_fail(egress, CAPNWEB_E_TRANSPORT);
-    }
-    egress->message_open = false;
-    egress->sent_data = false;
-    return CAPNWEB_OK;
-  }
-  return egress_fail(egress, CAPNWEB_E_INVALID_ARGUMENT);
-}
-
 static enum capnweb_status ingress_fail(
     struct iterate_kit_websocket_text_ingress *ingress,
     enum capnweb_status status) {

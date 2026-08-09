@@ -38,7 +38,6 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
-#include "esp_random.h"
 #include "esp_system.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
@@ -165,38 +164,6 @@ static char stream_path[96] = STREAM_PATH_DEFAULT;
  * This is the DEVICE, and it never changes.
  */
 static const char *const client_path = "/clients/home-assistant-voice-preview-edition";
-/* The path a setup call is preparing; adopted only when the server is ready. */
-static char pending_stream_path[96];
-
-/*
- * EVERY CALL GETS ITS OWN STREAM. A second call on the same path is a second
- * conversation wearing the first one's history. `stream_used` starts TRUE:
- * the boot path is either the default or one used before, and both have a
- * past. `awaiting_fresh_stream` stops the prepare-then-call handshake from
- * looping. See the Waveshare port for the measured history behind this.
- */
-static bool stream_used = true;
-static bool awaiting_fresh_stream;
-/*
- * WHEN the prepare went out, so waiting on it can expire.
- *
- * `awaiting_fresh_stream` was cleared only by setup_succeeded or setup_failed,
- * so a request whose completion never came back latched it true for the rest
- * of the boot: no further prepare was attempted, no call could be placed, and
- * the board sat on its default stream looking perfectly healthy. Measured on
- * the HA Voice PE — setupFailStep 0, voicelab ready, conversation still
- * /agents/voice/device after four minutes. Every other in-flight state here
- * already expires; this one was missed.
- */
-static uint64_t awaiting_since_ms;
-/** Prepares abandoned because nothing ever answered them. */
-static uint32_t prepare_timeouts;
-/*
- * True when the stream being prepared was NOT asked for by a person.
- * See the eager prepare in the app loop: the adoption path must not
- * turn a speculative preparation into a call nobody wanted.
- */
-static bool preparing_ahead;
 #define CONVERSATION_ID "havpedev"
 #define GREETING "Hi, I am your Iterate device. What can I do for you?"
 
@@ -289,7 +256,6 @@ static struct {
   uint32_t speaker_underruns;
   uint32_t speaker_conceal_frames;
   uint32_t speaker_catchup_frames;
-  uint32_t speaker_debt_paid;
   uint32_t speaker_write_failures;
   uint32_t speaker_margin_max_ms;
   atomic_uint_fast64_t starve_at_ms;
@@ -447,6 +413,18 @@ static void on_speaker_pcm(
    * Audio arriving within a second of a starve means the answer was still
    * going: the pipe genuinely ran dry mid-speech, and that is audible.
    */
+  /*
+   * SPEAKING FOLLOWS THE AUDIO, not a transcript.
+   *
+   * This used to be set from `on_transcript`, which meant the face and the
+   * lights announced the answer when its TEXT arrived. Text and audio are
+   * separate event streams and routinely arrive out of order, so the screen
+   * could say "speaking" before a sample had played, or stay on the previous
+   * state through the first words. Clients no longer receive transcripts at
+   * all; a frame the playout accepted is the honest signal, and the setter
+   * is idempotent so paying for it per frame costs one compare.
+   */
+  havpe_ui_set_state(HAVPE_UI_SPEAKING);
   {
     const uint64_t starved_at = atomic_exchange_explicit(
         &runtime.starve_at_ms, 0U, memory_order_acq_rel);
@@ -555,17 +533,6 @@ static void on_control(
     havpe_ui_set_state(HAVPE_UI_IDLE);
     havpe_ui_set_status(
         havpe_ui_call_requested() ? "reconnecting" : "call ended");
-  }
-}
-
-/* Transcript drives the coarse screen state; no transcript is retained. */
-static void on_transcript(
-    void *context, bool from_user, const char *text, bool final) {
-  (void)context;
-  (void)text;
-  (void)final;
-  if (!from_user) {
-    havpe_ui_set_state(HAVPE_UI_SPEAKING);
   }
 }
 
@@ -728,29 +695,10 @@ static void playback_task(void *argument) {
             memory_order_acq_rel);
         continue;
       }
-      /* Pay the debt: one frame concealed, one late frame dropped. */
-      if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_DEBT) {
-        ++runtime.speaker_debt_paid;
-        continue;
-      }
     }
 
     const uint64_t write_started_ms = now_ms(NULL);
     havpe_audio_watch(true);
-#ifdef ITERATE_KIT_DIAGNOSTIC_STARVATION
-    /*
-     * FAULT INJECTION, and it must land where a real gap would: after the
-     * arm, gated on a full ring already credited.
-     */
-    if (havpe_audio_starvation_pending() &&
-        havpe_audio_written_ms() >= DMA_RING_CREDIT_MS) {
-      const uint32_t starve_ms = havpe_audio_take_injected_starvation();
-      ESP_LOGW(
-          tag, "injecting %ums of starvation mid-answer",
-          (unsigned)starve_ms);
-      DELAY_MS(starve_ms);
-    }
-#endif
     /*
      * Admission is nonblocking. The hardware-owner task reserves the DMA
      * ledger immediately before its blocking write; this task waits at most
@@ -1037,7 +985,6 @@ static struct iterate_kit_module aec_module(void) {
     .methods = methods,
     .method_count = sizeof(methods) / sizeof(methods[0]),
     .context = NULL,
-    .poll = NULL,
     .close = NULL,
     .session_ended = NULL,
   };
@@ -1218,7 +1165,6 @@ static size_t health_json(char *out, size_t capacity) {
      */
     {"spkSoftDryTicks", runtime.speaker_conceal_frames},
     {"spkCatchup", runtime.speaker_catchup_frames},
-    {"spkDebtPaid", runtime.speaker_debt_paid},
     {"spkWriteFailures", runtime.speaker_write_failures},
     {"codecPlaybackFailures", havpe_audio_playback_driver_failures()},
     {"captureGainClipped", havpe_audio_capture_gain_clipped()},
@@ -1298,10 +1244,6 @@ static size_t health_json(char *out, size_t capacity) {
     {"rpcImportsMax", tables.imports_capacity},
     {"rpcCalls", tables.calls_used},
     {"rpcCallsMax", tables.calls_capacity},
-    /* Which step of preparing a conversation failed last — the reason that
-     * used to exist only on a console whose opening reboots the board. */
-    {"setupFailStep", (uint32_t)runtime.voicelab.setup_failure_step},
-    {"prepareTimeouts", prepare_timeouts},
     {"heapFree", (uint32_t)esp_get_free_heap_size()},
     /*
      * INTERNAL, NOT TOTAL. `heapFree` counts PSRAM, and on a board with eight
@@ -1467,43 +1409,6 @@ static bool clock_slug(char *out, size_t capacity) {
   if (gmtime_r(&seconds, &parts) == NULL) return false;
   return strftime(out, capacity, "%Y-%m-%d-%H%M%S", &parts) > 0U;
 }
-
-/*
- * A conversation nobody has had before, named after the second it was
- * started. The RNG name remains for a clock that has not arrived.
- */
-static bool begin_new_conversation(void) {
-  char candidate[sizeof(stream_path)];
-  char when[20];
-
-  if (clock_slug(when, sizeof(when))) {
-    (void)snprintf(candidate, sizeof(candidate), "/agents/voice/%s", when);
-  } else {
-    (void)snprintf(
-        candidate, sizeof(candidate), "/agents/voice/dev-%08lx%08lx",
-        (unsigned long)esp_random(), (unsigned long)esp_random());
-  }
-  /*
-   * ANSWERED, so the caller does not latch a wait on a request that was never
-   * made. `setup_succeeded`/`setup_failed` only ever fire for a request that
-   * actually went out — a refusal here produces neither, so a caller that had
-   * already set "waiting for a fresh stream" would wait for the rest of the
-   * device's life.
-   */
-  if (iterate_kit_voicelab_setup_conversation(&runtime.voicelab, candidate) !=
-      CAPNWEB_OK) {
-    havpe_ui_set_state(HAVPE_UI_IDLE);
-    havpe_ui_set_status("could not ask the server");
-    return false;
-  }
-  (void)snprintf(
-      pending_stream_path, sizeof(pending_stream_path), "%s", candidate);
-  havpe_ui_set_state(HAVPE_UI_CONNECTING);
-  havpe_ui_set_status("preparing a new conversation...");
-  return true;
-}
-
-
 /*
  * A START-UP FAULT MUST BE VISIBLE, NOT A REBOOT LOOP.
  *
@@ -1661,11 +1566,6 @@ void iterate_kit_havpe_run(void) {
       next_button_poll_at = now_ms(NULL) + BUTTON_POLL_MS;
       havpe_button_poll();
     }
-    /*
-     * Give the capability modules a turn: a deferred reply is only a promise
-     * that something will come back to it; this is the something.
-     */
-    (void)iterate_kit_peer_poll(&runtime.peer, now_ms(NULL));
     (void)iterate_kit_device_event_poll(
         &runtime.device_events, ITERATE_KIT_VOICE_DEVICE_EVENT_POLL_BUDGET);
     /*
@@ -1853,50 +1753,6 @@ void iterate_kit_havpe_run(void) {
         havpe_ui_set_status("reconnecting");
         iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
       }
-      /*
-       * A prepared conversation is adopted only once the server says it is
-       * ready; swapping the path first would point the device at a stream
-       * with no processor on it.
-       */
-      if (runtime.voicelab.setup_succeeded) {
-        runtime.voicelab.setup_succeeded = false;
-        (void)snprintf(
-            stream_path, sizeof(stream_path), "%s", pending_stream_path);
-        ESP_LOGI(tag, "new conversation ready: %s", stream_path);
-        havpe_ui_set_status("new conversation ready");
-        stream_used = false;
-        awaiting_fresh_stream = false;
-        /* Remount: the mount is bound to the path it was made with. */
-        runtime.voicelab_generation = 0U;
-        /*
-         * A conversation prepared AHEAD of a tap must not place its
-         * own call — it exists so that the tap, when it comes, is
-         * cheap. Only a preparation somebody asked for starts one.
-         */
-        if (!preparing_ahead) {
-          havpe_ui_request_call(true);
-        }
-        preparing_ahead = false;
-      }
-      /* A prepare nothing ever answered must not latch the ladder shut. */
-      if (awaiting_fresh_stream && awaiting_since_ms != 0U &&
-          iterate_kit_voice_elapsed_ms(now, awaiting_since_ms) >
-              ITERATE_KIT_VOICE_PREPARE_TIMEOUT_MS) {
-        ++prepare_timeouts;
-        awaiting_fresh_stream = false;
-        preparing_ahead = false;
-        awaiting_since_ms = 0U;
-        ESP_LOGW(tag, "preparing a conversation went unanswered — trying again");
-      }
-      if (runtime.voicelab.setup_failed) {
-        runtime.voicelab.setup_failed = false;
-        ESP_LOGE(tag, "could not prepare %s", pending_stream_path);
-        awaiting_fresh_stream = false;
-        preparing_ahead = false;
-        havpe_ui_request_call(false);
-        havpe_ui_set_state(HAVPE_UI_IDLE);
-        havpe_ui_set_status("could not start a new conversation");
-      }
       if (iterate_kit_voice_elapsed_ms(now, last_liveness_ms) >
           NO_LIVENESS_RESTART_MS) {
         ESP_LOGE(
@@ -1923,16 +1779,33 @@ void iterate_kit_havpe_run(void) {
      * block below builds a new one. Backed off, because a mount that fails
      * every time must not become a spin.
      */
-    if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_FAILED &&
-        runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY) {
+    if (runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY) {
       static struct iterate_kit_retry_gate remount_gate;
       static bool remount_gate_ready;
       if (!remount_gate_ready) {
         remount_gate_ready =
-            iterate_kit_retry_gate_init(&remount_gate, 2000U, 30000U) ==
+            iterate_kit_retry_gate_init(
+                &remount_gate,
+                (uint32_t)ITERATE_KIT_VOICE_REMOUNT_RETRY_MS,
+                (uint32_t)ITERATE_KIT_VOICE_REMOUNT_RETRY_MAX_MS) ==
             ITERATE_KIT_OK;
       }
-      if (remount_gate_ready &&
+      /*
+       * RECOVERY HAS TO CLEAR THE BACKOFF, or the backoff outlives the fault.
+       *
+       * This gate was only ever deferred. Five transient failures — an
+       * access-point blip in the first minute will do it — walked the delay
+       * 2s, 4s, 8s, 16s, 30s and left it there for the rest of the boot, so a
+       * board that had been perfectly healthy for an hour still took thirty
+       * seconds to notice the next failed mount. A mount that reached READY
+       * is the evidence the gate exists to wait for, and it is the same
+       * signal both transport gates already reset themselves on.
+       */
+      if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY) {
+        iterate_kit_retry_gate_reset(&remount_gate);
+      } else if (
+          runtime.voicelab.state == ITERATE_KIT_VOICELAB_FAILED &&
+          remount_gate_ready &&
           iterate_kit_retry_gate_ready(&remount_gate, (int64_t)now * 1000)) {
         iterate_kit_retry_gate_defer(&remount_gate, (int64_t)now * 1000);
         ESP_LOGW(
@@ -1965,7 +1838,6 @@ void iterate_kit_havpe_run(void) {
         .clock_context = NULL,
         .on_speaker = on_speaker_pcm,
         .on_control = on_control,
-        .on_transcript = on_transcript,
         .on_viseme = NULL,
         .downlink_context = NULL,
       };
@@ -2153,22 +2025,9 @@ void iterate_kit_havpe_run(void) {
             .call_pending = runtime.voicelab.call_pending,
             .link_ready = outbox_free >= 3U,
             .now_ms = now,
-            .preparing = awaiting_fresh_stream,
-            .stream_used = stream_used,
             .wants_call = wants_call,
         };
         switch (iterate_kit_launch_next_step(&launch, &launching)) {
-          case ITERATE_KIT_LAUNCH_PREPARE_AHEAD:
-            ESP_LOGI(tag, "idle: preparing the next conversation in advance");
-            preparing_ahead = begin_new_conversation();
-            awaiting_fresh_stream = preparing_ahead;
-            awaiting_since_ms = now;
-            break;
-          case ITERATE_KIT_LAUNCH_PREPARE_NOW:
-            ESP_LOGI(tag, "call asked for: preparing a fresh conversation");
-            awaiting_fresh_stream = begin_new_conversation();
-            awaiting_since_ms = now;
-            break;
           case ITERATE_KIT_LAUNCH_PLACE_CALL:
             call_pending_since = now;
             if (iterate_kit_voicelab_start_call(&runtime.voicelab, GREETING) ==
@@ -2201,9 +2060,6 @@ void iterate_kit_havpe_run(void) {
         call_active_shown = runtime.voicelab.call_active;
         havpe_ui_set_call_active(call_active_shown);
         if (call_active_shown) {
-          /* Marked on the ACCEPTED edge: a call that never connected left
-           * no history. */
-          stream_used = true;
           havpe_ui_set_state(HAVPE_UI_IDLE);
           havpe_ui_set_status("hold the button to talk");
         }
@@ -2221,7 +2077,7 @@ void iterate_kit_havpe_run(void) {
       /*
        * NO TURN MACHINE ON THIS BOARD, AND THIS IS THE BOARD THAT DESERVES IT
        * LEAST OF ALL. It carries a dedicated XMOS DSP doing hardware echo
-       * cancellation — `capture_is_echo_cancelled` is true here and false on
+       * cancellation — the XMOS has already done it here, unlike on
        * every other board — and it was nevertheless the one gated behind a
        * held button, while the StackChan, whose AEC is software, ran open-mic
        * on the provider's server VAD.

@@ -14,13 +14,9 @@
  * call", because a stream's identity WAS the call's identity. The server now
  * mints the call and says so with `call-started`, so one stream carries as
  * many conversations as the device has button presses, and the only question
- * left is whether to place one.
- *
- * The old preparation path is not merely redundant, it was actively fatal:
- * preparing meant installing the processor facet on a brand-new path, whose
- * first materialisation is measured at 45-52s — longer than setup's own
- * deadline. Boards sat at `wantsCall: true, callPending: false` forever,
- * indefinitely "preparing" and never dialling.
+ * left is whether to place one. The preparation half of the ladder, and the
+ * `stream_used` / `preparing` inputs that drove it, are gone — see the header
+ * for why keeping them was fatal rather than merely redundant.
  */
 
 static struct iterate_kit_launch_inputs pressed(uint64_t now) {
@@ -38,28 +34,17 @@ static void a_press_places_a_call(void) {
   assert(iterate_kit_launch_next_step(&launch, &inputs) == ITERATE_KIT_LAUNCH_PLACE_CALL);
 }
 
-/* A stream that has already carried a call carries the next one too. */
-static void a_used_stream_is_reused(void) {
-  struct iterate_kit_launch launch = {0};
-  struct iterate_kit_launch_inputs inputs = pressed(1000U);
-  inputs.stream_used = true;
-  assert(iterate_kit_launch_next_step(&launch, &inputs) == ITERATE_KIT_LAUNCH_PLACE_CALL);
-}
-
-/* Nothing happens unasked. Idling must never mint or dial on its own. */
+/* Nothing happens unasked. Idling must never dial on its own. */
 static void idling_does_nothing(void) {
   struct iterate_kit_launch launch = {0};
   struct iterate_kit_launch_inputs inputs = pressed(1000U);
   inputs.wants_call = false;
   assert(iterate_kit_launch_next_step(&launch, &inputs) == ITERATE_KIT_LAUNCH_NOTHING);
-  inputs.stream_used = true;
-  assert(iterate_kit_launch_next_step(&launch, &inputs) == ITERATE_KIT_LAUNCH_NOTHING);
 }
 
 /*
- * ONE THING AT A TIME. A second attempt while a call is live, pending, or
- * being prepared races the first, and two calls on one device is worse than
- * none.
+ * ONE THING AT A TIME. A second attempt while a call is live or pending races
+ * the first, and two calls on one device is worse than none.
  */
 static void one_thing_at_a_time(void) {
   struct iterate_kit_launch launch = {0};
@@ -70,10 +55,6 @@ static void one_thing_at_a_time(void) {
   inputs.call_active = false;
 
   inputs.call_pending = true;
-  assert(iterate_kit_launch_next_step(&launch, &inputs) == ITERATE_KIT_LAUNCH_NOTHING);
-  inputs.call_pending = false;
-
-  inputs.preparing = true;
   assert(iterate_kit_launch_next_step(&launch, &inputs) == ITERATE_KIT_LAUNCH_NOTHING);
 }
 
@@ -158,7 +139,6 @@ static void nothing_is_dereferenced_blind(void) {
 
 int main(void) {
   a_press_places_a_call();
-  a_used_stream_is_reused();
   idling_does_nothing();
   one_thing_at_a_time();
   a_link_that_cannot_carry_it_costs_nothing();

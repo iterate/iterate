@@ -113,16 +113,6 @@ typedef void (*iterate_kit_voicelab_seen_fn)(
     void *context, const char *type, size_t length);
 
 /**
- * A line of conversation as it arrives. `from_user` distinguishes what the
- * device's microphone was heard saying from what the assistant replied;
- * `final` marks the completed line (assistant text streams in as deltas, so
- * a caller should replace the open line until it is final). `text` is
- * NUL-terminated and only valid for the duration of the call.
- */
-typedef void (*iterate_kit_voicelab_transcript_fn)(
-    void *context, bool from_user, const char *text, bool final);
-
-/**
  * One scheduled assistant mouth shape, decoded from an
  * events.iterate.com/voice-agent/viseme event.
  * `offset_samples` counts 16 kHz samples from the first sample of
@@ -195,7 +185,6 @@ struct iterate_kit_voicelab_options {
    */
   iterate_kit_voicelab_speaker_fn on_speaker;
   iterate_kit_voicelab_control_fn on_control;
-  iterate_kit_voicelab_transcript_fn on_transcript;
   /** NULL when this device has no face; the subscription still asks. */
   iterate_kit_voicelab_viseme_fn on_viseme;
   /** Optional: every event type seen on the downlink, for logging. */
@@ -226,31 +215,6 @@ struct iterate_kit_voicelab {
   /* Make-before-break: the outgoing connection lives until its successor opens. */
   struct capnweb_remote_capability previous_connection_capability;
   struct capnweb_local_capability callback_capability;
-  /* The voice-agent guest, held only while a conversation is being set up. */
-  struct capnweb_remote_capability setup_capability;
-  bool has_setup_capability;
-  /**
-   * A new conversation is being prepared: its path, and how it went.
-   *
-   * Kept on the voicelab rather than in the caller because the answer arrives
-   * on a callback, and a caller that has to remember what it asked for is a
-   * caller that can forget.
-   */
-  char setup_path[96];
-  bool setup_pending;
-  bool setup_succeeded;
-  bool setup_failed;
-  /**
-   * WHICH of the five ways preparing a conversation can fail, last time.
-   *
-   * The reason existed only as an ESP_LOGE on a serial port that REBOOTS these
-   * boards when you attach to it, so from the outside a device that could not
-   * prepare was indistinguishable from one that simply never answered. It cost
-   * an evening: the server was minting the stream and returning an error, and
-   * nothing the device published said so. 1..5 in source order; 0 = never
-   * failed.
-   */
-  uint8_t setup_failure_step;
   bool has_session_capability;
   bool has_project_capability;
   bool has_stream_capability;
@@ -331,18 +295,6 @@ struct iterate_kit_voicelab {
   int64_t last_event_offset;
   char args_buffer[ITERATE_KIT_VOICELAB_ARGS_CAPACITY];
   char b64_buffer[ITERATE_KIT_VOICELAB_B64_CAPACITY];
-  /* Accumulates assistant transcript deltas for the open line. */
-  char transcript_buffer[512];
-  size_t transcript_length;
-  /*
-   * The provider announces one spoken turn under two events —
-   * conversation.item.added and
-   * conversation.item.input_audio_transcription.completed — both carrying
-   * the same text. Whichever arrives first wins; the item id is what makes
-   * the second one recognisable as a repeat rather than a genuine second
-   * utterance of the same words.
-   */
-  char last_user_item_id[80];
   uint8_t pcm_buffer[ITERATE_KIT_VOICELAB_FRAME_BYTES];
   /* One frame of mu-law, half the size of the PCM16 it came from. */
   uint8_t mulaw_buffer[ITERATE_KIT_VOICELAB_FRAME_BYTES / 2U];
@@ -447,22 +399,6 @@ bool iterate_kit_voicelab_needs_recycle(
 /** Open the successor connection; the old one is released on success. */
 enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab);
-
-/**
- * Prepare `path` for a conversation: append the birth certificate, the back
- * office and the processor subscription, so a device can start a fresh
- * context without a laptop.
- *
- * This is the same `setupVoiceAgent` the CLI calls, made from the project
- * capability this session already holds. It is idempotent, so asking twice
- * for a path that is ready costs one round trip and changes nothing.
- *
- * Completion is reported through `setup_succeeded` / `setup_failed`, because
- * the answer arrives on a callback and the caller is a cooperative loop with
- * nowhere to block.
- */
-enum capnweb_status iterate_kit_voicelab_setup_conversation(
-    struct iterate_kit_voicelab *voicelab, const char *path);
 
 enum capnweb_status iterate_kit_voicelab_close(
     struct iterate_kit_voicelab *voicelab);

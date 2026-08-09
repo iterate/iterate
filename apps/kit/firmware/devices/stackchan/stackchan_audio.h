@@ -116,9 +116,6 @@ void stackchan_audio_rollback_write(uint32_t ms);
 uint32_t stackchan_audio_starved_ms(void);
 uint32_t stackchan_audio_starve_events(void);
 uint32_t stackchan_audio_written_ms(void);
-void stackchan_audio_inject_starvation(uint32_t ms);
-bool stackchan_audio_starvation_pending(void);
-uint32_t stackchan_audio_take_injected_starvation(void);
 
 #ifdef __cplusplus
 }

@@ -515,18 +515,6 @@ static bool prepare_avatar_frame_under_lock(
     atomic_saturating_increment(&owner.metrics.render_failures);
     return false;
   }
-  {
-    const struct iterate_kit_conversation_visual_state status =
-        status_with_physical_speaker();
-    iterate_kit_conversation_overlay_render(
-        &status,
-        (uint32_t)(now_us_wide() / 1000U),
-        /* Its twelve lights are REAL, on its body, from this same snapshot. */
-        ITERATE_KIT_OVERLAY_LIGHTS_NONE,
-        owner.framebuffer,
-        (uint32_t)FACE_RENDER_WIDTH,
-        (uint32_t)FACE_RENDER_HEIGHT);
-  }
   swap_rgb565_bytes_for_panel();
   *render_cpu_us = saturating_elapsed_us(now_us_wide(), started_at_us);
   return true;

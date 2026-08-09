@@ -207,15 +207,11 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
   .playback_sample_rate_hz = STACKCHAN_AUDIO_SAMPLE_RATE_HZ,
   .capture_channels = 1,
   .playback_channels = 1,
-  .full_duplex = true,
   /*
    * TRUE, and physically meant: the reference plane is the amplifier
    * divider sampled in the same TDM frame as the near microphone.
    */
   .has_reference_channel = true,
-  .capture_is_echo_cancelled = false,
-  .capture_clock_is_hardware_owned = true,
-  .playback_clock_is_hardware_owned = true,
   .has_output_gain_control = true,
   .output_gain_ceiling_centi_db = 0,
 };
@@ -230,7 +226,6 @@ static int64_t ledger_empty_at_us;
 static uint32_t ledger_written_ms;
 static uint32_t ledger_starved_ms;
 static uint32_t ledger_starve_events;
-static atomic_uint inject_starvation_ms;
 
 static uint32_t saturating_add_u32(uint32_t value, uint32_t delta) {
   const uint32_t sum = value + delta;
@@ -301,19 +296,6 @@ uint32_t stackchan_audio_written_ms(void) {
   return ledger_written_ms;
 }
 
-void stackchan_audio_inject_starvation(uint32_t ms) {
-  atomic_store_explicit(&inject_starvation_ms, ms, memory_order_relaxed);
-}
-
-bool stackchan_audio_starvation_pending(void) {
-  return atomic_load_explicit(&inject_starvation_ms, memory_order_relaxed) >
-      0U;
-}
-
-uint32_t stackchan_audio_take_injected_starvation(void) {
-  return atomic_exchange_explicit(
-      &inject_starvation_ms, 0U, memory_order_relaxed);
-}
 
 /* --- ISR tap ---------------------------------------------------------------- */
 

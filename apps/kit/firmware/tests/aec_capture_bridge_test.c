@@ -434,6 +434,60 @@ static void timestamp_regression_is_rejected_without_state_drift(void) {
   TEST_ASSERT(metrics->sequence_discontinuities == 0U);
 }
 
+/*
+ * OBSERVING THE BRIDGE MUST NOT CHANGE IT.
+ *
+ * metrics() used to assign the two partial-sample members on every call. Both
+ * are already written at each fill site, so the assignment changed nothing —
+ * but it made reading a health document a mutation of state the audio task
+ * owns, and stackchan paid for it: its app loop could not read the bridge
+ * without racing that task, so the read was moved onto the task and mirrored
+ * through atomics.
+ *
+ * Reading through a const pointer is the compile-time half of the proof. This
+ * is the runtime half, taken mid-frame with both a raw and a clean partial
+ * outstanding, which is the only state the old writes could have altered.
+ */
+static void reading_metrics_does_not_mutate_the_bridge(void) {
+  struct fixture fixture = {0};
+  initialise(&fixture);
+
+  /* Five 128-sample chunks: one 320-sample wire frame out, partials on both
+   * sides of the bridge still filling. */
+  for (uint32_t sequence = 0U; sequence < 5U; ++sequence) {
+    TEST_ASSERT(
+        push_chunk(
+            &fixture,
+            sequence,
+            (uint64_t)(sequence + 1U) * 8000U,
+            (size_t)sequence * dma_samples) == ITERATE_KIT_OK);
+  }
+
+  const struct iterate_kit_aec_capture_bridge *readonly = &fixture.bridge;
+  const struct iterate_kit_aec_capture_bridge_metrics *metrics =
+      iterate_kit_aec_capture_bridge_metrics(readonly);
+  TEST_ASSERT(metrics != NULL);
+  TEST_ASSERT(metrics->input_partial_samples != 0U);
+  TEST_ASSERT(metrics->egress_partial_samples != 0U);
+
+  const struct iterate_kit_aec_capture_bridge before = fixture.bridge;
+  const struct iterate_kit_aec_capture_bridge_metrics snapshot = *metrics;
+  for (size_t read = 0U; read < 4U; ++read) {
+    TEST_ASSERT(
+        iterate_kit_aec_capture_bridge_metrics(readonly) == metrics);
+  }
+  TEST_ASSERT(memcmp(&before, &fixture.bridge, sizeof(before)) == 0);
+  TEST_ASSERT(memcmp(&snapshot, metrics, sizeof(snapshot)) == 0);
+
+  /* The partials the reads did not disturb still complete their frames. */
+  TEST_ASSERT(
+      push_chunk(&fixture, 5U, 48000U, 5U * dma_samples) ==
+      ITERATE_KIT_OK);
+  TEST_ASSERT(
+      metrics->egress_samples_copied ==
+      snapshot.egress_samples_copied + wire_samples);
+}
+
 int main(void) {
   preserves_distinct_reference_and_playout_timelines();
   reframes_without_loss_or_drift();
@@ -443,5 +497,6 @@ int main(void) {
   egress_backpressure_abandons_the_whole_stale_suffix();
   coalesced_input_cannot_send_past_backpressure();
   timestamp_regression_is_rejected_without_state_drift();
+  reading_metrics_does_not_mutate_the_bridge();
   return 0;
 }

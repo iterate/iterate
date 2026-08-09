@@ -480,8 +480,6 @@ static void tolerates_missing_arguments(void) {
       ITERATE_KIT_PLAYOUT_IGNORE);
   iterate_kit_playout_reset(NULL, 1U);
   iterate_kit_playout_interrupt(NULL);
-  assert(strcmp(iterate_kit_playout_action_name(
-                    ITERATE_KIT_PLAYOUT_REPLACE), "replace") == 0);
 }
 
 

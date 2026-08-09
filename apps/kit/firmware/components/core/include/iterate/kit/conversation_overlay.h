@@ -23,13 +23,15 @@ extern "C" {
  * one by the same rules.
  *
  * So the twelve logical lights of `conversation_lights.h` ARE the language.
- * On the ring they are twelve LEDs. On a screen they are the same twelve dots
- * in a rail down the left margin, in the same order, with the same colours.
- * Learn it once.
+ * On the ring they are twelve LEDs. On a screen they are the same twelve
+ * colours, in the same order, painted by that board's own renderer through
+ * `iterate_kit_conversation_lights_for_screen`. Learn it once.
  *
- * The rail lives in the left margin because that margin is empty in every
- * compiled avatar — measured, not assumed: the narrowest is 18 free columns,
- * and this rail is 8 wide. It therefore never covers a face.
+ * This module once painted them itself, as a rail down a frame's left margin
+ * or a strip below the face. Every board turned it off — each already had a
+ * renderer that knew its own panel — so all three callers passed LIGHTS_NONE
+ * and the RGB565 blitter here drew nothing at all. Colours are shared; pixels
+ * are the board's business.
  *
  * NOT-CONNECTED IS NOT A SUBTLE STATE, AND IT IS NOT A CAPTION EITHER. It was
  * a word across the bottom of the face for a while — legible, and wrong: a
@@ -44,12 +46,8 @@ extern "C" {
  */
 
 enum {
-  /** Source columns the always-on rail occupies at the left edge. */
-  ITERATE_KIT_OVERLAY_RAIL_WIDTH = 8,
   /** The banner's breathing period, in milliseconds. */
   ITERATE_KIT_OVERLAY_PULSE_PERIOD_MS = 1400,
-  /** Source rows a horizontal light strip occupies below the face. */
-  ITERATE_KIT_OVERLAY_STRIP_HEIGHT = 14,
 };
 
 /**
@@ -121,29 +119,6 @@ void iterate_kit_conversation_lights_animate(
     struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]);
 
 /**
- * Where a screen puts the twelve lights, if it puts them anywhere.
- *
- * NOT EVERY SCREEN SHOULD DRAW THEM. The StackChan has a real twelve-pixel LED
- * run on its body, already fed from this same snapshot — painting a second
- * copy down the side of its face was a picture of its own LEDs, which is
- * clutter, not information. A board with real lights renders NONE.
- */
-enum iterate_kit_overlay_lights {
-  ITERATE_KIT_OVERLAY_LIGHTS_NONE = 0,
-  /** A vertical rail in the left margin, for a face with no LEDs beside it. */
-  ITERATE_KIT_OVERLAY_LIGHTS_RAIL,
-  /**
-   * A horizontal strip across the bottom, for a panel with room below the
-   * face. The caller makes its frame taller than the face by
-   * ITERATE_KIT_OVERLAY_STRIP_HEIGHT and the strip lands in those rows, so
-   * the lights scale with the face and are drawn by the same code as
-   * everywhere else — rather than by whatever widget toolkit that board
-   * happens to use.
-   */
-  ITERATE_KIT_OVERLAY_LIGHTS_STRIP,
-};
-
-/**
  * The twelve lights as a SCREEN should show them.
  *
  * `conversation_lights` is tuned for exposed WS2812s, where 30 of 255 is
@@ -155,23 +130,6 @@ void iterate_kit_conversation_lights_for_screen(
     const struct iterate_kit_conversation_visual_state *state,
     uint32_t now_ms,
     struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]);
-
-/**
- * Draws the lights in the requested layout, and the banner when one is
- * needed, into an RGB565 frame.
- *
- * The frame is the caller's — typically a rendered avatar — and is modified
- * in place; only the left rail and, when raised, the bottom banner are
- * touched. Frames too small for the rail are left entirely alone rather than
- * given a clipped, meaningless fragment of it.
- */
-void iterate_kit_conversation_overlay_render(
-    const struct iterate_kit_conversation_visual_state *state,
-    uint32_t now_ms,
-    enum iterate_kit_overlay_lights lights,
-    uint16_t *rgb565,
-    uint32_t width,
-    uint32_t height);
 
 #ifdef __cplusplus
 }

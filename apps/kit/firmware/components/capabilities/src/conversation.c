@@ -65,7 +65,6 @@ struct iterate_kit_module iterate_kit_conversation_control_module(
     .methods = methods,
     .method_count = sizeof(methods) / sizeof(methods[0]),
     .context = conversation,
-    .poll = NULL,
     .close = NULL,
     .session_ended = NULL,
   };

@@ -28,7 +28,6 @@ static void a_disabled_adapter_is_explicitly_unavailable(void)
   assert(darwin.codec.properties->capture_sample_rate_hz == 16000U);
   assert(darwin.codec.properties->playback_sample_rate_hz == 16000U);
   assert(!darwin.codec.properties->has_reference_channel);
-  assert(!darwin.codec.properties->capture_is_echo_cancelled);
   assert(iterate_kit_audio_codec_read(
              &darwin.codec,
              frame,

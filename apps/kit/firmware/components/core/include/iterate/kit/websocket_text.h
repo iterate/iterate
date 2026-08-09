@@ -13,46 +13,6 @@
 extern "C" {
 #endif
 
-enum iterate_kit_websocket_text_frame_kind {
-  ITERATE_KIT_WEBSOCKET_TEXT_FIRST_PARTIAL = 0,
-  ITERATE_KIT_WEBSOCKET_TEXT_CONTINUATION_PARTIAL,
-  ITERATE_KIT_WEBSOCKET_TEXT_FINISH,
-};
-
-typedef enum capnweb_status (*iterate_kit_websocket_send_frame_fn)(
-    void *context,
-    enum iterate_kit_websocket_text_frame_kind kind,
-    const char *data,
-    size_t length);
-
-/**
- * Adapts Cap'n Web's BEGIN/DATA/END text fragments to RFC 6455 fragments
- * without copying them. Every DATA fragment is sent synchronously before the
- * callback returns; END emits one empty final continuation frame.
- *
- * This direct adapter is suitable only when the caller can tolerate the frame
- * sender's latency. Realtime/device builds should normally use the SPSC outbox
- * below so Cap'n Web never waits behind socket I/O.
- */
-struct iterate_kit_websocket_text_egress {
-  iterate_kit_websocket_send_frame_fn send_frame;
-  void *context;
-  bool message_open;
-  bool sent_data;
-  enum capnweb_status terminal_status;
-};
-
-void iterate_kit_websocket_text_egress_init(
-    struct iterate_kit_websocket_text_egress *egress,
-    iterate_kit_websocket_send_frame_fn send_frame,
-    void *context);
-
-enum capnweb_status iterate_kit_websocket_text_egress_send(
-    void *context,
-    enum capnweb_text_fragment_kind kind,
-    const char *data,
-    size_t length);
-
 typedef enum capnweb_status (*iterate_kit_websocket_receive_text_fn)(
     void *context, const char *message, size_t length);
 

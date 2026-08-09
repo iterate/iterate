@@ -139,10 +139,6 @@ static void cli_main_on_control(
 static void cli_main_on_event_seen(
     void *context, const char *type, size_t length);
 
-/* Logs final user and assistant transcripts. */
-static void cli_main_on_transcript(
-    void *context, bool from_user, const char *text, bool final);
-
 /* Records one frame on the true timeline: the WAV, then the room. */
 static bool cli_main_record_frame(
     struct cli_runtime *runtime, const uint8_t *pcm);
@@ -1032,7 +1028,6 @@ static void cli_main_start_voicelab(struct cli_runtime *runtime)
     .on_speaker = cli_main_on_speaker,
     .on_control = cli_main_on_control,
     .on_event_seen = cli_main_on_event_seen,
-    .on_transcript = cli_main_on_transcript,
     .clock_context = NULL,
     .downlink_context = runtime,
   };
@@ -1203,16 +1198,6 @@ static void cli_main_on_control(
         "warn", "call ended; wantsCall=%s",
         runtime->wants_call ? "true" : "false");
   }
-}
-
-static void cli_main_on_transcript(
-    void *context, bool from_user, const char *text, bool final)
-{
-  (void)context;
-  if (!final) return;
-  cli_runtime_log(
-      "info", "transcript speaker=%s text=%s",
-      from_user ? "user" : "assistant", text);
 }
 
 static bool cli_main_record_frame(
@@ -1395,10 +1380,6 @@ static void cli_main_play_frame(
      * away and delete half an answer. */
     ++runtime->speaker_catchup_frames;
     runtime->answer_emitted_ms += ITERATE_KIT_VOICE_FRAME_MS;
-    return;
-  }
-  if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_DEBT) {
-    ++runtime->speaker_debt_paid;
     return;
   }
   if (action != ITERATE_KIT_VOICE_PLAYBACK_PLAY) return;

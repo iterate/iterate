@@ -157,7 +157,6 @@ struct cli_runtime {
   uint32_t speaker_underruns;
   uint32_t speaker_conceal_frames;
   uint32_t speaker_catchup_frames;
-  uint32_t speaker_debt_paid;
   uint32_t speaker_write_failures;
   uint32_t mic_write_failures;
   /* Frames the room never got because the speaker ring was full. */

@@ -49,8 +49,8 @@ bool m5sticks3_audio_init(void);
  *
  * Dedicated hardware tasks own the blocking I2S and recorder calls. The seam
  * only copies complete 20 ms frames to and from bounded depth-one mailboxes.
- * `full_duplex` is false: read() returns UNAVAILABLE outside capture mode and
- * write() returns UNAVAILABLE while the microphone owns the pins.
+ * This board is HALF DUPLEX: read() returns UNAVAILABLE outside capture mode
+ * and write() returns UNAVAILABLE while the microphone owns the pins.
  */
 struct iterate_kit_audio_codec m5sticks3_audio_codec(void);
 
@@ -127,20 +127,6 @@ uint32_t m5sticks3_audio_starved_ms(void);
 /** How many separate times that happened. */
 uint32_t m5sticks3_audio_starve_events(void);
 
-/** Milliseconds of audio handed over since feeding began. */
-uint32_t m5sticks3_audio_written_ms(void);
-
-/**
- * Deliberately stop feeding the DAC for `ms` while an answer is playing.
- * FAULT INJECTION: the only way to show the starvation detector still works.
- */
-void m5sticks3_audio_inject_starvation(uint32_t ms);
-
-/** Whether an injected starvation is still owed. */
-bool m5sticks3_audio_starvation_pending(void);
-
-/** Claim the owed starvation, clearing it. */
-uint32_t m5sticks3_audio_take_injected_starvation(void);
 
 #ifdef __cplusplus
 }

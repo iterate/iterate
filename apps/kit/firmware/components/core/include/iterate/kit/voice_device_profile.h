@@ -172,15 +172,24 @@ enum {
   ITERATE_KIT_VOICE_PING_TIMEOUT_MS = 20000,
   ITERATE_KIT_VOICE_BRIDGE_SILENCE_MS = 20000,
   ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS = 10000,
-  /*
-   * How long a prepare-a-conversation request may go unanswered.
-   *
-   * Sibling of the 20s call-start expiry, and added for the same reason: an
-   * in-flight request with no deadline is a latch. Setup is measured at 3-5s
-   * server-side, so twenty seconds is far past legitimate slowness.
-   */
-  ITERATE_KIT_VOICE_PREPARE_TIMEOUT_MS = 20000,
   ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS = 180000,
+  /*
+   * Re-mounting a voicelab that failed under a healthy connection.
+   *
+   * A BACKOFF THAT ONLY EVER GROWS IS NOT A BACKOFF, it is a ceiling the
+   * device reaches once and never leaves. All four boards deferred this gate
+   * on every remount attempt and never reset it, so five transient failures
+   * anywhere in a boot — an access-point blip during the first minute is
+   * enough — left the board taking 30s to notice a failed mount for the rest
+   * of its life, long after everything had recovered. Both transport gates
+   * already reset themselves on a healthy connection; these four did not.
+   *
+   * Live here rather than as four copies of 2000/30000 so the reset rule and
+   * the numbers it applies to cannot drift apart per board, and so the host
+   * test pins the same budget the devices use.
+   */
+  ITERATE_KIT_VOICE_REMOUNT_RETRY_MS = 2000,
+  ITERATE_KIT_VOICE_REMOUNT_RETRY_MAX_MS = 30000,
   /*
    * How long an IDLE device may hold a mount nobody is answering before it
    * replaces the session.

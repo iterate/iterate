@@ -228,17 +228,3 @@ enum iterate_kit_playout_action iterate_kit_playout_classify(
   ++playout->appended;
   return ITERATE_KIT_PLAYOUT_APPEND;
 }
-
-const char *iterate_kit_playout_action_name(
-    enum iterate_kit_playout_action action) {
-  switch (action) {
-    case ITERATE_KIT_PLAYOUT_IGNORE:
-      return "ignore";
-    case ITERATE_KIT_PLAYOUT_APPEND:
-      return "append";
-    case ITERATE_KIT_PLAYOUT_REPLACE:
-      return "replace";
-    default:
-      return "unknown";
-  }
-}

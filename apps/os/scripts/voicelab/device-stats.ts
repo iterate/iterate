@@ -72,7 +72,6 @@ export interface DeviceStats {
   spkSoftDryRefills?: number;
   spkSoftDryTicks?: number;
   spkCatchup?: number;
-  spkDebtPaid?: number;
   spkWriteFailures?: number;
   spkBadFrames?: number;
   spkSeqGaps?: number;
@@ -197,7 +196,6 @@ export const TOLERATED_COUNTERS = [
   "spkAnswerStarts",
   "spkSupersededMidplay",
   "spkCatchup",
-  "spkDebtPaid",
   "spkAnswerDrains",
   "spkIgnoredCall",
   "spkIgnoredStale",

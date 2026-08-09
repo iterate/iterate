@@ -79,9 +79,6 @@ iterate_kit_configuration_build_itx_websocket_url(
     char *destination,
     size_t destination_capacity);
 
-const char *iterate_kit_configuration_error_name(
-    enum iterate_kit_configuration_error error);
-
 #ifdef __cplusplus
 }
 #endif

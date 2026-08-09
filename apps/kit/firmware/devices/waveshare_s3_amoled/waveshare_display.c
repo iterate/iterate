@@ -223,13 +223,6 @@ static void refresh_face(void) {
           iterate_kit_face_awake(&wake, status.conversation_active, now))) {
     return;
   }
-  iterate_kit_conversation_overlay_render(
-      &status,
-      (uint32_t)now,
-      ITERATE_KIT_OVERLAY_LIGHTS_NONE,
-      face_frame,
-      (uint32_t)FACE_RENDER_WIDTH,
-      (uint32_t)CARD_SOURCE_HEIGHT);
   {
     const size_t card_bytes =
         (size_t)FACE_RENDER_WIDTH * CARD_SOURCE_HEIGHT * sizeof(*face_frame);

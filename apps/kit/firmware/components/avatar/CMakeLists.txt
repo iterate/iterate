@@ -2,7 +2,6 @@ set(ITERATE_KIT_AVATAR_SOURCES
   src/face_animator.c
   src/face_avatar_registry.c
   src/face_doze.c
-  src/face_driver.c
   src/face_keyframe.c
   src/face_performance.c
   src/face_scale.c

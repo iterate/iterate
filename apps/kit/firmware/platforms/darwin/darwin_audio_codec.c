@@ -17,11 +17,7 @@ static const struct iterate_kit_audio_codec_properties darwin_properties = {
     .playback_sample_rate_hz = ITERATE_KIT_VOICE_SAMPLE_RATE_HZ,
     .capture_channels = 1U,
     .playback_channels = 1U,
-    .full_duplex = true,
     .has_reference_channel = false,
-    .capture_is_echo_cancelled = false,
-    .capture_clock_is_hardware_owned = true,
-    .playback_clock_is_hardware_owned = true,
     .has_output_gain_control = false,
     .output_gain_ceiling_centi_db = 0,
 };

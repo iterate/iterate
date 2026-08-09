@@ -57,11 +57,7 @@ static const struct iterate_kit_audio_codec_properties fake_codec_properties = {
   .playback_sample_rate_hz = 16000U,
   .capture_channels = 1U,
   .playback_channels = 1U,
-  .full_duplex = true,
   .has_reference_channel = true,
-  .capture_is_echo_cancelled = false,
-  .capture_clock_is_hardware_owned = true,
-  .playback_clock_is_hardware_owned = true,
   .has_output_gain_control = true,
   .output_gain_ceiling_centi_db = -1200,
 };

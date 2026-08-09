@@ -11,20 +11,6 @@ static const char *const authenticate_path[] = {"authenticate"};
 static const char *const streams_get_path[] = {"streams", "get"};
 static const char *const project_path[] = {"projects", "get"};
 static const char *const append_path[] = {"append"};
-static const char *const workers_get_path[] = {"workers", "get"};
-static const char *const setup_voice_agent_path[] = {"setupVoiceAgent"};
-
-/*
- * The guest that owns setupVoiceAgent, addressed exactly as the CLI addresses
- * it. Baked in here because the device has to be able to prepare a
- * conversation with nothing else running — the cost is that renaming the
- * entry point or moving the config repo needs a reflash, which is a fair
- * price for a device that can start a fresh context on its own.
- */
-#define VOICE_AGENT_WORKER_REF                                                \
-  "{\"path\":\"/\",\"type\":\"stateless\",\"source\":{\"createWorker\":{"       \
-  "\"entryPoint\":\"voice-agent.ts\","                                         \
-  "\"files\":{\"repoPath\":\"/repos/config\",\"type\":\"repo\"}}}}"
 
 static bool nonempty(const char *value) {
   return value != NULL && value[0] != '\0';
@@ -390,59 +376,6 @@ static void handle_viseme(
       (uint8_t)viseme,
       (uint8_t)confidence);
 }
-
-/** Emit the assistant line accumulated so far, then reset the buffer. */
-static void flush_assistant_transcript(
-    struct iterate_kit_voicelab *voicelab, bool final) {
-  if (voicelab->options.on_transcript == NULL ||
-      voicelab->transcript_length == 0U) {
-    return;
-  }
-  voicelab->transcript_buffer[voicelab->transcript_length] = '\0';
-  voicelab->options.on_transcript(
-      voicelab->options.downlink_context,
-      false,
-      voicelab->transcript_buffer,
-      final);
-  if (final) {
-    voicelab->transcript_length = 0U;
-  }
-}
-
-/**
- * Hand one user line to the transcript callback, at most once per
- * conversation item. `item_id_value` may be NULL, in which case the line is
- * always emitted.
- */
-static void emit_user_transcript(
-    struct iterate_kit_voicelab *voicelab,
-    const struct capnweb_value *text_value,
-    const struct capnweb_value *item_id_value) {
-  char text[192];
-  size_t length = 0U;
-  if (voicelab->options.on_transcript == NULL ||
-      capnweb_value_copy_string(text_value, text, sizeof(text), &length) !=
-          CAPNWEB_OK ||
-      length == 0U) {
-    return;
-  }
-  if (item_id_value != NULL) {
-    char item_id[sizeof(voicelab->last_user_item_id)];
-    size_t item_id_length = 0U;
-    if (capnweb_value_copy_string(
-            item_id_value, item_id, sizeof(item_id), &item_id_length) ==
-            CAPNWEB_OK &&
-        item_id_length > 0U) {
-      if (strcmp(item_id, voicelab->last_user_item_id) == 0) {
-        return;
-      }
-      memcpy(voicelab->last_user_item_id, item_id, item_id_length + 1U);
-    }
-  }
-  voicelab->options.on_transcript(
-      voicelab->options.downlink_context, true, text, true);
-}
-
 static void handle_grok_event(
     struct iterate_kit_voicelab *voicelab,
     const struct capnweb_value *payload) {
@@ -461,133 +394,13 @@ static void handle_grok_event(
     }
     return;
   }
-  if (capnweb_value_string_equals(&type_value, "response.created")) {
-    voicelab->transcript_length = 0U;
-    return;
-  }
-  if (capnweb_value_string_equals(
-          &type_value, "response.output_audio_transcript.done")) {
-    /*
-     * The authoritative complete line. Preferring it over the accumulated
-     * deltas makes delta loss, truncation and reordering cosmetic rather
-     * than corrupting: whatever ends up on screen came from one field.
-     */
-    struct capnweb_value transcript_value;
-    size_t length = 0U;
-    if (capnweb_value_object_get(&event_value, "transcript", &transcript_value) &&
-        capnweb_value_copy_string(
-            &transcript_value,
-            voicelab->transcript_buffer,
-            sizeof(voicelab->transcript_buffer),
-            &length) != CAPNWEB_E_INVALID_ARGUMENT) {
-      if (length >= sizeof(voicelab->transcript_buffer)) {
-        length = sizeof(voicelab->transcript_buffer) - 1U;
-      }
-      voicelab->transcript_length = length;
-      flush_assistant_transcript(voicelab, true);
-    }
-    return;
-  }
   if (capnweb_value_string_equals(&type_value, "response.done")) {
-    flush_assistant_transcript(voicelab, true);
-    voicelab->transcript_length = 0U; /* never carry text into the next answer */
     if (voicelab->options.on_control != NULL) {
       voicelab->options.on_control(
           voicelab->options.downlink_context,
           ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE);
     }
     return;
-  }
-  if (capnweb_value_string_equals(
-          &type_value, "response.output_audio_transcript.delta")) {
-    struct capnweb_value delta_value;
-    char delta[256];
-    size_t delta_length = 0U;
-    enum capnweb_status copied;
-    if (!capnweb_value_object_get(&event_value, "delta", &delta_value)) {
-      return;
-    }
-    copied = capnweb_value_copy_string(
-        &delta_value, delta, sizeof(delta), &delta_length);
-    /*
-     * E_LIMIT still NUL-terminates and reports the FULL length, so treating
-     * it as failure discarded the whole delta — a sentence-sized one simply
-     * vanished from the line. Take what fits instead.
-     */
-    if (copied != CAPNWEB_OK && copied != CAPNWEB_E_LIMIT) {
-      return;
-    }
-    if (delta_length >= sizeof(delta)) {
-      delta_length = sizeof(delta) - 1U;
-    }
-    /*
-     * Keep the NEWEST words on overflow, not the oldest: restarting at zero
-     * threw away everything said so far, so a long answer appeared to begin
-     * mid-sentence ("twenty-six, twenty-seven, ..."). Slide the buffer
-     * instead, so the line stays coherent at its tail.
-     */
-    if (voicelab->transcript_length + delta_length >=
-        sizeof(voicelab->transcript_buffer)) {
-      const size_t keep = sizeof(voicelab->transcript_buffer) / 2U;
-      if (voicelab->transcript_length > keep) {
-        memmove(
-            voicelab->transcript_buffer,
-            voicelab->transcript_buffer + voicelab->transcript_length - keep,
-            keep);
-        voicelab->transcript_length = keep;
-      }
-      if (voicelab->transcript_length + delta_length >=
-          sizeof(voicelab->transcript_buffer)) {
-        voicelab->transcript_length = 0U;
-      }
-    }
-    memcpy(
-        voicelab->transcript_buffer + voicelab->transcript_length,
-        delta,
-        delta_length);
-    voicelab->transcript_length += delta_length;
-    flush_assistant_transcript(voicelab, false);
-    return;
-  }
-  if (capnweb_value_string_equals(
-          &type_value, "conversation.item.input_audio_transcription.completed")) {
-    struct capnweb_value transcript_value;
-    struct capnweb_value item_id_value;
-    const bool has_item_id =
-        capnweb_value_object_get(&event_value, "item_id", &item_id_value);
-    if (capnweb_value_object_get(
-            &event_value, "transcript", &transcript_value)) {
-      emit_user_transcript(
-          voicelab, &transcript_value, has_item_id ? &item_id_value : NULL);
-    }
-    return;
-  }
-  if (capnweb_value_string_equals(&type_value, "conversation.item.added")) {
-    struct capnweb_value item;
-    struct capnweb_value role;
-    struct capnweb_value item_id_value;
-    struct capnweb_value content_wrapper;
-    struct capnweb_value content;
-    bool has_item_id;
-    size_t index;
-    if (!capnweb_value_object_get(&event_value, "item", &item) ||
-        !capnweb_value_object_get(&item, "role", &role) ||
-        !capnweb_value_string_equals(&role, "user") ||
-        !capnweb_value_object_get(&item, "content", &content_wrapper) ||
-        !capnweb_value_get_expression_array(&content_wrapper, &content)) {
-      return;
-    }
-    has_item_id = capnweb_value_object_get(&item, "id", &item_id_value);
-    for (index = 0U; index < capnweb_value_array_size(&content); ++index) {
-      struct capnweb_value part;
-      struct capnweb_value transcript_value;
-      if (capnweb_value_array_at(&content, index, &part) &&
-          capnweb_value_object_get(&part, "transcript", &transcript_value)) {
-        emit_user_transcript(
-            voicelab, &transcript_value, has_item_id ? &item_id_value : NULL);
-        return;
-      }
-    }
   }
 }
 
@@ -1477,7 +1290,6 @@ enum capnweb_status iterate_kit_voicelab_mark_turn(
   if (turn == ITERATE_KIT_VOICELAB_TURN_START) {
     /* A new turn cancels whatever answer was mid-flight; its partial text
      * must not prefix the next one. */
-    voicelab->transcript_length = 0U;
   }
   length = snprintf(
       voicelab->args_buffer,
@@ -1557,79 +1369,6 @@ enum capnweb_status iterate_kit_voicelab_ping(
   }
   return status;
 }
-
-static void setup_completed(void *context, const struct capnweb_result *result) {
-  struct iterate_kit_voicelab *voicelab = context;
-  if (voicelab == NULL) return;
-  voicelab->setup_pending = false;
-  if (result == NULL || result->kind != CAPNWEB_RESULT_VALUE) {
-    voicelab->setup_failed = true;
-    voicelab->setup_failure_step = 1U;
-    return;
-  }
-  voicelab->setup_succeeded = true;
-}
-
-static void setup_worker_ready(
-    void *context, const struct capnweb_result *result) {
-  struct iterate_kit_voicelab *voicelab = context;
-  int length;
-  if (voicelab == NULL) return;
-  if (result == NULL || result->kind != CAPNWEB_RESULT_VALUE) {
-    voicelab->setup_pending = false;
-    voicelab->setup_failed = true;
-    voicelab->setup_failure_step = 2U;
-    return;
-  }
-  if (!take_result_capability(result, &voicelab->setup_capability)) {
-    voicelab->setup_pending = false;
-    voicelab->setup_failed = true;
-    voicelab->setup_failure_step = 3U;
-    return;
-  }
-  voicelab->has_setup_capability = true;
-  length = snprintf(
-      voicelab->args_buffer, sizeof(voicelab->args_buffer),
-      "[{\"streamPath\":\"%s\"}]", voicelab->setup_path);
-  if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
-    voicelab->setup_pending = false;
-    voicelab->setup_failed = true;
-    voicelab->setup_failure_step = 4U;
-    return;
-  }
-  if (capnweb_session_call_path(
-          voicelab->options.session, voicelab->setup_capability,
-          setup_voice_agent_path, 1U, voicelab->args_buffer, (size_t)length,
-          setup_completed, voicelab) != CAPNWEB_OK) {
-    voicelab->setup_pending = false;
-    voicelab->setup_failed = true;
-    voicelab->setup_failure_step = 5U;
-  }
-}
-
-enum capnweb_status iterate_kit_voicelab_setup_conversation(
-    struct iterate_kit_voicelab *voicelab, const char *path) {
-  static const char worker_ref[] = "[" VOICE_AGENT_WORKER_REF "]";
-  if (voicelab == NULL || !nonempty(path)) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  if (voicelab->setup_pending || !voicelab->has_project_capability) {
-    return CAPNWEB_E_STATE;
-  }
-  if (strlen(path) >= sizeof(voicelab->setup_path)) {
-    return CAPNWEB_E_LIMIT;
-  }
-  (void)snprintf(
-      voicelab->setup_path, sizeof(voicelab->setup_path), "%s", path);
-  voicelab->setup_pending = true;
-  voicelab->setup_succeeded = false;
-  voicelab->setup_failed = false;
-  return capnweb_session_call_path(
-      voicelab->options.session, voicelab->project_capability,
-      workers_get_path, sizeof(workers_get_path) / sizeof(workers_get_path[0]),
-      worker_ref, sizeof(worker_ref) - 1U, setup_worker_ready, voicelab);
-}
-
 enum capnweb_status iterate_kit_voicelab_close(
     struct iterate_kit_voicelab *voicelab) {
   enum capnweb_status first_error = CAPNWEB_OK;

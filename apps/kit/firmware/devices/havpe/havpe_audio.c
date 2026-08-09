@@ -17,8 +17,7 @@
  *
  * AEC is hardware, in the XMOS (XCORE-VOICE FFVA, firmware pinned to
  * exactly 1.3.1 and verified at boot). There is no software AEC and no
- * exposed loudspeaker reference; the portable seam advertises
- * capture_is_echo_cancelled and the composition uses the passthrough
+ * exposed loudspeaker reference, so the composition uses the passthrough
  * processor.
  *
  * Slave-bus traps this file honours (all measured on the donor):
@@ -241,7 +240,6 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
   .playback_sample_rate_hz = HAVPE_AUDIO_SAMPLE_RATE_HZ,
   .capture_channels = 1,
   .playback_channels = 1,
-  .full_duplex = true,
   /*
    * FALSE is the load-bearing fact of this board: the XMOS keeps its AEC
    * reference private, nothing on the ESP capture bus carries it, and zero
@@ -249,9 +247,6 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
    * measured reference.
    */
   .has_reference_channel = false,
-  .capture_is_echo_cancelled = true,
-  .capture_clock_is_hardware_owned = true,
-  .playback_clock_is_hardware_owned = true,
   /*
    * The AIC3204 DAC is pinned at 0 dB: a production run at ESPHome's +24 dB
    * endpoint made the provider transcribe its own speaker output. Exposing
@@ -271,7 +266,6 @@ static int64_t ledger_empty_at_us;
 static uint32_t ledger_written_ms;
 static uint32_t ledger_starved_ms;
 static uint32_t ledger_starve_events;
-static atomic_uint inject_starvation_ms;
 
 static uint32_t saturating_add(uint32_t value, uint32_t delta) {
   const uint32_t sum = value + delta;
@@ -338,9 +332,6 @@ uint32_t havpe_audio_starve_events(void) {
   return ledger_starve_events;
 }
 
-uint32_t havpe_audio_written_ms(void) {
-  return ledger_written_ms;
-}
 
 bool havpe_audio_speaker_is_playing(void) {
   bool playing;
@@ -367,19 +358,6 @@ bool havpe_audio_speaker_is_playing(void) {
   return playing;
 }
 
-void havpe_audio_inject_starvation(uint32_t ms) {
-  atomic_store_explicit(&inject_starvation_ms, ms, memory_order_relaxed);
-}
-
-bool havpe_audio_starvation_pending(void) {
-  return atomic_load_explicit(&inject_starvation_ms, memory_order_relaxed) >
-      0U;
-}
-
-uint32_t havpe_audio_take_injected_starvation(void) {
-  return atomic_exchange_explicit(
-      &inject_starvation_ms, 0U, memory_order_relaxed);
-}
 
 /* --- hardware tasks -------------------------------------------------------- */
 

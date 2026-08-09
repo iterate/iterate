@@ -41,8 +41,8 @@ static void a_pull_returns_the_devices_own_document(void) {
 
   assert(module.method_count == 1U);
   assert(strcmp(module.methods[0].path[0], "health") == 0);
-  /* No poll, no close, no session hook: a pure reader owns no lifecycle. */
-  assert(module.poll == NULL);
+  /* No close, no session hook: a pure reader owns no lifecycle. */
+  assert(module.close == NULL);
   assert(module.session_ended == NULL);
 
   assert(

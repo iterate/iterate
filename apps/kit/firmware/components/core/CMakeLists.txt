@@ -14,7 +14,6 @@ set(ITERATE_KIT_CORE_SOURCES
   src/peer.c
   src/retry_gate.c
   src/spsc_ring.c
-  src/talk_button.c
   src/touch_tap.c
   src/voice_playback_clock.c
   src/voicelab_stream.c

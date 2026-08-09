@@ -228,7 +228,6 @@ struct iterate_kit_module iterate_kit_camera_module(
     .methods = camera->methods,
     .method_count = sizeof(camera->methods) / sizeof(camera->methods[0]),
     .context = camera,
-    .poll = NULL,
     .close = NULL,
     .session_ended = session_ended,
   };

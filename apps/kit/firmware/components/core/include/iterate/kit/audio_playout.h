@@ -197,8 +197,4 @@ enum iterate_kit_playout_action iterate_kit_playout_classify(
  */
 void iterate_kit_playout_interrupt(struct iterate_kit_playout *playout);
 
-/** Human-readable action name, for logs and test failure messages. */
-const char *iterate_kit_playout_action_name(
-    enum iterate_kit_playout_action action);
-
 #endif /* ITERATE_KIT_AUDIO_PLAYOUT_H */

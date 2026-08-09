@@ -165,7 +165,6 @@ int64_t ledger_empty_at_us;
 uint32_t ledger_written_ms;
 uint32_t ledger_starved_ms;
 uint32_t ledger_starve_events;
-std::atomic<uint32_t> inject_starvation_ms{0};
 
 uint32_t saturating_add(uint32_t value, uint32_t delta) {
   const uint32_t sum = value + delta;
@@ -250,11 +249,7 @@ const struct iterate_kit_audio_codec_properties codec_properties = {
   /* playback_sample_rate_hz = */ M5STICKS3_AUDIO_SAMPLE_RATE_HZ,
   /* capture_channels = */ 1,
   /* playback_channels = */ 1,
-  /* full_duplex = */ false,
   /* has_reference_channel = */ false,
-  /* capture_is_echo_cancelled = */ false,
-  /* capture_clock_is_hardware_owned = */ true,
-  /* playback_clock_is_hardware_owned = */ true,
   /*
    * No runtime control: the -18 dB brownout ceiling is FIXED in the codec
    * table (0x32 = 0x9B) above, and the seam's contract makes the ceiling
@@ -735,22 +730,6 @@ uint32_t m5sticks3_audio_starved_ms(void) {
 
 uint32_t m5sticks3_audio_starve_events(void) {
   return ledger_starve_events;
-}
-
-uint32_t m5sticks3_audio_written_ms(void) {
-  return ledger_written_ms;
-}
-
-void m5sticks3_audio_inject_starvation(uint32_t ms) {
-  inject_starvation_ms.store(ms, std::memory_order_relaxed);
-}
-
-bool m5sticks3_audio_starvation_pending(void) {
-  return inject_starvation_ms.load(std::memory_order_relaxed) > 0U;
-}
-
-uint32_t m5sticks3_audio_take_injected_starvation(void) {
-  return inject_starvation_ms.exchange(0U, std::memory_order_relaxed);
 }
 
 enum iterate_kit_status m5sticks3_audio_set_volume(

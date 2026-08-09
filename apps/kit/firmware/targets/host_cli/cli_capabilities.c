@@ -265,7 +265,7 @@ static void cli_capabilities_write_health_audio(
   cli_capabilities_append(
       writer,
       ",\"spkUnderruns\":%u,\"spkConceal\":%u,\"spkCatchup\":%u,"
-      "\"spkDebtPaid\":%u,\"spkWriteFailures\":%u,"
+      "\"spkWriteFailures\":%u,"
       "\"talkReadFailures\":0,\"spkMarginMaxMs\":%u,"
       "\"spkBadFrames\":%u,\"spkSeqGaps\":%u,"
       "\"spkDecodeFailures\":%u,\"bargeIns\":%u,\"batches\":%u,"
@@ -274,7 +274,7 @@ static void cli_capabilities_write_health_audio(
       "\"bridgeAgeMs\":%u,\"downlinkRecycles\":%u,\"batchAgeMs\":%u,"
       "\"uptimeMs\":%" PRIu64,
       runtime->speaker_underruns, runtime->speaker_conceal_frames,
-      runtime->speaker_catchup_frames, runtime->speaker_debt_paid,
+      runtime->speaker_catchup_frames,
       runtime->speaker_write_failures, runtime->speaker_margin_max_ms,
       runtime->speaker_bad_frames, runtime->playout.gaps,
       runtime->voicelab.spk_decode_failures, runtime->barge_in_flushes,

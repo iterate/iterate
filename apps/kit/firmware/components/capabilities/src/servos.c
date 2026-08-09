@@ -82,7 +82,6 @@ struct iterate_kit_module iterate_kit_servos_module(
     .methods = methods,
     .method_count = sizeof(methods) / sizeof(methods[0]),
     .context = servos,
-    .poll = NULL,
     .close = NULL,
     .session_ended = NULL,
   };

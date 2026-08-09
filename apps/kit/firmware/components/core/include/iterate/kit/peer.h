@@ -13,8 +13,6 @@ extern "C" {
 
 enum iterate_kit_poll_status {
   ITERATE_KIT_POLL_OK = 0,
-  ITERATE_KIT_POLL_DRIVER_ERROR,
-  ITERATE_KIT_POLL_CALLBACK_REJECTED,
   ITERATE_KIT_POLL_CAPNWEB_ERROR,
 };
 
@@ -29,8 +27,6 @@ struct iterate_kit_method {
   capnweb_dispatch_fn dispatch;
 };
 
-typedef struct iterate_kit_poll_result (*iterate_kit_module_poll_fn)(
-    void *context, uint64_t now_ms);
 typedef struct iterate_kit_poll_result (*iterate_kit_module_close_fn)(
     void *context);
 typedef void (*iterate_kit_module_session_ended_fn)(void *context);
@@ -39,16 +35,20 @@ typedef void (*iterate_kit_module_session_ended_fn)(void *context);
  * One composable capability module. Method and module arrays are borrowed for
  * the peer lifetime and are normally static or embedded in a device profile.
  *
- * poll() must perform bounded cooperative work; the peer adds no task, queue,
- * mutex, allocation, or retry. session_ended() releases session-scoped remote
- * handles without shutting down physical hardware. close() is the separate
- * device-lifecycle boundary and may therefore stop hardware.
+ * session_ended() releases session-scoped remote handles without shutting down
+ * physical hardware. close() is the separate device-lifecycle boundary and may
+ * therefore stop hardware.
+ *
+ * There was a third hook, poll(), for bounded cooperative work per owner-loop
+ * turn. Every module ever written left it NULL — capabilities here are
+ * request/response or push straight from the task that owns the hardware — so
+ * the peer's poll pass was four boards calling a function that walked a table
+ * of nulls. The hook, the pass, and its two error statuses are gone.
  */
 struct iterate_kit_module {
   const struct iterate_kit_method *methods;
   size_t method_count;
   void *context;
-  iterate_kit_module_poll_fn poll;
   iterate_kit_module_close_fn close;
   /**
    * Drops handles borrowed from a Cap'n Web session without touching the
@@ -75,14 +75,6 @@ struct iterate_kit_peer_options {
  */
 struct iterate_kit_peer {
   struct iterate_kit_peer_options options;
-  struct iterate_kit_poll_result last_poll_result;
-  /*
-   * A remote callback rejection is the normal terminal signal for one JS
-   * subscription, not evidence that the peer or device failed. Retaining a
-   * saturating lifetime count makes those endings observable without a queue
-   * of historical errors or a second diagnostics owner.
-   */
-  uint32_t subscription_callback_rejections;
   /*
    * Saturating count of inbound calls that reached this device capability.
    * Socket pings deliberately do not appear here. Targets use the distinction
@@ -97,10 +89,6 @@ enum capnweb_status iterate_kit_peer_init(
     const struct iterate_kit_peer_options *options);
 struct capnweb_capability iterate_kit_peer_capability(
     struct iterate_kit_peer *peer);
-struct iterate_kit_poll_result iterate_kit_peer_poll(
-    struct iterate_kit_peer *peer, uint64_t now_ms);
-uint32_t iterate_kit_peer_subscription_callback_rejections(
-    const struct iterate_kit_peer *peer);
 uint32_t iterate_kit_peer_served_dispatches(
     const struct iterate_kit_peer *peer);
 void iterate_kit_peer_session_ended(struct iterate_kit_peer *peer);

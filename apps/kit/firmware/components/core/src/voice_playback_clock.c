@@ -17,8 +17,6 @@ void iterate_kit_voice_playback_clock_reprime(
   if (clock == NULL) return;
   clock->priming = true;
   clock->answer_done = false;
-  /* A new answer never owes latency correction for the abandoned answer. */
-  clock->drop_debt_frames = 0U;
 }
 
 void iterate_kit_voice_playback_clock_answer_done(
@@ -173,10 +171,6 @@ iterate_kit_voice_playback_clock_frame(
     clock->next_catchup_at_frame =
         frames_played + ITERATE_KIT_VOICE_SPEAKER_CATCHUP_EVERY;
     return ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP;
-  }
-  if (clock->drop_debt_frames > 0U) {
-    --clock->drop_debt_frames;
-    return ITERATE_KIT_VOICE_PLAYBACK_DROP_DEBT;
   }
   clock->last_write_ms = now_ms;
   return ITERATE_KIT_VOICE_PLAYBACK_PLAY;

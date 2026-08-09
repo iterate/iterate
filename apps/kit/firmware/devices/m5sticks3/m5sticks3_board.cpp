@@ -224,20 +224,6 @@ bool face_draw(void) {
     ++face.render_failures;
     return false;
   }
-  iterate_kit_conversation_overlay_render(
-      &status,
-      sample_clock,
-      /*
-       * The lights are drawn to the PANEL EDGE below, not into the face. The
-       * face card is centred, so a rail inside it landed forty pixels in —
-       * "just left of the face" rather than at the side of the screen, which
-       * reads as part of the picture instead of as the device's own status.
-       */
-      ITERATE_KIT_OVERLAY_LIGHTS_NONE,
-      face.frame,
-      static_cast<uint32_t>(int{FACE_RENDER_WIDTH}),
-      static_cast<uint32_t>(int{FACE_RENDER_HEIGHT}));
-
   /* The atlas dimensions are enum constants; widen them once so none of the
    * arithmetic below mixes an enum with a float. */
   const float source_w = static_cast<float>(int{FACE_RENDER_WIDTH});

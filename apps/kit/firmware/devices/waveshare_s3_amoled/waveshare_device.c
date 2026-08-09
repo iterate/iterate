@@ -1,17 +1,16 @@
 /*
  * Waveshare ESP32-S3 Touch AMOLED 1.8 — the Iterate voice device.
  *
- * The whole product is here: an on-screen Iterate UI (start call / hang up,
- * live transcript), a live capability at kit.waveshare so an agent can drive
- * the screen and the call, and the voice pipe itself.
+ * The whole product is here: an on-screen Iterate UI (start call / hang up),
+ * a live capability at kit.waveshare so an agent can drive the screen and the
+ * call, and the voice pipe itself.
  *
  * ONE Cap'n Web WebSocket to /api carries everything, exactly like the
  * TypeScript voicelab client: authenticate -> projects.get -> streams.get,
  * then 50 Hz one-way appends of ephemeral events.iterate.com/voice-agent/mic-frame events (real
  * ES8311 microphone), and a live openConnection callback delivering
  * events.iterate.com/voice-agent/spk-frame events (decoded to the speaker) plus grok-events
- * (speech_started = barge-in flush, response.done = end of answer,
- * transcript deltas to the screen).
+ * (speech_started = barge-in flush, response.done = end of answer).
  *
  * Nothing runs off-device: pressing "start call" calls the project's OWN
  * userspace worker (itx.worker.startCall) over that same socket, and the
@@ -42,7 +41,6 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
-#include "esp_random.h"
 #include "esp_system.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
@@ -374,51 +372,6 @@ static char stream_path[96] = STREAM_PATH_DEFAULT;
  * This is the DEVICE, and it never changes.
  */
 static const char *const client_path = "/clients/waveshare";
-/*
- * The path a setup call is preparing. Kept apart from the live one so a setup
- * that fails leaves the device on the conversation it already had, rather than
- * pointed at a stream nobody has prepared.
- */
-static char pending_stream_path[96];
-
-/*
- * EVERY CALL GETS ITS OWN STREAM.
- *
- * A conversation IS its stream, so a second call on the same path is a second
- * conversation wearing the first one's history — the agent reads it, and the
- * person gets answers about something they said ten minutes ago.
- *
- * `stream_used` starts TRUE, deliberately: the path this device boots on is
- * either the default or one it used before, and both have a past. So the first
- * call after a boot makes a fresh stream like every other call.
- *
- * `awaiting_fresh_stream` is what stops that from looping. Adopting a new
- * conversation asks for a call, which would ask for a new conversation, which
- * would ask for a call; the flag says "the stream being prepared is for the
- * call already asked for" and is cleared the moment it is adopted.
- */
-static bool stream_used = true;
-static bool awaiting_fresh_stream;
-/*
- * WHEN the prepare went out, so waiting on it can expire.
- *
- * `awaiting_fresh_stream` was cleared only by setup_succeeded or setup_failed,
- * so a request whose completion never came back latched it true for the rest
- * of the boot: no further prepare was attempted, no call could be placed, and
- * the board sat on its default stream looking perfectly healthy. Measured on
- * the HA Voice PE — setupFailStep 0, voicelab ready, conversation still
- * /agents/voice/device after four minutes. Every other in-flight state here
- * already expires; this one was missed.
- */
-static uint64_t awaiting_since_ms;
-/** Prepares abandoned because nothing ever answered them. */
-static uint32_t prepare_timeouts;
-/*
- * True when the stream being prepared was NOT asked for by a person.
- * See the eager prepare in the app loop: the adoption path must not
- * turn a speculative preparation into a call nobody wanted.
- */
-static bool preparing_ahead;
 #define CONVERSATION_ID "wsdev"
 #define GREETING "Hi, I am your Iterate device. What can I do for you?"
 
@@ -563,7 +516,6 @@ static struct {
   uint32_t speaker_underruns;
   uint32_t speaker_conceal_frames;
   uint32_t speaker_catchup_frames;
-  uint32_t speaker_debt_paid;
   uint32_t speaker_write_failures;
   uint32_t speaker_margin_max_ms;
   atomic_uint_fast64_t starve_at_ms;
@@ -757,6 +709,18 @@ static void on_speaker_pcm(
   waveshare_audio_amplifier(true);
   atomic_store_explicit(
       &runtime.speaker_answer_done, false, memory_order_release);
+  /*
+   * SPEAKING FOLLOWS THE AUDIO, not a transcript.
+   *
+   * This used to be set from `on_transcript`, which meant the face and the
+   * lights announced the answer when its TEXT arrived. Text and audio are
+   * separate event streams and routinely arrive out of order, so the screen
+   * could say "speaking" before a sample had played, or stay on the previous
+   * state through the first words. Clients no longer receive transcripts at
+   * all; a frame the playout accepted is the honest signal, and the setter
+   * is idempotent so paying for it per frame costs one compare.
+   */
+  waveshare_display_set_state(WAVESHARE_UI_SPEAKING);
   /*
    * Audio arriving within a second of a starve means the answer was still
    * going: the pipe genuinely ran dry mid-speech, and that is audible.
@@ -955,18 +919,6 @@ static void on_control(
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
     waveshare_display_set_status(
         waveshare_display_call_requested() ? "reconnecting" : "call ended");
-  }
-}
-
-/* Transcript state drives the face; this minimal target retains no transcript. */
-static void on_transcript(
-    void *context, bool from_user, const char *text, bool final) {
-  (void)context;
-  (void)from_user;
-  (void)text;
-  (void)final;
-  if (!from_user) {
-    waveshare_display_set_state(WAVESHARE_UI_SPEAKING);
   }
 }
 
@@ -1235,39 +1187,10 @@ static void playback_task(void *argument) {
             memory_order_acq_rel);
         continue;
       }
-
-    /*
-     * Pay the debt: one frame concealed, one late frame dropped. Without
-     * this, every concealment would permanently add its own duration to
-     * playout lag and the buffer would ratchet toward full.
-     */
-      if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_DEBT) {
-        ++runtime.speaker_debt_paid;
-        continue;
-      }
     }
 
     const uint64_t write_started_ms = now_ms(NULL);
     waveshare_audio_dma_watch(true);
-#ifdef ITERATE_KIT_DIAGNOSTIC_STARVATION
-    /*
-     * FAULT INJECTION, and it must land where a real gap would.
-     *
-     * Placed AFTER the arm and gated on a full ring already credited, because
-     * the first attempt sat before the arm: a recent dry receive had disarmed
-     * the watch, the delay ran unarmed, and the arm that followed reset the
-     * written-audio counter — telemetry showed sends=2 written=20 at the moment
-     * of the injection, which is that reset. Pending is not consumed until the
-     * answer is genuinely under way, so it waits for the right frame rather than
-     * being spent on the wrong one.
-     */
-    if (waveshare_audio_starvation_pending() &&
-        waveshare_audio_dma_written_ms() >= DMA_RING_CREDIT_MS) {
-      const uint32_t starve_ms = waveshare_audio_take_injected_starvation();
-      ESP_LOGW(tag, "injecting %ums of starvation mid-answer", (unsigned)starve_ms);
-      DELAY_MS(starve_ms);
-    }
-#endif
     /*
      * Admission is nonblocking. The hardware-owner task reserves the DMA
      * ledger immediately before its blocking write; this task waits at most
@@ -1740,21 +1663,6 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"dmaOpening", waveshare_audio_dma_underruns_opening()},
     /* Normal answer-end drain, kept apart from the ledger deficit on purpose. */
     {"dmaDraining", waveshare_audio_dma_sends_draining()},
-#ifdef ITERATE_KIT_DIAGNOSTIC_STARVATION
-    /*
-     * DIAGNOSTIC BUILD ONLY. These six were added to find the starvation bug and
-     * they overflowed the stats line in production: the device logged
-     * `health json full at "recvFailures" (1476 bytes)` and went telemetry-dark,
-     * which reads downstream as "the speaker never started". The gates below are
-     * what production needs; this is scaffolding.
-     */
-    {"dmaUnderrunFirstSend", waveshare_audio_dma_underrun_first_send()},
-    {"dmaUnderrunLastSend", waveshare_audio_dma_underrun_last_send()},
-    {"dmaUnderrunGapUs", waveshare_audio_dma_underrun_gap_us()},
-    {"dmaOwedMs", (uint32_t)waveshare_audio_dma_owed_ms()},
-    {"dmaSends", waveshare_audio_dma_sends()},
-    {"dmaWrittenMs", waveshare_audio_dma_written_ms()},
-#endif
     /* The task-side starvation measure: ms the ring was empty, and how often. */
     {"spkStarvedMs", waveshare_audio_starved_ms()},
     {"spkStarveEvents", waveshare_audio_starve_events()},
@@ -1766,7 +1674,6 @@ size_t waveshare_health_json(char *out, size_t capacity) {
      */
     {"spkSoftDryTicks", runtime.speaker_conceal_frames},
     {"spkCatchup", runtime.speaker_catchup_frames},
-    {"spkDebtPaid", runtime.speaker_debt_paid},
     {"spkWriteFailures", runtime.speaker_write_failures},
     {"codecPlaybackFailures", waveshare_audio_playback_driver_failures()},
     {"lowerReadFailures", waveshare_buttons_lower_read_failures()},
@@ -1848,8 +1755,6 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"rpcCallsMax", tables.calls_capacity},
     /* Which step of preparing a conversation failed last — the reason that
      * used to exist only on a console whose opening reboots the board. */
-    {"setupFailStep", (uint32_t)runtime.voicelab.setup_failure_step},
-    {"prepareTimeouts", prepare_timeouts},
     {"heapFree", (uint32_t)esp_get_free_heap_size()},
     /*
      * INTERNAL, NOT TOTAL. `heapFree` counts PSRAM, and on a board with eight
@@ -1920,7 +1825,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
        * board that wants a call and never places one is otherwise silent
        * about which of three conditions refused it.
        */
-      "\"hasStreamCap\":%s,\"outboxFree\":%u,\"preparing\":%s,"
+      "\"hasStreamCap\":%s,\"outboxFree\":%u,"
       "\"lastStartStatus\":%d,\"startCallFailures\":%u,"
       "\"lastLaunchStep\":%d,\"launchPolls\":%u,"
       "\"sawWantsCall\":%s,\"sawLinkReady\":%s,\"wantsCallPolls\":%u,"
@@ -1939,7 +1844,6 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       runtime.talking ? "true" : "false",
       runtime.voicelab.has_stream_capability ? "true" : "false",
       (unsigned)(CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots),
-      awaiting_fresh_stream ? "true" : "false",
       (int)runtime.last_start_status,
       (unsigned)runtime.start_call_failures,
       runtime.last_launch_step,
@@ -2050,56 +1954,6 @@ static bool clock_slug(char *out, size_t capacity) {
   if (gmtime_r(&seconds, &parts) == NULL) return false;
   return strftime(out, capacity, "%Y-%m-%d-%H%M%S", &parts) > 0U;
 }
-
-/*
- * A conversation nobody has had before.
- *
- * The path IS the conversation's identity, so a new path is the whole of
- * "start fresh" — there is no history to clear, because a stream nobody has
- * written to has none.
- *
- * NAMED AFTER THE SECOND IT WAS STARTED, with nothing random appended. The
- * name used to be two words from the hardware RNG, which made collisions
- * impossible but also made every conversation in a list indistinguishable from
- * every other. Seconds are unique per device by construction — a device cannot
- * start two conversations in the same second — and two DEVICES doing it in the
- * same second would have to be in the same project and pressed within that
- * second of each other. That is the trade: a readable name everywhere, against
- * a collision nobody in this lab will ever see. The RNG name remains for the
- * case that genuinely cannot be named after a time: a clock that has not
- * arrived.
- */
-static bool begin_new_conversation(void) {
-  char candidate[sizeof(stream_path)];
-  char when[20];
-
-  if (clock_slug(when, sizeof(when))) {
-    (void)snprintf(candidate, sizeof(candidate), "/agents/voice/%s", when);
-  } else {
-    (void)snprintf(candidate, sizeof(candidate), "/agents/voice/dev-%08lx%08lx",
-                   (unsigned long)esp_random(), (unsigned long)esp_random());
-  }
-  /*
-   * ANSWERED, so the caller does not latch a wait on a request that was never
-   * made. `setup_succeeded`/`setup_failed` only ever fire for a request that
-   * actually went out — a refusal here produces neither, so a caller that had
-   * already set "waiting for a fresh stream" would wait for the rest of the
-   * device's life.
-   */
-  if (iterate_kit_voicelab_setup_conversation(&runtime.voicelab, candidate) !=
-      CAPNWEB_OK) {
-    /* Leave the prior status either way; the setup request has completed. */
-    waveshare_display_set_state(WAVESHARE_UI_IDLE);
-    waveshare_display_set_status("could not ask the server");
-    return false;
-  }
-  (void)snprintf(pending_stream_path, sizeof(pending_stream_path), "%s",
-                 candidate);
-  waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
-  waveshare_display_set_status("preparing a new conversation...");  return true;
-}
-
-
 /*
  * A START-UP FAULT MUST BE VISIBLE, NOT A REBOOT LOOP.
  *
@@ -2292,15 +2146,6 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
       next_button_poll_at = now_ms(NULL) + BUTTON_POLL_MS;
       waveshare_buttons_poll();
     }
-    /*
-     * Give the capability modules a turn.
-     *
-     * Nothing on this device did this before, which meant any method that
-     * DEFERRED its reply — showImage, and conversation.interruptPlayback —
-     * left the caller waiting forever. A deferred reply is only a promise that
-     * something will come back to it; this is the something.
-     */
-    (void)iterate_kit_peer_poll(&runtime.peer, now_ms(NULL));
     /*
      * ...and drain what those methods queued. A capability that accepts an
      * intent and never delivers it is worse than one that is absent: the
@@ -2538,64 +2383,6 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         waveshare_display_set_status("reconnecting");
         iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
       }
-      /*
-       * A prepared conversation is adopted only once the server says it is
-       * ready. Swapping the path first would point the device at a stream
-       * with no processor on it, which looks exactly like a dead device.
-       */
-      if (runtime.voicelab.setup_succeeded) {
-        runtime.voicelab.setup_succeeded = false;
-        (void)snprintf(
-            stream_path, sizeof(stream_path), "%s", pending_stream_path);
-        ESP_LOGI(tag, "new conversation ready: %s", stream_path);
-        /* NOT the path: the menu draws that as its headline, and printing it
-         * again here put the same string on screen twice. */
-        waveshare_display_set_status("new conversation ready");
-        /* Fresh, and the call that was waiting for it may now happen here. */
-        stream_used = false;
-        awaiting_fresh_stream = false;
-        /* Remount: the mount is bound to the path it was made with. */
-        runtime.voicelab_generation = 0U;
-        /*
-         * A conversation prepared AHEAD of a tap must not place its
-         * own call — it exists so that the tap, when it comes, is
-         * cheap. Only a preparation somebody asked for starts one.
-         */
-        if (!preparing_ahead) {
-          waveshare_display_request_call(true);
-        }
-        preparing_ahead = false;
-      }
-      /* A prepare nothing ever answered must not latch the ladder shut. */
-      if (awaiting_fresh_stream && awaiting_since_ms != 0U &&
-          iterate_kit_voice_elapsed_ms(now, awaiting_since_ms) >
-              ITERATE_KIT_VOICE_PREPARE_TIMEOUT_MS) {
-        ++prepare_timeouts;
-        awaiting_fresh_stream = false;
-        preparing_ahead = false;
-        awaiting_since_ms = 0U;
-        ESP_LOGW(tag, "preparing a conversation went unanswered — trying again");
-      }
-      if (runtime.voicelab.setup_failed) {
-        runtime.voicelab.setup_failed = false;
-        /*
-         * A FAILED SETUP NO LONGER CANCELS THE PRESS.
-         *
-         * This dropped the user's call intent, which was right when a call
-         * needed a freshly prepared stream: without the stream there was no
-         * call to want. Preparation is gone — the device calls on the stream
-         * it is already on — so nothing the press needs depends on this, and
-         * clearing the intent here silently ate the press.
-         *
-         * That is exactly what it did: `conversation.start()` returned true,
-         * `wantsCall` read true, and a stale setup failure from the retired
-         * prepare path cleared it before the loop could place the call.
-         * Every launch gate was green and `start_call` was never reached.
-         */
-        ESP_LOGW(tag, "a stream setup failed; the call stands");
-        awaiting_fresh_stream = false;
-        preparing_ahead = false;
-      }
       if (iterate_kit_voice_elapsed_ms(now, last_liveness_ms) > NO_LIVENESS_RESTART_MS) {
         ESP_LOGE(
             tag,
@@ -2621,16 +2408,33 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
      * block below builds a new one. Backed off, because a mount that fails
      * every time must not become a spin.
      */
-    if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_FAILED &&
-        runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY) {
+    if (runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY) {
       static struct iterate_kit_retry_gate remount_gate;
       static bool remount_gate_ready;
       if (!remount_gate_ready) {
         remount_gate_ready =
-            iterate_kit_retry_gate_init(&remount_gate, 2000U, 30000U) ==
+            iterate_kit_retry_gate_init(
+                &remount_gate,
+                (uint32_t)ITERATE_KIT_VOICE_REMOUNT_RETRY_MS,
+                (uint32_t)ITERATE_KIT_VOICE_REMOUNT_RETRY_MAX_MS) ==
             ITERATE_KIT_OK;
       }
-      if (remount_gate_ready &&
+      /*
+       * RECOVERY HAS TO CLEAR THE BACKOFF, or the backoff outlives the fault.
+       *
+       * This gate was only ever deferred. Five transient failures — an
+       * access-point blip in the first minute will do it — walked the delay
+       * 2s, 4s, 8s, 16s, 30s and left it there for the rest of the boot, so a
+       * board that had been perfectly healthy for an hour still took thirty
+       * seconds to notice the next failed mount. A mount that reached READY
+       * is the evidence the gate exists to wait for, and it is the same
+       * signal both transport gates already reset themselves on.
+       */
+      if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY) {
+        iterate_kit_retry_gate_reset(&remount_gate);
+      } else if (
+          runtime.voicelab.state == ITERATE_KIT_VOICELAB_FAILED &&
+          remount_gate_ready &&
           iterate_kit_retry_gate_ready(&remount_gate, (int64_t)now * 1000)) {
         iterate_kit_retry_gate_defer(&remount_gate, (int64_t)now * 1000);
         ESP_LOGW(
@@ -2661,7 +2465,6 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         .clock_context = NULL,
         .on_speaker = on_speaker_pcm,
         .on_control = on_control,
-        .on_transcript = on_transcript,
         .on_viseme = on_viseme,
         .downlink_context = NULL,
       };
@@ -2913,8 +2716,6 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
             .call_pending = runtime.voicelab.call_pending,
             .link_ready = outbox_free >= 3U,
             .now_ms = now,
-            .preparing = awaiting_fresh_stream,
-            .stream_used = stream_used,
             .wants_call = wants_call,
         };
         runtime.last_launch_step = (int)iterate_kit_launch_next_step(&launch, &launching);
@@ -2923,17 +2724,6 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         runtime.saw_link_ready = launching.link_ready;
         if (launching.wants_call) ++runtime.wants_call_polls;
         switch ((enum iterate_kit_launch_step)runtime.last_launch_step) {
-          case ITERATE_KIT_LAUNCH_PREPARE_AHEAD:
-            ESP_LOGI(tag, "idle: preparing the next conversation in advance");
-            preparing_ahead = begin_new_conversation();
-            awaiting_fresh_stream = preparing_ahead;
-            awaiting_since_ms = now;
-            break;
-          case ITERATE_KIT_LAUNCH_PREPARE_NOW:
-            ESP_LOGI(tag, "call asked for: preparing a fresh conversation");
-            awaiting_fresh_stream = begin_new_conversation();
-            awaiting_since_ms = now;
-            break;
           case ITERATE_KIT_LAUNCH_PLACE_CALL:
             call_pending_since = now;
             /*
@@ -2986,10 +2776,6 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
          */
         waveshare_avatar_set_call_active(call_active_shown);
         if (call_active_shown) {
-          /* This stream has now hosted a conversation, so the next call will
-           * be made somewhere else. Marked on the ACCEPTED edge rather than on
-           * the request, because a call that never connected left no history. */
-          stream_used = true;
           /*
            * Display only. The playout reset for a new call lives in on_control's
            * CALL_ACCEPTED branch, on the receive path that classifies frames —

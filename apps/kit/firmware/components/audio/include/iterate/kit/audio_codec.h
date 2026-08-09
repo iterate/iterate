@@ -20,26 +20,22 @@ extern "C" {
  * board adapter must not copy those supervision constants into this struct.
  *
  * `has_reference_channel` means read() returns a capture-clock-aligned
- * loudspeaker reference, not merely a copy of intended TX PCM. The property is
- * exposed before any portable caller uses it so adding AEC cannot require a
- * platform bypass. A true value does not by itself prove acoustic alignment or
- * cancellation quality; those require board-specific evidence.
+ * loudspeaker reference, not merely a copy of intended TX PCM. A true value
+ * does not by itself prove acoustic alignment or cancellation quality; those
+ * require board-specific evidence.
+ *
+ * Four more facts were advertised here and never asked for:
+ * `full_duplex`, `capture_is_echo_cancelled`, and the two
+ * `*_clock_is_hardware_owned` flags. Every board filled them in and no caller
+ * ever branched on one, so all four said only what their board's own header
+ * already says in prose. A property nobody reads is a claim nobody checks.
  */
 struct iterate_kit_audio_codec_properties {
   uint32_t capture_sample_rate_hz;
   uint32_t playback_sample_rate_hz;
   uint8_t capture_channels;
   uint8_t playback_channels;
-  bool full_duplex;
   bool has_reference_channel;
-  bool capture_is_echo_cancelled;
-  /** True when the codec or platform driver, not its caller, advances capture. */
-  bool capture_clock_is_hardware_owned;
-  /**
-   * True when the codec or platform driver advances playback. A deterministic
-   * adapter may emulate that hardware-owned cadence without changing the fact.
-   */
-  bool playback_clock_is_hardware_owned;
   bool has_output_gain_control;
   /** Maximum gain relative to unity PCM (0 dB); negative values attenuate. */
   int16_t output_gain_ceiling_centi_db;

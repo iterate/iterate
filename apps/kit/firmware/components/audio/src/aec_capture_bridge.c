@@ -371,11 +371,9 @@ enum iterate_kit_status iterate_kit_aec_capture_bridge_reset(
 
 const struct iterate_kit_aec_capture_bridge_metrics *
 iterate_kit_aec_capture_bridge_metrics(
-    struct iterate_kit_aec_capture_bridge *bridge) {
+    const struct iterate_kit_aec_capture_bridge *bridge) {
   if (bridge == NULL || !bridge->initialized) {
     return NULL;
   }
-  bridge->metrics.input_partial_samples = bridge->input_fill;
-  bridge->metrics.egress_partial_samples = bridge->egress_fill;
   return &bridge->metrics;
 }

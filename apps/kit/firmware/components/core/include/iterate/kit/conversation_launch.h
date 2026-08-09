@@ -11,53 +11,35 @@ extern "C" {
 /*
  * GETTING INTO A CALL, for every board.
  *
- * Placing a call is two steps: prepare a conversation stream (the server mints
- * the stream, the agent, the capability host, three system prompts and a
- * warm-up handshake — measured at 3-5s) and then place the call on it. Each
- * board had its own copy of the ladder that sequences those, and all four
- * copies shared ONE retry timer between "prepare because nobody has asked yet"
- * and "prepare because somebody just pressed the button".
+ * A STREAM IS NO LONGER A CONVERSATION, so this is one step: place the call.
  *
- * That is the defect this module exists to end. The idle prepare arms a
- * deliberately slow retry — nobody is waiting on it — and the tap then had to
- * serve that countdown: measured on the HA Voice PE, one press reached the
- * server in 2.6s and the next took 21.5s, of which 18s was the device sitting
- * on an idle backoff while a person stood in front of it. Three separate
- * deadlines here, and a press can never wait on the idle one.
+ * Placing a call used to be two — mint a fresh `/agents/voice/<timestamp>`,
+ * then dial on it — because a stream's identity WAS the call's identity. Each
+ * board carried its own copy of the ladder that sequenced those, and all four
+ * shared ONE retry timer between "prepare because nobody has asked yet" and
+ * "prepare because somebody just pressed the button", so a press served the
+ * idle countdown: measured on the HA Voice PE, one press reached the server in
+ * 2.6s and the next took 21.5s, of which 18s was a device sitting on an idle
+ * backoff while a person stood in front of it.
+ *
+ * Splitting the deadlines fixed the wait. What retired the whole ladder was
+ * the server minting the call itself and saying so with `call-started`: one
+ * stream now carries as many conversations as the device has button presses.
+ * Keeping the old behaviour was actively fatal by then — preparing meant
+ * installing the processor facet on a brand-new path, whose first
+ * materialisation is measured at 45-52s, longer than setup's own deadline. A
+ * board asked for a stream it could not get and sat at `wantsCall: true,
+ * callPending: false` forever, indefinitely "preparing" and never dialling.
  */
 
-/** Retry for a prepare nobody is waiting on. Slow on purpose. */
-#define ITERATE_KIT_LAUNCH_PREPARE_AHEAD_RETRY_MS 30000U
-/** Retry for a prepare somebody IS waiting on. */
-#define ITERATE_KIT_LAUNCH_PREPARE_RETRY_MS 8000U
 /** Retry for placing the call itself; a start takes ~1-3s. */
 #define ITERATE_KIT_LAUNCH_PLACE_RETRY_MS 8000U
-/**
- * Prepares-ahead in a row that produced no usable stream before it stops.
- *
- * PREPARING AHEAD IS AN OPTIMISATION AND MUST NEVER BECOME A LOOP. It repeats
- * while `stream_used` is true, and `stream_used` only clears when the device
- * SEES the prepare succeed. Measured on `iterate`: the server minted a fresh
- * conversation stream every thirty seconds, per board, all evening — the
- * completion never reached the device, so it asked again forever and never
- * reached a state where it could place a call. Dozens of abandoned streams on
- * a real project, and from the outside a device that simply never answers.
- *
- * Three is enough to ride out a lost reply and few enough that a broken setup
- * path stops rather than scribbling. A tap still prepares: this bounds the
- * IDLE path only, because nobody is waiting on that one.
- */
-#define ITERATE_KIT_LAUNCH_PREPARE_AHEAD_LIMIT 3U
 
 /** What the device loop should do about calls this tick. */
 enum iterate_kit_launch_step {
   /** Nothing is owed: no intent, or a deadline has not come round yet. */
   ITERATE_KIT_LAUNCH_NOTHING = 0,
-  /** Prepare a fresh conversation while idle, so a press costs nothing. */
-  ITERATE_KIT_LAUNCH_PREPARE_AHEAD,
-  /** Prepare a fresh conversation because a call was asked for. */
-  ITERATE_KIT_LAUNCH_PREPARE_NOW,
-  /** The stream is fresh and unused: place the call on it. */
+  /** Somebody has asked and nothing is in flight: place the call. */
   ITERATE_KIT_LAUNCH_PLACE_CALL,
 };
 
@@ -65,19 +47,10 @@ enum iterate_kit_launch_step {
 struct iterate_kit_launch_inputs {
   /** The person is asking for a call — a held button, a tap, an RPC. */
   bool wants_call;
-  /**
-   * This stream already has a conversation on it.
-   *
-   * A used stream is never called again: carrying the last conversation into
-   * this one costs the person an answer that makes no sense.
-   */
-  bool stream_used;
   /** A call is up. */
   bool call_active;
   /** A start has been sent and nothing has answered it yet. */
   bool call_pending;
-  /** A prepare is already in flight; a second would race it. */
-  bool preparing;
   /** The session can carry the request — outbox room, transport ready. */
   bool link_ready;
   /** Milliseconds since boot, monotonic. */
@@ -85,25 +58,14 @@ struct iterate_kit_launch_inputs {
 };
 
 /**
- * The three deadlines, which are NOT one deadline.
+ * The one deadline.
  *
- * Zero-initialise and everything is immediately due, which is what a device
- * that has just come up wants.
+ * Zero-initialise and it is immediately due, which is what a device that has
+ * just come up wants.
  */
 struct iterate_kit_launch {
-  /** Earliest next prepare-ahead. Armed slow; a press must never read it. */
-  uint64_t next_prepare_ahead_ms;
-  /** Earliest next prepare for a call somebody asked for. */
-  uint64_t next_prepare_ms;
   /** Earliest next attempt at placing the call. */
   uint64_t next_place_ms;
-  /**
-   * Consecutive idle prepares that never produced a call.
-   *
-   * Cleared when a call is actually placed, which is the only evidence that
-   * preparing ahead is doing what it exists for.
-   */
-  uint32_t prepares_without_call;
 };
 
 /**

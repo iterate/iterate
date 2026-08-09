@@ -73,7 +73,6 @@ struct iterate_kit_module iterate_kit_health_module(
     .methods = methods,
     .method_count = sizeof(methods) / sizeof(methods[0]),
     .context = health_state,
-    .poll = NULL,
     .close = NULL,
     .session_ended = NULL,
   };

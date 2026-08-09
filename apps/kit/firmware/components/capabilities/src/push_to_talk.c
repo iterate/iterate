@@ -75,7 +75,6 @@ struct iterate_kit_module iterate_kit_push_to_talk_module(
     .methods = methods,
     .method_count = sizeof(methods) / sizeof(methods[0]),
     .context = push_to_talk,
-    .poll = NULL,
     .close = NULL,
     .session_ended = NULL,
   };

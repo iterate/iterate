@@ -13,27 +13,9 @@ enum iterate_kit_launch_step iterate_kit_launch_next_step(
    */
   if (!inputs->link_ready) return ITERATE_KIT_LAUNCH_NOTHING;
   /* Something is already happening; a second attempt would race it. */
-  if (inputs->call_active || inputs->call_pending || inputs->preparing) {
+  if (inputs->call_active || inputs->call_pending) {
     return ITERATE_KIT_LAUNCH_NOTHING;
   }
-
-  /*
-   * A STREAM IS NO LONGER A CONVERSATION, so a used one does not need
-   * replacing.
-   *
-   * Every path below used to mint a fresh `/agents/voice/<timestamp>` per
-   * call, because the stream WAS the conversation — its identity was the
-   * call's identity. The server now mints the call itself and says so with
-   * `call-started`, so one stream carries as many conversations as the device
-   * has button presses.
-   *
-   * Keeping the old behaviour is what stopped the boards calling at all:
-   * preparing a fresh stream means installing the processor facet on it, and
-   * a facet's first materialisation on a new path is measured at 45-52s
-   * against setup's own deadline. A device asked for a stream it could not get
-   * and sat at `wantsCall: true, callPending: false` forever — indefinitely
-   * "preparing", never dialling.
-   */
   if (!inputs->wants_call) {
     return ITERATE_KIT_LAUNCH_NOTHING;
   }
@@ -61,15 +43,10 @@ enum iterate_kit_launch_step iterate_kit_launch_next_step(
   }
   if (inputs->now_ms < launch->next_place_ms) return ITERATE_KIT_LAUNCH_NOTHING;
   launch->next_place_ms = inputs->now_ms + ITERATE_KIT_LAUNCH_PLACE_RETRY_MS;
-  /* Preparing ahead did its job: the count starts again from here. */
-  launch->prepares_without_call = 0U;
   return ITERATE_KIT_LAUNCH_PLACE_CALL;
 }
 
 void iterate_kit_launch_retry_now(struct iterate_kit_launch *launch) {
   if (launch == NULL) return;
-  launch->next_prepare_ahead_ms = 0U;
-  launch->next_prepare_ms = 0U;
   launch->next_place_ms = 0U;
-  launch->prepares_without_call = 0U;
 }

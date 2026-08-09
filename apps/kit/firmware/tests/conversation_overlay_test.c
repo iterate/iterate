@@ -11,24 +11,6 @@
 #error "firmware tests must execute assertions"
 #endif
 
-enum { WIDTH = 160, HEIGHT = 120 };
-
-static uint16_t frame[WIDTH * HEIGHT];
-
-static void clear_frame(void) {
-  memset(frame, 0, sizeof(frame));
-}
-
-static bool any_pixel_in(
-    uint32_t x, uint32_t y, uint32_t width, uint32_t height) {
-  for (uint32_t row = y; row < y + height; ++row) {
-    for (uint32_t column = x; column < x + width; ++column) {
-      if (frame[row * (uint32_t)WIDTH + column] != 0U) return true;
-    }
-  }
-  return false;
-}
-
 static struct iterate_kit_conversation_visual_state ready_state(void) {
   const struct iterate_kit_conversation_visual_state state = {
     .network = ITERATE_KIT_NETWORK_CONNECTED,
@@ -38,36 +20,22 @@ static struct iterate_kit_conversation_visual_state ready_state(void) {
 }
 
 /*
- * The whole reason the rail sits in the left margin: it must never touch the
- * face. The avatars' drawn extents were measured (the narrowest free left
- * margin is eighteen columns), and this pins the promise that the overlay
- * stays inside eight of them.
- */
-static void rail_stays_inside_the_left_margin(void) {
-  const struct iterate_kit_conversation_visual_state state = ready_state();
-  clear_frame();
-  iterate_kit_conversation_overlay_render(&state, 0U, ITERATE_KIT_OVERLAY_LIGHTS_RAIL, frame, WIDTH, HEIGHT);
-  assert(any_pixel_in(0U, 0U, (uint32_t)ITERATE_KIT_OVERLAY_RAIL_WIDTH, HEIGHT));
-  assert(!any_pixel_in(
-      (uint32_t)ITERATE_KIT_OVERLAY_RAIL_WIDTH,
-      0U,
-      (uint32_t)WIDTH - (uint32_t)ITERATE_KIT_OVERLAY_RAIL_WIDTH,
-      HEIGHT));
-}
-
-/*
  * Twelve sockets, always. A sector that is off must still occupy its place,
  * or "three green" and "three green plus six dark" become the same picture.
  */
 static void every_light_has_a_socket(void) {
   const struct iterate_kit_conversation_visual_state state = ready_state();
-  clear_frame();
-  iterate_kit_conversation_overlay_render(&state, 0U, ITERATE_KIT_OVERLAY_LIGHTS_RAIL, frame, WIDTH, HEIGHT);
+  struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+  iterate_kit_conversation_lights_for_screen(&state, 0U, pixels);
   for (uint32_t index = 0U;
        index < (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
        ++index) {
-    /* Ten rows of pitch at this height; every band must contain something. */
-    assert(any_pixel_in(0U, index * 10U, (uint32_t)ITERATE_KIT_OVERLAY_RAIL_WIDTH, 10U));
+    /* Asserted on the colours rather than on painted pixels: this module
+     * stopped blitting when all three boards turned its rail off, so the
+     * socket promise now lives where the colours are made. */
+    assert(
+        pixels[index].red != 0U || pixels[index].green != 0U ||
+        pixels[index].blue != 0U);
   }
 }
 
@@ -94,24 +62,17 @@ static void only_attention_states_breathe(void) {
 
 /* NULL is a state too, and it is the worst one: say something. */
 static void an_absent_state_still_says_something(void) {
+  struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+  bool lit = false;
   assert(iterate_kit_conversation_needs_attention(NULL));
   assert(iterate_kit_conversation_status_word(NULL) != NULL);
-  clear_frame();
-  iterate_kit_conversation_overlay_render(NULL, 0U, ITERATE_KIT_OVERLAY_LIGHTS_RAIL, frame, WIDTH, HEIGHT);
-  assert(any_pixel_in(0U, 0U, (uint32_t)WIDTH, (uint32_t)HEIGHT));
-}
-
-/*
- * Refusing beats clipping: four lights past the bottom edge would relabel
- * every sector below them.
- */
-static void a_frame_too_small_is_left_alone(void) {
-  clear_frame();
-  {
-    const struct iterate_kit_conversation_visual_state state = ready_state();
-    iterate_kit_conversation_overlay_render(&state, 0U, ITERATE_KIT_OVERLAY_LIGHTS_RAIL, frame, 4U, 4U);
+  iterate_kit_conversation_lights_for_screen(NULL, 0U, pixels);
+  for (uint32_t index = 0U;
+       index < (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
+       ++index) {
+    if (pixels[index].red > 200U) lit = true;
   }
-  assert(!any_pixel_in(0U, 0U, (uint32_t)WIDTH, (uint32_t)HEIGHT));
+  assert(lit);
 }
 
 static void names_every_state_a_person_can_reach(void) {
@@ -127,8 +88,6 @@ static void names_every_state_a_person_can_reach(void) {
   state.network = ITERATE_KIT_NETWORK_CONNECTING;
   assert(
       strcmp(iterate_kit_conversation_status_word(&state), "connecting") == 0);
-  state.network = ITERATE_KIT_NETWORK_DISCONNECTED;
-  assert(strcmp(iterate_kit_conversation_status_word(&state), "offline") == 0);
   state.media_failed = true;
   assert(
       strcmp(iterate_kit_conversation_status_word(&state), "audio fault") == 0);
@@ -200,11 +159,9 @@ static void connecting_walks_and_ready_holds_still(void) {
 
 int main(void) {
   connecting_walks_and_ready_holds_still();
-  rail_stays_inside_the_left_margin();
   every_light_has_a_socket();
   only_attention_states_breathe();
   an_absent_state_still_says_something();
-  a_frame_too_small_is_left_alone();
   names_every_state_a_person_can_reach();
   the_face_sleeps_when_the_call_ends();
   a_momentary_drop_does_not_close_the_eyes();

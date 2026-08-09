@@ -12,8 +12,8 @@
 #include <string.h>
 
 enum {
-  /* Matches the device: a delivery batch carrying a nested
-   * conversation.item.added transcript needs more than a trivial budget. */
+  /* Matches the device: a delivery batch is a nested pipeline expression and
+   * needs more than a trivial budget. */
   TOKEN_CAPACITY = 256,
   CALL_CAPACITY = 8,
   OUTPUT_CAPACITY = 64,
@@ -218,24 +218,6 @@ static void record_speaker(
   spoken_answer = identity == NULL ? 0U : identity->answer;
 }
 
-static char heard_user[192];
-static char heard_assistant[256];
-static bool assistant_final;
-
-static int heard_user_count;
-
-static void record_transcript(
-    void *context, bool from_user, const char *text, bool final) {
-  (void)context;
-  if (from_user) {
-    snprintf(heard_user, sizeof(heard_user), "%s", text);
-    ++heard_user_count;
-    return;
-  }
-  snprintf(heard_assistant, sizeof(heard_assistant), "%s", text);
-  assistant_final = final;
-}
-
 static void record_control(
     void *context, enum iterate_kit_voicelab_control control) {
   (void)context;
@@ -283,7 +265,6 @@ static void downlink_flow(void) {
       .clock_context = &fixture,
       .on_speaker = record_speaker,
       .on_control = record_control,
-      .on_transcript = record_transcript,
       .on_viseme = record_viseme,
       .downlink_context = NULL,
     };
@@ -355,72 +336,23 @@ static void downlink_flow(void) {
   assert(speech_started_count == 1);
   assert(fixture.voicelab.last_event_offset == 41);
 
-  /* Assistant text streams as deltas and completes; the user's line arrives
-   * whole on conversation.item.added. */
+  /*
+   * CLIENTS DO NOT RECEIVE TRANSCRIPTS. This used to be four pushes proving
+   * assistant deltas accumulated, the authoritative `.done` line won over
+   * them, and one spoken turn produced one user line however many events
+   * described it. All of that text is gone from the device protocol; what
+   * still has to survive is the CONTROL edge that shared those events'
+   * envelope, because a `response.done` that stops arriving is an answer the
+   * playout never learns has ended.
+   */
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
       "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":43,"
-      "\"payload\":{\"event\":{\"type\":\"response.created\"}}},"
-      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":44,"
-      "\"payload\":{\"event\":{\"type\":"
-      "\"response.output_audio_transcript.delta\",\"delta\":\"Hel\"}}}"
-      "]],\"scannedThroughOffset\":44,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",2,1]");
-  assert(strcmp(heard_assistant, "Hel") == 0);
-  assert(!assistant_final);
-
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":45,"
-      "\"payload\":{\"event\":{\"type\":"
-      "\"response.output_audio_transcript.delta\",\"delta\":\"lo.\"}}},"
-      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":46,"
       "\"payload\":{\"event\":{\"type\":\"response.done\"}}}"
-      "]],\"scannedThroughOffset\":46,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",3,1]");
-  assert(strcmp(heard_assistant, "Hello.") == 0);
-  assert(assistant_final);
-
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":47,"
-      "\"payload\":{\"event\":{\"type\":\"conversation.item.added\","
-      "\"item\":{\"id\":\"item_1\",\"role\":\"user\",\"content\":[[{\"type\":"
-      "\"input_audio\",\"transcript\":\"what is the capital of France\"}]]}}}}"
-      "]],\"scannedThroughOffset\":47,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",4,1]");
-  assert(strcmp(heard_user, "what is the capital of France") == 0);
-  assert(heard_user_count == 1);
-
-  /* The SAME turn also arrives as a transcription.completed. One spoken turn
-   * is one line on screen, however many events describe it. */
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":48,"
-      "\"payload\":{\"event\":{\"type\":"
-      "\"conversation.item.input_audio_transcription.completed\","
-      "\"item_id\":\"item_1\","
-      "\"transcript\":\"what is the capital of France\"}}}"
-      "]],\"scannedThroughOffset\":48,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",5,1]");
-  assert(heard_user_count == 1);
-
-  /* A genuinely new turn with the same words is still its own line. */
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":49,"
-      "\"payload\":{\"event\":{\"type\":"
-      "\"conversation.item.input_audio_transcription.completed\","
-      "\"item_id\":\"item_2\","
-      "\"transcript\":\"what is the capital of France\"}}}"
-      "]],\"scannedThroughOffset\":49,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",6,1]");
-  assert(heard_user_count == 2);
+      "]],\"scannedThroughOffset\":43,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",2,1]");
+  assert(response_done_count == 1);
 
   /* conversation-accepted on the stream is what makes a call live. */
   assert(!fixture.voicelab.call_active);
@@ -430,7 +362,7 @@ static void downlink_flow(void) {
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\",\"offset\":50,"
       "\"payload\":{\"conversationId\":\"wsdev\",\"bridge\":\"worker\"}}"
       "]],\"scannedThroughOffset\":50,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",7,1]");
+  receive(&fixture, "[\"release\",3,1]");
   assert(fixture.voicelab.call_active);
 
   /*
@@ -452,7 +384,7 @@ static void downlink_flow(void) {
       "\"payload\":{\"conversationId\":\"wsdev\",\"answer\":3,\"viseme\":2,"
       "\"confidence\":100}}"
       "]],\"scannedThroughOffset\":53,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",8,1]");
+  receive(&fixture, "[\"release\",4,1]");
   assert(viseme_count == 1);
   assert(viseme_answer == 3U);
   assert(viseme_offset_samples == 6400U);
@@ -469,7 +401,7 @@ static void downlink_flow(void) {
       "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":42,"
       "\"payload\":{\"event\":{\"type\":\"response.done\"}}}"
       "]],\"scannedThroughOffset\":42,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",9,1]");
+  receive(&fixture, "[\"release\",5,1]");
   assert(fixture.voicelab.spk_frames_received == 1U);
   assert(response_done_count == 1);
   assert(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
@@ -531,7 +463,6 @@ static void mount_with_downlink(struct fixture *fixture, int *next_id) {
     .clock_context = fixture,
     .on_speaker = record_speaker,
     .on_control = record_control,
-    .on_transcript = record_transcript,
     .on_viseme = record_viseme,
     .downlink_context = NULL,
   };

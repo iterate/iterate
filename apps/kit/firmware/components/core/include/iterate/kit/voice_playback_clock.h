@@ -16,10 +16,16 @@ extern "C" {
  * The producer first uses audio_playout.h to decide whether an arriving frame
  * is current and whether the ring must be replaced.  This module answers the
  * separate realtime question at each 20 ms sink tick: wait for opening
- * prefill, play, conceal a mid-answer hole, or discard one late frame to pay
- * concealment debt / bound excessive backlog.  Keeping those two decisions
- * separate is essential: sequence identity is exact, while occupancy is
- * local to the consumer.
+ * prefill, play, conceal a mid-answer hole, or discard one late frame to bound
+ * excessive backlog.  Keeping those two decisions separate is essential:
+ * sequence identity is exact, while occupancy is local to the consumer.
+ *
+ * There was a fifth answer, DROP_DEBT: one frame discarded per frame
+ * concealed, so concealment could not permanently add its own duration to
+ * playout lag.  Nothing ever incurred the debt — `drop_debt_frames` was only
+ * ever zeroed and decremented, never incremented — so the branch, its counter
+ * and the five device arms that read it were unreachable from the day they
+ * were written.  DROP_CATCHUP is what actually bounds lag.
  *
  * One playback owner mutates this structure.  Calls are allocation-free and
  * non-blocking; `now_ms` is monotonic milliseconds and `queued_bytes` excludes
@@ -28,7 +34,6 @@ extern "C" {
 struct iterate_kit_voice_playback_clock {
   bool priming;
   bool answer_done;
-  uint32_t drop_debt_frames;
   uint32_t next_catchup_at_frame;
   uint64_t last_write_ms;
   uint64_t starve_at_ms;
@@ -38,7 +43,6 @@ enum iterate_kit_voice_playback_action {
   ITERATE_KIT_VOICE_PLAYBACK_WAIT = 0,
   ITERATE_KIT_VOICE_PLAYBACK_PLAY,
   ITERATE_KIT_VOICE_PLAYBACK_CONCEAL,
-  ITERATE_KIT_VOICE_PLAYBACK_DROP_DEBT,
   ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP,
 };
 

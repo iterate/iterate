@@ -125,8 +125,8 @@ struct iterate_kit_aec_capture_bridge_metrics {
  * history. These losses are exact counters, not benign log messages.
  *
  * The struct is public only so callers can own it statically. Treat its fields
- * as private and observe state through metrics(). All operations, including
- * metrics(), belong to one task; this type contains no atomics.
+ * as private and observe state through metrics(). Mutating operations belong
+ * to one task; this type contains no atomics.
  */
 struct iterate_kit_aec_capture_bridge {
   struct iterate_kit_aec_capture_bridge_options options;
@@ -177,9 +177,21 @@ enum iterate_kit_status iterate_kit_aec_capture_bridge_push_aligned(
 enum iterate_kit_status iterate_kit_aec_capture_bridge_reset(
     struct iterate_kit_aec_capture_bridge *bridge);
 
+/**
+ * Reads the counters without touching them.
+ *
+ * THE READER USED TO WRITE. It copied `input_fill`/`egress_fill` into the two
+ * partial-sample members on every call — but both members are already kept
+ * current at each fill site, so the writes changed nothing and only made
+ * observing the bridge an operation that mutates it. That cost stackchan a
+ * workaround: its app loop could not read its own health document without
+ * racing the audio task, so the read had to be moved onto the owning task and
+ * mirrored through atomics. A const reader is safe from any task, subject to
+ * the usual torn-read caveat on a struct this size.
+ */
 const struct iterate_kit_aec_capture_bridge_metrics *
 iterate_kit_aec_capture_bridge_metrics(
-    struct iterate_kit_aec_capture_bridge *bridge);
+    const struct iterate_kit_aec_capture_bridge *bridge);
 
 #ifdef __cplusplus
 }

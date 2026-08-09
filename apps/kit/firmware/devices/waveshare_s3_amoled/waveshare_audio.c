@@ -150,11 +150,7 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
   .playback_sample_rate_hz = WAVESHARE_AUDIO_SAMPLE_RATE_HZ,
   .capture_channels = 1,
   .playback_channels = 1,
-  .full_duplex = true,
   .has_reference_channel = false,
-  .capture_is_echo_cancelled = false,
-  .capture_clock_is_hardware_owned = true,
-  .playback_clock_is_hardware_owned = true,
   .has_output_gain_control = true,
   .output_gain_ceiling_centi_db = 0,
 };
@@ -341,7 +337,6 @@ static volatile uint32_t dma_underruns_opening;
  * there.
  */
 static volatile uint32_t dma_sends_draining;
-static volatile uint32_t dma_sends_since_start;
 /*
  * MILLISECONDS OF AUDIO handed over since feeding began.
  *
@@ -357,13 +352,6 @@ static volatile uint32_t dma_sends_since_start;
  * over. That is the real condition the window was reaching for.
  */
 static volatile uint32_t dma_written_ms_since_start;
-/*
- * Microseconds since the last write, captured at the moment an underrun is
- * counted. THE decisive number: if we were genuinely late the gap is at least a
- * descriptor (15ms); if it is small, the ring emptied while we were feeding it
- * and the accounting is wrong rather than the pipeline.
- */
-static volatile int64_t dma_last_write_us;
 /*
  * AUDIO HANDED OVER BUT NOT YET SENT, in milliseconds. The starvation test.
  *
@@ -391,19 +379,6 @@ static volatile int32_t dma_owed_ms;
  * lives in DRAM because the ISR is in IRAM and must not fault on it.
  */
 static DRAM_ATTR portMUX_TYPE dma_ledger_lock = portMUX_INITIALIZER_UNLOCKED;
-static volatile uint32_t dma_underrun_gap_us;
-/*
- * WHERE the first counted underrun happened, as a send index since this answer
- * started feeding. Instrumentation, because two explanations fit the same
- * counter and only this number tells them apart: a small index means the
- * opening window is simply too short for the real refill, and a large one means
- * the pipeline genuinely starved mid-answer. Guessing between those is how a
- * counter gets masked instead of fixed.
- */
-static volatile uint32_t dma_underrun_first_send;
-static volatile uint32_t dma_underrun_last_send;
-/* Milliseconds of feeding the speaker task must skip, for fault injection. */
-static volatile uint32_t inject_starvation_ms;
 
 static bool IRAM_ATTR on_dma_sent(
     i2s_chan_handle_t handle, i2s_event_data_t *event, void *context) {
@@ -423,7 +398,6 @@ static bool IRAM_ATTR on_dma_sent(
   portENTER_CRITICAL_ISR(&dma_ledger_lock);
   if (dma_watch) {
     dma_owed_ms -= (int32_t)DMA_DESCRIPTOR_MS;
-    if (dma_sends_since_start < 0xffffffffU) ++dma_sends_since_start;
     if (dma_owed_ms < 0) {
       dma_owed_ms = 0; /* Don't accumulate debt across a gap. */
       if (dma_draining) {
@@ -431,12 +405,6 @@ static bool IRAM_ATTR on_dma_sent(
       } else if (dma_written_ms_since_start < DMA_RING_MS) {
         ++dma_underruns_opening;
       } else {
-        if (dma_underruns == 0U) {
-          dma_underrun_first_send = dma_sends_since_start;
-          dma_underrun_gap_us =
-              (uint32_t)(esp_timer_get_time() - dma_last_write_us);
-        }
-        dma_underrun_last_send = dma_sends_since_start;
         ++dma_underruns;
       }
     }
@@ -453,17 +421,8 @@ int32_t waveshare_audio_dma_owed_ms(void) {
   return dma_owed_ms;
 }
 
-uint32_t waveshare_audio_dma_sends(void) {
-  return dma_sends_since_start;
-}
 
-uint32_t waveshare_audio_dma_written_ms(void) {
-  return dma_written_ms_since_start;
-}
 
-uint32_t waveshare_audio_dma_underrun_gap_us(void) {
-  return dma_underrun_gap_us;
-}
 
 /*
  * STARVATION MEASURED ON THE WRITING TASK, not inferred from callbacks.
@@ -537,7 +496,6 @@ void waveshare_audio_reserve_write(uint32_t ms) {
   /* The deadline moves out by exactly the audio this write hands over. */
   base_us = now_us > dma_empty_at_us ? now_us : dma_empty_at_us;
   dma_empty_at_us = base_us + (int64_t)ms * 1000;
-  dma_last_write_us = now_us;
   dma_owed_ms += (int32_t)ms;
   if (dma_written_ms_since_start < 0xffff0000U) dma_written_ms_since_start += ms;
   portEXIT_CRITICAL(&dma_ledger_lock);
@@ -558,7 +516,6 @@ void waveshare_audio_dma_watch(bool active) {
   /* One lock over the whole transition — see on_dma_sent. */
   portENTER_CRITICAL(&dma_ledger_lock);
   if (active && !dma_watch) {
-    dma_sends_since_start = 0U;
     dma_written_ms_since_start = 0U;
     dma_owed_ms = 0;
     /*
@@ -598,27 +555,8 @@ uint32_t waveshare_audio_dma_sends_draining(void) {
   return dma_sends_draining;
 }
 
-void waveshare_audio_inject_starvation(uint32_t ms) {
-  inject_starvation_ms = ms;
-}
 
-bool waveshare_audio_starvation_pending(void) {
-  return inject_starvation_ms > 0U;
-}
 
-uint32_t waveshare_audio_take_injected_starvation(void) {
-  const uint32_t ms = inject_starvation_ms;
-  inject_starvation_ms = 0U;
-  return ms;
-}
-
-uint32_t waveshare_audio_dma_underrun_first_send(void) {
-  return dma_underrun_first_send;
-}
-
-uint32_t waveshare_audio_dma_underrun_last_send(void) {
-  return dma_underrun_last_send;
-}
 
 uint32_t waveshare_audio_dma_underruns_opening(void) {
   return dma_underruns_opening;
@@ -756,11 +694,11 @@ bool waveshare_audio_init(void) {
       .invert_sclk = false,
       .hw_gain = {.pa_voltage = 5.0f, .codec_dac_voltage = 3.3f},
       /*
-       * Kept to match Waveshare's BSP recipe during this structural move.
-       * The NS4150B supply is physically 3.3 V, so 5.0 V makes the codec
-       * abstraction's gain arithmetic inaccurate. Do not retune it here:
-       * consolidation-plan.md section 8 records the required measured follow-
-       * up, and changing it would mix an acoustic change into this port.
+       * Kept to match Waveshare's BSP recipe. The NS4150B supply is
+       * physically 3.3 V, so 5.0 V makes the codec abstraction's gain
+       * arithmetic inaccurate — but correcting it is an ACOUSTIC change and
+       * belongs in its own measured comparison, not folded into a structural
+       * one. Retune it only against a recording, never by reasoning.
        */
       /*
        * Reg 0x44 = 0x58 (the default) puts DAC output in the ADC lane's right
@@ -820,7 +758,8 @@ bool waveshare_audio_init(void) {
      * 0x16 ADC_SCALE here, whose reset value is already 24 dB, and clears
      * ADC_SYNC. It does not change the analogue PGA at register 0x14. The
      * earlier "30 dB clipped" result therefore measured digital saturation,
-     * not an analogue-PGA comparison. See consolidation-plan.md section 8.
+     * not an analogue-PGA comparison — so it is not evidence about the PGA at
+     * all, and the comparison it appeared to settle is still open.
      */
     (void)esp_codec_dev_set_in_gain(codec_dev, 24.0f);
     /*
@@ -900,11 +839,6 @@ enum iterate_kit_status waveshare_audio_set_volume(
 }
 
 uint8_t waveshare_audio_volume(void) { return speaker_volume_percent; }
-
-void waveshare_audio_set_mic_gain(float db) {
-  if (codec_dev == NULL) return;
-  (void)esp_codec_dev_set_in_gain(codec_dev, db);
-}
 
 void waveshare_audio_amplifier(bool on) {
   static bool configured;

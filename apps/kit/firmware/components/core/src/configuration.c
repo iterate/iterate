@@ -382,32 +382,3 @@ enum iterate_kit_configuration_error iterate_kit_configuration_decode(
   }
   return ITERATE_KIT_CONFIGURATION_OK;
 }
-
-const char *iterate_kit_configuration_error_name(
-    enum iterate_kit_configuration_error error) {
-  switch (error) {
-    case ITERATE_KIT_CONFIGURATION_OK:
-      return "ok";
-    case ITERATE_KIT_CONFIGURATION_INVALID_ARGUMENT:
-      return "invalid argument";
-    case ITERATE_KIT_CONFIGURATION_TRUNCATED:
-      return "truncated image";
-    case ITERATE_KIT_CONFIGURATION_INVALID_MAGIC:
-      return "invalid magic";
-    case ITERATE_KIT_CONFIGURATION_UNSUPPORTED_VERSION:
-      return "unsupported version";
-    case ITERATE_KIT_CONFIGURATION_CHECKSUM_MISMATCH:
-      return "checksum mismatch";
-    case ITERATE_KIT_CONFIGURATION_MALFORMED_FIELD:
-      return "malformed field";
-    case ITERATE_KIT_CONFIGURATION_DUPLICATE_FIELD:
-      return "duplicate field";
-    case ITERATE_KIT_CONFIGURATION_FIELD_TOO_LONG:
-      return "field too long";
-    case ITERATE_KIT_CONFIGURATION_MISSING_FIELD:
-      return "missing field";
-    case ITERATE_KIT_CONFIGURATION_INVALID_VALUE:
-      return "invalid value";
-  }
-  return "unknown configuration error";
-}

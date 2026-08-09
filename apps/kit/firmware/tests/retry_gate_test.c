@@ -1,5 +1,7 @@
 #include "iterate/kit/retry_gate.h"
 
+#include "iterate/kit/voice_device_profile.h"
+
 #include <assert.h>
 #include <stdint.h>
 
@@ -15,6 +17,58 @@
  * This boundary scenario also proves microsecond deadlines saturate rather than
  * wrapping near INT64_MAX and that an impossible delay range is rejected.
  */
+/*
+ * THE VOICELAB REMOUNT BACKOFF, WITH THE DEVICE'S OWN BUDGET.
+ *
+ * All four boards ran this gate and none of them ever reset it, so the delay
+ * only ever grew: five transient failures walked it to the 30s ceiling and
+ * left it there for the rest of the boot, and a board that had been healthy
+ * for an hour still took thirty seconds to notice the next failed mount. The
+ * constants are read from voice_device_profile.h — the same table the devices
+ * initialise the gate from — so a change to the budget moves this test with
+ * it instead of leaving a stale number behind.
+ */
+static void remounting_recovers_its_responsiveness(void) {
+  const int64_t initial_us =
+      (int64_t)ITERATE_KIT_VOICE_REMOUNT_RETRY_MS * 1000;
+  const int64_t maximum_us =
+      (int64_t)ITERATE_KIT_VOICE_REMOUNT_RETRY_MAX_MS * 1000;
+  struct iterate_kit_retry_gate gate;
+  int64_t now_us = 0;
+  int attempt;
+
+  assert(
+      iterate_kit_retry_gate_init(
+          &gate,
+          (uint32_t)ITERATE_KIT_VOICE_REMOUNT_RETRY_MS,
+          (uint32_t)ITERATE_KIT_VOICE_REMOUNT_RETRY_MAX_MS) ==
+      ITERATE_KIT_OK);
+
+  /* A board that has just come up may remount at once. */
+  assert(iterate_kit_retry_gate_ready(&gate, now_us));
+
+  /* Five failures is what a single access-point blip can produce, and it is
+   * exactly what used to pin the board at the ceiling. */
+  for (attempt = 0; attempt < 5; ++attempt) {
+    iterate_kit_retry_gate_defer(&gate, now_us);
+    now_us += maximum_us;
+  }
+  iterate_kit_retry_gate_defer(&gate, now_us);
+  assert(!iterate_kit_retry_gate_ready(&gate, now_us + maximum_us - 1));
+  assert(iterate_kit_retry_gate_ready(&gate, now_us + maximum_us));
+
+  /*
+   * THE FIX. A mount that reached READY is the evidence the gate waits for,
+   * so the next failure is owed a prompt attempt — not the ceiling the old
+   * faults earned.
+   */
+  iterate_kit_retry_gate_reset(&gate);
+  assert(iterate_kit_retry_gate_ready(&gate, now_us));
+  iterate_kit_retry_gate_defer(&gate, now_us);
+  assert(!iterate_kit_retry_gate_ready(&gate, now_us + initial_us - 1));
+  assert(iterate_kit_retry_gate_ready(&gate, now_us + initial_us));
+}
+
 int main(void) {
   struct iterate_kit_retry_gate gate;
 
@@ -53,5 +107,6 @@ int main(void) {
   assert(
       iterate_kit_retry_gate_init(&gate, 1000U, 999U) ==
       ITERATE_KIT_INVALID_ARGUMENT);
+  remounting_recovers_its_responsiveness();
   return 0;
 }

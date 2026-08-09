@@ -19,9 +19,15 @@ struct iterate_kit_rgb8 {
   uint8_t blue;
 };
 
+/*
+ * There was a third state, DISCONNECTED, and no board could ever reach it:
+ * all four map `link_ready` to CONNECTED or CONNECTING, because a device that
+ * cannot see the network is still trying to and saying "offline" about it was
+ * a promise the fleet never kept. Its status word, its dark-red network
+ * sector and its banner colour are gone with it.
+ */
 enum iterate_kit_network_state {
-  ITERATE_KIT_NETWORK_DISCONNECTED = 0,
-  ITERATE_KIT_NETWORK_CONNECTING,
+  ITERATE_KIT_NETWORK_CONNECTING = 0,
   ITERATE_KIT_NETWORK_CONNECTED,
 };
 
