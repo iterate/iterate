@@ -266,6 +266,28 @@ iterate_kit_esp_idf_websocket_connection_send(
     size_t payload_size);
 
 /**
+ * ASK THE HOP WHETHER IT IS ALIVE, RIGHT NOW.
+ *
+ * The keepalive inside service_control() asks the same question on its own
+ * clock, and that clock is deliberately 120 s because anything shorter keeps a
+ * Durable Object from ever hibernating. This is the other caller: something
+ * happened that makes the answer worth a control frame immediately. The only
+ * one today is a press — see the press probe in components/voice — which is the
+ * one moment a stale socket is expensive rather than free.
+ *
+ * Owner-task-only, like every other operation on this connection. It queues,
+ * it does not write; the queued frame goes out on the next service_control()
+ * pass, and the PONG it earns arrives as a receive CONTROL result and moves
+ * `pongs_received`. That counter is the whole answer, and the caller watches it.
+ *
+ * Stamped outbound so a probe also postpones the idle keepalive: having just
+ * asked, there is nothing for the 120 s clock to add.
+ */
+enum iterate_kit_status
+iterate_kit_esp_idf_websocket_connection_probe(
+    struct iterate_kit_esp_idf_websocket_connection *connection);
+
+/**
  * Gives queued PONG/CLOSE work one bounded nonblocking write opportunity.
  *
  * Control frames share the same wire writer as data so bytes can never be

@@ -500,7 +500,18 @@ static void remember_websocket_error(
 
 static bool service_websocket_control(
     struct iterate_kit_esp_idf_itx_transport *transport) {
-  const enum iterate_kit_websocket_tx_result result =
+  enum iterate_kit_websocket_tx_result result;
+  /*
+   * The application asked the hop a question. Consumed here because this is
+   * the network task, which is the connection's only legal owner, and this
+   * function is the one thing every path through the loop calls while the
+   * socket is up. Exchanged rather than loaded so one request is one PING.
+   */
+  if (atomic_exchange_u32(&transport->probe_requested, 0U)) {
+    (void)iterate_kit_esp_idf_websocket_connection_probe(
+        &transport->websocket);
+  }
+  result =
       iterate_kit_esp_idf_websocket_connection_service_control(
           &transport->websocket);
   if (result == ITERATE_KIT_WEBSOCKET_TX_IDLE ||
@@ -1523,6 +1534,15 @@ void iterate_kit_esp_idf_itx_transport_request_restart(
     return;
   }
   request_restart(transport);
+}
+
+void iterate_kit_esp_idf_itx_transport_request_probe(
+    struct iterate_kit_esp_idf_itx_transport *transport) {
+  if (transport == NULL || !transport->initialized) {
+    return;
+  }
+  atomic_store_u32(&transport->probe_requested, 1U);
+  wake_network_task(transport);
 }
 
 enum iterate_kit_status iterate_kit_esp_idf_itx_transport_stop(

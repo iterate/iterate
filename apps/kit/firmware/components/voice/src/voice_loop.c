@@ -297,6 +297,14 @@ enum {
    */
   DOWNLINK_SILENCE_MS = ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS,
   /*
+   * The press's own liveness question, and the only one on this device that is
+   * asked by an EVENT rather than by a clock. Ten seconds of nothing after a
+   * press was the worst failure left here; three is what the arithmetic below
+   * costs. See ITERATE_KIT_VOICE_PRESS_PROBE_MS for why the evidence is a PONG.
+   */
+  PRESS_PROBE_MS = ITERATE_KIT_VOICE_PRESS_PROBE_MS,
+  PRESS_PROBE_ATTEMPTS = ITERATE_KIT_VOICE_PRESS_PROBE_ATTEMPTS,
+  /*
    * Last resort. The transport can be READY, the socket open, and nothing
    * whatsoever moving: a half-open TCP connection looks perfectly healthy
    * from this end. If no probe has completed for this long, no amount of
@@ -492,12 +500,19 @@ EXT_RAM_BSS_ATTR static struct {
    * bug. The overflow is logged for the same reason.
    */
   /*
-   * 2560, not 1536. Nine added fields overflowed it and the device went dark:
-   * every downstream reader then sees "no stats", which looks like a broken
-   * speaker rather than a full buffer. The guard names the field it stopped at,
-   * which is how this was found in one read.
+   * 2816, and it grows whenever fields are added. It was 1536; nine added
+   * fields overflowed it and the device went dark, because every downstream
+   * reader then sees "no stats", which looks like a broken speaker rather than
+   * a full buffer. The guard names the field it stopped at, which is how that
+   * was found in one read.
+   *
+   * The last +256 is the four press-probe fields. 81 fields at their longest
+   * rendering is ~2.3 KiB before the board appends its own dozen, so the
+   * headroom here is thinner than the number looks. This lives in PSRAM with
+   * the rest of `runtime`, so the margin is nearly free and the failure it
+   * prevents is a board that answers nothing when asked how it is.
    */
-  char stats_buffer[2560];
+  char stats_buffer[2816];
   uint32_t stats_sequence;
   enum iterate_kit_esp_idf_itx_transport_state last_transport_state;
   enum iterate_kit_voicelab_state last_voicelab_state;
@@ -612,6 +627,27 @@ EXT_RAM_BSS_ATTR static struct {
   uint32_t downlink_recycles;
   /* How many of those in a row have not yet produced a batch. */
   uint32_t downlink_recycles_running;
+  /*
+   * THE PRESS PROBE: is this socket still connected to anything?
+   *
+   * Armed when a call is placed and disarmed by the PONG. `sent_ms` is zero
+   * when nothing is outstanding, which is every moment of an idle board's life
+   * — see ITERATE_KIT_VOICE_PRESS_PROBE_MS for why an idle probe would be the
+   * wrong thing entirely.
+   */
+  uint64_t press_probe_sent_ms;
+  uint32_t press_probe_pongs_before;
+  /* The PONG count as of this pass, sampled by the liveness block so the
+   * launch below can take a baseline without a second metrics snapshot. */
+  uint32_t pongs_seen;
+  uint8_t press_probe_attempt;
+  /* Probes sent, probes that no PONG answered, and the last measured round
+   * trip. The last one is the instrument that turns the 1500 ms budget into a
+   * number somebody can check. */
+  uint32_t press_probes;
+  uint32_t press_probe_misses;
+  uint32_t press_probe_ms;
+  uint32_t press_probe_restarts;
   /* Diagnostics for a frozen device: see the pulse in the app loop. */
   uint32_t loop_count;
   uint64_t last_pulse_ms;
@@ -1774,7 +1810,32 @@ static enum iterate_kit_status handle_device_event(
   (void)context;
   switch ((enum iterate_kit_device_event_type)event->type) {
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
+      /*
+       * A PRESS OPENS THE CALL. ONE VERB, NOT TWO.
+       *
+       * This set the talk latch and nothing else, and the turn machine below
+       * reads that latch only inside `wants_call` — so a press with no call up
+       * was latched and then never consulted. Driving a button board with
+       * `pushToTalk.start()` alone looked completely dead, the reply said the
+       * event had been accepted (it had), and an afternoon went into bisecting
+       * hardware that was working. The caller had to know to call
+       * `conversation.start()` first, and nothing anywhere said so.
+       *
+       * The stream protocol already decided this the right way round:
+       * `ptt-start` opens a call if none is up and the SERVER resolves it. A
+       * device press is the same request, so it makes the same claim here —
+       * and it is ONE assignment rather than a wrapper that calls two verbs,
+       * because two verbs is the thing that was wrong.
+       *
+       * `conversation.start()` still exists and still means something: an
+       * open-mic board has no press at all, and on a button board it is how you
+       * open a call to be greeted without holding the microphone open.
+       *
+       * Only STARTED. Releasing talk commits the turn; it does not hang up, for
+       * the same reason `ptt-end` does not.
+       */
       runtime.remote_talk = (true);
+      runtime.view.wants_call = (true);
       return ITERATE_KIT_OK;
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
       runtime.remote_talk = (false);
@@ -1795,38 +1856,15 @@ static enum iterate_kit_status handle_device_event(
 static size_t render_health(void *context, char *out, size_t capacity);
 
 /*
- * WOULD A TALK REQUEST ARRIVING RIGHT NOW ACTUALLY OPEN THE MICROPHONE?
+ * `talk_would_be_honoured` WAS HERE, and it answered the reply's `latched`
+ * field: would a talk request arriving right now actually open the microphone?
+ * On a board where a press did not open the call, the honest answer was often
+ * "no", and reporting it was the best that could be done about an ordering
+ * every caller had to know.
  *
- * The exact condition the turn machine applies to `remote_talk`, and it has to
- * be exact or the answer is a second opinion rather than the truth: a
- * push-to-talk board reads the latch only inside `wants_call && ...`, so a
- * remote press with no call is latched and then never read. Nothing later can
- * report that — the press is not dropped, it is simply never consulted — which
- * is why the honest moment to say so is the reply.
- *
- * `wants_call` and not `call_active`: pressing talk while a call is still
- * being placed is legitimate and will be honoured the moment it lands, so
- * answering "no" there would be the opposite lie.
+ * The gate it reported is gone — a press opens the call — so the predicate can
+ * only answer "yes" and the field it fed can only say `true`. Both went.
  */
-static bool talk_would_be_honoured(void *context) {
-  (void)context;
-  if (runtime.facts == NULL) return false;
-  /*
-   * On an open-mic board the microphone rides the call and there is no latch
-   * to set — which is why those boards do not mount this capability at all.
-   * Answering honestly here costs nothing and keeps the predicate true to its
-   * name if that ever changes.
-   */
-  if (runtime.facts->turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD) {
-    return runtime.voicelab.call_active;
-  }
-  return runtime.view.wants_call;
-}
-
-static const struct iterate_kit_push_to_talk_driver push_to_talk_driver = {
-  .context = NULL,
-  .would_be_honoured = talk_would_be_honoured,
-};
 
 static bool initialise_connection(void) {
   /*
@@ -1852,8 +1890,7 @@ static bool initialise_connection(void) {
     if (iterate_kit_device_event_queue_init(
             &runtime.device_events, &event_options) != ITERATE_KIT_OK ||
         iterate_kit_push_to_talk_init(
-            &runtime.push_to_talk, &runtime.device_events,
-            &push_to_talk_driver) != ITERATE_KIT_OK ||
+            &runtime.push_to_talk, &runtime.device_events) != ITERATE_KIT_OK ||
         iterate_kit_conversation_control_init(
             &runtime.conversation_control, &runtime.device_events) !=
             ITERATE_KIT_OK) {
@@ -1886,10 +1923,12 @@ static bool initialise_connection(void) {
     }
   }
   /*
-   * ASKABLE. The same document this device pushes as dev-stats, on demand,
-   * because the pushed copy only reaches whoever was already listening — and
-   * the other way to interrogate a quiet board is its console, which on this
-   * hardware REBOOTS it.
+   * ASKABLE, and only askable. There was a copy of this document pushed onto
+   * the stream every five seconds as dev-stats; it was deleted because a board
+   * that talks on a timer keeps a Durable Object awake forever. The pull is
+   * what is left, and it is the better half: the pushed copy only reached
+   * whoever was already listening, and the other way to interrogate a quiet
+   * board is its console, which on this hardware REBOOTS it.
    */
   {
     const struct iterate_kit_health_driver driver = {
@@ -2154,6 +2193,21 @@ static size_t health_json(char *out, size_t capacity) {
          : (uint32_t)iterate_kit_voice_elapsed_ms(
                now, runtime.voicelab.last_bridge_ms)},
     {"downlinkRecycles", runtime.downlink_recycles},
+    /*
+     * THE PRESS PROBE, AS AN INSTRUMENT RATHER THAN A BELIEF.
+     *
+     * `pressProbeMs` is the last PONG round trip measured after a press, and it
+     * is the only evidence anybody has for what that costs on this hardware —
+     * the 1500 ms budget it is checked against was a guess. `pressProbeMisses`
+     * counts probes no PONG answered (a lossy access point moves this without
+     * anything being wrong); `pressProbeRestarts` counts sockets replaced
+     * because two in a row went unanswered, and that one should stay at zero
+     * unless a socket really did die.
+     */
+    {"pressProbes", runtime.press_probes},
+    {"pressProbeMs", runtime.press_probe_ms},
+    {"pressProbeMisses", runtime.press_probe_misses},
+    {"pressProbeRestarts", runtime.press_probe_restarts},
     {"batchAgeMs",
      runtime.voicelab.last_batch_ms == 0U
          ? 0U
@@ -2672,6 +2726,30 @@ bool iterate_kit_voice_loop_init(
 }
 
 /*
+ * ASK THE HOP, BECAUSE A PRESS JUST MADE THE ANSWER WORTH KNOWING.
+ *
+ * Queues one WebSocket PING and records the PONG count to beat. Called when a
+ * call is placed and, once, again if the first went unanswered — see
+ * ITERATE_KIT_VOICE_PRESS_PROBE_MS for why the answer is a PONG rather than a
+ * delivered batch, and why a single missed one is not evidence.
+ *
+ * Takes the pong baseline from a metrics snapshot the caller already has, so
+ * arming costs one control frame and no extra sampling.
+ */
+static void arm_press_probe(uint64_t now, uint32_t pongs_now) {
+  runtime.press_probe_sent_ms = now;
+  runtime.press_probe_pongs_before = pongs_now;
+  ++runtime.press_probe_attempt;
+  ++runtime.press_probes;
+  iterate_kit_esp_idf_itx_transport_request_probe(&transport);
+}
+
+static void disarm_press_probe(void) {
+  runtime.press_probe_sent_ms = 0U;
+  runtime.press_probe_attempt = 0U;
+}
+
+/*
  * ONE PASS OF THE DEVICE.
  *
  * `now_ms` is a parameter rather than a call, because a step that is handed
@@ -2770,12 +2848,30 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
     runtime.intent.end_call = false;
     runtime.intent.toggle_call = false;
     {
-      static bool talk_logged;
-      if (runtime.intent.talk_held != talk_logged) {
-        talk_logged = runtime.intent.talk_held;
+      static bool talk_down;
+      if (runtime.intent.talk_held != talk_down) {
+        talk_down = runtime.intent.talk_held;
+        /*
+         * ...AND A FINGER ON THE TALK BUTTON OPENS THE CALL TOO, for the same
+         * reason `pushToTalk.start()` does: one verb. The Waveshare already got
+         * this by accident — its upper button is BOTH `start_call` and
+         * `talk_held`, so a press there was always a call — while the M5Stick
+         * put talk on the front button and the call on the side, and holding
+         * front alone did precisely nothing. Two boards with one program must
+         * not answer the same gesture differently.
+         *
+         * THE RISING EDGE, not the level. `talk_held` stays true for as long as
+         * the button is down, so raising on the level would re-open a call the
+         * person had just ended with their other hand and there would be no way
+         * to hang up without letting go first.
+         *
+         * Placed after the explicit start/end/toggle above so that within one
+         * pass the specific instruction wins over this implicit one.
+         */
+        if (talk_down) runtime.view.wants_call = true;
         ESP_LOGI(
             tag, "talk %s",
-            talk_logged ? "down (talking)" : "up (commit)");
+            talk_down ? "down (talking)" : "up (commit)");
       }
     }
 
@@ -2913,6 +3009,69 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       if (liveness.websocket_pongs_received != last_pong_count) {
         last_pong_count = liveness.websocket_pongs_received;
         last_liveness_ms = now;
+      }
+      runtime.pongs_seen = liveness.websocket_pongs_received;
+      /*
+       * THE PRESS'S OWN QUESTION, ANSWERED ON THE PRESS'S OWN CLOCK.
+       *
+       * The watchdog above waits seven minutes, deliberately, because on an
+       * idle board a dead hop costs nothing. This one waits three seconds,
+       * because a press just went out and a press is the one moment a dead hop
+       * is the difference between a device and a brick. It exists at all
+       * because the append the press sends CANNOT report its own failure: a
+       * one-way write into a half-open socket is accepted by TCP, reports
+       * success, and is noticed by nothing until DOWNLINK_SILENCE_MS ten
+       * seconds later.
+       *
+       * It shares this block only because the PONG count is already sampled
+       * here; the two deadlines are unrelated and must not be merged.
+       *
+       * Disarmed the moment the transport stops being READY — the socket is
+       * already being replaced, and a PONG from a connection that no longer
+       * exists is never coming.
+       */
+      if (runtime.press_probe_sent_ms != 0U) {
+        if (transport.state != ITERATE_KIT_ESP_IDF_ITX_READY) {
+          disarm_press_probe();
+        } else if (liveness.websocket_pongs_received !=
+                   runtime.press_probe_pongs_before) {
+          /*
+           * ALIVE — and now measured. `pressProbeMs` is the only evidence
+           * anybody has for what a PONG round trip actually costs on these
+           * boards, which is what the 1500 ms budget was guessed against.
+           */
+          runtime.press_probe_ms = (uint32_t)iterate_kit_voice_elapsed_ms(
+              now, runtime.press_probe_sent_ms);
+          disarm_press_probe();
+        } else if (iterate_kit_voice_elapsed_ms(
+                       now, runtime.press_probe_sent_ms) > PRESS_PROBE_MS) {
+          ++runtime.press_probe_misses;
+          if (runtime.press_probe_attempt < PRESS_PROBE_ATTEMPTS) {
+            /* One missed PONG is a dropped packet. Ask again before acting. */
+            ESP_LOGW(
+                tag,
+                "no pong %ums after a press — asking once more",
+                (unsigned int)PRESS_PROBE_MS);
+            arm_press_probe(now, liveness.websocket_pongs_received);
+          } else {
+            /*
+             * TWO IN A ROW IS A DEAD SOCKET, and the only remedy for a dead
+             * socket is a new one: recycling the stream connection would send
+             * its round trip down the same silent pipe. Forget the call first
+             * — it was requested into nothing, and believing in it would stop
+             * the intent from placing a real one on the replacement session.
+             */
+            ESP_LOGE(
+                tag,
+                "hop did not answer %u probes after a press — replacing the "
+                "socket",
+                (unsigned int)PRESS_PROBE_ATTEMPTS);
+            ++runtime.press_probe_restarts;
+            disarm_press_probe();
+            iterate_kit_voicelab_forget_call(&runtime.voicelab);
+            iterate_kit_esp_idf_itx_transport_request_restart(&transport);
+          }
+        }
       }
       /*
        * A TRANSPORT THAT IS NEVER READY MUST NOT DISABLE THE RESTART.
@@ -3177,6 +3336,15 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        * no control to hold at all and the microphone rides the open call —
        * requesting the manual default there produces an accepted call and a
        * deaf assistant, so the policy is a fact rather than a guess.
+       *
+       * `wants_call &&` IS NOW A SAFETY NET RATHER THAN AN ORDERING. It used to
+       * be the reason a talk request needed `conversation.start()` in front of
+       * it: the latch was set and this conjunct silently discarded it forever.
+       * Both talk sources raise `wants_call` at the press now, so nothing can
+       * arrive here holding talk without a call being wanted — except the one
+       * case this still has to refuse, which is talk held across a deliberate
+       * hang-up. Sending microphone frames into a call nobody wants is not a
+       * turn, so the conjunct stays.
        */
       const bool wants_talk =
           runtime.facts->turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD
@@ -3312,6 +3480,17 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
                     &runtime.voicelab, runtime.facts->greeting);
             if (runtime.last_start_status == CAPNWEB_OK) {
               runtime.view.status = ("starting call");
+              /*
+               * AND ASK THE HOP, because the request above cannot report its
+               * own delivery. It is a Cap'n Web call whose reply arrives only
+               * if the far side is still there, and into a half-open socket it
+               * simply never returns — accepted by TCP, READY transport, ten
+               * seconds of silence before anything notices. The probe is armed
+               * HERE and nowhere else: a press is the only event on this device
+               * that makes a stale socket expensive, and an idle board must
+               * stay silent or the Durable Object behind it never hibernates.
+               */
+              arm_press_probe(now, runtime.pongs_seen);
             } else {
               ++runtime.start_call_failures;
             }

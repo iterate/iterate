@@ -299,8 +299,8 @@ static const struct iterate_kit_board_facts facts = {
       "it has hardware echo cancellation in an XMOS DSP, so it can be "
       "interrupted and there is no push-to-talk. "
       "conversation.start() and conversation.end() begin and end a call. "
-      "health() returns this device's full diagnostics, the same document it "
-      "pushes as dev-stats — start there when it seems unwell. "
+      "health() returns this device's full diagnostics — start there when it "
+      "seems unwell. "
       "speaker.setVolume({percent}) sets how loud it plays, 0-100, clamped to "
       "a ceiling this board has a measured reason for; speaker.volume() reads "
       "it back. Both answer {percent,ceiling}. "
@@ -330,8 +330,8 @@ static const struct iterate_kit_board_facts facts = {
       "speaker.setVolume({percent}) sets how loud it plays, 0-100; it clamps "
       "to a ceiling this board has a measured reason for and answers with "
       "{percent,ceiling}, which speaker.volume() also returns. "
-      "health() returns the same diagnostics document the device pushes "
-      "as dev-stats.\",\"children\":{}}",
+      "health() returns this device's full diagnostics "
+      "document.\",\"children\":{}}",
   /*
    * THE TURN POLICY, SAID OUT LOUD. This read "hold the button to talk" on a
    * board that had stopped implementing push-to-talk months earlier — the

@@ -2,8 +2,6 @@
 
 #include "rpc_internal.h"
 
-#include <stdio.h>
-
 #include <string.h>
 
 /*
@@ -17,31 +15,32 @@ static const char *const start_path[] = {"pushToTalk", "start"};
 static const char *const stop_path[] = {"pushToTalk", "stop"};
 
 /*
- * `{accepted, latched}` — AND THE SECOND FIELD IS THE WHOLE POINT.
+ * `{accepted}`, AND NOW THAT IS THE WHOLE TRUTH.
  *
- * This used to answer `true`, which meant "the local queue took your event"
- * and was read by every caller as "the microphone is open". Those are
- * different claims, and on a push-to-talk board with no call up the gap
- * between them is total: the event is queued, the handler sets the latch, and
- * the turn machine never reads the latch because every use of it is gated
- * behind `wants_call`. The request is accepted and then ignored, permanently,
- * and the only symptom is silence.
+ * This answered a bare `true` once, which meant "the local queue took your
+ * event" and was read by every caller as "the microphone is open". Those were
+ * different claims, and on a push-to-talk board with no call up the gap between
+ * them was total: the event was queued, the handler set the latch, and the turn
+ * machine never read the latch because every use of it was gated behind
+ * `wants_call`. The request was accepted and then ignored, permanently, and the
+ * only symptom was silence. That cost an afternoon of hardware bisection.
  *
- * That cost an afternoon of hardware bisection: two boards "did not respond to
- * a press" and the press had in fact been delivered, acknowledged and dropped
- * on the floor exactly as designed. `accepted` is what the old boolean meant.
- * `latched` is what the caller thought it meant.
+ * A second field, `latched`, reported that gap at the instant of the call. It
+ * is gone WITH THE GAP: a press now opens the call as well as the microphone
+ * (see handle_device_event in components/voice), so there is no state in which
+ * an accepted press is not acted on, and a field that is always `true` is
+ * noise. Absent rather than false is the rule that survived — a device with
+ * nothing to say about a gate must not appear to answer "no".
  *
- * `latched` is absent, not false, when the composition supplied no driver:
- * a device that cannot answer the question must not appear to answer it "no".
+ * The object shape stays rather than collapsing back to a bare boolean: this is
+ * the reply an agent reads, and `{"accepted":true}` says which claim is being
+ * made where `true` says only that something happened.
  */
 static enum capnweb_status publish(
     struct iterate_kit_push_to_talk *push_to_talk,
     enum iterate_kit_device_event_type type,
     struct capnweb_reply *reply) {
-  /* Small, fixed-width, and only one dispatch runs at a time on this peer. */
-  static char document[64];
-  int written;
+  static const char document[] = "{\"accepted\":true}";
   const enum iterate_kit_status status =
       iterate_kit_device_event_publish(
           push_to_talk->events,
@@ -50,23 +49,8 @@ static enum capnweb_status publish(
   if (status != ITERATE_KIT_OK) {
     return iterate_kit_reply_status(reply, status);
   }
-  if (push_to_talk->driver.would_be_honoured == NULL) {
-    written = snprintf(document, sizeof(document), "{\"accepted\":true}");
-  } else {
-    written = snprintf(
-        document,
-        sizeof(document),
-        "{\"accepted\":true,\"latched\":%s}",
-        push_to_talk->driver.would_be_honoured(push_to_talk->driver.context)
-            ? "true"
-            : "false");
-  }
-  if (written < 0 || (size_t)written >= sizeof(document)) {
-    return capnweb_reply_set_error(
-        reply, "RangeError", "push-to-talk reply did not fit");
-  }
   return capnweb_reply_set_borrowed_expression(
-      reply, document, (size_t)written, NULL, NULL);
+      reply, document, sizeof(document) - 1U, NULL, NULL);
 }
 
 static enum capnweb_status start(
@@ -93,8 +77,7 @@ static enum capnweb_status stop(
 
 enum iterate_kit_status iterate_kit_push_to_talk_init(
     struct iterate_kit_push_to_talk *push_to_talk,
-    struct iterate_kit_device_event_queue *events,
-    const struct iterate_kit_push_to_talk_driver *driver) {
+    struct iterate_kit_device_event_queue *events) {
   if (push_to_talk == NULL ||
       events == NULL ||
       !events->initialized) {
@@ -102,9 +85,6 @@ enum iterate_kit_status iterate_kit_push_to_talk_init(
   }
   memset(push_to_talk, 0, sizeof(*push_to_talk));
   push_to_talk->events = events;
-  if (driver != NULL) {
-    push_to_talk->driver = *driver;
-  }
   push_to_talk->initialized = true;
   return ITERATE_KIT_OK;
 }

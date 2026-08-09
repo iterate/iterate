@@ -180,24 +180,27 @@ static const struct iterate_kit_board_facts facts = {
   .instructions =
       "M5StickS3: a small voice endpoint with a text status screen. "
       "The front button is push-to-talk; the side button starts and ends a "
-      "call. conversation.start() and conversation.end() do the same. "
-      "health() returns this device's full diagnostics, the same document it "
-      "pushes as dev-stats — start there when it seems unwell. "
+      "call. pushToTalk.start() is the whole gesture: it opens a call if none "
+      "is up and holds the microphone open, exactly as holding the front "
+      "button does; pushToTalk.stop() commits the turn and asks for an answer. "
+      "It has no echo cancellation and its microphone and speaker share pins, "
+      "so it only listens while talk is held. "
+      "conversation.start() opens a call WITHOUT holding the microphone, for "
+      "when you want it to greet you first; conversation.end() hangs up. "
+      "health() returns this device's full diagnostics — start there when it "
+      "seems unwell. "
       "speaker.setVolume({percent}) sets how loud it plays, 0-100; "
       "speaker.volume() reads it back. Both answer {percent,ceiling}. "
-      "pushToTalk.start() and pushToTalk.stop() hold its microphone open, "
-      "joining the physical button as a wired-OR: it has no echo cancellation "
-      "and its microphone and speaker share pins, so it only listens while one "
-      "of them is held. "
       "Audio and lifecycle events share this stream connection.",
   .peer_description =
       "{\"instructions\":\"M5StickS3 voice endpoint. "
-      "conversation.start() / conversation.end() begin and end a call; "
-      "pushToTalk.start() / pushToTalk.stop() hold its microphone open the way "
-      "the front button does. speaker.setVolume({percent}) sets how loud it "
-      "plays, 0-100, and answers {percent,ceiling}, which speaker.volume() "
-      "also returns. health() returns the same diagnostics document the device "
-      "pushes as dev-stats.\",\"children\":{}}",
+      "pushToTalk.start() opens a call and holds the microphone open the way "
+      "the front button does, and pushToTalk.stop() commits the turn; "
+      "conversation.start() opens a call without holding the microphone and "
+      "conversation.end() hangs up. speaker.setVolume({percent}) sets how loud "
+      "it plays, 0-100, and answers {percent,ceiling}, which speaker.volume() "
+      "also returns. health() returns this device's full diagnostics "
+      "document.\",\"children\":{}}",
   .talk_hint = "hold the front button to talk",
   .call_hint = "connection lost — press side to call",
   .speaker = {

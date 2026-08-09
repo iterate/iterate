@@ -205,12 +205,9 @@ enum {
    * of never hibernating is paid continuously. It is NOT accepted for the
    * moment that matters — see below.
    *
-   * THE FIRST PRESS AFTER A LONG IDLE MUST NOT WAIT THIS OUT, and it does not.
-   * A press restamps `last_batch_ms` and then arms DOWNLINK_SILENCE_MS above:
-   * ten seconds with a call wanted and no batch delivered is read as a dead
-   * lane and answered with a make-before-break recycle, and three of those
-   * escalate to replacing the session. So a press into a socket that died
-   * silently is noticed on the press's own clock, not on the probe's.
+   * THE FIRST PRESS AFTER A LONG IDLE MUST NOT WAIT THIS OUT, and it does not:
+   * a press asks the hop itself, on its own clock. See
+   * ITERATE_KIT_VOICE_PRESS_PROBE_MS below.
    *
    * THESE TWO MOVE TOGETHER, which is why the one below moved with it.
    */
@@ -231,10 +228,50 @@ enum {
    * restart means three consecutive losses rather than one. The cost is that
    * a genuinely dead hop on an IDLE board is now carried for up to seven
    * minutes — which costs nothing, because the board is idle, and because the
-   * case anybody can notice is a PRESS, and a press is recovered by
-   * DOWNLINK_SILENCE_MS above on its own ten-second clock.
+   * case anybody can notice is a PRESS, and a press has its own probe below.
    */
   ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS = 420000,
+  /*
+   * HOW LONG A PRESS WAITS FOR THE HOP TO ANSWER BEFORE THE SOCKET IS DEAD.
+   *
+   * The failure this exists for: a one-way append into a half-open socket is
+   * accepted by TCP and reports success. The socket looks open, the transport
+   * stays READY, and the first thing that notices is DOWNLINK_SILENCE_MS ten
+   * seconds later — ten seconds in which a person has pressed to talk and
+   * nothing whatsoever has happened. That is the worst failure left on these
+   * boards and it is entirely on the press path.
+   *
+   * SO THE PRESS ASKS. Placing a call queues a WebSocket PING and watches
+   * `websocket_pongs_received`. Armed by a press and by nothing else: an idle
+   * board never sends one, which is the whole reason the periodic probe had to
+   * be slowed to 120 s and must not be undone here.
+   *
+   * WHY A PONG AND NOT A DELIVERED BATCH. A batch is the far side finishing
+   * application work — journalling the append, fanning it out to subscribers —
+   * and its latency legitimately includes waking an object that may be cold.
+   * A short deadline on THAT would tear down healthy sessions for being slow,
+   * which is worse than the bug. A PONG is owed by the socket peer as soon as
+   * it parses the frame in order and owes nothing to any of that work, so it
+   * answers the only question the press actually has: is this socket still
+   * connected to anything? Nothing else on the device separates "dead socket"
+   * from "slow server", and the two want opposite remedies — a new socket
+   * versus patience.
+   *
+   * 1500 ms x 2, AND THE SECOND ATTEMPT IS THE POINT. One missed PONG is a
+   * dropped packet; two consecutive are a dead hop. This is the same judgement
+   * NO_LIVENESS_RESTART_MS above makes for the idle path, where three losses
+   * rather than one are required before a reboot, and it is made here for the
+   * same reason: on a lossy access point a single-loss rule fires constantly.
+   * So a press into a dead socket is answered in ~3 s where it used to take 10,
+   * and a press into a merely slow one is not answered at all.
+   *
+   * 1500 ms IS A BUDGET, NOT A MEASUREMENT — no PONG round trip has been
+   * measured on these boards. `pressProbeMs` in health() reports the last one
+   * so that the next person to touch this number has evidence instead of this
+   * comment.
+   */
+  ITERATE_KIT_VOICE_PRESS_PROBE_MS = 1500,
+  ITERATE_KIT_VOICE_PRESS_PROBE_ATTEMPTS = 2,
   /*
    * Re-mounting a voicelab that failed under a healthy connection.
    *

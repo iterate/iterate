@@ -11,14 +11,7 @@ struct fixture {
   struct iterate_kit_device_event handled[EVENT_CAPACITY];
   struct iterate_kit_push_to_talk push_to_talk;
   size_t handled_count;
-  /** What this fixture's device would say about a call being up. */
-  bool call_wanted;
 };
-
-static bool fixture_would_be_honoured(void *context) {
-  const struct fixture *fixture = context;
-  return fixture->call_wanted;
-}
 
 static enum iterate_kit_status handle_event(
     void *context, const struct iterate_kit_device_event *event) {
@@ -41,14 +34,9 @@ static void fixture_init(struct fixture *fixture) {
   assert(
       iterate_kit_device_event_queue_init(&fixture->queue, &options) ==
       ITERATE_KIT_OK);
-  const struct iterate_kit_push_to_talk_driver driver = {
-    .context = fixture,
-    .would_be_honoured = fixture_would_be_honoured,
-  };
   assert(
       iterate_kit_push_to_talk_init(
-          &fixture->push_to_talk, &fixture->queue, &driver) ==
-      ITERATE_KIT_OK);
+          &fixture->push_to_talk, &fixture->queue) == ITERATE_KIT_OK);
 }
 
 static void remote_calls_join_the_bounded_device_event_path(void) {
@@ -84,30 +72,30 @@ static void remote_calls_join_the_bounded_device_event_path(void) {
 }
 
 /*
- * ACCEPTED IS NOT LATCHED, AND THE REPLY HAS TO SAY WHICH.
+ * ONE CLAIM, AND NO SECOND FIELD QUALIFYING IT.
  *
- * A press with no call up is queued, handled, and then never read: every use
- * of the latch on a push-to-talk board is gated behind `wants_call`. The old
- * reply was `true` for both cases, so a caller had no way to tell a working
- * device from one quietly discarding every press — which is exactly how two
- * boards were bisected in hardware for an afternoon before anyone suspected
- * the answer rather than the device.
+ * There was a `latched` field here reporting whether the press would actually
+ * be acted on, because a press with no call up was accepted and then never
+ * read. A press opens the call now (see handle_device_event in
+ * components/voice), so the qualification has nothing left to qualify — and a
+ * device with no gate must not appear to answer "no" about one. The absence is
+ * the assertion.
  */
-static void a_press_with_no_call_says_it_was_not_latched(void) {
+static void the_reply_claims_acceptance_and_nothing_else(void) {
   struct fixture fixture;
   struct capnweb_reply reply = {0};
   fixture_init(&fixture);
-  fixture.call_wanted = false;
   const struct iterate_kit_module module =
       iterate_kit_push_to_talk_module(&fixture.push_to_talk);
 
   assert(
       module.methods[0].dispatch(module.context, NULL, &reply) == CAPNWEB_OK);
   assert(reply.kind == CAPNWEB_REPLY_EXPRESSION);
-  assert(strstr((const char *)reply.value.borrowed.data, "\"accepted\":true") != NULL);
-  assert(strstr((const char *)reply.value.borrowed.data, "\"latched\":false") != NULL);
+  assert(
+      strcmp((const char *)reply.value.borrowed.data, "{\"accepted\":true}") ==
+      0);
 
-  /* Still queued, still delivered: refusing to LIE is not refusing to act. */
+  /* Still queued, still delivered: the reply is a claim about the queue. */
   assert(iterate_kit_device_event_poll(&fixture.queue, EVENT_CAPACITY) ==
          ITERATE_KIT_OK);
   assert(fixture.handled_count == 1U);
@@ -115,46 +103,8 @@ static void a_press_with_no_call_says_it_was_not_latched(void) {
          ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED);
 }
 
-static void a_press_during_a_wanted_call_says_it_was_latched(void) {
-  struct fixture fixture;
-  struct capnweb_reply reply = {0};
-  fixture_init(&fixture);
-  fixture.call_wanted = true;
-  const struct iterate_kit_module module =
-      iterate_kit_push_to_talk_module(&fixture.push_to_talk);
-
-  assert(
-      module.methods[0].dispatch(module.context, NULL, &reply) == CAPNWEB_OK);
-  assert(reply.kind == CAPNWEB_REPLY_EXPRESSION);
-  assert(strstr((const char *)reply.value.borrowed.data, "\"latched\":true") != NULL);
-}
-
-/*
- * A DEVICE THAT CANNOT ANSWER MUST NOT APPEAR TO ANSWER "no". Omitting the
- * field is the difference between "this press will be ignored" and "this
- * composition does not know", and a caller can tell those apart.
- */
-static void a_composition_with_no_gate_omits_the_claim(void) {
-  struct fixture fixture;
-  struct capnweb_reply reply = {0};
-  fixture_init(&fixture);
-  assert(
-      iterate_kit_push_to_talk_init(
-          &fixture.push_to_talk, &fixture.queue, NULL) == ITERATE_KIT_OK);
-  const struct iterate_kit_module module =
-      iterate_kit_push_to_talk_module(&fixture.push_to_talk);
-
-  assert(
-      module.methods[0].dispatch(module.context, NULL, &reply) == CAPNWEB_OK);
-  assert(reply.kind == CAPNWEB_REPLY_EXPRESSION);
-  assert(strstr((const char *)reply.value.borrowed.data, "\"accepted\":true") != NULL);
-  assert(strstr((const char *)reply.value.borrowed.data, "latched") == NULL);
-}
-
 int main(void) {
   remote_calls_join_the_bounded_device_event_path();
-  a_press_with_no_call_says_it_was_not_latched();
-  a_press_during_a_wanted_call_says_it_was_latched();
-  a_composition_with_no_gate_omits_the_claim();
+  the_reply_claims_acceptance_and_nothing_else();
   return 0;
 }

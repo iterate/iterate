@@ -267,25 +267,28 @@ static const struct iterate_kit_board_facts facts = {
   .instructions =
       "Waveshare AMOLED: a voice endpoint with a touch screen showing a face. "
       "The upper button is push-to-talk; the lower button hangs up. "
-      "conversation.start() and conversation.end() begin and end a call. "
-      "health() returns this device's full diagnostics, the same document it "
-      "pushes as dev-stats — start there when it seems unwell. "
+      "pushToTalk.start() is the whole gesture: it opens a call if none is up "
+      "and holds the microphone open, exactly as pressing the upper button "
+      "does; pushToTalk.stop() commits the turn and asks for an answer. It has "
+      "no echo cancellation, so it only listens while talk is held. "
+      "conversation.start() opens a call WITHOUT holding the microphone, for "
+      "when you want it to greet you first; conversation.end() hangs up. "
+      "health() returns this device's full diagnostics — start there when it "
+      "seems unwell. "
       "speaker.setVolume({percent}) sets how loud it plays, 0-100, clamped to "
       "a ceiling this board has a measured reason for; speaker.volume() reads "
       "it back. Both answer {percent,ceiling}. "
-      "pushToTalk.start() and pushToTalk.stop() hold its microphone open, "
-      "joining the physical button as a wired-OR: it has no echo cancellation, "
-      "so it only listens while one of them is held. "
       "Audio and lifecycle events share this stream connection.",
   .peer_description =
       "{\"instructions\":\"Waveshare voice endpoint. "
-      "conversation.start() / conversation.end() begin and end a call; "
-      "pushToTalk.start() / pushToTalk.stop() hold its microphone open the way "
-      "the upper button does. speaker.setVolume({percent}) sets how loud it "
-      "plays, 0-100; it clamps to a ceiling this board has a measured reason "
-      "for and answers with {percent,ceiling}, which speaker.volume() also "
-      "returns. health() returns the same diagnostics document the device "
-      "pushes as dev-stats.\",\"children\":{}}",
+      "pushToTalk.start() opens a call and holds the microphone open the way "
+      "the upper button does, and pushToTalk.stop() commits the turn; "
+      "conversation.start() opens a call without holding the microphone and "
+      "conversation.end() hangs up. speaker.setVolume({percent}) sets how loud "
+      "it plays, 0-100; it clamps to a ceiling this board has a measured "
+      "reason for and answers with {percent,ceiling}, which speaker.volume() "
+      "also returns. health() returns this device's full diagnostics "
+      "document.\",\"children\":{}}",
   .talk_hint = "hold the upper button to talk",
   .call_hint = "press upper to call",
   .speaker = {

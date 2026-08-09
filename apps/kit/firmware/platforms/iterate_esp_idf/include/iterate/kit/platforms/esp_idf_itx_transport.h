@@ -327,6 +327,9 @@ struct iterate_kit_esp_idf_itx_transport {
   uint32_t wifi_retry_now;
   uint32_t wifi_retry_later;
   uint32_t restart_requested;
+  /* One pending hop probe; see request_probe(). Set by the app task, consumed
+   * by the network task, which is the connection's only legal owner. */
+  uint32_t probe_requested;
   uint32_t protocol_failure_generation;
   uint32_t fatal_failure_latched;
   uint32_t fatal_failure_reason;
@@ -430,6 +433,29 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
  * less correct than remounting cleanly.
  */
 void iterate_kit_esp_idf_itx_transport_request_restart(
+    struct iterate_kit_esp_idf_itx_transport *transport);
+
+/**
+ * Asks the hop, immediately, whether it is still there.
+ *
+ * A one-way append into a HALF-OPEN socket is accepted by TCP and reports
+ * success: the bytes sit in lwIP, the socket looks open, the transport stays
+ * READY, and nothing in this device is ever told otherwise. That is fine while
+ * a board is idle and unaffordable at the moment somebody presses to talk, so
+ * the press asks — see the press probe in components/voice. The idle keepalive
+ * cannot cover this: it is 120 s on purpose, because a shorter one wakes a
+ * Durable Object that would otherwise hibernate.
+ *
+ * The answer is `websocket_pongs_received` moving in the metrics above. It is
+ * the ONE signal that separates "this socket is dead" from "the far side is
+ * slow": a PONG is owed by the socket peer as soon as it parses the frame in
+ * order, and owes nothing to whatever application work the append triggered.
+ *
+ * Only publishes a flag and wakes the network task, like request_restart; safe
+ * from the application task. A probe requested with no socket up is dropped,
+ * because there is nothing to ask and a reconnect is already in progress.
+ */
+void iterate_kit_esp_idf_itx_transport_request_probe(
     struct iterate_kit_esp_idf_itx_transport *transport);
 
 /**

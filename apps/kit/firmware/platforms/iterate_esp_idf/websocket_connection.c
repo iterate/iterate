@@ -726,6 +726,31 @@ iterate_kit_esp_idf_websocket_connection_send(
       &connection->tx, opcode, payload, payload_size);
 }
 
+enum iterate_kit_status
+iterate_kit_esp_idf_websocket_connection_probe(
+    struct iterate_kit_esp_idf_websocket_connection *connection) {
+  if (connection == NULL ||
+      !connection->initialized ||
+      !connection->connected ||
+      connection->peer_close_pending) {
+    return ITERATE_KIT_UNAVAILABLE;
+  }
+  if (iterate_kit_websocket_tx_queue_control(
+          &connection->tx,
+          ITERATE_KIT_WEBSOCKET_PING,
+          NULL,
+          0U) != ITERATE_KIT_OK) {
+    /*
+     * The single PING slot already holds one. Pressure on that slot means a
+     * probe is outstanding, which is what the caller wanted anyway — but say
+     * so rather than report a frame that was not queued.
+     */
+    return ITERATE_KIT_BACKPRESSURE;
+  }
+  connection->last_outbound_us = esp_timer_get_time();
+  return ITERATE_KIT_OK;
+}
+
 enum iterate_kit_websocket_tx_result
 iterate_kit_esp_idf_websocket_connection_service_control(
     struct iterate_kit_esp_idf_websocket_connection *connection) {
