@@ -1,6 +1,7 @@
 import { DocsApp } from "@iterate-com/docs";
 import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import { GuestbookApp } from "iterate/starter-apps/guestbook";
+import { MediaApp } from "iterate/starter-apps/media";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 import { TodoApp } from "iterate/starter-apps/todo";
 
@@ -34,6 +35,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     },
   });
   #guestbookApp = GuestbookApp.create(this.env);
+  #mediaApp = MediaApp.create(this.env);
   #todoApp = TodoApp.create(this.env);
 
   /** Agent-callable app helpers: `itx.worker.docs.link({ workspace, path })`
@@ -161,6 +163,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 
     await this.#aiLintApp.processEvent(event);
     await this.#guestbookApp.processEvent(event);
+    await this.#mediaApp.processEvent(event);
   }
 
   async fetch(req: Request): Promise<Response> {
