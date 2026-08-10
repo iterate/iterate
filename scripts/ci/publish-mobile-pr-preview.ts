@@ -42,6 +42,10 @@ async function publishMobilePrPreview() {
   const channel = channelForBranch(pullRequest.head.ref);
   const headSha = pullRequest.head.sha;
 
+  const repoForUrl = getRepo();
+  process.env.MOBILE_BUILD_GITHUB_URL =
+    pullRequest.html_url ||
+    `https://github.com/${repoForUrl.owner}/${repoForUrl.repo}/pull/${pullRequest.number}`;
   run("node", ["scripts/write-build-info.mjs"], mobileDir);
   const message = `PR #${pullRequest.number}: ${(pullRequest.title || "").slice(0, 900)}`;
   // --clear-cache: CI reuses sandboxes across branches and Metro's cache

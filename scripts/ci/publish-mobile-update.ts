@@ -36,6 +36,11 @@ async function publishMobileUpdate() {
     throw new Error("EXPO_TOKEN is not set — eas-cli cannot authenticate");
   }
 
+  // Main is a stream of squash-merges with no single owning PR, so bug
+  // reports go to the commit page — the CI commit comment (QRs) lives there.
+  const sha = process.env.GITHUB_SHA || run("git", ["rev-parse", "HEAD"], repoRoot).trim();
+  const repoForUrl = getRepo();
+  process.env.MOBILE_BUILD_GITHUB_URL = `https://github.com/${repoForUrl.owner}/${repoForUrl.repo}/commit/${sha}`;
   run("node", ["scripts/write-build-info.mjs"], mobileDir);
 
   const message = run("git", ["log", "-1", "--format=%s"], repoRoot).trim().slice(0, 1024);
@@ -61,7 +66,6 @@ async function publishMobileUpdate() {
   const installedRuntime = latestInstalledRuntime();
   const installBuild = ensureBuildForRuntime(runtimeVersion);
 
-  const sha = process.env.GITHUB_SHA || run("git", ["rev-parse", "HEAD"], repoRoot).trim();
   const appConfig = JSON.parse(readFileSync(path.join(mobileDir, "app.json"), "utf8"));
   const { owner, slug } = appConfig.expo;
   const plan = planPreview({

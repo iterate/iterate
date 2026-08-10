@@ -7,6 +7,7 @@
 // exposes no getter, so we mirror the active value in AsyncStorage ourselves.
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Updates from "expo-updates";
+import { logEvent } from "./session-log.ts";
 
 const STORAGE_KEY = "preview-channel-override";
 
@@ -29,8 +30,13 @@ export async function switchChannelAndReload(channel: string | null) {
   await setPreviewChannelOverride(channel);
   const result = await Updates.checkForUpdateAsync();
   if (!result.isAvailable) {
+    logEvent("events.iterate.com/mobile/preview-channel-switched", {
+      channel,
+      result: "no-update",
+    });
     return "no-update" as const;
   }
+  logEvent("events.iterate.com/mobile/preview-channel-switched", { channel, result: "reloading" });
   await Updates.fetchUpdateAsync();
   await Updates.reloadAsync();
   return "reloading" as const;

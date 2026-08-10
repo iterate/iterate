@@ -1,22 +1,41 @@
 import "react-native-url-polyfill/auto";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { Stack, useSegments } from "expo-router";
+import { Stack, useGlobalSearchParams, usePathname, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { StyleSheet, Text, View } from "react-native";
 import { initialWindowMetrics, SafeAreaProvider } from "react-native-safe-area-context";
+import { SessionErrorBoundary } from "../components/error-boundary.tsx";
 import { BUILD_TIMESTAMP } from "../lib/build-info.ts";
 import { queryClient } from "../lib/query.ts";
 import { routeInitialNotification } from "../lib/push-device.ts";
+import { installSessionErrorLogger, logScreenView } from "../lib/session-log.ts";
+import { installSessionLogMirror } from "../lib/session-log-mirror.ts";
 import { colors } from "../lib/theme.ts";
+
+installSessionErrorLogger();
+installSessionLogMirror();
 
 export default function RootLayout() {
   return (
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <QueryClientProvider client={queryClient}>
-        <RootStack />
+        <SessionErrorBoundary>
+          <ScreenViewLogger />
+          <RootStack />
+        </SessionErrorBoundary>
       </QueryClientProvider>
     </SafeAreaProvider>
   );
+}
+
+/** Feeds the session log's screen-viewed trail. Render-time call rather than
+ * useEffect (house rules): logScreenView dedupes on pathname, so re-renders
+ * and a thrown-away concurrent render are no-ops. */
+function ScreenViewLogger() {
+  const pathname = usePathname();
+  const params = useGlobalSearchParams();
+  logScreenView(pathname, params);
+  return null;
 }
 
 function RootStack() {

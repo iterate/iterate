@@ -7,7 +7,7 @@ size: medium
 
 ## Status summary
 
-Spec complete (grilled 2026-08-10, see [interview log](mobile-bug-reporting.interview.md)). Implementation not started. Three layers: (1) stamp `githubUrl` into build-info and add a 🐛 drawer item, (2) client-side session event log with ephemeral stream mirroring, (3) report flow that snapshots the log into a durable event + clipboard context block + opens GitHub.
+Implemented 2026-08-10 (spec grilled same day, see [interview log](mobile-bug-reporting.interview.md)). All three layers in: `githubUrl` stamping + 🐛 drawer item, session log (ring buffer + ephemeral mirroring + error boundary/global handler), and the clipboard report flow. Typecheck/lint/knip/tests green. Remaining: on-device verification of the end-to-end flow (needs a preview build from this PR, which CI produces).
 
 ## Original ask (verbatim)
 
@@ -59,15 +59,15 @@ No server-side GitHub comment posting in v1: `itx.integrations.github` is scoped
 
 ## Checklist
 
-- [ ] Stamp `githubUrl` in `write-build-info.mjs` (arg/env from CI publish scripts; empty locally); update `mobile-preview.test.ts` if it covers stamping
-- [ ] Ring buffer + `logEvent(type, payload)` module in `apps/mobile/src/lib/`
-- [ ] `screen-viewed` router listener wired in `_layout.tsx`
-- [ ] Global error handler + React error boundary → `error-occurred` (durable append at occurrence)
-- [ ] `rpc-failed` capture at the itx seam
-- [ ] Ephemeral fire-and-forget mirroring to `/mobile-events` when project connection open
-- [ ] Seed `logEvent` at approver.ts + preview-channel switch callsites
-- [ ] 🐛 drawer item + report flow (snapshot → durable report event → clipboard → toast → open browser)
-- [ ] Verify the clipboard block renders well pasted into a GitHub comment (details block, no mangled markdown)
+- [x] Stamp `githubUrl` in `write-build-info.mjs` (arg/env from CI publish scripts; empty locally); update `mobile-preview.test.ts` if it covers stamping _(env var `MOBILE_BUILD_GITHUB_URL` set by both publish scripts; the test file doesn't cover stamping, no changes needed)_
+- [x] Ring buffer + `logEvent(type, payload)` module in `apps/mobile/src/lib/` _(`session-log.ts` — deliberately import-free so leaf modules like auth.ts can log without cycles; mirroring split into `session-log-mirror.ts`)_
+- [x] `screen-viewed` router listener wired in `_layout.tsx` _(`ScreenViewLogger` component: render-time `logScreenView` with pathname dedupe instead of useEffect, per house rules)_
+- [x] Global error handler + React error boundary → `error-occurred` (durable append at occurrence) _(`installSessionErrorLogger` chains onto ErrorUtils; `components/error-boundary.tsx` logs + offers reload)_
+- [x] `rpc-failed` capture at the itx seam _(implemented as `query-failed`/`mutation-failed` via react-query cache subscriptions in `query.ts` — the one seam nearly every RPC rides; honest naming since not every query is an RPC)_
+- [x] Ephemeral fire-and-forget mirroring to `/mobile-events` when project connection open _(`session-log-mirror.ts`; project context tracked from route params by the screen logger)_
+- [x] Seed `logEvent` at approver.ts + preview-channel switch callsites _(`approval-signed`, `preview-channel-switched`; auth.ts error catches upgraded to `logError`)_
+- [x] 🐛 drawer item + report flow (snapshot → durable report event → clipboard → toast → open browser) _(`bug-report.ts`; Alert doubles as the toast with an "Open GitHub" button; 2s append timeout)_
+- [x] Verify the clipboard block renders well pasted into a GitHub comment (details block, no mangled markdown) _(inline-snapshot test on the pure builder `bug-report-markdown.ts`; needs one real paste check on-device once a preview build exists)_
 
 ## Out of scope
 

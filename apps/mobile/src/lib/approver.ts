@@ -18,6 +18,7 @@ import type { HumanApprovalKey } from "../../../os/src/domains/projects/egress-a
 import { EVENT } from "./approvals.ts";
 import { getProjectItx } from "./itx.ts";
 import * as SecureStore from "./secure-store.ts";
+import { logEvent } from "./session-log.ts";
 import { generateApproverKey, installRandomSource, signApprovalMessage } from "./approver-core.ts";
 
 installRandomSource(Crypto.getRandomValues);
@@ -154,6 +155,7 @@ export async function signWithApproverKey(
   });
   if (!privateKey)
     throw new Error("Enrolled key's public half exists but the private half is gone.");
+  logEvent("events.iterate.com/mobile/approval-signed", { keyId: info.keyId, projectId });
   return { keyId: info.keyId, signature: signApprovalMessage(privateKey, message) };
 }
 

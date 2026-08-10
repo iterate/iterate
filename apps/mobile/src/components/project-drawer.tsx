@@ -12,6 +12,8 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { buildInfo } from "../lib/build-info.ts";
+import { reportBug } from "../lib/bug-report.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 type ProjectDrawerProps = {
@@ -142,6 +144,12 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
                   label="Build info"
                   onPress={() => close(() => router.push("/build-info"))}
                 />
+                {buildInfo.githubUrl ? (
+                  <DrawerItem
+                    label="🐛 Report bug"
+                    onPress={() => close(() => void reportBug({ projectId, projectSlug }))}
+                  />
+                ) : null}
               </View>
             </View>
           </Animated.View>

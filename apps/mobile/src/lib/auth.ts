@@ -20,6 +20,7 @@
 
 import * as AuthSession from "expo-auth-session";
 import * as WebBrowser from "expo-web-browser";
+import { logError } from "./session-log.ts";
 import { clearStoredAuth, getStoredAuth, setStoredAuth } from "./storage.ts";
 
 // Required for promptAsync to resolve when the OAuth redirect deep-links back
@@ -132,7 +133,11 @@ export async function signIn(baseUrl: string): Promise<void> {
         : ""),
   );
   if (result.type !== "success") {
-    throw new Error(result.type === "error" ? String(result.error) : `sign-in ${result.type}`);
+    const error = new Error(
+      result.type === "error" ? String(result.error) : `sign-in ${result.type}`,
+    );
+    logError("auth.sign-in", error, { resultType: result.type });
+    throw error;
   }
   if (!result.params.code) {
     throw new Error(`Auth redirect carried no code: ${JSON.stringify(result.params)}`);
@@ -148,6 +153,7 @@ export async function signIn(baseUrl: string): Promise<void> {
     { tokenEndpoint: config.token_endpoint },
   ).catch((error) => {
     console.log(`[auth] code exchange failed: ${String(error)}`);
+    logError("auth.code-exchange", error);
     throw error;
   });
   console.log(`[auth] exchange ok: refreshToken=${tokens.refreshToken ? "yes" : "MISSING"}`);

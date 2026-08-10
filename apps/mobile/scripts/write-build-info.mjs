@@ -33,6 +33,11 @@ const info = {
   builtBy: env.EAS_BUILD_USERNAME || env.GITHUB_ACTOR || userInfo().username,
   machine: env.EAS_BUILD ? "eas-build" : env.CI ? "ci" : hostname(),
   builtAt: new Date().toISOString(),
+  // Where to file a bug against this exact bundle: the PR for PR-channel
+  // publishes, the commit page for main-channel publishes (set by the CI
+  // publish scripts). Empty = local/EAS-machine stamp; the drawer's
+  // "Report bug" item hides itself.
+  githubUrl: env.MOBILE_BUILD_GITHUB_URL || "",
 };
 
 const out = fileURLToPath(new URL("../src/build-info.json", import.meta.url));

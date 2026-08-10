@@ -66,6 +66,7 @@ export default function BuildInfoScreen() {
           value={buildInfo.builtBy && `${buildInfo.builtBy}@${buildInfo.machine}`}
         />
         <Row label="Bundled at" value={formatTime(buildInfo.builtAt)} />
+        <Row label="GitHub" value={buildInfo.githubUrl} />
         <Row label="Source" value={bundleSource} />
       </Section>
       <Section title="Updates">
