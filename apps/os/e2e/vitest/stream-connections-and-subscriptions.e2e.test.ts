@@ -2133,15 +2133,22 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
   expect(idleClose).toBeDefined();
 
   // Cold-boot the Stream with no real work, then leave it completely
-  // untouched past the 21-second delivery-watchdog horizon. Its durable
-  // cursor must absorb the boot's `woken` fact without waking the hosted
-  // processor, and no stale alarm may create another incarnation or callback
-  // cycle during the quiet window. The final read can itself cold-boot the
-  // Stream, so compare event timestamps against the time captured BEFORE it.
+  // untouched past the 21-second delivery-watchdog horizon. `kill()` can
+  // settle before the next call reaches a fresh incarnation, so use the
+  // durable `woken` fact as the boot barrier. Its durable cursor must absorb
+  // that fact without waking the hosted processor, and no stale alarm may
+  // create another incarnation or callback cycle during the quiet window.
+  const beforeRestartOffset = coreState(await stream.runtimeState()).maxOffset;
   await stream.kill().catch(() => undefined);
+  const bootWoken = await stream.waitForEvent({
+    afterOffset: beforeRestartOffset,
+    eventTypes: ["events.iterate.com/stream/woken"],
+    timeoutMs: 30_000,
+  });
   const booted = runtimeState(await stream.runtimeState());
   expect(booted.coreProcessorState.subscriptions.outbound.byName[subscriptionName]).toBeDefined();
-  const quietAfterOffset = booted.coreProcessorState.maxOffset;
+  expect(booted.coreProcessorState.maxOffset).toBeGreaterThanOrEqual(bootWoken.offset);
+  const quietAfterOffset = bootWoken.offset;
   await new Promise((resolve) => setTimeout(resolve, 25_000));
   const quietEndedAt = Date.now();
   const lifecycleEventsDuringQuiet = (
@@ -2154,7 +2161,12 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
       ],
       limit: 100,
     })
-  ).filter((event) => Date.parse(event.createdAt) < quietEndedAt);
+  )
+    // The final read can itself cold-boot the Stream. Cloudflare and the test
+    // runner have independent clocks, so leave one second of skew outside the
+    // assertion. A stale 21-second watchdog wake still lands at least three
+    // seconds inside this 25-second quiet window.
+    .filter((event) => Date.parse(event.createdAt) < quietEndedAt - 1_000);
   expect(lifecycleEventsDuringQuiet).toEqual([]);
   expect(
     runtimeState(await stream.runtimeState()).runtime.connections[subscriptionName],
