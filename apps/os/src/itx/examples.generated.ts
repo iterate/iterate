@@ -832,7 +832,7 @@ return;
     id: "journal-is-the-record",
     title: "The stream IS the record: provide, revoke, read it back",
     description:
-      "provideCapability and revokeCapability are appends to the scope's stream (the project root, '/'). Read the stream back and watch the record happen — there is no hidden registry to drift from it.",
+      "provideCapability and revokeCapability are appends to YOUR scope's stream — the project root '/' for a plain project itx, your personal scope in the REPL. Read the stream back and watch the record happen — there is no hidden registry to drift from it.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
@@ -846,8 +846,10 @@ const provision = await itx.provideCapability({
 });
 await provision.revoke();
 
-// The scope's stream is an ordinary stream — same getEvents API as anything.
-const events = await itx.streams.get("/").getEvents();
+// The scope's stream is an ordinary stream — same getEvents API as
+// anything. capabilityHost.path names the scope this itx mounts on.
+const scopePath = await itx.capabilityHost.path;
+const events = await itx.streams.get(scopePath).getEvents();
 const record = events
   .filter(
     (event) => Array.isArray(event.payload?.path) && event.payload.path.join(".") === capPath,
