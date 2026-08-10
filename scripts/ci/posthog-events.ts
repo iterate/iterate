@@ -10,8 +10,10 @@ export type PostHogEvent = {
 // PostHog accepts batch request bodies up to 20 MB and documents no event-count
 // ceiling. Keep each request below both 5 MB and 100 events: accepted 2,000+
 // event CI bursts remained unqueryable. Space the bounded requests by 500 ms
-// because preview and unit finalizers can otherwise burst concurrently. The
-// preview suite currently emits roughly 8,000 events per run.
+// because preview and unit finalizers can otherwise burst concurrently. Mark
+// these retained CI artifacts as a historical migration so PostHog processes
+// them in order without spike detection. The preview suite currently emits
+// roughly 8,000 events per run.
 const POSTHOG_BATCH_EVENT_BUDGET_BYTES = 5_000_000;
 const POSTHOG_BATCH_EVENT_LIMIT = 100;
 const POSTHOG_BATCH_INTERVAL_MS = 500;
@@ -44,7 +46,11 @@ export async function sendPostHogEvents(events: PostHogEvent[], config = readPos
         const response = await fetch(`${config.host}/batch/`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ api_key: config.apiKey, batch }),
+          body: JSON.stringify({
+            api_key: config.apiKey,
+            batch,
+            historical_migration: true,
+          }),
           signal: AbortSignal.timeout(15_000),
         });
         if (!response.ok)
