@@ -19,11 +19,11 @@
 // Web-platform approximations, deliberate and dev-only: the web build has no
 // push channel, so the spec enrolls this browser's device identity
 // server-side with a format-valid but undeliverable Expo token. Expo answers
-// DeviceNotRegistered at send time (verified against the real API), so lane
-// two's deterministic terminal status is "Send failed" — the honest web-build
-// account of "the push left the building"; a real phone would read
-// Sent/Delivered. That rejection also revokes the fake device, which is why
-// the send lane runs LAST.
+// DeviceNotRegistered normally answers at send time (verified against the real
+// API), so lane two reads "Send failed". If the vendor call crosses its
+// bounded deadline after the durable attempt starts, the only honest terminal
+// status is "Delivery uncertain" — it may have accepted the push, so the
+// processor never retries. A real phone would normally read Sent/Delivered.
 
 import { expect, type Page } from "@playwright/test";
 import { connectItxReady } from "iterate/node";
@@ -32,16 +32,14 @@ import { withTunnel } from "../../apps/os/e2e/test-support/tunnel.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
 import { resolveAdminSecret } from "../test-support/forged-session.ts";
 import { test } from "../test-support/test.ts";
+import { withApprovalDeliveryDiagnostic } from "./approval-delivery-diagnostics.ts";
 
 // The browser's device identity, fixed BEFORE the app boots (the web build's
 // secure store is localStorage), so the server-side enrollment below and the
 // app's Notifications view read the same device stream.
 const DEVICE_ID = "spec-web-phone";
 
-// KNOWN GAP (2026-08-03): the same silent approval/notification event loss as
-// approvals.spec.ts fails at both root-intent and device-journal boundaries.
-// Evidence and restoration criteria: tasks/quarantined-mobile-approvals-event-delivery.md.
-test.skip("the approval push is suppressed in the watched thread and sent when you're elsewhere", async ({
+test("the approval push is suppressed in the watched thread and sent when you're elsewhere", async ({
   page,
 }, testInfo) => {
   const osBaseUrl = await resolveOsBaseUrl();
@@ -151,14 +149,20 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
     const watchedPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
     const watchedAgent = await itx.agents.get(watchedPath).create();
     void watchedAgent.capabilityHost.runScript(parkOneRequest("watched")).catch(() => {});
-    await waitForBatchCardButton(page, "Approve (Face ID)");
+    await waitForBatchCardButton({
+      agentPaths: [watchedPath],
+      deviceId: DEVICE_ID,
+      itx,
+      name: "Approve (Face ID)",
+      page,
+    });
 
     // Off to the Notifications view (project screen → drawer). The claim has
     // fired; by the time we arrive the device processor has settled the push
     // obligation `suppressed` — the row says so, instead of a push having
     // interrupted whoever was reading the thread.
     await page.goBack();
-    await page.getByLabel("Open project menu").click();
+    await page.getByLabel("Open project menu").filter({ visible: true }).click();
     // The drawer slides in over ~180ms and the press works mid-slide — but
     // clicking then bakes a half-open drawer into the recording (video-mode
     // freezes the click-moment screenshot under its synthetic pointer, which
@@ -185,7 +189,8 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
     // ── Lane two: the user stays HERE while a different thread's batch
     // parks. No dialog renders, nothing claims the batch, the grace window
     // lapses, and the device processor sends the push — on the web build's
-    // undeliverable token that terminally reads "Send failed" (see header).
+    // undeliverable token that terminally reads either an explicit rejection
+    // or bounded uncertainty (see header).
     const elsewhereAgent = await itx.agents.get("/agents/elsewhere-thread").create();
     // The thread's agent-maintained status, appended ahead of the run so the
     // notification expansion's thread-context line has something real to
@@ -215,7 +220,16 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
           ).length,
       )
       .toBe(2);
-    await page.getByText("Send failed").waitFor();
+    const settlements = await itx.streams.get(`/devices/${DEVICE_ID}`).getEvents({
+      eventTypes: ["events.iterate.com/device/notification-settled"],
+    });
+    const sendOutcome = (settlements.at(-1)!.payload as any).outcome;
+    expect(["rejected-by-expo", "uncertain"]).toContain(sendOutcome.kind);
+    if (sendOutcome.kind === "uncertain") {
+      expect(sendOutcome).toMatchObject({ phase: "expo-send", reason: expect.any(String) });
+    }
+    const sendStatus = sendOutcome.kind === "uncertain" ? "Delivery uncertain" : "Send failed";
+    await page.getByText(sendStatus).waitFor();
     // Both lanes journaled side by side — the comparison this spec exists for.
     await page.getByText("Skipped — already on screen").waitFor();
 
@@ -226,7 +240,7 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
     // there.
     await page
       .getByTestId(/^notification-row-/)
-      .filter({ hasText: "Send failed" })
+      .filter({ hasText: sendStatus })
       .click();
     await page.getByText("Awaiting decision").waitFor();
     await page.getByText("egress-echo?elsewhere=1").waitFor();
@@ -273,8 +287,20 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
  * same as specs/mobile/approvals.spec.ts's helper of the same name: the
  * parked script run's activity spinner covers the wait the whole way.
  */
-function waitForBatchCardButton(page: Page, name: string) {
-  return page.getByRole("button", { name }).waitFor();
+function waitForBatchCardButton(input: {
+  agentPaths: string[];
+  deviceId: string;
+  itx: Parameters<typeof withApprovalDeliveryDiagnostic>[0]["itx"];
+  name: string;
+  page: Page;
+}) {
+  return withApprovalDeliveryDiagnostic({
+    description: `The approval button "${input.name}" did not render in the thread.`,
+    deviceId: input.deviceId,
+    itx: input.itx,
+    streamPaths: input.agentPaths,
+    wait: () => input.page.getByRole("button", { name: input.name }).waitFor(),
+  });
 }
 
 /**

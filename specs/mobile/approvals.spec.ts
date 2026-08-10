@@ -30,18 +30,14 @@ import { withTunnel } from "../../apps/os/e2e/test-support/tunnel.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
 import { resolveAdminSecret } from "../test-support/forged-session.ts";
 import { test } from "../test-support/test.ts";
+import { withApprovalDeliveryDiagnostic } from "./approval-delivery-diagnostics.ts";
 
 // The browser's device identity, fixed BEFORE the app boots (the web build's
 // secure store is localStorage), so the server-side enrollment below and the
 // Notifications view read the same device stream.
 const DEVICE_ID = "spec-web-approver";
 
-// KNOWN GAP (2026-08-03): repeated preview and isolated runs intermittently
-// lose the approval batch before it reaches the thread or notification journal.
-// Evidence and restoration criteria: tasks/quarantined-mobile-approvals-event-delivery.md.
-test.skip("approve and reject script bursts from inside the chat thread", async ({
-  page,
-}, testInfo) => {
+test("approve and reject script bursts from inside the chat thread", async ({ page }, testInfo) => {
   const osBaseUrl = await resolveOsBaseUrl();
   const echo = await startEgressEcho();
   try {
@@ -166,7 +162,13 @@ test.skip("approve and reject script bursts from inside the chat thread", async 
         { title: "Refund sweep", activity: "Emailing 3 customers about order refunds" },
       ]),
     );
-    await waitForBatchCardButton(page, "Approve all 3 (Face ID)");
+    await waitForBatchCardButton({
+      agentPaths: [agentPath],
+      deviceId: DEVICE_ID,
+      itx,
+      name: "Approve all 3 (Face ID)",
+      page,
+    });
     await decideBatch(page, "Approve all 3 (Face ID)", (dialog) => dialog.accept());
 
     // Run 1 must SETTLE before lane 2's command goes in: the settle event
@@ -196,7 +198,13 @@ test.skip("approve and reject script bursts from inside the chat thread", async 
         { activity: "Requesting payment for 3 overdue invoices" },
       ]),
     );
-    await waitForBatchCardButton(page, "Reject all");
+    await waitForBatchCardButton({
+      agentPaths: [agentPath],
+      deviceId: DEVICE_ID,
+      itx,
+      name: "Reject all",
+      page,
+    });
     await decideBatch(page, "Reject all", (dialog) => dialog.accept(reason));
 
     // ── Asserted from the protocol: each script narrated its outcomes into
@@ -253,13 +261,21 @@ test.skip("approve and reject script bursts from inside the chat thread", async 
     // IN FULL — so "what was this run even doing?" reads without opening the
     // thread.
     await page.goBack(); // chat → chat list: browser history IS the app's back stack on web
-    await page.getByLabel("Open project menu").click();
+    await page.getByLabel("Open project menu").filter({ visible: true }).click();
     await page.getByRole("button", { name: "Notifications" }).click();
-    // Newest first: the reject burst's row sits above the approve burst's.
-    const batchRows = page.getByTestId(/^notification-row-/);
-    await batchRows.nth(1).waitFor();
-    await batchRows.first().click();
-    await batchRows.nth(1).click();
+    // Main also journals each scripted outcome message as an "Agent replied"
+    // notification. Select only the approval-batch rows: newest first, the
+    // reject burst sits above the approve burst.
+    const batchRows = page
+      .getByTestId(/^notification-row-/)
+      .filter({ has: page.getByText("Approvals needed", { exact: true }) });
+    await withApprovalDeliveryDiagnostic({
+      description: "The second approval notification row did not render.",
+      deviceId: DEVICE_ID,
+      itx,
+      streamPaths: [agentPath],
+      wait: () => batchRows.nth(1).waitFor(),
+    });
     const threadName = agentPath.replace(/^\/agents\//, "");
     // The line is a link (tap = open the thread), one per card, each unique
     // by its lane's status title. Full-text equality, not substring: a
@@ -268,13 +284,19 @@ test.skip("approve and reject script bursts from inside the chat thread", async 
     // activity-only update.
     const approveContext = page.getByRole("link", { name: /Refund sweep/ });
     const rejectContext = page.getByRole("link", { name: /Invoice chase/ });
-    await approveContext.waitFor();
+    // Inspect one row at a time, as a person does. Each expansion contains the
+    // full batch and can push its sibling outside FlatList's rendered window;
+    // collapsing it first keeps the next row mounted and actionable.
+    await batchRows.first().click();
     await rejectContext.waitFor();
-    expect(await approveContext.textContent()).toBe(
-      `${threadName} · Refund sweep — Emailing 3 customers about order refunds`,
-    );
     expect(await rejectContext.textContent()).toBe(
       `${threadName} · Invoice chase — Requesting payment for 3 overdue invoices`,
+    );
+    await batchRows.first().click();
+    await batchRows.nth(1).click();
+    await approveContext.waitFor();
+    expect(await approveContext.textContent()).toBe(
+      `${threadName} · Refund sweep — Emailing 3 customers about order refunds`,
     );
 
     // Tapping the line deep-links back into the thread it snapshotted.
@@ -302,8 +324,20 @@ async function sendChatMessage(page: Page, message: string) {
  * wait with real spinners the whole way — the card mounts while the parked
  * script run still spins.
  */
-function waitForBatchCardButton(page: Page, name: string) {
-  return page.getByRole("button", { name }).waitFor();
+function waitForBatchCardButton(input: {
+  agentPaths: string[];
+  deviceId: string;
+  itx: Parameters<typeof withApprovalDeliveryDiagnostic>[0]["itx"];
+  name: string;
+  page: Page;
+}) {
+  return withApprovalDeliveryDiagnostic({
+    description: `The approval button "${input.name}" did not render in the thread.`,
+    deviceId: input.deviceId,
+    itx: input.itx,
+    streamPaths: input.agentPaths,
+    wait: () => input.page.getByRole("button", { name: input.name }).waitFor(),
+  });
 }
 
 /**
