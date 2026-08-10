@@ -116,8 +116,9 @@ test("the approval push is suppressed in the watched thread and sent when you're
     const outwaitRulesCache = () => new Promise((resolve) => setTimeout(resolve, 6_000));
     await (page.videoMode ? page.videoMode.deadAir(outwaitRulesCache) : outwaitRulesCache());
 
-    const parkOneRequest = (marker: string) =>
-      `async () => { await fetch(${JSON.stringify(echo.url)} + "?${marker}=1", { method: "POST", body: "${marker}" }).catch(() => {}); }`;
+    const parkRequestBody = (marker: string) =>
+      `await fetch(${JSON.stringify(echo.url)} + "?${marker}=1", { method: "POST", body: "${marker}" }).catch(() => {});`;
+    const parkOneRequest = (marker: string) => `async () => { ${parkRequestBody(marker)} }`;
 
     // ── Stage the ORPHAN before the device exists: park a batch, and only
     // enroll once its push intent has been journaled on the root stream.
@@ -177,22 +178,22 @@ test("the approval push is suppressed in the watched thread and sent when you're
     await page.getByText("New chat").click();
     await page.getByPlaceholder("Message").waitFor();
     const watchedPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
-    const watchedAgent = await itx.agents.get(watchedPath).create();
+    const watchedAgent = itx.agents.get(watchedPath);
+    // Start this lane through the visible composer. Creating the agent from a
+    // second admin connection after the blank chat has mounted replaces the
+    // lazily opened stream underneath the page; the browser store correctly
+    // heals that separate stream-birth race, but only after its liveness
+    // probe. A real first message creates the agent and nudges the same live
+    // connection before running the script, which is the foreground delivery
+    // path this spec means to exercise.
+    await sendChatMessage(page, `/script ${parkRequestBody("watched")}`);
+    await page.getByText("running code…").waitFor();
     const watchedRunStarted = watchedAgent.stream.waitForEvent({
       afterOffset: 0,
       eventTypes: ["events.iterate.com/capability-host/script-run-started"],
       timeoutMs: 15_000,
     });
-    void watchedAgent.capabilityHost.runScript(parkOneRequest("watched")).catch(() => {});
-    // This script starts through the admin itx connection, not the mobile
-    // composer, so the thread has no local "sending" state while a cold
-    // worker accepts it. Separate that startup boundary from the live
-    // approval-delivery assertion below: once the durable run has started,
-    // the thread must promptly project its existing running activity. That
-    // spinner then honestly covers the egress hold + debounce before the
-    // approval button arrives; no retry or wider UI-action timeout involved.
     await watchedRunStarted;
-    await page.getByText("running code…").waitFor();
     await waitForBatchCardButton({
       agentPaths: [watchedPath],
       deviceId: DEVICE_ID,
@@ -357,6 +358,13 @@ test("the approval push is suppressed in the watched thread and sent when you're
     await echo.close();
   }
 });
+
+/** Type into the chat composer and send through RN-web's controlled input. */
+async function sendChatMessage(page: Page, message: string) {
+  await page.getByPlaceholder("Message").click();
+  await page.keyboard.insertText(message);
+  await page.getByRole("button", { name: "Send" }).click();
+}
 
 /**
  * Wait for a batch-card button while the burst coalesces at the egress door —

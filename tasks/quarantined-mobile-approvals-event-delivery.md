@@ -19,12 +19,13 @@ not part of this restoration.
 The narrow replacement is implemented and locally green. It contains only
 directly reproduced script-worker ownership, approval-claim ordering, bounded
 push settlement, accepted-message handoff, correlated diagnostics, and the two
-unskips. The current preview passed 16 targeted cases before the shared auth
-signup helper retried at its missing OTP-form navigation boundary; that helper
-now waits for the visible form before using the normal action budget. The code
-change resets all exact-head counters. Remaining work is a fresh deployment,
-25 consecutive paired four-worker iterations, three canonical previews, and
-review/telemetry cleanup.
+unskips. The latest four-worker gate reached 20 first-attempt cases before
+showing that the notification spec created its watched agent behind an already
+mounted lazy stream; the browser healed that separate birth race after the
+suppression window. The watched lane now uses the real first-message path and
+passed an 8-case four-worker replay. This code change resets the exact-head
+counters. Remaining work is a fresh deployment, 25 consecutive paired
+four-worker iterations, three canonical previews, and review/telemetry cleanup.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -148,6 +149,20 @@ failure, or missing-transition diagnostic is investigated immediately; do not
 hide a recurrence with a timeout increase or another retry.
 
 ## Implementation log
+
+- 2026-08-10: The exact-head four-worker gate reached 20 first-attempt passes,
+  then the notification lane exposed a real test setup race. The mounted blank
+  chat had opened a lazy stream; the spec created that agent from a second
+  admin connection, replacing the stream underneath the page. Durable evidence
+  on project `mobile-notifs-msnap7z6-0` showed the notification attempted at
+  13:57:36 and settled rejected at 13:57:37, while the page's late
+  `project/approval-presented` claim landed at 13:57:53. The browser store's
+  liveness probe healed the replaced callback after ~22s, as designed, but the
+  separate birth race had already outlived the 1.5s suppression window. The
+  watched lane now starts its script through the visible composer: the real
+  first-message path creates the agent and nudges that same live connection,
+  matching the already-stable approvals spec instead of coupling this delivery
+  proof to an unrelated lazy-stream replacement.
 
 - 2026-08-10: Re-audited Slack, PostHog, draft PR #2428, and current `main`.
   Confirmed the tests exposed real load-sensitive product defects rather than
