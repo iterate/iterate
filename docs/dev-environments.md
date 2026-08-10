@@ -348,14 +348,6 @@ invariants:
   GC sweep — see **[Preview resource GC](preview-resource-gc.md)** for how
   teardown is decoupled from releasing the slot (and how disposable data
   expires 3h after last use).
-- **Draft PRs don't claim a slot unless they ask.** Drafts are the default
-  for agent-opened PRs, and nineteen slots don't survive a busy night of them. A
-  draft asks by wearing the `preview` label (durable — previews then behave
-  as for a ready PR), being marked ready for review, or a one-shot explicit
-  run (dispatching the `Cloudflare Previews` workflow, or
-  `pnpm preview deploy --allow-draft`; the next push re-applies the policy).
-  A draft that holds a slot without asking — e.g. a ready PR converted back
-  to draft — gives it back on the next lifecycle run.
 - **The semaphore is the single source of lease truth.** The PR body's
   managed section only _displays_ the slot (and per-app results); it is never
   consulted for ownership and never a reason to skip. Before running tests or
@@ -375,7 +367,7 @@ invariants:
   someone else on it.
 - **Everything is attributable and visible.** `pnpm preview status` shows
   each slot's holder, PR open/closed state, idle/orphaned verdict, open
-  preview-eligible PRs without a slot, and reclaim commands when the fleet
+  PRs without a slot, and reclaim commands when the fleet
   is full for a reason other than "nineteen open PRs". The semaphore UI at
   semaphore.iterate.com shows the same live leases; every lease transition
   (acquired/renewed/evicted/expired/force-released) is logged as an event in
@@ -393,15 +385,13 @@ invariants:
   doppler run --project _shared --config prd -- pnpm preview gc --dry-run
   ```
 
-An eligible PR can request one configured slot by putting an exact standalone
+A PR can request one configured slot by putting an exact standalone
 line in its body:
 
 ```text
 preview_environment=preview-17
 ```
 
-This selects a slot; it does not opt a draft into previews. The PR must still
-carry the `preview` label, be ready for review, or use an explicit one-off run.
 If the requested slot is unknown or held by another owner, acquisition fails
 without forcing the holder or silently falling back to another slot.
 

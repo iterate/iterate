@@ -56,14 +56,6 @@ type PullRequestCommandOptions = {
   pullRequestNumber?: number;
 };
 
-/** Label a draft PR can wear to get previews despite the draft policy below. */
-const previewOptInLabel = "preview";
-
-const draftPreviewNotice = [
-  "This PR is a draft, so it doesn't claim a preview slot.",
-  `To get previews: add the \`${previewOptInLabel}\` label, mark the PR ready for review, or dispatch the Cloudflare Previews workflow for a one-off run.`,
-].join(" ");
-
 // Cloudflare documents that a Worker/DO code update is globally eventually
 // consistent after the new edge Worker version is serving. A newly addressed
 // Durable Object can therefore still be assigned the prior code for seconds
@@ -75,28 +67,6 @@ const draftPreviewNotice = [
 const previewMinimumDeploymentAgeMs = 90_000;
 const previewRolloutRemainingSecondsEnvironment = "PREVIEW_APP_ROLLOUT_REMAINING_SECONDS";
 
-/**
- * Draft PRs don't hold preview slots unless they ask: there are only nine
- * slots and drafts are the default for agent-opened PRs, so a busy night of
- * drafts was exhausting the fleet before any human asked for a preview.
- * "Asking" = the `preview` label, marking ready for review, or an explicit
- * `--allow-draft` run (the workflow_dispatch path). A draft that still holds
- * a slot per the semaphore (it was ready once, or opted out again) gives it
- * back.
- */
-function decideDraftPreviewPolicy(input: {
-  allowDraft: boolean;
-  holdsSlot: boolean;
-  isDraft: boolean;
-  labels: string[];
-}): "deploy" | "skip" | "teardown" {
-  if (!input.isDraft || input.allowDraft || input.labels.includes(previewOptInLabel)) {
-    return "deploy";
-  }
-
-  return input.holdsSlot ? "teardown" : "skip";
-}
-
 type DeployCommandOptions = PullRequestCommandOptions & {
   /**
    * Deploy every preview app regardless of the diff. Diff selection only
@@ -106,13 +76,6 @@ type DeployCommandOptions = PullRequestCommandOptions & {
    * happening to touch a fleet-shared path.
    */
   allApps?: boolean;
-  /**
-   * Deploy even when the PR is a draft without the `preview` label. Draft
-   * PRs otherwise skip previews (or give their slot back); an explicit
-   * invocation — workflow_dispatch, the flake-hunt marathon, a human at a
-   * terminal — is an ask, so those callers pass this.
-   */
-  allowDraft?: boolean;
 };
 
 /** One PR context + runtime shared by every phase of a preview command. */
@@ -303,7 +266,7 @@ export async function testTarget(options: TestTargetOptions) {
  * structurally gone. The lease is shared through the semaphore itself (same
  * holder; test's adopt re-issues the slot deploy just claimed), never
  * through a handed-around copy. A deploy failure throws before any test
- * runs; a draft skip skips both phases.
+ * runs.
  */
 export async function run(options: DeployCommandOptions = {}) {
   const { context, runtime } = await resolvePreviewCommandSetup(options);
@@ -311,10 +274,6 @@ export async function run(options: DeployCommandOptions = {}) {
     const deployResult = await measurePreviewDeployRun(telemetry, () =>
       deployPreviewApps({ context, options, runtime, telemetry }),
     );
-    if ("skippedReason" in deployResult && deployResult.skippedReason === "draft") {
-      return deployResult;
-    }
-
     // A "nothing to deploy" skip still tests. Unchanged apps may reuse their
     // exact recorded Worker versions, but every PR head earns its own e2e
     // result; a previous head's green is never promoted to this check.
@@ -433,61 +392,8 @@ async function deployPreviewApps({
       : "PR body shows no slot — this PR has not recorded a deploy yet",
   );
 
-  // The semaphore is the single source of lease truth: the draft policy's
-  // "does this PR hold a slot?" question goes there, not to the PR body,
-  // whose copy can be stale (a cancelled run can claim without recording).
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
   const holder = pullRequestHolder(context.pullRequestNumber);
-  const heldSlots = await listSlotsLeasedToHolder(semaphore, holder);
-  const draftPolicy = decideDraftPreviewPolicy({
-    allowDraft: options.allowDraft === true,
-    holdsSlot: heldSlots.length > 0,
-    isDraft: context.pullRequestIsDraft,
-    labels: context.pullRequestLabels,
-  });
-  if (draftPolicy === "skip") {
-    logPreview(
-      `draft PR without the ${previewOptInLabel} label — not claiming a preview slot (mark ready, add the label, or pass --allow-draft)`,
-    );
-    const update = await updatePreviewState(context, (state) => ({
-      ...state,
-      notice: draftPreviewNotice,
-    }));
-    return {
-      ok: true,
-      skipped: true,
-      skippedReason: "draft",
-      state: update.state,
-    };
-  }
-  if (draftPolicy === "teardown") {
-    logPreview(
-      `draft PR without the ${previewOptInLabel} label holds ${heldSlots.map((slot) => slot.slug).join(", ")} — tearing down and releasing the slot (mark ready, add the label, or pass --allow-draft to keep previews)`,
-    );
-    const cleanupResult = await cleanupPreviewForPullRequest({ ...runtime, context });
-    if (!cleanupResult.ok) {
-      // ok=false means the lease RELEASE failed (a failed teardown alone
-      // still releases and reports ok — see cleanupPreviewForPullRequest).
-      throw new Error("Failed to release the draft PR's preview slot lease.");
-    }
-    // Pin the post-teardown state in this write: the GitHub read inside
-    // updatePreviewState can be stale (read-after-write lag) and would
-    // otherwise resurrect the released lease and app rows — and this run's
-    // test step would then re-acquire the slot the draft just gave up.
-    const update = await updatePreviewState(context, (state) => ({
-      ...state,
-      ...cleanupResult.state,
-      notice: draftPreviewNotice,
-    }));
-    return {
-      ok: true,
-      skipped: true,
-      skippedReason: "draft",
-      releasedLease: cleanupResult.released,
-      state: update.state,
-    };
-  }
-
   const selectedApps = options.allApps
     ? (logPreview("--all-apps: deploying the full preview fleet regardless of diff"),
       Object.values(cloudflarePreviewApps))
@@ -1277,7 +1183,7 @@ export async function assign(options: AssignOptions = {}) {
 /**
  * Show environment config lease inventory, cross-check holders against GitHub
  * PR state, and explain why the fleet can look full even when only a handful
- * of PRs are open (orphaned closed-PR leases, idle holds, draft opt-ins, …).
+ * of PRs are open (orphaned closed-PR leases, idle holds, manual holds, …).
  *
  *   doppler run --project _shared --config prd -- pnpm preview status
  */
@@ -1326,9 +1232,6 @@ export async function status(options: StatusOptions = {}) {
       number: pullRequest.number,
       title: pullRequest.title,
       url: pullRequest.url,
-      isDraft: pullRequest.isDraft,
-      labels: pullRequest.labels,
-      previewEligible: pullRequestWouldClaimPreviewSlot(pullRequest),
       holdsSlot: diagnosis.holdersWithOpenPrs.includes(pullRequest.number),
     })),
     diagnosis,
@@ -2839,8 +2742,6 @@ type PullRequestPreviewContext = {
   pullRequestBody: string;
   pullRequestHeadSha: string;
   pullRequestHeadRef?: string;
-  pullRequestIsDraft: boolean;
-  pullRequestLabels: string[];
   pullRequestNumber: number;
   repositoryFullName: string;
   workflowRunUrl: string | null;
@@ -4713,21 +4614,7 @@ type PreviewDiagnosisOpenPullRequest = {
   number: number;
   title: string;
   url: string;
-  isDraft: boolean;
-  labels: string[];
 };
-
-/**
- * Draft PRs only claim a slot when they opt in (same policy as deploy). Used
- * by `preview status` so "9 open PRs" is not compared apples-to-oranges with
- * the 9-slot fleet.
- */
-function pullRequestWouldClaimPreviewSlot(pullRequest: {
-  isDraft: boolean;
-  labels: readonly string[];
-}): boolean {
-  return !pullRequest.isDraft || pullRequest.labels.includes(previewOptInLabel);
-}
 
 type PreviewDiagnosisSlot = {
   slug: string;
@@ -4755,17 +4642,8 @@ function diagnosePreviewFleetCapacity(input: {
   const holdersWithOpenPrs = input.openPullRequests
     .map((pullRequest) => pullRequest.number)
     .filter((number) => leased.some((slot) => parsePullRequestHolder(slot.holder) === number));
-  const previewEligibleOpen = input.openPullRequests.filter(pullRequestWouldClaimPreviewSlot);
-  const previewEligibleWithoutSlot = previewEligibleOpen.filter(
+  const openWithoutSlot = input.openPullRequests.filter(
     (pullRequest) => !holdersWithOpenPrs.includes(pullRequest.number),
-  );
-  // Drafts that opted in via a one-shot `--allow-draft` dispatch hold a slot
-  // without the label, so exclude any that actually hold one — otherwise we'd
-  // tell the operator it "correctly claims no slot" next to holdsSlot: true.
-  const openButIneligible = input.openPullRequests.filter(
-    (pullRequest) =>
-      !pullRequestWouldClaimPreviewSlot(pullRequest) &&
-      !holdersWithOpenPrs.includes(pullRequest.number),
   );
   const closedHolders = leased.filter((slot) => slot.pullRequestState === "closed");
   const nonPrHolders = leased.filter((slot) => parsePullRequestHolder(slot.holder) === null);
@@ -4800,16 +4678,9 @@ function diagnosePreviewFleetCapacity(input: {
         .join(", ")}.`,
     );
   }
-  if (previewEligibleWithoutSlot.length > 0) {
+  if (openWithoutSlot.length > 0) {
     reasons.push(
-      `${previewEligibleWithoutSlot.length} open preview-eligible PR(s) have no slot: ${previewEligibleWithoutSlot
-        .map((pullRequest) => `#${pullRequest.number}`)
-        .join(", ")}.`,
-    );
-  }
-  if (openButIneligible.length > 0) {
-    reasons.push(
-      `${openButIneligible.length} open draft PR(s) without the \`${previewOptInLabel}\` label correctly claim no slot: ${openButIneligible
+      `${openWithoutSlot.length} open PR(s) have no slot: ${openWithoutSlot
         .map((pullRequest) => `#${pullRequest.number}`)
         .join(", ")}.`,
     );
@@ -4818,10 +4689,10 @@ function diagnosePreviewFleetCapacity(input: {
     input.openPullRequests.length > 0 &&
     closedHolders.length === 0 &&
     available.length === 0 &&
-    previewEligibleOpen.length <= input.slots.length
+    input.openPullRequests.length <= input.slots.length
   ) {
     reasons.push(
-      `Open-PR count alone (${input.openPullRequests.length} open, ${previewEligibleOpen.length} preview-eligible) does not explain a full fleet — check idle/manual holders above.`,
+      `Open-PR count alone (${input.openPullRequests.length} open) does not explain a full fleet — check idle/manual holders above.`,
     );
   }
 
@@ -4834,9 +4705,7 @@ function diagnosePreviewFleetCapacity(input: {
     closedHolders.length > 0 ? `${closedHolders.length} orphaned (closed PR)` : null,
     idle.length > 0 ? `${idle.length} idle` : null,
     active.length > 0 ? `${active.length} active` : null,
-    previewEligibleWithoutSlot.length > 0
-      ? `${previewEligibleWithoutSlot.length} open PR(s) waiting for a slot`
-      : null,
+    openWithoutSlot.length > 0 ? `${openWithoutSlot.length} open PR(s) waiting for a slot` : null,
   ].filter(Boolean);
 
   return {
@@ -4846,8 +4715,7 @@ function diagnosePreviewFleetCapacity(input: {
     idleCount: idle.length,
     activeCount: active.length,
     openPullRequestCount: input.openPullRequests.length,
-    previewEligibleOpenCount: previewEligibleOpen.length,
-    previewEligibleWithoutSlotCount: previewEligibleWithoutSlot.length,
+    openWithoutSlotCount: openWithoutSlot.length,
     holdersWithOpenPrs,
     nextLeaseExpiryAt:
       leased
@@ -4876,10 +4744,6 @@ async function listOpenPullRequestsForPreviewDiagnosis(
     number: pullRequest.number,
     title: pullRequest.title,
     url: pullRequest.html_url,
-    isDraft: Boolean(pullRequest.draft),
-    labels: (pullRequest.labels ?? [])
-      .map((label) => (typeof label === "string" ? label : label.name))
-      .filter((name): name is string => typeof name === "string" && name.length > 0),
   }));
 }
 
@@ -6183,8 +6047,6 @@ async function resolvePullRequestPreviewContext(params: {
     pullRequestBody: pullRequest.data.body || "",
     pullRequestHeadSha: pullRequest.data.head.sha,
     pullRequestHeadRef: pullRequest.data.head.ref,
-    pullRequestIsDraft: pullRequest.data.draft === true,
-    pullRequestLabels: pullRequest.data.labels.map((label) => label.name),
     pullRequestNumber: params.pullRequestNumber,
     repositoryFullName,
     workflowRunUrl:
@@ -6211,7 +6073,6 @@ export const previewInternals = {
   claimEnvironmentConfigLease,
   classifyEnvironmentConfigLeases,
   classifyLeaseForReclaim,
-  decideDraftPreviewPolicy,
   describeEnvironmentConfigLeases,
   describeForcePushCompareHazard,
   describeLostSlotOwnership,
@@ -6220,7 +6081,6 @@ export const previewInternals = {
   evaluateCloudflareZoneCheck,
   holderPullRequestUrl,
   pullRequestHolder,
-  pullRequestWouldClaimPreviewSlot,
   requireExplicitReclaimForce,
   retakeRecordedSlotIfFree,
   resolveSlotWaitTotalMs,
