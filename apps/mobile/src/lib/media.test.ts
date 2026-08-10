@@ -240,8 +240,14 @@ test("filterMedia: terms AND together over markdown+transcript+filename+tags, ch
   ];
   expect(filterMedia(items, "train ticket", [])).toMatchObject([{ offset: 1 }]);
   // Deep links search by the SANITIZED name carried in the stored path
-  // (spaces become underscores) — the path is part of the haystack.
-  expect(filterMedia(items, "k1-f.png", [])).toMatchObject([{ offset: 1 }]);
+  // (spaces become underscores) — that segment is part of the haystack, but
+  // the /media/ prefix and hash are NOT: "media" must not match everything.
+  expect(filterMedia(items, "f.png", [])).toMatchObject([
+    { offset: 1 },
+    { offset: 2 },
+    { offset: 3 },
+  ]);
+  expect(filterMedia(items, "/media", [])).toEqual([]);
   expect(filterMedia(items, "trenitalia", [])).toMatchObject([{ offset: 1 }]); // transcript hit
   expect(filterMedia(items, "typeerror", [])).toMatchObject([{ offset: 2 }]);
   expect(filterMedia(items, "", ["screenshot", "code"])).toMatchObject([{ offset: 2 }]);

@@ -275,10 +275,14 @@ export function filterMedia(
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   return items.filter((item) => {
     const { markdown, transcript, filename, path, tags } = item.payload;
-    // path carries the SANITIZED filename — what in-app deep links search by
-    // (lib/in-app-links.ts), so names with spaces still match.
+    // The stored name (path minus directory and hash prefix) is the
+    // SANITIZED filename in-app deep links search by (lib/in-app-links.ts),
+    // so names with spaces still match — but only that segment joins the
+    // haystack: the /media/ prefix and content hash would make queries like
+    // "media" match everything.
+    const storedName = (path.split("/").at(-1) || "").replace(/^[0-9a-f]{32,}-/, "");
     const haystack =
-      `${markdown} ${transcript} ${filename} ${path} ${tags.join(" ")}`.toLowerCase();
+      `${markdown} ${transcript} ${filename} ${storedName} ${tags.join(" ")}`.toLowerCase();
     return (
       terms.every((term) => haystack.includes(term)) &&
       selectedTags.every((tag) => tags.includes(tag))
