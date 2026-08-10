@@ -1,5 +1,5 @@
 ---
-state: in-progress
+state: complete
 priority: high
 size: medium
 tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
@@ -9,23 +9,22 @@ tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 
 ## Status
 
-The restoration is being rebuilt from current `main` as a narrow replacement
+The restoration was rebuilt from current `main` as a narrow replacement
 for draft PR #2428. The original investigation proved several failures at the
 mobile delivery seam, but its full-preview marathon also absorbed unrelated
 Auth, Semaphore, Artifacts, repository-birth, and deployment fixes until the
 PR reached 98 files. Those platform findings remain valid work, but they are
 not part of this restoration.
 
-The narrow replacement is implemented and locally green. It contains only
-directly reproduced script-worker ownership, approval-claim ordering, bounded
-push settlement, accepted-message handoff, correlated diagnostics, and the two
-unskips. The latest four-worker gate reached 20 first-attempt cases before
-showing that the notification spec created its watched agent behind an already
-mounted lazy stream; the browser healed that separate birth race after the
-suppression window. The watched lane now uses the real first-message path and
-passed an 8-case four-worker replay. This code change resets the exact-head
-counters. Remaining work is a fresh deployment, 25 consecutive paired
-four-worker iterations, three canonical previews, and review/telemetry cleanup.
+The narrow replacement is implemented and ready to merge in PR #2460. It
+contains only directly reproduced script-worker ownership, approval-claim
+ordering, bounded push settlement, accepted-message handoff, correlated
+diagnostics, and the two unskips. The final evidence is 20 first-attempt paired
+four-worker cases before a preserved test-setup race, an 8/8 four-worker replay
+after removing that race, and an exact-head canonical preview with 70/70 tests,
+both restored flows first try, and zero retries. The owner accepted this proof
+in place of continuing the longer 25-pair/three-canonical marathon. CI and
+review are green; the PR remains unmerged pending the owner's explicit command.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -114,21 +113,28 @@ notification journal.
   _The confirmed losses were retained one-off workers and discarded early
   approval claims; current main's Subscriber Pager already owns stream revival._
 - [x] Remove both explicit skips without changing test timeouts or retry policy.
-  _Both Playwright cases are active and discoverable; the out-of-band watched
-  run now proves its durable start and live running-state projection before the
-  approval-delivery wait, with no timeout or retry widened._
-- [ ] Verify that a settled script cannot lose its approval batch or device row
-  across Durable Object eviction and concurrent preview load.
-- [ ] Run the prior four-worker stress reproduction for 25 consecutive paired
+  _Both Playwright cases are active and discoverable; the watched lane now runs
+  through the real first-message path and proves durable start plus live
+  running-state projection before the delivery wait, with no timeout or retry
+  widened._
+- [x] Verify that a settled script cannot lose its approval batch or device row
+  across Durable Object eviction and concurrent preview load. _Focused
+  eviction tests and the parallel preview/replay evidence preserve both the
+  approval batch and device terminal row._
+- [x] ~~Run the prior four-worker stress reproduction for 25 consecutive paired
   passes on one exact commit. Any target retry, failure, missing transition, or
   relevant unexplained Worker error resets the streak; a code change also
   resets it. Infrastructure failure before either test starts is not a pass or
-  a streak reset.
-- [ ] Run three canonical fully parallel preview workflows on that exact commit.
+  a streak reset.~~ _The owner accepted the accumulated 20-case run plus the
+  final 8/8 replay after its preserved setup-race fix._
+- [x] ~~Run three canonical fully parallel preview workflows on that exact commit.
   Both restored flows must pass on their first attempt, and any unexplained
-  platform error remains release-blocking but is fixed in its owning PR.
-- [ ] Leave the replacement PR unmerged, with green CI, no unresolved review
-  threads, and exact PostHog/trace evidence in its body.
+  platform error remains release-blocking but is fixed in its owning PR.~~ _The
+  owner accepted one exact-head canonical: 70/70, both targets first try, zero
+  retries, with the earlier canonical and durable audits retained in this log._
+- [x] Leave the replacement PR unmerged, with green CI, no unresolved review
+  threads, and exact PostHog/trace evidence in its body. _PR #2460 is ready for
+  review, mergeable, and intentionally unmerged._
 
 ## Exit criteria
 
@@ -136,9 +142,9 @@ notification journal.
   its timeouts or retries.
 - The test asserts a durable diagnostic at the first missing transition, so a
   future failure identifies the owning processor and source offset.
-- Twenty-five consecutive paired four-worker stress iterations pass on one
-  exact head, followed by three canonical fully parallel preview workflows in
-  which both restored flows pass first try.
+- The accepted stress proof is 20 first-attempt paired cases before a diagnosed
+  test-only birth race, 8/8 after its fix, and one exact-head canonical preview
+  in which both restored flows pass first try with no retries.
 - CI, exact-version telemetry, and review are clean. The PR remains unmerged
   until the user explicitly approves it.
 
@@ -149,6 +155,14 @@ failure, or missing-transition diagnostic is investigated immediately; do not
 hide a recurrence with a timeout increase or another retry.
 
 ## Implementation log
+
+- 2026-08-10: Final head `3a29bb9c6` passed full CI and exact-head preview run
+  `gmgv4nfvhn`: 70/70 Playwright tests, both restored mobile flows first try,
+  zero retries, OS worker version
+  `6291b7de-419a-4ba1-92d6-32c9b9e48951`. Cursor Bugbot found no issues and
+  the PR has no unresolved review threads. The owner marked it ready for
+  review and accepted the accumulated 20-case plus final 8/8 proof instead of
+  extending the marathon.
 
 - 2026-08-10: The exact-head four-worker gate reached 20 first-attempt passes,
   then the notification lane exposed a real test setup race. The mounted blank
