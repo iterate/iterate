@@ -9,7 +9,7 @@
 // their events land on the live stream. Tap a thumbnail for full screen;
 // "Re-analyze" reruns the pipeline and overlays the newest result.
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Crypto from "expo-crypto";
 import { Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
@@ -20,6 +20,7 @@ import {
   Modal,
   Pressable,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -40,8 +41,13 @@ import {
   readAllMediaEvents,
   type MediaListItem,
 } from "../../../lib/media.ts";
+import { runSyncPass, type SyncPassResult } from "../../../lib/media-sync.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
-import { getServerBaseUrl } from "../../../lib/storage.ts";
+import {
+  getMediaSyncEnabled,
+  getServerBaseUrl,
+  setMediaSyncEnabled,
+} from "../../../lib/storage.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
 
@@ -71,6 +77,30 @@ export default function MediaScreen() {
     staleTime: Infinity,
   });
   const baseUrl = server.data;
+
+  // Device-local per-project opt-in; flipping it on immediately runs a sync
+  // pass (the query's enabled flag), as does every screen open while on.
+  const queryClient = useQueryClient();
+  const syncEnabled = useQuery({
+    queryKey: ["media-sync-enabled", projectId],
+    queryFn: () => getMediaSyncEnabled(projectId),
+    staleTime: Infinity,
+  });
+  const [syncProgress, setSyncProgress] = useState<string | null>(null);
+  const syncPass = useQuery({
+    queryKey: ["media-sync-pass", baseUrl || "pending", projectId],
+    queryFn: async (): Promise<SyncPassResult> => {
+      const project = await getProjectItx(baseUrl!, projectId);
+      try {
+        return await runSyncPass({ project, onProgress: setSyncProgress });
+      } finally {
+        setSyncProgress(null);
+      }
+    },
+    enabled: baseUrl !== undefined && syncEnabled.data === true,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
 
   const events = useLiveEvents({
     queryKey: ["media-events", baseUrl || "pending", projectId],
@@ -127,6 +157,9 @@ export default function MediaScreen() {
               contentType: image.contentType,
               width: image.width,
               height: image.height,
+              source: "picker",
+              capturedAt: null,
+              isScreenshot: null,
               mode: "capture",
             }),
           );
@@ -172,6 +205,35 @@ export default function MediaScreen() {
           <Text style={styles.captureText}>+ Add</Text>
         </Pressable>
       </View>
+      <View style={styles.syncRow}>
+        <Text style={styles.syncLabel}>Auto-collect screenshots</Text>
+        <Switch
+          value={syncEnabled.data === true}
+          onValueChange={(enabled) => {
+            queryClient.setQueryData(["media-sync-enabled", projectId], enabled);
+            void setMediaSyncEnabled(projectId, enabled);
+          }}
+        />
+      </View>
+      {syncEnabled.data === true ? (
+        <View style={styles.syncStatusRow}>
+          <Text numberOfLines={1} style={styles.syncStatus}>
+            {syncProgress ||
+              (syncPass.isFetching
+                ? "Syncing…"
+                : syncPass.isError
+                  ? String(syncPass.error.message)
+                  : syncSummary(syncPass.data))}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            disabled={syncPass.isFetching}
+            onPress={() => void syncPass.refetch()}
+          >
+            <Text style={styles.syncNow}>Sync now</Text>
+          </Pressable>
+        </View>
+      ) : null}
       {chipTags.length > 0 ? (
         <View style={styles.chips}>
           {chipTags.map((tag) => {
@@ -257,6 +319,14 @@ export default function MediaScreen() {
   );
 }
 
+function syncSummary(result: SyncPassResult | undefined): string {
+  if (result === undefined) return "";
+  if (result.status === "denied") return "Photo access denied — allow it in Settings";
+  const limited = result.accessPrivileges === "limited" ? " · limited access" : "";
+  const more = result.more ? " · more next pass" : "";
+  return `Synced ${result.synced} new · ${result.known} already captured${more}${limited}`;
+}
+
 function PendingRow({
   onViewImage,
   row,
@@ -322,6 +392,9 @@ function MediaRow({
           contentType: item.payload.contentType,
           width: item.payload.width,
           height: item.payload.height,
+          source: item.payload.source,
+          capturedAt: item.payload.capturedAt,
+          isScreenshot: item.payload.isScreenshot,
           mode: { reprocessNonce: Date.now().toString(36) },
         }),
       );
@@ -365,7 +438,9 @@ function MediaRow({
               {tag}
             </Text>
           ))}
-          <Text style={styles.rowDate}>{new Date(item.capturedAt).toLocaleDateString()}</Text>
+          <Text style={styles.rowDate}>
+            {new Date(item.payload.capturedAt || item.capturedAt).toLocaleDateString()}
+          </Text>
         </View>
         {expanded ? (
           <Pressable
@@ -414,6 +489,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   captureDisabled: { opacity: 0.5 },
+  syncRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+  },
+  syncLabel: { color: colors.text, fontSize: 14 },
+  syncStatusRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.md,
+    paddingTop: 4,
+  },
+  syncStatus: { color: colors.textMuted, flex: 1, fontSize: 12 },
+  syncNow: { color: colors.accent, fontSize: 12, fontWeight: "600" },
   captureText: { color: colors.background, fontSize: 14, fontWeight: "600" },
   chips: {
     flexDirection: "row",

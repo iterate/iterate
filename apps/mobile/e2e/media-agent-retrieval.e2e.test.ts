@@ -54,6 +54,9 @@ test("an agent-style media-search run finds the swimming lesson among decoys", a
         contentType: "image/png",
         width: 0,
         height: 0,
+        source: "picker",
+        capturedAt: null,
+        isScreenshot: null,
         mode: "capture",
       }),
     );

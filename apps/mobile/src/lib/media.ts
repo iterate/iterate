@@ -54,6 +54,13 @@ export type MediaCapturedPayload = MediaProcessingResult & {
   contentType: string;
   width: number;
   height: number;
+  /** Where the item entered: hand-picked or the library sync engine. */
+  source: "picker" | "library-sync";
+  /** Asset creation time (ISO) when the source knows it; null from the
+   * picker, which strips asset metadata on recompression. */
+  capturedAt: string | null;
+  /** iOS's own screenshot flag (mediaSubtypes) — null when unknowable. */
+  isScreenshot: boolean | null;
 };
 
 export type MediaProcessedPayload = MediaProcessingResult & { stableKey: string };
@@ -93,6 +100,9 @@ export type ProcessScriptInput = {
   contentType: string;
   width: number;
   height: number;
+  source: "picker" | "library-sync";
+  capturedAt: string | null;
+  isScreenshot: boolean | null;
   /**
    * "capture" appends the media/captured birth event (idempotent per
    * stableKey — a re-run returns the existing event). A reprocess appends a
@@ -114,6 +124,9 @@ export function buildProcessScript(input: ProcessScriptInput): string {
     contentType: input.contentType,
     width: input.width,
     height: input.height,
+    source: input.source,
+    capturedAt: input.capturedAt,
+    isScreenshot: input.isScreenshot,
     path: mediaFilePath(input.stableKey, input.filename),
     capture: input.mode === "capture",
     idempotencyKey:
@@ -198,6 +211,9 @@ export function buildProcessScript(input: ProcessScriptInput): string {
             contentType: input.contentType,
             width: input.width,
             height: input.height,
+            source: input.source,
+            capturedAt: input.capturedAt,
+            isScreenshot: input.isScreenshot,
           }
         : {}),
     },
