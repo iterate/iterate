@@ -101,17 +101,12 @@ pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
 ```
 
 How to open a PR (branch hygiene, body shape, **screenshots that actually
-render**, drafts/previews) — and **after open**: wait for Iterate Review /
+render**, previews) — and **after open**: wait for Iterate Review /
 review bots, address **every** CI/review comment (fix or reply + resolve),
 **never leave threads standing**, **never merge on red CI** unless the human
 explicitly said so: **[Pull requests](docs/pull-requests.md)**.
 
 **Browser testing:** use **Playwriter** with an isolated headless session by default (or an authorized real-Chrome session when explicitly requested). Give every concurrent agent a unique Playwriter session id. See [Browser testing](docs/browser-testing.md). Keep the Playwriter CLI and skill current.
-
-**Draft PRs don't get a preview deployment** (or preview e2e). If you open a
-PR as a draft and want a preview environment, add the `preview` label; marking
-the PR ready for review also starts previews. Lease model details:
-[Dev environments](docs/dev-environments.md).
 
 ## Repository map
 
@@ -161,7 +156,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 
 ### Development
 
-- [Pull requests](docs/pull-requests.md) — opening PRs, absolute screenshot URLs, drafts/previews, body hygiene; after open: wait for Iterate Review, address every thread, no merge on red CI
+- [Pull requests](docs/pull-requests.md) — opening PRs, absolute screenshot URLs, previews, body hygiene; after open: wait for Iterate Review, address every thread, no merge on red CI
 - [Browser testing](docs/browser-testing.md) — isolated Playwriter sessions, and reusable test logins
 - [Dev environments](docs/dev-environments.md) — local dev, minting identities, opening project-scoped or platform-wide operator sessions, browsers for agents, preview-from-local
 - [Tunnels](docs/tunnels.md) — public HTTPS URLs for local dev, webhooks, OAuth callbacks, and CI/e2e fixtures

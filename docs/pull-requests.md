@@ -73,9 +73,9 @@ gh api repos/iterate/iterate/pulls/<n> -H "Accept: application/vnd.github.html+j
 gh api -X PATCH repos/iterate/iterate/pulls/<n> --input payload.json
 ```
 
-## Drafts / previews
+## Previews
 
-Drafts don't get a preview unless labeled `preview` or marked ready. Lease details: [Dev environments](./dev-environments.md).
+Every open PR (draft or ready) gets a preview deployment. Lease details: [Dev environments](./dev-environments.md).
 
 ## After open — agents landing a PR
 

@@ -706,57 +706,15 @@ describe("preview workflow scope", () => {
   });
 });
 
-describe("draft preview policy", () => {
-  const { decideDraftPreviewPolicy } = previewInternals;
-
-  test.for([
-    {
-      name: "deploys ready PRs regardless of labels or leases",
-      input: { allowDraft: false, holdsSlot: false, isDraft: false, labels: [] },
-      expected: "deploy",
-    },
-    {
-      name: "skips drafts that hold no slot",
-      input: { allowDraft: false, holdsSlot: false, isDraft: true, labels: ["bug"] },
-      expected: "skip",
-    },
-    {
-      name: "gives a draft's slot back when the semaphore says it holds one without asking",
-      input: { allowDraft: false, holdsSlot: true, isDraft: true, labels: [] },
-      expected: "teardown",
-    },
-    {
-      name: "deploys drafts wearing the preview label",
-      input: { allowDraft: false, holdsSlot: false, isDraft: true, labels: ["preview"] },
-      expected: "deploy",
-    },
-    {
-      name: "deploys drafts when the caller explicitly allows it",
-      input: { allowDraft: true, holdsSlot: false, isDraft: true, labels: [] },
-      expected: "deploy",
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(decideDraftPreviewPolicy(input)).toBe(expected);
-  });
-
-  test("wires the lifecycle events and the dispatch override into the workflow", () => {
+describe("preview workflow dispatch", () => {
+  test("a manual dispatch redeploys the full fleet", () => {
     const workflow = readFileSync(
       resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
       "utf8",
     );
 
-    // Draft/label transitions must re-run the policy so a PR can claim a
-    // slot (ready_for_review, labeled) or give one back (converted_to_draft,
-    // unlabeled).
-    expect(workflow).toContain("- ready_for_review");
-    expect(workflow).toContain("- converted_to_draft");
-    expect(workflow).toContain("- labeled");
-    expect(workflow).toContain("- unlabeled");
-    // A manual dispatch is an explicit ask for a fresh preview: it bypasses
-    // the draft policy and cannot false-green after cleanup recorded this
-    // exact head as released.
     expect(workflow).toContain(
-      "${{ github.event_name == 'workflow_dispatch' && '--allow-draft --all-apps' || '' }}",
+      "${{ github.event_name == 'workflow_dispatch' && '--all-apps' || '' }}",
     );
   });
 });
@@ -903,8 +861,6 @@ describe("preview test commands", () => {
           pullRequestBody: "",
           pullRequestHeadSha: "head-sha",
           pullRequestHeadRef: "telemetry-branch",
-          pullRequestIsDraft: false,
-          pullRequestLabels: [],
           pullRequestNumber: 2237,
           repositoryFullName: "iterate/iterate",
           workflowRunUrl: "https://github.com/iterate/iterate/actions/runs/123",
@@ -2531,42 +2487,7 @@ describe("lease reclaim verdicts", () => {
 });
 
 describe("preview fleet capacity diagnosis", () => {
-  const { diagnosePreviewFleetCapacity, pullRequestWouldClaimPreviewSlot } = previewInternals;
-
-  test("treats ready PRs and preview-labeled drafts as slot-eligible", () => {
-    expect(pullRequestWouldClaimPreviewSlot({ isDraft: false, labels: [] })).toBe(true);
-    expect(pullRequestWouldClaimPreviewSlot({ isDraft: true, labels: ["preview"] })).toBe(true);
-    expect(pullRequestWouldClaimPreviewSlot({ isDraft: true, labels: [] })).toBe(false);
-  });
-
-  test("does not call a label-less draft slot-less when it actually holds one (--allow-draft)", () => {
-    const diagnosis = diagnosePreviewFleetCapacity({
-      openPullRequests: [
-        {
-          number: 4242,
-          title: "draft dispatched with --allow-draft",
-          url: "https://github.com/iterate/iterate/pull/4242",
-          isDraft: true,
-          labels: [],
-        },
-      ],
-      slots: [
-        {
-          slug: "preview-1",
-          verdict: "active",
-          holder: "pr-4242",
-          pullRequestUrl: "https://github.com/iterate/iterate/pull/4242",
-          pullRequestState: "open",
-          leasedUntil: "2026-07-16T09:20:18.639Z",
-          lastUsedAgo: "2m ago",
-        },
-      ],
-    });
-
-    // It holds a slot, so it must not be reported as "correctly claims no slot".
-    expect(diagnosis.holdersWithOpenPrs).toContain(4242);
-    expect(diagnosis.reasons.some((reason) => reason.includes("claim no slot"))).toBe(false);
-  });
+  const { diagnosePreviewFleetCapacity } = previewInternals;
 
   test("explains a full fleet held mostly by closed PRs despite few open ones", () => {
     const diagnosis = diagnosePreviewFleetCapacity({
@@ -2575,15 +2496,11 @@ describe("preview fleet capacity diagnosis", () => {
           number: 2008,
           title: "ready pr without a slot",
           url: "https://github.com/iterate/iterate/pull/2008",
-          isDraft: false,
-          labels: [],
         },
         {
           number: 1983,
-          title: "draft without opt-in",
+          title: "draft pr without a slot",
           url: "https://github.com/iterate/iterate/pull/1983",
-          isDraft: true,
-          labels: [],
         },
       ],
       slots: [
@@ -2611,7 +2528,7 @@ describe("preview fleet capacity diagnosis", () => {
     expect(diagnosis.availableCount).toBe(0);
     expect(diagnosis.leasedCount).toBe(2);
     expect(diagnosis.orphanedCount).toBe(1);
-    expect(diagnosis.previewEligibleWithoutSlotCount).toBe(1);
+    expect(diagnosis.openWithoutSlotCount).toBe(2);
     expect(diagnosis.reclaimCommands).toEqual(["pnpm preview reclaim --slot preview-1 --force"]);
     expect(diagnosis.reasons.some((reason) => reason.includes("closed/merged"))).toBe(true);
     expect(diagnosis.reasons.some((reason) => reason.includes("#2008"))).toBe(true);
