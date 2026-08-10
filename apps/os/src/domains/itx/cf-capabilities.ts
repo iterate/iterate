@@ -4,12 +4,17 @@
 // classes in rpc-targets.ts (AiRpcTarget, CfBrowserCapabilityRpcTarget, …);
 // these are the input/output shapes their signatures publish.
 
+import type { FileData } from "../files/file-url-signing.ts";
+
 /** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
- * a filename plus the raw bytes as a Blob. */
+ * a filename plus the raw bytes. */
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
   name: string;
-  blob: Blob;
+  /** The document bytes: any `FileData` shape (Uint8Array, base64 string,
+   * Blob, …), coerced server-side. Blob does not survive the capnweb hop
+   * from script sandboxes, so pass bytes or base64 from scripts. */
+  blob: FileData;
 };
 
 /** Per-format tuning for `ai.toMarkdown`: output format (markdown, or plain

@@ -1704,18 +1704,21 @@ export default class ProjectWorker extends WorkerEntrypoint {
     e2eProven: false,
     title: "Convert a document or HTML to Markdown with Workers AI",
     description:
-      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). It also converts an in-hand HTML string — a fetched page, an email body — via new Blob([html], { type: 'text/html' }): never strip HTML with regex. conversionOptions.output.format 'text' returns plain text with link targets and image URLs stripped — often 10x smaller on emails and newsletters, whose bytes are mostly tracking links and base64 images. Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
+      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary; the extension in name picks the converter). It also converts an in-hand HTML string — a fetched page, an email body — via new TextEncoder().encode(html): never strip HTML with regex. conversionOptions.output.format 'text' returns plain text with link targets and image URLs stripped — often 10x smaller on emails and newsletters, whose bytes are mostly tracking links and base64 images. Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
     runtimes: LIVE_SESSION_RUNTIMES,
     fn: async (itx) => {
       const supported = await itx.ai.toMarkdown();
-      const csv = new Blob(["name,value\nalpha,1\nbeta,2\n"], { type: "text/csv" });
+      // blob takes bytes or base64 — the .csv/.html extension in `name`
+      // picks the converter. (A Blob would die at the RPC boundary when this
+      // runs in a script sandbox.)
+      const csv = new TextEncoder().encode("name,value\nalpha,1\nbeta,2\n");
       const converted = await itx.integrations.cf.ai.toMarkdown({ name: "sample.csv", blob: csv });
 
       // An HTML string already in hand (fetched page, email body) is a
-      // document too — wrap it in a Blob instead of regex-stripping tags.
+      // document too — encode it instead of regex-stripping tags.
       const html =
         '<h1>Report</h1><p><a href="https://example.com/very-long-tracking-url">Everything</a> is <em>fine</em>.</p>';
-      const doc = { name: "page.html", blob: new Blob([html], { type: "text/html" }) };
+      const doc = { name: "page.html", blob: new TextEncoder().encode(html) };
       const fromHtml = await itx.ai.toMarkdown(doc);
       // output.format "text": link/image URLs stripped, text kept — the
       // compact choice when the URLs don't matter (emails, newsletters).

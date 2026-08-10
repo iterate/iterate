@@ -283,7 +283,7 @@ import type {
   WaitroseConnection,
 } from "./domains/integrations/types.ts";
 import type { EmailAttachmentInput } from "./domains/email/utils.ts";
-import type { FileData } from "./domains/files/file-url-signing.ts";
+import { projectFileDataToBytes, type FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import {
   AgentProcessorContract,
@@ -3264,12 +3264,12 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents — including an in-hand HTML string via new Blob([html], { type: 'text/html' }) — to Markdown. run() is for what YOU cannot do: image/audio/video generation, transcription, embeddings, classification at volume. Don't run() a text model to summarize, draft, or answer over content you are about to read or relay — you are usually a more intelligent model; return the data and write it yourself. Text models take { messages: [{ role, content }, …] } and answer in result.response. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
+        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. run() is for what YOU cannot do: image/audio/video generation, transcription, embeddings, classification at volume. Don't run() a text model to summarize, draft, or answer over content you are about to read or relay — you are usually a more intelligent model; return the data and write it yourself. Text models take { messages: [{ role, content }, …] } and answer in result.response. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
       children: {
         models: "List available models.",
         run: "Run one model invocation — for outputs the caller cannot produce itself (images, audio, transcription, bulk classification), not for text the caller will read or relay.",
         toMarkdown:
-          "Convert one document or an array of { name, blob } to Markdown — an in-hand HTML string converts via new Blob([html], { type: 'text/html' }); call with no args for supported formats. For emails and newsletters (mostly tracking links and giant base64 images), pass { conversionOptions: { output: { format: 'text' } } } to strip link targets and image URLs — often 10x smaller.",
+          "Convert one document or an array of { name, blob } to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. Call with no args for supported formats. For emails and newsletters (mostly tracking links and giant base64 images), pass { conversionOptions: { output: { format: 'text' } } } to strip link targets and image URLs — often 10x smaller.",
       },
       parent: "a project itx (itx.ai)",
     });
@@ -3306,9 +3306,11 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
 
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
-  /** Convert one document (`{ name, blob }`) to Markdown — an in-hand HTML
-   * string (a fetched page, an email body) converts via
-   * `new Blob([html], { type: "text/html" })`; never strip HTML by hand.
+  /** Convert one document (`{ name, blob }`) to Markdown — `blob` accepts
+   * bytes or base64 (a Blob made in a script cannot cross the RPC
+   * boundary). An in-hand HTML string (a fetched page, an email body)
+   * converts via `new TextEncoder().encode(html)` with a `.html` name;
+   * never strip HTML by hand.
    * `{ conversionOptions: { output: { format: "text" } } }` returns plain
    * text with link targets and image URLs stripped — the compact choice for
    * emails and newsletters, whose bytes are mostly tracking links. */
@@ -3321,7 +3323,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
     documents: CfMarkdownDocument[],
     options?: CfMarkdownConversionOptions,
   ): Promise<CfMarkdownConversionResult[]>;
-  toMarkdown(
+  async toMarkdown(
     ...args: CfMarkdownConversionArgs
   ): Promise<
     CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]
@@ -3330,7 +3332,21 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       return env.AI.toMarkdown().supported();
     }
     const [documents, options] = args;
-    return env.AI.toMarkdown(documents as never, options as never) as Promise<
+    // Blob cannot cross the capnweb hop from script sandboxes, so `blob`
+    // accepts the whole FileData union and the Blob is minted here.
+    const coerce = async (document: CfMarkdownDocument) => ({
+      name: document.name,
+      blob:
+        document.blob instanceof Blob
+          ? document.blob
+          : new Blob([(await projectFileDataToBytes(document.blob)) as Uint8Array<ArrayBuffer>], {
+              type: "application/octet-stream",
+            }),
+    });
+    const coerced = Array.isArray(documents)
+      ? await Promise.all(documents.map(coerce))
+      : await coerce(documents);
+    return env.AI.toMarkdown(coerced as never, options as never) as Promise<
       CfMarkdownConversionResult | CfMarkdownConversionResult[]
     >;
   }
