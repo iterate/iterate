@@ -11,6 +11,12 @@ export async function connectMobileOAuth(input: {
   project: ProjectStub;
   provider: OAuthProviderSlug;
 }): Promise<{ githubStealState: string | null }> {
+  if (!URL.canParse(input.callbackUrl)) throw new Error("OAuth callback URL is invalid.");
+  const callbackProtocol = new URL(input.callbackUrl).protocol;
+  const nativeCallback = callbackProtocol === "iterate:";
+  if (!nativeCallback && callbackProtocol !== "https:" && callbackProtocol !== "http:") {
+    throw new Error("OAuth callback URL uses an unsupported scheme.");
+  }
   let authorizationUrl = input.authorizationUrl;
 
   // GitHub needs an App-install callback followed by user OAuth. Slack and
@@ -22,7 +28,14 @@ export async function connectMobileOAuth(input: {
 
     const callback = new URL(browserResult.url);
     const callbackError = callback.searchParams.get("error");
-    if (callbackError) throw new Error(callbackError.replaceAll("_", " "));
+    if (callbackError) {
+      const githubStealState = callback.searchParams.get("githubSteal");
+      if (callbackError === "github_installation_already_claimed" && githubStealState) {
+        return { githubStealState };
+      }
+      throw new Error(callbackError.replaceAll("_", " "));
+    }
+    if (!nativeCallback) return { githubStealState: null };
 
     const state = callback.searchParams.get("oauthState");
     if (!state) throw new Error("OAuth callback did not include signed state.");

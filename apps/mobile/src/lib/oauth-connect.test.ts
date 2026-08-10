@@ -1,6 +1,39 @@
 import { expect, test, vi } from "vitest";
 import { connectMobileOAuth } from "./oauth-connect.ts";
 
+test("accepts a server-completed web callback without native ferry parameters", async () => {
+  const completeConnect = vi.fn();
+
+  await expect(
+    connectMobileOAuth({
+      authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+      callbackUrl: "https://mobile.iterate.test/project/prj_1/integrations",
+      openAuthSession: async () => ({
+        type: "success",
+        url: "https://mobile.iterate.test/project/prj_1/integrations",
+      }),
+      project: { integrations: { completeConnect } } as any,
+      provider: "google",
+    }),
+  ).resolves.toEqual({ githubStealState: null });
+  expect(completeConnect).not.toHaveBeenCalled();
+});
+
+test("returns a GitHub move proof from a server-completed web callback", async () => {
+  await expect(
+    connectMobileOAuth({
+      authorizationUrl: "https://github.com/apps/iterate/installations/new",
+      callbackUrl: "https://mobile.iterate.test/project/prj_1/integrations",
+      openAuthSession: async () => ({
+        type: "success",
+        url: "https://mobile.iterate.test/project/prj_1/integrations?error=github_installation_already_claimed&githubSteal=signed-move-proof",
+      }),
+      project: { integrations: { completeConnect: vi.fn() } } as any,
+      provider: "github",
+    }),
+  ).resolves.toEqual({ githubStealState: "signed-move-proof" });
+});
+
 test("completes both GitHub browser stages through the authenticated project RPC", async () => {
   const openAuthSession = vi
     .fn()

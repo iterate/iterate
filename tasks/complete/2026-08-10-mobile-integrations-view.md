@@ -103,5 +103,6 @@ dashboard's `/integrations` view, adapted to a phone-sized native UI.
   back to the app; the app completes through its authenticated project RPC.
   OAuth RPCs now derive the user from their server-side principal instead of
   accepting a client-supplied id. HTTPS callbacks remain cookie-bound, GitHub's
-  two browser stages stay bounded, and regression coverage pins the callback,
-  identity, and move-confirmation paths.
+  two browser stages stay bounded, and the Expo web path accepts the server's
+  completed callback (including GitHub move proofs) without expecting native
+  ferry fields. Regression coverage pins each callback and identity boundary.
