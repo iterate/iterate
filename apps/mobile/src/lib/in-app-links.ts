@@ -10,6 +10,7 @@ export type InAppLink = {
   pathname:
     | "/project/[projectId]/media"
     | "/project/[projectId]/repo"
+    | "/project/[projectId]/repos"
     | "/project/[projectId]/integrations";
   params: Record<string, string>;
 };
@@ -40,10 +41,13 @@ const SPECIAL_PATHS: {
   },
   {
     prefix: "/repos",
-    resolve: (path, projectId) => {
+    resolve: (path, projectId): InAppLink => {
       // Repo paths are /repos/<name>[/file...]; the repo screen owns file
-      // selection, so route to the repo itself.
+      // selection, so route to the repo itself. Bare /repos is the list.
       const repoPath = path.split("/").slice(0, 3).join("/");
+      if (repoPath === "/repos") {
+        return { pathname: "/project/[projectId]/repos", params: { projectId } };
+      }
       return { pathname: "/project/[projectId]/repo", params: { projectId, repoPath } };
     },
   },

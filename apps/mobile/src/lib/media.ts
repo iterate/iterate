@@ -274,8 +274,11 @@ export function filterMedia(
 ): MediaListItem[] {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   return items.filter((item) => {
-    const { markdown, transcript, filename, tags } = item.payload;
-    const haystack = `${markdown} ${transcript} ${filename} ${tags.join(" ")}`.toLowerCase();
+    const { markdown, transcript, filename, path, tags } = item.payload;
+    // path carries the SANITIZED filename — what in-app deep links search by
+    // (lib/in-app-links.ts), so names with spaces still match.
+    const haystack =
+      `${markdown} ${transcript} ${filename} ${path} ${tags.join(" ")}`.toLowerCase();
     return (
       terms.every((term) => haystack.includes(term)) &&
       selectedTags.every((tag) => tags.includes(tag))

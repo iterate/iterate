@@ -17,10 +17,14 @@ test("media links land on the Media screen searching the original filename", () 
   });
 });
 
-test("repo links open the repo screen at the repo root", () => {
+test("repo links open the repo screen at the repo root; bare /repos opens the list", () => {
   expect(resolveInAppLink("https://os.iterate.com/repos/config/docs/plan.md", context)).toEqual({
     pathname: "/project/[projectId]/repo",
     params: { projectId: "prj_1", repoPath: "/repos/config" },
+  });
+  expect(resolveInAppLink("https://os.iterate.com/repos", context)).toEqual({
+    pathname: "/project/[projectId]/repos",
+    params: { projectId: "prj_1" },
   });
 });
 

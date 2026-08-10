@@ -239,6 +239,9 @@ test("filterMedia: terms AND together over markdown+transcript+filename+tags, ch
     item(3, "Meme about trains", "", ["clipping"]),
   ];
   expect(filterMedia(items, "train ticket", [])).toMatchObject([{ offset: 1 }]);
+  // Deep links search by the SANITIZED name carried in the stored path
+  // (spaces become underscores) — the path is part of the haystack.
+  expect(filterMedia(items, "k1-f.png", [])).toMatchObject([{ offset: 1 }]);
   expect(filterMedia(items, "trenitalia", [])).toMatchObject([{ offset: 1 }]); // transcript hit
   expect(filterMedia(items, "typeerror", [])).toMatchObject([{ offset: 2 }]);
   expect(filterMedia(items, "", ["screenshot", "code"])).toMatchObject([{ offset: 2 }]);
