@@ -149,6 +149,21 @@ Misha's feedback after capturing 20 real screenshots, all addressed:
       `/screenshots` and won't show in the Media screen.
 - [ ] identify source app/website per item — deferred (strays into the
       rules territory of #2405); revisit after dogfooding tags/search
+- [ ] full-screen viewer chrome — deferred (Misha, round 2): pinch-zoom;
+      tap toggles a chrome overlay showing tags + description (minimised,
+      "See more" expands to a scrollable half-screen); swipe-down dismisses
+      (social-media style, since tap no longer closes)
+
+## Feedback round 2 (2026-08-10)
+
+- [x] tapping a pending (still-analyzing) thumbnail opens the full-screen
+      viewer too _uses the local previewUri_
+- [x] agents can now discover media: `media-search` example in the itx
+      catalogue (apps/os/src/itx/examples-source.ts) — agents find it via
+      itx.docs.search("media"/"screenshot"), it reads /media events, overlays
+      processed results, filters by keyword, mints signed URLs. The real
+      surface later: MediaProcessor reduced state + itx.media.search/list/get
+      (already in follow-ups).
 
 ## Additional log
 

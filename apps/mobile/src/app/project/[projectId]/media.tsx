@@ -214,7 +214,7 @@ export default function MediaScreen() {
             pending.length > 0 ? (
               <View style={{ gap: spacing.sm, marginBottom: spacing.sm }}>
                 {pending.map((row) => (
-                  <PendingRow key={row.previewUri} row={row} />
+                  <PendingRow key={row.previewUri} onViewImage={setViewerUri} row={row} />
                 ))}
               </View>
             ) : null
@@ -250,10 +250,18 @@ export default function MediaScreen() {
   );
 }
 
-function PendingRow({ row }: { row: PendingItem }) {
+function PendingRow({
+  onViewImage,
+  row,
+}: {
+  onViewImage: (uri: string) => void;
+  row: PendingItem;
+}) {
   return (
     <View style={[styles.row, row.status === "error" && styles.rowError]}>
-      <Image source={{ uri: row.previewUri }} style={styles.thumb} />
+      <Pressable accessibilityLabel="View full screen" onPress={() => onViewImage(row.previewUri)}>
+        <Image source={{ uri: row.previewUri }} style={styles.thumb} />
+      </Pressable>
       <View style={styles.rowBody}>
         <Text numberOfLines={1} style={styles.pendingFilename}>
           {row.filename}

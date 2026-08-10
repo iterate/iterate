@@ -1621,6 +1621,65 @@ return {
 `.trim(),
   },
   {
+    id: "media-search",
+    e2eProven: false,
+    title: "Search captured media (screenshots/photos) by content",
+    description:
+      "The mobile app's Media screen captures screenshots and photos into project file storage and appends events.iterate.com/media/captured onto the /media stream (re-analyses append events.iterate.com/media/processed; the LATEST processed payload per stableKey supersedes the captured one). Each payload carries a vision-model description (markdown), a verbatim OCR transcript (transcript), tags, and the itx.files path holding the bytes. To answer questions like 'find my train ticket screenshot', read the stream, overlay processed results, and filter over those text fields; mint signed URLs with itx.files.get(path).url() to share the actual images.",
+    context: "project",
+    runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
+    code: `
+const query = (vars.query ?? "ticket").toLowerCase();
+
+const events = [];
+let cursor = 0;
+while (true) {
+  const page = await itx.streams.get("/media").getEvents({
+    afterOffset: cursor,
+    eventTypes: [
+      "events.iterate.com/media/captured",
+      "events.iterate.com/media/processed",
+    ],
+  });
+  if (page.length === 0) break;
+  events.push(...page);
+  cursor = page[page.length - 1].offset;
+}
+
+// Latest processed result per item supersedes its captured payload
+// (events arrive offset-ascending, so later set() calls win).
+const processed = new Map();
+for (const event of events) {
+  if (event.type.endsWith("/processed")) {
+    const payload = event.payload || {};
+    processed.set(payload.stableKey, payload);
+  }
+}
+const items = events
+  .filter((event) => event.type.endsWith("/captured"))
+  .map((event) => {
+    const captured = event.payload || {};
+    return { ...captured, ...processed.get(captured.stableKey) };
+  });
+
+const hits = items.filter((item) =>
+  \`\${item.markdown} \${item.transcript} \${item.filename} \${item.tags.join(" ")}\`
+    .toLowerCase()
+    .includes(query),
+);
+return await Promise.all(
+  hits.slice(0, 5).map(async (hit) => ({
+    filename: hit.filename,
+    tags: hit.tags,
+    description: hit.markdown,
+    transcript: hit.transcript,
+    // Signed https URL — paste into chat to show the image.
+    url: await itx.files.get(hit.path).url(),
+  })),
+);
+`.trim(),
+  },
+  {
     id: "ai-generate-text",
     e2eProven: false,
     title: "Run a hosted text model for bulk, mechanical work",
