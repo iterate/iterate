@@ -82,7 +82,8 @@ async function publishMobilePrPreview() {
     process.env,
     bundleStampForPr({ body: pr.body || "", pullRequestNumber: pullRequest.number }),
   );
-  run("node", ["scripts/write-build-info.mjs"], mobileDir);
+  // run() captures stdout — echo the stamp so the CI log shows what got baked.
+  console.log(run("node", ["scripts/write-build-info.mjs"], mobileDir).trim());
   const message = `PR #${pullRequest.number}: ${(pullRequest.title || "").slice(0, 900)}`;
   // --clear-cache: CI reuses sandboxes across branches and Metro's cache
   // bakes in absolute paths (see tasks/complete/2026-08-04-mobile-build-info-commit-message.md).
