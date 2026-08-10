@@ -7,30 +7,30 @@ follows: complete/2026-08-10-media-capture.md (PR #2462)
 
 # Media followups (round 3)
 
-**Status summary:** just started. Post-merge feedback batch on the media
-capture feature: naming/label polish, in-app deep-links for special streams,
-markdown-rendered descriptions, and an agent-retrieval e2e reconstructing
-the real dogfood thread.
+**Status summary:** implemented, both live e2e lanes green against local
+dev. All five checklist items done; deep-link resolver is origin-strict and
+unit-tested; the agent-retrieval e2e finds the swimming lesson among decoys
+through the same door agents use.
 
 ## Checklist
 
-- [ ] drawer label `Media` → `/media`, matching the `/repos` convention
+- [x] drawer label `Media` → `/media`, matching the `/repos` convention
       (Integrations in #2453 slots into the same drawer style)
-- [ ] clearer image paths: files move from `/media/inbound/<sha256>-<name>`
+- [x] clearer image paths _mediaFilePath in lib/media.ts_: files move from `/media/inbound/<sha256>-<name>`
       to `/media/<sha256>-<name>` — one namespace, so a media file's path
       *is* `/media/whatever.png`; document the mental model in the
       media-search example description (stream `/media` = events, files
       `/media/<hash>-<name>` = bytes; payload `path` is authoritative, so
       pre-rename captures keep resolving)
-- [ ] in-app deep-links for special streams: the shared Markdown component's
+- [x] in-app deep-links for special streams _lib/in-app-links.ts + components/markdown.tsx_: the shared Markdown component's
       `onLinkPress` currently sends every URL to the system browser; add a
       small pure resolver mapping same-deployment URLs to in-app routes —
       `/media/...` → the Media screen (item focused via search), `/repos/...`
       → the repo screen — falling through to `Linking.openURL` otherwise.
       Extensible table so `/integrations/...` etc. can join later.
-- [ ] markdown-render media descriptions in the list (reuse the chat
+- [x] markdown-render media descriptions _media.tsx, collapsed rows clip via maxHeight_ in the list (reuse the chat
       `Markdown` component, preview mode collapsed / full when expanded)
-- [ ] agent-retrieval e2e reconstructing the sushi dogfood thread: capture
+- [x] agent-retrieval e2e reconstructing the sushi dogfood thread _e2e/media-agent-retrieval.e2e.test.ts, AppKit-rendered fixtures_: capture
       checked-in fake screenshots (a swimming-lesson email screenshot + two
       decoys), then run the media-search example the way an agent would and
       assert the swimming lesson's date/time is retrievable by keyword

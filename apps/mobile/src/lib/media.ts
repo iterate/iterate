@@ -74,9 +74,13 @@ export function normalizedImageFilename(
   return `${stem}.${extension}`;
 }
 
+/** A media file's path IS `/media/<sha256>-<original-filename>` — one flat
+ * content-addressed namespace (the hash keeps dedup; the filename keeps it
+ * readable and searchable). The event payload's `path` is authoritative, so
+ * items stored under older layouts keep resolving. */
 export function mediaFilePath(stableKey: string, filename: string): string {
   const safe = filename.replace(/[^\w.-]+/g, "_").slice(-64);
-  return `/media/inbound/${stableKey}-${safe}`;
+  return `/media/${stableKey}-${safe}`;
 }
 
 export function mediaIdempotencyKey(stableKey: string): string {
