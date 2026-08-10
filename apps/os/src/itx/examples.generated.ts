@@ -1636,10 +1636,7 @@ let cursor = 0;
 while (true) {
   const page = await itx.streams.get("/media").getEvents({
     afterOffset: cursor,
-    eventTypes: [
-      "events.iterate.com/media/captured",
-      "events.iterate.com/media/processed",
-    ],
+    eventTypes: ["events.iterate.com/media/captured", "events.iterate.com/media/processed"],
   });
   if (page.length === 0) break;
   events.push(...page);
