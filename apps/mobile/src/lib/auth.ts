@@ -20,6 +20,7 @@
 
 import * as AuthSession from "expo-auth-session";
 import * as WebBrowser from "expo-web-browser";
+import { emailFromJwt } from "./jwt-claims.ts";
 import { clearStoredAuth, getStoredAuth, setStoredAuth } from "./storage.ts";
 
 // Required for promptAsync to resolve when the OAuth redirect deep-links back
@@ -168,6 +169,21 @@ export async function signIn(baseUrl: string, options: { loginHint?: string } = 
 
 export async function hasSignIn(baseUrl: string): Promise<boolean> {
   return (await getStoredAuth(baseUrl)) !== null;
+}
+
+/**
+ * The email claim of the server's current sign-in, or null when signed out or
+ * the session can't produce a token (dead refresh token — which
+ * getAccessToken already clears). Never throws: this powers comparison UI
+ * (the preview-QR mismatch card), not an auth gate.
+ */
+export async function getSignedInEmail(baseUrl: string): Promise<string | null> {
+  if (!(await hasSignIn(baseUrl))) return null;
+  try {
+    return emailFromJwt(await getAccessToken(baseUrl));
+  } catch {
+    return null;
+  }
 }
 
 export async function signOut(baseUrl: string): Promise<void> {

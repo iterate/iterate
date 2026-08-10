@@ -12,7 +12,11 @@ import { Stack, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { buildInfo } from "../lib/build-info.ts";
-import { getPreviewChannelOverride, switchChannelAndReload } from "../lib/preview-channel.ts";
+import {
+  fetchLatestUpdateAndReload,
+  getPreviewChannelOverride,
+  switchChannelAndReload,
+} from "../lib/preview-channel.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function BuildInfoScreen() {
@@ -38,13 +42,8 @@ export default function BuildInfoScreen() {
   });
   const check = useMutation({
     mutationFn: async () => {
-      const result = await Updates.checkForUpdateAsync();
-      if (!result.isAvailable) {
-        return "Already up to date";
-      }
-      await Updates.fetchUpdateAsync();
-      await Updates.reloadAsync();
-      return "Restarting…";
+      const result = await fetchLatestUpdateAndReload();
+      return result === "up-to-date" ? "Already up to date" : "Restarting…";
     },
   });
 

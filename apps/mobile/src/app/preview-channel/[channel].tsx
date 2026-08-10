@@ -2,21 +2,39 @@
 //   iterate://preview-channel/<channel>[?env=<envs.ts key>&email=<*+test@nustom.com>]
 // `env` is the PR's leased preview slot — the backend this channel's JS
 // expects — and `email` a per-PR test identity (CI bakes both in,
-// scripts/ci/publish-mobile-pr-preview.ts). This screen owns ONE decision —
-// the channel switch (deliberately a confirm, not an auto-switch: a stray
-// link tap shouldn't silently repoint the app at another PR's JS). The env
-// and email ride along as HINTS: once the channel matches, this screen
-// forwards them to the sign-in screen, which suggests the backend and test
-// identity there. `env` resolves against the preset list only
-// (serverPresetForEnvKey), so a crafted link can't name an arbitrary server.
+// scripts/ci/publish-mobile-pr-preview.ts). This screen owns TWO decisions
+// and one non-decision:
+// - The channel switch stays a confirm, not an auto-switch: a stray link tap
+//   shouldn't silently repoint the app at another PR's JS.
+// - Freshness is automatic: once the channel already matches, the scan itself
+//   is the intent ("run what this QR shows"), so the screen pulls the
+//   channel's latest update and reloads into it. (Switching also fetches
+//   latest — switchChannelAndReload's check/fetch/reload.)
+// - Backend/identity differences from the QR's recommendation are SHOWN, with
+//   a one-tap fix, never applied silently. `env` resolves against the preset
+//   list only (serverPresetForEnvKey), so a crafted link can't name an
+//   arbitrary server; the hints also still ferry to the sign-in screen via
+//   Continue.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { getSignedInEmail, signIn } from "../../lib/auth.ts";
 import { buildInfo } from "../../lib/build-info.ts";
-import { testEmailFromHint } from "../../lib/deep-link-hints.ts";
-import { getPreviewChannelOverride, switchChannelAndReload } from "../../lib/preview-channel.ts";
-import { serverPresetForEnvKey } from "../../lib/servers.ts";
+import {
+  recommendationMismatches,
+  recommendationSwitchPlan,
+  testEmailFromHint,
+  type SwitchPlan,
+} from "../../lib/deep-link-hints.ts";
+import { reconnectItxSession } from "../../lib/itx.ts";
+import {
+  fetchLatestUpdateAndReload,
+  getPreviewChannelOverride,
+  switchChannelAndReload,
+} from "../../lib/preview-channel.ts";
+import { DEFAULT_SERVER, serverPresetForEnvKey } from "../../lib/servers.ts";
+import { getServerBaseUrl, setServerBaseUrl } from "../../lib/storage.ts";
 import { colors, radius, spacing } from "../../lib/theme.ts";
 
 export default function PreviewChannelScreen() {
@@ -34,8 +52,8 @@ export default function PreviewChannelScreen() {
   // The test-identity hint ferries onward for per-PR test addresses only;
   // anything else in the param is dropped rather than suggested.
   const testEmail = testEmailFromHint(params.email);
-  // What the sign-in screen receives once the channel matches. Hints only —
-  // nothing here changes state; the sign-in screen suggests, the user decides.
+  // What the sign-in screen receives on Continue. Hints only — nothing here
+  // changes state; the sign-in screen suggests, the user decides.
   const hintParams = {
     ...(recommendedServer !== null && typeof params.env === "string" ? { env: params.env } : {}),
     ...(testEmail !== null ? { email: testEmail } : {}),
@@ -57,6 +75,62 @@ export default function PreviewChannelScreen() {
   // to the sign-in screen.
   const alreadyOnTarget = current.isSuccess && current.data === channel;
 
+  // Dev bundles (Metro native OR expo web dev, where isEnabled is true but
+  // checkForUpdateAsync throws "cannot check for updates in development
+  // mode") can't OTA.
+  const canOta = Updates.isEnabled && !__DEV__;
+
+  // Scanning always means "the latest": once the channel matches, pull its
+  // newest update and reload into it, visibly. A query rather than an effect
+  // — run-on-mount work is what queries are for here — single-shot per scan
+  // (staleTime Infinity, no retry). Post-reload re-entry runs it again,
+  // finds the now-running update is the latest, and stops: no loop.
+  const freshness = useQuery({
+    queryKey: ["qr-channel-freshness", channel],
+    enabled: alreadyOnTarget && canOta,
+    queryFn: fetchLatestUpdateAndReload,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+  // Where the phone actually points and who it's signed in as — compared
+  // against the QR's recommendation below. The identity read may cost one
+  // token refresh; fine for a scan flow.
+  const phoneState = useQuery({
+    queryKey: ["qr-phone-state", recommendedServer?.baseUrl || null],
+    enabled: recommendedServer !== null,
+    queryFn: async () => {
+      const serverBaseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
+      const email = await getSignedInEmail(serverBaseUrl);
+      const recommendedServerEmail =
+        recommendedServer!.baseUrl === serverBaseUrl
+          ? email
+          : await getSignedInEmail(recommendedServer!.baseUrl);
+      return { serverBaseUrl, email, recommendedServerEmail };
+    },
+  });
+  const qr = { server: recommendedServer, email: testEmail };
+  const mismatches = phoneState.data ? recommendationMismatches(phoneState.data, qr) : [];
+  const plan = phoneState.data ? recommendationSwitchPlan(phoneState.data, qr) : null;
+
+  const applyPlan = useMutation({
+    mutationFn: async (input: SwitchPlan) => {
+      await setServerBaseUrl(input.baseUrl);
+      if (input.type === "sign-in") {
+        await signIn(input.baseUrl, input.loginHint ? { loginHint: input.loginHint } : {});
+      }
+      return input.baseUrl;
+    },
+    // Mirrors the sign-in screen's login mutation: reconnect on the new
+    // deployment, drop every cached read, land on the boot path (which
+    // fast-forwards to the remembered project or the picker).
+    onSuccess: (baseUrl) => {
+      reconnectItxSession(baseUrl);
+      queryClient.clear();
+      router.replace("/");
+    },
+  });
+
   const currentChannel = current.data || Updates.channel || "preview";
 
   return (
@@ -69,7 +143,6 @@ export default function PreviewChannelScreen() {
         <Row label="Current" value={currentChannel} />
         <Row label="Target" value={channel} />
         {recommendedServer !== null ? (
-          // Display-only preview of what the sign-in screen will suggest next.
           <Row label="Recommended backend" value={recommendedServer.label} />
         ) : null}
         <Row
@@ -79,13 +152,30 @@ export default function PreviewChannelScreen() {
         {buildInfo.message ? <Row label="Commit" value={buildInfo.message} /> : null}
       </View>
       {alreadyOnTarget ? (
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => router.replace({ pathname: "/", params: hintParams })}
-          style={styles.button}
-        >
-          <Text style={styles.buttonLabel}>Continue</Text>
-        </Pressable>
+        <>
+          {canOta ? (
+            <Text style={freshness.isError ? styles.errorNote : styles.note}>
+              {freshness.isLoading
+                ? "Checking this channel for its latest update…"
+                : freshness.data === "reloading"
+                  ? "Newer update found — fetching and restarting…"
+                  : freshness.isError
+                    ? String(freshness.error)
+                    : "You're running this channel's latest update."}
+            </Text>
+          ) : (
+            <Text style={styles.note}>
+              OTA updates don't run in dev bundles — can't pull the channel's latest here.
+            </Text>
+          )}
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => router.replace({ pathname: "/", params: hintParams })}
+            style={styles.button}
+          >
+            <Text style={styles.buttonLabel}>Continue</Text>
+          </Pressable>
+        </>
       ) : !Updates.isEnabled ? (
         <Text style={styles.note}>
           OTA updates are off in this bundle (Metro dev server) — channel switching only works in
@@ -113,6 +203,45 @@ export default function PreviewChannelScreen() {
       {switchChannel.error ? (
         <Text style={styles.errorNote}>{String(switchChannel.error)}</Text>
       ) : null}
+      {recommendedServer !== null && mismatches.length > 0 ? (
+        <>
+          <Text style={styles.mismatchHeading}>This QR expects a different setup</Text>
+          <View style={styles.card}>
+            {mismatches.map((mismatch) =>
+              mismatch.kind === "backend" ? (
+                <Row
+                  key="backend"
+                  label="Backend"
+                  value={`${mismatch.current.replace(/^https?:\/\//, "")} → ${mismatch.recommended.label}`}
+                />
+              ) : (
+                <Row
+                  key="identity"
+                  label="Signed in"
+                  value={`${mismatch.current || "not signed in"} → ${mismatch.recommended}`}
+                />
+              ),
+            )}
+          </View>
+          {plan !== null ? (
+            <Pressable
+              accessibilityRole="button"
+              disabled={applyPlan.isPending}
+              onPress={() => applyPlan.mutate(plan)}
+              style={[styles.button, applyPlan.isPending && styles.buttonDisabled]}
+            >
+              <Text style={styles.buttonLabel}>
+                {applyPlan.isPending
+                  ? "Switching…"
+                  : planLabel(plan, phoneState.data!.serverBaseUrl)}
+              </Text>
+            </Pressable>
+          ) : null}
+          {applyPlan.error ? <Text style={styles.errorNote}>{String(applyPlan.error)}</Text> : null}
+        </>
+      ) : recommendedServer !== null && phoneState.isSuccess ? (
+        <Text style={styles.note}>Backend and sign-in match this QR's recommendation.</Text>
+      ) : null}
       <Pressable
         accessibilityRole="button"
         // Deep links open this screen with no back stack.
@@ -123,6 +252,12 @@ export default function PreviewChannelScreen() {
       </Pressable>
     </View>
   );
+}
+
+function planLabel(plan: SwitchPlan, currentServerBaseUrl: string) {
+  if (plan.type === "use-server") return `Use ${plan.label}`;
+  const where = plan.baseUrl === currentServerBaseUrl ? "" : ` on ${plan.label}`;
+  return plan.loginHint ? `Sign in${where} as ${plan.loginHint}` : `Sign in${where}`;
 }
 
 function Row({ label, value }: { label: string; value: string | null | undefined }) {
@@ -139,6 +274,7 @@ function Row({ label, value }: { label: string; value: string | null | undefined
 const styles = StyleSheet.create({
   container: { gap: spacing.lg, padding: spacing.lg },
   heading: { color: colors.text, fontSize: 18, fontWeight: "600" },
+  mismatchHeading: { color: colors.text, fontSize: 15, fontWeight: "600" },
   card: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
@@ -169,10 +305,11 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.md,
     borderWidth: 1,
+    paddingHorizontal: spacing.md,
     paddingVertical: 14,
   },
   buttonDisabled: { opacity: 0.6 },
-  buttonLabel: { color: colors.text, fontSize: 16, fontWeight: "600" },
+  buttonLabel: { color: colors.text, fontSize: 16, fontWeight: "600", textAlign: "center" },
   linkButton: { alignItems: "center", paddingVertical: 8 },
   linkLabel: { color: colors.textMuted, fontSize: 14 },
   note: { color: colors.textMuted, fontSize: 13, textAlign: "center" },

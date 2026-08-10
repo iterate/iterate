@@ -13,7 +13,11 @@ code recommendation it should show an on-screen option to switch."
 
 ## Status summary
 
-Spec committed first for review; implementation not started yet.
+Implemented and verified (typecheck, lint, knip, format, mobile vitest, web
+specs all green). Main pieces: automatic latest-update pull on scan when the
+channel already matches, and a backend/identity mismatch card with a one-tap
+switch action on the preview-channel screen. Not covered: on-device OTA
+freshness (needs a phone scan) and the OAuth tap itself in the web lane.
 
 ## Background
 
@@ -66,31 +70,41 @@ PR-preview QRs deep-link to `iterate://preview-channel/<channel>?env=<slot>&emai
 
 ## Checklist
 
-- [ ] `lib/preview-channel.ts`: `fetchLatestUpdateAndReload()` — the
+- [x] `lib/preview-channel.ts`: `fetchLatestUpdateAndReload()` — the
       check/fetch/reload dance minus the override write; reuse it from
-      build-info.tsx's check button
-- [ ] `[channel].tsx`: auto-run freshness check (tanstack `useQuery`, no
+      build-info.tsx's check button _(switchChannelAndReload now delegates to
+      it too; build-info.tsx maps its statuses onto the helper)_
+- [x] `[channel].tsx`: auto-run freshness check (tanstack `useQuery`, no
       useEffect) when already on the target channel and OTA enabled; status
       line for checking / up-to-date / restarting / error; Continue stays
-      tappable throughout
-- [ ] `lib/jwt-claims.ts` (Expo-free): decode a JWT payload, expose
+      tappable throughout _(query `["qr-channel-freshness", channel]`; gated
+      on `Updates.isEnabled && !__DEV__` — expo web dev reports isEnabled true
+      but checkForUpdateAsync throws in dev mode)_
+- [x] `lib/jwt-claims.ts` (Expo-free): decode a JWT payload, expose
       `emailFromJwt` + unit test (null on anything malformed, never throws)
-- [ ] `lib/auth.ts`: `getSignedInEmail(baseUrl)` — stored auth → access token
-      → email claim, null on any failure
-- [ ] `lib/deep-link-hints.ts` (Expo-free): `recommendationMismatches(phone, qr)`
+      _(atob + JSON.parse; jwt-claims.test.ts)_
+- [x] `lib/auth.ts`: `getSignedInEmail(baseUrl)` — stored auth → access token
+      → email claim, null on any failure _(next to hasSignIn; swallows
+      SignInRequiredError/refresh failures by design)_
+- [x] `lib/deep-link-hints.ts` (Expo-free): `recommendationMismatches(phone, qr)`
       + a switch planner returning the one-tap action; unit tests including
-      `testEmailFromHint` backfill (that helper currently has no test)
-- [ ] `[channel].tsx`: phone-state query (server, signed-in email, sign-in on
+      `testEmailFromHint` backfill _(recommendationSwitchPlan; identity is
+      compared against where the switch LANDS — the recommended server's
+      sign-in — so an already-parked test sign-in makes it a pure repoint)_
+- [x] `[channel].tsx`: phone-state query (server, signed-in email, sign-in on
       recommended server), mismatch card with rows + one-tap buttons, matches
       reassurance line; actions mirror index.tsx's login mutation
-      (setServerBaseUrl → optional signIn with login_hint →
-      reconnectItxSession → queryClient.clear() → router.replace)
-- [ ] Web-lane spec: seed `iterate.secure-store.iterate.server` via
+      _(`["qr-phone-state", recommendedBaseUrl]`; applyPlan mutation:
+      setServerBaseUrl → optional signIn with login_hint →
+      reconnectItxSession → queryClient.clear() → router.replace("/"))_
+- [x] Web-lane spec: seed `iterate.secure-store.iterate.server` via
       localStorage (web SecureStore shim) and assert the mismatch card +
       action button render for a signed-out phone pointed at prd scanning a
-      preview_N QR
-- [ ] Verify: typecheck, lint, knip, format, mobile vitest,
-      `pnpm spec --project=mobile`
+      preview_N QR _(specs/mobile/preview-deeplink-mismatch.spec.ts — also
+      asserts the dev-bundle OTA note and the all-matches reassurance line)_
+- [x] Verify: typecheck, lint, knip, format, mobile vitest,
+      `pnpm spec --project=mobile` _(all green locally; on-device OTA paths
+      need a phone scan — flagged in the PR body)_
 
 ## Implementation notes
 
