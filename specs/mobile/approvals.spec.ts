@@ -287,7 +287,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // thread.
     await page.goBack(); // chat → chat list: browser history IS the app's back stack on web
     await page.getByLabel("Open project menu").filter({ visible: true }).click();
-    await page.getByRole("button", { name: "Notifications" }).click();
+    await page.getByRole("button", { name: "/notifications" }).click();
     // Main also journals each scripted outcome message as an "Agent replied"
     // notification. Select only the approval-batch rows: newest first, the
     // reject burst sits above the approve burst.

@@ -214,7 +214,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // reads as a clipped drawer to a reviewer). The product is fine: given a
     // beat, the panel settles at translateX(0) at this exact viewport. Wait
     // for the item to stop moving before pressing.
-    const notificationsItem = page.getByRole("button", { name: "Notifications" });
+    const notificationsItem = page.getByRole("button", { name: "/notifications" });
     await notificationsItem.waitFor();
     await expect
       .poll(async () => {
