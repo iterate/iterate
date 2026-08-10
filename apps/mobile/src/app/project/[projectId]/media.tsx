@@ -20,7 +20,6 @@ import {
   Modal,
   Pressable,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
@@ -45,9 +44,10 @@ import {
 import { runSyncPass, type SyncPassResult } from "../../../lib/media-sync.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import {
-  getMediaSyncEnabled,
+  getMediaSyncSettings,
   getServerBaseUrl,
-  setMediaSyncEnabled,
+  setMediaSyncSettings,
+  type MediaSyncSettings,
 } from "../../../lib/storage.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
@@ -81,29 +81,42 @@ export default function MediaScreen() {
   });
   const baseUrl = server.data;
 
-  // Device-local per-project opt-in; flipping it on immediately runs a sync
-  // pass (the query's enabled flag), as does every screen open while on.
+  // Device-local per-project opt-in behind a confirm dialog — the row never
+  // acts directly, so a fat-finger cannot start anything. Once confirmed,
+  // a capped sync pass runs (the query's enabled flag) and again on every
+  // screen open while on; the chosen back-to threshold is an absolute date.
   const queryClient = useQueryClient();
-  const syncEnabled = useQuery({
-    queryKey: ["media-sync-enabled", projectId],
-    queryFn: () => getMediaSyncEnabled(projectId),
+  const syncSettings = useQuery({
+    queryKey: ["media-sync-settings", projectId],
+    queryFn: () => getMediaSyncSettings(projectId),
     staleTime: Infinity,
   });
+  const [syncDialogOpen, setSyncDialogOpen] = useState(false);
   const [syncProgress, setSyncProgress] = useState<string | null>(null);
+  const settings = syncSettings.data;
   const syncPass = useQuery({
-    queryKey: ["media-sync-pass", baseUrl || "pending", projectId],
+    queryKey: ["media-sync-pass", baseUrl || "pending", projectId, settings?.sinceIso || "off"],
     queryFn: async (): Promise<SyncPassResult> => {
       const project = await getProjectItx(baseUrl!, projectId);
       try {
-        return await runSyncPass({ project, onProgress: setSyncProgress });
+        return await runSyncPass({
+          project,
+          since: settings!.sinceIso,
+          onProgress: setSyncProgress,
+        });
       } finally {
         setSyncProgress(null);
       }
     },
-    enabled: baseUrl !== undefined && syncEnabled.data === true,
+    enabled: baseUrl !== undefined && settings?.enabled === true,
     staleTime: 5 * 60_000,
     retry: false,
   });
+  const applySyncSettings = (next: MediaSyncSettings) => {
+    queryClient.setQueryData(["media-sync-settings", projectId], next);
+    void setMediaSyncSettings(projectId, next);
+    setSyncDialogOpen(false);
+  };
 
   const events = useLiveEvents({
     queryKey: ["media-events", baseUrl || "pending", projectId],
@@ -208,17 +221,20 @@ export default function MediaScreen() {
           <Text style={styles.captureText}>+ Add</Text>
         </Pressable>
       </View>
-      <View style={styles.syncRow}>
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => setSyncDialogOpen(true)}
+        style={styles.syncRow}
+      >
         <Text style={styles.syncLabel}>Auto-collect screenshots</Text>
-        <Switch
-          value={syncEnabled.data === true}
-          onValueChange={(enabled) => {
-            queryClient.setQueryData(["media-sync-enabled", projectId], enabled);
-            void setMediaSyncEnabled(projectId, enabled);
-          }}
-        />
-      </View>
-      {syncEnabled.data === true ? (
+        <View style={styles.syncRowValue}>
+          <Text style={styles.syncStatus}>
+            {settings?.enabled ? `On · back to ${shortDate(settings.sinceIso)}` : "Off"}
+          </Text>
+          <Text style={styles.syncChevron}>›</Text>
+        </View>
+      </Pressable>
+      {settings?.enabled === true ? (
         <View style={styles.syncStatusRow}>
           <Text numberOfLines={1} style={styles.syncStatus}>
             {syncProgress ||
@@ -314,6 +330,19 @@ export default function MediaScreen() {
       )}
       <Modal
         animationType="fade"
+        onRequestClose={() => setSyncDialogOpen(false)}
+        statusBarTranslucent
+        transparent
+        visible={syncDialogOpen}
+      >
+        <SyncDialog
+          onApply={applySyncSettings}
+          onCancel={() => setSyncDialogOpen(false)}
+          settings={settings || null}
+        />
+      </Modal>
+      <Modal
+        animationType="fade"
         onRequestClose={() => setViewer(null)}
         statusBarTranslucent
         transparent
@@ -328,6 +357,93 @@ export default function MediaScreen() {
           />
         ) : null}
       </Modal>
+    </View>
+  );
+}
+
+const BACKFILL_WINDOWS = [
+  { label: "1 day", days: 1 },
+  { label: "1 week", days: 7 },
+  { label: "1 month", days: 30 },
+  { label: "3 months", days: 91 },
+  { label: "1 year", days: 365 },
+];
+
+function shortDate(iso: string): string {
+  return new Date(iso).toLocaleDateString();
+}
+
+/** The confirm sheet behind the Auto-collect row: nothing syncs until "Turn
+ * on" — the row itself never acts. Extending the window backwards later is
+ * the same dialog with a longer choice. */
+function SyncDialog({
+  settings,
+  onApply,
+  onCancel,
+}: {
+  settings: MediaSyncSettings | null;
+  onApply: (next: MediaSyncSettings) => void;
+  onCancel: () => void;
+}) {
+  const [windowDays, setWindowDays] = useState(7);
+  const sinceIso = new Date(Date.now() - windowDays * 86_400_000).toISOString();
+  const enabled = settings?.enabled === true;
+  return (
+    <View style={styles.dialogBackdrop}>
+      <View style={styles.dialog}>
+        <Text style={styles.dialogTitle}>Auto-collect screenshots</Text>
+        <Text style={styles.dialogBody}>
+          When on, opening this screen syncs screenshots from your photo library into this project —
+          screenshots only, at most 50 per visit, and never older than the date you pick. Nothing
+          happens until you confirm here.
+        </Text>
+        <Text style={styles.dialogSectionLabel}>Collect back to</Text>
+        <View style={styles.chips}>
+          {BACKFILL_WINDOWS.map((option) => {
+            const selected = option.days === windowDays;
+            return (
+              <Pressable
+                key={option.label}
+                onPress={() => setWindowDays(option.days)}
+                style={[styles.chip, selected && styles.chipSelected]}
+              >
+                <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                  {option.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        <Text style={styles.dialogHint}>
+          {`Screenshots taken since ${shortDate(sinceIso)}. Start small — you can extend further back here any time.`}
+        </Text>
+        {enabled && settings ? (
+          <Text
+            style={styles.dialogHint}
+          >{`Currently on, back to ${shortDate(settings.sinceIso)}.`}</Text>
+        ) : null}
+        <View style={styles.dialogActions}>
+          <Pressable accessibilityRole="button" onPress={onCancel} style={styles.dialogButton}>
+            <Text style={styles.dialogButtonText}>Cancel</Text>
+          </Pressable>
+          {enabled ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => settings && onApply({ enabled: false, sinceIso: settings.sinceIso })}
+              style={styles.dialogButton}
+            >
+              <Text style={styles.dialogButtonText}>Turn off</Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => onApply({ enabled: true, sinceIso })}
+            style={[styles.dialogButton, styles.dialogButtonPrimary]}
+          >
+            <Text style={styles.dialogButtonPrimaryText}>{enabled ? "Update" : "Turn on"}</Text>
+          </Pressable>
+        </View>
+      </View>
     </View>
   );
 }
@@ -510,6 +626,44 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
   },
   syncLabel: { color: colors.text, fontSize: 14 },
+  syncRowValue: { alignItems: "center", flexDirection: "row", gap: spacing.xs },
+  syncChevron: { color: colors.textFaint, fontSize: 18 },
+  dialogBackdrop: {
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
+    flex: 1,
+    justifyContent: "center",
+    padding: spacing.lg,
+  },
+  dialog: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    gap: spacing.sm,
+    padding: spacing.lg,
+    width: "100%",
+  },
+  dialogTitle: { color: colors.text, fontSize: 17, fontWeight: "600" },
+  dialogBody: { color: colors.textMuted, fontSize: 13, lineHeight: 19 },
+  dialogSectionLabel: { color: colors.text, fontSize: 13, fontWeight: "600", marginTop: 4 },
+  dialogHint: { color: colors.textFaint, fontSize: 12 },
+  dialogActions: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    justifyContent: "flex-end",
+    marginTop: spacing.sm,
+  },
+  dialogButton: {
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+  },
+  dialogButtonText: { color: colors.text, fontSize: 14 },
+  dialogButtonPrimary: { backgroundColor: colors.accent, borderColor: colors.accent },
+  dialogButtonPrimaryText: { color: colors.background, fontSize: 14, fontWeight: "600" },
   syncStatusRow: {
     alignItems: "center",
     flexDirection: "row",

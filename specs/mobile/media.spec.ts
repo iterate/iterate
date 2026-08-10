@@ -81,7 +81,15 @@ test("renders, searches, and views seeded media", async ({ page }, testInfo) => 
   await page.getByRole("button", { name: "See more" }).click();
   await page.getByText("See less").waitFor();
   await page.getByLabel("Close image").click();
-  await page.getByText("Auto-collect screenshots").waitFor();
+
+  // The Auto-collect row opens a confirm dialog — nothing syncs on tap.
+  await page.getByText("Auto-collect screenshots").click();
+  await page.getByText("Nothing happens until you confirm here.").waitFor();
+  await page.getByText("1 week", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Turn on" }).waitFor();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.getByText("Nothing happens until you confirm here.").waitFor({ state: "hidden" });
+  await page.getByText("Off", { exact: true }).waitFor();
 });
 
 test("captures through the live vision pipeline", async ({ page }, testInfo) => {

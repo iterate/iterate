@@ -40,6 +40,9 @@ export type SyncPassResult =
  */
 export async function runSyncPass(input: {
   project: ProjectStub;
+  /** Hard floor: assets created before this ISO instant are never touched.
+   * The newest-first walk stops outright at the first older asset. */
+  since: string;
   onProgress: (message: string) => void;
 }): Promise<SyncPassResult> {
   const permission = await MediaLibrary.requestPermissionsAsync();
@@ -72,8 +75,10 @@ export async function runSyncPass(input: {
       first: 50,
       ...(after === undefined ? {} : { after }),
     });
+    const sinceMs = new Date(input.since).getTime();
     for (const asset of page.assets) {
       if (!tracker.shouldContinue()) break scan;
+      if (asset.creationTime && asset.creationTime < sinceMs) break scan;
       input.onProgress(`Checking ${candidates.length + known + 1}…`);
       const read = await readAssetBase64(asset);
       if (read === null) continue; // e.g. iCloud asset without a local copy
