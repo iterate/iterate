@@ -19,9 +19,11 @@ not part of this restoration.
 The narrow replacement is implemented and locally green. It contains only
 directly reproduced script-worker ownership, approval-claim ordering, bounded
 push settlement, accepted-message handoff, correlated diagnostics, and the two
-unskips. The remaining work is deployed proof: the old four-worker reproduction
-plus three canonical full previews, with 25 consecutive targeted stress
-iterations on one exact head.
+unskips. A four-worker preview replay is green after separating out-of-band
+script startup from live approval delivery and making parallel project slugs
+unique. The remaining work is exact-head deployed proof: the old four-worker
+reproduction plus three canonical full previews, with 25 consecutive targeted
+stress iterations on one commit.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -109,10 +111,10 @@ notification journal.
   machine without polling, broader waits, or another retry layer.
   _The confirmed losses were retained one-off workers and discarded early
   approval claims; current main's Subscriber Pager already owns stream revival._
-- [x] Remove both explicit skips without changing test timeouts, assertions, or
-  retry policy.
-  _Both Playwright cases are active and discoverable; no timeout or retry was
-  widened._
+- [x] Remove both explicit skips without changing test timeouts or retry policy.
+  _Both Playwright cases are active and discoverable; the out-of-band watched
+  run now proves its durable start and live running-state projection before the
+  approval-delivery wait, with no timeout or retry widened._
 - [ ] Verify that a settled script cannot lose its approval batch or device row
   across Durable Object eviction and concurrent preview load.
 - [ ] Run the prior four-worker stress reproduction for 25 consecutive paired
@@ -154,3 +156,12 @@ hide a recurrence with a timeout increase or another retry.
   typecheck, 56 focused worker tests, 30 Device tests, 23 mobile tests, and 66
   current-main Stream sender/Subscriber Pager recovery tests. Added the
   `preview` label to start the exact-head deployed gate.
+- 2026-08-10: The first four-worker gate attempt reproduced two notification
+  failures during the cold gap before `script-run-started`; both approvals
+  arrived normally after test cleanup. Added a durable-start boundary followed
+  by the existing visible `running code…` projection before measuring live
+  approval delivery. A validation replay then exposed a same-millisecond
+  parallel project-slug collision; both specs now include the Playwright worker
+  index. The unchanged four-worker/eight-outcome shape subsequently passed 8/8
+  against preview 8. Formal counters remain at zero until the new exact head is
+  deployed.

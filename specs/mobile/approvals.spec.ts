@@ -44,7 +44,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // ── Sign up through the REAL flow: server picker → OAuth popup → email
     // OTP (fixed dev code) → org+project onboarding → project access →
     // consent → back in the app.
-    const projectSlug = `mobile-approvals-${Date.now().toString(36)}`;
+    const projectSlug = `mobile-approvals-${Date.now().toString(36)}-${testInfo.parallelIndex}`;
     await page.addInitScript((deviceId) => {
       localStorage.setItem("iterate.secure-store.iterate.mobileDeviceId.v1", deviceId);
     }, DEVICE_ID);

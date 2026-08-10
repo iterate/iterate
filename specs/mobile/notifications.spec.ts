@@ -52,7 +52,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // ── Sign up through the REAL flow (same as approvals.spec.ts). NB: the
     // slug must not contain "notifications" — getByText matches substrings,
     // and the drawer assertion below must not collide with header titles.
-    const projectSlug = `mobile-notifs-${Date.now().toString(36)}`;
+    const projectSlug = `mobile-notifs-${Date.now().toString(36)}-${testInfo.parallelIndex}`;
     await page.goto("/");
     await page.getByPlaceholder("https://os.iterate.com").fill(osBaseUrl);
     // Explicit timeout: without one, waitForEvent inherits the global 1s
@@ -148,7 +148,21 @@ test("the approval push is suppressed in the watched thread and sent when you're
     await page.getByPlaceholder("Message").waitFor();
     const watchedPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
     const watchedAgent = await itx.agents.get(watchedPath).create();
+    const watchedRunStarted = watchedAgent.stream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/capability-host/script-run-started"],
+      timeoutMs: 15_000,
+    });
     void watchedAgent.capabilityHost.runScript(parkOneRequest("watched")).catch(() => {});
+    // This script starts through the admin itx connection, not the mobile
+    // composer, so the thread has no local "sending" state while a cold
+    // worker accepts it. Separate that startup boundary from the live
+    // approval-delivery assertion below: once the durable run has started,
+    // the thread must promptly project its existing running activity. That
+    // spinner then honestly covers the egress hold + debounce before the
+    // approval button arrives; no retry or wider UI-action timeout involved.
+    await watchedRunStarted;
+    await page.getByText("running code…").waitFor();
     await waitForBatchCardButton({
       agentPaths: [watchedPath],
       deviceId: DEVICE_ID,
@@ -285,7 +299,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
 /**
  * Wait for a batch-card button while the burst coalesces at the egress door —
  * same as specs/mobile/approvals.spec.ts's helper of the same name: the
- * parked script run's activity spinner covers the wait the whole way.
+ * already-started script run's activity spinner covers the wait the whole way.
  */
 function waitForBatchCardButton(input: {
   agentPaths: string[];
