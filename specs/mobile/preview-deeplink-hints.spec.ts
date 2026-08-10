@@ -62,6 +62,7 @@ test("deep-link hints survive to a real auth screen with the test OTP prefilled"
 
   // Sign in opens the REAL auth deployment in a popup (OIDC discovery +
   // client registration + authorize happen live against the slot).
+  // timeout: deployed-lane navigation shows no loading UI for the spinner waiter
   const popupPromise = context.waitForEvent("page", { timeout: 45_000 });
   await page.getByRole("button", { name: "Sign in" }).click();
   const popup = await popupPromise;
@@ -69,6 +70,7 @@ test("deep-link hints survive to a real auth screen with the test OTP prefilled"
   // The signed /login redirect carried the login_hint: the page offers the
   // hinted identity as its primary action.
   const continueAs = popup.getByRole("button", { name: `Continue as ${HINT_EMAIL}` });
+  // timeout: deployed-lane navigation shows no loading UI for the spinner waiter
   await continueAs.waitFor({ timeout: 45_000 });
   await continueAs.click();
 
@@ -76,8 +78,10 @@ test("deep-link hints survive to a real auth screen with the test OTP prefilled"
   // fixed test OTP. The user only confirms.
   await popup
     .getByText(`Enter the 6-digit code sent to ${HINT_EMAIL}`)
+    // timeout: deployed-lane navigation shows no loading UI for the spinner waiter
     .waitFor({ timeout: 30_000 });
   await expect
+    // timeout: deployed-lane navigation shows no loading UI for the spinner waiter
     .poll(() => popup.getByTestId("email-otp-input").inputValue(), { timeout: 10_000 })
     .toBe("424242");
 });

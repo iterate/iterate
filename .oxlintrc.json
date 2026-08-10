@@ -50,7 +50,8 @@
     {
       "name": "unicorn-js",
       "specifier": "eslint-plugin-unicorn"
-    }
+    },
+    "middlewright/lint-plugin"
   ],
   "rules": {
     "constructor-super": "error",
@@ -280,6 +281,17 @@
       "files": ["apps/os/src/rpc-targets.ts"],
       "rules": {
         "iterate/mechanical-class-impl": "error"
+      }
+    },
+    {
+      "files": [
+        "specs/mobile/media.spec.ts",
+        "specs/mobile/integrations.spec.ts",
+        "specs/mobile/preview-deeplink-hints.spec.ts",
+        "specs/mobile/preview-deeplink-mismatch.spec.ts"
+      ],
+      "rules": {
+        "middlewright/require-timeout-comment": "error"
       }
     }
   ]

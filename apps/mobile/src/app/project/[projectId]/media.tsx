@@ -277,6 +277,11 @@ export default function MediaScreen() {
             you can search them here by what they show.
           </Text>
         </View>
+      ) : visible.length === 0 && pending.length === 0 ? (
+        <View style={styles.center}>
+          <Text style={styles.emptyTitle}>No results</Text>
+          <Text style={styles.emptyBody}>Nothing matches this search — try fewer words.</Text>
+        </View>
       ) : (
         <FlatList
           data={visible}

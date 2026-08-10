@@ -139,3 +139,18 @@ should a fresh deploy nudge redelivery?
 - CI caught what my mid-stage gate laziness missed (zod-schema-naming,
   spec-restricted-syntax, stale config-repo-template codegen) — full gates
   after every stage from now on.
+
+## Review round (Misha, 2026-08-10)
+
+- [x] no raw action timeouts in specs: adopted middlewright's
+      require-timeout-comment oxlint rule from the PR-25 pkg.pr.new build
+      (sha-pinned; local spinner-waiter patch still applies), scoped to the
+      merged mobile specs; the two flagged waits now rely on the spinner
+      waiter, and every remaining popup timeout carries a conforming
+      one-line justification. FOLLOWUP: repo-wide enablement — 97 sites
+      across specs/ (incl. #2460's files) need the same treatment.
+- [x] AI spec is never CI-deterministic: split media.spec.ts — a
+      deterministic lane (admin-seeded event, exact assertions, CI-able)
+      and the live vision lane as a permanent opt-in (eval candidate)
+- [x] negative assertions: the Media screen gained a "No results" empty
+      state and the spec asserts it positively
