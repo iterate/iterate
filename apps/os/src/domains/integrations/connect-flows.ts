@@ -565,7 +565,15 @@ async function gateConnectState(input: {
     };
   }
   const callbackUrl = stateData.callbackUrl ?? null;
-  if (input.userId === null || stateData.userId !== input.userId) {
+  const nativeCallback = Boolean(
+    stateData.callbackUrl &&
+    URL.canParse(stateData.callbackUrl) &&
+    new URL(stateData.callbackUrl).protocol === "iterate:",
+  );
+  if (
+    (input.userId === null && !nativeCallback) ||
+    (input.userId !== null && stateData.userId !== input.userId)
+  ) {
     return {
       ok: false,
       result: { callbackUrl, error: `${input.errorPrefix}_user_mismatch`, ok: false },

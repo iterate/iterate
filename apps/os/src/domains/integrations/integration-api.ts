@@ -90,15 +90,14 @@ async function handleOAuthCallback(input: {
     return redirectWithError(callbackUrl, `${input.provider}_oauth_missing_code`);
   }
 
-  // The signed-state userId binding: the user completing the flow must be the
-  // user who started it. The state signature itself is verified itx-side;
-  // here we only need who the browser session is.
+  // Browser callbacks remain bound to the signed-in user. Native callbacks
+  // have no browser cookie, so completeConnect decides whether null is allowed
+  // only after it verifies the state's signed callback URL.
   const userId = input.auth?.type === "user" ? input.auth.userId : null;
-  if (userId === null) return new Response("OAuth callback user mismatch.", { status: 403 });
 
-  // First-party authority: the caller's session was checked above, and the
-  // state signature is verified itx-side; completing the connect is this
-  // worker's own doing, not something the browser is authorized for.
+  // First-party authority: the state signature and callback identity are
+  // verified itx-side; completing the connect is this worker's own doing, not
+  // something the browser is authorized for.
   const project = await new ProjectCollectionRpcTarget({
     auth: trustedInternalAuthContext(),
     config: input.context.config,

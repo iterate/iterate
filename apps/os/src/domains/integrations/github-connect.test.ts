@@ -43,6 +43,55 @@ describe("completeConnect (github App installation)", () => {
     vi.unstubAllGlobals();
   });
 
+  test("accepts a signed native callback without weakening browser session binding", async () => {
+    const nativeState = await createOAuthState(
+      {
+        callbackUrl: "iterate://project/prj_test/integrations",
+        projectId: PROJECT_ID,
+        provider: "github",
+        userId: "user_1",
+      },
+      SECRET_ENCRYPTION_KEY,
+    );
+    await expect(
+      completeConnect({
+        config: testConfig(),
+        installationId: "789",
+        projectId: PROJECT_ID,
+        provider: "github",
+        state: nativeState,
+        userId: null,
+      }),
+    ).resolves.toMatchObject({
+      callbackUrl: expect.stringContaining("https://github.com/login/oauth/authorize"),
+      ok: true,
+    });
+
+    const browserState = await createOAuthState(
+      {
+        callbackUrl: "https://os.iterate.com/projects/test/integrations",
+        projectId: PROJECT_ID,
+        provider: "github",
+        userId: "user_1",
+      },
+      SECRET_ENCRYPTION_KEY,
+    );
+    await expect(
+      completeConnect({
+        config: testConfig(),
+        installationId: "789",
+        projectId: PROJECT_ID,
+        provider: "github",
+        state: browserState,
+        userId: null,
+      }),
+    ).resolves.toEqual({
+      callbackUrl: "https://os.iterate.com/projects/test/integrations",
+      error: "github_oauth_user_mismatch",
+      ok: false,
+    });
+  });
+
   test("proves user access before claiming the installation", async () => {
     const state = await createOAuthState(
       { projectId: PROJECT_ID, provider: "github", userId: "user_1" },

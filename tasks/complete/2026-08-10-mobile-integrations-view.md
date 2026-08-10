@@ -98,3 +98,9 @@ dashboard's `/integrations` view, adapted to a phone-sized native UI.
   status reads; account rows now query the Secret DO-backed connection status
   when the integration catalogue snapshot has not caught up, with regression
   coverage for that boundary.
+- 2026-08-10: Fixed native OAuth completion: the system browser has no OS
+  session cookie, so the callback now permits a missing browser identity only
+  when the verified HMAC state returns to the `iterate:` app scheme. HTTPS
+  callbacks remain bound to the signed-in browser user. Shared GitHub completion
+  coverage proves both sides of that boundary; the same gate serves Slack and
+  Google.
