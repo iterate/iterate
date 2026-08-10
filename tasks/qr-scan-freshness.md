@@ -120,3 +120,8 @@ PR-preview QRs deep-link to `iterate://preview-channel/<channel>?env=<slot>&emai
 - Web lane can't exercise real OTA (`Updates.isEnabled` is false in Metro/web
   bundles) — the spec asserts the explanatory note instead. Native freshness
   path is device-verified only.
+- Bugbot round (all three accepted, commit 843580a21): freshness re-checks
+  per mount (`refetchOnMount: "always"`) not per process; the mismatch
+  card/plan render only once the channel matches (pre-switch, a plan tap
+  abandoned the channel change); the plan button is held while a freshness
+  reload could fire mid-OAuth (`reloadImminent` guard).
