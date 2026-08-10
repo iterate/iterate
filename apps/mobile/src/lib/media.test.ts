@@ -42,7 +42,7 @@ test("capture script describes, transcribes, tags, and appends one idempotent ev
     itx,
   );
 
-  expect(itx.calls.bytesPath).toBe("/media/inbound/abc123-IMG_0001.PNG");
+  expect(itx.calls.bytesPath).toBe("/media/abc123-IMG_0001.PNG");
   expect(itx.calls.visionBody.messages[0].content[1].image_url.url).toMatch(
     /^data:image\/png;base64,/,
   );
@@ -201,9 +201,7 @@ test("normalizedImageFilename forces the extension to match the payload type", (
 });
 
 test("mediaFilePath sanitizes and bounds the filename", () => {
-  expect(mediaFilePath("abc", "IMG 0001 (edited)?.png")).toBe(
-    "/media/inbound/abc-IMG_0001_edited_.png",
-  );
+  expect(mediaFilePath("abc", "IMG 0001 (edited)?.png")).toBe("/media/abc-IMG_0001_edited_.png");
   expect(mediaFilePath("abc", "x".repeat(200) + ".png")).toMatch(/^.{0,100}\.png$/);
 });
 
@@ -241,6 +239,15 @@ test("filterMedia: terms AND together over markdown+transcript+filename+tags, ch
     item(3, "Meme about trains", "", ["clipping"]),
   ];
   expect(filterMedia(items, "train ticket", [])).toMatchObject([{ offset: 1 }]);
+  // Deep links search by the SANITIZED name carried in the stored path
+  // (spaces become underscores) — that segment is part of the haystack, but
+  // the /media/ prefix and hash are NOT: "media" must not match everything.
+  expect(filterMedia(items, "f.png", [])).toMatchObject([
+    { offset: 1 },
+    { offset: 2 },
+    { offset: 3 },
+  ]);
+  expect(filterMedia(items, "/media", [])).toEqual([]);
   expect(filterMedia(items, "trenitalia", [])).toMatchObject([{ offset: 1 }]); // transcript hit
   expect(filterMedia(items, "typeerror", [])).toMatchObject([{ offset: 2 }]);
   expect(filterMedia(items, "", ["screenshot", "code"])).toMatchObject([{ offset: 2 }]);
@@ -269,7 +276,7 @@ function item(offset: number, markdown: string, transcript: string, tags: string
     capturedAt: `2026-08-10T00:00:0${offset}Z`,
     payload: {
       stableKey: `k${offset}`,
-      path: `/media/inbound/k${offset}-f.png`,
+      path: `/media/k${offset}-f.png`,
       filename: "f.png",
       contentType: "image/png",
       width: 1,

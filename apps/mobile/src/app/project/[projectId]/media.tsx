@@ -25,6 +25,7 @@ import {
   View,
 } from "react-native";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
+import { Markdown } from "../../../components/markdown.tsx";
 import { getProjectItx } from "../../../lib/itx.ts";
 import {
   buildProcessScript,
@@ -52,8 +53,14 @@ type PendingItem = {
 };
 
 export default function MediaScreen() {
-  const { projectId, slug } = useLocalSearchParams<{ projectId: string; slug?: string }>();
-  const [query, setQuery] = useState("");
+  const { projectId, slug, q } = useLocalSearchParams<{
+    projectId: string;
+    slug?: string;
+    /** Prefills search — in-app deep links (lib/in-app-links.ts) land here
+     * with the linked item's filename. */
+    q?: string;
+  }>();
+  const [query, setQuery] = useState(q || "");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [pending, setPending] = useState<PendingItem[]>([]);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
@@ -337,9 +344,16 @@ function MediaRow({
         )}
       </Pressable>
       <View style={styles.rowBody}>
-        <Text numberOfLines={expanded ? undefined : 3} style={styles.markdown}>
-          {item.payload.markdown || "(no description)"}
-        </Text>
+        {item.payload.markdown ? (
+          // Same renderer as chat messages; collapsed rows clip to a few
+          // lines' height instead of clamping (EnrichedMarkdownText has no
+          // numberOfLines).
+          <View style={expanded ? undefined : styles.markdownCollapsed}>
+            <Markdown markdown={item.payload.markdown} preview />
+          </View>
+        ) : (
+          <Text style={styles.markdown}>(no description)</Text>
+        )}
         {expanded && item.payload.transcript ? (
           <Text selectable style={styles.transcript}>
             {item.payload.transcript}
@@ -450,6 +464,7 @@ const styles = StyleSheet.create({
   thumbPlaceholder: { backgroundColor: colors.border },
   rowBody: { flex: 1, gap: spacing.xs },
   markdown: { color: colors.text, fontSize: 13, lineHeight: 18 },
+  markdownCollapsed: { maxHeight: 76, overflow: "hidden" },
   transcript: {
     borderLeftColor: colors.border,
     borderLeftWidth: 2,

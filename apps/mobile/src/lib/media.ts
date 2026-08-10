@@ -74,9 +74,13 @@ export function normalizedImageFilename(
   return `${stem}.${extension}`;
 }
 
+/** A media file's path IS `/media/<sha256>-<original-filename>` — one flat
+ * content-addressed namespace (the hash keeps dedup; the filename keeps it
+ * readable and searchable). The event payload's `path` is authoritative, so
+ * items stored under older layouts keep resolving. */
 export function mediaFilePath(stableKey: string, filename: string): string {
   const safe = filename.replace(/[^\w.-]+/g, "_").slice(-64);
-  return `/media/inbound/${stableKey}-${safe}`;
+  return `/media/${stableKey}-${safe}`;
 }
 
 export function mediaIdempotencyKey(stableKey: string): string {
@@ -270,8 +274,15 @@ export function filterMedia(
 ): MediaListItem[] {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   return items.filter((item) => {
-    const { markdown, transcript, filename, tags } = item.payload;
-    const haystack = `${markdown} ${transcript} ${filename} ${tags.join(" ")}`.toLowerCase();
+    const { markdown, transcript, filename, path, tags } = item.payload;
+    // The stored name (path minus directory and hash prefix) is the
+    // SANITIZED filename in-app deep links search by (lib/in-app-links.ts),
+    // so names with spaces still match — but only that segment joins the
+    // haystack: the /media/ prefix and content hash would make queries like
+    // "media" match everything.
+    const storedName = (path.split("/").at(-1) || "").replace(/^[0-9a-f]{32,}-/, "");
+    const haystack =
+      `${markdown} ${transcript} ${filename} ${storedName} ${tags.join(" ")}`.toLowerCase();
     return (
       terms.every((term) => haystack.includes(term)) &&
       selectedTags.every((tag) => tags.includes(tag))

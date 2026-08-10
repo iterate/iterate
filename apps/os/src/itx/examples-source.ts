@@ -1738,7 +1738,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     e2eProven: false,
     title: "Search captured media (screenshots/photos) by content",
     description:
-      "The mobile app's Media screen captures screenshots and photos into project file storage and appends events.iterate.com/media/captured onto the /media stream (re-analyses append events.iterate.com/media/processed; the LATEST processed payload per stableKey supersedes the captured one). Each payload carries a vision-model description (markdown), a verbatim OCR transcript (transcript), tags, and the itx.files path holding the bytes. To answer questions like 'find my train ticket screenshot', read the stream, overlay processed results, and filter over those text fields; mint signed URLs with itx.files.get(path).url() to share the actual images.",
+      "The mobile app's Media screen captures screenshots and photos into project file storage and appends events.iterate.com/media/captured onto the /media stream (re-analyses append events.iterate.com/media/processed; the LATEST processed payload per stableKey supersedes the captured one). Each payload carries a vision-model description (markdown), a verbatim OCR transcript (transcript), tags, and the itx.files path holding the bytes — a media file's path is /media/<sha256>-<original-filename>, one flat content-addressed namespace. To answer questions like 'find my train ticket screenshot', read the stream, overlay processed results, and filter over those text fields; mint signed URLs with itx.files.get(path).url() to share the actual images.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { query?: string }) => {
       const query = (vars.query ?? "ticket").toLowerCase();

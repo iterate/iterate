@@ -157,7 +157,7 @@ function DrawerButton({ project }: { project: { projectId: string; projectSlug: 
                       onPress={() => close(projectRoute("/project/[projectId]/repos"))}
                     />
                     <DrawerItem
-                      label="Media"
+                      label="/media"
                       onPress={() => close(projectRoute("/project/[projectId]/media"))}
                     />
                     <View style={styles.separator} />
