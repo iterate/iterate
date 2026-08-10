@@ -5,12 +5,13 @@ size: medium
 
 # Monitor the restored mobile approval flows for 25 natural previews
 
-Status: 4/25 qualifying natural canonical preview occurrences are queryable. The restored approval and notification specs passed first attempt in all four; 21 natural occurrences remain.
+Status: 5/25 qualifying natural canonical preview occurrences are queryable. The restored approval and notification specs passed first attempt in all five; 20 natural occurrences remain.
 
 - [x] Define the post-merge gate from durable telemetry. *A qualifying occurrence is a normally triggered canonical preview workflow with both restored specs passed, `retry_count = 0`, `passed_after_retry = false`, and one complete non-failed telemetry finalizer.*
 - [x] Preserve the accepted baseline evidence. *Workflows `497719938401885`, `105920886681524`, and `114044928448857` are queryable qualifying occurrences.*
 - [x] Count the first natural occurrence after the telemetry delivery diagnosis. *Workflow `294834303475777` was triggered by the normal #2470 push, passed both restored specs first attempt, and has a complete 10-artifact / 7,832-runner-event finalizer.*
-- [ ] Observe 21 more qualifying natural canonical preview occurrences.
+- [x] Count the first natural occurrence after propagating #2467's completed trace proof. *Workflow `454307980408418` was triggered by the normal #2470 push, passed both restored specs first attempt, and has a complete 10-artifact / 7,664-runner-event finalizer.*
+- [ ] Observe 20 more qualifying natural canonical preview occurrences.
 - [ ] Investigate any target retry, failure, incomplete finalizer, or missing-transition diagnostic before allowing the streak to continue.
 - [ ] Record the final 25-workflow evidence set and close the restoration goal.
 
@@ -29,5 +30,6 @@ Status: 4/25 qualifying natural canonical preview occurrences are queryable. The
 | 2 | `105920886681524` | `dc0ce4fe` | #2467 | both targets clean; complete finalizer |
 | 3 | `114044928448857` | `dea98701` | #2470 | both targets clean; complete finalizer |
 | 4 | `294834303475777` | `b9c2364b` | #2470 | both targets clean; complete 10-artifact finalizer |
+| 5 | `454307980408418` | `70701a66` | #2470 | both targets clean; complete 10-artifact finalizer |
 
 Manual workflow `350306797014989` on `081ff01f` proved default PostHog delivery and is intentionally excluded from the counter.
