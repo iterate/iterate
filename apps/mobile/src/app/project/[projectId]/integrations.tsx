@@ -23,7 +23,8 @@ import {
   type MobileIntegrationConnection,
   type MobileIntegrations,
 } from "../../../lib/integrations.ts";
-import { getItxSession, getProjectItx } from "../../../lib/itx.ts";
+import { getProjectItx } from "../../../lib/itx.ts";
+import { connectMobileOAuth } from "../../../lib/oauth-connect.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
@@ -44,42 +45,31 @@ export default function IntegrationsScreen() {
   const connectOAuth = useMutation({
     mutationFn: async (provider: OAuthProviderSlug) => {
       const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
-      const [session, project] = await Promise.all([
-        getItxSession(baseUrl),
-        getProjectItx(baseUrl, projectId),
-      ]);
-      const { principal } = await session.__describe();
+      const project = await getProjectItx(baseUrl, projectId);
       const callbackUrl = Linking.createURL(`/project/${projectId}/integrations`, {
         queryParams: { slug: slug || "" },
       });
       const { authorizationUrl } = await project.integrations.startOAuthFlow({
         callbackUrl,
         provider,
-        userId: principal,
       });
-      const result = await WebBrowser.openAuthSessionAsync(authorizationUrl, callbackUrl);
-      if (result.type === "success") {
-        const callback = new URL(result.url);
-        const error = callback.searchParams.get("error");
-        if (error && error !== "github_installation_already_claimed") {
-          throw new Error(error.replaceAll("_", " "));
-        }
-      }
-      return { project, result };
+      const result = await connectMobileOAuth({
+        authorizationUrl,
+        callbackUrl,
+        openAuthSession: WebBrowser.openAuthSessionAsync,
+        project,
+        provider,
+      });
+      return { project, ...result };
     },
-    onSuccess: async ({ project, result }) => {
-      if (result.type === "success") {
-        const callback = new URL(result.url);
-        const error = callback.searchParams.get("error");
-        const githubSteal = callback.searchParams.get("githubSteal");
-        if (error === "github_installation_already_claimed" && githubSteal) {
-          const move = await confirmAction(
-            "Move this GitHub installation?",
-            "It is connected to another project. Moving it disconnects that project and routes future GitHub activity here.",
-            "Move installation",
-          );
-          if (move) await project.integrations.confirmGithubSteal({ state: githubSteal });
-        }
+    onSuccess: async ({ githubStealState, project }) => {
+      if (githubStealState) {
+        const move = await confirmAction(
+          "Move this GitHub installation?",
+          "It is connected to another project. Moving it disconnects that project and routes future GitHub activity here.",
+          "Move installation",
+        );
+        if (move) await project.integrations.confirmGithubSteal({ state: githubStealState });
       }
       await queryClient.invalidateQueries({ queryKey });
     },

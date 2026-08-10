@@ -421,8 +421,7 @@ export async function startOAuthFlow(input: {
   config: AppConfig;
   projectId: string;
   provider: OAuthProviderSlug;
-  /** The user to bind the OAuth state to. Browser-supplied, not authority; the
-   * callback's user check against the signed state is the backstop. */
+  /** The authenticated initiating user, resolved by the RPC boundary. */
   userId: string;
 }): Promise<{ authorizationUrl: string }> {
   const baseUrl = requestBaseUrl(input);
@@ -565,15 +564,7 @@ async function gateConnectState(input: {
     };
   }
   const callbackUrl = stateData.callbackUrl ?? null;
-  const nativeCallback = Boolean(
-    stateData.callbackUrl &&
-    URL.canParse(stateData.callbackUrl) &&
-    new URL(stateData.callbackUrl).protocol === "iterate:",
-  );
-  if (
-    (input.userId === null && !nativeCallback) ||
-    (input.userId !== null && stateData.userId !== input.userId)
-  ) {
+  if (input.userId === null || stateData.userId !== input.userId) {
     return {
       ok: false,
       result: { callbackUrl, error: `${input.errorPrefix}_user_mismatch`, ok: false },
