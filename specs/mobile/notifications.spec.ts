@@ -222,26 +222,29 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // Until the push pipeline journals onto THIS device's stream, nothing on
     // the device represents it — the script start, egress hold, debounce and
     // grace window are server work with no on-screen counterpart, exactly
-    // like a real phone idling before a push arrives. So the spec waits for
-    // the terminal settlement on the PROTOCOL (lane one's suppression was
-    // the first settled event; lane two's rejection is the second). The row
-    // itself appeared on screen much earlier, wearing its in-flight
-    // "Waiting to send…" / "Sending…" statuses — honest product indicators
-    // that keep the UI wait below covered until the settle push flips the
-    // label.
-    await expect
-      .poll(
-        async () =>
-          (
-            await itx.streams.get(`/devices/${DEVICE_ID}`).getEvents({
-              eventTypes: ["events.iterate.com/device/notification-settled"],
-            })
-          ).length,
-      )
-      .toBe(2);
-    const settlements = await itx.streams.get(`/devices/${DEVICE_ID}`).getEvents({
+    // like a real phone idling before a push arrives. Separate the durable
+    // attempt boundary from the vendor call: approval debounce + the 1.5s
+    // suppression grace happen before this event, and Expo then has its own
+    // bounded 15s answer deadline. An aggregate 15s poll from script launch
+    // races that valid terminal-uncertain path.
+    const deviceStream = itx.streams.get(`/devices/${DEVICE_ID}`);
+    const attemptStarted = await deviceStream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/device/notification-attempt-started"],
+      timeoutMs: 15_000,
+    });
+    await deviceStream.waitForEvent({
+      afterOffset: attemptStarted.offset,
+      eventTypes: ["events.iterate.com/device/notification-settled"],
+      predicate: (event) => event.payload?.requestOffset === attemptStarted.payload?.requestOffset,
+      // The product deadline is 15s; leave only a small propagation margin
+      // for its already-durable terminal event to reach this ITX reader.
+      timeoutMs: 20_000,
+    });
+    const settlements = await deviceStream.getEvents({
       eventTypes: ["events.iterate.com/device/notification-settled"],
     });
+    expect(settlements).toHaveLength(2);
     const sendOutcome = (settlements.at(-1)!.payload as any).outcome;
     expect(["rejected-by-expo", "uncertain"]).toContain(sendOutcome.kind);
     if (sendOutcome.kind === "uncertain") {
