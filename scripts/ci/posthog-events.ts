@@ -9,10 +9,12 @@ export type PostHogEvent = {
 
 // PostHog accepts batch request bodies up to 20 MB and documents no event-count
 // ceiling. Keep each request below both 5 MB and 100 events: accepted 2,000+
-// event CI bursts remained unqueryable, while unpaced 100-event replays landed
-// completely. The preview suite currently emits roughly 8,000 events per run.
+// event CI bursts remained unqueryable. Space the bounded requests by 500 ms
+// because preview and unit finalizers can otherwise burst concurrently. The
+// preview suite currently emits roughly 8,000 events per run.
 const POSTHOG_BATCH_EVENT_BUDGET_BYTES = 5_000_000;
 const POSTHOG_BATCH_EVENT_LIMIT = 100;
+const POSTHOG_BATCH_INTERVAL_MS = 500;
 
 export function readPostHogConfig(environment = process.env): { apiKey: string; host: string } {
   const raw = environment.APP_CONFIG_POSTHOG?.trim();
@@ -30,11 +32,12 @@ export function readPostHogConfig(environment = process.env): { apiKey: string; 
 
 /** Delivers deterministic system events. Callers supply stable identities for backfill safety. */
 export async function sendPostHogEvents(events: PostHogEvent[], config = readPostHogConfig()) {
-  for (const batch of postHogEventBatches(
+  const batches = postHogEventBatches(
     events,
     POSTHOG_BATCH_EVENT_BUDGET_BYTES,
     POSTHOG_BATCH_EVENT_LIMIT,
-  )) {
+  );
+  for (const [batchIndex, batch] of batches.entries()) {
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
@@ -54,6 +57,9 @@ export async function sendPostHogEvents(events: PostHogEvent[], config = readPos
       }
     }
     if (lastError) throw new Error("PostHog CI telemetry delivery failed", { cause: lastError });
+    if (batchIndex < batches.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, POSTHOG_BATCH_INTERVAL_MS));
+    }
   }
 }
 

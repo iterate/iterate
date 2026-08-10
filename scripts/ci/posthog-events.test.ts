@@ -1,5 +1,12 @@
+import { once } from "node:events";
+import { createServer } from "node:http";
 import { expect, it } from "vitest";
-import { postHogEventBatches, systemEvent, type PostHogEvent } from "./posthog-events.ts";
+import {
+  postHogEventBatches,
+  sendPostHogEvents,
+  systemEvent,
+  type PostHogEvent,
+} from "./posthog-events.ts";
 
 it("uses a stable top-level PostHog UUID for retry and replay deduplication", () => {
   const first = systemEvent("ci test finished", "stable-source-occurrence", "ci-test:1", {});
@@ -44,6 +51,19 @@ it("bounds capture batches by event count before a valid large request becomes a
   ]);
 });
 
+it("paces consecutive capture requests instead of bursting a complete CI run", async () => {
+  await using endpoint = await postHogCaptureEndpoint();
+  const events = Array.from({ length: 201 }, (_, index) =>
+    eventWithPayload(String(index), "payload"),
+  );
+
+  await sendPostHogEvents(events, { apiKey: "phc_test", host: endpoint.url });
+
+  expect(endpoint.requestTimes).toHaveLength(3);
+  expect(endpoint.requestTimes[1]! - endpoint.requestTimes[0]!).toBeGreaterThanOrEqual(450);
+  expect(endpoint.requestTimes[2]! - endpoint.requestTimes[1]!).toBeGreaterThanOrEqual(450);
+});
+
 it("keeps an individually oversized event intact for an explicit API failure", () => {
   const event = eventWithPayload("oversized", "1234567890");
   expect(postHogEventBatches([event], 1, 100)).toEqual([[event]]);
@@ -72,5 +92,26 @@ function eventWithPayload(id: string, payload: string): PostHogEvent {
     event: "ci test finished",
     uuid: id,
     properties: { distinct_id: `ci-test:${id}`, payload },
+  };
+}
+
+async function postHogCaptureEndpoint() {
+  const requestTimes: number[] = [];
+  const server = createServer((request, response) => {
+    requestTimes.push(performance.now());
+    request.resume();
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"status":"Ok"}');
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address() as any;
+  return {
+    requestTimes,
+    url: `http://127.0.0.1:${address.port}`,
+    async [Symbol.asyncDispose]() {
+      server.close();
+      await once(server, "close");
+    },
   };
 }
