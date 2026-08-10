@@ -253,7 +253,7 @@ export default function MediaScreen() {
       >
         <Text style={styles.syncLabel}>Auto-collect screenshots</Text>
         <View style={styles.syncRowValue}>
-          <Text style={styles.syncStatus}>
+          <Text style={styles.syncRowValueText}>
             {settings?.enabled ? `On · back to ${shortDate(settings.sinceIso)}` : "Off"}
           </Text>
           <Text style={styles.syncChevron}>›</Text>
@@ -664,6 +664,10 @@ const styles = StyleSheet.create({
   },
   syncLabel: { color: colors.text, flex: 1, fontSize: 14 },
   syncRowValue: { alignItems: "center", flexDirection: "row", gap: spacing.xs },
+  // NOT syncStatus: that style's flex:1 (needed for truncation in the
+  // status line) stretches the value into a wide box here, stranding the
+  // chevron at the screen edge.
+  syncRowValueText: { color: colors.textMuted, fontSize: 12 },
   syncChevron: { color: colors.textFaint, fontSize: 18 },
   dialogBackdrop: {
     alignItems: "center",
