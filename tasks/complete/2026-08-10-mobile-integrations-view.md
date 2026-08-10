@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 size: medium
 ---
 
@@ -7,11 +7,9 @@ size: medium
 
 ## Status
 
-Implementation and local verification are complete. The drawer route, full
-mobile catalogue and connection controls, unit coverage, preview deployment,
-and phone-sized visual proof are done. Current `main` has been merged to pick up
-the upstream initial-processor-snapshot fix; only the refreshed preview/CI proof
-remains.
+Complete. The drawer route, OS-matched `/agents` → `/integrations` → `/repos`
+navigation, full mobile catalogue and connection controls, unit coverage,
+phone-sized proof, mobile OTA, and refreshed preview E2E are green.
 
 ## Goal
 
@@ -27,7 +25,7 @@ dashboard's `/integrations` view, adapted to a phone-sized native UI.
 - [x] Let users disconnect built-in connections behind an explicit confirmation. *Connected rows use the shared disconnect RPC after a native/web confirm.*
 - [x] Show project-provided integrations and the platform API integrations exposed by the dashboard as read-only cards. *Both dashboard sections are rendered below connectable cards.*
 - [x] Cover deterministic data shaping in Vitest and the real phone-sized route/navigation/list state in Playwright without requiring third-party credentials. *Vitest proves status joins; Playwright signs up, opens the drawer, and asserts the real empty catalogue.*
-- [x] Verify the mobile build/typecheck/tests and the preview deployment, with visual proof in the draft PR. *Mobile typecheck and all 85 unit tests pass; preview 9 and its 390×844 screenshot proved the live route, and the refreshed preview is pending after merging current `main`.*
+- [x] Verify the mobile build/typecheck/tests and the preview deployment, with visual proof in the draft PR. *Mobile typecheck and all 85 unit tests pass; preview 9, its 390×844 screenshot, the mobile OTA, and the same-head broad preview rerun are green.*
 
 ## Assumptions
 
@@ -90,3 +88,7 @@ dashboard's `/integrations` view, adapted to a phone-sized native UI.
   `/agents`, `/integrations`, `/repos`. Removed the mobile-only Examples and
   Notifications entries from that primary group; the remaining OS sections are
   explicitly follow-up scope.
+- 2026-08-10: The refreshed preview deployed the latest head. The original
+  `agents.list()` CLI repro now returns `[]`; broad preview E2E passed on the
+  same-head rerun after an unrelated Dummy Petshop OAuth flake. All PR checks
+  are green.
