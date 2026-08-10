@@ -122,3 +122,42 @@ Taxonomy is data in `apps/mobile/src/lib/screenshots.ts` — expect churn.
   (`choices[0].message.content`), not `.response` — tag parser handles both.
 - default agent prompt was ~70 chars under its 17000-char ceiling; the recipe
   edit had to stay terse (agent-prompt-budgets.test.ts enforces it).
+
+## Feedback round 1 (dogfood, 2026-08-10)
+
+Misha's feedback after capturing 20 real screenshots, all addressed:
+
+- [x] optimistic UI: picked items show immediately as pending cards with
+      per-item status; pipeline runs 3-wide (was strictly sequential — a
+      20-item batch crawled) _mapWithConcurrency in lib/media.ts_
+- [x] tags were wild guesses (everything `bug-report`): dropped
+      `bug-report`/`iterate` from the taxonomy, tags now come from a vision
+      model looking at the PIXELS (not the description), prompt is
+      explicitly conservative, empty tag list is a valid answer
+- [x] re-tag from fresh: "Re-analyze" on an expanded card reruns the whole
+      pipeline and appends `media/processed`; deriveMediaList overlays the
+      latest result per item — prompt/model improvements apply retroactively
+- [x] tap thumbnail → full-screen viewer
+- [x] full text search: one llama-4-scout vision call per item returns
+      {transcript, tags} as JSON; transcript is verbatim OCR, searched
+      alongside the description (e2e asserts the fixture's rendered text
+      comes back verbatim)
+- [x] renamed screenshots → media (`/media` stream,
+      `events.iterate.com/media/*`, `/media/inbound/*` files, Media screen):
+      camera photos are equally valid input; `screenshot` is now just a tag
+      the vision model applies. NOTE: pre-rename dogfood captures live on
+      `/screenshots` and won't show in the Media screen.
+- [ ] identify source app/website per item — deferred (strays into the
+      rules territory of #2405); revisit after dogfooding tags/search
+
+## Additional log
+
+- toMarkdown transcribes clean text images perfectly but summarizes dense
+  screenshots (its prompt is Cloudflare-fixed) — hence the separate
+  transcript call. Vision model shootout on dev: llama-4-scout and
+  mistral-small-3.1 both transcribe verbatim via OpenAI-style image
+  messages; llava garbles; llama-3.2-11b-vision needs a license handshake;
+  moondream rejects the messages shape. Picked scout.
+- e2e fixture is a checked-in PNG (e2e/fixtures/ticket.png, rendered with
+  AppKit) reading "Train to Florence / Seat 21A" — the transcript assertion
+  is a real OCR check.

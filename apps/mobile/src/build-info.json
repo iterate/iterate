@@ -1,8 +1,8 @@
 {
-  "commit": "",
-  "message": "",
-  "branch": "",
-  "builtBy": "",
-  "machine": "",
-  "builtAt": ""
+  "commit": "f472267a424f87d29c29e12308479e991b0c77c6",
+  "message": "mobile: screenshots capture — toMarkdown descriptions, auto-tags, searchable stream",
+  "branch": "screenshots-capture",
+  "builtBy": "mmkal",
+  "machine": "Mishas-MacBook-Pro.local",
+  "builtAt": "2026-08-10T10:45:34.861Z"
 }
