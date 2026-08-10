@@ -68,9 +68,9 @@ function DrawerButton({ project }: { project: { projectId: string; projectSlug: 
   const projectRoute =
     (
       pathname:
+        | "/project/[projectId]"
         | "/project/[projectId]/repos"
-        | "/project/[projectId]/examples"
-        | "/project/[projectId]/notifications"
+        | "/project/[projectId]/integrations"
         | "/project/[projectId]/media",
     ) =>
     () => {
@@ -145,16 +145,16 @@ function DrawerButton({ project }: { project: { projectId: string; projectSlug: 
                 {project !== null ? (
                   <>
                     <DrawerItem
+                      label="/agents"
+                      onPress={() => close(projectRoute("/project/[projectId]"))}
+                    />
+                    <DrawerItem
+                      label="/integrations"
+                      onPress={() => close(projectRoute("/project/[projectId]/integrations"))}
+                    />
+                    <DrawerItem
                       label="/repos"
                       onPress={() => close(projectRoute("/project/[projectId]/repos"))}
-                    />
-                    <DrawerItem
-                      label="Examples"
-                      onPress={() => close(projectRoute("/project/[projectId]/examples"))}
-                    />
-                    <DrawerItem
-                      label="Notifications"
-                      onPress={() => close(projectRoute("/project/[projectId]/notifications"))}
                     />
                     <DrawerItem
                       label="Media"

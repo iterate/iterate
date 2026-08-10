@@ -1,9 +1,10 @@
 // The /api/integrations/* HTTP surface, mounted under the Start catch-all
-// route (src/routes/api.$.ts). Everything runs in the one OS worker, so itx
-// effects call the session RpcTargets in-process (first-party authority, the
-// same lane worker.ts uses for project ingress) — no loopback HTTP round trip
-// to this deployment's own /api.
-import { parseOAuthStateUnverified } from "./oauth-state.ts";
+// route (src/routes/api.$.ts). Everything runs in the one OS worker: browser
+// OAuth completion calls the shared domain operation directly, while the MCP
+// lane uses in-process RpcTargets. Neither loops back through this deployment's
+// own HTTP surface.
+import { completeConnect as completeIntegrationConnect } from "./connect-flows.ts";
+import { verifyOAuthState } from "./oauth-state.ts";
 import { itxAuthFromPrincipal, trustedInternalAuthContext } from "~/auth.ts";
 import { ProjectCollectionRpcTarget } from "~/rpc-targets.ts";
 import type { Principal } from "~/auth/principal.ts";
@@ -70,11 +71,14 @@ async function handleOAuthCallback(input: {
   }
 
   if (!state) return Response.json({ error: "Missing OAuth state." }, { status: 400 });
-  const unverified = parseOAuthStateUnverified(state);
-  if (!unverified || unverified.provider !== input.provider) {
+  const stateData = await verifyOAuthState(
+    { provider: input.provider, state },
+    itxEnv.SECRET_ENCRYPTION_KEY,
+  );
+  if (!stateData) {
     return Response.json({ error: "Invalid or expired OAuth state." }, { status: 400 });
   }
-  const callbackUrl = unverified.callbackUrl ?? null;
+  const callbackUrl = stateData.callbackUrl ?? null;
   if (error) return redirectWithError(callbackUrl, `${input.provider}_oauth_denied`);
 
   // GitHub is a two-stage callback. The setup URL first supplies an untrusted
@@ -90,23 +94,28 @@ async function handleOAuthCallback(input: {
     return redirectWithError(callbackUrl, `${input.provider}_oauth_missing_code`);
   }
 
-  // The signed-state userId binding: the user completing the flow must be the
-  // user who started it. The state signature itself is verified itx-side;
-  // here we only need who the browser session is.
+  // A system browser has no mobile bearer token or OS session cookie. Return
+  // the provider result to the app; its authenticated project RPC performs
+  // completeConnect and enforces the user bound into the verified state.
+  if (callbackUrl && URL.canParse(callbackUrl) && new URL(callbackUrl).protocol === "iterate:") {
+    const nativeCallback = new URL(callbackUrl);
+    nativeCallback.searchParams.set("oauthState", state);
+    if (code) nativeCallback.searchParams.set("oauthCode", code);
+    if (installationId) nativeCallback.searchParams.set("oauthInstallationId", installationId);
+    return redirectResponse(nativeCallback.toString());
+  }
+
+  // Browser callbacks remain bound to the signed-in user who started the flow.
   const userId = input.auth?.type === "user" ? input.auth.userId : null;
   if (userId === null) return new Response("OAuth callback user mismatch.", { status: 403 });
 
-  // First-party authority: the caller's session was checked above, and the
-  // state signature is verified itx-side; completing the connect is this
-  // worker's own doing, not something the browser is authorized for.
-  const project = await new ProjectCollectionRpcTarget({
-    auth: trustedInternalAuthContext(),
-    config: input.context.config,
-    ctx: input.context.executionCtx,
-  }).get(unverified.projectId);
-  const result = await project.integrations.completeConnect({
+  // The state has already been verified above; completeConnect verifies it
+  // again at the storage boundary before exchanging or recording credentials.
+  const result = await completeIntegrationConnect({
     code,
+    config: input.context.config,
     installationId,
+    projectId: stateData.projectId,
     provider: input.provider,
     state,
     userId,
