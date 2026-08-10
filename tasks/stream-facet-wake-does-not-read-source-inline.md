@@ -7,9 +7,10 @@ size: medium
 
 ## Status summary
 
-Implementation and local regression proofs are complete. The actor cycle is
-removed in the runner; preview deployment, the exact failed spec, canonical
-CI, and trace review remain.
+Implementation, local regressions, preview deployment, and the exact canonical
+spec proof are complete. The actor cycle is removed: the former 45-second
+timeout passed first-attempt in 12.2 seconds. Five other canonical retries are
+being classified before this follow-up can be called release-clean.
 
 ## Problem
 
@@ -35,10 +36,14 @@ test and not a source-recreation failure.
       retried deferred refold._
 - [x] Run the complete runner/registry suites and package typechecks. _All 51
       focused tests pass; OS and `iterate` package typechecks pass._
-- [ ] Deploy preview 1 and run the exact formerly-retrying spec without a test
-      retry layer.
+- [x] Deploy preview 1 and run the exact formerly-retrying spec without a test
+      retry layer. _Preview worker `55e991b7-3e83-4508-b0a7-b8842c5322b5`
+      passed the filtered Vitest command directly, with no framework retry._
 - [ ] Run canonical preview CI without retries and audit the project-create
-      trace for a bounded wake/read sequence.
+      trace for a bounded wake/read sequence. _Canonical run `t8l3czqmv5`
+      passed the target first-attempt in 12,193 ms (`retryCount: 0`), down from
+      the prior 62,980 ms aggregate retry. Five unrelated cases retried, so the
+      run is not accepted as release-clean._
 
 ## Implementation log
 
@@ -46,3 +51,9 @@ test and not a source-recreation failure.
   `log_9fb77830554e40699eb03a11de87b3d1`. Its Stream alarm fired about 37.9
   seconds late only because the same source turn still owned the facet wake.
   The retry created its project in 7.49 seconds and the product behavior passed.
+- 2026-08-10: Canonical preview run `t8l3czqmv5` proved the fixed target on its
+  first attempt in 12.2 seconds. Two unrelated Playwright retries carried
+  Cloudflare DO storage-reset references `kpc2frhccd9lun481bs84l74` and
+  `6mohha84pjb2eum30ps0sviv`; one unrelated Vitest retry carried the explicit
+  code-update reset. The remaining MITM timeout and delayed reactivity-live
+  transition still require classification.
