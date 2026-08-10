@@ -11,6 +11,23 @@ import type { StreamEvent } from "iterate/sdk/itx/react";
 export const USER_MESSAGE_TYPE = "events.iterate.com/agents/context-added";
 export const ASSISTANT_MESSAGE_TYPE = "events.iterate.com/agents/web-message-sent";
 
+/**
+ * The send RPC can acknowledge its context append before the live feed sees
+ * the agent's next durable activity fact. Keep the local working indicator
+ * across that handoff so the UI never presents an idle gap for accepted work.
+ */
+export function awaitingAgentActivity(events: StreamEvent[], sentMessageOffset: number): boolean {
+  return !events.some(
+    (event) =>
+      event.offset > sentMessageOffset &&
+      (event.type === "events.iterate.com/capability-host/script-run-requested" ||
+        event.type === "events.iterate.com/agent/llm-request-requested" ||
+        event.type === ASSISTANT_MESSAGE_TYPE ||
+        event.type === "events.iterate.com/stream/error-occurred" ||
+        event.type === "events.iterate.com/agent/paused"),
+  );
+}
+
 export type ChatMessage = {
   role: "user" | "assistant";
   text: string;
