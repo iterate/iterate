@@ -528,9 +528,10 @@ const STREAM_WAIT_REACQUIRE_MS = 10_000;
 // Bound each DO invocation below the outer e2e/client watchdog so a half-open
 // native RPC cannot park the public call forever; two attempts still fit
 // comfortably inside the standard 30-second operation budget. Root appends
-// are excluded: project/capability-host birth can legitimately spend longer
-// than this under load, and those callers already own explicit end-to-ready
-// deadlines around the whole durable saga.
+// are excluded from this DEADLINE: project/capability-host birth can
+// legitimately spend longer than this under load. A keyed root append still
+// gets one retry after an explicit availability rejection — no timer invents
+// that signal, and its idempotency key makes the replay safe.
 const KEYED_STREAM_APPEND_ATTEMPT_TIMEOUT_MS = 10_000;
 
 function detachPlainRpcResult<T>(result: T[]): T[];
@@ -679,6 +680,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
     );
     const canDeadlineReplay = isKeyed && this.props.path !== "/";
+    const canRetry = isKeyed;
     const append = async () => {
       const invocation = invoke();
       if (!canDeadlineReplay) return await invocation;
@@ -701,7 +703,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       );
     };
     const result = await (
-      canDeadlineReplay
+      canRetry
         ? retryLoggedIdempotentOperation({
             context: { path: this.props.path, projectId: this.props.projectId },
             message: "keyed stream append retrying after Durable Object unavailability",

@@ -431,9 +431,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
       // Decided: rejected indexes refuse, approved indexes release through
       // the ordinary egress lanes CONCURRENTLY — they were concurrent when
-      // the rule caught them. Settling is bookkeeping about each outcome and
-      // must never CHANGE it: a failed append logs, but the caller still
-      // gets whatever upstream truly returned (or the true upstream error).
+      // the rule caught them. The settlement fact is part of each approved
+      // entry's success: its caller cannot observe success unless that fact
+      // landed durably, while a failure still stays isolated from siblings.
       await Promise.all(
         entries.map(async (entry, index) => {
           if (decision.verdicts[index] === "reject") {
@@ -454,25 +454,16 @@ export class ProjectDurableObject extends DurableObject<Env> {
             return;
           }
           const settle = (outcome: { status?: number; error?: string }) =>
-            stream
-              .append({
-                type: "events.iterate.com/project/human-approval-settled",
-                idempotencyKey: `human-approval-settled:${approvalRequestEventOffset}:${index}`,
-                payload: { approvalRequestEventOffset, index, ...outcome },
-              })
-              .catch((error: unknown) => {
-                console.warn("egress approval: settle append failed", {
-                  approvalRequestEventOffset,
-                  index,
-                  error,
-                  projectId: this.#name.projectId,
-                });
-              });
-          // The whole per-entry path is inside this try so one entry's
-          // failure (even Request reconstruction) settles and rejects THAT
-          // entry alone — the fan-out Promise.all must never reject, or the
-          // outer catch would blast every pending sibling with an unrelated
-          // error while their released upstream calls run on.
+            stream.append({
+              type: "events.iterate.com/project/human-approval-settled",
+              idempotencyKey: `human-approval-settled:${approvalRequestEventOffset}:${index}`,
+              payload: { approvalRequestEventOffset, index, ...outcome },
+            });
+          // Every per-entry failure (including Request reconstruction and
+          // settlement journaling) rejects THAT entry inside this callback.
+          // The fan-out Promise.all must never reject, or the outer catch
+          // would blast pending siblings while their upstream calls run on.
+          let response: Response;
           try {
             const released = new Request(entry.held.url, {
               method: entry.held.method,
@@ -480,11 +471,21 @@ export class ProjectDurableObject extends DurableObject<Env> {
               body: entry.bodyBytes as BodyInit | null,
               redirect: entry.redirect,
             });
-            const response = await this.#egress(released);
+            response = await this.#egress(released);
+          } catch (error) {
+            try {
+              await settle({ error: error instanceof Error ? error.message : String(error) });
+              entry.reject(error);
+            } catch (settlementError) {
+              entry.reject(settlementError);
+            }
+            return;
+          }
+
+          try {
             await settle({ status: response.status });
             entry.resolve(response);
           } catch (error) {
-            await settle({ error: error instanceof Error ? error.message : String(error) });
             entry.reject(error);
           }
         }),
