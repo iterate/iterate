@@ -22,22 +22,47 @@ it("packs capture batches by encoded payload size", () => {
   ];
   const oneEventBytes = Buffer.byteLength(JSON.stringify(events[0]));
 
-  expect(postHogEventBatches(events, oneEventBytes * 2 + 1)).toEqual([
+  expect(postHogEventBatches(events, oneEventBytes * 2 + 1, 100)).toEqual([
     [events[0], events[1]],
     [events[2]],
   ]);
 });
 
+it("bounds capture batches by event count before a valid large request becomes a burst", () => {
+  const events = [
+    eventWithPayload("a", "1"),
+    eventWithPayload("b", "2"),
+    eventWithPayload("c", "3"),
+    eventWithPayload("d", "4"),
+    eventWithPayload("e", "5"),
+  ];
+
+  expect(postHogEventBatches(events, 1_000_000, 2)).toEqual([
+    [events[0], events[1]],
+    [events[2], events[3]],
+    [events[4]],
+  ]);
+});
+
 it("keeps an individually oversized event intact for an explicit API failure", () => {
   const event = eventWithPayload("oversized", "1234567890");
-  expect(postHogEventBatches([event], 1)).toEqual([[event]]);
+  expect(postHogEventBatches([event], 1, 100)).toEqual([[event]]);
 });
 
 it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
   "rejects an invalid capture batch byte budget (%s)",
   (budget) => {
-    expect(() => postHogEventBatches([], budget)).toThrow(
+    expect(() => postHogEventBatches([], budget, 100)).toThrow(
       "PostHog batch event budget must be a positive safe integer",
+    );
+  },
+);
+
+it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+  "rejects an invalid capture batch event limit (%s)",
+  (eventLimit) => {
+    expect(() => postHogEventBatches([], 1_000_000, eventLimit)).toThrow(
+      "PostHog batch event limit must be a positive safe integer",
     );
   },
 );
