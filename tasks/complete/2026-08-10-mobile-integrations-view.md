@@ -92,3 +92,9 @@ dashboard's `/integrations` view, adapted to a phone-sized native UI.
   `agents.list()` CLI repro now returns `[]`; broad preview E2E passed on the
   same-head rerun after an unrelated Dummy Petshop OAuth flake. All PR checks
   are green.
+- 2026-08-10: Merged current `main`, resolving the drawer conflict by keeping
+  the requested `/agents`, `/integrations`, `/repos` order plus main's new
+  mobile-only Media route. Bugbot found a real secret-index race in Waitrose
+  status reads; account rows now query the Secret DO-backed connection status
+  when the integration catalogue snapshot has not caught up, with regression
+  coverage for that boundary.

@@ -7,8 +7,11 @@ test("joins built-in journals to live status and keeps project-provided mounts",
     integrations: {
       getConnection: async (input: { connection: string; provider: string }) => {
         getConnectionCalls.push(input);
+        const connected =
+          input.connection === "iterate-workspace" ||
+          (input.provider === "waitrose" && input.connection === "personal");
         return {
-          connected: input.connection === "iterate-workspace",
+          connected,
           displayName: input.connection === "iterate-workspace" ? "Iterate" : null,
           externalId: input.connection === "iterate-workspace" ? "T123" : null,
           metadata: {},
@@ -55,7 +58,7 @@ test("joins built-in journals to live status and keeps project-provided mounts",
   expect(integrations).toMatchObject({
     accounts: [
       {
-        connected: false,
+        connected: true,
         connection: "personal",
         integration: "waitrose",
       },
@@ -88,4 +91,5 @@ test("joins built-in journals to live status and keeps project-provided mounts",
     ],
   });
   expect(getConnectionCalls).toContainEqual({ connection: "old-account", provider: "google" });
+  expect(getConnectionCalls).toContainEqual({ connection: "personal", provider: "waitrose" });
 });

@@ -101,26 +101,31 @@ export async function listMobileIntegrations(project: ProjectStub): Promise<Mobi
     telegram: connectedEntries.filter((entry) => entry.integration === "telegram"),
     waitrose: connectedEntries.filter((entry) => entry.integration === "waitrose"),
   };
-  return {
-    accounts: secrets.flatMap((secret) => {
-      const match = /^\/secrets\/integrations\/([^/]+)\/([^/]+)\/session$/.exec(secret.path);
-      if (match === null) return [];
-      const integration = match[1]!;
-      const connection = match[2]!;
-      const waitrose =
-        integration === "waitrose"
-          ? connections.waitrose.find((entry) => entry.connection === connection)
-          : undefined;
-      const connected = integration === "waitrose" ? waitrose?.status.connected || false : null;
-      return [
-        {
-          connected,
-          connection,
-          integration,
-          path: secret.path,
-        },
-      ];
+  const accountEntries = secrets.flatMap((secret) => {
+    const match = /^\/secrets\/integrations\/([^/]+)\/([^/]+)\/session$/.exec(secret.path);
+    if (match === null) return [];
+    return [
+      {
+        connection: match[2]!,
+        integration: match[1]!,
+        path: secret.path,
+      },
+    ];
+  });
+  const accounts = await Promise.all(
+    accountEntries.map(async (account): Promise<MobileAccountConnection> => {
+      if (account.integration !== "waitrose") return { ...account, connected: null };
+      const status =
+        connections.waitrose.find((entry) => entry.connection === account.connection)?.status ||
+        (await project.integrations.getConnection({
+          connection: account.connection,
+          provider: "waitrose",
+        }));
+      return { ...account, connected: status.connected };
     }),
+  );
+  return {
+    accounts,
     connections,
     provided: entries.filter(
       (entry): entry is Extract<IntegrationConnectionListEntry, { source: "provided" }> =>
