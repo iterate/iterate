@@ -64,7 +64,12 @@ test("the approval push is suppressed in the watched thread and sent when you're
     const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
     await page.getByRole("button", { name: "Sign in" }).click();
     const popup = await popupPromise;
-    await popup.getByTestId("email-login-button").click();
+    const emailLoginButton = popup.getByTestId("email-login-button");
+    // The popup event fires before its cross-server auth navigation mounts
+    // the login choices. Wait for that durable UI fact, then keep the click
+    // itself under the normal 1s action budget.
+    await emailLoginButton.waitFor({ state: "visible", timeout: 15_000 });
+    await emailLoginButton.click();
     await signUpWithEmailOtp(popup, {
       email: uniqueSignupEmail("mobile-notifs"),
       projectSlug,
