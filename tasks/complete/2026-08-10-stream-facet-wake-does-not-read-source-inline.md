@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 size: medium
 ---
 
@@ -7,11 +7,11 @@ size: medium
 
 ## Status summary
 
-Implementation, local regressions, preview deployment, and the exact canonical
-spec proof are complete. The actor cycle is removed: the former 45-second
-timeout passed first-attempt twice in 12.2 and 11.9 seconds. The first run's
-rollout/storage burst was absent from the second; its sole retry exposed an AI
-Gateway cache-warmup contract error, now fixed pending canonical proof.
+Complete. The actor cycle is removed, focused regressions and package checks
+pass, and a fully clean natural canonical preview run passed the former
+45-second timeout first-attempt in 11.8 seconds. Its project-create trace shows
+zero source subrequests beneath the hosted processor-facade wake; later reads
+run in their independent catch-up/barrier scopes.
 
 ## Problem
 
@@ -40,12 +40,13 @@ test and not a source-recreation failure.
 - [x] Deploy preview 1 and run the exact formerly-retrying spec without a test
       retry layer. _Preview worker `55e991b7-3e83-4508-b0a7-b8842c5322b5`
       passed the filtered Vitest command directly, with no framework retry._
-- [ ] Run canonical preview CI without retries and audit the project-create
-      trace for a bounded wake/read sequence. _Canonical run `t8l3czqmv5`
-      passed the target first-attempt in 12,193 ms (`retryCount: 0`), down from
-      the prior 62,980 ms aggregate retry. Run `5cf646r0kg` repeated the proof
-      in 11,870 ms. Its sole unrelated retry was the now-bounded AI Gateway
-      cache warmup, so neither full run is accepted as release-clean._
+- [x] Run canonical preview CI without retries and audit the project-create
+      trace for a bounded wake/read sequence. _Natural workflow
+      `294834303475777` passed the target first-attempt in 11,761 ms and the
+      whole run had zero failures or retries. Trace
+      `ad0dd6cff34f4190a33d592f04f02ce2` contains zero source subrequests below
+      all nine processor-facade RPC spans; independent same-facet reads were
+      successful and bounded to 1,368 ms._
 
 ## Implementation log
 
@@ -67,5 +68,21 @@ test and not a source-recreation failure.
 - 2026-08-10: The next run's only retry was a second immediate AI Gateway cache
   MISS. Cloudflare documents cache writes as volatile, so the test now models
   MISS as a bounded, logged warmup state instead of consuming a framework
-  retry. The pre-fix canonical failure is the red proof; canonical preview on
-  the new head is the remaining green proof.
+  retry. The pre-fix canonical failure is the red proof.
+- 2026-08-10: Natural canonical workflow `294834303475777`, Depot workflow
+  `8ctt8cvf6k`, ran against preview-4 worker version
+  `6f25540f-b948-47ba-8d24-cca9e96ff1c8`. The complete run had no test
+  failures, retries, passed-after-retry tests, or incomplete finalizers.
+- 2026-08-10: The target project was
+  `prj_9cd52919d0634eb391a5be1a9b9565cf` (Ray `a290b7becaece61d`). Its
+  `Project.create` span completed successfully in 6,540 ms. Across the exact
+  trace's 92 JSRPC spans and 85 Durable Object subrequest spans, no subrequest
+  had any processor-facade span as its parent. The nine later reads from the
+  colocated source all completed successfully in 7–1,368 ms beneath explicit
+  `catchUp`, `snapshot`, or `waitUntilProcessed` scopes.
+- 2026-08-10: Two retained processor-facade capabilities ended with
+  Cloudflare's `canceled` lifecycle outcome after their owning call stopped
+  retaining them. Both are info-level `jsrpc OK` spans, neither owns a source
+  subrequest, and the enclosing `Project.create` plus all read/processing spans
+  completed successfully; they are capability disposal, not failed work.
+  Trace: https://dash.cloudflare.com/376ef7ed81b0573f93524de763666c15/observability/traces/ad0dd6cff34f4190a33d592f04f02ce2
