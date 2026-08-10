@@ -3,28 +3,30 @@ status: in-progress
 size: large
 ---
 
-# REPL on the script door
+# Durable REPL
 
 ## Status summary
 
-Spec fleshed out, implementation not started yet. Main pieces: script-door run
-path + per-user scope, stream-derived history, session REPL deletion, examples
-audit, editor types from the scope preamble, spec updates.
+Spec fleshed out; implementation under way. Main pieces: REPL runs execute as
+real scope scripts (`runScript`) in a per-user scope, stream-derived history,
+session REPL deletion, examples audit, editor types from the scope preamble,
+spec updates.
 
-Make the product REPL run scripts through the capability-host script door on a
-dedicated per-user scope, replacing in-browser evaluation. "Script door" =
-submitting code to a scope's capability host — the same path as agent scripts
-and `itx.capabilityHost.runScript(code)`: typechecked against scope capability
-types, journaled as `script-run-requested`/`script-run-settled` on the scope
-stream, outcomes feed the scope's derived `results` preamble.
+Make the product REPL run scripts through the capability-host script runner on
+a dedicated per-user scope, replacing in-browser evaluation. That is the same
+path agent scripts take (`itx.capabilityHost.runScript(code)`): typechecked
+against scope capability types, journaled as
+`script-run-requested`/`script-run-settled` on the scope stream, outcomes
+feeding the scope's derived `results` preamble.
 
 ## Settled decisions (final)
 
-1. REPL Runs go through the script door; each Run settles on a stream and feeds
-   the same derived `results` preamble agents get (`results[0].data` inline,
-   `await results[0].load(itx)` for large — capability-host-preamble.ts).
+1. REPL Runs execute as real scope scripts; each Run settles on a stream and
+   feeds the same derived `results` preamble agents get (`results[0].data`
+   inline, `await results[0].load(itx)` for large —
+   capability-host-preamble.ts).
 2. NO live persistent-isolate REPL. Continuity is derived-and-durable only.
-3. ONE REPL type: script-door only. DELETE the session REPL: browser-eval
+3. ONE REPL type. DELETE the session REPL: browser-eval
    (src/itx/browser-repl.ts) goes away wholesale; the REPL always has a project
    context. Session-context catalogue examples repointed or retired (audited
    below).
@@ -58,7 +60,7 @@ stream, outcomes feed the scope's derived `results` preamble.
 - **User identifier**: `useAuthClient().session.user.id` (the auth user id) —
   the only stable identifier the web session exposes; slugs/emails can change.
   Scope path: `/repl/<user-id>`.
-- **Explicit `return`**: the script door runs `async (itx) => { ... }` bodies;
+- **Explicit `return`**: `runScript` executes `async (itx) => { ... }` bodies;
   the browser REPL's "last expression is the result" magic dies with the
   in-browser evaluator. The REPL wraps the typed body as
   `async (itx) => {\n<body>\n}` (injecting `const vars: Record<string, any> = {}`
@@ -67,18 +69,20 @@ stream, outcomes feed the scope's derived `results` preamble.
   wrapper for display.
 - **`$_` / `_` die**: the mutable browser scope is deleted; continuity is
   `results[0].data` / `results[N].load(itx)` — same as agents.
+- **npm imports die**: the old REPL rewrote `import` lines to esm.sh in the
+  browser; server-side scripts have no module loader (agent parity — agents
+  can't import npm packages in scripts either). No catalogue example used
+  top-level imports.
 - **`/admin/repl` deleted**: it was a session REPL for admins; admins use
   per-project REPLs like everyone else. Admin sidebar link removed.
 - **Examples audit outcome**:
   - Session-context entries (`whoami`, `list-projects`) lose the `browser`
     runtime (node/cli reading material; the examples sheet marks them
-    not-runnable-here with a pointer to the node SDK/CLI).
+    not-runnable-here).
   - Live-capability entries (`provide-live-capability`,
-    `provide-live-flattened`, and any other `type: "live"` /
-    `RpcTarget`-dependent entries) lose the `browser` runtime: a script-door
-    run executes server-side, so the browser can no longer be the live
-    provider process from the REPL. Node/cli e2e matrix coverage keeps them
-    proven.
+    `provide-live-flattened`) lose the `browser` runtime: Runs execute
+    server-side, so the browser can no longer be the live provider process
+    from the REPL. Node/cli e2e matrix coverage keeps them proven.
   - `specs/repl-examples.spec.ts` filters to browser-runnable cases instead of
     throwing on non-browser cased examples; the matrix meta-assertion is
     relaxed the same way.
@@ -89,7 +93,7 @@ stream, outcomes feed the scope's derived `results` preamble.
 
 ## Checklist
 
-- [x] Task file committed, draft PR opened _initial commit on branch repl-on-script-door_
+- [x] Task file committed, draft PR opened _initially as `repl-on-script-door`; renamed to `durable-repl` (jargon purge), PR reopened_
 - [ ] `ItxScopeRepl` container: per-user scope path, host `create()` via
       suspense query, `useStreamConnection` history buffer, run mutation
       through `capabilityHosts.get(path).runScript(wrapped)`
@@ -135,3 +139,6 @@ stream, outcomes feed the scope's derived `results` preamble.
   JSON result — the REPL renders it straight off the settled event).
 - Stream reading: `useStreamConnection((itx) => itx.streams.get(path).openConnection({replayAfterOffset: 0, processEventBatch}))`
   per itx-activity-tail.tsx; offsets dedupe replay overlap on reconnect.
+- Renamed from `repl-on-script-door` to `durable-repl` mid-flight: "script
+  door" jargon banned; prose now says what it is — runs execute as real scope
+  scripts via `runScript`, the same path agent scripts take.

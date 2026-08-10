@@ -1,6 +1,13 @@
+// The durable REPL's presentational layer. Entries are STREAM-DERIVED
+// (the container folds the scope stream's script-run-requested/settled events
+// — see itx-scope-repl.tsx); this component renders the list, the CodeMirror
+// editor with its TypeScript worker, and the examples sheet. Runs execute
+// server-side in the user's personal capability scope, so there is no console
+// affordance (return values are the output; journaled console output is a
+// noted follow-up in tasks/durable-repl.md).
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { WorkerShape } from "@valtown/codemirror-ts/worker";
 import { BookOpen, ChevronDown, Play } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -22,7 +29,8 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import { itxReplAutocompleteWorker } from "./itx-repl-autocomplete.ts";
-import type { BrowserReplEntry } from "~/itx/browser-repl.ts";
+import type { ItxReplTypeScriptWorker } from "./itx-repl-types.ts";
+import type { ReplRunEntry } from "./itx-scope-repl-entries.ts";
 import type { ItxExample } from "~/itx/examples.ts";
 
 const REPL_SOURCE_PATH = "/repl.ts";
@@ -40,25 +48,27 @@ const loadTypeScriptExtensionModules = import.meta.env.SSR
 interface ItxReplProps {
   canRun: boolean;
   code: string;
-  /** The context this REPL session is connected to. Project-context examples
-   * only run on a project-scoped handle, so the session REPL (which holds the
-   * OS Session, not an itx) offers them as reading material with a pointer to
-   * a project REPL instead. */
-  context: "session" | "project";
-  entries: BrowserReplEntry[];
+  entries: ReplRunEntry[];
   examples: ItxExample[];
   examplesOpen: boolean;
   onChangeCode: (code: string) => void;
   onRun: () => void;
   onSelectExample: (code: string) => void;
   onSetExamplesOpen: (open: boolean) => void;
+  /** The submitted-but-not-yet-journaled Run (null once its request event lands). */
+  pendingCode: string | null;
+  /** A Run failure with no journaled settlement (transport, scope birth). */
+  runError: string | null;
+  /** The per-user capability scope Runs execute in, e.g. /repl/usr123. */
+  scopePath: string;
+  /** The scope's assembled preamble (typed `results`) for the editor worker. */
+  scopePreamble: string | null;
   status: string;
 }
 
 export function ItxRepl({
   canRun,
   code,
-  context,
   entries,
   examples,
   examplesOpen,
@@ -66,18 +76,24 @@ export function ItxRepl({
   onRun,
   onSelectExample,
   onSetExamplesOpen,
+  pendingCode,
+  runError,
+  scopePath,
+  scopePreamble,
   status,
 }: ItxReplProps) {
   const typeScriptExtensions = useReplTypeScriptExtensions({
     code,
     path: REPL_SOURCE_PATH,
+    scopePreamble,
   });
   const runButtonLabel = typeScriptExtensions.loading ? "Loading..." : "Run";
   const bottomRef = useRef<HTMLDivElement>(null);
+  const entryCount = entries.length + (pendingCode === null ? 0 : 1);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [entries.length]);
+  }, [entryCount]);
 
   return (
     <main className="flex h-full min-h-0 flex-col bg-background">
@@ -87,19 +103,19 @@ export function ItxRepl({
             <div className="flex items-start justify-between gap-3 border-b pb-3">
               <div className="min-w-0 space-y-1 text-sm text-muted-foreground">
                 <p>
-                  <span className="text-foreground">
-                    Run TypeScript against your iterate context.
-                  </span>{" "}
-                  Start with <code className="font-mono text-xs">itx</code>, await async calls, and
-                  use <code className="font-mono text-xs">$_</code> or{" "}
-                  <code className="font-mono text-xs">_</code> for the last successful result.
+                  <span className="text-foreground">Run TypeScript as real project scripts.</span>{" "}
+                  Scripts execute server-side in your scope (
+                  <code className="font-mono text-xs">{scopePath}</code>), typechecked and journaled
+                  — reload and the session is still here. Use{" "}
+                  <code className="font-mono text-xs">return</code> to produce a result; prior
+                  results stay in scope as{" "}
+                  <code className="font-mono text-xs">results[0].data</code> (or{" "}
+                  <code className="font-mono text-xs">await results[0].load(itx)</code> for large
+                  ones).
                 </p>
                 <p>
-                  Try{" "}
-                  <code className="font-mono text-xs">
-                    {context === "project" ? "await itx.__describe()" : "await itx.projects.list()"}
-                  </code>
-                  , then edit the selected input and run again.
+                  Try <code className="font-mono text-xs">return await itx.__describe()</code>, then
+                  edit and run again.
                 </p>
               </div>
               <Button
@@ -113,52 +129,20 @@ export function ItxRepl({
               </Button>
             </div>
             {entries.map((entry, index) => (
-              <div
-                key={entry.id}
-                data-testid="itx-repl-entry"
-                data-status={entry.status}
-                data-entry-index={index}
-                className={
-                  entry.status === "error"
-                    ? "flex flex-col gap-2 border-l-2 border-destructive/50 bg-destructive/5 py-2 pr-3 pl-3"
-                    : "flex flex-col gap-2 border-l-2 border-muted-foreground/25 bg-muted/25 py-2 pr-3 pl-3"
-                }
-              >
-                <ReplPromptRow status={null} />
-                <ReplCodeBlock code={entry.code} language="typescript" />
-                {entry.consoleOutput ? (
-                  <ReplCollapsibleCodeBlock
-                    code={entry.consoleOutput}
-                    language="text"
-                    title="Console"
-                  />
-                ) : null}
-                {entry.status === "success" ? (
-                  <>
-                    <div data-testid="itx-repl-visible-result">
-                      <ReplCollapsibleSerializedBlock data={entry.result} title="Result" />
-                    </div>
-                    <pre data-testid="itx-repl-result-json" hidden>
-                      {entry.output}
-                    </pre>
-                  </>
-                ) : (
-                  <>
-                    <div data-testid="itx-repl-visible-error">
-                      <ReplCollapsibleCodeBlock
-                        code={entry.output}
-                        language={entry.outputLanguage}
-                        title="Error"
-                        variant="error"
-                      />
-                    </div>
-                    <pre data-testid="itx-repl-error" data-type="error" hidden>
-                      {entry.output}
-                    </pre>
-                  </>
-                )}
-              </div>
+              <ReplEntryRow key={entry.executionId} entry={entry} index={index} />
             ))}
+            {pendingCode === null ? null : (
+              <ReplEntryRow
+                entry={{
+                  code: pendingCode,
+                  executionId: "pending",
+                  requestedAt: "",
+                  requestedAtOffset: -1,
+                  status: "running",
+                }}
+                index={entries.length}
+              />
+            )}
             <div className="flex flex-col gap-2 border-l-2 border-primary/50 py-2 pr-3 pl-3">
               <ReplPromptRow status={typeScriptExtensions.loading ? null : status}>
                 <Button
@@ -185,6 +169,14 @@ export function ItxRepl({
                   showLineNumbers={false}
                 />
               </div>
+              {runError === null ? null : (
+                <p
+                  className="font-mono text-xs whitespace-pre-wrap text-destructive"
+                  data-testid="itx-repl-run-error"
+                >
+                  {runError}
+                </p>
+              )}
               <div ref={bottomRef} />
             </div>
           </div>
@@ -199,16 +191,20 @@ export function ItxRepl({
           <ScrollArea className="min-h-0 flex-1">
             <div className="flex flex-col gap-4 p-4">
               {examples.map((example) => {
-                // A project handle can run the session examples (narrowing to
-                // itself), but a session handle cannot run project ones.
-                const runnableHere = context === "project" || example.context === "session";
+                // Runs execute server-side as scope scripts in a project
+                // context, so a snippet is runnable here exactly when it
+                // declares the browser runtime AND a project context. The rest
+                // (session catalog, live providers, agent-only members) is
+                // reading material for the node SDK / CLI / agents.
+                const runnableHere =
+                  example.context === "project" && example.runtimes.includes("browser");
                 return (
                   <article key={example.id} className="flex flex-col gap-3 rounded-md border p-3">
                     <div className="flex flex-col gap-1">
                       <h3 className="text-sm font-medium">{example.title}</h3>
                       <p className="text-sm text-muted-foreground">{example.description}</p>
                       <p className="font-mono text-xs text-muted-foreground">
-                        {example.context === "project" ? "project context" : "session context"}
+                        {example.context} context
                         {" · runs in: "}
                         {example.runtimes.join(", ")}
                       </p>
@@ -222,7 +218,8 @@ export function ItxRepl({
                     <div className="flex items-center justify-end gap-3">
                       {!runnableHere ? (
                         <span className="text-xs text-muted-foreground">
-                          Needs a project context — open a project&apos;s REPL to run it.
+                          Not runnable here — needs {example.runtimes.join("/")}
+                          {example.context === "project" ? "" : ` (${example.context} context)`}.
                         </span>
                       ) : null}
                       <Button
@@ -245,11 +242,60 @@ export function ItxRepl({
   );
 }
 
-function useReplTypeScriptExtensions(input: { code: string; path: string }) {
+/** One journaled Run: the code, then its outcome (or a live spinner). The
+ * testids/data attributes are the Playwright specs' contract — keep stable. */
+function ReplEntryRow({ entry, index }: { entry: ReplRunEntry; index: number }) {
+  return (
+    <div
+      data-testid="itx-repl-entry"
+      data-status={entry.status}
+      data-entry-index={index}
+      className={
+        entry.status === "error"
+          ? "flex flex-col gap-2 border-l-2 border-destructive/50 bg-destructive/5 py-2 pr-3 pl-3"
+          : "flex flex-col gap-2 border-l-2 border-muted-foreground/25 bg-muted/25 py-2 pr-3 pl-3"
+      }
+    >
+      <ReplPromptRow status={entry.status === "running" ? "Running..." : null} />
+      <ReplCodeBlock code={entry.code} language="typescript" />
+      {entry.status === "success" ? (
+        <>
+          <div data-testid="itx-repl-visible-result">
+            <ReplCollapsibleSerializedBlock data={entry.result} title="Result" />
+          </div>
+          <pre data-testid="itx-repl-result-json" hidden>
+            {JSON.stringify(entry.result, null, 2)}
+          </pre>
+        </>
+      ) : entry.status === "error" ? (
+        <>
+          <div data-testid="itx-repl-visible-error">
+            <ReplCollapsibleCodeBlock
+              code={entry.error}
+              language="text"
+              title="Error"
+              variant="error"
+            />
+          </div>
+          <pre data-testid="itx-repl-error" data-type="error" hidden>
+            {entry.error}
+          </pre>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function useReplTypeScriptExtensions(input: {
+  code: string;
+  path: string;
+  scopePreamble: string | null;
+}) {
   const codeRef = useRef(input.code);
   codeRef.current = input.code;
   const [extensions, setExtensions] = useState<readonly SourceCodeBlockExtension[]>([]);
   const [loading, setLoading] = useState(Boolean(loadTypeScriptExtensionModules));
+  const remoteWorkerRef = useRef<ItxReplTypeScriptWorker | null>(null);
 
   useEffect(() => {
     let innerWorker: Worker | null = null;
@@ -269,8 +315,11 @@ function useReplTypeScriptExtensions(input: { code: string; path: string }) {
       innerWorker = new Worker(new URL("./itx-repl-typescript.worker.ts", import.meta.url), {
         type: "module",
       });
-      const remoteWorker = comlinkModule.wrap<WorkerShape>(innerWorker);
-      releaseWorker = () => remoteWorker[comlinkModule.releaseProxy]?.();
+      const remoteWorker = comlinkModule.wrap<ItxReplTypeScriptWorker>(innerWorker);
+      releaseWorker = () => {
+        remoteWorkerRef.current = null;
+        remoteWorker[comlinkModule.releaseProxy]?.();
+      };
 
       await remoteWorker.initialize();
       await remoteWorker.updateFile({
@@ -283,6 +332,7 @@ function useReplTypeScriptExtensions(input: { code: string; path: string }) {
         innerWorker.terminate();
         return;
       }
+      remoteWorkerRef.current = remoteWorker;
 
       const { tsFacetWorker, tsHoverWorker, tsLinterWorker, tsSyncWorker } =
         typeScriptExtensionsModule;
@@ -313,6 +363,16 @@ function useReplTypeScriptExtensions(input: { code: string; path: string }) {
       innerWorker?.terminate();
     };
   }, [input.path]);
+
+  // Best-effort scope typing: push the scope's assembled preamble into the
+  // worker whenever it changes (a settled Run refreshes it) or once the worker
+  // finishes initializing (`extensions` flips). Failures fall back silently to
+  // the itx-only types.
+  useEffect(() => {
+    const remoteWorker = remoteWorkerRef.current;
+    if (!remoteWorker) return;
+    remoteWorker.setScopeContext({ preambleTs: input.scopePreamble }).catch(() => {});
+  }, [input.scopePreamble, extensions]);
 
   return useMemo(() => ({ extensions, loading }), [extensions, loading]);
 }

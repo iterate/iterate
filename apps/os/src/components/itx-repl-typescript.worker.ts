@@ -3,7 +3,15 @@ import { createWorker } from "@valtown/codemirror-ts/worker";
 import * as Comlink from "comlink";
 import ts from "typescript";
 import { getAutocompletionWithDocs } from "./itx-repl-autocomplete-worker.ts";
-import { ITX_TYPES_PATH, itxReplDeclaration, itxTypesDeclaration } from "./itx-repl-types.ts";
+import {
+  EMPTY_REPL_SCOPE_MODULE,
+  ITX_TYPES_PATH,
+  REPL_SCOPE_GLOBALS_PATH,
+  REPL_SCOPE_PREAMBLE_PATH,
+  itxReplDeclaration,
+  itxTypesDeclaration,
+  replScopeModules,
+} from "./itx-repl-types.ts";
 
 const REPL_SOURCE_PATH = "/repl.ts";
 const REPL_TYPES_PATH = "/iterate-repl-globals.d.ts";
@@ -61,11 +69,21 @@ const worker = createWorker(async () => {
   const fsMap = createTypeScriptLibMap();
   fsMap.set(ITX_TYPES_PATH, itxTypesDeclaration);
   fsMap.set(REPL_TYPES_PATH, itxReplDeclaration);
+  // The scope files are root files from birth (updateFile-able later via
+  // setScopeContext) so the program never needs a new root added at runtime.
+  fsMap.set(REPL_SCOPE_PREAMBLE_PATH, EMPTY_REPL_SCOPE_MODULE);
+  fsMap.set(REPL_SCOPE_GLOBALS_PATH, EMPTY_REPL_SCOPE_MODULE);
   fsMap.set(REPL_SOURCE_PATH, "\n");
   const system = createSystem(fsMap);
   const env = createVirtualTypeScriptEnvironment(
     system,
-    [ITX_TYPES_PATH, REPL_TYPES_PATH, REPL_SOURCE_PATH],
+    [
+      ITX_TYPES_PATH,
+      REPL_TYPES_PATH,
+      REPL_SCOPE_PREAMBLE_PATH,
+      REPL_SCOPE_GLOBALS_PATH,
+      REPL_SOURCE_PATH,
+    ],
     ts,
     compilerOptions,
   );
@@ -89,5 +107,18 @@ Comlink.expose({
     const env = worker.getEnv();
     if (!env) return null;
     return getAutocompletionWithDocs({ ...input, env });
+  },
+  /** Best-effort scope typing (see replScopeModules); false = not applied. */
+  setScopeContext(input: { preambleTs: string | null }): boolean {
+    const env = worker.getEnv();
+    if (!env) return false;
+    try {
+      const modules = replScopeModules(input.preambleTs);
+      env.updateFile(REPL_SCOPE_PREAMBLE_PATH, modules.preamble);
+      env.updateFile(REPL_SCOPE_GLOBALS_PATH, modules.globals);
+      return true;
+    } catch {
+      return false;
+    }
   },
 });

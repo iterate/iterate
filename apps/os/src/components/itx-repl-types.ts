@@ -7,6 +7,9 @@ export type ItxReplTypeScriptWorker = WorkerShape & {
     context: Pick<CompletionContext, "explicit" | "pos">;
     path: string;
   }): Promise<CompletionResult | null>;
+  /** Feed the scope's assembled preamble into the virtual filesystem so
+   * `results` completes with real types. Best-effort: false = not applied. */
+  setScopeContext(input: { preambleTs: string | null }): Promise<boolean>;
 };
 
 /**
@@ -26,18 +29,20 @@ export const itxTypesDeclaration: string = itxTypesFileText;
 
 /**
  * REPL prelude for the editor's virtual filesystem. Only what
- * `~/itx-api.generated.ts` does not cover lives here: the session globals the REPL
- * runtime actually injects (see `~/itx/browser-repl.ts`), ambient shims for
- * the workers-runtime globals the raw type file references (`Disposable`,
- * `ExecutionContext` — the editor's lib is es2022 + dom), and global aliases
- * so snippets can name the types without importing them.
+ * `~/itx-api.generated.ts` does not cover lives here: the globals the script
+ * runtime injects (`itx`, `vars` — the wrap in
+ * itx-scope-repl-entries.ts declares `vars` when the body doesn't), ambient
+ * shims for the workers-runtime globals the raw type file references
+ * (`Disposable`, `ExecutionContext` — the editor's lib is es2022 + dom), and
+ * global aliases so snippets can name the types without importing them.
  *
- * The REPL handle is typed `Session & Project` — the same pragmatic intersection
- * `iterate/sdk/itx/react` uses: a project REPL holds the project itx, the
- * global/admin REPL holds the Session catalog, and a wrong call for the
- * context fails at runtime exactly like a missing capability would. Dynamic
- * capabilities (`itx.someMountedCap...`) are runtime-typed: the editor flags
- * them, itx resolves them.
+ * The REPL always holds a PROJECT context now (runs execute server-side in a
+ * per-user scope whose capability reads fall back to the project root), so
+ * `itx` is the Project surface — the same alias base the server-side typecheck
+ * gate uses. Dynamic capabilities (`itx.someMountedCap...`) are runtime-typed:
+ * the editor flags them, itx resolves them. The `results` global is NOT here:
+ * it is scope state, fed in per scope via `setScopeContext` (see
+ * {@link replScopeModules}); without results the name correctly doesn't exist.
  */
 export const itxReplDeclaration = `
 import type * as itxTypes from "./itx-types.ts";
@@ -62,9 +67,6 @@ declare global {
     readonly exports: Record<string, unknown>;
     readonly props: unknown;
   }
-
-  /** Live-stub base class for capability providers (from capnweb). */
-  class RpcTarget {}
 
   // The design-of-record types, exposed globally so snippets can annotate
   // with them without an import. Shapes live in ./itx-types.ts only.
@@ -100,31 +102,64 @@ declare global {
   type JsonValue = itxTypes.JsonValue;
 
   /**
-   * The connected handle for this REPL session. A project REPL holds the
-   * project itx; the global/admin REPL holds the Session catalog. Awaiting is
-   * always allowed: over Cap'n Web every member resolves as a promise.
+   * The itx your script runs against: the project surface, scoped to your
+   * personal REPL scope (capability reads fall back to the project root).
+   * Every member resolves as a promise.
    */
-  const itx: itxTypes.Session & itxTypes.Project;
+  const itx: itxTypes.Project;
   /**
    * Script parameters — always in scope, so the catalogue examples
    * (src/itx/examples.ts) run unchanged in every runtime. Assign your own
    * (\`const vars = { … }\`) to parameterize a snippet by hand.
    */
   const vars: Record<string, any>;
-  /** Set in a project REPL; undefined in the global one. */
-  const projectId: string | undefined;
-  /** The last successful REPL result. */
-  let $_: unknown;
-  /** Alias for the last successful REPL result. */
-  let _: unknown;
 }
-
-/**
- * REPL imports resolve at runtime (bare specifiers via esm.sh); the editor
- * cannot typecheck them, so every module is \`any\`. Relative imports still
- * resolve to real files, so this never shadows ./itx-types.ts.
- */
-declare module "*";
 
 export {};
 `;
+
+/** The scope preamble module in the editor's virtual filesystem — the scope's
+ * assembled preamble compiles here, and its \`results\` value is re-exported. */
+export const REPL_SCOPE_PREAMBLE_PATH = "/repl-scope-preamble.ts";
+/** Global declarations bridging the scope module into the snippet's scope. */
+export const REPL_SCOPE_GLOBALS_PATH = "/repl-scope-globals.d.ts";
+/** What both scope files hold when the scope has nothing to inject. */
+export const EMPTY_REPL_SCOPE_MODULE = "export {};\n";
+
+/**
+ * Render the two virtual-filesystem files that make a scope's `results` array
+ * autocomplete with its real types: the preamble module (the scope's
+ * platform-assembled preamble verbatim, with the `Itx` alias its large-result
+ * loaders reference) and a globals file declaring `results` as that module's
+ * value. When the preamble carries no `results` section the files go empty —
+ * the name correctly doesn't exist until a script has settled. Everything here
+ * is best-effort editor sugar; the server-side typecheck gate is authoritative.
+ */
+export function replScopeModules(preambleTs: string | null): {
+  globals: string;
+  preamble: string;
+} {
+  if (!preambleTs || !preambleTs.includes("const results = [")) {
+    return { globals: EMPTY_REPL_SCOPE_MODULE, preamble: EMPTY_REPL_SCOPE_MODULE };
+  }
+  const preamble = [
+    `import type * as itxTypes from "./itx-types.ts";`,
+    // The preamble's large-result loaders are typed `load(itx: Itx)`; the
+    // gate aliases Itx to the Project surface plus mount types. Mount types
+    // are out of (cheap) reach here — Project alone keeps the file compiling.
+    `type Itx = itxTypes.Project;`,
+    preambleTs,
+    `export const __replResults = results;`,
+    ``,
+  ].join("\n");
+  const globals = [
+    `declare global {`,
+    `  /** Prior script results in this REPL scope, newest first: results[0].data`,
+    `   * inline, await results[N].load(itx) for large results. */`,
+    `  const results: typeof import(".${REPL_SCOPE_PREAMBLE_PATH}").__replResults;`,
+    `}`,
+    `export {};`,
+    ``,
+  ].join("\n");
+  return { globals, preamble };
+}
