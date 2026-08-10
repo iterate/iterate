@@ -1,0 +1,125 @@
+:root {
+  color: #18212a;
+  background: #f6f4ef;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 280px;
+}
+
+main {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+header,
+.status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+h1,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 18px;
+}
+
+label,
+section {
+  display: grid;
+  gap: 8px;
+}
+
+.capability {
+  padding: 10px;
+  border: 1px solid #dcd8cf;
+  border-radius: 8px;
+  background: #eeece6;
+}
+
+.proof {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.proof p {
+  user-select: text;
+  border: 1px solid #dcd8cf;
+  border-radius: 6px;
+  background: white;
+  padding: 8px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+code {
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+label,
+.status {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+input,
+textarea,
+button {
+  border: 1px solid #c9c5bc;
+  border-radius: 8px;
+  font: inherit;
+}
+
+input,
+textarea {
+  background: white;
+  padding: 10px;
+}
+
+textarea {
+  width: 100%;
+  min-height: 360px;
+  height: calc(100vh - 260px);
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+button {
+  cursor: pointer;
+  color: white;
+  background: #18212a;
+  padding: 8px 12px;
+}
+
+button.secondary {
+  color: #18212a;
+  background: transparent;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.error {
+  color: #a42121;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

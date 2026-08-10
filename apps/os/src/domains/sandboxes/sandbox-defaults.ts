@@ -1,5 +1,5 @@
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+import type { SubscriptionConfiguredPayload } from "../streams/core-processor-contract.ts";
 import { DEFAULT_SANDBOX_INSTANCE_TYPE, SandboxInstanceType } from "./instance-types.ts";
 import { SandboxProcessorContract } from "./sandbox-processor-contract.ts";
 import { assertValidSleepAfter, sandboxCreateClaimKey, type SandboxCreateInput } from "./utils.ts";
@@ -31,7 +31,6 @@ export function sandboxCreationEvents(input: {
   projectId: string;
 }) {
   const { instanceType, path, projectId } = input;
-  const durableObjectName = DurableObjectNameCodec.stringify({ path, projectId });
   return [
     SandboxProcessorContract.buildEvent({
       type: "events.iterate.com/sandbox/created",
@@ -51,11 +50,19 @@ export function sandboxCreationEvents(input: {
             },
           }),
         ]),
-    buildHostedProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${SandboxProcessorContract.slug}`,
-      processor: ["sandboxes", ["get", path], "processor"],
-      processorSlug: SandboxProcessorContract.slug,
+    // The sandbox processor deliberately STAYS hosted in its own Durable
+    // Object (the Containers SDK owns that DO's class), so its wake keeps the
+    // itx expression instead of facet placement.
+    CoreProcessorContract.buildEvent({
+      type: "events.iterate.com/stream/subscription-configured",
+      idempotencyKey: `stream/subscription-configured:${SandboxProcessorContract.slug}`,
+      payload: {
+        name: SandboxProcessorContract.slug,
+        receiver: {
+          action: "wake-processor",
+          expression: ["sandboxes", ["get", path], "processor", "wakeStreamProcessor"],
+        },
+      } satisfies SubscriptionConfiguredPayload,
     }),
   ];
 }

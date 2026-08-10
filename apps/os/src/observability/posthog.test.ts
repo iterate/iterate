@@ -39,7 +39,7 @@ import type { AppConfig } from "~/config.ts";
 
 const config = {
   cloudflare: { workerName: "os-prd" },
-  posthog: { apiKey: "phc_test" },
+  posthog: { apiKey: "phc_test", capture: true },
 } as Pick<AppConfig, "cloudflare" | "posthog">;
 
 function captureContext(operation: object = {}) {

@@ -6,24 +6,7 @@ import { generateDefaultAvatar } from "@iterate-com/shared/default-avatar";
 import { config, env } from "./env.ts";
 import { getAuthPlugins } from "./auth-plugins.ts";
 import { authJwt } from "./auth-jwt.ts";
-
-/**
- * THE browser-origin trust decision, in one place. Loopback origins: on
- * test-automation stages (fixedTestOtpEnabled — local/dev/preview, never
- * production) ANY loopback port is trusted, because the Expo Web mobile app's
- * browser-side OAuth (discovery, dynamic registration, token exchange —
- * native apps never hit CORS) runs on a random port per invocation;
- * production trusts only the MCP inspector's fixed port 6274. Everything
- * else must BE this deployment: the auth app origin, or its public alias.
- */
-export function isAllowedBrowserOrigin(origin: string | null | undefined) {
-  if (!origin || !URL.canParse(origin)) return false;
-  const url = new URL(origin);
-  const isLoopback =
-    url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-  if (isLoopback) return config.fixedTestOtpEnabled || url.port === "6274";
-  return url.origin === config.authAppOrigin || url.origin === config.publicUrl;
-}
+import { resolveAllowedBrowserOrigin } from "./browser-origin.ts";
 
 export type ProjectIngressTokenPayload = {
   type: "project-ingress";
@@ -61,11 +44,11 @@ export const auth = betterAuth({
   }),
   trustedOrigins: (request) => {
     const origin = request?.headers.get("origin");
-    if (!origin || !isAllowedBrowserOrigin(origin)) return [];
+    const allowedOrigin = resolveAllowedBrowserOrigin(origin, config);
+    if (!allowedOrigin) return [];
     // The allowed requester plus this deployment's own origins — loopback
-    // clients pass the predicate on shape, so the requester must be listed
-    // explicitly.
-    const trusted: string[] = [new URL(origin).origin, config.authAppOrigin];
+    // and extension clients must be listed explicitly.
+    const trusted = [allowedOrigin, config.authAppOrigin];
     if (config.publicUrl) trusted.push(config.publicUrl);
     return trusted;
   },

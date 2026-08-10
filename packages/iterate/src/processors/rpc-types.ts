@@ -4,10 +4,11 @@
  * These are hand-authored shapes (generics preserved) that both the public itx
  * contract and the server-side processor and connection code build against.
  */
+import type { StatefulDynamicWorkerRef } from "../itx-api.generated.ts";
 import type { StreamEvent } from "./schemas.ts";
 
 /** Source-local identity for one durable subscription that sends matching stream events. */
-export type SubscriptionKey = string;
+export type SubscriptionName = string;
 
 /** Stable identity for one live connection to a processEventBatch callback. */
 export type ConnectionKey = string;
@@ -50,12 +51,12 @@ export type ProcessorSnapshot<State> = {
  * (trusted-internal): its processEventBatch callback drives the host's durable
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
- * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
- * processor wakes from the request's `processorSlug`. Each public domain
- * surface selects that same named processor for inspection, while deliberately
- * omitting this method from its public TypeScript contract, so
- * `agent.processor`, `agent.slack.processor`, and other siblings expose their
- * own snapshots and checkpoints.
+ * agent stream hosts agent + slack-agent + more) resolve WHICH processor
+ * wakes from the request's `name` (which equals the contract slug). Each
+ * public domain surface selects that same named processor for inspection,
+ * while deliberately omitting this method from its public TypeScript
+ * contract, so `agent.processor`, `agent.slack.processor`, and other siblings
+ * expose their own snapshots and checkpoints.
  */
 export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
   wakeStreamProcessor(request: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse>;
@@ -189,7 +190,9 @@ export type SubscriptionConfigurationForDelivery = {
   createdAt: string;
   path: string;
   payload: {
-    subscriptionKey?: string;
+    /** The subscription's caller-chosen name; omitted when the effective name
+     * is derived from this event's offset (`subscription:<offset>`). */
+    name?: string;
     description?: string;
     filter?: {
       eventTypes?: string[];
@@ -197,9 +200,20 @@ export type SubscriptionConfigurationForDelivery = {
     };
     receiver:
       | {
-          action: "processor-wake";
+          /** The processor runs as a facet of the stream's own Durable Object:
+           * the subscription NAME is the facet name and the registered-contract
+           * selector; delivery is an in-process parent→facet dial (no wake
+           * lane). `source` chooses the class — `builtin` (resolved by the
+           * stream's path-family registration) or `userspace` (the DurableObject
+           * class is loaded from `worker` and hosted as a facet). */
+          action: "facet-processor";
+          source: { kind: "builtin" } | { kind: "userspace"; worker: StatefulDynamicWorkerRef };
+        }
+      | {
+          /** The processor runs in ANOTHER Durable Object, woken by dialing this
+           * itx expression (own-DO or userspace-worker placement). */
+          action: "wake-processor";
           expression: Array<string | [method: string, ...args: unknown[]]>;
-          processorSlug?: string;
         }
       | {
           action: "copy-to-stream";
@@ -259,7 +273,8 @@ export type StreamDeliveryBatch = {
    */
   events: StreamEvent[];
   streamMaxOffset: number;
-  subscriptionKey: SubscriptionKey;
+  /** The source stream's subscription this delivery serves, by NAME. */
+  name: SubscriptionName;
   /**
    * Offset of the configure or cursor-set event that started this delivery run.
    * It stays stable across network retries, but changes after an explicit seek
@@ -406,7 +421,8 @@ export type StreamWebhookDelivery = {
    * coordinates (`offset`, `createdAt`, `path`) keep naming the source row.
    */
   event: StreamEvent;
-  subscriptionKey: SubscriptionKey;
+  /** The source stream's subscription this delivery serves, by NAME. */
+  name: SubscriptionName;
   /** See {@link StreamDeliveryBatch.cursorChangedAtSourceOffset}. */
   cursorChangedAtSourceOffset: number;
   /** Stable across retries of this event within one delivery run. */
@@ -429,9 +445,14 @@ export type StreamProcessorWakeRequest = {
     streamId: string;
     streamMaxOffset: number;
   };
-  subscriptionKey: SubscriptionKey;
-  /** Which hosted processor to wake (multi-processor hosts resolve on it). */
-  processorSlug?: string;
+  /**
+   * The subscription's NAME — the caller-chosen per-stream binding this wake
+   * serves. Processor-wake names EQUAL their contract slug, so it is also the
+   * registered processor name (and, under facet placement, the facet name):
+   * hosts route on this one identity, and a name matching no registered
+   * processor fails loudly here with the registry's unknown-name error.
+   */
+  name: SubscriptionName;
 };
 
 /**

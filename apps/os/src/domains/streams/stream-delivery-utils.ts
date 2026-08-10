@@ -130,7 +130,7 @@ export function sameCopiedEventIdentity(
   return (
     existingHop !== undefined &&
     incomingHop !== undefined &&
-    existingHop.subscriptionKey === incomingHop.subscriptionKey &&
+    existingHop.name === incomingHop.name &&
     existingHop.cursorChangedAtSourceOffset === incomingHop.cursorChangedAtSourceOffset &&
     existingHop.projectId === incomingHop.projectId &&
     existingHop.path === incomingHop.path &&

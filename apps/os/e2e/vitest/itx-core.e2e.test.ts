@@ -130,7 +130,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
         expect.objectContaining({
           path: "/repos/config",
           projectId: description.projectId,
-          subscriptionKey: "project-config-to-root",
+          name: "project-config-to-root",
           type: "events.iterate.com/repos/created",
         }),
       ],
@@ -147,14 +147,14 @@ test("Authenticated internal auth itx can create project and append to stream", 
   const workerConfigurations = events.filter(
     (event) =>
       event.type === "events.iterate.com/stream/subscription-configured" &&
-      (event.payload as { subscriptionKey?: string }).subscriptionKey === "project-worker",
+      (event.payload as { name?: string }).name === "project-worker",
   );
   expect(workerConfigurations).toHaveLength(1);
   const permanentWorkerConfiguration = workerConfigurations[0];
   expect(permanentWorkerConfiguration).toMatchObject({
     idempotencyKey: `project-worker-subscription:${description.projectId}`,
     payload: {
-      subscriptionKey: "project-worker",
+      name: "project-worker",
       receiver: {
         action: "itx-call",
         expression: ["processEventBatch"],
@@ -171,11 +171,11 @@ test("Authenticated internal auth itx can create project and append to stream", 
 
   const rootRuntime = await stream.runtimeState();
   const workerConfiguration = (rootRuntime.coreProcessorState as CoreProcessorState).subscriptions
-    .outbound.byKey["project-worker"];
+    .outbound.byName["project-worker"];
   expect(workerConfiguration).toMatchObject({
     configuredAtOffset: permanentWorkerConfiguration!.offset,
     configuration: {
-      subscriptionKey: "project-worker",
+      name: "project-worker",
       receiver: {
         action: "itx-call",
         expression: ["processEventBatch"],
@@ -188,7 +188,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
   });
   expect(workerConfiguration!.configuration).not.toHaveProperty("filter");
   expect(
-    rootRuntime.runtime.subscriptions["project-worker"]!.acknowledgedOffset,
+    rootRuntime.runtime.subscriptions["project-worker"]!.confirmedOffset,
   ).toBeGreaterThanOrEqual(permanentWorkerConfiguration!.offset);
 
   // First-hand on the config repo's own stream: the same facts, no
@@ -205,8 +205,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
     configRepoEvents.some(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { subscriptionKey?: string }).subscriptionKey ===
-          "project-config-to-root",
+        (event.payload as { name?: string }).name === "project-config-to-root",
     ),
   ).toBe(true);
 
@@ -258,11 +257,11 @@ test("Authenticated internal auth itx can create project and append to stream", 
     },
     {
       type: "events.iterate.com/stream/subscription-configured",
-      payload: { subscriptionKey: "project-worker" },
+      payload: { name: "project-worker" },
     },
     {
       type: "events.iterate.com/stream/subscription-configured",
-      payload: { subscriptionKey: "iterate-platform-posthog" },
+      payload: { name: "iterate-platform-posthog" },
     },
     {
       type: "events.iterate.com/stream/woken",
@@ -351,8 +350,12 @@ test("Trusted internal root can access global streams and repos", async () => {
     type: "events.iterate.test/global-stream",
   });
 
-  using repo = await itx.repos.get(path).create({ type: "empty" });
-  expect(await repo.whoami()).toBe(`repo null:${path}`);
+  // Repos live under /repos/** — the one path namespace whose streams host
+  // the facet-placed repo processor (the facet composition is path-selected,
+  // for deployment-global streams exactly as for project streams).
+  const repoPath = `/repos/global-${crypto.randomUUID()}`;
+  using repo = await itx.repos.get(repoPath).create({ type: "empty" });
+  expect(await repo.whoami()).toBe(`repo null:${repoPath}`);
 });
 
 // This test is handy because it proves that we really only need one round trip to

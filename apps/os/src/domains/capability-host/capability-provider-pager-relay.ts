@@ -1,11 +1,15 @@
 // Stateless client-side owner of a Capability Provider Pager.
 //
-// The provider client gives one CapabilityHost Durable Object this
-// hibernatable WebSocket and retains any number of providers here. The DO
-// releases ordinary RPC references while idle, then sends a mount-specific
-// Page asking this relay to lend it a short RPC leg. The connected event and
-// each provided event are durable; the random pagerDialId and the RPC legs
-// are transport details only.
+// The provider client gives one capability scope this hibernatable WebSocket
+// and retains any number of providers here. The scope's capability-host runs
+// as a FACET of its Stream Durable Object, and the Pager's runtime half (the
+// socket, lent RPC legs, pending activations) is parent-held — so this relay
+// dials the STREAM Durable Object: its fetch accepts the Pager upgrade and
+// its capability doors serialize the control-plane mutations before
+// forwarding to the facet. The DO releases ordinary RPC references while
+// idle, then sends a mount-specific Page asking this relay to lend it a
+// short RPC leg. The connected event and each provided event are durable;
+// the random pagerDialId and the RPC legs are transport details only.
 
 import { RpcTarget } from "cloudflare:workers";
 import { z } from "zod";
@@ -60,9 +64,28 @@ class CapabilityProviderInvokerRpcTarget extends RpcTarget implements Capability
   }
 }
 
+/**
+ * The scope's Stream Durable Object surface this relay dials: the real
+ * `fetch()` the Pager upgrade rides, plus the parent-side capability doors
+ * (see the Capability Provider Pagers section in stream-durable-object.ts).
+ */
+type CapabilityHostStreamStub = {
+  activateLiveCapability(input: {
+    connectedAtOffset: number;
+    invoker: CapabilityProviderInvoker;
+    providedAtOffset: number;
+  }): Promise<Disposable | undefined>;
+  connectCapabilityProviderPager(input: { pagerDialId: string }): Promise<number>;
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+  provideCapability(
+    record: CapabilityProvidedPayload,
+  ): Promise<{ path: string[]; providedAtOffset: number }>;
+  revokeCapability(input: RevokeCapabilityInput): Promise<void>;
+};
+
 /** One client-given Pager shared by every live provider mounted through this relay. */
 export class CapabilityProviderPagerRelay {
-  readonly #durableObject: ReturnType<Env["CAPABILITY_HOST"]["getByName"]>;
+  readonly #durableObject: CapabilityHostStreamStub;
   readonly #waitUntil: (promise: Promise<unknown>) => void;
   readonly #mounts = new Map<number, MountedProvider>();
   #connectedAtOffset: number | undefined;
@@ -75,9 +98,14 @@ export class CapabilityProviderPagerRelay {
     waitUntil(promise: Promise<unknown>): void;
   }) {
     const path = normalizePath(input.scope.path);
-    this.#durableObject = input.env.CAPABILITY_HOST.getByName(
+    // Safe: the STREAM stub's generated RPC surface carries exactly these
+    // capability doors (plus much more this relay never dials); the
+    // hand-declared CapabilityHostStreamStub swaps the deep generated
+    // DurableObjectStub type for the plain subset, the same seam pattern as
+    // the facet relays' ParentStreamStub.
+    this.#durableObject = input.env.STREAM.getByName(
       DurableObjectNameCodec.stringify({ path, projectId: input.scope.projectId }),
-    );
+    ) as unknown as CapabilityHostStreamStub;
     this.#waitUntil = input.waitUntil;
   }
 
@@ -245,6 +273,15 @@ export class CapabilityProviderPagerRelay {
       mounted.provider.dispose();
     } catch (error) {
       console.error("live provider disposal failed", { error, providedAtOffset });
+    }
+    const pager = this.#pager;
+    if (this.#mounts.size > 0 || pager === undefined) return;
+    this.#pager = undefined;
+    this.#connectedAtOffset = undefined;
+    try {
+      pager.close(1000, "no live capability mounts");
+    } catch {
+      // Already closed.
     }
   }
 

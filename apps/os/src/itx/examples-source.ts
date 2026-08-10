@@ -709,7 +709,7 @@ return await itx.projects.get(pid).__describe();
     e2eProven: false,
     title: "Make a plain HTTP request through project egress",
     description:
-      "itx.egress.fetch(request) is the raw outbound HTTP door: call an external API, download a file, GET or POST anything — every request project-attributed. It takes ONE argument, a Request (build headers/method/body onto it). Choosing a door: egress.fetch is the plain request; itx.browser.quickAction renders a JS-heavy page and can return markdown; itx.ai.toMarkdown converts documents. Secret placeholders in headers and URL paths substitute at egress; exact JSON string values also substitute when x-iterate-secret-template: json is set (see secret-postman-echo). External service — interactive-only.",
+      "itx.egress.fetch(request) is the raw outbound HTTP door: call an external API, download a file, GET or POST anything — every request project-attributed. It takes ONE argument, a Request (build headers/method/body onto it). Choosing a door: egress.fetch is the plain request; itx.browser.quickAction renders a JS-heavy page and can return markdown; itx.ai.toMarkdown converts documents. RETURN the response data (or just the fields you need) — never save a copy to a file first: script results are retained, and your next script reads them via the `results` preamble. Secret placeholders in headers and URL paths substitute at egress; exact JSON string values also substitute when x-iterate-secret-template: json is set (see secret-postman-echo). External service — interactive-only.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { url?: string }) => {
       const url = vars.url ?? "https://example.com/";
@@ -1009,7 +1009,7 @@ return await itx.projects.get(pid).__describe();
     id: "files-roundtrip",
     title: "Store, read, and share a project file",
     description:
-      "itx.files.get(path) is project file storage (R2-backed, mutable paths): put({ data, contentType }) stores bytes — base64 strings (what itx.ai.run image models return), Uint8Array, Blob, or a stream — bytes() reads them back, url() mints a signed public link any HTTP client can fetch (default expiry 7 days), delete() removes the file. Use it to save, keep, or persist data for later and remember state between runs (files hold bytes; streams hold structured events). On agent scopes prefer itx.agent.addFiles: one call that stores AND attaches files to the conversation.",
+      "itx.files.get(path) is project file storage (R2-backed, mutable paths): put({ data, contentType }) stores bytes — base64 strings (what itx.ai.run image models return), Uint8Array, Blob, or a stream — bytes() reads them back, url() mints a signed public link any HTTP client can fetch (default expiry 7 days), delete() removes the file. Use it to save, keep, or persist data for later and remember state between runs (files hold bytes; streams hold structured events) — but NOT for script results: those are retained automatically and reachable from later scripts via the `results` preamble, no copy needed. On agent scopes prefer itx.agent.addFiles: one call that stores AND attaches files to the conversation.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { path?: string; note?: string }) => {
       const path = vars.path ?? "/repl/files-demo.txt";
@@ -1454,7 +1454,7 @@ return {
     id: "stream-receive-events-from",
     title: "Receive matching events from another stream",
     description:
-      "receiver.subscribeToEventsFrom({ sourceStreamPath: source, subscriptionKey, filter?, jsonataTransform?, description? }) starts durable copying from the named source into this receiving stream. filter.eventTypes selects event types and filter.jsonataCondition is a JSONata expression over the whole event that must evaluate to exactly true. jsonataTransform is a JSONata constructor shaping what this stream commits ({ type?, payload?, metadata? }; omitted fields copy verbatim) while provenance and dedupe stay keyed to the source event. Each received event records every stream hop in source.copiedFrom; self-receive is rejected and multi-hop cycles stop before appending to a stream already in that list.",
+      "receiver.subscribeToEventsFrom({ sourceStreamPath: source, name, filter?, jsonataTransform?, description? }) starts durable copying from the named source into this receiving stream. filter.eventTypes selects event types and filter.jsonataCondition is a JSONata expression over the whole event that must evaluate to exactly true. jsonataTransform is a JSONata constructor shaping what this stream commits ({ type?, payload?, metadata? }; omitted fields copy verbatim) while provenance and dedupe stay keyed to the source event. Each received event records every stream hop in source.copiedFrom; self-receive is rejected and multi-hop cycles stop before appending to a stream already in that list.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { source?: string; target?: string }) => {
       const source = itx.streams.get(vars.source ?? "/examples/receive-events/source");
@@ -1462,7 +1462,7 @@ return {
 
       await target.subscribeToEventsFrom({
         sourceStreamPath: vars.source ?? "/examples/receive-events/source",
-        subscriptionKey: "example/high-importance-notes",
+        name: "example/high-importance-notes",
         description: "Demo: high-importance notes land on the target stream.",
         filter: {
           eventTypes: ["events.iterate.example/note"],
@@ -1508,7 +1508,7 @@ return {
     e2eProven: false,
     title: "Search the inbox and read message bodies through the built-in Gmail integration",
     description:
-      "itx.integrations.gmail.get().request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. get() selects the first connected account; pass a slug only for a specific account. Do it in ONE script: list matching ids, fan out format: 'full' fetches, decode and convert every body, return the lot — don't spread list/read across turns, and don't pre-trim out of caution: an oversized return comes back as a typed preview plus a spill file you read next turn. Bodies arrive as base64url-encoded MIME parts: walk payload.parts for text/html, decode the bytes, and convert with itx.ai.toMarkdown using conversionOptions.output.format 'text' (never regex-strip HTML by hand) — email HTML is mostly tracking links and giant base64 images, and text output strips link/image URLs for ~10x smaller content. Reads real mail — interactive-only.",
+      "itx.integrations.gmail.get().request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. get() selects the first connected account; pass a slug only for a specific account. Do it in ONE script: list matching ids, fan out format: 'full' fetches, decode and convert every body, return the lot — don't spread list/read across turns, and don't pre-trim out of caution: an oversized return comes back as a typed preview, with the full value available to your next script as `await results[0].load(itx)`. Bodies arrive as base64url-encoded MIME parts: walk payload.parts for text/html, decode the bytes, and convert with itx.ai.toMarkdown using conversionOptions.output.format 'text' (never regex-strip HTML by hand) — email HTML is mostly tracking links and giant base64 images, and text output strips link/image URLs for ~10x smaller content. Reads real mail — interactive-only.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { q?: string }) => {
       const gmail = itx.integrations.gmail.get();
@@ -1519,7 +1519,7 @@ return {
 
       // One script, one return: fetch every hit in full and read all the
       // bodies now — splitting list/read across turns wastes rounds, and an
-      // oversized return degrades safely (typed preview + spill file).
+      // oversized return degrades safely (typed preview + results loader).
       const messages = await Promise.all(
         (inbox.data.messages ?? []).map(async (message) => {
           const full = await gmail.request({

@@ -56,6 +56,31 @@ Find and fix the server-side reason deliveries stop mid-turn:
   subscription accepted by a pre-creation instance should either carry over
   or be terminated at creation time.
 
+## prd sighting, 2026-08-07 (runtime lane variant)
+
+Stream `agents/web/2026-08-07t15-50-03-269z` (project misha): every LLM request
+succeeded server-side and the reply was durably sent 15s after the user's
+message, yet the open tab showed "Waiting for a response 692.5s" (11.5+ min)
+and never rendered the reply. The Agent DO's `liveState.get()` was correct
+(zero runtime since offset 1288), so this wedge was the **client**
+`useLiveState` runtime-lane subscription staying stale despite its 45s ping
+watchdog — a second lane with the same dead-transport shape as the event-lane
+stall documented here. Two consequences stacked:
+
+1. Stale active runtime (`llmRequests.requested: 1`) kept projecting a phantom
+   live activity with a counting clock.
+2. The reply bubble stayed in `deferredAssistantMessages` because the flush
+   lived only in `reduceAgentUiRuntime` (the runtime overlay). Fixed
+   2026-08-07: the journal fold now settles + flushes at
+   `script-run-settled` when nothing is running
+   (`packages/ui/src/components/events/agent-ui-reducer.ts`), so a wedged
+   runtime lane can no longer hide a sent message.
+
+The stale-runtime phantom spinner remains reproducible whenever the runtime
+lane wedges; see also
+[prd-subrequest-depth-limit-breaks-deliveries](prd-subrequest-depth-limit-breaks-deliveries.md)
+for the prd-side delivery errors observed on the same stream.
+
 ## Repro
 
 - Deterministic-ish on a preview slot: open

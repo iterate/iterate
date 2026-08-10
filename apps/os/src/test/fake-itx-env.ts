@@ -117,24 +117,22 @@ export function createFakeItxEnv(options?: {
   }
 
   function activeSubscription(
-    name: string,
-    subscriptionKey: string,
+    streamName: string,
+    subscriptionName: string,
   ): {
     event: FakeStreamEvent;
     payload: Record<string, unknown>;
   } | null {
     let active: { event: FakeStreamEvent; payload: Record<string, unknown> } | null = null;
-    for (const event of streamEvents(name)) {
+    for (const event of streamEvents(streamName)) {
       const payload = event.payload as Record<string, unknown>;
       if (event.type === "events.iterate.com/stream/subscription-configured") {
-        const effectiveKey =
-          typeof payload.subscriptionKey === "string"
-            ? payload.subscriptionKey
-            : `subscription:${event.offset}`;
-        if (effectiveKey === subscriptionKey) active = { event, payload };
+        const effectiveName =
+          typeof payload.name === "string" ? payload.name : `subscription:${event.offset}`;
+        if (effectiveName === subscriptionName) active = { event, payload };
       } else if (
         event.type === "events.iterate.com/stream/subscription-removed" &&
-        payload.subscriptionKey === subscriptionKey
+        payload.name === subscriptionName
       ) {
         active = null;
       }
@@ -187,9 +185,9 @@ export function createFakeItxEnv(options?: {
             idempotencyKey?: string;
           }) {
             const { configuration } = input;
-            const requestedKey = configuration.subscriptionKey;
-            if (requestedKey !== undefined && typeof requestedKey !== "string") {
-              throw new Error("fake subscriptionKey must be a string when supplied");
+            const requestedName = configuration.name;
+            if (requestedName !== undefined && typeof requestedName !== "string") {
+              throw new Error("fake subscription name must be a string when supplied");
             }
             const receiver = configuration.receiver as FakeCopyReceiver;
             if (
@@ -199,7 +197,7 @@ export function createFakeItxEnv(options?: {
               throw new Error("fake expected a copy receiver");
             }
             const existing =
-              typeof requestedKey === "string" ? activeSubscription(name, requestedKey) : null;
+              typeof requestedName === "string" ? activeSubscription(name, requestedName) : null;
             const subscriptionConfiguredEvent =
               existing !== null &&
               JSON.stringify(existing.payload) === JSON.stringify(configuration)
@@ -217,17 +215,14 @@ export function createFakeItxEnv(options?: {
               string,
               unknown
             >;
-            const subscriptionKey =
-              typeof storedConfiguration.subscriptionKey === "string"
-                ? storedConfiguration.subscriptionKey
+            const subscriptionName =
+              typeof storedConfiguration.name === "string"
+                ? storedConfiguration.name
                 : `subscription:${subscriptionConfiguredEvent.offset}`;
-            return { subscriptionKey, subscriptionConfiguredEvent };
+            return { name: subscriptionName, subscriptionConfiguredEvent };
           },
-          async removeCopySubscription(input: {
-            expectedReceiverPath: string;
-            subscriptionKey: string;
-          }) {
-            const active = activeSubscription(name, input.subscriptionKey);
+          async removeCopySubscription(input: { expectedReceiverPath: string; name: string }) {
+            const active = activeSubscription(name, input.name);
             if (active === null) return { status: "already-absent" as const };
             const receiver = active.payload.receiver as FakeCopyReceiver;
             if (
@@ -239,7 +234,7 @@ export function createFakeItxEnv(options?: {
             const subscriptionRemovedEvent = appendStored(name, [
               {
                 type: "events.iterate.com/stream/subscription-removed",
-                payload: { subscriptionKey: input.subscriptionKey, reason: "requested" },
+                payload: { name: input.name, reason: "requested" },
               },
             ])[0]!;
             return { status: "removed" as const, subscriptionRemovedEvent };

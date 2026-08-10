@@ -2,10 +2,11 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { StreamContext } from "../projects/stream-context.ts";
-import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
+import type { StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import { SCRIPT_EXTERNAL_CLEANUP_GRACE_MS } from "./script-execution-budgets.ts";
+import { serializeScriptResult } from "./script-result-serialization.ts";
 import type { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
 
 export { SCRIPT_EXTERNAL_CLEANUP_GRACE_MS } from "./script-execution-budgets.ts";
@@ -129,13 +130,14 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
     // This is an RPC/event JSON boundary, not a deep-clone operation. Preserve
     // JSON's deliberate normalization and rejection semantics (Dates become
     // strings; unsupported/cyclic values fail) instead of structuredClone's
-    // broader value model.
-    const serializedResult = result === undefined ? undefined : JSON.stringify(result);
+    // broader value model — with one correction JSON cannot make on its own:
+    // an Error's message is non-enumerable, so a plain stringify hands the
+    // caller `{}` (or workerd's RPC bookkeeping) in place of the explanation.
+    // See serializeScriptResult.
+    const serializedResult = serializeScriptResult(result);
     return {
       status: "succeeded",
-      ...(serializedResult === undefined
-        ? {}
-        : { result: JSON.parse(serializedResult) as JsonValue }),
+      ...(serializedResult === undefined ? {} : { result: serializedResult }),
     };
   }
 }

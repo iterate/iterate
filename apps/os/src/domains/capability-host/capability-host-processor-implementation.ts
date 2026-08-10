@@ -245,6 +245,14 @@ export class CapabilityHostProcessor extends StreamProcessor<
   // ------------------------------------------------------------------ reduce
   // Pure reduction, one switch, cases inline.
   protected override reduce({ event, state }: ReduceArgs<CapabilityHostProcessorContract>) {
+    // A COPIED event is data delivered from another stream, never this scope's
+    // own lifecycle: reducing one would fabricate local state — e.g. the
+    // clients-to-root subscription copies client scopes' provider Pager
+    // connected/disconnected facts onto "/" for the project catalog, and the
+    // root host reducing those would grow phantom pager entries keyed by copy
+    // offsets that no real disconnect can ever clear (or worse, a source
+    // offset colliding with a real root pager's would clear the real one).
+    if (event.source?.copiedFrom !== undefined) return state;
     switch (event.type) {
       case "events.iterate.com/capability-host/created":
         // The first created event wins; a duplicate is a no-op (explicit
@@ -657,6 +665,11 @@ export class CapabilityHostProcessor extends StreamProcessor<
       return await invokeNormalizedCapability(provider, hit.rest, args);
     }
     if (this.deps.invokeLiveCapability === undefined) {
+      // Live mounts are Pager-bound: the durable record outlives the
+      // provider's Pager, and a call while it is away fails plainly. (A
+      // dedicated receiver-absent signal that PARKS a stream delivery
+      // instead of failing it is future work — see
+      // docs/stream-subscription-model-redesign.md.)
       throw new Error(`capability "${hit.record.path.join(".")}" is offline`);
     }
     return await this.deps.invokeLiveCapability(hit.record, hit.rest, args);
