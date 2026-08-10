@@ -14,7 +14,7 @@ const processingFields = {
   processedBy: z.string().meta({ description: "Model id that produced this processing." }),
 };
 
-const itemSchema = z.object({
+const MediaItem = z.object({
   stableKey: z.string().meta({ description: "Content hash — the item's identity." }),
   path: z.string().meta({ description: "itx.files path holding the bytes." }),
   filename: z.string().meta({ description: "Original filename as picked/synced." }),
@@ -31,7 +31,7 @@ const itemSchema = z.object({
   ...processingFields,
 });
 
-export type MediaItem = z.infer<typeof itemSchema>;
+export type MediaItem = z.infer<typeof MediaItem>;
 
 export const MediaProcessorContract = defineProcessorContract({
   slug: "media",
@@ -39,7 +39,7 @@ export const MediaProcessorContract = defineProcessorContract({
   description: "Reduces captured media (screenshots/photos) on /media into a searchable index.",
   stateSchema: z.object({
     items: z
-      .record(z.string(), itemSchema)
+      .record(z.string(), MediaItem)
       .default({})
       .meta({ description: "Items by stableKey, latest processing overlaid." }),
   }),

@@ -7,6 +7,8 @@ import type { DynamicWorkerCapability, ItxBinding, StreamEvent } from "../../sdk
 import { mediaStreamPath, mediaWorkerRef } from "./app-ref.ts";
 import type { MediaApp as MediaWorker } from "./worker.ts";
 
+export { mediaStreamPath, mediaWorkerRef } from "./app-ref.ts";
+
 export const MediaApp = {
   create(env: { ITX: Pick<ItxBinding, "get"> }) {
     return {
@@ -33,18 +35,10 @@ export const MediaApp = {
               "search({ q, tags?, limit? }) keyword-matches vision descriptions, OCR transcripts, " +
               "filenames, and tags, newest first, returning signed image URLs. " +
               "list({ limit? }) is the unfiltered newest; get(stableKey) one item.",
-            types: [
-              "type MediaSearchHit = { stableKey: string; path: string; filename: string;",
-              "  contentType: string; width: number; height: number; source: string;",
-              "  capturedAt: string | null; isScreenshot: boolean | null; capturedEventAt: string;",
-              "  markdown: string; transcript: string; tags: string[]; processedBy: string;",
-              "  url: string };",
-              "type Media = {",
-              "  search(query: { q?: string; tags?: string[]; limit?: number }): Promise<MediaSearchHit[]>;",
-              "  list(query: { limit?: number }): Promise<MediaSearchHit[]>;",
-              "  get(stableKey: string): Promise<Omit<MediaSearchHit, 'url'> | null>;",
-              "};",
-            ].join("\n"),
+            // No `types`: the provide-time compile gate rejects strings it
+            // cannot check, and a failure here would get the worker-updated
+            // event skipped (delivery is onFailingEvent: skip). Untyped +
+            // instructions beats a mount that never happens.
           });
         }
       },

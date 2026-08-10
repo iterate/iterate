@@ -136,6 +136,7 @@ export default defineConfig([
       "starter-apps/guestbook/index": "src/starter-apps/guestbook/index.ts",
       "starter-apps/guestbook/worker": "src/starter-apps/guestbook/worker.ts",
       "starter-apps/media/index": "src/starter-apps/media/index.ts",
+      "starter-apps/media/ref": "src/starter-apps/media/ref.ts",
       "starter-apps/media/worker": "src/starter-apps/media/worker.ts",
       "starter-apps/todo/index": "src/starter-apps/todo/index.ts",
       processors: "src/processors/index.ts",

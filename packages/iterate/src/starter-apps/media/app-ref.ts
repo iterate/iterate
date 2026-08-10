@@ -1,22 +1,10 @@
 // The MediaApp's physical identity: a stable durable key preserves its
-// processor storage across implementation updates.
+// processor storage across implementation updates. The literal lives in
+// ref.ts (dependency-free for the mobile e2e); this module holds the
+// satisfies check against the real ref type.
 import type { StatefulDynamicWorkerRef } from "../../sdk.ts";
+import { mediaWorkerRef as mediaWorkerRefLiteral } from "./ref.ts";
 
-export const mediaStreamPath = "/media";
+export { mediaStreamPath } from "./ref.ts";
 
-export const mediaWorkerRef = {
-  className: "MediaApp",
-  durableWorkerKey: "app-media-stream",
-  path: "/",
-  source: {
-    createWorker: {
-      entryPoint: "node_modules/iterate/dist/starter-apps/media/configured-worker.mjs",
-      files: {
-        include: ["package.json"],
-        repoPath: "/repos/config",
-        type: "repo",
-      },
-    },
-  },
-  type: "stateful",
-} satisfies StatefulDynamicWorkerRef;
+export const mediaWorkerRef = mediaWorkerRefLiteral satisfies StatefulDynamicWorkerRef;

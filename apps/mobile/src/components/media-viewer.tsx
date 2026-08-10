@@ -83,6 +83,7 @@ export function MediaViewer({
     <View style={styles.viewer}>
       <GestureDetector gesture={gestures}>
         <Animated.Image
+          accessibilityLabel="Full screen media"
           resizeMode="contain"
           source={{ uri }}
           style={[styles.image, { transform: [...translate.getTranslateTransform(), { scale }] }]}
