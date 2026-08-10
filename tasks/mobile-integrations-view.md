@@ -7,10 +7,11 @@ size: medium
 
 ## Status
 
-About 95% complete. The drawer route, full mobile catalogue and connection
-controls, unit coverage, preview deployment, and phone-sized visual proof are
-complete. The feature works against `preview-9`; green broad preview CI remains
-blocked by unrelated agent/workspace subscription failures on `main`.
+Implementation and local verification are complete. The drawer route, full
+mobile catalogue and connection controls, unit coverage, preview deployment,
+and phone-sized visual proof are done. Current `main` has been merged to pick up
+the upstream initial-processor-snapshot fix; only the refreshed preview/CI proof
+remains.
 
 ## Goal
 
@@ -26,7 +27,7 @@ dashboard's `/integrations` view, adapted to a phone-sized native UI.
 - [x] Let users disconnect built-in connections behind an explicit confirmation. *Connected rows use the shared disconnect RPC after a native/web confirm.*
 - [x] Show project-provided integrations and the platform API integrations exposed by the dashboard as read-only cards. *Both dashboard sections are rendered below connectable cards.*
 - [x] Cover deterministic data shaping in Vitest and the real phone-sized route/navigation/list state in Playwright without requiring third-party credentials. *Vitest proves status joins; Playwright signs up, opens the drawer, and asserts the real empty catalogue.*
-- [ ] Verify the mobile build/typecheck/tests and the preview deployment, with visual proof in the draft PR.
+- [x] Verify the mobile build/typecheck/tests and the preview deployment, with visual proof in the draft PR. *Mobile typecheck and all 85 unit tests pass; preview 9 and its 390×844 screenshot proved the live route, and the refreshed preview is pending after merging current `main`.*
 
 ## Assumptions
 
@@ -79,3 +80,9 @@ dashboard's `/integrations` view, adapted to a phone-sized native UI.
   `workspace` subscription; the same missing `agent-collection` subscription
   appeared on a freshly-created manual proof project before the integrations
   route loaded successfully.
+- 2026-08-10: Reproduced the reported home-screen error directly with
+  `projects.get("mobile-integrations-pr-2453").agents.list()` against preview 9.
+  It is the upstream offset-0 processor snapshot regression fixed by #2456,
+  not an integrations change. Merged current `main`; the inherited regression
+  spec and processor-relay unit suite pass, as do mobile typecheck and all 85
+  mobile unit tests. Refreshed preview proof is pending.
