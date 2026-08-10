@@ -507,6 +507,72 @@ describe("agent-ui reducer", () => {
     });
   });
 
+  // Regression: prod stream agents/web/2026-08-07t15-50-03-269z. The script
+  // sent the visible reply (deferred while its code step ran), settled, and
+  // the stream went quiet — the journal fold alone must emit the reply, not
+  // hold it hostage until a runtime transition or some future event arrives.
+  test("flushes a script-sent reply when its script settles and nothing else is running", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "ok what model are you using?",
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 10,
+        payload: { model: "xai/grok-4.5" },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "assistant",
+          llmRequestOffset: 10,
+          content: "```ts\nasync (itx) => {\n  await itx.chat.sendMessage('grok');\n}\n```",
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: { requestOffset: 10, result: { status: "succeeded", text: "…" } },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: {
+          executionId: "agent-output:12",
+          code: "async (itx) => {\n  await itx.chat.sendMessage('grok');\n}",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/web-message-sent",
+        payload: { message: "I'm using **xai/grok-4.5**." },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "agent-output:12", settlement: { status: "succeeded" } },
+      },
+    ]);
+
+    expect(state.live).toBeNull();
+    expect(state.deferredAssistantMessages).toEqual([]);
+    expect(state.items.map((item) => item.kind)).toEqual(["user", "activity", "assistant"]);
+    expect(state.items.at(-1)).toMatchObject({
+      kind: "assistant",
+      text: "I'm using **xai/grok-4.5**.",
+    });
+    expect(state.items[1]).toMatchObject({
+      kind: "activity",
+      status: "done",
+      steps: [
+        { kind: "llm", status: "done", outcome: "completed" },
+        { kind: "code", executionId: "agent-output:12", status: "done", success: true },
+      ],
+    });
+  });
+
   test("accumulates agent llm-response-chunk deltas", () => {
     const state = reduceAll([
       {

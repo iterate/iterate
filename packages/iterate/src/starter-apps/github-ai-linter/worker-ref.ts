@@ -60,7 +60,7 @@ export async function reviewBotSubscriptionEvent(
         jsonataCondition: reviewBotSubscriptionCondition(startAfterOffset),
       },
       receiver: {
-        action: "processor-wake",
+        action: "wake-processor",
         expression: [
           "workers",
           ["get", await reviewBotAppRef(connection, config)],
@@ -97,7 +97,7 @@ export async function pullRequestLinterSubscriptionEvent(
         eventTypes: Object.values(githubAiLinterEventTypes),
       },
       receiver: {
-        action: "processor-wake",
+        action: "wake-processor",
         expression: [
           "workers",
           ["get", await pullRequestLinterAppRef(input, config)],

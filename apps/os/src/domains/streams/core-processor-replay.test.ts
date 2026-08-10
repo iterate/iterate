@@ -27,12 +27,12 @@ function committed(offset: number, type: string, payload: Record<string, unknown
 }
 
 /**
- * One literal committed event for every event type owned by the version-30
+ * One literal committed event for every event type owned by the version-31
  * core contract. These are deliberately not produced from the schemas: a
  * schema edit must either keep this exact event history replayable or require
  * an intentional state-version/cutover decision and fixture update.
  */
-const VERSION_30_COMMITTED_EVENTS: StreamEvent[] = [
+const VERSION_31_COMMITTED_EVENTS: StreamEvent[] = [
   committed(1, "events.iterate.com/stream/created", {
     projectId: PROJECT_ID,
     path: STREAM_PATH,
@@ -108,7 +108,7 @@ const VERSION_30_COMMITTED_EVENTS: StreamEvent[] = [
       jsonataCondition: "payload.ready = true",
     },
     receiver: {
-      action: "processor-wake",
+      action: "wake-processor",
       expression: ["agents", ["get", "/agents/reviewer"], "processor", "wakeStreamProcessor"],
     },
   }),
@@ -116,8 +116,8 @@ const VERSION_30_COMMITTED_EVENTS: StreamEvent[] = [
     name: "device",
     description: "Run the device processor as a facet of this stream",
     receiver: {
-      action: "processor-wake",
-      placement: "facet",
+      action: "facet-processor",
+      source: { kind: "builtin" },
     },
   }),
   committed(18, "events.iterate.com/stream/subscription-configured", {
@@ -157,17 +157,17 @@ const VERSION_30_COMMITTED_EVENTS: StreamEvent[] = [
   },
 ];
 
-describe("core processor version 30 committed-event replay", () => {
-  test("version 30 parses and reduces one frozen event of every owned type", () => {
-    expect(CORE_STATE_VERSION).toBe(30);
-    expect(new Set(VERSION_30_COMMITTED_EVENTS.map((event) => event.type))).toEqual(
+describe("core processor version 31 committed-event replay", () => {
+  test("version 31 parses and reduces one frozen event of every owned type", () => {
+    expect(CORE_STATE_VERSION).toBe(31);
+    expect(new Set(VERSION_31_COMMITTED_EVENTS.map((event) => event.type))).toEqual(
       new Set(Object.keys(CoreProcessorContract.events)),
     );
 
     const processor = new StreamCoreProcessor({ projectId: PROJECT_ID });
     let state: CoreProcessorState = CoreProcessorContract.stateSchema.parse({});
     const states = new Map<number, CoreProcessorState>();
-    for (const fixture of VERSION_30_COMMITTED_EVENTS) {
+    for (const fixture of VERSION_31_COMMITTED_EVENTS) {
       // First-hand control events must still parse under this reducer version.
       // Received copies deliberately bypass that parse, exactly as the replay
       // reducer does, because their payload belongs to the source lifetime.
@@ -203,8 +203,8 @@ describe("core processor version 30 committed-event replay", () => {
       streamId: STREAM_ID,
       createdAt: "2026-07-21T12:00:01.000Z",
       incarnationId: "incarnation-1",
-      maxOffset: VERSION_30_COMMITTED_EVENTS.at(-1)?.offset,
-      eventCount: VERSION_30_COMMITTED_EVENTS.length,
+      maxOffset: VERSION_31_COMMITTED_EVENTS.at(-1)?.offset,
+      eventCount: VERSION_31_COMMITTED_EVENTS.length,
       childPaths: ["/children"],
       paused: false,
       pauseReason: null,
@@ -236,7 +236,7 @@ describe("core processor version 30 committed-event replay", () => {
                 jsonataCondition: "payload.ready = true",
               },
               receiver: {
-                action: "processor-wake",
+                action: "wake-processor",
                 expression: [
                   "agents",
                   ["get", "/agents/reviewer"],
@@ -253,8 +253,8 @@ describe("core processor version 30 committed-event replay", () => {
               name: "device",
               description: "Run the device processor as a facet of this stream",
               receiver: {
-                action: "processor-wake",
-                placement: "facet",
+                action: "facet-processor",
+                source: { kind: "builtin" },
               },
             },
             configuredAtOffset: 17,

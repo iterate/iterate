@@ -322,6 +322,13 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
     await this.#reads(name).waitUntilEvent(input);
   }
 
+  /** Pull the named processor through the durable stream tail — the parent
+   * facade's catch-up-before-snapshot leg, dialed before every facet read.
+   * `name` may be omitted on a single-processor host. */
+  async catchUp(args?: { name?: string }): Promise<void> {
+    await this.#reads(args?.name).catchUp();
+  }
+
   /**
    * The node's live-state door: snapshot + minimal diffs over the registry's
    * engine, hydrated before the first read. The facet hop is Workers RPC,

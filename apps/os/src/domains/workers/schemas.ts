@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { StreamDeliveryBatch } from "iterate/processors";
-import type { ProjectRpcTarget } from "../../rpc-targets.ts";
+import type { Project } from "../../itx-api.generated.ts";
 import { normalizePath } from "../durable-object-names.ts";
 
 const DURABLE_WORKER_KEY = /^[a-z][a-z0-9-]{0,62}$/;
@@ -355,7 +355,7 @@ const StatelessDynamicWorkerRef = z.strictObject({
   type: z.literal("stateless"),
 }) satisfies z.ZodType<StatelessDynamicWorkerRef, unknown>;
 
-const StatefulDynamicWorkerRef = z.strictObject({
+export const StatefulDynamicWorkerRef = z.strictObject({
   ...WorkerRefBase,
   className: z.string(),
   durableWorkerKey: z.string().regex(DURABLE_WORKER_KEY),
@@ -402,5 +402,5 @@ export type ItxBinding = {
    * properly" warning out of production logs. Values obtained THROUGH it
    * hold their own references and survive its disposal.
    */
-  get(): Promise<ProjectRpcTarget & Disposable>;
+  get(): Promise<Project & Disposable>;
 };

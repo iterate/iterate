@@ -80,7 +80,9 @@ export function selectStrugglingSubscriptions(
         lag: runtime.lag,
         attempt: configured.deliveryHalted?.attempts ?? runtime.attempt,
         lastError: configured.deliveryHalted?.error ?? runtime.lastError,
-        canSetCursor: configured.configuration.receiver.action !== "processor-wake",
+        canSetCursor:
+          configured.configuration.receiver.action !== "facet-processor" &&
+          configured.configuration.receiver.action !== "wake-processor",
       },
     ];
   });

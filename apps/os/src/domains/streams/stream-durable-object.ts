@@ -55,6 +55,9 @@ import {
   parseLiveStatePagerLaneTag,
 } from "../live-state-pager.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
+import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+import { WorkerBuildFailedError } from "../workers/artifact-store.ts";
+import type { StatefulDynamicWorkerRef } from "../workers/schemas.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
 import {
   assertCoreProcessorCheckpointGrowthFits,
@@ -425,19 +428,15 @@ function createSubscriptionReceiverCalls(deps: {
   return {
     async wakeStreamProcessor(receiver, request, expectedDelivery) {
       let value: unknown;
-      if (receiver.placement === "facet") {
-        // Facet placement: the subscription name IS the facet name; the wake
-        // is an in-process parent→facet dial, no itx expression involved. The
-        // facet's wakeStreamProcessor returns the standard wake response, so
-        // everything downstream (retention, batching, watchdog) is shared.
+      if (receiver.action === "facet-processor") {
+        // Facet: the subscription name IS the facet name; the wake is an
+        // in-process parent→facet dial, no itx expression involved. The facet's
+        // wakeStreamProcessor returns the standard wake response, so everything
+        // downstream (retention, batching, watchdog) is shared.
         const facet = await deps.dialProcessorFacet(request.name);
         value = await facet.wakeStreamProcessor(request);
       } else {
-        if (receiver.expression === undefined) {
-          throw new Error(
-            `processor-wake subscription "${request.name}" has neither facet placement nor an expression`,
-          );
-        }
+        // wake-processor: the schema requires an expression here.
         ({ value } = await evaluateItxExpression(
           deps.createAuthorityRoot(),
           toInvocation(receiver.expression, request),
@@ -520,6 +519,12 @@ const PROJECT_WORKER_SUBSCRIPTION_NAME = "project-worker";
  * replays into every facet-placed subscription's facet.
  */
 const FACET_ALARM_KV_KEY = "facetAlarmAtMs";
+
+/** Per-userspace-facet marker of which loaded build the facet is running,
+ * keyed by subscription name. A changed source cacheKey (a config-repo commit)
+ * aborts the stale facet before it is re-created against the new class —
+ * mirroring StatefulWorkerDurableObject's source-change abort. */
+const FACET_SOURCE_VERSION_KV_PREFIX = "facetSourceVersion:";
 
 /** Bounded extra delay before retrying a facet's failed alarm replay. */
 const FACET_ALARM_RETRY_DELAY_MS = 1_000;
@@ -714,8 +719,12 @@ class FacetLiveStateRelayRpcTarget
 type OutboundSubscriptionReceiver =
   CoreProcessorState["subscriptions"]["outbound"]["byName"][string]["configuration"]["receiver"];
 
-/** The processor-wake variant of {@link OutboundSubscriptionReceiver}. */
-type ProcessorWakeReceiver = Extract<OutboundSubscriptionReceiver, { action: "processor-wake" }>;
+/** The hosted-processor variants (a facet or a remote wake) of
+ * {@link OutboundSubscriptionReceiver}. */
+type HostedProcessorReceiver = Extract<
+  OutboundSubscriptionReceiver,
+  { action: "facet-processor" | "wake-processor" }
+>;
 
 /**
  * Copy an expression-evaluation result into plain data and release the
@@ -933,6 +942,17 @@ export class StreamDurableObject extends DurableObject<Env> {
         // durable work that has not started yet; that owed wake is invisible
         // to the sender's recomputation and must veto the deletion.
         if (this.#deliveryAlarmBoundary.hasScheduledWork) return;
+        // A pending facet keepalive desire lives in its OWN kv slot, equally
+        // invisible to the sender's recomputation. Re-arm from it rather than
+        // deleting the native alarm out from under it: a facet's alarm is only
+        // re-armed on boot, and a genuinely idle stream never boots — so a
+        // delete here would strand the facet's revival until the next append
+        // (reopening the exact zero-lag wedge the keepalive exists to close).
+        const facetDesire = this.#readFacetAlarmAtMs();
+        if (facetDesire !== null) {
+          this.#alarmArmer.armNoLaterThan(facetDesire);
+          return;
+        }
         this.#alarmArmer.clearWhenQuiet();
       },
       runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
@@ -1195,21 +1215,22 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /**
    * The committed catalog row a processor read/dial door may act on: the
-   * subscription must EXIST and be a processor-wake row. Reads must never
+   * subscription must EXIST and be a hosted-processor row (facet-processor or
+   * wake-processor). Reads must never
    * materialize processor state for a caller-chosen name the committed
    * catalog does not place there — `ctx.facets.get` CREATES a facet on first
    * dial, so an unchecked name would mint arbitrary facets (including
    * wrong-path first-party runners) from a read. Same gate shape as
    * `waitUntilProcessed`'s existence check.
    */
-  #requireProcessorWakeSubscription(name: string): ProcessorWakeReceiver {
+  #requireHostedProcessorSubscription(name: string): HostedProcessorReceiver {
     const configured = this.#coreProcessorState.subscriptions.outbound.byName[name];
     if (configured === undefined) {
       throw unconfiguredSubscriptionError(name);
     }
     const receiver = configured.configuration.receiver;
-    if (receiver.action !== "processor-wake") {
-      throw new Error(`subscription "${name}" is not a processor-wake subscription`);
+    if (receiver.action !== "facet-processor" && receiver.action !== "wake-processor") {
+      throw new Error(`subscription "${name}" is not a hosted-processor subscription`);
     }
     return receiver;
   }
@@ -1217,8 +1238,12 @@ export class StreamDurableObject extends DurableObject<Env> {
   /**
    * Create-or-reuse the processor facet named after a subscription and make
    * sure it received its first-contact `configure` before any wake. The class
-   * is the sibling `ProcessorFacet` export from `iterate/processors/cloudflare`,
-   * re-exported as an OS worker entrypoint so `ctx.exports` carries it.
+   * is either the OS worker's own `ProcessorFacet` entrypoint (a `builtin`
+   * source, resolved by this stream's path-family registration) or a userspace
+   * DurableObject class LOADED from the subscription's `StatefulDynamicWorkerRef`
+   * (a `userspace` source) — both speak the same `ProcessorFacet` protocol
+   * (`configure` + parent-proxied alarm + `wakeStreamProcessor`/`handleAlarm`),
+   * so everything below this class-resolution seam is shared.
    *
    * THE facet-materialization choke point: every caller funnels through the
    * committed-catalog check, so no read, socket lane, alarm replay, or
@@ -1226,26 +1251,27 @@ export class StreamDurableObject extends DurableObject<Env> {
    * under facet placement.
    */
   async #dialProcessorFacet(name: string): Promise<ProcessorFacetStub> {
-    const receiver = this.#requireProcessorWakeSubscription(name);
-    if (receiver.placement !== "facet") {
-      throw new Error(`subscription "${name}" does not run under facet placement`);
+    const receiver = this.#requireHostedProcessorSubscription(name);
+    if (receiver.action !== "facet-processor") {
+      throw new Error(`subscription "${name}" does not run as a facet`);
     }
-    const workerExports = this.ctx.exports as Record<string, unknown>;
-    // Loose lookup on purpose: the class is the sibling ProcessorFacet export
-    // from iterate/processors/cloudflare, surfaced as an OS worker entrypoint;
-    // ctx.exports carries every exported entrypoint by name.
-    const facetClass = workerExports.ProcessorFacet as DurableObjectClass | undefined;
-    if (facetClass === undefined) {
-      throw new Error(
-        'facet placement requires the OS worker to export the "ProcessorFacet" entrypoint',
-      );
-    }
+    const resolved =
+      receiver.source.kind === "userspace"
+        ? await this.#loadUserspaceFacetClass(name, receiver.source.worker)
+        : this.#builtinFacetClass();
+    // Rebuild the facet whenever its resolved class changed: ctx.facets.get
+    // reuses an existing facet and IGNORES a new startup class, so a source
+    // commit, a same-source className re-point, and a builtin<->userspace flip
+    // all have to abort the stale facet first. The version marker below
+    // distinguishes all three.
+    this.#abortFacetOnVersionChange(name, resolved.version);
     // Safe: ctx.facets.get returns an untyped Fetcher stub (workerd's facet
-    // API carries no class-level typing), but the instance behind it is
-    // always the ProcessorFacet class passed in the startup callback above —
-    // ProcessorFacetStub is exactly that class's RPC surface.
+    // API carries no class-level typing), but the instance behind it is always
+    // the class passed in the startup callback — a ProcessorFacet subclass
+    // (the OS built-in or the userspace StreamProcessorFacet base), whose RPC
+    // surface ProcessorFacetStub over-approximates.
     const facet = this.ctx.facets.get(name, () => ({
-      class: facetClass,
+      class: resolved.class,
     })) as unknown as ProcessorFacetStub;
     if (!this.#configuredProcessorFacets.has(name)) {
       const parentName = this.ctx.id.name;
@@ -1260,6 +1286,73 @@ export class StreamDurableObject extends DurableObject<Env> {
       this.#configuredProcessorFacets.add(name);
     }
     return facet;
+  }
+
+  /** Abort a facet whose resolved class changed since it was created, so the
+   * next ctx.facets.get re-creates it against the new class (it otherwise
+   * reuses the existing facet and ignores the new startup class) — the same
+   * source-change abort StatefulWorkerDurableObject does. */
+  #abortFacetOnVersionChange(name: string, version: string): void {
+    const versionKey = `${FACET_SOURCE_VERSION_KV_PREFIX}${name}`;
+    const previous = this.ctx.storage.kv.get<string>(versionKey);
+    if (previous !== undefined && previous !== version) {
+      this.ctx.facets.abort(name, `facet source changed for ${name}`);
+      this.#configuredProcessorFacets.delete(name);
+    }
+    if (previous !== version) this.ctx.storage.kv.put(versionKey, version);
+  }
+
+  /** The OS worker's own facet class, surfaced as an entrypoint on `ctx.exports`
+   * (the sibling `ProcessorFacet` export from `iterate/processors/cloudflare`).
+   * Its version is a constant: the built-in class only changes on an OS deploy,
+   * which evicts every DO anyway. */
+  #builtinFacetClass(): { class: DurableObjectClass; version: string } {
+    // Loose lookup on purpose: ctx.exports carries every exported entrypoint by
+    // name.
+    const facetClass = (this.ctx.exports as Record<string, unknown>).ProcessorFacet as
+      | DurableObjectClass
+      | undefined;
+    if (facetClass === undefined) {
+      throw new Error(
+        'facet-processor subscriptions require the OS worker to export the "ProcessorFacet" entrypoint',
+      );
+    }
+    return { class: facetClass, version: "builtin" };
+  }
+
+  /** Lazily built loader for userspace facet sources; one per incarnation so
+   * loaded isolates are keyed by a stable instance nonce (no per-dial isolate
+   * accumulation). The scope is this stream's own `{ projectId, path }`, so the
+   * loaded facet's `env.ITX` answers as this stream's scope — how it dials the
+   * alarm proxy and stream handle back. */
+  #facetWorkerRunner: DynamicWorkerRunner | undefined;
+  #workerRunnerForFacets(projectId: string): DynamicWorkerRunner {
+    return (this.#facetWorkerRunner ??= new DynamicWorkerRunner({
+      streamContext: { kind: "scope", scopePath: this.name.path },
+      exports: this.ctx.exports,
+      projectId,
+      scopePath: this.name.path,
+    }));
+  }
+
+  /** Load a userspace facet class from its source ref. The version marker is
+   * `(className, sourceCacheKey)` — the same identity StatefulWorkerDurableObject
+   * versions by — so both a config-repo commit and a same-source className
+   * re-point rebuild the facet (the shared abort in `#dialProcessorFacet`). */
+  async #loadUserspaceFacetClass(
+    name: string,
+    ref: StatefulDynamicWorkerRef,
+  ): Promise<{ class: DurableObjectClass; version: string }> {
+    const projectId = this.name.projectId;
+    if (projectId === null) {
+      throw new Error(`userspace facet "${name}" requires a project stream`);
+    }
+    const loaded = await this.#workerRunnerForFacets(projectId).loadStatefulClass(ref);
+    if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
+    return {
+      class: loaded.klass,
+      version: JSON.stringify({ className: ref.className, cacheKey: loaded.resolved.cacheKey }),
+    };
   }
 
   #readFacetAlarmAtMs(): number | null {
@@ -1320,7 +1413,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       this.#coreProcessorState.subscriptions.outbound.byName,
     ).flatMap(([name, entry]) => {
       const receiver = entry.configuration.receiver;
-      return receiver.action === "processor-wake" && receiver.placement === "facet" ? [name] : [];
+      return receiver.action === "facet-processor" ? [name] : [];
     });
     // Plain copy: the platform's AlarmInvocationInfo host object does not
     // serialize across the facet hop.
@@ -1367,8 +1460,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     name: string;
   }): StreamProcessorFacadeRpcTarget | ExpressionProcessorFacadeRpcTarget {
     const name = z.string().trim().min(1).parse(args.name);
-    const receiver = this.#requireProcessorWakeSubscription(name);
-    if (receiver.placement === "facet") {
+    const receiver = this.#requireHostedProcessorSubscription(name);
+    if (receiver.action === "facet-processor") {
       return new StreamProcessorFacadeRpcTarget({
         name,
         dial: () => this.#dialProcessorFacet(name),
@@ -1399,14 +1492,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     name: string,
     call: [method: string, ...args: unknown[]],
   ): Promise<unknown> {
-    const receiver = this.#requireProcessorWakeSubscription(name);
-    if (receiver.placement === "facet") {
-      throw new Error(`subscription "${name}" now runs under facet placement; re-dial its facade`);
-    }
-    if (receiver.expression === undefined) {
-      throw new Error(
-        `processor-wake subscription "${name}" has neither facet placement nor an expression`,
-      );
+    const receiver = this.#requireHostedProcessorSubscription(name);
+    if (receiver.action === "facet-processor") {
+      throw new Error(`subscription "${name}" now runs as a facet; re-dial its facade`);
     }
     const { value } = await evaluateItxExpression(this.#createEventDeliveryAuthorityRoot(), [
       ...receiver.expression.slice(0, -1),
@@ -1659,7 +1747,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   presentAgentRuntimeTransition(args: { transition: unknown }): void {
     const entry = this.#coreProcessorState.subscriptions.outbound.byName["slack-agent"];
     const receiver = entry?.configuration.receiver;
-    if (receiver?.action !== "processor-wake" || receiver.placement !== "facet") return;
+    if (receiver?.action !== "facet-processor") return;
     this.#runInBackground(async () => {
       const facet = await this.#dialProcessorFacet("slack-agent");
       disposeAcknowledgedRpcResult(
@@ -1694,9 +1782,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         return {
           name,
           action: receiver.action,
-          ...(receiver.action === "processor-wake" && receiver.placement === "facet"
-            ? { placement: "facet" as const }
-            : {}),
+          ...(receiver.action === "facet-processor" ? { placement: "facet" as const } : {}),
           configuredAtOffset: entry.configuredAtOffset,
           status:
             row?.status ??
@@ -2828,12 +2914,12 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     const receiver = configured.configuration.receiver;
-    if (receiver.action === "processor-wake") {
-      if (receiver.placement === "facet") {
-        const facet = await this.#dialProcessorFacet(trimmedName);
-        await facet.waitUntilProcessed({ offset: args.offset, timeoutMs, name: trimmedName });
-        return;
-      }
+    if (receiver.action === "facet-processor") {
+      const facet = await this.#dialProcessorFacet(trimmedName);
+      await facet.waitUntilProcessed({ offset: args.offset, timeoutMs, name: trimmedName });
+      return;
+    }
+    if (receiver.action === "wake-processor") {
       // Swap the expression's trailing `wakeStreamProcessor` property step for
       // the public `waitUntilProcessed` verb on the same `processor` node.
       const value = await this.#callExpressionProcessorNode(trimmedName, [
@@ -2955,9 +3041,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       // dial the named facet) for a caller-chosen key the committed catalog
       // does not place under facet placement. Same gate as processorFacade.
       try {
-        const receiver = this.#requireProcessorWakeSubscription(lane);
-        if (receiver.placement !== "facet") {
-          throw new Error(`subscription "${lane}" does not run under facet placement`);
+        const receiver = this.#requireHostedProcessorSubscription(lane);
+        if (receiver.action !== "facet-processor") {
+          throw new Error(`subscription "${lane}" does not run as a facet`);
         }
       } catch (error) {
         return Response.json(
@@ -2979,11 +3065,11 @@ export class StreamDurableObject extends DurableObject<Env> {
       // subscription under facet placement (the host create batch configures
       // it), so a caller cannot park provider sockets on arbitrary streams.
       try {
-        const receiver = this.#requireProcessorWakeSubscription(
+        const receiver = this.#requireHostedProcessorSubscription(
           CapabilityHostProcessorContract.slug,
         );
-        if (receiver.placement !== "facet") {
-          throw new Error("the capability-host subscription does not run under facet placement");
+        if (receiver.action !== "facet-processor") {
+          throw new Error("the capability-host subscription does not run as a facet");
         }
       } catch (error) {
         return Response.json(

@@ -2017,7 +2017,7 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
     subscriptionConfigured({
       name: subscriptionName,
       receiver: {
-        action: "processor-wake",
+        action: "wake-processor",
         expression: ["schedulers", ["get", streamPath], "processor", "wakeStreamProcessor"],
       },
     }),
@@ -2393,7 +2393,7 @@ test.skipIf(deployedBaseUrl() === null)(
       subscriptionConfigured({
         name: subscriptionName,
         receiver: {
-          action: "processor-wake",
+          action: "wake-processor",
           expression: ["schedulers", ["get", streamPath], "processor", "wakeStreamProcessor"],
         },
       });
@@ -2514,7 +2514,7 @@ test("hosted delivery intersects the stored filter with the processor's announce
         eventTypes: ["events.iterate.com/scheduler/created", MATCHING_EVENT_TYPE],
       },
       receiver: {
-        action: "processor-wake",
+        action: "wake-processor",
         expression: ["schedulers", ["get", streamPath], "processor", "wakeStreamProcessor"],
       },
     }),
@@ -2597,8 +2597,8 @@ test("a facet-placed processor delivers in-process and serves snapshots through 
     subscriptionConfigured({
       name: subscriptionName,
       receiver: {
-        action: "processor-wake",
-        placement: "facet",
+        action: "facet-processor",
+        source: { kind: "builtin" },
       },
     }),
   );
@@ -2623,7 +2623,7 @@ test("a facet-placed processor delivers in-process and serves snapshots through 
     name: subscriptionName,
     status: "active",
     configuration: {
-      receiver: { action: "processor-wake", placement: "facet" },
+      receiver: { action: "facet-processor", source: { kind: "builtin" } },
     },
   });
 
@@ -2638,7 +2638,7 @@ test("a facet-placed processor delivers in-process and serves snapshots through 
     expect.arrayContaining([
       expect.objectContaining({
         name: subscriptionName,
-        action: "processor-wake",
+        action: "facet-processor",
         placement: "facet",
         status: "active",
       }),
@@ -3220,7 +3220,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       event: subscriptionConfigured({
         name: "agent",
         receiver: {
-          action: "processor-wake",
+          action: "wake-processor",
           expression: ["agents", ["get", `/agents/${marker}`], "processor", "wakeStreamProcessor"],
           jsonataTransform: "payload",
         },
@@ -3594,7 +3594,7 @@ async function runEphemeralEcho(
     subscriptionConfigured({
       name: "eph-echo",
       receiver: {
-        action: "processor-wake",
+        action: "wake-processor",
         expression: [
           "workers",
           [
