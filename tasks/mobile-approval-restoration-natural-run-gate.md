@@ -5,7 +5,7 @@ size: medium
 
 # Monitor the restored mobile approval flows for 25 natural previews
 
-Status: 11/25 qualifying natural canonical preview occurrences are queryable. The restored approval and notification specs passed first attempt in all eleven; 14 natural occurrences remain. Four intervening natural runs are excluded and classified below: three had unrelated failures, while one target notification spec retried after preview auth returned HTTP 429. The corrected stream quiet-window fence passed first attempt in two canonical previews. No excluded run left incomplete telemetry.
+Status: 14/25 qualifying natural canonical preview occurrences are queryable. The restored approval and notification specs passed first attempt in all fourteen; 11 natural occurrences remain. Four intervening natural runs are excluded and classified below: three had unrelated failures, while one target notification spec retried after preview auth returned HTTP 429. The corrected stream quiet-window fence passed first attempt in two canonical previews. No excluded run left incomplete telemetry.
 
 - [x] Define the post-merge gate from durable telemetry. *A qualifying occurrence is a normally triggered canonical preview workflow with both restored specs passed, `retry_count = 0`, `passed_after_retry = false`, and one complete non-failed telemetry finalizer.*
 - [x] Preserve the accepted baseline evidence. *Workflows `497719938401885`, `105920886681524`, and `114044928448857` are queryable qualifying occurrences.*
@@ -19,7 +19,8 @@ Status: 11/25 qualifying natural canonical preview occurrences are queryable. Th
 - [x] Count the overlapping natural #2473 preview. *Depot run `8q04w5ncq1` records a normal `pull_request` trigger. Retained workflow `171901776700561` had both restored specs clean, no failed or retried test anywhere, and a complete 8-artifact / 6,650-runner-event finalizer.*
 - [x] Classify the excluded target retry. *Natural workflow `274645031538687` predated #2470. Its notification spec's first attempt received HTTP 429 from preview auth's fixed-code OTP endpoint (CF-Ray `a2901dc1b807f6c0-IAD`), then passed on the single framework retry. #2470 raises only the preview/test-lane OTP limit, and later natural occurrences are clean.*
 - [x] Count the natural #2469 preview. *Depot run `gwzq58bvf4` records a normal `pull_request` trigger. Retained workflow `293927096273794` had both restored specs clean, no failed or retried test anywhere, and a complete 8-artifact / 6,487-runner-event finalizer.*
-- [ ] Observe 14 more qualifying natural canonical preview occurrences.
+- [x] Count three earlier retained natural previews. *Workflows `263677043387377`, `140816095847378`, and `368039917139070` had both restored targets clean and complete non-failed 8-artifact finalizers. Their single unrelated retries are classified below.*
+- [ ] Observe 11 more qualifying natural canonical preview occurrences.
 - [ ] Investigate any target retry, failure, incomplete finalizer, or missing-transition diagnostic before allowing the streak to continue.
 - [ ] Record the final 25-workflow evidence set and close the restoration goal.
 
@@ -45,6 +46,9 @@ Status: 11/25 qualifying natural canonical preview occurrences are queryable. Th
 | 9 | `476025826996334` | `921cfc4b` | #2467 | both targets clean; corrected stream fence clean; complete 10-artifact / 7,893-runner-event finalizer |
 | 10 | `171901776700561` | `cc288de0` | #2473 | both targets clean; zero run-wide retries or failures; complete 8-artifact / 6,650-runner-event finalizer |
 | 11 | `293927096273794` | `4808070a` | #2469 | both targets clean; zero run-wide retries or failures; complete 8-artifact / 6,487-runner-event finalizer |
+| 12 | `263677043387377` | `cd66a8ca` | #2469 | both targets clean; complete 8-artifact / 6,687-runner-event finalizer; unrelated retry classified below |
+| 13 | `140816095847378` | `137b7425` | #2469 | both targets clean; complete 8-artifact / 6,585-runner-event finalizer; unrelated retry classified below |
+| 14 | `368039917139070` | `bb351744` | #2473 | both targets clean; complete 8-artifact / 6,806-runner-event finalizer; unrelated retry classified below |
 
 Manual workflow `350306797014989` on `081ff01f` proved default PostHog delivery and is intentionally excluded from the counter.
 
@@ -59,3 +63,9 @@ The same workflow had one unrelated Vitest retry in `Agent scripts can send web-
 Workflow `204202074715153` had one unrelated Playwright retry in the seeded Docs app review. The first project reached the UI but showed `Event delivery retrying`: exact-version `os-preview-4` telemetry records 20-second hosted-processor acknowledgement timeouts for the root `project` processor and `/repos/config` `repo` processor. The bounded retry path later wrote both subscription cursors back to `attempt = 0` with `last_error` and in-flight state cleared; the Playwright retry passed. This was not a target retry and the finalizer was complete.
 
 Workflow `476025826996334` had one unrelated Playwright retry in the two-dashboard-clients spec. Exact-version `os-preview-1` telemetry records a Cloudflare Durable Object storage reset during `appendCoreEvent` on Stream DO `ed08f734…` (trace `422ff29c…`, Cloudflare reference `cuf18o8ljkn8n2leevbe4j3c`). The single framework retry passed. This was not a target retry and the finalizer was complete.
+
+Workflow `263677043387377` had one unrelated Playwright retry while checking that dismissing a new-file discard dialog preserves the edit. The failure snapshot shows the dialog was dismissed but the repo editor remounted `draft.md` without its buffered text and exposed no loading state, so Middlewright's one-millisecond no-spinner probe failed immediately. The framework retry passed. This was not a target retry and the finalizer was complete.
+
+Workflow `140816095847378` had one unrelated Vitest retry in `invalid receiver-specific combinations and expressions never commit`. The first attempt failed with Cloudflare's explicit `stream-unavailable` Durable Object storage-reset reference `tuvl8nmdb9i7tgbd498oqo60`; the framework retry passed. This was not a target retry and the finalizer was complete.
+
+Workflow `368039917139070` had one unrelated Vitest retry in the deliberate stream-restart egress test. Exact-version `os-preview-5` telemetry ties the first attempt to project `prj_41400cb01ad24c319b8f402585128806` and WebSocket request `a290f2553ef9d90d`: the intentional `Stream.kill` rejected at `18:08:56.803Z`, the decision append then succeeded and the script returned 200, but the settlement `Stream.waitForEvent` reached its fixed 30-second deadline. This is the pre-#2467 settlement gap that #2467 fixes; its later canonical proofs are clean. This was not a target retry and the finalizer was complete.
