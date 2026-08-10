@@ -431,9 +431,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
       // Decided: rejected indexes refuse, approved indexes release through
       // the ordinary egress lanes CONCURRENTLY — they were concurrent when
-      // the rule caught them. Settling is bookkeeping about each outcome and
-      // must never CHANGE it: a failed append logs, but the caller still
-      // gets whatever upstream truly returned (or the true upstream error).
+      // the rule caught them. The settlement fact is part of each approved
+      // entry's success: its caller cannot observe success unless that fact
+      // landed durably, while a failure still stays isolated from siblings.
       await Promise.all(
         entries.map(async (entry, index) => {
           if (decision.verdicts[index] === "reject") {

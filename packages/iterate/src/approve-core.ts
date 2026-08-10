@@ -187,6 +187,7 @@ export async function decide(input: {
   const reason = input.reason?.trim().slice(0, 1_000);
   await input.stream.append({
     type: EVENT.decided,
+    idempotencyKey: `human-approval-decided:${input.offset}`,
     payload: {
       approvalRequestEventOffset: input.offset,
       verdicts: [...input.verdicts],

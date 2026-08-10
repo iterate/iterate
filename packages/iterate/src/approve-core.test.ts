@@ -3,6 +3,7 @@ import type { RpcStub } from "@iterate-com/capnweb";
 import type { Stream, StreamEvent } from "./itx-api.generated.ts";
 import {
   awaitSettlement,
+  decide,
   EVENT,
   reconcileBacklog,
   safeHost,
@@ -47,6 +48,37 @@ function fakeStream(log: StreamEvent[]): RpcStub<Stream> {
 const REQUEST_OFFSET = 10;
 // A short settlement window so the no-match cases resolve fast under test.
 const WINDOW_MS = 40;
+
+test("decide gives one approval request a replay-safe event identity", async () => {
+  let appended: any;
+  const stream: any = {
+    append: async (event: any) => {
+      appended = event;
+      return [];
+    },
+  };
+
+  await decide({
+    stream,
+    projectId: "prj_test",
+    key: null,
+    offset: 41,
+    payload: {
+      requests: [],
+      ruleKey: "needs-human",
+      ruleDescription: "needs a human",
+      streamContext: { kind: "client-session", principal: "admin", admin: true },
+      expiresAt: "2026-08-10T15:00:00.000Z",
+    },
+    verdicts: [],
+  });
+
+  expect(appended).toMatchObject({
+    type: EVENT.decided,
+    idempotencyKey: "human-approval-decided:41",
+    payload: { approvalRequestEventOffset: 41, decidedBy: "human" },
+  });
+});
 
 test("safeHost preserves the port that identifies a destination", () => {
   expect(safeHost("http://localhost:8080/refund")).toBe("localhost:8080");

@@ -426,6 +426,7 @@ test("a script run's parked hold survives a stream Durable Object restart", asyn
 
     await root.append({
       type: DECIDED,
+      idempotencyKey: `human-approval-decided:${requested.offset}`,
       payload: {
         approvalRequestEventOffset: requested.offset,
         verdicts: ["approve"],
