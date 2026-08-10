@@ -23,9 +23,13 @@ The platform runs each agent under its **headless** processor — turn
 scheduling and the LLM call, with no response interpretation. `worker.ts`
 here is the interpreter:
 
-1. On each agent's birth subscription event, it retargets the wake to the
-   headless processor (a keyed `stream/subscription-configured` upsert —
-   reversible by appending the original back).
+1. On each agent's birth subscription event, it hands the wake over to the
+   headless processor: configure the `agent-headless` subscription, remove the
+   `agent` one (subscription names are contract selectors; the handover is
+   reversible by appending the mirror pair). Note: facet subscriptions are
+   documented as platform-internal, so this userland append is the
+   experiment's shakiest joint — if a deployment rejects it, the opt-in needs
+   a small platform door instead.
 2. It supersedes each agent's keyed system-prompt slot with
    `prompts/agent-system-prompt.md`, and injects `AGENTS.md` as standing
    context, re-syncing both on every config-repo commit.
