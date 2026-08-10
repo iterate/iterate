@@ -19,11 +19,12 @@ not part of this restoration.
 The narrow replacement is implemented and locally green. It contains only
 directly reproduced script-worker ownership, approval-claim ordering, bounded
 push settlement, accepted-message handoff, correlated diagnostics, and the two
-unskips. A four-worker preview replay is green after separating out-of-band
-script startup from live approval delivery and making parallel project slugs
-unique. The remaining work is exact-head deployed proof: the old four-worker
-reproduction plus three canonical full previews, with 25 consecutive targeted
-stress iterations on one commit.
+unskips. The current preview passed 16 targeted cases before the shared auth
+signup helper retried at its missing OTP-form navigation boundary; that helper
+now waits for the visible form before using the normal action budget. The code
+change resets all exact-head counters. Remaining work is a fresh deployment,
+25 consecutive paired four-worker iterations, three canonical previews, and
+review/telemetry cleanup.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -174,3 +175,14 @@ hide a recurrence with a timeout increase or another retry.
   transitions. The spec now polls the public call through that one classified
   mounting outcome; its four-worker replay passed 4/4. This gate-discovered
   test fix changes the head, so the formal mobile and canonical counters reset.
+- 2026-08-10: On `c4a99261d`, the targeted four-worker gate passed 16 cases
+  before an approvals attempt retried after 2.5s. The restored approval path
+  had not started: the shared signup helper submitted the email address and
+  immediately tried to fill an OTP field that had not mounted within the
+  global 1s action budget. Its retry passed. Added an explicit 15s visible-form
+  boundary followed by the normal-budget fill; exact-head counters reset.
+- 2026-08-10: Audited two script-related retries from canonical run
+  `cxgcwbgdvt`. Durable history classified the fence test as a Worker rollout
+  reset and the concurrency batch as 20 safely orphaned executions after its
+  common CapabilityHost incarnation vanished mid-hold. Both are known rollout
+  failures, not evidence that one-off Worker disposal raced settled calls.
