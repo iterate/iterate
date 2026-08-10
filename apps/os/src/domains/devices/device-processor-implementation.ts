@@ -329,8 +329,17 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         ) {
           return state;
         }
-        // A reply intent copied after its claim (see recentReplyClaims) opens
-        // already-presented, so the send pass settles it suppressed.
+        // An approval or reply intent copied after its claim opens already-
+        // presented, so the send pass settles it suppressed.
+        const approvalRequestEventOffset = event.payload.approvalRequestEventOffset;
+        const pendingApprovalPresentations = { ...state.pendingApprovalPresentations };
+        const approvalPresentedAt =
+          approvalRequestEventOffset === undefined
+            ? undefined
+            : pendingApprovalPresentations[String(approvalRequestEventOffset)];
+        if (approvalRequestEventOffset !== undefined) {
+          delete pendingApprovalPresentations[String(approvalRequestEventOffset)];
+        }
         const replyOffset = event.payload.agentReplyEventOffset;
         const destination = event.payload.destination;
         const claimed =
@@ -342,16 +351,21 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
             : undefined;
         return {
           ...state,
+          latestApprovalRequestEventOffset:
+            approvalRequestEventOffset === undefined
+              ? state.latestApprovalRequestEventOffset
+              : Math.max(state.latestApprovalRequestEventOffset, approvalRequestEventOffset),
+          pendingApprovalPresentations,
           notifications: {
             ...state.notifications,
             [event.offset]: {
               ...(event.payload.agentReplyEventOffset === undefined
                 ? {}
                 : { agentReplyEventOffset: event.payload.agentReplyEventOffset }),
-              ...(event.payload.approvalRequestEventOffset === undefined
-                ? {}
-                : { approvalRequestEventOffset: event.payload.approvalRequestEventOffset }),
-              ...(claimed ? { presentedAt: claimed.claimedAt } : {}),
+              ...(approvalRequestEventOffset === undefined ? {} : { approvalRequestEventOffset }),
+              ...(approvalPresentedAt || claimed?.claimedAt
+                ? { presentedAt: approvalPresentedAt || claimed?.claimedAt }
+                : {}),
               body: event.payload.body,
               destination: event.payload.destination,
               expiresAt: event.payload.expiresAt,
@@ -364,23 +378,34 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       }
       case "events.iterate.com/project/approval-presented": {
         // The claim marks every still-`requested` obligation for the batch;
-        // the send pass settles them `suppressed`. Claims matching nothing
-        // reduce to nothing — the obligation may already be settled, the
-        // attempt may already have started (the push is out; too late), or
-        // the claim may even have been copied here before the intent (an
-        // accepted race: the push then goes out despite the claim).
+        // the send pass settles them `suppressed`. The ordered copy lane may
+        // carry the claim before the notification processor's later intent,
+        // so a claim above the intent high-water mark waits durably for that
+        // intent. A claim at or below the frontier matching no requested
+        // obligation is late (already sent or settled) and remains a no-op.
         const claimed = Object.entries(state.notifications).filter(
           ([, notification]) =>
             notification.status === "requested" &&
             notification.approvalRequestEventOffset === event.payload.approvalRequestEventOffset &&
             notification.presentedAt === undefined,
         );
-        if (claimed.length === 0) return state;
-        const notifications = { ...state.notifications };
-        for (const [offset, notification] of claimed) {
-          notifications[offset] = { ...notification, presentedAt: Date.parse(event.createdAt) };
+        if (claimed.length > 0) {
+          const notifications = { ...state.notifications };
+          for (const [offset, notification] of claimed) {
+            notifications[offset] = { ...notification, presentedAt: Date.parse(event.createdAt) };
+          }
+          return { ...state, notifications };
         }
-        return { ...state, notifications };
+        if (event.payload.approvalRequestEventOffset <= state.latestApprovalRequestEventOffset) {
+          return state;
+        }
+        return {
+          ...state,
+          pendingApprovalPresentations: {
+            ...state.pendingApprovalPresentations,
+            [event.payload.approvalRequestEventOffset]: Date.parse(event.createdAt),
+          },
+        };
       }
       case "events.iterate.com/project/agent-reply-presented": {
         // Same shape as the approval claim, matched on the (destination

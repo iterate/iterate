@@ -451,6 +451,34 @@ describe("DeviceProcessor settlements", () => {
 // =============================================================================
 
 describe("DeviceProcessor approval-push suppression", () => {
+  it("a claim copied before its notification intent still suppresses the push", async () => {
+    const h = makeDeviceHarness();
+    h.gateway.send = async () => {
+      throw new Error("a foregrounded approval push must never dial Expo");
+    };
+
+    await h.play(["append", DEVICE_CREATED, APPROVAL_PRESENTED]);
+    expect(h.state().pendingApprovalPresentations).toEqual({
+      "17": Date.parse("2026-07-18T08:00:00Z"),
+    });
+
+    await h.play(["crash"], ["advanceTime", 200], ["append", approvalIntentRequested()]);
+
+    expect(h.sent).toHaveLength(0);
+    expect(h.events(STARTED)).toHaveLength(0);
+    expect(h.events(SETTLED)).toMatchObject([
+      {
+        idempotencyKey: "device/notification-settled@3",
+        payload: { requestOffset: 3, outcome: { kind: "suppressed" } },
+      },
+    ]);
+    expect(h.state()).toMatchObject({
+      latestApprovalRequestEventOffset: 17,
+      notifications: {},
+      pendingApprovalPresentations: {},
+    });
+  });
+
   it("an approval intent waits out the grace window: no attempt inside it, the alarm nudge sends after it", async () => {
     const h = makeDeviceHarness();
     await h.play(["append", DEVICE_CREATED, approvalIntentRequested()]);
