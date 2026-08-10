@@ -1296,6 +1296,15 @@ export class StreamDurableObject extends DurableObject<Env> {
     const versionKey = `${FACET_SOURCE_VERSION_KV_PREFIX}${name}`;
     const previous = this.ctx.storage.kv.get<string>(versionKey);
     if (previous !== undefined && previous !== version) {
+      /*
+       * SAY SO. Aborting is the most destructive thing this class does to
+       * userspace — it discards a facet's in-memory state and whatever work
+       * was in flight — and until now it did that silently: no log, no event,
+       * nothing. A day was spent suspecting this code of firing on every wake
+       * precisely because there was no way to see whether it fired at all.
+       * The versions are the whole story, so both are here.
+       */
+      console.info("stream facet source changed; aborting", { name, previous, version });
       this.ctx.facets.abort(name, `facet source changed for ${name}`);
       this.#configuredProcessorFacets.delete(name);
     }
