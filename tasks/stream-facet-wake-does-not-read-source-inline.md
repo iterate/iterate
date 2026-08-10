@@ -7,9 +7,9 @@ size: medium
 
 ## Status summary
 
-Implementation and focused regression proofs are in progress. The actor cycle
-is classified and removed in the runner; preview deployment, the exact failed
-spec, canonical CI, and trace review remain.
+Implementation and local regression proofs are complete. The actor cycle is
+removed in the runner; preview deployment, the exact failed spec, canonical
+CI, and trace review remain.
 
 ## Problem
 
@@ -33,7 +33,8 @@ test and not a source-recreation failure.
       now returns the durable effect cursor first and defers refold/load to the
       independent one-way batch callback; a runner spec covers a failed and
       retried deferred refold._
-- [ ] Run the complete runner/registry suites and package typechecks.
+- [x] Run the complete runner/registry suites and package typechecks. _All 51
+      focused tests pass; OS and `iterate` package typechecks pass._
 - [ ] Deploy preview 1 and run the exact formerly-retrying spec without a test
       retry layer.
 - [ ] Run canonical preview CI without retries and audit the project-create

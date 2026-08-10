@@ -1478,9 +1478,7 @@ describe("StreamProcessorRunner caught-up processing (delivery.caughtUp)", () =>
         },
       },
     });
-    const { processEventBatch } = await harness.runner.openEventBatchCallback(undefined, {
-      sourceScansAllEvents: true,
-    });
+    const { processEventBatch } = await harness.runner.openHostedEventBatchCallback(TEST_STREAM_ID);
 
     await processEventBatch({
       streamId: TEST_STREAM_ID,
@@ -1505,6 +1503,34 @@ describe("StreamProcessorRunner caught-up processing (delivery.caughtUp)", () =>
     });
     expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
     expect(headCalls).toEqual([{ open: ["a"], event: null }]);
+  });
+
+  it("returns a hosted checkpoint before refolding its stale reduction cache", async () => {
+    const journal = makeJournal();
+    journal.seed({ type: REQUESTED, payload: { id: "already-processed" } });
+    const store = makeProgressStore();
+    store.plant({
+      streamId: TEST_STREAM_ID,
+      reduction: {
+        reducerVersion: "stale-version",
+        reducedThroughOffset: 0,
+        state: { count: 0, open: [] },
+      },
+      processing: { acknowledgedThroughOffset: 1, cursorRevision: 0 },
+    });
+    const harness = makeHarness({ journal, store });
+    const nestedRead = new Error("source cannot serve a nested refold during its alarm");
+    journal.failNextReadWith(nestedRead);
+
+    const opened = await harness.runner.openHostedEventBatchCallback(TEST_STREAM_ID);
+
+    expect(opened.checkpointOffset).toBe(1);
+    await expect(opened.processEventBatch(eventBatch([], 1))).rejects.toBe(nestedRead);
+    await expect(opened.processEventBatch(eventBatch([], 1))).resolves.toBeUndefined();
+    await expect(harness.runner.snapshot()).resolves.toEqual({
+      offset: 1,
+      state: { count: 1, open: ["already-processed"] },
+    });
   });
 
   it("runs blockProcessorWhile registrations in strict FIFO order — fold-derived work lands after per-event work", async () => {

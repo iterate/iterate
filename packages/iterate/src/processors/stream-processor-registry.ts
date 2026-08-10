@@ -726,9 +726,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       // this RPC makes the stream pull a result that cannot settle until the
       // nested append reaches the stream again — a cyclic actor-drain tree
       // that workerd can retain until idle teardown.
-      const opened = await entry.runner.openEventBatchCallback(args.stream.streamId, {
-        sourceScansAllEvents: true,
-      });
+      const opened = await entry.runner.openHostedEventBatchCallback(args.stream.streamId);
       const processEventBatch = (batch: StreamWakeEventBatch) => {
         const { reportDeliveryResult, ...frame } = batch;
         if (

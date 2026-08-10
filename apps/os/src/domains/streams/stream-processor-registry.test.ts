@@ -471,6 +471,18 @@ describe("recovery revival", () => {
 // =============================================================================
 
 describe("wakeStreamProcessor", () => {
+  it("opens a trusted hosted callback without reading back into its source stream", async () => {
+    const h = makeHarness();
+    const read = vi
+      .spyOn(h.stream, "getEventPage")
+      .mockRejectedValue(new Error("source stream cannot serve a nested read during its alarm"));
+
+    const woken = await h.wake("alpha-proc");
+
+    expect(woken).toMatchObject({ streamId: STREAM_ID, checkpointOffset: 0 });
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("answers the runner's cursor, processEventBatch, announcement, and runtime capabilities", async () => {
     const h = makeHarness();
     // Name-only resolution: an unregistered name is a loud error — there is no
