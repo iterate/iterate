@@ -5,7 +5,7 @@ size: medium
 
 # Monitor the restored mobile approval flows for 25 natural previews
 
-Status: 10/25 qualifying natural canonical preview occurrences are queryable. The restored approval and notification specs passed first attempt in all ten; 15 natural occurrences remain. Three intervening natural runs are excluded because their complete finalizers reported unrelated failures. The corrected stream quiet-window fence passed first attempt in two canonical previews. Their unrelated Playwright retries are classified below and did not affect either restored target or leave incomplete telemetry.
+Status: 10/25 qualifying natural canonical preview occurrences are queryable. The restored approval and notification specs passed first attempt in all ten; 15 natural occurrences remain. Four intervening natural runs are excluded and classified below: three had unrelated failures, while one target notification spec retried after preview auth returned HTTP 429. The corrected stream quiet-window fence passed first attempt in two canonical previews. No excluded run left incomplete telemetry.
 
 - [x] Define the post-merge gate from durable telemetry. *A qualifying occurrence is a normally triggered canonical preview workflow with both restored specs passed, `retry_count = 0`, `passed_after_retry = false`, and one complete non-failed telemetry finalizer.*
 - [x] Preserve the accepted baseline evidence. *Workflows `497719938401885`, `105920886681524`, and `114044928448857` are queryable qualifying occurrences.*
@@ -17,6 +17,7 @@ Status: 10/25 qualifying natural canonical preview occurrences are queryable. Th
 - [x] Count the corrected fence's natural #2470 proof. *Workflow `204202074715153` passed both restored specs first attempt and has a complete 10-artifact / 8,003-runner-event finalizer. The corrected stream spec also passed first attempt.*
 - [x] Count the corrected fence's natural #2467 proof. *Workflow `476025826996334` passed both restored specs first attempt and has a complete 10-artifact / 7,893-runner-event finalizer. The corrected stream spec also passed first attempt.*
 - [x] Count the overlapping natural #2473 preview. *Depot run `8q04w5ncq1` records a normal `pull_request` trigger. Retained workflow `171901776700561` had both restored specs clean, no failed or retried test anywhere, and a complete 8-artifact / 6,650-runner-event finalizer.*
+- [x] Classify the excluded target retry. *Natural workflow `274645031538687` predated #2470. Its notification spec's first attempt received HTTP 429 from preview auth's fixed-code OTP endpoint (CF-Ray `a2901dc1b807f6c0-IAD`), then passed on the single framework retry. #2470 raises only the preview/test-lane OTP limit, and later natural occurrences are clean.*
 - [ ] Observe 15 more qualifying natural canonical preview occurrences.
 - [ ] Investigate any target retry, failure, incomplete finalizer, or missing-transition diagnostic before allowing the streak to continue.
 - [ ] Record the final 25-workflow evidence set and close the restoration goal.
@@ -48,6 +49,10 @@ Manual workflow `350306797014989` on `081ff01f` proved default PostHog delivery 
 Natural workflow `278234786942377` on `965beafd` is intentionally excluded: both restored targets were clean, but the complete finalizer correctly reported an unrelated Vitest failure and retry.
 
 Natural workflows `223122126291692` on `2231c91d` and `440009111509530` on `f0af39c9` are intentionally excluded: both restored targets were clean, but their complete 10-artifact finalizers correctly reported the stream fence failure and retries elsewhere in the OS suite.
+
+Natural workflow `274645031538687` on `b4cc9f19` is intentionally excluded. Its complete 10-artifact / 7,958-runner-event finalizer records the approval target clean and the notification target passed after one retry. The first notification attempt posted to `auth.iterate-preview-1.com/api/auth/email-otp/send-verification-otp` at `2026-08-10T15:43:26.981Z`; the Playwright trace captured HTTP 429 and CF-Ray `a2901dc1b807f6c0-IAD`, so the OTP screen never appeared. The run predates #2470's preview/test-only fixed-code OTP limit fix. Subsequent natural occurrences on and after #2470 passed the notification target first attempt.
+
+The same workflow had one unrelated Vitest retry in `Agent scripts can send web-chat messages (with file attachments) and call project tools`. Exact-version `os-preview-1` telemetry ties its first attempt to project `prj_793f9b16f0e94bbc97c46f6c7e39493f` and WebSocket request `a2901c9c3b56822a`: `Stream.append` hit a retryable Durable Object reset at `15:42:53.384Z`; recovery re-appended successfully at `15:42:53.570Z`, but three re-armed one-shot `Stream.waitForEvent` calls reached their unchanged 30-second public deadline at `15:43:23.355Z`. The framework retry created a new project/session and passed. This did not affect the target-retry classification or finalizer completeness.
 
 Workflow `204202074715153` had one unrelated Playwright retry in the seeded Docs app review. The first project reached the UI but showed `Event delivery retrying`: exact-version `os-preview-4` telemetry records 20-second hosted-processor acknowledgement timeouts for the root `project` processor and `/repos/config` `repo` processor. The bounded retry path later wrote both subscription cursors back to `attempt = 0` with `last_error` and in-flight state cleared; the Playwright retry passed. This was not a target retry and the finalizer was complete.
 
