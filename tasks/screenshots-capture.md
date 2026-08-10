@@ -7,11 +7,13 @@ supersedes: screenshots-collector (closed PR #2405 — simplified)
 
 # Screenshots capture
 
-**Status summary:** prototype in progress. Simplified cut of the
-screenshots-collector spec (#2405): no rules engine, no OCR layers, no
-media-library sync, no server-side processor. Capture screenshots from the
-phone, describe them with `itx.ai.toMarkdown`, auto-tag with a cheap LLM,
-persist on a stream, search from the phone. Ships OTA today (JS-only).
+**Status summary:** prototype implemented, live e2e green against local dev
+(vision description + tags + idempotent event, end to end). Mobile side is
+JS-only (ships OTA); the PR also carries a small os fix it exposed —
+`ai.toMarkdown` now accepts bytes/base64 for `blob`, because a sandbox-made
+Blob can't cross the RPC boundary (the documented agent recipe was broken).
+Main missing pieces: real-phone dogfood pass, and the follow-ups listed at
+the bottom (auto-sync, share sheet, embedding search).
 
 ## What it is
 
@@ -62,18 +64,23 @@ Taxonomy is data in `apps/mobile/src/lib/screenshots.ts` — expect churn.
 
 ## Checklist
 
-- [ ] `src/lib/screenshots.ts`: event type + payload, tag taxonomy, file
+- [x] `src/lib/screenshots.ts`: event type + payload, tag taxonomy, file
       path/idempotency-key derivation, pipeline script builder
       (JSON-embedded input, injection-safe), client-side search filter
-- [ ] unit tests for script builder + search filter (root CI runs these)
-- [ ] `pickImages` gains a required `selectionLimit` param (chat passes 6,
-      screenshots 20)
-- [ ] Screenshots screen: capture → per-item progress → list with signed-url
+      _apps/mobile/src/lib/screenshots.ts; script is evaluated (not string-asserted) in its unit test_
+- [x] unit tests for script builder + search filter (root CI runs these)
+      _7 tests incl. hostile-filename injection and dedup short-circuit_
+- [x] `pickImages` gains a required `selectionLimit` param (chat passes 6,
+      screenshots 20) _attachments.ts also now carries width/height_
+- [x] Screenshots screen: capture → per-item progress → list with signed-url
       thumbnails, tag chips, search box; drawer item + route union
-- [ ] dedup: skip upload when `getEvent({ idempotencyKey })` already exists
-- [ ] live e2e (`apps/mobile/e2e/screenshots.e2e.test.ts`): tiny PNG fixture
+      _app/project/[projectId]/screenshots.tsx_
+- [x] dedup: skip upload when `getEvent({ idempotencyKey })` already exists
+      _client-side pre-check + server-side check inside the script + append idempotency key_
+- [x] live e2e (`apps/mobile/e2e/screenshots.e2e.test.ts`): tiny PNG fixture
       through the whole pipeline — also the repo's first proof that
       image→toMarkdown works (cf-ai-to-markdown example is `e2eProven: false`)
+      _passes against local dev; red-square fixture gets a real vision description_
 
 ## Explicitly cut from #2405 (still good ideas, later)
 
@@ -100,3 +107,18 @@ Taxonomy is data in `apps/mobile/src/lib/screenshots.ts` — expect churn.
   against main @ 207823a45: `runScript` arbitrary code, `append` idempotency
   replay, `getEvent({idempotencyKey})`, `files.put` base64 `FileData`,
   toMarkdown image support via Cloudflare converter.
+
+- (found) `ai.toMarkdown({ name, blob: new Blob(...) })` — the documented
+  recipe — fails from script sandboxes: capnweb can't serialize Blob
+  ("Could not serialize object of type Blob"). Fixed at the product surface:
+  `CfMarkdownDocument.blob` now takes the whole `FileData` union
+  (bytes/base64/Blob), coerced server-side. Agent prompts, `__describe`, and
+  the cf-ai-to-markdown example updated to the bytes form.
+- (found) the coerced Blob needs a non-empty `type` — Workers AI's binding
+  rejects `type: ""` with a bare zod "Too small: expected string to have >=1
+  characters". `application/octet-stream` works; the converter picks the
+  format from the `name` extension (result carries the real mimeType).
+- (found) `@cf/meta/llama-3.2-3b-instruct` answers OpenAI-style
+  (`choices[0].message.content`), not `.response` — tag parser handles both.
+- default agent prompt was ~70 chars under its 17000-char ceiling; the recipe
+  edit had to stay terse (agent-prompt-budgets.test.ts enforces it).

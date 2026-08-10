@@ -70,7 +70,8 @@ function DrawerButton({ project }: { project: { projectId: string; projectSlug: 
       pathname:
         | "/project/[projectId]/repos"
         | "/project/[projectId]/examples"
-        | "/project/[projectId]/notifications",
+        | "/project/[projectId]/notifications"
+        | "/project/[projectId]/screenshots",
     ) =>
     () => {
       // Only rendered inside the project !== null branch below; the guard is
@@ -154,6 +155,10 @@ function DrawerButton({ project }: { project: { projectId: string; projectSlug: 
                     <DrawerItem
                       label="Notifications"
                       onPress={() => close(projectRoute("/project/[projectId]/notifications"))}
+                    />
+                    <DrawerItem
+                      label="Screenshots"
+                      onPress={() => close(projectRoute("/project/[projectId]/screenshots"))}
                     />
                     <View style={styles.separator} />
                     <DrawerItem
