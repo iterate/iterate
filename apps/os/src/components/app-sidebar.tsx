@@ -473,23 +473,6 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
-      <SidebarSeparator />
-      <SidebarGroup>
-        <SidebarGroupContent>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                tooltip="Repl"
-                render={<Link to="/itx-repl" />}
-                isActive={Boolean(matchRoute({ to: "/itx-repl", fuzzy: false }))}
-              >
-                <SquareTerminal />
-                <span>Repl</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
     </>
   );
 }

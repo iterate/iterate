@@ -50,7 +50,15 @@ test("derives running → success entries from requested/settled events", () => 
     settled({ offset: 5, executionId: "run-1", settlement: { status: "succeeded", result: 2 } }),
   ]);
   expect(settledEntries).toMatchObject([
-    { executionId: "run-1", requestedAtOffset: 3, result: 2, status: "success" },
+    // settledAtOffset is the entry's stable address — the same offset the
+    // preamble's results rows carry for results.byOffset(n).
+    {
+      executionId: "run-1",
+      requestedAtOffset: 3,
+      result: 2,
+      settledAtOffset: 5,
+      status: "success",
+    },
   ]);
 });
 

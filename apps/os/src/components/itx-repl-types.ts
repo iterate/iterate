@@ -139,7 +139,7 @@ export function replScopeModules(preambleTs: string | null): {
   globals: string;
   preamble: string;
 } {
-  if (!preambleTs || !preambleTs.includes("const results = [")) {
+  if (!preambleTs || !preambleTs.includes("const __resultRows = [")) {
     return { globals: EMPTY_REPL_SCOPE_MODULE, preamble: EMPTY_REPL_SCOPE_MODULE };
   }
   const preamble = [

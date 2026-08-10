@@ -104,14 +104,17 @@ export function ItxRepl({
               <div className="min-w-0 space-y-1 text-sm text-muted-foreground">
                 <p>
                   <span className="text-foreground">Run TypeScript as real project scripts.</span>{" "}
-                  Scripts execute server-side in your scope (
+                  Scripts execute server-side in the project&apos;s shared REPL scope (
                   <code className="font-mono text-xs">{scopePath}</code>), typechecked and journaled
-                  — reload and the session is still here. Use{" "}
+                  — reload and the session is still here, and teammates see the same history. Use{" "}
                   <code className="font-mono text-xs">return</code> to produce a result; prior
                   results stay in scope as{" "}
                   <code className="font-mono text-xs">results[0].data</code> (or{" "}
                   <code className="font-mono text-xs">await results[0].load(itx)</code> for large
-                  ones).
+                  ones), and each entry&apos;s <code className="font-mono text-xs">#offset</code>{" "}
+                  label addresses it stably as{" "}
+                  <code className="font-mono text-xs">results.byOffset(offset)</code> even while
+                  others run scripts.
                 </p>
                 <p>
                   Try <code className="font-mono text-xs">return await itx.__describe()</code>, then
@@ -256,7 +259,17 @@ function ReplEntryRow({ entry, index }: { entry: ReplRunEntry; index: number }) 
           : "flex flex-col gap-2 border-l-2 border-muted-foreground/25 bg-muted/25 py-2 pr-3 pl-3"
       }
     >
-      <ReplPromptRow status={entry.status === "running" ? "Running..." : null} />
+      <ReplPromptRow status={entry.status === "running" ? "Running..." : null}>
+        {entry.status === "running" ? null : (
+          <span
+            className="font-mono text-xs text-muted-foreground"
+            data-testid="itx-repl-entry-offset"
+            title={`results.byOffset(${entry.settledAtOffset})`}
+          >
+            #{entry.settledAtOffset}
+          </span>
+        )}
+      </ReplPromptRow>
       <ReplCodeBlock code={entry.code} language="typescript" />
       {entry.status === "success" ? (
         <>

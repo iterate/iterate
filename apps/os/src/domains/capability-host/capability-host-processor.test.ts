@@ -708,8 +708,8 @@ describe("CapabilityHostProcessor preamble", () => {
     ]);
     expect(h.worker.calls).toHaveLength(2);
     const preambleJs = h.worker.calls[1]!.options.preambleJs!;
-    expect(preambleJs).toContain("const results = [");
-    expect(preambleJs).toContain('{ executionId: "exec-1", data: {"users":["amy"]} }');
+    expect(preambleJs).toContain("const __resultRows = [");
+    expect(preambleJs).toContain('executionId: "exec-1", data: {"users":["amy"]} }');
     // js variant, not ts: the worker only ever needs the no-emit fallback text
     expect(preambleJs).not.toContain("as const");
 

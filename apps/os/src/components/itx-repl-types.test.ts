@@ -85,11 +85,22 @@ describe("itx REPL TypeScript declarations", () => {
     // (see capability-host-preamble.ts renderResultsArray).
     const preambleTs = [
       "// ── prior script results, newest first (assembled by the platform) ──",
-      "const results = [",
-      '  { executionId: "run-1", data: { count: 3 } },',
+      "const __resultRows = [",
+      '  { offset: 12, executionId: "run-1", data: { count: 3 } },',
       "] as const;",
+      "const results = Object.assign(__resultRows, {",
+      "  byOffset: (offset: number) => {",
+      "    const match = __resultRows.find((row) => row.offset === offset);",
+      '    if (!match) throw new Error("no retained script result settled at offset " + offset);',
+      "    return match;",
+      "  },",
+      "});",
     ].join("\n");
-    const code = "const count: number = results[0].data.count;";
+    const code = [
+      "const count: number = results[0].data.count;",
+      "const stable: number = results.byOffset(12).data.count;",
+      "[count, stable];",
+    ].join("\n");
     const env = createReplTypeScriptEnv(code, replScopeModules(preambleTs));
 
     const diagnostics = env.languageService

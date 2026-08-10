@@ -25,8 +25,8 @@ export type ReplRunEntry = {
   requestedAtOffset: number;
 } & (
   | { status: "running" }
-  | { status: "success"; result: unknown }
-  | { status: "error"; error: string }
+  | { status: "success"; result: unknown; settledAtOffset: number }
+  | { status: "error"; error: string; settledAtOffset: number }
 );
 
 const REPL_WRAPPER_HEADER = "async (itx) => {";
@@ -81,11 +81,20 @@ export function deriveReplEntries(events: readonly StreamEvent[]): ReplRunEntry[
       const requested = entries.get(executionId);
       if (!requested) continue; // replay starts at 0, so this only guards malformed streams
       const settlement = ScriptExecutionSettlement.safeParse(payload.settlement);
+      // The settled event's offset doubles as the entry's STABLE address:
+      // it is what the preamble's results rows carry as `offset`, so the UI
+      // label and `results.byOffset(n)` name the same row.
+      const settledAtOffset = event.offset;
       const settled: ReplRunEntry = !settlement.success
-        ? { ...requested, status: "error", error: "Malformed settlement event." }
+        ? { ...requested, status: "error", error: "Malformed settlement event.", settledAtOffset }
         : settlement.data.status === "failed"
-          ? { ...requested, status: "error", error: settlement.data.error }
-          : { ...requested, status: "success", result: settlement.data.result ?? null };
+          ? { ...requested, status: "error", error: settlement.data.error, settledAtOffset }
+          : {
+              ...requested,
+              status: "success",
+              result: settlement.data.result ?? null,
+              settledAtOffset,
+            };
       entries.set(executionId, settled);
     }
   }

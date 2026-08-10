@@ -30,11 +30,17 @@ feeding the scope's derived `results` preamble.
    (src/itx/browser-repl.ts) goes away wholesale; the REPL always has a project
    context. Session-context catalogue examples repointed or retired (audited
    below).
-4. Runs execute in a dedicated per-user scope `/repl/<user-id>`, reached via
-   `itx.capabilityHosts.get(path)`. Scope birth = the standard
+4. Runs execute in the project's ONE shared scope `/repl` (REVISED by Misha
+   mid-implementation — was per-user `/repl/<user-id>`: singleton-scope
+   consistency with `/scheduler/primary`, a guessable stream name, and the
+   REPL becomes a shared project console — teammates see one Out[n] history
+   and one set of pinned preamble helpers). Reached via
+   `itx.capabilityHosts.get("/repl")`; birth = the standard
    `capabilityHosts.get(path).create()` batch (default birth certificate
    already records the one-hop fallback to the project root host via
    `capabilityFallbackForScope`), so capability reads resolve project-wide.
+   Consequence: STABLE ADDRESSING moved into this task (see below) — in a
+   shared scope, `results[0]` can shift between typing and running.
 5. History is STREAM-DERIVED: the entry list renders from the scope's
    `script-run-requested`/`script-run-settled` events plus local in-flight
    state for the pending Run only. Reload restores the session. No useEffect,
@@ -53,13 +59,15 @@ feeding the scope's derived `results` preamble.
   dynamic-worker spin-up; noted, not fixed here.
 - `/_app/itx-repl` becomes a minimal project chooser linking to per-project
   REPLs. Sidebar link stays pointed at it.
-- Stable addressing (`results.byOffset(n)`) out of scope — follow-up.
+- ~~Stable addressing (`results.byOffset(n)`) out of scope — follow-up.~~
+  _Pulled INTO the task with the shared-scope revision: every results row now
+  carries its settlement's stream `offset`, the assembled array wears
+  `results.byOffset(n)` (throws outside the retained window), and the REPL
+  labels each entry `#<offset>`. Lives in capability-host-preamble.ts, so
+  agents get it too; documented in that file's header._
 
 ## Assumptions added while fleshing out (delineated — not from the grill)
 
-- **User identifier**: `useAuthClient().session.user.id` (the auth user id) —
-  the only stable identifier the web session exposes; slugs/emails can change.
-  Scope path: `/repl/<user-id>`.
 - **Explicit `return`**: `runScript` executes `async (itx) => { ... }` bodies;
   the browser REPL's "last expression is the result" magic dies with the
   in-browser evaluator. The REPL wraps the typed body as
@@ -75,6 +83,10 @@ feeding the scope's derived `results` preamble.
   top-level imports.
 - **`/admin/repl` deleted**: it was a session REPL for admins; admins use
   per-project REPLs like everyone else. Admin sidebar link removed.
+- **`/_app/itx-repl` deleted** (revision follow-through): briefly a project
+  chooser; with the route settled as `/projects/<slug>/repl` (matching the
+  `/media` convention) the session-level page and its global sidebar entry
+  went away — the project sidebar's Repl entry is the way in.
 - **Examples audit outcome**:
   - Session-context entries (`whoami`, `list-projects`) lose the `browser`
     runtime (node/cli reading material; the examples sheet marks them
@@ -111,7 +123,7 @@ feeding the scope's derived `results` preamble.
       spec still passes on the new run path; matrix meta-assertion relaxed _90s budget for the cold path; spinner-waiter bypassed for the run wait_
 - [x] Unit tests: entry derivation (requested/settled interleavings, unwrap,
       pending dedupe) + repl-types test updated _itx-scope-repl-entries.test.ts (8 tests); repl-types tests cover the typed results modules_
-- [x] Live verification: run entries, reload restores history _local dev + real browser: describe run, results[0].data continuity run, typecheck-gate error entry; hard reload restored all three from the stream. forged-session-repl + describe-project/run-script playwright specs green against dev_
+- [x] Live verification: run entries, reload restores history _local dev + real browser: describe run, results[0].data continuity run, typecheck-gate error entry; hard reload restored all three from the stream. forged-session-repl + describe-project/run-script playwright specs green against dev. Re-verified after the shared-scope revision: entries labeled #16/#21, `results.byOffset(16)` returned the first run's data from the second run, reload restored both_
 - [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test` _all green locally (2743 vitest passes in apps/os)_
 
 ## Follow-ups (deliberately out of scope)
@@ -148,3 +160,8 @@ feeding the scope's derived `results` preamble.
   carrying the compiler diagnostics; the dev-server OOM auto-restart
   (dev.ts, PR #2401) tripped once mid-verification — unrelated to this
   change, restart resumed cleanly.
+- Shared-scope revision (Misha, mid-review): scope `/repl` (not per-user),
+  route stays `/projects/<slug>/repl`, stable addressing pulled in. byOffset
+  is rendered by the preamble assembler as `Object.assign(__resultRows, {
+  byOffset })` so the tuple keeps per-index literal types while the helper
+  rides the same value; the settled event's offset doubles as the UI label.
