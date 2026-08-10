@@ -10,7 +10,10 @@ size: small
 Complete. Keyed root appends now get one bounded availability replay, approval
 decisions are replay-safe, and a fetch cannot report success until its
 settlement fact is durable. Focused preview proofs and the full preview suite
-pass without retries; PR #2467 is ready for review.
+passed without retries at the product head. A later docs-only CI run exposed a
+separate Stream Facet wake cycle, now tracked in
+`tasks/stream-facet-wake-does-not-read-source-inline.md`; PR #2467 remains draft
+until that release gate is green.
 
 ## Problem
 
@@ -80,3 +83,7 @@ divergent result.
   tests, 73 Playwright tests, and no retries. Its 190.9s OS lane is below the
   preceding failed run's 210.0s, but still trips the repo's existing 100s
   performance warning; this PR did not raise that baseline.
+- 2026-08-10: The later docs-only head retried during `Project.create`, before
+  the tested source recreation began. The separate source-alarm/facet-wake
+  actor cycle is a release blocker, but does not reopen the completed approval
+  settlement behavior.
