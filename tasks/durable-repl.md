@@ -7,10 +7,10 @@ size: large
 
 ## Status summary
 
-Spec fleshed out; implementation under way. Main pieces: REPL runs execute as
-real scope scripts (`runScript`) in a per-user scope, stream-derived history,
-session REPL deletion, examples audit, editor types from the scope preamble,
-spec updates.
+Implementation complete and live-verified: runs execute server-side via
+`runScript` in `/repl/<user-id>`, history restores from the scope stream on
+reload (verified in a real browser, incl. a typecheck-gate error entry and a
+`results[0].data` continuity run), all checks green. Remaining: review.
 
 Make the product REPL run scripts through the capability-host script runner on
 a dedicated per-user scope, replacing in-browser evaluation. That is the same
@@ -94,25 +94,25 @@ feeding the scope's derived `results` preamble.
 ## Checklist
 
 - [x] Task file committed, draft PR opened _initially as `repl-on-script-door`; renamed to `durable-repl` (jargon purge), PR reopened_
-- [ ] `ItxScopeRepl` container: per-user scope path, host `create()` via
+- [x] `ItxScopeRepl` container: per-user scope path, host `create()` via
       suspense query, `useStreamConnection` history buffer, run mutation
-      through `capabilityHosts.get(path).runScript(wrapped)`
-- [ ] Presentational `itx-repl.tsx` reworked: stream-derived entries,
+      through `capabilityHosts.get(path).runScript(wrapped)` _apps/os/src/components/itx-scope-repl.tsx; pure derivation in itx-scope-repl-entries.ts_
+- [x] Presentational `itx-repl.tsx` reworked: stream-derived entries,
       running/success/error states, console affordance removed, copy updated
-      (`return`, `results[0]`)
-- [ ] Delete `src/itx/browser-repl.ts` + `browser-repl.test.ts`; REPL routes
+      (`return`, `results[0]`) _same testids kept so the Playwright specs' contract held_
+- [x] Delete `src/itx/browser-repl.ts` + `browser-repl.test.ts`; REPL routes
       re-wired (`/projects/$slug/repl` project REPL, `/_app/itx-repl` project
-      chooser, `/admin/repl` removed)
-- [ ] Editor scope types: worker `setScopeContext` + preamble query feeding a
-      virtual module; `results` autocompletes; failure falls back silently
-- [ ] Examples audit implemented (runtimes updated, generated file regenerated
-      via `pnpm generate:itx-examples`)
-- [ ] Specs updated: repl-examples filters to browser-runnable; forged-session
-      spec still passes on the new run path; matrix meta-assertion relaxed
-- [ ] Unit tests: entry derivation (requested/settled interleavings, unwrap,
-      pending dedupe) + repl-types test updated
-- [ ] Live verification: run entries, reload restores history
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
+      chooser, `/admin/repl` removed) _routeTree regenerated; admin sidebar entry dropped_
+- [x] Editor scope types: worker `setScopeContext` + preamble query feeding a
+      virtual module; `results` autocompletes; failure falls back silently _replScopeModules in itx-repl-types.ts; preamble refetched after every settled run_
+- [x] Examples audit implemented (runtimes updated, generated file regenerated
+      via `pnpm generate:itx-examples`) _LIVE_SESSION_RUNTIMES → node/cli; new INTERACTIVE_RUNTIMES keeps browser for model/account reading material_
+- [x] Specs updated: repl-examples filters to browser-runnable; forged-session
+      spec still passes on the new run path; matrix meta-assertion relaxed _90s budget for the cold path; spinner-waiter bypassed for the run wait_
+- [x] Unit tests: entry derivation (requested/settled interleavings, unwrap,
+      pending dedupe) + repl-types test updated _itx-scope-repl-entries.test.ts (8 tests); repl-types tests cover the typed results modules_
+- [x] Live verification: run entries, reload restores history _local dev + real browser: describe run, results[0].data continuity run, typecheck-gate error entry; hard reload restored all three from the stream. forged-session-repl + describe-project/run-script playwright specs green against dev_
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test` _all green locally (2743 vitest passes in apps/os)_
 
 ## Follow-ups (deliberately out of scope)
 
@@ -142,3 +142,9 @@ feeding the scope's derived `results` preamble.
 - Renamed from `repl-on-script-door` to `durable-repl` mid-flight: "script
   door" jargon banned; prose now says what it is — runs execute as real scope
   scripts via `runScript`, the same path agent scripts take.
+- Live verification notes: nested `runScript` from a REPL run works (the
+  "run-script" catalogue example passes through the REPL in 6.5s — no
+  deadlock); a provable typo (`awaitt`) settles as a journaled error entry
+  carrying the compiler diagnostics; the dev-server OOM auto-restart
+  (dev.ts, PR #2401) tripped once mid-verification — unrelated to this
+  change, restart resumed cleanly.
