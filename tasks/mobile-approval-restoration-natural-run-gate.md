@@ -5,7 +5,7 @@ size: medium
 
 # Monitor the restored mobile approval flows for 25 natural previews
 
-Status: 16/25 qualifying post-merge natural canonical preview occurrences are queryable. The restored approval and notification specs passed first attempt in all sixteen; nine natural occurrences remain. Eleven post-merge natural runs are excluded and classified below: seven failed both targets because the Notifications drawer entry was absent, one target notification spec retried after preview auth returned HTTP 429, and three had unrelated stream-fence failures. One other finished post-merge workflow explicitly skipped both targets and is not an occurrence. The corrected stream quiet-window fence passed first attempt in two canonical previews. No excluded run left incomplete telemetry.
+Status: 17/25 qualifying post-merge natural canonical preview occurrences are queryable. The restored approval and notification specs passed first attempt in all seventeen; eight natural occurrences remain. Eleven post-merge natural runs are excluded and classified below: seven failed both targets because the Notifications drawer entry was absent, one target notification spec retried after preview auth returned HTTP 429, and three had unrelated stream-fence failures. One other finished post-merge workflow explicitly skipped both targets and is not an occurrence. The corrected stream quiet-window fence passed first attempt in two canonical previews. No excluded run left incomplete telemetry.
 
 - [x] Define the post-merge gate from durable telemetry. *A qualifying occurrence is a normally triggered canonical preview workflow with both restored specs passed, `retry_count = 0`, `passed_after_retry = false`, and one complete non-failed telemetry finalizer.*
 - [x] Preserve the accepted baseline evidence. *Workflows `497719938401885`, `105920886681524`, and `114044928448857` are queryable qualifying occurrences.*
@@ -24,7 +24,8 @@ Status: 16/25 qualifying post-merge natural canonical preview occurrences are qu
 - [x] Enforce the post-merge boundary. *PR #2460 merged at `2026-08-10T14:23:36Z`; three clean retained workflows that started before that instant were removed from the counter.*
 - [x] Count two earlier retained post-merge previews. *Workflows `468072880416234` and `113365974235070` had both restored targets clean and complete non-failed finalizers. One unrelated retry is classified below.*
 - [x] Audit the post-merge gap before the first accepted baseline. *Six workflows failed both targets on the missing Notifications entry point, one finished workflow skipped both targets, and cancelled workflows produced no target artifact. No additional clean occurrence was missed.*
-- [ ] Observe 9 more qualifying natural canonical preview occurrences.
+- [x] Count the newest natural #2473 preview. *Depot run `6tp7nl5v0j` records a normal `pull_request` trigger. Workflow `134965373738416` had both restored targets clean, no failed or retried test anywhere, and a complete 8-artifact / 6,795-runner-event finalizer.*
+- [ ] Observe 8 more qualifying natural canonical preview occurrences.
 - [ ] Investigate any target retry, failure, incomplete finalizer, or missing-transition diagnostic before allowing the streak to continue.
 - [ ] Record the final 25-workflow evidence set and close the restoration goal.
 
@@ -56,6 +57,7 @@ Status: 16/25 qualifying post-merge natural canonical preview occurrences are qu
 | 14 | `204202074715153` | `7941dac4` | #2470 | both targets clean; corrected stream fence clean; complete 10-artifact / 8,003-runner-event finalizer |
 | 15 | `476025826996334` | `921cfc4b` | #2467 | both targets clean; corrected stream fence clean; complete 10-artifact / 7,893-runner-event finalizer |
 | 16 | `171901776700561` | `cc288de0` | #2473 | both targets clean; zero run-wide retries or failures; complete 8-artifact / 6,650-runner-event finalizer |
+| 17 | `134965373738416` | `ff906eb0` | #2473 | both targets clean; zero run-wide retries or failures; complete 8-artifact / 6,795-runner-event finalizer |
 
 Manual workflow `350306797014989` on `081ff01f` proved default PostHog delivery and is intentionally excluded from the counter.
 
