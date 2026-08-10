@@ -1,11 +1,27 @@
 ---
-state: todo
+state: in-progress
 priority: high
 size: medium
 tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 ---
 
 # Restore the quarantined mobile approvals event-delivery e2es
+
+## Status
+
+The restoration is being rebuilt from current `main` as a narrow replacement
+for draft PR #2428. The original investigation proved several failures at the
+mobile delivery seam, but its full-preview marathon also absorbed unrelated
+Auth, Semaphore, Artifacts, repository-birth, and deployment fixes until the
+PR reached 98 files. Those platform findings remain valid work, but they are
+not part of this restoration.
+
+This branch will contain only directly reproduced script-worker ownership,
+approval-claim ordering, live delivery recovery, bounded push settlement,
+correlated diagnostics, and the two unskips. No product fix is accepted without
+a red/green regression at its public runtime seam. Validation uses the old
+four-worker reproduction plus three canonical full previews; the targeted
+pair must pass 25 consecutive stress iterations on one exact head.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -42,6 +58,21 @@ notification journal.
   entry for the first two canonical runs. The missing transition is therefore
   silent today, which is itself the defect rather than evidence of a healthy
   request.
+- PostHog shows the failure predates PR #2388 and rose with preview load. Across
+  recorded CI runs, approvals had failures or retries from 2026-07-29 onward;
+  notifications retried on 2026-07-31, then failed or retried repeatedly on
+  2026-08-01 and 2026-08-02. On 2026-08-03, approvals failed 11/74 and retried
+  21/74 while notifications failed 9/74 and retried 20/74.
+- The first investigation reproduced the load boundary locally: one approvals
+  flow grew workerd from 164 MB to 4.6 GB. One-off `runScript` isolates were
+  entering Worker Loader's reusable `get()` cache under a unique identity;
+  parallel runs retained workers that could never be reused and eventually
+  hit dynamic-worker capacity.
+- A separate durable-ordering reproduction copied
+  `project/approval-presented` before its matching notification intent. The
+  Device reducer discarded the early claim, sent a push the foreground user
+  had already suppressed, revoked the rejected fake token, and removed the
+  subscription before the next intent could arrive.
 
 ## Quarantined behavior
 
@@ -58,15 +89,31 @@ notification journal.
 
 ## Work
 
-- Add correlated diagnostics for every transition from script fetch hold,
+- [ ] Port only the directly reproduced fixes onto current `main`; do not pull
+  unrelated gate discoveries into this PR.
+- [ ] Add correlated diagnostics for every transition from script fetch hold,
   through batch creation and decision, to the device notification journal.
   A missing transition must become a bounded, classified failure rather than a
   vanished button or row.
-- Minimize whether the loss occurs in the egress batching processor, the live
+- [ ] Preserve one red/green regression per accepted product fix at the public
+  Worker Loader, Device processor, Stream delivery, or Expo-send seam.
+- [ ] Minimize whether the loss occurs in the egress batching processor, the live
   thread subscription, or notification journaling, then fix the owning state
   machine without polling, broader waits, or another retry layer.
-- Verify that a settled script cannot lose its approval batch or device row
+- [ ] Remove both explicit skips without changing test timeouts, assertions, or
+  retry policy.
+- [ ] Verify that a settled script cannot lose its approval batch or device row
   across Durable Object eviction and concurrent preview load.
+- [ ] Run the prior four-worker stress reproduction for 25 consecutive paired
+  passes on one exact commit. Any target retry, failure, missing transition, or
+  relevant unexplained Worker error resets the streak; a code change also
+  resets it. Infrastructure failure before either test starts is not a pass or
+  a streak reset.
+- [ ] Run three canonical fully parallel preview workflows on that exact commit.
+  Both restored flows must pass on their first attempt, and any unexplained
+  platform error remains release-blocking but is fixed in its owning PR.
+- [ ] Leave the replacement PR unmerged, with green CI, no unresolved review
+  threads, and exact PostHog/trace evidence in its body.
 
 ## Exit criteria
 
@@ -74,6 +121,21 @@ notification journal.
   its timeouts or retries.
 - The test asserts a durable diagnostic at the first missing transition, so a
   future failure identifies the owning processor and source offset.
-- At least 25 consecutive canonical, fully parallel preview runs complete with
-  no retry, silent event loss, unexplained Worker error, or missing approval or
-  notification row.
+- Twenty-five consecutive paired four-worker stress iterations pass on one
+  exact head, followed by three canonical fully parallel preview workflows in
+  which both restored flows pass first try.
+- CI, exact-version telemetry, and review are clean. The PR remains unmerged
+  until the user explicitly approves it.
+
+## After merge
+
+Monitor the first 25 natural canonical preview occurrences in PostHog. A retry,
+failure, or missing-transition diagnostic is investigated immediately; do not
+hide a recurrence with a timeout increase or another retry.
+
+## Implementation log
+
+- 2026-08-10: Re-audited Slack, PostHog, draft PR #2428, and current `main`.
+  Confirmed the tests exposed real load-sensitive product defects rather than
+  a regression introduced by #2388. Started a clean replacement branch and
+  excluded the unrelated platform fixes accumulated by the old marathon.
