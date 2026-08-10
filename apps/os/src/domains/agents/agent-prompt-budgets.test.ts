@@ -45,7 +45,10 @@ const CHARS_PER_TOKEN = 4;
 // 4150 → 4200 (2026-08-04): THE SHAPE OF WORK gained one bullet — "YOU are
 // the LLM": a prod chat piped email content through ai.run and relayed a 3B
 // model's summary verbatim; the docs invited it and nothing forbade it.
-const DEFAULT_PROMPT_TOKEN_CEILING = 4_200;
+// 4200 → 4250 (2026-08-06): the script preamble shipped — the fresh-scripts
+// bullet now teaches `results` (prior outcomes in scope, typed) and
+// setPreamble; without the teach the injected symbols are dead weight.
+const DEFAULT_PROMPT_TOKEN_CEILING = 4_250;
 
 const AGENT_PROMPTS: Record<string, string> = {
   default: DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -82,6 +85,16 @@ test("the default prompt teaches agents to share workspace files through Docs", 
   expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
     "This is not `itx.docs`, which searches API documentation.",
   );
+});
+
+test("the default prompt teaches results retention, not defensive file copies", () => {
+  // A field agent writeFile'd a full API response AND returned the whole
+  // body because the old oversized-results bullet taught the workspace
+  // spill file + readFile as the retention mechanism. The prompt must lead
+  // with the `results` loader and draw the implication explicitly.
+  expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await results[0].load(itx)");
+  expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("never save your own copy to a file");
+  expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain("itx.workspace.readFile");
 });
 
 test("the default prompt teaches agents to share task boards through Tasks", () => {

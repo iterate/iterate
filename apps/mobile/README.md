@@ -92,6 +92,12 @@ installed. Whichever the fingerprint heuristic says you need is expanded.
 The switch persists across restarts; get back with **Build info → Reset to
 default channel**.
 
+Lifecycle: closing a PR deletes its channel, update branch, and QR assets
+(`.depot/workflows/mobile-pr-preview-cleanup.yml`). Channel discovery is the
+PR bodies' QR sections — deliberately no in-app channel list, because listing
+channels needs the EAS API and we don't ship `EXPO_TOKEN` to the deployment
+(a CI-pushed snapshot could enable it tokenlessly later).
+
 ## Run and test it in a browser
 
 Expo Web renders the same Expo Router screens through React Native Web, so UI

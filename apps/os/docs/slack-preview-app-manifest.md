@@ -326,7 +326,7 @@ match, or OS was not redeployed after the Doppler update.
 1. Open the preview dashboard:
    `https://os.iterate-preview-N.com`.
 2. Sign in with a real browser session or an agent-authenticated session. See
-   `apps/os/docs/preview-agent-browser-smoke.md` for the headless browser path.
+   `apps/os/docs/preview-browser-smoke.md` for the headless browser path.
 3. Create or open the project that should receive Slack events.
 4. Go to the project **Integrations** page and click **Connect Slack**.
 5. Approve the Slack OAuth screen.

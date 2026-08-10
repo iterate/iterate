@@ -28,12 +28,51 @@ import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-con
 import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
 import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
+import { parseConfigRepoTemplateReference } from "../../lib/config-repo-template-reference.ts";
 import { ApprovalPresentedEvents } from "./approval-presented-contract.ts";
+import { AgentReplyPresentedEvents } from "./agent-reply-presented-contract.ts";
 import { StreamContext } from "./stream-context.ts";
+
+/**
+ * One client scope in the project's clients catalog: a capability-host scope
+ * (typically under /clients/**) that `projects.connect` provided a live
+ * capability to, reduced from its copied provider Pager connected/disconnected
+ * facts. Presence is last-known: the platform journals the disconnect when
+ * the provider's socket dies.
+ */
+const ProjectClientRecord = z.object({
+  path: z.string().meta({ description: "The client's identity — its scope's stream path." }),
+  connected: z.boolean().meta({
+    description:
+      "True while at least one provider Pager is connected on the scope (a reconnect " +
+      "overlaps briefly, so this counts sessions, not sockets).",
+  }),
+  lastConnectedAt: z
+    .string()
+    .meta({ description: "Source-stream commit time of the newest pager-connected fact." }),
+  lastDisconnectedAt: z
+    .string()
+    .optional()
+    .meta({ description: "Source-stream commit time of the newest pager-disconnected fact." }),
+  connectedAtOffsets: z
+    .array(z.number().int().positive())
+    .default([])
+    .meta({
+      description:
+        "Reducer bookkeeping: source-stream offsets of the pager-connected facts still open " +
+        "(each pager-disconnected names the connectedAtOffset it closes). `connected` is " +
+        "this set's non-emptiness.",
+    }),
+});
+/** The clients-catalog fold record (includes reducer bookkeeping). */
+export type ProjectClientRecord = z.infer<typeof ProjectClientRecord>;
+
+/** What `itx.clients.list()` returns per client: the catalog record minus reducer bookkeeping. */
+export type ProjectClientListItem = Omit<ProjectClientRecord, "connectedAtOffsets">;
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
-  version: "0.6.0",
+  version: "0.7.0",
   description:
     "Project root: runs the project/create-requested → project/created bootstrap saga, births " +
     "the sibling processors every project gets (root capability host, primary scheduler, config " +
@@ -115,6 +154,18 @@ export const ProjectProcessorContract = defineProcessorContract({
           "Catalog of the project's physical streams (stream/created and " +
           "stream/child-stream-created facts). Purely physical: a path here never implies any " +
           "processor identity.",
+      }),
+    clients: z
+      .record(z.string(), ProjectClientRecord)
+      .default({})
+      .meta({
+        description:
+          "Catalog of client scopes keyed by path, recorded from copied capability-host " +
+          "provider Pager connected/disconnected facts (each projects.connect's birth batch " +
+          "configures the clients-to-root copy subscription); what itx.clients.list() reads. " +
+          "Last-known presence: the platform journals the disconnect when a provider's " +
+          "socket dies, so `connected` is honest to socket death, not merely to polite " +
+          "goodbyes.",
       }),
     customDomains: z
       .array(
@@ -456,6 +507,9 @@ export const ProjectProcessorContract = defineProcessorContract({
     // consume it and cannot import this module back (this module imports the
     // device contract).
     ...ApprovalPresentedEvents,
+    // Same arrangement for the chat-reply suppression claim ("the user is
+    // already looking at this reply") — standalone catalog, owned here.
+    ...AgentReplyPresentedEvents,
   },
   consumes: [
     "*",
@@ -483,6 +537,8 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/created",
     "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/notification/created",
+    "events.iterate.com/capability-host/capability-provider-pager-connected",
+    "events.iterate.com/capability-host/capability-provider-pager-disconnected",
   ],
   processorDeps: [
     CoreProcessorContract,
@@ -540,7 +596,8 @@ function sameProjectCreationRequest(
   return (
     left.config.slug === right.config.slug &&
     left.config.onboardingActive === right.config.onboardingActive &&
-    left.config.creatorEmail === right.config.creatorEmail
+    left.config.creatorEmail === right.config.creatorEmail &&
+    left.config.configRepoTemplate === right.config.configRepoTemplate
   );
 }
 
@@ -650,6 +707,27 @@ function projectCreationPayloadSchema() {
             description:
               "The creating user's login email, when known. Seeds owner-scoped project state " +
               "such as the inbound email sender allowlist.",
+          }),
+        configRepoTemplate: z
+          .string()
+          .trim()
+          .min(1)
+          .refine(
+            (value) => {
+              try {
+                parseConfigRepoTemplateReference(value);
+                return true;
+              } catch {
+                return false;
+              }
+            },
+            { message: "Invalid public GitHub config template reference." },
+          )
+          .optional()
+          .meta({
+            description:
+              "Canonical public GitHub reference copied into /repos/config at project birth; " +
+              "omit for Iterate's embedded default.",
           }),
       })
       .meta({ description: "Birth-time configuration, recorded verbatim onto state." }),

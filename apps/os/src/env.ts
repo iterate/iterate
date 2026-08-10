@@ -83,15 +83,6 @@ export interface Env {
     import("./domains/typecheck/typechecker-entrypoint.ts").TypecheckerEntrypoint
   >;
 
-  AGENT: DurableObjectNamespace<
-    import("./domains/agents/agent-durable-object.ts").AgentDurableObject
-  >;
-  AGENT_COLLECTION: DurableObjectNamespace<
-    import("./domains/agents/agent-collection-durable-object.ts").AgentCollectionDurableObject
-  >;
-  CAPABILITY_HOST: DurableObjectNamespace<
-    import("./domains/capability-host/capability-host-durable-object.ts").CapabilityHostDurableObject
-  >;
   DEVICE: DurableObjectNamespace<
     import("./domains/devices/device-durable-object.ts").DeviceDurableObject
   >;

@@ -16,8 +16,7 @@ const context = {
   },
   server: {
     baseUrl: "https://os.iterate.com",
-    projectId: "proj_123",
-    projectSlug: "dogfood",
+    project: { projectId: "proj_123", projectSlug: "dogfood" },
   },
   reportEventOffset: 42,
   entries: [
@@ -66,7 +65,17 @@ test("append failed — trail is the only copy, channel override shown", () => {
     updates: { ...context.updates, channelOverride: "other-pr-branch" },
     reportEventOffset: null,
   });
-  expect(markdown).toContain("append failed — the trail below is the only copy");
+  expect(markdown).toContain("none committed — the trail below is the only copy");
   expect(markdown).toContain("(override `other-pr-branch`)");
   expect(markdown).not.toContain("offset");
+});
+
+test("no project open — server line says so, no event reference", () => {
+  const markdown = buildBugReportMarkdown({
+    ...context,
+    server: { baseUrl: "https://os.iterate.com", project: null },
+    reportEventOffset: null,
+  });
+  expect(markdown).toContain("https://os.iterate.com, no project open");
+  expect(markdown).toContain("none committed — the trail below is the only copy");
 });

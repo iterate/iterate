@@ -842,7 +842,20 @@ function reduceAgentUiEvent(
         // earlier round when this one's script didn't update it.
         ...(state.summaryActivity == null ? {} : { activitySummary: state.summaryActivity }),
       };
-      return { ...state, live: { ...state.live, steps } };
+      const next = { ...state, live: { ...state.live, steps } };
+      // A visible reply the script sent was deferred while its step ran (see
+      // emitAssistantMessageItem). If this settle is the turn's last journal
+      // fact — nothing running, no follow-up round — no later event exists to
+      // flush it, and the runtime-transition flush is a transient overlay on
+      // a lane that can lag or wedge independently. Journal facts alone must
+      // surface a sent message: settle the activity here and flush.
+      if (
+        (next.deferredAssistantMessages.length > 0 || next.queuedUserMessages.length > 0) &&
+        !steps.some((candidate) => candidate.status === "running")
+      ) {
+        return flushDeferredMessages(settleLive(next, timestampMs, items), items);
+      }
+      return next;
     }
 
     case AGENT_SUMMARY_UPDATED: {

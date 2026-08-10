@@ -20,7 +20,7 @@ const SOURCE_CREATED_AT = "2026-07-21T12:00:00.000Z";
 const SELF = { projectId: PROJECT_ID, path: RECEIVER_PATH };
 
 const configuration = {
-  subscriptionKey: "issues",
+  name: "issues",
   description: "Receive issue events",
   filter: { eventTypes: ["example.com/issue-created"] },
   receiver: {
@@ -47,7 +47,7 @@ type InboundRecords = NonNullable<BuildArgs["inbound"]>;
 function batch(
   streamId = FIRST_STREAM_ID,
   streamCreatedAt = SOURCE_CREATED_AT,
-  configured: SubscriptionConfiguredPayload & { subscriptionKey: string } = configuration,
+  configured: SubscriptionConfiguredPayload & { name: string } = configuration,
 ): StreamDeliveryBatch {
   return {
     projectId: PROJECT_ID,
@@ -56,15 +56,9 @@ function batch(
     streamCreatedAt,
     events: [sourceEvent],
     streamMaxOffset: sourceEvent.offset,
-    subscriptionKey: configured.subscriptionKey,
+    name: configured.name,
     cursorChangedAtSourceOffset: 2,
-    deliveryId: deliveryId(
-      streamId,
-      configured.subscriptionKey,
-      2,
-      sourceEvent.offset,
-      sourceEvent.offset,
-    ),
+    deliveryId: deliveryId(streamId, configured.name, 2, sourceEvent.offset, sourceEvent.offset),
     attempt: 1,
     configuredEvent: {
       type: "events.iterate.com/stream/subscription-configured",
@@ -84,7 +78,7 @@ function recordedInbound(
   } = {},
 ): InboundRecords {
   return {
-    [configuration.subscriptionKey]: {
+    [configuration.name]: {
       streamId: args.streamId ?? FIRST_STREAM_ID,
       streamCreatedAt: args.streamCreatedAt ?? SOURCE_CREATED_AT,
       cursorChangedAtSourceOffset: args.cursorChangedAtSourceOffset ?? 2,
@@ -124,7 +118,7 @@ describe("copy input boundary", () => {
             streamId: FIRST_STREAM_ID,
             streamCreatedAt: SOURCE_CREATED_AT,
             offset: sourceEvent.offset,
-            subscriptionKey: configuration.subscriptionKey,
+            name: configuration.name,
           },
         ],
       },
@@ -204,12 +198,12 @@ describe("copy input boundary", () => {
       },
     ],
     [
-      "the configured event names another subscription key",
+      "the configured event names another subscription name",
       () => {
         const args = validArgs();
         args.batch.configuredEvent = {
           ...args.batch.configuredEvent,
-          payload: { ...configuration, subscriptionKey: "another-subscription" },
+          payload: { ...configuration, name: "another-subscription" },
         };
         return args;
       },
@@ -324,7 +318,7 @@ describe("copy event construction", () => {
       streamId: SECOND_STREAM_ID,
       streamCreatedAt: SOURCE_CREATED_AT,
       offset: sourceEvent.offset,
-      subscriptionKey: configuration.subscriptionKey,
+      name: configuration.name,
     });
   });
 
@@ -357,7 +351,7 @@ describe("copy event construction", () => {
             path: SOURCE_PATH,
             streamId: FIRST_STREAM_ID,
             offset: sourceEvent.offset,
-            subscriptionKey: configuration.subscriptionKey,
+            name: configuration.name,
             // The hop records the ORIGINAL source type; only the committed
             // body is reshaped.
             type: sourceEvent.type,
@@ -428,7 +422,7 @@ describe("copy event construction", () => {
 
   test("a cycle drop acknowledges the whole batch and appends one idempotent error event", () => {
     const copiedFrom = {
-      subscriptionKey: "prior-subscription",
+      name: "prior-subscription",
       streamId: SECOND_STREAM_ID,
       streamCreatedAt: SOURCE_CREATED_AT,
       cursorChangedAtSourceOffset: 1,
@@ -458,7 +452,7 @@ describe("copy event construction", () => {
       type: "events.iterate.com/stream/error-occurred",
       payload: {
         message: expect.stringContaining(
-          `dropped 1 copied event(s) from "${SOURCE_PATH}" subscription "${configuration.subscriptionKey}"`,
+          `dropped 1 copied event(s) from "${SOURCE_PATH}" subscription "${configuration.name}"`,
         ),
       },
     });
@@ -470,7 +464,7 @@ describe("copy event construction", () => {
 
   test("durably drops a received-from chain at the hop cap instead of retrying it", () => {
     const copiedFrom = Array.from({ length: MAX_COPIED_FROM_HOPS }, (_, index) => ({
-      subscriptionKey: `subscription-${index}`,
+      name: `subscription-${index}`,
       streamId: SECOND_STREAM_ID,
       streamCreatedAt: SOURCE_CREATED_AT,
       cursorChangedAtSourceOffset: 1,

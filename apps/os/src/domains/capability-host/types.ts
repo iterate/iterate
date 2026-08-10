@@ -14,6 +14,23 @@ import type { ItxExpression } from "../../itx/expression.ts";
 
 export type { ItxExpression } from "../../itx/expression.ts";
 
+/**
+ * `setPreamble` recipe: one keyed entry of TypeScript injected above every
+ * later script in the scope (typecheck and execution). A re-set at the same
+ * key replaces the code but keeps the entry's injection position. Compiled
+ * against the scope's assembled preamble at set time — an entry that breaks
+ * compilation rejects here instead of degrading every later script's check.
+ */
+export type SetPreambleInput = {
+  key: string;
+  code: string;
+};
+
+/** Durable reference to the event that connected the provider's client-given Pager. */
+export type CapabilityProviderPagerReference = {
+  connectedAtOffset: number;
+};
+
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {
   args: unknown[];
@@ -75,6 +92,7 @@ export type CapabilityProvidedPayload =
       flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];
+      providerPager: CapabilityProviderPagerReference;
       type: "live";
       types?: string;
     }

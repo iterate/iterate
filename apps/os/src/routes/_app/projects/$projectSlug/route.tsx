@@ -2,6 +2,7 @@ import { Suspense, useEffect } from "react";
 import { ClientOnly, Outlet, createFileRoute } from "@tanstack/react-router";
 import { ProjectScope, useIterateSession } from "iterate/sdk/itx/react";
 import { ItxResourceLoading } from "~/components/itx-boundary.tsx";
+import { OsAppClientPresence } from "~/components/os-app-client-presence.tsx";
 import { getProjectBySlugServerFn } from "~/lib/project-server-fns.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug")({
@@ -35,6 +36,7 @@ function ProjectLayout() {
         <ClientOnly fallback={null}>
           <Suspense fallback={null}>
             <ProjectSessionPrewarm />
+            <OsAppClientPresence slug={project.slug} />
           </Suspense>
         </ClientOnly>
         <Outlet />

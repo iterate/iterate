@@ -217,7 +217,7 @@ test coverage removed without replacement is
 - [Agent Smoke Testing](./docs/agent-smoke-testing.md)
 - [Doppler-Backed Scripts](./docs/doppler-backed-scripts.md)
 - [Project Seeds](./docs/project-seeds.md) — capture and restore selected projects across a deliberate data erase without replaying old streams
-- [Preview Agent Browser Smoke](./docs/preview-agent-browser-smoke.md)
+- [Preview browser smoke](./docs/preview-browser-smoke.md)
 - [Headless Local Debugging](./docs/headless-local-debugging.md)
 - [Domain Context](./CONTEXT.md)
 

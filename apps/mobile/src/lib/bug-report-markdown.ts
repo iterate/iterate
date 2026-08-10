@@ -16,9 +16,13 @@ export type BugReportContext = {
     runtimeVersion: string | null;
     updateId: string | null;
   };
-  server: { baseUrl: string; projectId: string; projectSlug: string };
+  server: {
+    baseUrl: string;
+    project: { projectId: string; projectSlug: string } | null;
+  };
   /** Offset of the durable bug-report-filed event, or null if the append
-   * failed/timed out (the trail below is then the only copy). */
+   * failed/timed out — or there was no project open to append to (the trail
+   * below is then the only copy). */
   reportEventOffset: number | null;
   entries: SessionLogEntry[];
 };
@@ -31,10 +35,10 @@ export function buildBugReportMarkdown(context: BugReportContext): string {
   const { build, updates, server } = context;
   const commit = build.commit.slice(0, 7);
   const reportRef =
-    context.reportEventOffset === null
-      ? "durable report event: append failed — the trail below is the only copy"
+    context.reportEventOffset === null || server.project === null
+      ? "durable report event: none committed — the trail below is the only copy"
       : `durable report event: \`events.iterate.com/mobile/bug-report-filed\` at offset ${context.reportEventOffset} ` +
-        `on stream \`/mobile-events\` of project \`${server.projectId}\` (${server.baseUrl}) — ` +
+        `on stream \`/mobile-events\` of project \`${server.project.projectId}\` (${server.baseUrl}) — ` +
         "embeds the full session log; fetch it with `pnpm cli itx run` against that environment";
   const trail = context.entries
     .slice(-TRAIL_LINES)
@@ -53,7 +57,10 @@ export function buildBugReportMarkdown(context: BugReportContext): string {
     `- updates: channel \`${updates.channel || "?"}\`` +
       (updates.channelOverride ? ` (override \`${updates.channelOverride}\`)` : "") +
       `, runtime \`${updates.runtimeVersion || "?"}\`, update \`${updates.updateId || "?"}\``,
-    `- server: ${server.baseUrl}, project: ${server.projectSlug} (\`${server.projectId}\`)`,
+    `- server: ${server.baseUrl}` +
+      (server.project
+        ? `, project: ${server.project.projectSlug} (\`${server.project.projectId}\`)`
+        : ", no project open"),
     `- ${reportRef}`,
     "",
     "Recent activity (oldest first):",

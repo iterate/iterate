@@ -5,7 +5,7 @@ import {
 } from "./project-worker-health-logic.ts";
 
 const healthy = {
-  acknowledgedOffset: 40,
+  confirmedOffset: 40,
   lag: 0,
   attempt: 0,
   nextAttemptAt: null,
@@ -20,7 +20,7 @@ describe("selectStrugglingSubscriptions", () => {
   it("surfaces halted subscriptions from durable reduced state", () => {
     const struggling = selectStrugglingSubscriptions({
       configured: {
-        "root#project": {
+        "project-worker": {
           ...sourceOwnedConfiguration,
           deliveryHalted: {
             afterOffset: 300,
@@ -28,24 +28,24 @@ describe("selectStrugglingSubscriptions", () => {
             error: "userspace processor threw on offset 300",
           },
         },
-        "root#healthy": sourceOwnedConfiguration,
+        "iterate-platform-posthog": sourceOwnedConfiguration,
       },
       runtime: {
-        "root#project": {
-          acknowledgedOffset: 300,
+        "project-worker": {
+          confirmedOffset: 300,
           lag: 12,
           attempt: 0,
           nextAttemptAt: null,
           lastError: null,
         },
-        "root#healthy": healthy,
+        "iterate-platform-posthog": healthy,
       },
     });
     expect(struggling).toEqual([
       {
-        subscriptionKey: "root#project",
+        name: "project-worker",
         status: "halted",
-        acknowledgedOffset: 300,
+        confirmedOffset: 300,
         haltedAfterOffset: 300,
         lag: 12,
         attempt: 15,
@@ -57,10 +57,10 @@ describe("selectStrugglingSubscriptions", () => {
 
   it("surfaces subscriptions failing in backoff before they halt", () => {
     const struggling = selectStrugglingSubscriptions({
-      configured: { "root#project": sourceOwnedConfiguration },
+      configured: { "project-worker": sourceOwnedConfiguration },
       runtime: {
-        "root#project": {
-          acknowledgedOffset: 118,
+        "project-worker": {
+          confirmedOffset: 118,
           lag: 4,
           attempt: 3,
           nextAttemptAt: 1_000,
@@ -70,9 +70,9 @@ describe("selectStrugglingSubscriptions", () => {
     });
     expect(struggling).toEqual([
       {
-        subscriptionKey: "root#project",
+        name: "project-worker",
         status: "backoff",
-        acknowledgedOffset: 118,
+        confirmedOffset: 118,
         haltedAfterOffset: null,
         lag: 4,
         attempt: 3,
@@ -82,11 +82,32 @@ describe("selectStrugglingSubscriptions", () => {
     ]);
   });
 
+  it("ranks a durable halt above the retry row", () => {
+    const struggling = selectStrugglingSubscriptions({
+      configured: {
+        "project-worker": {
+          ...sourceOwnedConfiguration,
+          deliveryHalted: { afterOffset: 300, attempts: 15 },
+        },
+      },
+      runtime: {
+        "project-worker": {
+          confirmedOffset: 300,
+          lag: 1,
+          attempt: 2,
+          nextAttemptAt: 1_000,
+          lastError: "late",
+        },
+      },
+    });
+    expect(struggling.map((subscription) => subscription.status)).toEqual(["halted"]);
+  });
+
   it("is empty when everything is healthy or the runtime has not loaded", () => {
     expect(
       selectStrugglingSubscriptions({
-        configured: { "root#project": sourceOwnedConfiguration },
-        runtime: { "root#project": healthy },
+        configured: { "project-worker": sourceOwnedConfiguration },
+        runtime: { "project-worker": healthy },
       }),
     ).toEqual([]);
     expect(selectStrugglingSubscriptions({ configured: undefined, runtime: undefined })).toEqual(
@@ -97,9 +118,9 @@ describe("selectStrugglingSubscriptions", () => {
 
 describe("buildRedriveEvents", () => {
   const halted = {
-    subscriptionKey: "root#project",
+    name: "project-worker",
     status: "halted" as const,
-    acknowledgedOffset: 300,
+    confirmedOffset: 300,
     haltedAfterOffset: 300,
     lag: 12,
     attempt: 15,
@@ -111,20 +132,20 @@ describe("buildRedriveEvents", () => {
     expect(buildRedriveEvents("resume", halted)).toEqual([
       {
         type: "events.iterate.com/stream/subscription-delivery-resumed",
-        payload: { subscriptionKey: "root#project" },
+        payload: { name: "project-worker" },
       },
     ]);
   });
 
-  it("skip seeks to acknowledgedOffset + 1 — past the stuck event", () => {
+  it("skip seeks to confirmedOffset + 1 — past the stuck event", () => {
     expect(buildRedriveEvents("skip", halted)).toEqual([
       {
         type: "events.iterate.com/stream/subscription-cursor-set",
-        payload: { subscriptionKey: "root#project", afterOffset: 301 },
+        payload: { name: "project-worker", afterOffset: 301 },
       },
       {
         type: "events.iterate.com/stream/subscription-delivery-resumed",
-        payload: { subscriptionKey: "root#project" },
+        payload: { name: "project-worker" },
       },
     ]);
   });
@@ -132,9 +153,9 @@ describe("buildRedriveEvents", () => {
   it("skip on a backing-off subscription seeks past its stuck event too", () => {
     expect(
       buildRedriveEvents("skip", {
-        subscriptionKey: "root#project",
+        name: "project-worker",
         status: "backoff",
-        acknowledgedOffset: 118,
+        confirmedOffset: 118,
         haltedAfterOffset: null,
         lag: 4,
         attempt: 3,
@@ -144,11 +165,11 @@ describe("buildRedriveEvents", () => {
     ).toEqual([
       {
         type: "events.iterate.com/stream/subscription-cursor-set",
-        payload: { subscriptionKey: "root#project", afterOffset: 119 },
+        payload: { name: "project-worker", afterOffset: 119 },
       },
       {
         type: "events.iterate.com/stream/subscription-delivery-resumed",
-        payload: { subscriptionKey: "root#project" },
+        payload: { name: "project-worker" },
       },
     ]);
   });
@@ -157,7 +178,7 @@ describe("buildRedriveEvents", () => {
     expect(() =>
       buildRedriveEvents("skip", {
         ...halted,
-        subscriptionKey: "hosted-agent",
+        name: "agent",
         canSetCursor: false,
       }),
     ).toThrow(/owns its cursor at the receiver/);

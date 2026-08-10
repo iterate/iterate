@@ -268,7 +268,7 @@ describe("ProjectProcessor bootstrap", () => {
     ]);
     expect(h.network.eventsAt("/repos/config")[2]).toMatchObject({
       payload: {
-        subscriptionKey: "project-config-to-root",
+        name: "project-config-to-root",
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: "/",
@@ -297,6 +297,34 @@ describe("ProjectProcessor bootstrap", () => {
       birthCertificate: null,
       onboardingActive: true,
       notificationReady: true,
+    });
+  });
+
+  it("births the config repo from the requested public GitHub template", async () => {
+    const h = makeProjectHarness();
+    const configRepoTemplate = "github:iterate/iterate#main&path:configs/with-voice";
+    await h.stream.append(
+      ...projectCreationEvents({
+        projectId: "prj_test",
+        payload: {
+          config: {
+            ...PROJECT_CREATE_REQUESTED.payload.config,
+            configRepoTemplate,
+          },
+        },
+      }),
+    );
+    await h.settle();
+
+    expect(h.network.eventsAt("/repos/config")[0]).toMatchObject({
+      type: "events.iterate.com/repos/create-requested",
+      payload: {
+        type: "github-public-template",
+        owner: "iterate",
+        path: "configs/with-voice",
+        ref: "main",
+        repo: "iterate",
+      },
     });
   });
 
@@ -390,7 +418,7 @@ describe("ProjectProcessor bootstrap", () => {
     expect(
       h
         .events("events.iterate.com/stream/subscription-configured")
-        .filter((event) => event.payload.subscriptionKey === "project-worker"),
+        .filter((event) => event.payload.name === "project-worker"),
     ).toMatchObject([
       {
         idempotencyKey: "project-worker-subscription:prj_test",
@@ -585,7 +613,7 @@ describe("ProjectProcessor bootstrap", () => {
     const copiedSource = {
       copiedFrom: [
         {
-          subscriptionKey: "project-config-to-root",
+          name: "project-config-to-root",
           streamId: "00000000-0000-4000-8000-000000000003",
           streamCreatedAt: new Date(1).toISOString(),
           cursorChangedAtSourceOffset: 1,
@@ -669,7 +697,7 @@ describe("ProjectProcessor catalogs", () => {
           source: {
             copiedFrom: [
               {
-                subscriptionKey: "agent-catalog",
+                name: "agent-catalog",
                 streamId: "11111111-1111-4111-8111-111111111111",
                 streamCreatedAt: new Date(1).toISOString(),
                 cursorChangedAtSourceOffset: 1,
@@ -693,7 +721,7 @@ describe("ProjectProcessor catalogs", () => {
           source: {
             copiedFrom: [
               {
-                subscriptionKey: "repo-catalog",
+                name: "repo-catalog",
                 streamId: "11111111-1111-4111-8111-111111111111",
                 streamCreatedAt: new Date(1).toISOString(),
                 cursorChangedAtSourceOffset: 1,

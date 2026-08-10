@@ -231,7 +231,7 @@ describe("linkRepoToGithub", () => {
       .get(CONNECTION_STREAM)
       ?.find((event) => event.type === "events.iterate.com/stream/subscription-configured");
     expect(subscription?.payload).toEqual({
-      subscriptionKey: "github-repo:/repos/project",
+      name: "github-repo:/repos/project",
       description:
         "Copies GitHub webhooks for acme/widgets onto this repo's stream so default-branch pushes can be imported.",
       filter: {
@@ -357,7 +357,7 @@ describe("linkRepoToGithub", () => {
       (e) => e.type === "events.iterate.com/stream/subscription-removed",
     );
     expect(removed?.payload).toEqual({
-      subscriptionKey: "github-repo:/repos/project",
+      name: "github-repo:/repos/project",
       reason: "requested",
     });
     expect(network.state.githubLink).toBeNull();
@@ -399,13 +399,13 @@ describe("linkRepoToGithub", () => {
       .get(otherConnectionStream)
       ?.find((e) => e.type === "events.iterate.com/stream/subscription-configured");
     expect(newSubscription?.payload).toMatchObject({
-      subscriptionKey: "github-repo:/repos/project",
+      name: "github-repo:/repos/project",
     });
     const oldRemoved = network.streams
       .get(CONNECTION_STREAM)
       ?.find((e) => e.type === "events.iterate.com/stream/subscription-removed");
     expect(oldRemoved?.payload).toEqual({
-      subscriptionKey: "github-repo:/repos/project",
+      name: "github-repo:/repos/project",
       reason: "requested",
     });
     expect(network.state.githubLink).toMatchObject({ connection: otherConnection });
@@ -450,7 +450,7 @@ describe("linkRepoToGithub", () => {
     // The restored outbound configuration landed after the removal.
     expect(lastSubscriptionEvent?.type).toBe("events.iterate.com/stream/subscription-configured");
     expect(lastSubscriptionEvent?.payload).toMatchObject({
-      subscriptionKey: "github-repo:/repos/project",
+      name: "github-repo:/repos/project",
       filter: {
         jsonataCondition: 'payload.delivery.name = "push" and payload.body.repository.id = 101',
       },
@@ -505,7 +505,7 @@ describe("unlinkRepoFromGithub", () => {
       .get(CONNECTION_STREAM)
       ?.find((event) => event.type === "events.iterate.com/stream/subscription-removed");
     expect(removed?.payload).toEqual({
-      subscriptionKey: "github-repo:/repos/project",
+      name: "github-repo:/repos/project",
       reason: "requested",
     });
   });

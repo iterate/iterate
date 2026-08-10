@@ -7,20 +7,42 @@ import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-even
 import type { z } from "zod";
 import type { StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
-import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { capabilityHostCreationEvents } from "../capability-host/capability-host-defaults.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
+  AGENT_COLLECTION_CREATED_EVENT_TYPE,
   AGENT_COLLECTION_PATH,
-  AGENT_COLLECTION_SUBSCRIPTION_KEY,
+  AGENT_COLLECTION_SUBSCRIPTION_NAME,
+  AgentCollectionProcessorContract,
 } from "./agent-collection-processor-contract.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 
 const TYPESCRIPT_FENCE_INSTRUCTION =
   "Respond with exactly one fenced TypeScript code block opened with ```ts and no surrounding prose.";
+
+/**
+ * The complete atomic birth batch for the project's singleton agent-collection
+ * stream (`/agents`): the existence marker plus the subscription arming its
+ * facet-hosted projection processor. Previously appended by the (retired)
+ * AgentCollectionDurableObject's constructor on first dial; now every agent
+ * `create()` ensures it — the idempotency keys make retries free.
+ */
+export function agentCollectionCreationEvents(input: { projectId: string }) {
+  return [
+    AgentCollectionProcessorContract.buildEvent({
+      type: AGENT_COLLECTION_CREATED_EVENT_TYPE,
+      idempotencyKey: `agent-collection/created:${input.projectId}`,
+      payload: {},
+    }),
+    buildFacetProcessorSubscriptionConfiguredEvent({
+      idempotencyKey: `stream/subscription-configured:${AgentCollectionProcessorContract.slug}`,
+      name: AgentCollectionProcessorContract.slug,
+    }),
+  ];
+}
 
 export const AGENT_SUMMARY_INSTRUCTION = [
   "AGENT SUMMARY (mandatory) — append alongside your work:",
@@ -87,7 +109,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- Whatever your function RETURNS (JSON-serializable) arrives as your next input, and you get another turn to act on it. A thrown error arrives the same way — read it and adapt. Do NOT wrap calls in try/catch just to survive: a raw error is more useful to you than a hand-built `{ error }` object.",
   "- Multi-step work is one script per response: each result comes back to you, and you write the next step having seen it. A response with more than one code block — or a block that does not start with `async` — is rejected with feedback and NOTHING runs; never queue future steps as extra blocks.",
   "- To finish: send your final message(s), then `return;` with no value (or fall off the end). `return null` counts as a value and buys a pointless extra turn. A response with no code block at all also ends your turn.",
-  "- Each script runs fresh — no variable survives between scripts. Carry state by returning it, messaging it, or writing a file.",
+  "- Scripts run fresh, but every script sees `results` (recent script outcomes, newest first, typed): `results[0].data`, `await results[0].load(itx)` if large, `.error` if failed — use it instead of re-pasting JSON. `itx.capabilityHost.setPreamble({ key, code })` pins constants/helpers above all later scripts.",
   "",
   "`itx` is a Cap'n Web RpcStub (Cloudflare's RPC protocol — https://github.com/cloudflare/capnweb) scoped to YOUR agent path in this project. Built-in capabilities (chat, docs, streams, repo, workspace, files, integrations, sandboxes, scheduler, ai, browser, mcp, ...) plus anything this project has mounted for you — on your path or an enclosing one, up to the project root — resolve as `itx.<name>`. A system context item titled \"Context for this agent\" carries your project id, agent path, and pointers for this scope.",
   "",
@@ -205,7 +227,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- Most scripts should fetch data and RETURN it. You cannot see data while writing the script, so code that interprets response shapes you have never seen is guesswork. Get the data in front of your eyes; decide on the next turn.",
   "- YOU are the LLM: don't pipe content through `itx.ai.run` to summarize, draft, or answer — return the data and write it yourself. `ai.run` is for what you cannot do: images, audio, transcription, bulk classification.",
   "- The script body is real TypeScript: `Promise.all` fans out independent calls, `Promise.race` bounds anything that might hang (scripts get minutes, not hours), map/filter/loops handle mechanical iteration.",
-  "- Return only what you need: pick fields, slice arrays. Oversized results render as an inferred type plus a preview; the FULL result is saved to a workspace file — the notice names the path; read it with `itx.workspace.readFile` and filter it in TypeScript instead of re-fetching.",
+  "- Return only what you need: pick fields, slice arrays. An oversized result renders as an inferred type plus a preview, and the FULL value stays reachable via `await results[0].load(itx)` — never re-fetch, and never save your own copy to a file: the platform retains every result.",
   "- Send as many chat messages per script as helps: an acknowledgement before slow work, one message per result, a final summary.",
   "",
   "OTHER AGENTS — the semantics behind the tour's delegation calls:",
@@ -237,7 +259,11 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
 // "small structural"/"plain" wording, no meaning change.
 // 9: docs.search now inlines the top hit's full doc in `result` — the docs
 // teach line says search-and-read is one turn, not two.
-const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "9";
+// 10: the oversized-results bullet leads with the `results` loader and says
+// never to save defensive copies — a field agent writeFile'd a full API
+// response AND returned the whole body because the old wording taught the
+// workspace spill file + readFile as the retention mechanism.
+const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "10";
 const AGENT_MODEL_POLICY_REVISION = "2";
 const AGENT_WORKSPACE_POLICY_REVISION = "3";
 const AGENT_BOOT_CONTEXT_REVISION = "3";
@@ -442,7 +468,8 @@ export function agentCreationForPath<
   systemPromptPolicy?: AgentSystemPromptPolicy;
   sibling?: {
     birthCertificate: SiblingBirthCertificate;
-    processorSlug: string;
+    /** The sibling's subscription name — the sibling contract's slug. */
+    name: string;
   };
 }) {
   const { agentPath, projectId, project } = input;
@@ -536,18 +563,15 @@ export function agentCreationForPath<
       ].join("\n"),
     },
   });
-  const durableObjectName = DurableObjectNameCodec.stringify({ projectId, path: agentPath });
-  const agentSubscription = buildHostedProcessorSubscriptionConfiguredEvent({
-    durableObjectName,
-    idempotencyKey: `stream/subscription-configured:${durableObjectName}#${AgentProcessorContract.slug}`,
-    processor: ["agents", ["get", agentPath], "processor"],
-    processorSlug: AgentProcessorContract.slug,
+  const agentSubscription = buildFacetProcessorSubscriptionConfiguredEvent({
+    idempotencyKey: `stream/subscription-configured:${AgentProcessorContract.slug}`,
+    name: AgentProcessorContract.slug,
   });
   const collectionSubscription = CoreProcessorContract.buildEvent({
     type: "events.iterate.com/stream/subscription-configured",
-    idempotencyKey: `stream/subscription-configured:${durableObjectName}#agent-collection`,
+    idempotencyKey: `stream/subscription-configured:${AGENT_COLLECTION_SUBSCRIPTION_NAME}`,
     payload: {
-      subscriptionKey: AGENT_COLLECTION_SUBSCRIPTION_KEY,
+      name: AGENT_COLLECTION_SUBSCRIPTION_NAME,
       description: "Project agent collection projection",
       filter: {
         eventTypes: ["events.iterate.com/agent/created", AGENT_SUMMARY_UPDATED_EVENT_TYPE],
@@ -569,11 +593,9 @@ export function agentCreationForPath<
     input.sibling === undefined
       ? []
       : [
-          buildHostedProcessorSubscriptionConfiguredEvent({
-            durableObjectName,
-            idempotencyKey: `stream/subscription-configured:${durableObjectName}#${input.sibling.processorSlug}`,
-            processor: ["agents", ["get", agentPath], "processor"],
-            processorSlug: input.sibling.processorSlug,
+          buildFacetProcessorSubscriptionConfiguredEvent({
+            idempotencyKey: `stream/subscription-configured:${input.sibling.name}`,
+            name: input.sibling.name,
           }),
         ];
 

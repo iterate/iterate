@@ -4,5 +4,3 @@ import raw from "../build-info.json";
 // `eas build` runs. The checked-in placeholder is all empty strings — an
 // unstamped local Metro bundle.
 export const buildInfo = raw;
-
-export const BUILD_TIMESTAMP = buildInfo.builtAt || "dev";

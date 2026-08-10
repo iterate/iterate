@@ -28,9 +28,27 @@ const qrAssetsReleaseTag = "gh-attach-assets";
 export const channelForBranch = (branch: string) =>
   branch.toLowerCase().replaceAll(/[^a-z0-9._-]+/g, "-");
 
-/** The tappable-and-scannable form of a preview-channel deep link. */
-export const interstitialUrl = (baseUrl: string, channel: string) =>
-  `${baseUrl}/m/preview-channel/${channel}`;
+/**
+ * Extra deep-link params carried through the interstitial into the app's
+ * confirm screen. `env` is an envs.ts key (the PR's leased preview slot) the
+ * app offers as the recommended backend; `email` is a `*+test@nustom.com`
+ * identity the app offers to sign in as (rides the non-prod test OTP, so it
+ * only accompanies a preview `env`).
+ */
+export type DeepLinkParams = { env?: string; email?: string };
+
+/** The hint params as a `?…` query suffix, or "" when there are none. */
+const deepLinkQuerySuffix = (params: DeepLinkParams) => {
+  const query = new URLSearchParams();
+  if (params.env) query.set("env", params.env);
+  if (params.email) query.set("email", params.email);
+  return query.size > 0 ? `?${query.toString()}` : "";
+};
+
+/** The tappable form of a preview-channel deep link (GitHub strips
+ * custom-scheme hrefs, so markdown links bounce through this https page). */
+export const interstitialUrl = (baseUrl: string, channel: string, params: DeepLinkParams) =>
+  `${baseUrl}/m/preview-channel/${channel}${deepLinkQuerySuffix(params)}`;
 
 /** Production OS — the phone's app talks to prd, so QR links do too. */
 export const prdBaseUrl = envs.prd.baseUrl;
@@ -103,13 +121,19 @@ export type PreviewPlan = {
   /** Does the published JS run on the binary a phone already has installed? */
   runtimeMatchesInstalled: boolean;
   channel: string;
-  /** Https interstitial that bounces to iterate://preview-channel/<channel>. */
+  /** Https interstitial that bounces to iterate://preview-channel/<channel> —
+   * the TAP path (GitHub strips custom-scheme hrefs, so links need https). */
   deepLinkUrl: string;
+  /** Raw app-scheme URL — the SCAN path. The camera opens custom schemes
+   * directly, so QR codes encode this and skip the interstitial hop. */
+  otaQrContent: string;
   installUrl: string;
 };
 
 export const planPreview = (input: {
   baseUrl: string;
+  /** The app's URL scheme (app.json `scheme`, i.e. "iterate"). */
+  scheme: string;
   channel: string;
   publishedRuntime: string;
   /** Runtime of the newest FINISHED preview-profile build — what's installable today. */
@@ -117,10 +141,15 @@ export const planPreview = (input: {
   /** Install page of the build serving this update: the newest usable build
    * whose runtime matches (may be freshly triggered). */
   installUrl: string;
+  /** Recommended backend + test sign-in riding the deep link ({} for none). */
+  deepLinkParams: DeepLinkParams;
 }): PreviewPlan => ({
   runtimeMatchesInstalled: input.publishedRuntime === input.installedRuntime,
   channel: input.channel,
-  deepLinkUrl: interstitialUrl(input.baseUrl, input.channel),
+  deepLinkUrl: interstitialUrl(input.baseUrl, input.channel, input.deepLinkParams),
+  // The scan path carries the same hint params as the tap path — the camera
+  // opens the scheme directly, so nothing gets a chance to drop them.
+  otaQrContent: `${input.scheme}://preview-channel/${input.channel}${deepLinkQuerySuffix(input.deepLinkParams)}`,
   installUrl: input.installUrl,
 });
 

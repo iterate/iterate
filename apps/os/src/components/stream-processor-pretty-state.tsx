@@ -41,21 +41,21 @@ export function CorePrettyState({
   const childPaths = Array.isArray(core.childPaths) ? core.childPaths : [];
   const subscriptions = readRuntimeRecord(core.subscriptions);
   const outbound = readRuntimeRecord(subscriptions?.outbound);
-  const outboundByKey = readRuntimeRecord(outbound?.byKey) ?? {};
+  const outboundByName = readRuntimeRecord(outbound?.byName) ?? {};
   const inbound = readRuntimeRecord(subscriptions?.inbound);
   const inboundBySourcePath = readRuntimeRecord(inbound?.bySourcePath) ?? {};
   const inboundSubscriptions = Object.entries(inboundBySourcePath).flatMap(
     ([sourcePath, sourceValue]) => {
-      const byKey = readRuntimeRecord(sourceValue) ?? {};
-      return Object.entries(byKey).map(([subscriptionKey, value]) => ({
+      const byName = readRuntimeRecord(sourceValue) ?? {};
+      return Object.entries(byName).map(([name, value]) => ({
         sourcePath,
-        subscriptionKey,
+        name,
         value,
       }));
     },
   );
   const connections = readRuntimeRecord(runtime?.connections) ?? {};
-  const subscriptionProgressByKey = readRuntimeRecord(runtime?.subscriptions) ?? {};
+  const subscriptionProgressByName = readRuntimeRecord(runtime?.subscriptions) ?? {};
   const paused = core.paused === true;
   const circuitBreaker = readRuntimeRecord(core.circuitBreaker);
   const trippedAtOffset = readNumber(circuitBreaker, "trippedAtOffset");
@@ -72,7 +72,7 @@ export function CorePrettyState({
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <RuntimeStateStat
           label="outbound subscriptions"
-          value={String(Object.keys(outboundByKey).length)}
+          value={String(Object.keys(outboundByName).length)}
         />
         <RuntimeStateStat
           label="inbound subscriptions"
@@ -81,7 +81,7 @@ export function CorePrettyState({
         <RuntimeStateStat label="connected" value={String(Object.keys(connections).length)} />
         <RuntimeStateStat
           label="sending"
-          value={String(Object.keys(subscriptionProgressByKey).length)}
+          value={String(Object.keys(subscriptionProgressByName).length)}
         />
       </div>
 
@@ -108,17 +108,26 @@ export function CorePrettyState({
         </div>
       ) : null}
 
-      {Object.keys(outboundByKey).length === 0 ? null : (
+      {Object.keys(outboundByName).length === 0 ? null : (
         <div>
           <SectionHeading>Outbound subscriptions</SectionHeading>
           <div className="flex flex-col gap-1.5">
-            {Object.entries(outboundByKey).map(([key, value]) => {
+            {Object.entries(outboundByName).map(([name, value]) => {
               const configured = readRuntimeRecord(value);
               const payload = readRuntimeRecord(configured?.configuration);
               const receiver = readRuntimeRecord(payload?.receiver);
               const kind = typeof receiver?.action === "string" ? receiver.action : "unknown";
-              const subscriptionProgress = readRuntimeRecord(subscriptionProgressByKey[key]);
+              const subscriptionProgress = readRuntimeRecord(subscriptionProgressByName[name]);
               const lag = readNumber(subscriptionProgress, "lag");
+              // Durable facts outrank the mirrored runtime row; halted vs
+              // plain retry stay visibly distinct.
+              const status =
+                configured?.deliveryHalted !== undefined
+                  ? "halted"
+                  : typeof subscriptionProgress?.status === "string" &&
+                      subscriptionProgress.status !== "active"
+                    ? subscriptionProgress.status
+                    : null;
               const filter = readRuntimeRecord(payload?.filter);
               const eventTypes = Array.isArray(filter?.eventTypes)
                 ? filter.eventTypes.filter((t): t is string => typeof t === "string")
@@ -130,13 +139,23 @@ export function CorePrettyState({
                   ? `copy → ${receiver.receivingStreamPath}`
                   : kind === "webhook-post" && typeof receiver?.url === "string"
                     ? `POST ${receiver.url}`
-                    : formatItxExpressionHint(receiver?.expression);
+                    : receiver?.action === "facet-processor"
+                      ? // The subscription name IS the contract slug and facet name.
+                        `facet · ${name}`
+                      : formatItxExpressionHint(receiver?.expression);
               return (
-                <div key={key} className="rounded-xl bg-muted/40 px-3 py-2">
+                <div key={name} className="rounded-xl bg-muted/40 px-3 py-2">
                   <div className="flex items-baseline justify-between gap-2">
-                    <div className="min-w-0 break-all font-mono text-xs">{key}</div>
-                    <div className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                    <div className="min-w-0 break-all font-mono text-xs">{name}</div>
+                    <div
+                      className={
+                        status === "halted"
+                          ? "shrink-0 font-mono text-[10px] text-destructive"
+                          : "shrink-0 font-mono text-[10px] text-muted-foreground"
+                      }
+                    >
                       {kind}
+                      {status == null ? "" : ` · ${status}`}
                       {lag == null ? "" : ` · lag ${lag}`}
                     </div>
                   </div>
@@ -175,14 +194,11 @@ export function CorePrettyState({
         <div>
           <SectionHeading>Inbound copy subscriptions</SectionHeading>
           <div className="flex flex-col gap-1.5">
-            {inboundSubscriptions.map(({ sourcePath, subscriptionKey, value }) => {
+            {inboundSubscriptions.map(({ sourcePath, name, value }) => {
               const entry = readRuntimeRecord(value);
               const numEventsReceived = readNumber(entry, "numEventsReceived") ?? 0;
               return (
-                <div
-                  key={`${sourcePath}:${subscriptionKey}`}
-                  className="rounded-xl bg-muted/40 px-3 py-2"
-                >
+                <div key={`${sourcePath}:${name}`} className="rounded-xl bg-muted/40 px-3 py-2">
                   <div className="flex items-baseline justify-between gap-2">
                     <div className="min-w-0 break-all font-mono text-xs">{sourcePath}</div>
                     <div className="shrink-0 font-mono text-[10px] text-muted-foreground">
@@ -190,7 +206,7 @@ export function CorePrettyState({
                     </div>
                   </div>
                   <div className="mt-1 break-all font-mono text-[11px] text-foreground/70">
-                    {subscriptionKey}
+                    {name}
                   </div>
                   {typeof entry?.lastEventReceivedAt !== "string" ? null : (
                     <div className="mt-1 text-[11px] text-muted-foreground">

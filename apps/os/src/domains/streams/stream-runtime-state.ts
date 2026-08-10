@@ -11,11 +11,12 @@ export type StreamRuntimeDebugState = {
     connections: Record<string, ConnectionRuntimeState>;
     /**
      * Idle-closed session connections whose subscriber is still present on a
-     * hibernatable wake socket (wake-socket.ts). Presence surfaces should
+     * hibernatable Subscriber Pager that the client gave the Stream DO
+     * (stream-subscriber-pager.ts). Presence surfaces should
      * render these as dormant, not gone: their `connection-closed
      * reason:"idle"` fact is deliberately not a departure.
      */
-    dormantSubscribers: Record<string, { idleDeliveredThrough: number; wakeSentAtOffset?: number }>;
+    dormantSubscribers: Record<string, { idleDeliveredThrough: number; pageSentAtOffset?: number }>;
     /** Stored subscription progress, keyed by subscription key. */
     subscriptions: Record<string, SubscriptionRuntimeState>;
     metrics: StreamThroughputMetrics;

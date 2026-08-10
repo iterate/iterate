@@ -19,7 +19,7 @@ import { getServerBaseUrl } from "./storage.ts";
  * and ship a clipboard block without the event reference. */
 const APPEND_TIMEOUT_MS = 2000;
 
-export async function reportBug(input: { projectId: string; projectSlug: string }) {
+export async function reportBug(project: { projectId: string; projectSlug: string } | null) {
   const entries = getSessionLog();
   const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
   const channelOverride = await getPreviewChannelOverride().catch(() => null);
@@ -30,15 +30,20 @@ export async function reportBug(input: { projectId: string; projectSlug: string 
     updateId: Updates.updateId,
   };
 
-  const reportEventOffset = await Promise.race([
-    appendReportEvent({ baseUrl, projectId: input.projectId, updates, entries }),
-    new Promise<null>((resolve) => setTimeout(() => resolve(null), APPEND_TIMEOUT_MS)),
-  ]).catch(() => null);
+  // Outside a project (the app-level drawer) there is no stream to append
+  // to — the clipboard trail is the whole report.
+  const reportEventOffset =
+    project === null
+      ? null
+      : await Promise.race([
+          appendReportEvent({ baseUrl, projectId: project.projectId, updates, entries }),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), APPEND_TIMEOUT_MS)),
+        ]).catch(() => null);
 
   const markdown = buildBugReportMarkdown({
     build: buildInfo,
     updates,
-    server: { baseUrl, projectId: input.projectId, projectSlug: input.projectSlug },
+    server: { baseUrl, project },
     reportEventOffset,
     entries,
   });

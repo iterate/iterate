@@ -207,7 +207,7 @@ bootstrap progress pass `{ waitUntilCreated: false }`. The Project processor
 creates the root capability host, scheduler, email router, and config repo at
 `/repos/config` (an ordinary repo on its own stream — `itx.repo` is the
 shorthand). The config repo is seeded from the template folder at
-`apps/os/config-repo-template` (thin TypeScript `worker.ts` router, modular
+`configs/default` (thin TypeScript `worker.ts` router, modular
 apps under `apps/`, and `package.json` — platform types come from its
 `iterate` devDependency's `iterate/sdk` export — `AGENTS.md`, `ONBOARDING.md`;
 codegen keeps the seeded file map in
@@ -393,7 +393,8 @@ an RpcTarget. A domain Durable Object constructs its processors and one
 `wakeStreamProcessor` calls and alarms to the right runner.
 
 When a hosted-processor subscription has events to send, the source stream
-calls `wakeStreamProcessor({ subscriptionKey, processorSlug, stream })`. The
+calls `wakeStreamProcessor({ name, stream })` (the name equals the contract
+slug). The
 runner's `openEventBatchCallback()` returns its committed checkpoint plus a
 live `processEventBatch` callback. The source retains that callback and sends
 ordered batches after the checkpoint. The processor, not the source, commits

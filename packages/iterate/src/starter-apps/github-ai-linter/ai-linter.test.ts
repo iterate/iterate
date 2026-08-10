@@ -29,7 +29,13 @@ const analysisRequest = (headSha: string): GithubAiLinterAnalysisRequested => ({
 });
 
 describe("GithubAiLinterProcessor", () => {
-  it("reduces diagnostics and mechanically publishes one review with a suggestion", async () => {
+  it("publishes visible diagnostics as one comment review and skips a suppressed-only result", async () => {
+    const createCheckRun = vi.fn(async () => ({
+      data: {
+        html_url: "https://github.com/acme/widgets/runs/84",
+        id: 84,
+      },
+    }));
     const createReview = vi.fn(async (_input: { body: string }) => ({
       data: {
         html_url: "https://github.com/acme/widgets/pull/7#pullrequestreview-42",
@@ -39,6 +45,10 @@ describe("GithubAiLinterProcessor", () => {
     const octokit = {
       paginate: vi.fn(async () => []),
       rest: {
+        checks: {
+          create: createCheckRun,
+          listForRef: vi.fn(async () => ({ data: { check_runs: [] } })),
+        },
         pulls: {
           createReview,
           get: vi.fn(async () => ({
@@ -131,6 +141,10 @@ describe("GithubAiLinterProcessor", () => {
           analysisRequestOffset: 1,
           diagnosticCount: 2,
           publication: {
+            checkRun: {
+              id: 84,
+              url: "https://github.com/acme/widgets/runs/84",
+            },
             reviewId: 42,
             reviewUrl: "https://github.com/acme/widgets/pull/7#pullrequestreview-42",
             status: "succeeded",
@@ -166,7 +180,7 @@ describe("GithubAiLinterProcessor", () => {
     expect(createReview).toHaveBeenCalledWith(
       expect.objectContaining({
         commit_id: "head-abc",
-        event: "REQUEST_CHANGES",
+        event: "COMMENT",
         comments: [
           {
             body: [
@@ -183,6 +197,19 @@ describe("GithubAiLinterProcessor", () => {
           },
         ],
       }),
+    );
+    expect(createCheckRun).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        conclusion: "neutral",
+        external_id: "iterate-github-ai-linter:101:analysis:1:head:head-abc",
+        head_sha: "head-abc",
+        name: "Iterate GitHub AI linter",
+        status: "completed",
+      }),
+    );
+    expect(createCheckRun.mock.invocationCallOrder[0]).toBeLessThan(
+      createReview.mock.invocationCallOrder[0]!,
     );
     const reviewBody = createReview.mock.calls[0]![0].body;
     expect(reviewBody).toContain("1 errors, 0 warnings, 1 suppressed, 0 resolved.");
@@ -233,9 +260,29 @@ describe("GithubAiLinterProcessor", () => {
     });
 
     expect(h.state().latestSuccessfulAnalysis?.resolvedDiagnostics).toEqual([]);
-    const secondReviewBody = createReview.mock.calls[1]![0].body;
-    expect(secondReviewBody).toContain("0 errors, 0 warnings, 1 suppressed, 0 resolved.");
-    expect(secondReviewBody).not.toContain("### Resolved");
+    expect(h.state().analyses[1]?.publication).toEqual({
+      checkRun: {
+        id: 84,
+        url: "https://github.com/acme/widgets/runs/84",
+      },
+      reason: "No visible findings to publish.",
+      status: "skipped",
+    });
+    expect(h.events(githubAiLinterEventTypes.reviewPublicationRequested)).toHaveLength(2);
+    expect(h.events(githubAiLinterEventTypes.reviewPublicationSettled)).toHaveLength(2);
+    expect(createReview).toHaveBeenCalledOnce();
+    expect(createCheckRun).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        conclusion: "success",
+        external_id: `iterate-github-ai-linter:101:analysis:${secondAnalysisOffset}:head:head-abc`,
+        head_sha: "head-abc",
+        name: "Iterate GitHub AI linter",
+        status: "completed",
+      }),
+    );
+    expect(octokit.rest.pulls.get).toHaveBeenCalledTimes(2);
+    expect(octokit.paginate).toHaveBeenCalledOnce();
   });
 
   it("settles an unfinished analysis as cancelled when a new head arrives", async () => {

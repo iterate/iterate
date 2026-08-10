@@ -8,7 +8,7 @@ import {
   CoreProcessorContract,
   MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM,
   parseCommittedCoreEvent as parseCoreEvent,
-  subscriptionKeyForConfiguredEvent,
+  subscriptionNameForConfiguredEvent,
   type CoreProcessorState,
 } from "./core-processor-contract.ts";
 import { compileEventFilter, compileJsonataExpression } from "./event-filter.ts";
@@ -25,7 +25,7 @@ export const STREAM_PAUSED_ERROR_PREFIX = "stream paused: ";
  * cursor/timestamp/counter fields to entries that already passed this limit,
  * or are copied events updating an EXISTING inbound record's fixed-shape
  * fields; a copied event whose stamp names a new (source path, subscription
- * key) pair creates a fresh entry with strings no limit has seen, so it runs
+ * name) pair creates a fresh entry with strings no limit has seen, so it runs
  * the scan, and {@link MAX_INBOUND_SOURCE_RECORDS} bounds how many such
  * entries can accumulate at all. The remaining 1 MiB is the headroom for the
  * fixed-shape drift.
@@ -35,7 +35,7 @@ export const MAX_CORE_PROCESSOR_STATE_BYTES = 1024 * 1024;
 /**
  * Hard cap on passive inbound records, counted across every source path. A
  * copied event's stamp may name a never-before-seen (source path,
- * subscription key) pair, so without a cap ever-new sources would grow this
+ * subscription name) pair, so without a cap ever-new sources would grow this
  * single-KV-value checkpoint until it could never be flushed — and a staged
  * rebuild of it would throw during boot — forever. Evicting is SAFE by
  * design: an evicted record merely degrades the fence to first-contact-accept
@@ -82,11 +82,9 @@ export function assertCoreProcessorCheckpointGrowthFits(args: {
     if (hop === undefined) return CHECKPOINT_GROWTH_EVENT_TYPES.has(event.type);
     // A copied event's only reducer mutation is its passive inbound record.
     // Updating an existing record touches bounded fields; creating one
-    // retains the stamp's path and subscription-key strings, which no other
+    // retains the stamp's path and subscription-name strings, which no other
     // limit has measured yet.
-    return (
-      args.before.subscriptions.inbound.bySourcePath[hop.path]?.[hop.subscriptionKey] === undefined
-    );
+    return args.before.subscriptions.inbound.bySourcePath[hop.path]?.[hop.name] === undefined;
   });
   if (!batchGrowsRetainedState) {
     return;
@@ -131,7 +129,7 @@ function parseCoreEventInput<const Type extends ParsedCoreEventInput["type"]>(
 }
 
 /**
- * Order two source delivery stamps for one (source path, subscription key):
+ * Order two source delivery stamps for one (source path, subscription name):
  * creation time orders stream lifetimes, the random stream ID makes a
  * same-millisecond tie deterministic, and the configure/cursor-set offset
  * orders config generations within one lifetime. The receiver's inbound fence
@@ -211,14 +209,16 @@ export class StreamCoreProcessor {
         args.event,
         "events.iterate.com/stream/subscription-configured",
       );
-      const requestedSubscriptionKey = event.payload.subscriptionKey;
+      const requestedName = event.payload.name;
+      // Only the platform's omitted-name fallback may mint `subscription:…`
+      // names; a caller may still address one that already exists (generated
+      // names are first-class, so replacing by the generated name works).
       if (
-        requestedSubscriptionKey?.startsWith("subscription:") === true &&
-        args.state.subscriptions.outbound.byKey[requestedSubscriptionKey]
-          ?.subscriptionKeyWasGenerated !== true
+        requestedName?.startsWith("subscription:") === true &&
+        args.state.subscriptions.outbound.byName[requestedName] === undefined
       ) {
         throw new Error(
-          `subscription key "${requestedSubscriptionKey}" uses the generated-key namespace but does not name an existing generated subscription`,
+          `subscription name "${requestedName}" uses the generated-name namespace but does not name an existing subscription`,
         );
       }
       if (event.payload.receiver.action === "webhook-post" && this.#projectId === null) {
@@ -231,11 +231,13 @@ export class StreamCoreProcessor {
         throw new Error("a stream cannot receive events from itself");
       }
       compileEventFilter(event.payload.filter);
-      // Every push receiver may carry a jsonataTransform; processor-wake never
-      // does (its schema has no such field — wake delivery must feed the
-      // processor its committed log verbatim).
+      // Every push receiver may carry a jsonataTransform; the processor
+      // actions (facet-processor / wake-processor) never do (their schema has
+      // no such field — wake delivery must feed the processor its committed log
+      // verbatim).
       if (
-        event.payload.receiver.action !== "processor-wake" &&
+        event.payload.receiver.action !== "facet-processor" &&
+        event.payload.receiver.action !== "wake-processor" &&
         event.payload.receiver.jsonataTransform !== undefined
       ) {
         compileJsonataExpression(event.payload.receiver.jsonataTransform);
@@ -243,11 +245,10 @@ export class StreamCoreProcessor {
       if (event.payload.receiver.action === "copy-to-stream") {
         const receivingStreamPath = event.payload.receiver.receivingStreamPath;
         const existingSubscriptionsForReceiver = Object.entries(
-          args.state.subscriptions.outbound.byKey,
+          args.state.subscriptions.outbound.byName,
         ).filter(
-          ([subscriptionKey, configured]) =>
-            (event.payload.subscriptionKey === undefined ||
-              subscriptionKey !== event.payload.subscriptionKey) &&
+          ([name, configured]) =>
+            (event.payload.name === undefined || name !== event.payload.name) &&
             configured.configuration.receiver.action === "copy-to-stream" &&
             configured.configuration.receiver.receivingStreamPath === receivingStreamPath,
         ).length;
@@ -268,11 +269,14 @@ export class StreamCoreProcessor {
         args.event,
         "events.iterate.com/stream/subscription-cursor-set",
       );
-      const configured = args.state.subscriptions.outbound.byKey[event.payload.subscriptionKey];
+      const configured = args.state.subscriptions.outbound.byName[event.payload.name];
       if (configured === undefined) {
-        throw new Error(`subscription "${event.payload.subscriptionKey}" does not exist`);
+        throw new Error(`subscription "${event.payload.name}" does not exist`);
       }
-      if (configured.configuration.receiver.action === "processor-wake") {
+      if (
+        configured.configuration.receiver.action === "facet-processor" ||
+        configured.configuration.receiver.action === "wake-processor"
+      ) {
         throw new Error(
           "hosted processors own their checkpoint; their subscription cursor cannot be set",
         );
@@ -292,12 +296,12 @@ export class StreamCoreProcessor {
         args.event,
         "events.iterate.com/stream/subscription-delivery-resumed",
       );
-      const configured = args.state.subscriptions.outbound.byKey[event.payload.subscriptionKey];
+      const configured = args.state.subscriptions.outbound.byName[event.payload.name];
       if (configured === undefined) {
-        throw new Error(`subscription "${event.payload.subscriptionKey}" does not exist`);
+        throw new Error(`subscription "${event.payload.name}" does not exist`);
       }
       if (configured.deliveryHalted === undefined) {
-        throw new Error(`subscription "${event.payload.subscriptionKey}" is not halted`);
+        throw new Error(`subscription "${event.payload.name}" is not halted`);
       }
     }
 
@@ -309,8 +313,19 @@ export class StreamCoreProcessor {
       if (args.authority !== "public") {
         throw new Error("requested subscription removals must come from a public command");
       }
-      if (args.state.subscriptions.outbound.byKey[event.payload.subscriptionKey] === undefined) {
-        throw new Error(`subscription "${event.payload.subscriptionKey}" does not exist`);
+      const configured = args.state.subscriptions.outbound.byName[event.payload.name];
+      if (configured === undefined) {
+        throw new Error(`subscription "${event.payload.name}" does not exist`);
+      }
+      // A hosted processor's subscription is part of its birth contract. Its
+      // configured event is idempotency-keyed, so removing the row would make
+      // a later create retry dedupe without restoring the processor. Push
+      // subscriptions remain removable through their owning domain doors.
+      if (
+        configured.configuration.receiver.action === "facet-processor" ||
+        configured.configuration.receiver.action === "wake-processor"
+      ) {
+        throw new Error("hosted processor subscriptions cannot be removed");
       }
     }
 
@@ -360,7 +375,7 @@ export class StreamCoreProcessor {
     const hop = args.event.source?.copiedFrom?.at(-1);
     if (hop !== undefined) {
       const byKey = next.subscriptions.inbound.bySourcePath[hop.path] ?? {};
-      const recorded = byKey[hop.subscriptionKey];
+      const recorded = byKey[hop.name];
       const sameLifetime =
         recorded !== undefined &&
         recorded.streamId === hop.streamId &&
@@ -372,7 +387,7 @@ export class StreamCoreProcessor {
           ...next.subscriptions.inbound.bySourcePath,
           [hop.path]: {
             ...byKey,
-            [hop.subscriptionKey]: {
+            [hop.name]: {
               streamId: hop.streamId,
               streamCreatedAt: hop.streamCreatedAt,
               cursorChangedAtSourceOffset: hop.cursorChangedAtSourceOffset,
@@ -470,24 +485,19 @@ export class StreamCoreProcessor {
           args.event,
           "events.iterate.com/stream/subscription-configured",
         );
-        const subscriptionKey = subscriptionKeyForConfiguredEvent(event);
-        const existing = next.subscriptions.outbound.byKey[subscriptionKey];
-        const subscriptionKeyWasGenerated =
-          event.payload.subscriptionKey === undefined ||
-          existing?.subscriptionKeyWasGenerated === true;
+        const name = subscriptionNameForConfiguredEvent(event);
         return {
           ...next,
           subscriptions: {
             ...next.subscriptions,
             outbound: {
               ...next.subscriptions.outbound,
-              byKey: {
-                ...next.subscriptions.outbound.byKey,
-                [subscriptionKey]: {
-                  configuration: { ...event.payload, subscriptionKey },
+              byName: {
+                ...next.subscriptions.outbound.byName,
+                [name]: {
+                  configuration: { ...event.payload, name },
                   configuredAtOffset: event.offset,
                   configuredAt: event.createdAt,
-                  ...(subscriptionKeyWasGenerated ? { subscriptionKeyWasGenerated: true } : {}),
                 },
               },
             },
@@ -496,15 +506,14 @@ export class StreamCoreProcessor {
       }
       case "events.iterate.com/stream/subscription-removed": {
         const event = parseCoreEvent(args.event, "events.iterate.com/stream/subscription-removed");
-        const { [event.payload.subscriptionKey]: _removed, ...byKey } =
-          next.subscriptions.outbound.byKey;
+        const { [event.payload.name]: _removed, ...byName } = next.subscriptions.outbound.byName;
         return {
           ...next,
           subscriptions: {
             ...next.subscriptions,
             outbound: {
               ...next.subscriptions.outbound,
-              byKey,
+              byName,
             },
           },
         };
@@ -514,7 +523,7 @@ export class StreamCoreProcessor {
           args.event,
           "events.iterate.com/stream/subscription-delivery-halted",
         );
-        const existing = next.subscriptions.outbound.byKey[event.payload.subscriptionKey];
+        const existing = next.subscriptions.outbound.byName[event.payload.name];
         if (existing === undefined) {
           return next;
         }
@@ -524,9 +533,9 @@ export class StreamCoreProcessor {
             ...next.subscriptions,
             outbound: {
               ...next.subscriptions.outbound,
-              byKey: {
-                ...next.subscriptions.outbound.byKey,
-                [event.payload.subscriptionKey]: {
+              byName: {
+                ...next.subscriptions.outbound.byName,
+                [event.payload.name]: {
                   ...existing,
                   deliveryHalted: {
                     reason: event.payload.reason,
@@ -545,7 +554,7 @@ export class StreamCoreProcessor {
           args.event,
           "events.iterate.com/stream/subscription-delivery-resumed",
         );
-        const existing = next.subscriptions.outbound.byKey[event.payload.subscriptionKey];
+        const existing = next.subscriptions.outbound.byName[event.payload.name];
         if (existing === undefined) {
           return next;
         }
@@ -556,9 +565,9 @@ export class StreamCoreProcessor {
             ...next.subscriptions,
             outbound: {
               ...next.subscriptions.outbound,
-              byKey: {
-                ...next.subscriptions.outbound.byKey,
-                [event.payload.subscriptionKey]: resumed,
+              byName: {
+                ...next.subscriptions.outbound.byName,
+                [event.payload.name]: resumed,
               },
             },
           },
@@ -569,7 +578,7 @@ export class StreamCoreProcessor {
           args.event,
           "events.iterate.com/stream/subscription-cursor-set",
         );
-        const existing = next.subscriptions.outbound.byKey[event.payload.subscriptionKey];
+        const existing = next.subscriptions.outbound.byName[event.payload.name];
         if (existing === undefined) {
           return next;
         }
@@ -579,9 +588,9 @@ export class StreamCoreProcessor {
             ...next.subscriptions,
             outbound: {
               ...next.subscriptions.outbound,
-              byKey: {
-                ...next.subscriptions.outbound.byKey,
-                [event.payload.subscriptionKey]: {
+              byName: {
+                ...next.subscriptions.outbound.byName,
+                [event.payload.name]: {
                   ...existing,
                   cursorSet: {
                     afterOffset: event.payload.afterOffset,
@@ -662,7 +671,7 @@ function resetCircuitBreaker(
  * committed-event-derived data for replay/rebuild to produce identical state:
  * oldest `lastEventReceivedAt` first (every value is a committed event's
  * `createdAt`, so plain string order is time order), ties broken by (source
- * path, subscription key) — always via this explicit sort, never object-key
+ * path, subscription name) — always via this explicit sort, never object-key
  * enumeration order. Evicting is SAFE by design: the fence merely degrades to
  * first-contact-accept for that source. Deleting a source path's last record
  * deletes the source path entry.
@@ -670,10 +679,10 @@ function resetCircuitBreaker(
 function evictInboundRecordsOverCap(
   bySourcePath: CoreProcessorState["subscriptions"]["inbound"]["bySourcePath"],
 ): CoreProcessorState["subscriptions"]["inbound"]["bySourcePath"] {
-  const records: [sourcePath: string, subscriptionKey: string, lastEventReceivedAt: string][] = [];
+  const records: [sourcePath: string, name: string, lastEventReceivedAt: string][] = [];
   for (const [sourcePath, byKey] of Object.entries(bySourcePath)) {
-    for (const [subscriptionKey, record] of Object.entries(byKey)) {
-      records.push([sourcePath, subscriptionKey, record.lastEventReceivedAt ?? ""]);
+    for (const [name, record] of Object.entries(byKey)) {
+      records.push([sourcePath, name, record.lastEventReceivedAt ?? ""]);
     }
   }
   if (records.length <= MAX_INBOUND_SOURCE_RECORDS) return bySourcePath;
@@ -684,11 +693,8 @@ function evictInboundRecordsOverCap(
       compareStrings(leftKey, rightKey),
   );
   let remaining = bySourcePath;
-  for (const [sourcePath, subscriptionKey] of records.slice(
-    0,
-    records.length - MAX_INBOUND_SOURCE_RECORDS,
-  )) {
-    const { [subscriptionKey]: _evicted, ...keptRecords } = remaining[sourcePath]!;
+  for (const [sourcePath, name] of records.slice(0, records.length - MAX_INBOUND_SOURCE_RECORDS)) {
+    const { [name]: _evicted, ...keptRecords } = remaining[sourcePath]!;
     if (Object.keys(keptRecords).length === 0) {
       const { [sourcePath]: _emptied, ...keptSourcePaths } = remaining;
       remaining = keptSourcePaths;
