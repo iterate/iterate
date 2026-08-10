@@ -65,6 +65,7 @@ const LIFECYCLE = [
   "events.iterate.com/voice-agent/conversation-failed",
   "events.iterate.com/voice-agent/provider-error",
   "events.iterate.com/voice-agent/buffer-flushed",
+  "events.iterate.com/voice-agent/idle-countdown",
   "events.iterate.com/stream/processor-revived",
 ] as const;
 
@@ -155,7 +156,44 @@ async function readJournal(stream: StreamReader): Promise<JournalEvent[]> {
 }
 
 interface StreamWriter {
-  append(...events: unknown[]): Promise<unknown>;
+  append(...events: unknown[]): Promise<{ offset: number }[]>;
+  waitForEvent(args: {
+    afterOffset?: number;
+    eventTypes: readonly string[];
+    timeoutMs: number;
+  }): Promise<{ type: string }>;
+}
+
+/**
+ * Wake the facet and wait until it says so, BEFORE the first press.
+ *
+ * THE PRESS IS EPHEMERAL AND AN EVICTED STREAM CANNOT HEAR IT. Measured on
+ * preview-3: a stream idle for a minute, one press, and the facet's hosted
+ * connection opened 1.4 seconds later — after `ptt-start` and forty-eight
+ * microphone frames had already come and gone. Ephemeral events reach live
+ * connections only, so the call was never opened and the run proved nothing
+ * about the deadline it exists to measure. A device has the same problem, but
+ * a device is not this harness's subject: the deadline is, and a run that
+ * cannot open a call cannot measure one.
+ *
+ * The token is what makes the answer THIS wake's; `afterOffset` behind the
+ * question is what stops a fast facet answering before anybody is listening.
+ */
+async function wakeFacet(stream: StreamWriter, token: string): Promise<void> {
+  const committed = await stream.append({
+    type: "events.iterate.com/voice-agent/warmup",
+    payload: { token },
+  });
+  const afterOffset = (committed.at(0)?.offset ?? 1) - 1;
+  const answer = await stream.waitForEvent({
+    afterOffset,
+    eventTypes: [
+      "events.iterate.com/voice-agent/warmup-ready",
+      "events.iterate.com/voice-agent/warmup-unresolved",
+    ],
+    timeoutMs: 90_000,
+  });
+  console.log(`  facet awake (${answer.type.replace("events.iterate.com/voice-agent/", "")})`);
 }
 
 /**
@@ -178,6 +216,8 @@ async function holdConversation(
   const stream = (itx as never as { streams: { get(path: string): StreamWriter } }).streams.get(
     options.streamPath,
   );
+
+  await wakeFacet(stream, crypto.randomUUID());
 
   const pressedAt: number[] = [];
   const releasedAt: number[] = [];
@@ -298,9 +338,13 @@ export async function teardown(options: TeardownOptions) {
   console.log("\n  the stream, in its own words:\n");
   for (const event of lifecycle) {
     const at = (Date.parse(event.createdAt) - zero) / 1000;
-    const reason = event.payload?.reason;
+    /* The countdown's phase is its reason: it is the one event here whose
+     * whole content is "where the loop got to". */
+    const reason = event.payload?.reason ?? event.payload?.phase;
+    const lap = event.payload?.lap;
     console.log(
       `    +${at.toFixed(1).padStart(6)}s  ${event.type.replace("events.iterate.com/", "")}` +
+        (typeof lap === "number" ? ` lap ${String(lap)}` : "") +
         (typeof reason === "string" ? `  — ${reason}` : ""),
     );
   }
