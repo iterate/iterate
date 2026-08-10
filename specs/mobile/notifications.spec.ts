@@ -126,17 +126,36 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // device — the batch is permanently unrepresented in the device list,
     // exactly the gap the synthetic needs-approval row exists to cover.
     const orphanAgent = await itx.agents.get("/agents/orphan-thread").create();
+    const orphanRunStarted = orphanAgent.stream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/capability-host/script-run-started"],
+      timeoutMs: 15_000,
+    });
     void orphanAgent.capabilityHost.runScript(parkOneRequest("orphan")).catch(() => {});
-    await expect
-      .poll(
-        async () =>
-          (
-            await itx.streams.get("/").getEvents({
-              eventTypes: ["events.iterate.com/notification/requested"],
-            })
-          ).length,
-      )
-      .toBe(1);
+    const orphanStarted = await orphanRunStarted;
+    const rootStream = itx.streams.get("/");
+    const orphanApproval = await rootStream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/project/human-approval-requested"],
+      predicate: (event) => {
+        const context = event.payload?.streamContext;
+        return (
+          typeof context === "object" &&
+          context !== null &&
+          "executionId" in context &&
+          context.executionId === orphanStarted.payload?.executionId
+        );
+      },
+      timeoutMs: 15_000,
+    });
+    await rootStream.waitForEvent({
+      afterOffset: orphanApproval.offset,
+      eventTypes: ["events.iterate.com/notification/requested"],
+      predicate: (event) =>
+        (event.payload as { approvalRequestEventOffset?: number }).approvalRequestEventOffset ===
+        orphanApproval.offset,
+      timeoutMs: 15_000,
+    });
     await itx.devices.get(DEVICE_ID).enroll({
       appVersion: "spec",
       expoPushToken: `ExponentPushToken[${DEVICE_ID}-never-deliverable]`,
