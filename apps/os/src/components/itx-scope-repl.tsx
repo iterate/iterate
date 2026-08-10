@@ -15,7 +15,6 @@ import { ClientOnly } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { StreamEvent } from "iterate/processors";
 import { useItx, useItxQuery, useStreamConnection } from "iterate/sdk/itx/react";
-import { ITX_EXAMPLES } from "~/itx/examples.ts";
 import { ItxRepl } from "./itx-repl.tsx";
 import {
   REPL_SCRIPT_EVENT_TYPES,
@@ -24,6 +23,7 @@ import {
   runErrorAlreadyJournaled,
   wrapReplScript,
 } from "./itx-scope-repl-entries.ts";
+import { ITX_EXAMPLES } from "~/itx/examples.ts";
 
 /** History window: plenty for a REPL session, bounded for pathological scopes. */
 const MAX_BUFFERED_SCRIPT_EVENTS = 1_000;

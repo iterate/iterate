@@ -8,8 +8,8 @@
 import type { StreamEvent } from "iterate/processors";
 import { ScriptExecutionSettlement } from "~/domains/capability-host/script-execution-settlement.ts";
 
-export const SCRIPT_RUN_REQUESTED = "events.iterate.com/capability-host/script-run-requested";
-export const SCRIPT_RUN_SETTLED = "events.iterate.com/capability-host/script-run-settled";
+const SCRIPT_RUN_REQUESTED = "events.iterate.com/capability-host/script-run-requested";
+const SCRIPT_RUN_SETTLED = "events.iterate.com/capability-host/script-run-settled";
 
 /** The event types the REPL's stream buffer keeps (everything else on the
  * scope stream — births, preamble sets, started markers — is noise here). */

@@ -21,7 +21,9 @@ test("project REPL accepts a forged session", async ({ helpers, page }) => {
   await page.getByRole("button", { name: "Run", exact: true }).click();
 
   const entry = page.locator(`[data-entry-index="${entryIndex}"][data-status="success"]`);
-  await entry.waitFor();
+  // The Run is a real scope script: scope birth + typecheck + worker spin-up
+  // precede the call itself on a cold project.
+  await entry.waitFor({ timeout: 90_000 });
 
   const resultJson = await entry.getByTestId("itx-repl-result-json").textContent();
   const result = JSON.parse(resultJson!);

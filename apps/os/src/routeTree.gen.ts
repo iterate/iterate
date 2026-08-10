@@ -23,7 +23,6 @@ import { Route as CollectSecretProjectSlugRouteImport } from './routes/collect-s
 import { Route as ApiMcpRouteImport } from './routes/api.mcp'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
-import { Route as AdminReplRouteImport } from './routes/admin/repl'
 import { Route as AdminProjectsRouteImport } from './routes/admin/projects'
 import { Route as AppNewProjectRouteImport } from './routes/_app/new-project'
 import { Route as AppItxReplRouteImport } from './routes/_app/itx-repl'
@@ -128,11 +127,6 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   id: '/api/$',
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
-} as any)
-const AdminReplRoute = AdminReplRouteImport.update({
-  id: '/repl',
-  path: '/repl',
-  getParentRoute: () => AdminRoute,
 } as any)
 const AdminProjectsRoute = AdminProjectsRouteImport.update({
   id: '/projects',
@@ -342,7 +336,6 @@ export interface FileRoutesByFullPath {
   '/itx-repl': typeof AppItxReplRoute
   '/new-project': typeof AppNewProjectRoute
   '/admin/projects': typeof AdminProjectsRoute
-  '/admin/repl': typeof AdminReplRoute
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
@@ -388,7 +381,6 @@ export interface FileRoutesByTo {
   '/itx-repl': typeof AppItxReplRoute
   '/new-project': typeof AppNewProjectRoute
   '/admin/projects': typeof AdminProjectsRoute
-  '/admin/repl': typeof AdminReplRoute
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
@@ -437,7 +429,6 @@ export interface FileRoutesById {
   '/_app/itx-repl': typeof AppItxReplRoute
   '/_app/new-project': typeof AppNewProjectRoute
   '/admin/projects': typeof AdminProjectsRoute
-  '/admin/repl': typeof AdminReplRoute
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
@@ -489,7 +480,6 @@ export interface FileRouteTypes {
     | '/itx-repl'
     | '/new-project'
     | '/admin/projects'
-    | '/admin/repl'
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
@@ -535,7 +525,6 @@ export interface FileRouteTypes {
     | '/itx-repl'
     | '/new-project'
     | '/admin/projects'
-    | '/admin/repl'
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
@@ -583,7 +572,6 @@ export interface FileRouteTypes {
     | '/_app/itx-repl'
     | '/_app/new-project'
     | '/admin/projects'
-    | '/admin/repl'
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
@@ -738,13 +726,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/$'
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
-    }
-    '/admin/repl': {
-      id: '/admin/repl'
-      path: '/repl'
-      fullPath: '/admin/repl'
-      preLoaderRoute: typeof AdminReplRouteImport
-      parentRoute: typeof AdminRoute
     }
     '/admin/projects': {
       id: '/admin/projects'
@@ -1119,14 +1100,12 @@ const AdminStreamsRouteRouteWithChildren =
 interface AdminRouteChildren {
   AdminStreamsRouteRoute: typeof AdminStreamsRouteRouteWithChildren
   AdminProjectsRoute: typeof AdminProjectsRoute
-  AdminReplRoute: typeof AdminReplRoute
   AdminIndexRoute: typeof AdminIndexRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminStreamsRouteRoute: AdminStreamsRouteRouteWithChildren,
   AdminProjectsRoute: AdminProjectsRoute,
-  AdminReplRoute: AdminReplRoute,
   AdminIndexRoute: AdminIndexRoute,
 }
 
