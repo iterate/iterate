@@ -134,6 +134,12 @@ test("the approval push is suppressed in the watched thread and sent when you're
     void orphanAgent.capabilityHost.runScript(parkOneRequest("orphan")).catch(() => {});
     const orphanStarted = await orphanRunStarted;
     const rootStream = itx.streams.get("/");
+    // script-run-started is durable progress BEFORE the one-off Worker Loader
+    // invokes the body. Four cold inline workers can legitimately queue there:
+    // the restoration gate measured 17.4s from started to this approval, then
+    // only 82ms from approval to notification. Give that cold-load boundary
+    // ~2x its observed tail; the notification projection keeps its own 15s
+    // deadline below, so this does not hide the delivery behavior under test.
     const orphanApproval = await rootStream.waitForEvent({
       afterOffset: 0,
       eventTypes: ["events.iterate.com/project/human-approval-requested"],
@@ -146,7 +152,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
           context.executionId === orphanStarted.payload?.executionId
         );
       },
-      timeoutMs: 15_000,
+      timeoutMs: 30_000,
     });
     await rootStream.waitForEvent({
       afterOffset: orphanApproval.offset,
@@ -237,7 +243,27 @@ test("the approval push is suppressed in the watched thread and sent when you're
       type: "events.iterate.com/agent/summary-updated",
       payload: { title: "Sending the launch webhook", activity: "waiting on egress approval" },
     });
+    const elsewhereRunStarted = elsewhereAgent.stream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/capability-host/script-run-started"],
+      timeoutMs: 15_000,
+    });
     void elsewhereAgent.capabilityHost.runScript(parkOneRequest("elsewhere")).catch(() => {});
+    const elsewhereStarted = await elsewhereRunStarted;
+    const elsewhereApproval = await rootStream.waitForEvent({
+      afterOffset: orphanApproval.offset,
+      eventTypes: ["events.iterate.com/project/human-approval-requested"],
+      predicate: (event) => {
+        const context = event.payload?.streamContext;
+        return (
+          typeof context === "object" &&
+          context !== null &&
+          "executionId" in context &&
+          context.executionId === elsewhereStarted.payload?.executionId
+        );
+      },
+      timeoutMs: 30_000,
+    });
     // Until the push pipeline journals onto THIS device's stream, nothing on
     // the device represents it — the script start, egress hold, debounce and
     // grace window are server work with no on-screen counterpart, exactly
@@ -247,9 +273,18 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // bounded 15s answer deadline. An aggregate 15s poll from script launch
     // races that valid terminal-uncertain path.
     const deviceStream = itx.streams.get(`/devices/${DEVICE_ID}`);
-    const attemptStarted = await deviceStream.waitForEvent({
+    const elsewhereDeviceRequest = await deviceStream.waitForEvent({
       afterOffset: 0,
+      eventTypes: ["events.iterate.com/notification/requested"],
+      predicate: (event) =>
+        (event.payload as { approvalRequestEventOffset?: number }).approvalRequestEventOffset ===
+        elsewhereApproval.offset,
+      timeoutMs: 15_000,
+    });
+    const attemptStarted = await deviceStream.waitForEvent({
+      afterOffset: elsewhereDeviceRequest.offset,
       eventTypes: ["events.iterate.com/device/notification-attempt-started"],
+      predicate: (event) => event.payload?.requestOffset === elsewhereDeviceRequest.offset,
       timeoutMs: 15_000,
     });
     await deviceStream.waitForEvent({
