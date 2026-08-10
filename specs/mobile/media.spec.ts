@@ -18,7 +18,7 @@ import { test } from "../test-support/test.ts";
 
 test.skip(
   process.env.MOBILE_MEDIA_SPECS !== "1",
-  "local-only until #2460 lands — run with MOBILE_MEDIA_SPECS=1",
+  "parked: opt-in until #2460 restores the mobile CI spec lane; run with MOBILE_MEDIA_SPECS=1 — revisit by 2026-08-24",
 );
 
 test("captures, searches, and views media through the phone-sized web build", async ({
