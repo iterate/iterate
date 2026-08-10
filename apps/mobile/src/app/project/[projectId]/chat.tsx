@@ -303,7 +303,9 @@ export default function ChatScreen() {
       ) : null}
       <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
         <Pressable
-          onPress={async () => setAttachments([...attachments, ...(await pickImages())])}
+          onPress={async () =>
+            setAttachments([...attachments, ...(await pickImages({ selectionLimit: 6 }))])
+          }
           disabled={send.isPending}
           style={styles.attach}
         >

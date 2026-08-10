@@ -372,9 +372,11 @@ export interface Ai {
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
-  /** Convert one document (`{ name, blob }`) to Markdown — an in-hand HTML
-   * string (a fetched page, an email body) converts via
-   * `new Blob([html], { type: "text/html" })`; never strip HTML by hand.
+  /** Convert one document (`{ name, blob }`) to Markdown — `blob` accepts
+   * bytes or base64 (a Blob made in a script cannot cross the RPC
+   * boundary). An in-hand HTML string (a fetched page, an email body)
+   * converts via `new TextEncoder().encode(html)` with a `.html` name;
+   * never strip HTML by hand.
    * `{ conversionOptions: { output: { format: "text" } } }` returns plain
    * text with link targets and image URLs stripped — the compact choice for
    * emails and newsletters, whose bytes are mostly tracking links. */
@@ -2488,11 +2490,14 @@ export type CfMarkdownSupportedFormat = {
 };
 
 /** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
- * a filename plus the raw bytes as a Blob. */
+ * a filename plus the raw bytes. */
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
   name: string;
-  blob: Blob;
+  /** The document bytes: any `FileData` shape (Uint8Array, base64 string,
+   * Blob, …), coerced server-side. Blob does not survive the capnweb hop
+   * from script sandboxes, so pass bytes or base64 from scripts. */
+  blob: FileData;
 };
 
 /** Per-format tuning for `ai.toMarkdown`: output format (markdown, or plain
