@@ -7,7 +7,9 @@ size: large
 
 ## Status summary
 
-Implementation complete and live-verified: runs execute server-side via
+Implementation complete; CI fully green (incl. preview e2e after main's
+mobile-approvals fix merged); all four Bugbot threads fixed and resolved.
+Live-verified: runs execute server-side via
 `runScript` in `/repl/<user-id>`, history restores from the scope stream on
 reload (verified in a real browser, incl. a typecheck-gate error entry and a
 `results[0].data` continuity run), all checks green. Remaining: review.
@@ -165,3 +167,13 @@ feeding the scope's derived `results` preamble.
   is rendered by the preamble assembler as `Object.assign(__resultRows, {
   byOffset })` so the tuple keeps per-index literal types while the helper
   rides the same value; the settled event's offset doubles as the UI label.
+- Bugbot round (all four real, all fixed): (1) cross-project state leak —
+  ItxScopeReplConnected + ItxActivityTail now key by projectId:scopePath;
+  (2) same-code rerun swallowed the pending row — the run mutation carries a
+  submit-time stream-offset anchor; (3) byOffset union types — now generic
+  over the tuple's literal offsets (Extract per offset), proven through the
+  real tswasm gate; (4) activity tail pointed at /repl with script-run
+  friendly renderers. Bonus find while re-verifying with the dev typechecker
+  sidecar down: the injected vars line was TS syntax, a SyntaxError on the
+  no-emit fallback path — now `const vars = JSON.parse("{}")` (JS-safe,
+  any-typed so vars-reading snippets stay clean through the gate).
