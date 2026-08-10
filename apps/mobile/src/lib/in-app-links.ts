@@ -4,10 +4,13 @@
 // with that item found, and /repos/... should open the repo workspace. Pure
 // resolver — the Markdown component's onLinkPress consults it and falls
 // through to Linking.openURL for everything else. Add rows to SPECIAL_PATHS
-// as more streams grow in-app lenses (/integrations, ...).
+// as more streams grow in-app lenses.
 
 export type InAppLink = {
-  pathname: "/project/[projectId]/media" | "/project/[projectId]/repo";
+  pathname:
+    | "/project/[projectId]/media"
+    | "/project/[projectId]/repo"
+    | "/project/[projectId]/integrations";
   params: Record<string, string>;
 };
 
@@ -27,6 +30,13 @@ const SPECIAL_PATHS: {
         params: { projectId, ...(filename ? { q: filename } : {}) },
       };
     },
+  },
+  {
+    prefix: "/integrations",
+    resolve: (_path, projectId) => ({
+      pathname: "/project/[projectId]/integrations",
+      params: { projectId },
+    }),
   },
   {
     prefix: "/repos",

@@ -24,6 +24,13 @@ test("repo links open the repo screen at the repo root", () => {
   });
 });
 
+test("integrations links open the Integrations screen", () => {
+  expect(resolveInAppLink("https://os.iterate.com/integrations/slack", context)).toEqual({
+    pathname: "/project/[projectId]/integrations",
+    params: { projectId: "prj_1" },
+  });
+});
+
 test("everything else falls through to the system browser", () => {
   // Different origin — including lookalike hosts and schemes.
   expect(resolveInAppLink("https://evil.example/media/x.png", context)).toBeNull();
