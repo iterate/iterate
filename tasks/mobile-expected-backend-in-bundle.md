@@ -1,0 +1,113 @@
+---
+status: in-progress
+size: medium
+branch: mobile-expected-backend-in-bundle
+---
+
+# Mobile: bake the expected backend into the JS bundle, not the QR
+
+## Status summary
+
+Fleshed-out spec, implementation not started. Assumptions below were made
+while Misha was AFK — the first commit is spec-only so the direction can be
+checked before code lands.
+
+## Motivation
+
+Today the "Recommended backend" (`env`) and per-PR test login (`email`) ride
+the preview QR / deep link as query params
+(`iterate://preview-channel/<channel>?env=preview_3&email=pr2429+test@nustom.com`),
+added in #2429 and consumed by the confirm + sign-in screens (#2465). That
+design has holes:
+
+- **Native EAS builds don't get the hints** — installing a build and launching
+  it never passes through the deep link, so the app has no idea which backend
+  the embedded JS expects.
+- **Switching back to main keeps stale hints** — the hints belong to the URL
+  you scanned, not the bundle you're running. Scan a PR QR, later switch back
+  to the `preview` (main) channel, and nothing tells the app "no
+  recommendation anymore".
+- **Param plumbing is invasive** — the interstitial must whitelist-forward the
+  query, expo-router double-decodes `+` (the space-normalization hack in
+  `deep-link-hints.ts`), the interstitial has to be served from the leased
+  slot's OS deployment (prd might run older code that drops params), and the
+  hints get ferried between screens via router params.
+
+The fix: the hints describe *the JS bundle*, so stamp them into the bundle —
+exactly like `apps/mobile/src/build-info.json` already stamps commit/branch.
+Whatever loads a bundle (OTA switch, auto-pull on the default channel, native
+install's embedded bundle) automatically carries its own expectation. Main
+bundles stamp nothing → no recommendation, by design. QR codes/deep links go
+back to carrying just the channel.
+
+## Checklist
+
+- [ ] Extend the build-info stamp with `expectedBackendEnv` and
+      `testLoginEmail` (empty string = none, matching the existing
+      placeholder convention; exposed as `string | null` from
+      `lib/build-info.ts`). `scripts/write-build-info.mjs` reads them from
+      env vars (`MOBILE_EXPECTED_BACKEND_ENV`, `MOBILE_TEST_LOGIN_EMAIL`),
+      defaulting to none.
+- [ ] `scripts/ci/publish-mobile-pr-preview.ts`: set those env vars when
+      running the stamp (leased slot from the PR body via
+      `leasedPreviewSlotFromBody`, `pr<N>+test@nustom.com`), so `eas update`
+      publishes a self-describing bundle. No slot leased → stamp nothing.
+- [ ] `scripts/ci/publish-mobile-update.ts` (main): stamp nothing — main
+      bundles recommend nothing, phones default to prd.
+- [ ] Strip `DeepLinkParams` out of `scripts/ci/mobile-preview.ts`: QR
+      content and interstitial URL carry the channel only; interstitial host
+      goes back to always-prd (slot-hosted interstitials existed only to
+      forward params). Simplify QR asset naming (no `-<env>` suffix needed).
+- [ ] `apps/os/src/routes/m.preview-channel.$channel.ts`: drop the
+      query-forwarding block — back to the bare channel bounce.
+- [ ] App: new tiny module (e.g. `lib/expected-backend.ts`) deriving the
+      `Recommendation` (`deep-link-hints.ts` type) from `buildInfo` —
+      `expectedBackendEnv` resolved via `serverPresetForEnvKey` (still
+      preset-list-only, so a poisoned stamp can't name an arbitrary server),
+      email still validated by `testEmailFromHint`.
+- [ ] `preview-channel/[channel].tsx`: stop reading `env`/`email` params.
+      Post-switch (the reload re-opens the screen in the NEW bundle), the
+      mismatch card + one-tap plan read from the running bundle's
+      expectation. Pre-switch "Recommended backend" row goes away — the old
+      bundle can't know the target bundle's backend, and that's honest.
+- [ ] `index.tsx` (sign-in): stop reading hint params; read the running
+      bundle's expectation directly. No more hint-ferrying via router params
+      on Continue.
+- [ ] New-bundle hook: on launch, compare the running update
+      (`Updates.updateId` / `buildInfo.commit`) against a stored last-seen
+      value; when the bundle changed and its expectation mismatches phone
+      state (`recommendationMismatches`), surface the existing mismatch
+      card/plan (reuse the pure logic + UI from the confirm screen) outside
+      the QR flow too — covers auto-pulled OTA updates and fresh native
+      installs. Dismissible, never auto-applies.
+- [ ] Tests: update `scripts/ci/mobile-preview.test.ts` (no more params in
+      URLs/QR content), `deep-link-hints.test.ts` (logic unchanged, feeding
+      changes), add coverage for the stamp env vars and the
+      bundle-expectation module.
+- [ ] Docs: `apps/mobile/README.md` preview section + any doc mentioning the
+      `?env=&email=` params.
+
+## Assumptions (made while AFK)
+
+1. **Field names/convention**: `expectedBackendEnv` (an envs.ts doppler
+   config key like `preview_3`) + `testLoginEmail`, empty-string placeholder
+   like the other build-info fields, normalized to `null` at the lib
+   boundary. Nullable per Misha's instruction — main/local bundles carry no
+   recommendation.
+2. **Native EAS builds get best-effort stamping.** The `eas-build-pre-install`
+   hook runs on EAS machines where the PR/slot is unknowable, so
+   PR-triggered native builds stamp none for now. This still beats today
+   (nothing at all rides an install), and the first OTA pull on the PR
+   channel delivers a fully-stamped bundle. If EAS's project archive turns
+   out to include the CI checkout's already-stamped file, make the hook
+   preserve existing expected-backend values instead of blanking them —
+   investigate during implementation, don't block on it.
+3. **Old QRs keep working.** Existing PR bodies have `?env=&email=` links;
+   the app just ignores the now-unread params. No migration needed —
+   republish on next push refreshes the section.
+4. **The mismatch offer stays suggest-only** (one-tap apply, never silent),
+   matching #2465's security posture.
+
+## Implementation log
+
+(append as work happens)
