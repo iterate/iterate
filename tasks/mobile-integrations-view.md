@@ -86,3 +86,7 @@ dashboard's `/integrations` view, adapted to a phone-sized native UI.
   not an integrations change. Merged current `main`; the inherited regression
   spec and processor-relay unit suite pass, as do mobile typecheck and all 85
   mobile unit tests. Refreshed preview proof is pending.
+- 2026-08-10: Matched the project drawer's primary navigation to OS:
+  `/agents`, `/integrations`, `/repos`. Removed the mobile-only Examples and
+  Notifications entries from that primary group; the remaining OS sections are
+  explicitly follow-up scope.

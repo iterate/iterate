@@ -38,7 +38,9 @@ test("opens the project integration catalogue from the mobile drawer", async ({
   await page.getByText(projectSlug).click();
   await page.getByText("New chat").waitFor();
   await page.getByLabel("Open project menu").filter({ visible: true }).click();
-  await page.getByRole("button", { name: "Integrations" }).click();
+  await page.getByRole("button", { name: "/agents" }).waitFor();
+  await page.getByRole("button", { name: "/repos" }).waitFor();
+  await page.getByRole("button", { name: "/integrations" }).click();
 
   await page.getByText("Connectable integrations", { exact: true }).waitFor();
   await expect.poll(() => page.getByText("Not connected", { exact: true }).count()).toBe(4);
