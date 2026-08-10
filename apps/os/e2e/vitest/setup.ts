@@ -8,11 +8,13 @@
  * surface at /api.
  */
 import { fileURLToPath } from "node:url";
+import { afterAll } from "vitest";
 import {
   cloudflareWorkerVersionOverrideHeaders,
   createCloudflareWorkerVersionOverrideFetch,
 } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
+import { recycleLocalDevServerIfPressured } from "../test-support/global-setup.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -29,3 +31,10 @@ if (Object.keys(cloudflareWorkerVersionOverrideHeaders(process.env)).length > 0)
   const nativeFetch = (stash[nativeFetchKey] ??= globalThis.fetch.bind(globalThis));
   globalThis.fetch = createCloudflareWorkerVersionOverrideFetch(nativeFetch, process.env);
 }
+
+// Between files, recycle the local dev server if its workerd RSS has grown past
+// the limit — the long local suite creates many project isolates that local
+// workerd never evicts, so this turns the monotonic climb toward the ~4GB cage
+// into a sawtooth and the suite survives instead of SIGABRT-ing mid-run. No-op
+// in CI / against a deployed target and on non-pressured runs.
+afterAll(recycleLocalDevServerIfPressured);

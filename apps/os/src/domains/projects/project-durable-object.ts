@@ -1,20 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
-import { disposeIgnoredRpcResult, LiveStateRpcTarget } from "iterate/sdk/capnweb";
-import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
-import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
+import { LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import type { StreamEvent } from "iterate/processors";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
-import {
-  itxForScope,
-  ProjectEgressInterceptRpcTarget,
-  STREAM_DURABLE_OBJECT_STUB,
-  StreamProcessorRpcTarget,
-  StreamRpcTarget,
-} from "../../rpc-targets.ts";
+import { ProjectEgressInterceptRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { LiveStateSockets } from "../live-state-socket.ts";
+import { LiveStatePagers } from "../live-state-pager.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
 import { withWebSocketHandshakeHeaders } from "../secrets/websocket-handshake.ts";
@@ -29,21 +21,7 @@ import {
   SECRET_JSON_TEMPLATE_HEADER,
   SecretSubstitutionError,
 } from "../secrets/utils.ts";
-import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
-import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
-import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
-import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
-import { TelegramProcessor } from "../integrations/telegram-processor-implementation.ts";
-import { TelegramProcessorContract } from "../integrations/telegram-processor-contract.ts";
-import { callProjectTelegramBotApi } from "../integrations/telegram-api.ts";
-import { buildTelegramAccessSettingsUrl } from "../integrations/utils.ts";
-import { readProjectById } from "../../project-directory.ts";
-import { EmailProcessor } from "../email/email-processor-implementation.ts";
-import { EmailProcessorContract } from "../email/email-processor-contract.ts";
-import { NotificationProcessor } from "../notifications/notification-processor-implementation.ts";
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
-import { defaultProjectWorkerRef } from "../repos/utils.ts";
-import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import {
   buildApprovalMessage,
@@ -63,11 +41,12 @@ import {
   openAiGatewayBindingEndpoint,
 } from "./openai-ai-gateway-egress.ts";
 import { takeStreamContext, type StreamContext } from "./stream-context.ts";
-import { ProjectProcessorContract } from "./project-processor-contract.ts";
-import { ProjectProcessor } from "./project-processor-implementation.ts";
+import {
+  ProjectProcessorContract,
+  type ProjectProcessorState,
+} from "./project-processor-contract.ts";
 import { StreamDatabase, type TouchInput } from "./stream-database.ts";
 import type { ProjectLiveState } from "./project-live-state.ts";
-import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
   /** Report this incarnation's code version for the deployment rollout gate. */
@@ -77,12 +56,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
-  // Last time #egressRules paid a catch-up — bounds rules staleness to ~5s.
+  // Last time #egressRules paid a facade snapshot — bounds rules staleness to ~5s.
   #egressRulesFreshAt = 0;
   // Demo (stateful live state): a counter every watcher of `itx.liveState` sees
   // update, mutated by `itx.liveDemo.increment()`. Proves the DO-backed,
-  // shared-engine case — and dogfoods the `getLiveState` fold the streams index
-  // will use.
+  // shared-engine case — and dogfoods the composite fold the streams index uses.
   #liveDemo: { count: number } = { count: 0 };
   // The project's streams index — a materialized view in the DO's own SQLite,
   // updated from the processEventBatch fan-in.
@@ -92,221 +70,85 @@ export class ProjectDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
-  /** liveState watcher sockets (domains/live-state-socket.ts) — a watched idle project hibernates at zero pin.
-   * The explicit field type is NOT inferable decoration: it breaks the
-   * field-initializer inference cycle with #registry (its hooks read the
-   * registry, whose onLiveAssembled reads this field back — TS7022 without
-   * it), the same pattern as the registry option getLiveState's explicit
-   * return type. */
-  readonly #liveStateSockets: LiveStateSockets = new LiveStateSockets({
+
+  // ---------------------------------------------------------------------------
+  // Reduced-state reads. The project processor runs as a facet of the root
+  // stream's own Durable Object (src/domains/processor-facet-durable-object.ts); this DO mirrors its
+  // committed fold through the stream's processor facade — one strict
+  // catch-up-backed snapshot per refresh.
+  // ---------------------------------------------------------------------------
+
+  /** The latest reduced project state this incarnation fetched. */
+  #lastReduced: ProjectProcessorState | undefined;
+
+  async #processorFacade(): Promise<{
+    snapshot(): Promise<{ offset: number; state: ProjectProcessorState }>;
+  }> {
+    // Safe: the root stream's facet composition registers the
+    // ProjectProcessor under ProjectProcessorContract.slug on "/", so the
+    // facade the Stream DO answers with for that name serves the project
+    // contract's fold. The RPC-generated facade type is untyped per name
+    // (the name is a runtime string), hence the assertion.
+    return (await this.env.STREAM.getByName(
+      DurableObjectNameCodec.stringify({ path: "/", projectId: this.#name.projectId }),
+    ).processorFacade({ name: ProjectProcessorContract.slug })) as unknown as {
+      snapshot(): Promise<{ offset: number; state: ProjectProcessorState }>;
+    };
+  }
+
+  async #refreshReducedState(): Promise<ProjectProcessorState> {
+    const { state } = await (await this.#processorFacade()).snapshot();
+    this.#lastReduced = state;
+    return state;
+  }
+
+  // ---------------------------------------------------------------------------
+  // The composite live state: reduced fold ⊕ streams index ⊕ demo counter —
+  // the shape behind `itx.liveState` (ProjectLiveState). The engine lives
+  // here because two of its three slices are this DO's own storage.
+  // ---------------------------------------------------------------------------
+
+  readonly #liveState = new LiveState<ProjectLiveState>({
+    reduced: ProjectProcessorContract.stateSchema.parse({}),
+    streamsIndex: {},
+    liveDemo: this.#liveDemo,
+  });
+
+  /** liveState watcher pagers (domains/live-state-pager.ts) — a watched
+   * idle project hibernates at zero pin. Wired to the COMPOSITE engine above
+   * (there is no processor registry here anymore — the project processor is
+   * facet-hosted on the root stream): the flusher reads the engine's last
+   * assembled state, and a pager seed refreshes through the same
+   * `#loadAndRefreshLive` the RPC liveState node uses. */
+  readonly #liveStatePagers = new LiveStatePagers({
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
-    readState: () => this.#registry.live.getState(),
-    refresh: () => this.#registry.loadAndRefreshLive(),
+    readState: () => this.#liveState.getState(),
+    refresh: () => this.#loadAndRefreshLive(),
     waitUntil: (work) => this.ctx.waitUntil(work),
   });
-  readonly #registry = createStreamProcessorRegistry(this.ctx, {
-    stream: this.#stream,
-    path: this.#name.path,
-    projectId: this.#name.projectId,
-    version: workerVersion(this.env),
-    onLiveAssembled: (assembly) => this.#liveStateSockets.refreshAfterAssembly(assembly),
-    // `itx.liveState` = the project's composite live state (see ProjectLiveState):
-    // the processor's fold is ONE peer slice, alongside the streams index the DO
-    // keeps in SQLite and the demo counter. The explicit return type breaks the
-    // field-initializer inference cycle (this closure reads #projectReads,
-    // which is built from this registry).
-    getLiveState: (): ProjectLiveState => {
-      const reduced = this.#projectReads.currentState;
-      // Reconcile any catalog stream missing an index row (cheap when none are),
-      // so newly-created quiet streams show up in ⌘K without waiting for events.
-      this.#streamDatabase.seedMissing(reduced.streams);
-      return {
-        reduced,
-        streamsIndex: this.#streamDatabase.all(),
-        liveDemo: this.#liveDemo,
-      };
-    },
-  });
-  // The DO constructs its processors — no host-injected readState/writeState/
-  // keepAliveWhile deps; the runner owns durable progress and keepalive. NO
-  // recovery on any of them, on purpose (parity with the host wiring): none
-  // overrides `reconcile`, so no post-eviction pass would have work to settle.
-  // Their consequential side effects all run under `blockProcessorWhile`,
-  // which holds the frame — a death mid-work leaves the cursor behind and the
-  // source stream calls their batch callback again. Their `runInBackground` work (the Slack 👀
-  // ack) is best-effort telemetry-grade
-  // today and stays that way (see the registry module doc's recovery rule).
-  readonly #projectProcessor = this.#registry.register(
-    new ProjectProcessor({
-      stream: this.#stream,
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-      customDomains: createCloudflareProjectCustomDomainDeps({
-        env: this.env,
-        projectId: this.#name.projectId,
-      }),
-      itx: itxForScope({
-        auth: trustedInternalAuthContext(),
-        ctx: this.ctx,
-        streamContext: { kind: "scope", scopePath: "/" },
-        path: "/",
-        projectId: this.#name.projectId,
-      }),
-      workerFetch: (request) =>
-        new DynamicWorkerRunner({
-          streamContext: { kind: "scope", scopePath: "/" },
-          exports: this.ctx.exports,
-          projectId: this.#name.projectId,
-          scopePath: "/",
-        }).fetch({
-          ref: defaultProjectWorkerRef(),
-          request,
-          traceRole: "project_config",
-        }),
-      appendPlatformEvents: async ({ events, streamId }) => {
-        disposeIgnoredRpcResult(
-          await this.#stream[STREAM_DURABLE_OBJECT_STUB].appendCoreEventsIfStreamId({
-            events,
-            streamId,
-          }),
-        );
-      },
-    }),
-  );
-  readonly #notificationProcessor = this.#registry.register(
-    new NotificationProcessor({
-      stream: this.#stream,
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    }),
-  );
-  readonly #notificationReads = this.#registry.reads(this.#notificationProcessor);
-  // Runner-backed reads: under runner drive the runner owns the cursors and
-  // the processor instance's internal checkpoint never advances, so every
-  // read this DO serves (snapshots, egress rules, approval keys, live state)
-  // must go through the runner's committed progress.
-  readonly #projectReads = this.#registry.reads(this.#projectProcessor);
 
-  // The Slack webhook router. It only ever WAKES on the Durable Object
-  // instances addressed at `/integrations/slack/{connection}` (the host stream
-  // is this DO's own path stream), where the OAuth connect flow configured
-  // its subscription; registering it on every instance is harmless.
-  // Registration routes wake delivery by slug; #slackReads below exposes the
-  // same runner's committed fold to the public processor inspection handle.
-  protected readonly slackRouterRegistration = this.#registry.register(
-    new SlackProcessor({
-      stream: this.#stream,
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-      acknowledgeRoutedWebhook: async ({ connection, payload }) => {
-        const ack = eyesReactionTargetFromWebhookPayload(payload);
-        if (ack == null) return;
-        try {
-          await callProjectSlackWebApi({
-            body: { channel: ack.channel, name: "eyes", timestamp: ack.timestamp },
-            connection,
-            method: "reactions.add",
-            projectId: this.#name.projectId,
-            streamContext: { kind: "scope", scopePath: this.#name.path },
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          // The slack-agent processor adds the same reaction once the routed
-          // stream catches up; whichever lands second dedups here.
-          if (message.includes("already_reacted") || message.includes("not_reactable")) return;
-          console.error("[slack] routed-webhook acknowledgement failed", {
-            error,
-            projectId: this.#name.projectId,
-          });
-        }
-      },
-    }),
-  );
-  readonly #slackReads = this.#registry.reads(this.slackRouterRegistration);
-
-  // The Telegram webhook router — same hosting shape as the Slack router: it
-  // only ever WAKES on `/integrations/telegram/{connection}` instances, where
-  // connectTelegram configured its subscription. No routed-webhook ack dep:
-  // Telegram has no reaction primitive; the telegram-agent processor's
-  // "typing…" chat action covers acknowledgement.
-  protected readonly telegramRouterRegistration = this.#registry.register(
-    new TelegramProcessor({
-      stream: this.#stream,
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-      now: Date.now,
-      sendTelegramMessage: ({ body, connection }) =>
-        callProjectTelegramBotApi({
-          body,
-          connection,
-          method: "sendMessage",
-          projectId: this.#name.projectId,
-          streamContext: { kind: "scope", scopePath: this.#name.path },
-        }),
-      telegramAccessSettingsUrl: async ({ connection, projectId }) => {
-        const project = await readProjectById(this.env.PROJECT_DIRECTORY, projectId);
-        if (project === null) {
-          throw new Error(
-            `Telegram access denial cannot link project ${projectId}: directory record missing`,
-          );
-        }
-        return buildTelegramAccessSettingsUrl({
-          baseUrl: parseConfig(this.env).baseUrl || "https://os.iterate.com",
-          connection,
-          projectSlug: project.slug,
-        });
-      },
-    }),
-  );
-  readonly #telegramReads = this.#registry.reads(this.telegramRouterRegistration);
-
-  // The email thread router — same hosting shape as the Slack router: it only
-  // ever WAKES on the Durable Object instance addressed at
-  // `/integrations/email`, where project bootstrap explicitly created it and
-  // configured its subscription. Email ingress only appends received mail.
-  readonly #emailProcessor = this.#registry.register(
-    new EmailProcessor({
-      stream: this.#stream,
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    }),
-  );
-  readonly #emailReads = this.#registry.reads(this.#emailProcessor);
-
-  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
-    return this.#registry.wakeStreamProcessor(args);
-  }
-
-  /** The registry's shared DO alarm — runner keepalives only. */
-  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    await this.#registry.handleAlarm(alarmInfo);
-  }
-
-  get slackProcessor() {
-    return new StreamProcessorRpcTarget(this.#slackReads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(SlackProcessorContract.slug),
+  #assembleLive(): void {
+    const reduced = this.#lastReduced;
+    if (reduced === undefined) return;
+    // Reconcile any catalog stream missing an index row (cheap when none are),
+    // so newly-created quiet streams show up in ⌘K without waiting for events.
+    this.#streamDatabase.seedMissing(reduced.streams);
+    this.#liveState.setState({
+      reduced,
+      streamsIndex: this.#streamDatabase.all(),
+      liveDemo: this.#liveDemo,
     });
+    // Socket watchers hear about every assembly: the flusher re-reads the
+    // engine at flush time, so scheduling here — the one materialization
+    // point — is complete coverage.
+    this.#liveStatePagers.scheduleFlush();
   }
 
-  get telegramProcessor() {
-    return new StreamProcessorRpcTarget(this.#telegramReads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(TelegramProcessorContract.slug),
-    });
+  async #loadAndRefreshLive(): Promise<void> {
+    await this.#refreshReducedState();
+    this.#assembleLive();
   }
-
-  get emailProcessor() {
-    // Runner-backed reads (#emailReads), never the processor instance — see
-    // the #projectReads comment: instance reads are stale forever under
-    // runner drive.
-    return new StreamProcessorRpcTarget(this.#emailReads, {
-      // The ingress door reads the sender allowlist from this snapshot; it
-      // must reflect a policy event appended moments ago (e.g. the birth
-      // seed) even when push delivery is lagging or a wake was dropped.
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(EmailProcessorContract.slug),
-    });
-  }
-
   describe() {
     return {
       projectId: this.#name.projectId,
@@ -319,54 +161,38 @@ export class ProjectDurableObject extends DurableObject<Env> {
     this.ctx.abort("kill requested");
   }
 
-  get processor() {
-    // Runner-backed reads (#projectReads), never the processor instance —
-    // see the field comment: instance reads are stale forever under runner
-    // drive.
-    return new StreamProcessorRpcTarget(this.#projectReads, {
-      // Lists served from this snapshot (child streams, secrets) must reflect
-      // a child stream created moments ago even when the root stream's push
-      // delivery is lagging or a wake was dropped.
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(ProjectProcessorContract.slug),
-    });
-  }
-
-  get notificationProcessor() {
-    return new StreamProcessorRpcTarget(this.#notificationReads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp("notification"),
-    });
-  }
-
   /** The project's live state — the get/set/assign/subscribe surface behind `itx.liveState`. */
   get liveState() {
-    return new LiveStateRpcTarget(this.#registry);
+    return new LiveStateRpcTarget<ProjectLiveState>({
+      live: this.#liveState,
+      loadAndRefreshLive: () => this.#loadAndRefreshLive(),
+    });
   }
 
   /** Demo mutation: bump the shared counter and push it to every `itx.liveState` watcher. */
   async incrementLiveDemo(): Promise<void> {
-    // External live-state inputs cannot use the synchronous refresh door on a
-    // cold incarnation: it deliberately refuses to assemble from a runner's
-    // schema default. Load every peer before mutating so this update is
-    // published immediately and a load failure rejects the caller.
-    await this.#registry.loadAndRefreshLive();
+    // Load the reduced peer slice before mutating so this update is published
+    // immediately over real facts and a load failure rejects the caller.
+    await this.#refreshReducedState();
     this.#liveDemo = { count: this.#liveDemo.count + 1 };
-    this.#registry.refreshLive();
+    this.#assembleLive();
   }
 
   /**
    * Update the live projections from one committed delivery before that
    * batch call returns. Both reducers are idempotent, so repeated calls
    * are harmless; a storage/RPC failure rejects the batch instead of silently
-   * leaving live state stale.
+   * leaving live state stale. This fan-in is also what keeps the composite's
+   * `reduced` slice fresh: every committed root-stream batch lands here.
    */
   async indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void> {
-    // See incrementLiveDemo: once this resolves every peer slice is real, so
-    // the synchronous refresh below cannot drop this external index update.
-    await this.#registry.loadAndRefreshLive();
-    const streamsBefore = this.#streamDatabase.all();
     this.#streamDatabase.touch(input.stream);
-    if (streamsBefore !== this.#streamDatabase.all()) {
-      this.#registry.refreshLive();
+    // The reduced slice's refresh is a cross-DO snapshot now (the fold lives
+    // in the root stream's facet); only pay it while someone is watching —
+    // an engine subscriber (the pinning fallback path) or a socket watcher.
+    if (this.#liveState.observed || this.#liveStatePagers.hasPagers()) {
+      await this.#refreshReducedState();
+      this.#assembleLive();
     }
   }
 
@@ -374,7 +200,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // The liveState lane routes FIRST and never falls through on a bad token:
     // this same fetch serves egress requests whose headers user scripts
     // control, and a request wearing the internal header must not egress.
-    const liveStateUpgrade = await this.#liveStateSockets.acceptUpgrade(request);
+    const liveStateUpgrade = await this.#liveStatePagers.acceptUpgrade(request);
     if (liveStateUpgrade !== undefined) return liveStateUpgrade;
     const taken = takeStreamContext(request);
     if (this.#egressInterceptor !== undefined) {
@@ -385,14 +211,14 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return this.#egressWithApprovalGate(taken.request, taken.streamContext);
   }
 
-  /** liveState sockets are one-way (this DO → relay); inbound frames are ignored. */
+  /** Live State Pagers are one-way (this DO → relay); inbound frames are ignored. */
   webSocketMessage(): void {}
 
   /** A closed watcher socket simply drops off `getWebSockets`; nothing to clean up. */
   webSocketClose(): void {}
 
   webSocketError(_ws: WebSocket, error: unknown): void {
-    this.#liveStateSockets.socketError(error);
+    this.#liveStatePagers.pagerError(error);
   }
 
   /**
@@ -432,17 +258,17 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   /**
    * The project's egress rules, from reduced state with BOUNDED staleness:
-   * push delivery normally keeps the fold current, but a wedged subscription
-   * must not leave policy arbitrarily stale — so at most every 5s an egress
-   * request pays one catch-up. (Grants are the trust boundary and always
-   * catch up; rules are policy, where seconds of lag are acceptable.)
+   * at most every 5s an egress request pays one facade snapshot (a strict
+   * catch-up-backed read of the facet-hosted fold). (Grants are the trust
+   * boundary and always catch up; rules are policy, where seconds of lag are
+   * acceptable.)
    */
   async #egressRules(): Promise<readonly EgressRule[]> {
-    if (!this.#projectReads.isLoaded || Date.now() - this.#egressRulesFreshAt > 5_000) {
-      await this.#registry.catchUp(ProjectProcessorContract.slug);
+    if (this.#lastReduced === undefined || Date.now() - this.#egressRulesFreshAt > 5_000) {
+      await this.#refreshReducedState();
       this.#egressRulesFreshAt = Date.now();
     }
-    return this.#projectReads.currentState.egressRules;
+    return this.#lastReduced!.egressRules;
   }
 
   /**
@@ -797,8 +623,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // ignore, no retry.
     let backoffMs = 200;
     while (true) {
+      let keyState: ProjectProcessorState;
       try {
-        await this.#registry.catchUp(ProjectProcessorContract.slug);
+        keyState = await this.#refreshReducedState();
       } catch (error) {
         if (Date.now() >= input.deadline) {
           console.warn("egress approval: decision unverifiable — key-state catch-up kept failing", {
@@ -815,7 +642,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       }
       const verdict = await evaluateDecision({
         decision: decided.data,
-        keys: this.#projectReads.currentState.humanApprovalKeys,
+        keys: keyState.humanApprovalKeys,
         message,
       });
       if (verdict.accepted) {

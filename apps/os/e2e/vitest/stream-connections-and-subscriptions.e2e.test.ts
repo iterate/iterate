@@ -35,6 +35,9 @@ import {
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const MATCHING_EVENT_TYPE = "events.iterate.test/subscriptions/matching";
 const OTHER_EVENT_TYPE = "events.iterate.test/subscriptions/other";
+const EPHEMERAL_FRAME_TYPE = "events.iterate.test/eph/live-frame";
+const DURABLE_POKE_TYPE = "events.iterate.test/eph/durable-poke";
+const SAW_TYPE = "events.iterate.test/eph/saw";
 
 /**
  * The default real-deployment test setup: one authenticated ITX session and
@@ -46,9 +49,9 @@ const OTHER_EVENT_TYPE = "events.iterate.test/subscriptions/other";
  *
  * A test opens sessions directly only when it specifically needs multiple
  * WebSockets, frame recording, session revocation, or a global stream. The
- * four explicitly named helpers at the bottom are the only test-only seams:
- * append trusted core events, deliver a trusted stream batch, force idle
- * teardown, and reset a stream lifetime.
+ * three explicitly named helpers at the bottom are the only test-only seams:
+ * append trusted core events, deliver a trusted stream batch, and reset a
+ * stream lifetime.
  */
 
 // Session callback connections and waitForEvent.
@@ -540,7 +543,7 @@ test("invalid replay coordinates and durable-key collisions leave a live callbac
   await expect(
     stream.append(
       subscriptionConfigured({
-        subscriptionKey: connectionKey,
+        name: connectionKey,
         receiver: {
           action: "itx-call",
           expression: ["worker", "processEventBatch"],
@@ -614,12 +617,12 @@ test("callback capabilities cross the worker proxy and disappear with their sess
         },
       },
     });
-    expect(await handle.connectionKey).toBe(connectionKey);
+    expect(await handle.ping()).toBe(true);
 
     await waitForCondition(
       async () => {
         const state = await observerStream.getProcessorRuntimeState({
-          subscriptionKey: connectionKey,
+          name: connectionKey,
         });
         return state?.runtime?.marker === marker && state.snapshot.offset === 123;
       },
@@ -766,7 +769,7 @@ test("configuring a subscription commits on the source alone; the receiver learn
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/source/${marker}`;
   const receivingStreamPath = `/e2e/subscriptions/receiver/${marker}`;
-  const subscriptionKey = `source-to-receiver-${marker}`;
+  const subscriptionName = `source-to-receiver-${marker}`;
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
@@ -775,7 +778,7 @@ test("configuring a subscription commits on the source alone; the receiver learn
 
   const configured = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
-    subscriptionKey,
+    name: subscriptionName,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
     description: "Receive matching test events from the source stream.",
   });
@@ -783,13 +786,13 @@ test("configuring a subscription commits on the source alone; the receiver learn
   expect(configured.subscriptionConfiguredEvent).toMatchObject({
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
-      subscriptionKey,
+      name: subscriptionName,
       receiver: { action: "copy-to-stream", receivingStreamPath: receivingStreamPath },
     },
   });
 
   const sourceState = coreState(await source.runtimeState());
-  expect(sourceState.subscriptions.outbound.byKey[subscriptionKey]).toMatchObject({
+  expect(sourceState.subscriptions.outbound.byName[subscriptionName]).toMatchObject({
     configuration: configured.subscriptionConfiguredEvent.payload,
   });
 
@@ -812,7 +815,7 @@ test("configuring a subscription commits on the source alone; the receiver learn
   // The committed copy's stamp is what creates the passive inbound record.
   expect(
     coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.[
-      subscriptionKey
+      subscriptionName
     ],
   ).toMatchObject({
     streamId: sourceState.streamId,
@@ -827,7 +830,7 @@ test("an agent-scoped script can make any project stream receive from another", 
   const agentPath = `/agents/subscription-author-${marker}`;
   const sourcePath = `/e2e/subscriptions/agent-authored/source/${marker}`;
   const receivingStreamPath = `/e2e/subscriptions/agent-authored/receiver/${marker}`;
-  const subscriptionKey = `agent-authored-${marker}`;
+  const subscriptionName = `agent-authored-${marker}`;
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
@@ -840,14 +843,14 @@ test("an agent-scoped script can make any project stream receive from another", 
   const execution = await agent.capabilityHost.runScript(`async (itx) => {
     return await itx.streams.get(${JSON.stringify(receivingStreamPath)}).subscribeToEventsFrom({
       sourceStreamPath: ${JSON.stringify(sourcePath)},
-      subscriptionKey: ${JSON.stringify(subscriptionKey)},
+      name: ${JSON.stringify(subscriptionName)},
       filter: { eventTypes: [${JSON.stringify(MATCHING_EVENT_TYPE)}] },
     });
   }`);
   expect(execution.result).toMatchObject({
     subscriptionConfiguredEvent: {
       type: "events.iterate.com/stream/subscription-configured",
-      payload: { subscriptionKey },
+      payload: { name: subscriptionName },
     },
   });
 
@@ -865,8 +868,13 @@ test("an agent-scoped script can make any project stream receive from another", 
   expect(copied).toMatchObject({
     payload: { marker, configuredBy: agentPath },
     source: {
+      // The provenance hop's `name` is the subscription's source-local name.
       copiedFrom: [
-        expect.objectContaining({ path: sourcePath, offset: sent!.offset, subscriptionKey }),
+        expect.objectContaining({
+          path: sourcePath,
+          offset: sent!.offset,
+          name: subscriptionName,
+        }),
       ],
     },
   });
@@ -890,10 +898,8 @@ test("bare subscribeToEventsFrom generates an offset key, starts now, and copies
     sourceStreamPath: sourcePath,
     idempotencyKey: `defaults-${marker}`,
   });
-  const defaultSubscriptionKey = configured.subscriptionKey;
-  expect(defaultSubscriptionKey).toBe(
-    `subscription:${configured.subscriptionConfiguredEvent.offset}`,
-  );
+  const generatedName = configured.name;
+  expect(generatedName).toBe(`subscription:${configured.subscriptionConfiguredEvent.offset}`);
   expect(configured.subscriptionConfiguredEvent).toMatchObject({
     payload: {
       receiver: {
@@ -903,7 +909,9 @@ test("bare subscribeToEventsFrom generates an offset key, starts now, and copies
       },
     },
   });
-  expect(configured.subscriptionConfiguredEvent.payload).not.toHaveProperty("subscriptionKey");
+  // Generated names live in reduced state only: the committed event omits the
+  // name and derives it from its own offset.
+  expect(configured.subscriptionConfiguredEvent.payload).not.toHaveProperty("name");
 
   const [liveControl] = await source.append({
     type: "events.iterate.com/stream/configured",
@@ -915,7 +923,7 @@ test("bare subscribeToEventsFrom generates an offset key, starts now, and copies
     timeoutMs: 15_000,
   });
   expect(copiedControl.source?.copiedFrom?.at(-1)).toMatchObject({
-    subscriptionKey: defaultSubscriptionKey,
+    name: generatedName,
     offset: liveControl!.offset,
     path: sourcePath,
   });
@@ -936,7 +944,7 @@ test.skipIf(deployedBaseUrl() === null)(
     const marker = crypto.randomUUID();
     const sourcePath = `/e2e/subscriptions/source-recreated/source/${marker}`;
     const receivingStreamPath = `/e2e/subscriptions/source-recreated/receiver/${marker}`;
-    const subscriptionKey = `source-recreated-${marker}`;
+    const subscriptionName = `source-recreated-${marker}`;
 
     using testProject = await openTestProject(marker);
     const { project } = testProject;
@@ -945,7 +953,7 @@ test.skipIf(deployedBaseUrl() === null)(
 
     const desired = {
       sourceStreamPath: sourcePath,
-      subscriptionKey,
+      name: subscriptionName,
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
       start: "beginning" as const,
     };
@@ -1000,7 +1008,7 @@ test.skipIf(deployedBaseUrl() === null)(
 
     expect(
       coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.[
-        subscriptionKey
+        subscriptionName
       ],
     ).toMatchObject({
       streamId: secondSourceState.streamId,
@@ -1014,7 +1022,7 @@ test("a receiver rejects a delayed batch after the same source key is reconfigur
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/stale-batch/source/${marker}`;
   const receivingStreamPath = `/e2e/subscriptions/stale-batch/receiver/${marker}`;
-  const subscriptionKey = `stale-batch-${marker}`;
+  const subscriptionName = `stale-batch-${marker}`;
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
@@ -1024,7 +1032,7 @@ test("a receiver rejects a delayed batch after the same source key is reconfigur
 
   const first = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
-    subscriptionKey,
+    name: subscriptionName,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
   });
   const [sourceEvent] = await source.append({
@@ -1040,7 +1048,7 @@ test("a receiver rejects a delayed batch after the same source key is reconfigur
 
   const replacement = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
-    subscriptionKey,
+    name: subscriptionName,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
     description: "Replacement configuration",
     start: "beginning",
@@ -1071,7 +1079,8 @@ test("a receiver rejects a delayed batch after the same source key is reconfigur
     streamCreatedAt: sourceState.createdAt!,
     events: [sourceEvent!],
     streamMaxOffset: sourceState.maxOffset,
-    subscriptionKey,
+    // Wire-envelope field: the subscription's name.
+    name: subscriptionName,
     cursorChangedAtSourceOffset: first.subscriptionConfiguredEvent.offset,
     deliveryId: `stale-batch:${marker}`,
     attempt: 1,
@@ -1086,7 +1095,7 @@ test("a receiver rejects a delayed batch after the same source key is reconfigur
   });
   expect(
     coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.[
-      subscriptionKey
+      subscriptionName
     ],
   ).toMatchObject({ cursorChangedAtSourceOffset: replacement.subscriptionConfiguredEvent.offset });
 });
@@ -1095,7 +1104,7 @@ test("repeating a receive command reuses its original now cursor", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/ambiguous-retry/source/${marker}`;
   const receivingStreamPath = `/e2e/subscriptions/ambiguous-retry/receiver/${marker}`;
-  const subscriptionKey = `ambiguous-retry-${marker}`;
+  const subscriptionName = `ambiguous-retry-${marker}`;
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
@@ -1108,7 +1117,7 @@ test("repeating a receive command reuses its original now cursor", async () => {
   });
   const desired = {
     sourceStreamPath: sourcePath,
-    subscriptionKey,
+    name: subscriptionName,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
     start: "now" as const,
   };
@@ -1118,7 +1127,7 @@ test("repeating a receive command reuses its original now cursor", async () => {
       afterOffset: 0,
       eventTypes: ["events.iterate.com/stream/subscription-configured"],
     })
-  ).find((event) => event.payload?.subscriptionKey === subscriptionKey);
+  ).find((event) => event.payload?.name === subscriptionName);
   expect(firstConfiguration).toBeDefined();
 
   const [betweenAttempts] = await source.append({
@@ -1128,13 +1137,13 @@ test("repeating a receive command reuses its original now cursor", async () => {
   const retried = await receiver.subscribeToEventsFrom(desired);
 
   expect(retried.subscriptionConfiguredEvent).toMatchObject({ offset: firstConfiguration!.offset });
-  expect(retried).toMatchObject({ subscriptionKey: first.subscriptionKey });
+  expect(retried).toMatchObject({ name: first.name });
   const configurations = (
     await source.getEvents({
       afterOffset: 0,
       eventTypes: ["events.iterate.com/stream/subscription-configured"],
     })
-  ).filter((event) => event.payload?.subscriptionKey === subscriptionKey);
+  ).filter((event) => event.payload?.name === subscriptionName);
   expect(configurations).toHaveLength(1);
   await receiver.append({ type: "events.iterate.com/stream/resumed", payload: {} });
   const delivered = await receiver.waitForEvent({
@@ -1150,7 +1159,7 @@ test("resumeSubscription restarts a halted rule at its existing cursor", async (
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/resume/source/${marker}`;
   const receivingStreamPath = `/e2e/subscriptions/resume/receiver/${marker}`;
-  const subscriptionKey = `resume-${marker}`;
+  const subscriptionName = `resume-${marker}`;
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
@@ -1160,7 +1169,7 @@ test("resumeSubscription restarts a halted rule at its existing cursor", async (
   const configuredOffset = coreState(await source.runtimeState()).maxOffset + 1;
   await appendTrustedCoreEvents(source, [
     subscriptionConfigured({
-      subscriptionKey,
+      name: subscriptionName,
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
       receiver: {
         action: "copy-to-stream",
@@ -1171,7 +1180,7 @@ test("resumeSubscription restarts a halted rule at its existing cursor", async (
     {
       type: "events.iterate.com/stream/subscription-delivery-halted",
       payload: {
-        subscriptionKey,
+        name: subscriptionName,
         reason: "delivery-failed",
         afterOffset: configuredOffset,
         attempts: 15,
@@ -1184,7 +1193,7 @@ test("resumeSubscription restarts a halted rule at its existing cursor", async (
     payload: { marker },
   });
   expect(
-    coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey],
+    coreState(await source.runtimeState()).subscriptions.outbound.byName[subscriptionName],
   ).toMatchObject({
     deliveryHalted: {
       afterOffset: configuredOffset,
@@ -1193,10 +1202,10 @@ test("resumeSubscription restarts a halted rule at its existing cursor", async (
     },
   });
 
-  const resumed = await source.resumeSubscription({ subscriptionKey });
+  const resumed = await source.resumeSubscription({ name: subscriptionName });
   expect(resumed).toMatchObject({
     type: "events.iterate.com/stream/subscription-delivery-resumed",
-    payload: { subscriptionKey },
+    payload: { name: subscriptionName },
   });
   const delivered = await receiver.waitForEvent({
     afterOffset: 0,
@@ -1206,9 +1215,10 @@ test("resumeSubscription restarts a halted rule at its existing cursor", async (
   });
   expect(delivered.source?.copiedFrom?.at(-1)?.offset).toBe(held!.offset);
   expect(
-    coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey],
+    coreState(await source.runtimeState()).subscriptions.outbound.byName[subscriptionName],
   ).not.toHaveProperty("deliveryHalted");
 });
+
 // Stream copies: provenance, cursors, and end conditions.
 test("chains longer than five copies retain provenance, cycles terminate, and removal revokes both sides", async () => {
   const marker = crypto.randomUUID();
@@ -1242,13 +1252,13 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
   for (let index = 1; index < streams.length; index += 1) {
     await streams[index]!.subscribeToEventsFrom({
       sourceStreamPath: paths[index - 1]!,
-      subscriptionKey: forwardRuleKeys[index - 1]!,
+      name: forwardRuleKeys[index - 1]!,
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
     });
   }
   await streamA.subscribeToEventsFrom({
     sourceStreamPath: pathG,
-    subscriptionKey: gToA,
+    name: gToA,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
   });
 
@@ -1263,7 +1273,7 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
     timeoutMs: 15_000,
   });
   expect(chained.source?.copiedFrom?.map((hop) => hop.path)).toEqual(paths.slice(0, -1));
-  expect(chained.source?.copiedFrom?.map((hop) => hop.subscriptionKey)).toEqual(forwardRuleKeys);
+  expect(chained.source?.copiedFrom?.map((hop) => hop.name)).toEqual(forwardRuleKeys);
 
   // G→A would complete a cycle. A acknowledges the source coordinate without
   // appending a duplicate product event, and records that decision as one
@@ -1276,7 +1286,7 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
   });
   expect(String(dropped.payload?.message)).toContain(`dropped 1 copied event(s) from "${pathG}"`);
   const cycleCursor = runtimeState(await streamG.runtimeState()).runtime.subscriptions[gToA]!;
-  expect(cycleCursor.acknowledgedOffset).toBeGreaterThanOrEqual(chained.offset);
+  expect(cycleCursor.confirmedOffset).toBeGreaterThanOrEqual(chained.offset);
   expect(
     (
       await streamA.getEvents({
@@ -1288,14 +1298,14 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
 
   const removed = await streamB.unsubscribeFromEvents({
     sourceStreamPath: pathA,
-    subscriptionKey: forwardRuleKeys[0]!,
+    name: forwardRuleKeys[0]!,
   });
   expect(removed).toMatchObject({
     status: "removed",
     subscriptionRemovedEvent: { type: "events.iterate.com/stream/subscription-removed" },
   });
   expect(
-    coreState(await streamA.runtimeState()).subscriptions.outbound.byKey[forwardRuleKeys[0]!],
+    coreState(await streamA.runtimeState()).subscriptions.outbound.byName[forwardRuleKeys[0]!],
   ).toBeUndefined();
 
   const removalObserverPath = `/e2e/subscriptions/cycle/removal-observer/${marker}`;
@@ -1303,7 +1313,7 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
   using removalObserver = project.streams.get(removalObserverPath);
   await removalObserver.subscribeToEventsFrom({
     sourceStreamPath: pathA,
-    subscriptionKey: removalObserverKey,
+    name: removalObserverKey,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
   });
   const [afterRemoval] = await streamA.append({
@@ -1319,7 +1329,7 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
   expect(observedAfterRemoval.source?.copiedFrom?.at(-1)).toMatchObject({
     offset: afterRemoval!.offset,
     path: pathA,
-    subscriptionKey: removalObserverKey,
+    name: removalObserverKey,
   });
   expect(
     (await streamB.getEvents({ afterOffset: 0, eventTypes: [MATCHING_EVENT_TYPE] })).map(
@@ -1333,7 +1343,7 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
   const sourcePath = `/e2e/subscriptions/hop-limit/source/${marker}`;
   const receiverPath = `/e2e/subscriptions/hop-limit/receiver/${marker}`;
   const observerPath = `/e2e/subscriptions/hop-limit/observer/${marker}`;
-  const subscriptionKey = `hop-limit-${marker}`;
+  const subscriptionName = `hop-limit-${marker}`;
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
@@ -1348,12 +1358,12 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
   });
   const configured = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
-    subscriptionKey,
+    name: subscriptionName,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
   });
   await observer.subscribeToEventsFrom({
     sourceStreamPath: receiverPath,
-    subscriptionKey: `observe-hop-limit-${marker}`,
+    name: `observe-hop-limit-${marker}`,
     filter: {
       eventTypes: [MATCHING_EVENT_TYPE, "events.iterate.com/stream/error-occurred"],
     },
@@ -1364,7 +1374,7 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
     ...historical!,
     source: {
       copiedFrom: Array.from({ length: MAX_COPIED_FROM_HOPS }, (_, index) => ({
-        subscriptionKey: `prior-copy-${index}`,
+        name: `prior-copy-${index}`,
         streamId: crypto.randomUUID(),
         streamCreatedAt: new Date(Date.parse(historical!.createdAt) - index).toISOString(),
         cursorChangedAtSourceOffset: 1,
@@ -1383,11 +1393,11 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
     streamCreatedAt: sourceState.createdAt!,
     events: [eventAtLimit],
     streamMaxOffset: sourceState.maxOffset,
-    subscriptionKey,
+    name: subscriptionName,
     cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
     deliveryId: streamDeliveryId(
       sourceState.streamId!,
-      subscriptionKey,
+      subscriptionName,
       configured.subscriptionConfiguredEvent.offset,
       historical!.offset,
       historical!.offset,
@@ -1400,7 +1410,7 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
   const dropped = await receiver.waitForEvent({
     afterOffset: 0,
     eventTypes: ["events.iterate.com/stream/error-occurred"],
-    predicate: (event) => String(event.payload?.message).includes(subscriptionKey),
+    predicate: (event) => String(event.payload?.message).includes(subscriptionName),
     timeoutMs: 15_000,
   });
   expect(String(dropped.payload?.message)).toContain(
@@ -1442,7 +1452,7 @@ test("a global subscription stays in the global namespace", async () => {
 
   await globalReceiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
-    subscriptionKey: `global-${marker}`,
+    name: `global-${marker}`,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
   });
   await globalSource.append({ type: MATCHING_EVENT_TYPE, payload: { marker } });
@@ -1464,7 +1474,7 @@ test("a copy filters, records its source, and deduplicates a retried delivery", 
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/copy/source/${marker}`;
   const receivingStreamPath = `/e2e/subscriptions/copy/receiver/${marker}`;
-  const subscriptionKey = `copy-${marker}`;
+  const subscriptionName = `copy-${marker}`;
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
@@ -1474,7 +1484,7 @@ test("a copy filters, records its source, and deduplicates a retried delivery", 
 
   const configured = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
-    subscriptionKey,
+    name: subscriptionName,
     filter: {
       eventTypes: [MATCHING_EVENT_TYPE],
       jsonataCondition: "payload.selected = true",
@@ -1495,7 +1505,7 @@ test("a copy filters, records its source, and deduplicates a retried delivery", 
     source: {
       copiedFrom: [
         {
-          subscriptionKey,
+          name: subscriptionName,
           cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
           createdAt: selected!.createdAt,
           offset: selected!.offset,
@@ -1518,11 +1528,11 @@ test("a copy filters, records its source, and deduplicates a retried delivery", 
     streamCreatedAt: sourceStateAfterCopy.createdAt!,
     events: [selected!],
     streamMaxOffset: sourceStateAfterCopy.maxOffset,
-    subscriptionKey,
+    name: subscriptionName,
     cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
     deliveryId: streamDeliveryId(
       sourceStateAfterCopy.streamId!,
-      subscriptionKey,
+      subscriptionName,
       configured.subscriptionConfiguredEvent.offset,
       selected!.offset,
       selected!.offset,
@@ -1539,7 +1549,7 @@ test("a copy filters, records its source, and deduplicates a retried delivery", 
   ).toHaveLength(1);
   expect(
     coreState(await receiver.runtimeState()).subscriptions.inbound.bySourcePath[sourcePath]?.[
-      subscriptionKey
+      subscriptionName
     ],
   ).toMatchObject({ numEventsReceived: 1 });
 });
@@ -1548,7 +1558,7 @@ test("a copy transform shapes the committed copy, keeps provenance, and dedupes 
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/copy-transform/source/${marker}`;
   const receivingStreamPath = `/e2e/subscriptions/copy-transform/receiver/${marker}`;
-  const subscriptionKey = `copy-transform-${marker}`;
+  const subscriptionName = `copy-transform-${marker}`;
   const summaryType = "events.iterate.test/subscriptions/summary";
 
   using testProject = await openTestProject(marker);
@@ -1559,7 +1569,7 @@ test("a copy transform shapes the committed copy, keeps provenance, and dedupes 
 
   const configured = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
-    subscriptionKey,
+    name: subscriptionName,
     filter: {
       eventTypes: [MATCHING_EVENT_TYPE],
       jsonataCondition: "payload.selected = true",
@@ -1581,7 +1591,7 @@ test("a copy transform shapes the committed copy, keeps provenance, and dedupes 
     source: {
       copiedFrom: [
         {
-          subscriptionKey,
+          name: subscriptionName,
           cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
           createdAt: selected!.createdAt,
           offset: selected!.offset,
@@ -1606,11 +1616,11 @@ test("a copy transform shapes the committed copy, keeps provenance, and dedupes 
     streamCreatedAt: sourceStateAfterCopy.createdAt!,
     events: [selected!],
     streamMaxOffset: sourceStateAfterCopy.maxOffset,
-    subscriptionKey,
+    name: subscriptionName,
     cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
     deliveryId: streamDeliveryId(
       sourceStateAfterCopy.streamId!,
-      subscriptionKey,
+      subscriptionName,
       configured.subscriptionConfiguredEvent.offset,
       selected!.offset,
       selected!.offset,
@@ -1631,7 +1641,7 @@ test("changing a subscription cursor deliberately copies the same source coordin
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/copy-after-seek/source/${marker}`;
   const receivingStreamPath = `/e2e/subscriptions/copy-after-seek/receiver/${marker}`;
-  const subscriptionKey = `copy-after-seek-${marker}`;
+  const subscriptionName = `copy-after-seek-${marker}`;
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
@@ -1640,7 +1650,7 @@ test("changing a subscription cursor deliberately copies the same source coordin
 
   const configured = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
-    subscriptionKey,
+    name: subscriptionName,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
   });
   const [selected] = await source.append({
@@ -1656,15 +1666,13 @@ test("changing a subscription cursor deliberately copies the same source coordin
   // Rewind through the successfully delivered event. This is a deliberate new
   // delivery run, not a transport retry, so the receiving stream appends a second copy.
   const cursorSet = await source.setSubscriptionCursor({
-    subscriptionKey,
+    name: subscriptionName,
     afterOffset: selected!.offset - 1,
   });
-  await waitForCondition(
-    async () =>
-      runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]
-        ?.acknowledgedOffset >= selected!.offset,
-    { description: "the rewound stream subscription to acknowledge the event again" },
-  );
+  // The uniform barrier works for a copy receiver too: processed = the copy ack.
+  await source.subscriptions
+    .get(subscriptionName)
+    .waitUntilProcessed({ offset: selected!.offset, timeoutMs: 30_000 });
   const copiesAfterSeek = await receiver.getEvents({
     afterOffset: 0,
     eventTypes: [MATCHING_EVENT_TYPE],
@@ -1675,7 +1683,7 @@ test("changing a subscription cursor deliberately copies the same source coordin
     source: {
       copiedFrom: [
         expect.objectContaining({
-          subscriptionKey,
+          name: subscriptionName,
           cursorChangedAtSourceOffset: cursorSet.offset,
           offset: selected!.offset,
         }),
@@ -1685,13 +1693,13 @@ test("changing a subscription cursor deliberately copies the same source coordin
 
   const receiverState = coreState(await receiver.runtimeState());
   expect(
-    receiverState.subscriptions.inbound.bySourcePath[sourcePath]?.[subscriptionKey],
+    receiverState.subscriptions.inbound.bySourcePath[sourcePath]?.[subscriptionName],
   ).toMatchObject({
     cursorChangedAtSourceOffset: cursorSet.offset,
     numEventsReceived: 2,
     lastEventReceivedAt: copiedAfterSeek.createdAt,
   });
-  expect(configured).toMatchObject({ subscriptionKey });
+  expect(configured).toMatchObject({ name: subscriptionName });
   expect(firstCopy.offset).toBeLessThan(copiedAfterSeek.offset);
 });
 
@@ -1699,7 +1707,7 @@ test("replacing a subscription starts a new copy run and keeps configuration out
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/copy-after-replacement/source/${marker}`;
   const receivingStreamPath = `/e2e/subscriptions/copy-after-replacement/receiver/${marker}`;
-  const subscriptionKey = `copy-after-replacement-${marker}`;
+  const subscriptionName = `copy-after-replacement-${marker}`;
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
@@ -1708,7 +1716,7 @@ test("replacing a subscription starts a new copy run and keeps configuration out
 
   await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
-    subscriptionKey,
+    name: subscriptionName,
     filter: {
       eventTypes: [MATCHING_EVENT_TYPE],
       jsonataCondition: "payload.selected = true",
@@ -1728,7 +1736,7 @@ test("replacing a subscription starts a new copy run and keeps configuration out
   // configure-event offset distinguishes the replay from the old copy.
   const replacement = await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
-    subscriptionKey,
+    name: subscriptionName,
     filter: {
       eventTypes: [MATCHING_EVENT_TYPE],
       jsonataCondition: "payload.selected = true",
@@ -1738,17 +1746,17 @@ test("replacing a subscription starts a new copy run and keeps configuration out
   });
   await waitForCondition(
     async () =>
-      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]
-        ?.acknowledgedOffset ?? 0) >= selected!.offset,
+      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionName]
+        ?.confirmedOffset ?? 0) >= selected!.offset,
     { description: "the replacement run to replay the existing source coordinate" },
   );
   expect(
-    coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey],
+    coreState(await source.runtimeState()).subscriptions.outbound.byName[subscriptionName],
   ).toMatchObject({
     configuration: replacement.subscriptionConfiguredEvent.payload,
   });
   expect(
-    coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey],
+    coreState(await source.runtimeState()).subscriptions.outbound.byName[subscriptionName],
   ).not.toHaveProperty("deliveryHalted");
   const copiedByReplacementReplay = await receiver.waitForEvent({
     afterOffset: firstCopy.offset,
@@ -1763,7 +1771,7 @@ test("replacing a subscription starts a new copy run and keeps configuration out
     source: {
       copiedFrom: [
         expect.objectContaining({
-          subscriptionKey,
+          name: subscriptionName,
           cursorChangedAtSourceOffset: replacement.subscriptionConfiguredEvent.offset,
           offset: selected!.offset,
         }),
@@ -1786,7 +1794,7 @@ test("replacing a subscription starts a new copy run and keeps configuration out
     source: {
       copiedFrom: [
         expect.objectContaining({
-          subscriptionKey,
+          name: subscriptionName,
           offset: newUnderReplacement!.offset,
           path: sourcePath,
         }),
@@ -1798,20 +1806,20 @@ test("replacing a subscription starts a new copy run and keeps configuration out
   // cursor/health/metrics fields and does not repeat receiver or policy configuration.
   const sourceState = runtimeState(await source.runtimeState());
   expect(
-    sourceState.coreProcessorState.subscriptions.outbound.byKey[subscriptionKey],
+    sourceState.coreProcessorState.subscriptions.outbound.byName[subscriptionName],
   ).toMatchObject({
     configuration: replacement.subscriptionConfiguredEvent.payload,
   });
-  expect(sourceState.runtime.subscriptions[subscriptionKey]).not.toHaveProperty("configuration");
-  expect(sourceState.runtime.subscriptions[subscriptionKey]).not.toHaveProperty("receiver");
-  expect(sourceState.runtime.subscriptions[subscriptionKey]).not.toHaveProperty("mode");
+  expect(sourceState.runtime.subscriptions[subscriptionName]).not.toHaveProperty("configuration");
+  expect(sourceState.runtime.subscriptions[subscriptionName]).not.toHaveProperty("receiver");
+  expect(sourceState.runtime.subscriptions[subscriptionName]).not.toHaveProperty("mode");
 });
 
 test("a filter failure retries in order and never advances past later events", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/filter-failure/source/${marker}`;
   const receivingStreamPath = `/e2e/subscriptions/filter-failure/receiver/${marker}`;
-  const subscriptionKey = `filter-failure-${marker}`;
+  const subscriptionName = `filter-failure-${marker}`;
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
@@ -1820,7 +1828,7 @@ test("a filter failure retries in order and never advances past later events", a
 
   await receiver.subscribeToEventsFrom({
     sourceStreamPath: sourcePath,
-    subscriptionKey,
+    name: subscriptionName,
     filter: {
       eventTypes: [MATCHING_EVENT_TYPE],
       jsonataCondition: '($assert(payload.allowed, "filter rejected event"); true)',
@@ -1833,13 +1841,15 @@ test("a filter failure retries in order and never advances past later events", a
 
   await waitForCondition(
     async () =>
-      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]?.attempt ??
+      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionName]?.attempt ??
         0) >= 1,
     { description: "the filter exception to enter the normal retry loop" },
   );
-  const runtime = runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]!;
-  expect(runtime.acknowledgedOffset).toBeLessThan(failed!.offset);
-  expect(runtime.acknowledgedOffset).toBeLessThan(later!.offset);
+  const runtime = runtimeState(await source.runtimeState()).runtime.subscriptions[
+    subscriptionName
+  ]!;
+  expect(runtime.confirmedOffset).toBeLessThan(failed!.offset);
+  expect(runtime.confirmedOffset).toBeLessThan(later!.offset);
   expect(runtime.lastError).toContain("filter condition failed");
   expect(runtime.lastError).toContain("filter rejected event");
   expect(await receiver.getEvents({ afterOffset: 0, eventTypes: [MATCHING_EVENT_TYPE] })).toEqual(
@@ -1857,8 +1867,8 @@ test("every project child stream is born with ordinary project-worker and PostHo
   using stream = project.streams.get(streamPath);
 
   const state = coreState(await stream.runtimeState());
-  expect(state.subscriptions.outbound.byKey["project-worker"]?.configuration).toMatchObject({
-    subscriptionKey: "project-worker",
+  expect(state.subscriptions.outbound.byName["project-worker"]?.configuration).toMatchObject({
+    name: "project-worker",
     receiver: {
       action: "itx-call",
       expression: ["processEventBatch"],
@@ -1869,9 +1879,9 @@ test("every project child stream is born with ordinary project-worker and PostHo
     },
   });
   expect(
-    state.subscriptions.outbound.byKey["iterate-platform-posthog"]?.configuration,
+    state.subscriptions.outbound.byName["iterate-platform-posthog"]?.configuration,
   ).toMatchObject({
-    subscriptionKey: "iterate-platform-posthog",
+    name: "iterate-platform-posthog",
     receiver: {
       action: "itx-call",
       expression: ["integrations", "posthog", "processEventBatch"],
@@ -1890,11 +1900,11 @@ test("every project child stream is born with ordinary project-worker and PostHo
     async () => {
       const subscriptions = runtimeState(await stream.runtimeState()).runtime.subscriptions;
       return ["project-worker", "iterate-platform-posthog"].every(
-        (key) => (subscriptions[key]?.acknowledgedOffset ?? 0) >= appended!.offset,
+        (name) => (subscriptions[name]?.confirmedOffset ?? 0) >= appended!.offset,
       );
     },
     {
-      description: "the ordinary project-worker and PostHog feeds to acknowledge the append",
+      description: "the ordinary project-worker and PostHog feeds to confirm the append",
       timeoutMs: 30_000,
     },
   );
@@ -1907,7 +1917,7 @@ test("every project child stream is born with ordinary project-worker and PostHo
       streamCreatedAt: new Date().toISOString(),
       events: [],
       streamMaxOffset: 0,
-      subscriptionKey: "project-worker",
+      name: "project-worker",
       cursorChangedAtSourceOffset: 1,
       deliveryId: `forged-project-worker:${marker}`,
       attempt: 1,
@@ -1917,7 +1927,7 @@ test("every project child stream is born with ordinary project-worker and PostHo
         createdAt: new Date().toISOString(),
         path: streamPath,
         payload: {
-          subscriptionKey: "project-worker",
+          name: "project-worker",
           receiver: {
             action: "itx-call",
             expression: ["unused"],
@@ -1945,7 +1955,7 @@ test("every project child stream is born with ordinary project-worker and PostHo
       path: "/forged-source",
       events: [],
       streamMaxOffset: 1,
-      subscriptionKey: "forged",
+      name: "forged",
       cursorChangedAtSourceOffset: 1,
       deliveryId: `forged-copy:${marker}`,
       attempt: 1,
@@ -1964,8 +1974,8 @@ test("every project child stream is born with ordinary project-worker and PostHo
   };
   await expect(
     hiddenProcessorWake.wakeStreamProcessor({
-      stream: { projectId, path: "/", streamMaxOffset: 1 },
-      subscriptionKey: "forged",
+      stream: { projectId, path: "/", streamId: crypto.randomUUID(), streamMaxOffset: 1 },
+      name: "forged",
     }),
   ).rejects.toThrow("wakeStreamProcessor may be called only by trusted stream event sending");
 
@@ -1982,16 +1992,22 @@ test("every project child stream is born with ordinary project-worker and PostHo
       path: streamPath,
       projectId,
       streamMaxOffset: 0,
-      subscriptionKey: "iterate-platform-posthog",
+      name: "iterate-platform-posthog",
     }),
   ).rejects.toThrow("PostHog ingestion is available only to stream delivery");
 });
 
-test("a hosted processor returns its callback, idles cleanly, and wakes again after idle and eviction", async () => {
+// Hosted processors. Two placements share the wake protocol: an itx
+// EXPRESSION dials a remote host across a real RPC hop (the scheduler and
+// sandbox keep this lane — their Durable Objects own domain alarms or a
+// Containers class), and FACET placement hosts the processor as a facet of
+// the stream's own Durable Object (the subscription name IS the facet name).
+// The expression tests below use the scheduler contract because it is the
+// surviving first-party own-DO shape.
+test("an expression-placed processor returns its callback, idles cleanly, and wakes again after idle and eviction", async () => {
   const marker = crypto.randomUUID();
-  const connection = `e2e-${marker.slice(0, 8)}`;
-  const streamPath = `/integrations/slack/${connection}`;
-  const subscriptionKey = `hosted-${marker}`;
+  const streamPath = `/scheduler/e2e-hosted-${marker.slice(0, 8)}`;
+  const subscriptionName = "scheduler"; // name-only wake routing: must match the registered processor name
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
@@ -1999,24 +2015,17 @@ test("a hosted processor returns its callback, idles cleanly, and wakes again af
 
   await stream.append(
     subscriptionConfigured({
-      subscriptionKey,
+      name: subscriptionName,
       receiver: {
         action: "processor-wake",
-        expression: [
-          "integrations",
-          "slack",
-          ["get", connection],
-          "processor",
-          "wakeStreamProcessor",
-        ],
-        processorSlug: "slack",
+        expression: ["schedulers", ["get", streamPath], "processor", "wakeStreamProcessor"],
       },
     }),
   );
   await waitForCondition(
     async () => {
       const state = runtimeState(await stream.runtimeState());
-      return state.runtime.connections[subscriptionKey]?.kind === "hosted";
+      return state.runtime.connections[subscriptionName]?.kind === "hosted";
     },
     {
       description: "the hosted processor wake call to return its batch callback",
@@ -2024,159 +2033,186 @@ test("a hosted processor returns its callback, idles cleanly, and wakes again af
     },
   );
   expect(
-    runtimeState(await stream.runtimeState()).runtime.connections[subscriptionKey],
+    runtimeState(await stream.runtimeState()).runtime.connections[subscriptionName],
   ).toMatchObject({
     kind: "hosted",
-    subscriptionKey,
+    name: subscriptionName,
   });
 
   const [created] = await stream.append({
-    type: "events.iterate.com/slack/created",
-    payload: { config: { connection } },
+    type: "events.iterate.com/scheduler/created",
+    payload: { config: {} },
   });
   await waitForCondition(
     async () => {
-      const runtime = await stream.getProcessorRuntimeState({ subscriptionKey });
+      const runtime = await stream.getProcessorRuntimeState({ name: subscriptionName });
       return (
         (runtime?.snapshot.offset ?? 0) >= created!.offset &&
-        (
-          runtime?.snapshot.state as
-            | { birthCertificate?: { config?: { connection?: string } } }
-            | undefined
-        )?.birthCertificate?.config?.connection === connection
+        (runtime?.snapshot.state as { birthCertificate?: { config?: object } } | undefined)
+          ?.birthCertificate?.config !== undefined
       );
     },
-    { description: "the Slack processor to reduce its own birth certificate" },
+    { description: "the scheduler processor to reduce its own birth certificate" },
   );
 
-  const ephemeralRouteKey = `C${marker.slice(0, 6)}:1712345678.000050`;
-  const durableRouteKey = `C${marker.slice(0, 6)}:1712345678.000051`;
-  const [, durableRouteConfigured] = await stream.append(
+  // The subscriptions catalog serves EXPRESSION rows too: the stream's
+  // facade replays the read verbs onto the worker's own `processor` node
+  // (the stored wake expression minus its trailing wake step), so the
+  // uniform barrier and snapshot work for every placement.
+  const expressionSubscription = stream.subscriptions.get(subscriptionName);
+  await expressionSubscription.waitUntilProcessed({
+    offset: created!.offset,
+    timeoutMs: 30_000,
+  });
+  await expressionSubscription.processor.waitUntilProcessed({
+    offset: created!.offset,
+    timeoutMs: 30_000,
+  });
+  const expressionSnapshot = await expressionSubscription.processor.snapshot();
+  expect(expressionSnapshot.offset).toBeGreaterThanOrEqual(created!.offset);
+  expect(expressionSnapshot.state).toMatchObject({ birthCertificate: {} });
+
+  const ephemeralKey = `ephemeral-${marker.slice(0, 8)}`;
+  const durableKey = `durable-${marker.slice(0, 8)}`;
+  const [, durableScheduleSet] = await stream.append(
     {
-      type: "events.iterate.com/slack/thread-route-configured",
+      type: "events.iterate.com/scheduler/schedule-set",
       ephemeral: true,
-      payload: {
-        channel: ephemeralRouteKey.split(":")[0],
-        threadTs: ephemeralRouteKey.split(":")[1],
-        streamPath: `/agents/slack/${connection}/ephemeral-${marker}`,
-      },
+      payload: farFutureSchedulePayload(ephemeralKey),
     },
     {
-      type: "events.iterate.com/slack/thread-route-configured",
-      payload: {
-        channel: durableRouteKey.split(":")[0],
-        threadTs: durableRouteKey.split(":")[1],
-        streamPath: `/agents/slack/${connection}/durable-${marker}`,
-      },
+      type: "events.iterate.com/scheduler/schedule-set",
+      payload: farFutureSchedulePayload(durableKey),
     },
   );
   await waitForCondition(
     async () => {
-      const runtime = await stream.getProcessorRuntimeState({ subscriptionKey });
-      const routes = (runtime?.snapshot.state as { routes?: Record<string, string> } | undefined)
-        ?.routes;
+      const runtime = await stream.getProcessorRuntimeState({ name: subscriptionName });
+      const schedules = (
+        runtime?.snapshot.state as { schedules?: Record<string, unknown> } | undefined
+      )?.schedules;
       return (
-        (runtime?.snapshot.offset ?? 0) >= durableRouteConfigured!.offset &&
-        routes?.[durableRouteKey] === `/agents/slack/${connection}/durable-${marker}`
+        (runtime?.snapshot.offset ?? 0) >= durableScheduleSet!.offset &&
+        schedules?.[durableKey] !== undefined
       );
     },
-    { description: "the hosted processor to reduce the durable route after an ephemeral route" },
+    { description: "the hosted processor to reduce the durable schedule after an ephemeral one" },
   );
   expect(
     (
-      (await stream.getProcessorRuntimeState({ subscriptionKey }))?.snapshot.state as
-        | { routes?: Record<string, string> }
+      (await stream.getProcessorRuntimeState({ name: subscriptionName }))?.snapshot.state as
+        | { schedules?: Record<string, unknown> }
         | undefined
-    )?.routes?.[ephemeralRouteKey],
+    )?.schedules?.[ephemeralKey],
   ).toBeUndefined();
 
   await waitForCondition(
     async () =>
-      runtimeState(await stream.runtimeState()).runtime.connections[subscriptionKey]
+      runtimeState(await stream.runtimeState()).runtime.connections[subscriptionName]
         ?.hasPendingDelivery === false,
-    { description: "the hosted callback to settle before forced idle teardown" },
+    { description: "the hosted callback to settle before its idle alarm" },
   );
-  await forceStreamIdleTeardown(stream);
   await waitForCondition(
     async () =>
-      runtimeState(await stream.runtimeState()).runtime.connections[subscriptionKey] === undefined,
-    { description: "idle teardown to release the hosted callback" },
-  );
-  expect(
-    (
-      await stream.getEvents({
-        afterOffset: created!.offset,
-        eventTypes: ["events.iterate.com/stream/connection-closed"],
-        limit: 100,
-      })
-    ).some(
-      (event) =>
-        event.payload?.connectionKey === subscriptionKey && event.payload?.reason === "idle",
-    ),
-  ).toBe(true);
-
-  const routeKeyAfterIdle = `C${marker.slice(0, 6)}:1712345678.000100`;
-  const [routeConfiguredAfterIdle] = await stream.append({
-    type: "events.iterate.com/slack/thread-route-configured",
-    payload: {
-      channel: routeKeyAfterIdle.split(":")[0],
-      threadTs: routeKeyAfterIdle.split(":")[1],
-      streamPath: `/agents/slack/${connection}/after-idle-${marker}`,
+      runtimeState(await stream.runtimeState()).runtime.connections[subscriptionName] === undefined,
+    {
+      description: "the bounded idle alarm to release the hosted callback",
+      timeoutMs: 15_000,
     },
+  );
+  const idleClose = (
+    await stream.getEvents({
+      afterOffset: created!.offset,
+      eventTypes: ["events.iterate.com/stream/connection-closed"],
+      limit: 100,
+    })
+  ).find(
+    (event) =>
+      event.payload?.connectionKey === subscriptionName && event.payload?.reason === "idle",
+  );
+  expect(idleClose).toBeDefined();
+
+  // Cold-boot the Stream with no real work, then leave it completely
+  // untouched past the 21-second delivery-watchdog horizon. Its durable
+  // cursor must absorb the boot's `woken` fact without waking the hosted
+  // processor, and no stale alarm may create another incarnation or callback
+  // cycle during the quiet window. The final read can itself cold-boot the
+  // Stream, so compare event timestamps against the time captured BEFORE it.
+  await stream.kill().catch(() => undefined);
+  const booted = runtimeState(await stream.runtimeState());
+  expect(booted.coreProcessorState.subscriptions.outbound.byName[subscriptionName]).toBeDefined();
+  const quietAfterOffset = booted.coreProcessorState.maxOffset;
+  await new Promise((resolve) => setTimeout(resolve, 25_000));
+  const quietEndedAt = Date.now();
+  const lifecycleEventsDuringQuiet = (
+    await stream.getEvents({
+      afterOffset: quietAfterOffset,
+      eventTypes: [
+        "events.iterate.com/stream/woken",
+        "events.iterate.com/stream/connection-opened",
+        "events.iterate.com/stream/connection-closed",
+      ],
+      limit: 100,
+    })
+  ).filter((event) => Date.parse(event.createdAt) < quietEndedAt);
+  expect(lifecycleEventsDuringQuiet).toEqual([]);
+  expect(
+    runtimeState(await stream.runtimeState()).runtime.connections[subscriptionName],
+  ).toBeUndefined();
+
+  const afterIdleKey = `after-idle-${marker.slice(0, 8)}`;
+  const [scheduleSetAfterIdle] = await stream.append({
+    type: "events.iterate.com/scheduler/schedule-set",
+    payload: farFutureSchedulePayload(afterIdleKey),
   });
   await waitForCondition(
     async () => {
-      const runtime = await stream.getProcessorRuntimeState({ subscriptionKey });
+      const runtime = await stream.getProcessorRuntimeState({ name: subscriptionName });
       return (
-        (runtime?.snapshot.offset ?? 0) >= routeConfiguredAfterIdle!.offset &&
-        (runtime?.snapshot.state as { routes?: Record<string, string> } | undefined)?.routes?.[
-          routeKeyAfterIdle
-        ] === `/agents/slack/${connection}/after-idle-${marker}`
+        (runtime?.snapshot.offset ?? 0) >= scheduleSetAfterIdle!.offset &&
+        (runtime?.snapshot.state as { schedules?: Record<string, unknown> } | undefined)
+          ?.schedules?.[afterIdleKey] !== undefined
       );
     },
     {
-      description: "the idled Slack processor to wake from its checkpoint",
+      description: "the idled scheduler processor to wake from its checkpoint",
       timeoutMs: 30_000,
     },
   );
 
   await stream.kill().catch(() => undefined);
   expect(
-    coreState(await stream.runtimeState()).subscriptions.outbound.byKey[subscriptionKey],
+    coreState(await stream.runtimeState()).subscriptions.outbound.byName[subscriptionName],
   ).toBeDefined();
 
-  const routeKey = `C${marker.slice(0, 6)}:1712345678.000200`;
-  const [routeConfigured] = await stream.append({
-    type: "events.iterate.com/slack/thread-route-configured",
-    payload: {
-      channel: routeKey.split(":")[0],
-      threadTs: routeKey.split(":")[1],
-      streamPath: `/agents/slack/${connection}/route-${marker}`,
-    },
+  const afterEvictionKey = `after-eviction-${marker.slice(0, 8)}`;
+  const [scheduleSetAfterEviction] = await stream.append({
+    type: "events.iterate.com/scheduler/schedule-set",
+    payload: farFutureSchedulePayload(afterEvictionKey),
   });
   await waitForCondition(
     async () => {
-      const runtime = await stream.getProcessorRuntimeState({ subscriptionKey });
+      const runtime = await stream.getProcessorRuntimeState({ name: subscriptionName });
       return (
-        (runtime?.snapshot.offset ?? 0) >= routeConfigured!.offset &&
-        (runtime?.snapshot.state as { routes?: Record<string, string> } | undefined)?.routes?.[
-          routeKey
-        ] === `/agents/slack/${connection}/route-${marker}`
+        (runtime?.snapshot.offset ?? 0) >= scheduleSetAfterEviction!.offset &&
+        (runtime?.snapshot.state as { schedules?: Record<string, unknown> } | undefined)
+          ?.schedules?.[afterEvictionKey] !== undefined
       );
     },
     {
-      description: "the evicted Slack processor to re-wake and reduce a routed-thread fact",
+      description: "the evicted scheduler processor to re-wake and reduce a schedule fact",
       timeoutMs: 30_000,
     },
   );
 });
 
-// The wake-socket cycle for session connections (wake-socket.ts): idle
-// teardown severs the pinning RPC leg while the owner's Cap'n Web session
-// stays open, and the next matching append makes the worker relay re-dial —
-// the SAME processEventBatch callback receives it, with no client
-// re-subscribe. Lifecycle facts and non-matching appends must not resurrect
-// the dormant subscriber (the close→wake→open→idle-close loop).
+// The client gives the Stream DO a hibernatable Stream Subscriber Pager
+// (stream-subscriber-pager.ts). Idle teardown severs the pinning RPC leg while
+// the owner's Cap'n Web session stays open; the next matching append makes the
+// DO Page the worker relay, which re-dials the ordinary RPC leg. The SAME
+// processEventBatch callback receives it, with no client re-subscribe.
+// Lifecycle facts and non-matching appends must not Page the dormant
+// subscriber (the close→Page→open→idle-close loop).
 test("an idle-torn session connection resumes on the next matching append without re-subscribing", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/subscriptions/session/wake/${marker}`;
@@ -2203,11 +2239,13 @@ test("an idle-torn session connection resumes on the next matching append withou
       description: "the live session connection to deliver the first append",
     });
 
-    await forceStreamIdleTeardown(stream);
     await waitForCondition(
       async () =>
         runtimeState(await stream.runtimeState()).runtime.connections[connectionKey] === undefined,
-      { description: "idle teardown to sever the wake-socket-backed session connection" },
+      {
+        description: "the real idle alarm to leave only the subscriber's hibernatable Pager",
+        timeoutMs: 15_000,
+      },
     );
     expect(
       (
@@ -2231,14 +2269,15 @@ test("an idle-torn session connection resumes on the next matching append withou
       runtimeState(await stream.runtimeState()).runtime.connections[connectionKey],
     ).toBeUndefined();
 
-    // …while a matching one wakes the relay, which re-dials from its exact
+    // …while a matching one Pages the relay, which re-dials from its exact
     // cursor and delivers through the ORIGINAL callback.
     const [second] = await stream.append({
       type: MATCHING_EVENT_TYPE,
       payload: { round: "after-idle" },
     });
     await waitForCondition(async () => received.some((event) => event.offset === second!.offset), {
-      description: "the wake re-dial to deliver the post-idle append to the original callback",
+      description:
+        "the Page-driven re-dial to deliver the post-idle append to the original callback",
       timeoutMs: 30_000,
     });
     expect(received.map((event) => event.type)).toEqual([MATCHING_EVENT_TYPE, MATCHING_EVENT_TYPE]);
@@ -2256,12 +2295,12 @@ test("an idle-torn session connection resumes on the next matching append withou
 });
 
 // The resurrection-loop regression (Bugbot 9d27eb22): a subscriber whose
-// filter explicitly names connection-closed must NOT be woken by its own idle
+// filter explicitly names connection-closed must NOT be Paged by its own idle
 // close fact — the teardown's nested reconcile runs before the dormancy stamp
-// lands, so without the isTearingDown gate the close would wake the relay,
+// lands, so without the isTearingDown gate the close would Page the relay,
 // re-dial, idle again, and cycle forever. The deferred close fact still
 // arrives on the next real wake.
-test("an idle close never wakes the subscriber it closed, even when its filter names connection-closed", async () => {
+test("an idle close never Pages the subscriber it closed, even when its filter names connection-closed", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/subscriptions/session/wake-loop/${marker}`;
   const connectionKey = `wake-loop-${marker.slice(0, 8)}`;
@@ -2288,11 +2327,13 @@ test("an idle close never wakes the subscriber it closed, even when its filter n
     await waitForCondition(async () => received.some((event) => event.offset === seed!.offset), {
       description: "the live connection to deliver the seed event",
     });
-    await forceStreamIdleTeardown(stream);
     await waitForCondition(
       async () =>
         runtimeState(await stream.runtimeState()).runtime.connections[connectionKey] === undefined,
-      { description: "idle teardown to sever the lifecycle-filtered session connection" },
+      {
+        description: "the real idle alarm to sever the lifecycle-filtered session connection",
+        timeoutMs: 15_000,
+      },
     );
 
     // The loop would re-open within one wake round trip; give it ample time
@@ -2309,14 +2350,14 @@ test("an idle close never wakes the subscriber it closed, even when its filter n
     );
     expect(idleCloses).toHaveLength(1);
 
-    // A real matching append wakes the relay, and the replay delivers the
+    // A real matching append Pages the relay, and the replay delivers the
     // deferred close fact along with the new event.
     const [fresh] = await stream.append({
       type: MATCHING_EVENT_TYPE,
       payload: { round: "after-idle" },
     });
     await waitForCondition(async () => received.some((event) => event.offset === fresh!.offset), {
-      description: "the wake re-dial to deliver the post-idle append",
+      description: "the Page-driven re-dial to deliver the post-idle append",
       timeoutMs: 30_000,
     });
     expect(
@@ -2339,11 +2380,10 @@ test.skipIf(deployedBaseUrl() === null)(
   { timeout: 45_000 },
   async () => {
     const marker = crypto.randomUUID();
-    const connection = `e2e-recreated-${marker.slice(0, 8)}`;
-    const streamPath = `/integrations/slack/${connection}`;
-    const subscriptionKey = `hosted-recreated-${marker}`;
-    const oldRouteKey = `C${marker.slice(0, 6)}:1712345678.000210`;
-    const newRouteKey = `C${marker.slice(0, 6)}:1712345678.000220`;
+    const streamPath = `/scheduler/e2e-recreated-${marker.slice(0, 8)}`;
+    const subscriptionName = "scheduler"; // name-only wake routing: must match the registered processor name
+    const oldKey = `old-lifetime-${marker.slice(0, 8)}`;
+    const newKey = `new-lifetime-${marker.slice(0, 8)}`;
 
     using testProject = await openTestProject(marker);
     const { project } = testProject;
@@ -2351,43 +2391,33 @@ test.skipIf(deployedBaseUrl() === null)(
 
     const configuredEvent = () =>
       subscriptionConfigured({
-        subscriptionKey,
+        name: subscriptionName,
         receiver: {
           action: "processor-wake",
-          expression: [
-            "integrations",
-            "slack",
-            ["get", connection],
-            "processor",
-            "wakeStreamProcessor",
-          ],
-          processorSlug: "slack",
+          expression: ["schedulers", ["get", streamPath], "processor", "wakeStreamProcessor"],
         },
       });
 
     await stream.append(configuredEvent());
-    const [, oldRoute] = await stream.append(
+    const [, oldSchedule] = await stream.append(
       {
-        type: "events.iterate.com/slack/created",
-        payload: { config: { connection } },
+        type: "events.iterate.com/scheduler/created",
+        payload: { config: {} },
       },
       {
-        type: "events.iterate.com/slack/thread-route-configured",
-        payload: {
-          channel: oldRouteKey.split(":")[0],
-          threadTs: oldRouteKey.split(":")[1],
-          streamPath: `/agents/slack/${connection}/old-lifetime-${marker}`,
-        },
+        type: "events.iterate.com/scheduler/schedule-set",
+        payload: farFutureSchedulePayload(oldKey),
       },
     );
     await waitForCondition(
       async () => {
-        const snapshot = (await stream.getProcessorRuntimeState({ subscriptionKey }))?.snapshot;
+        const snapshot = (await stream.getProcessorRuntimeState({ name: subscriptionName }))
+          ?.snapshot;
         return (
-          (snapshot?.offset ?? 0) >= oldRoute!.offset &&
-          (snapshot?.state as { routes?: Record<string, string> } | undefined)?.routes?.[
-            oldRouteKey
-          ] === `/agents/slack/${connection}/old-lifetime-${marker}`
+          (snapshot?.offset ?? 0) >= oldSchedule!.offset &&
+          (snapshot?.state as { schedules?: Record<string, unknown> } | undefined)?.schedules?.[
+            oldKey
+          ] !== undefined
         );
       },
       {
@@ -2406,17 +2436,17 @@ test.skipIf(deployedBaseUrl() === null)(
     const [newConfiguration] = await stream.append(configuredEvent());
     await waitForCondition(
       async () => {
-        const runtime = await stream.getProcessorRuntimeState({ subscriptionKey });
+        const runtime = await stream.getProcessorRuntimeState({ name: subscriptionName });
         const state = runtime?.snapshot.state as
           | {
               birthCertificate?: unknown;
-              routes?: Record<string, string>;
+              schedules?: Record<string, unknown>;
             }
           | undefined;
         return (
           (runtime?.snapshot.offset ?? 0) >= newConfiguration!.offset &&
           state?.birthCertificate === null &&
-          Object.keys(state.routes ?? {}).length === 0
+          Object.keys(state.schedules ?? {}).length === 0
         );
       },
       {
@@ -2425,33 +2455,30 @@ test.skipIf(deployedBaseUrl() === null)(
       },
     );
 
-    const [, newRoute] = await stream.append(
+    const [, newSchedule] = await stream.append(
       {
-        type: "events.iterate.com/slack/created",
-        payload: { config: { connection } },
+        type: "events.iterate.com/scheduler/created",
+        payload: { config: {} },
       },
       {
-        type: "events.iterate.com/slack/thread-route-configured",
-        payload: {
-          channel: newRouteKey.split(":")[0],
-          threadTs: newRouteKey.split(":")[1],
-          streamPath: `/agents/slack/${connection}/new-lifetime-${marker}`,
-        },
+        type: "events.iterate.com/scheduler/schedule-set",
+        payload: farFutureSchedulePayload(newKey),
       },
     );
     await waitForCondition(
       async () => {
-        const snapshot = (await stream.getProcessorRuntimeState({ subscriptionKey }))?.snapshot;
+        const snapshot = (await stream.getProcessorRuntimeState({ name: subscriptionName }))
+          ?.snapshot;
         const state = snapshot?.state as
           | {
-              birthCertificate?: { config?: { connection?: string } };
-              routes?: Record<string, string>;
+              birthCertificate?: { config?: object };
+              schedules?: Record<string, unknown>;
             }
           | undefined;
         return (
-          (snapshot?.offset ?? 0) >= newRoute!.offset &&
-          state?.birthCertificate?.config?.connection === connection &&
-          state.routes?.[newRouteKey] === `/agents/slack/${connection}/new-lifetime-${marker}`
+          (snapshot?.offset ?? 0) >= newSchedule!.offset &&
+          state?.birthCertificate?.config !== undefined &&
+          state.schedules?.[newKey] !== undefined
         );
       },
       {
@@ -2459,18 +2486,18 @@ test.skipIf(deployedBaseUrl() === null)(
         timeoutMs: 30_000,
       },
     );
-    const recreatedProcessorState = (await stream.getProcessorRuntimeState({ subscriptionKey }))
-      ?.snapshot.state as { routes?: Record<string, string> } | undefined;
-    expect(recreatedProcessorState?.routes?.[oldRouteKey]).toBeUndefined();
+    const recreatedProcessorState = (
+      await stream.getProcessorRuntimeState({ name: subscriptionName })
+    )?.snapshot.state as { schedules?: Record<string, unknown> } | undefined;
+    expect(recreatedProcessorState?.schedules?.[oldKey]).toBeUndefined();
   },
 );
 
 test("hosted delivery intersects the stored filter with the processor's announced event types", async () => {
   const marker = crypto.randomUUID();
-  const connection = `e2e-intersection-${marker.slice(0, 8)}`;
-  const streamPath = `/integrations/slack/${connection}`;
-  const subscriptionKey = `hosted-intersection-${marker}`;
-  const excludedRouteKey = `C${marker.slice(0, 6)}:1712345678.000300`;
+  const streamPath = `/scheduler/e2e-intersection-${marker.slice(0, 8)}`;
+  const subscriptionName = "scheduler"; // name-only wake routing: must match the registered processor name
+  const excludedKey = `filter-excluded-${marker.slice(0, 8)}`;
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
@@ -2478,29 +2505,23 @@ test("hosted delivery intersects the stored filter with the processor's announce
 
   await stream.append(
     subscriptionConfigured({
-      subscriptionKey,
+      name: subscriptionName,
       filter: {
-        // Slack announces `slack/created` and `thread-route-configured`, but not
-        // MATCHING_EVENT_TYPE. This stored filter chooses the opposite side
-        // for the latter two, so only `slack/created` survives both filters.
-        eventTypes: ["events.iterate.com/slack/created", MATCHING_EVENT_TYPE],
+        // The scheduler announces `scheduler/created` and `schedule-set`, but
+        // not MATCHING_EVENT_TYPE. This stored filter chooses the opposite
+        // side for `schedule-set`, so only `scheduler/created` survives both
+        // filters.
+        eventTypes: ["events.iterate.com/scheduler/created", MATCHING_EVENT_TYPE],
       },
       receiver: {
         action: "processor-wake",
-        expression: [
-          "integrations",
-          "slack",
-          ["get", connection],
-          "processor",
-          "wakeStreamProcessor",
-        ],
-        processorSlug: "slack",
+        expression: ["schedulers", ["get", streamPath], "processor", "wakeStreamProcessor"],
       },
     }),
   );
   await waitForCondition(
     async () =>
-      runtimeState(await stream.runtimeState()).runtime.connections[subscriptionKey]?.kind ===
+      runtimeState(await stream.runtimeState()).runtime.connections[subscriptionName]?.kind ===
       "hosted",
     {
       description: "the filter-intersection hosted processor to open",
@@ -2511,12 +2532,8 @@ test("hosted delivery intersects the stored filter with the processor's announce
   const [, , created] = await stream.append(
     {
       // Accepted by the processor announcement, rejected by the stored filter.
-      type: "events.iterate.com/slack/thread-route-configured",
-      payload: {
-        channel: excludedRouteKey.split(":")[0],
-        threadTs: excludedRouteKey.split(":")[1],
-        streamPath: `/agents/slack/${connection}/filter-excluded-${marker}`,
-      },
+      type: "events.iterate.com/scheduler/schedule-set",
+      payload: farFutureSchedulePayload(excludedKey),
     },
     {
       // Accepted by the stored filter, rejected by the processor announcement.
@@ -2525,23 +2542,17 @@ test("hosted delivery intersects the stored filter with the processor's announce
     },
     {
       // Accepted by both; proves delivery continued past both excluded rows.
-      type: "events.iterate.com/slack/created",
-      payload: { config: { connection } },
+      type: "events.iterate.com/scheduler/created",
+      payload: { config: {} },
     },
   );
   await waitForCondition(
     async () => {
-      const runtime = await stream.getProcessorRuntimeState({ subscriptionKey });
+      const runtime = await stream.getProcessorRuntimeState({ name: subscriptionName });
       return (
         (runtime?.snapshot.offset ?? 0) >= created!.offset &&
-        (
-          runtime?.snapshot.state as
-            | {
-                birthCertificate?: { config?: { connection?: string } };
-                routes?: Record<string, string>;
-              }
-            | undefined
-        )?.birthCertificate?.config?.connection === connection
+        (runtime?.snapshot.state as { birthCertificate?: { config?: object } } | undefined)
+          ?.birthCertificate?.config !== undefined
       );
     },
     {
@@ -2549,24 +2560,102 @@ test("hosted delivery intersects the stored filter with the processor's announce
       timeoutMs: 30_000,
     },
   );
-  const processorState = (await stream.getProcessorRuntimeState({ subscriptionKey }))?.snapshot
-    .state as { routes?: Record<string, string> } | undefined;
-  expect(processorState?.routes?.[excludedRouteKey]).toBeUndefined();
+  const processorState = (await stream.getProcessorRuntimeState({ name: subscriptionName }))
+    ?.snapshot.state as { schedules?: Record<string, unknown> } | undefined;
+  expect(processorState?.schedules?.[excludedKey]).toBeUndefined();
   expect(
-    runtimeState(await stream.runtimeState()).runtime.connections[subscriptionKey],
+    runtimeState(await stream.runtimeState()).runtime.connections[subscriptionName],
   ).toMatchObject({
     kind: "hosted",
   });
   expect(
-    coreState(await stream.runtimeState()).subscriptions.outbound.byKey[subscriptionKey],
+    coreState(await stream.runtimeState()).subscriptions.outbound.byName[subscriptionName],
   ).not.toHaveProperty("deliveryHalted");
+});
+
+// Facet placement: the subscription name IS the facet name and delivery is an
+// in-process parent-to-facet dial — no itx expression. The facet composition
+// is path-selected (an /integrations/slack/** stream hosts the slack router
+// family), and the subscriptions catalog serves the instance's processor
+// facade.
+test("a facet-placed processor delivers in-process and serves snapshots through the subscriptions catalog", async () => {
+  const marker = crypto.randomUUID();
+  const connection = `e2e-facet-${marker.slice(0, 8)}`;
+  const streamPath = `/integrations/slack/${connection}`;
+  // The canonical single-instance shape: the name defaults to the contract
+  // slug, so this reads as production's own configuration
+  // (buildFacetProcessorSubscriptionConfiguredEvent) and the facet's
+  // registry resolves the facade's reads by the same name.
+  const subscriptionName = "slack";
+
+  using testProject = await openTestProject(marker);
+  const { project } = testProject;
+  using stream = project.streams.get(streamPath);
+
+  // Facet placement is freely configurable through the ordinary append lane.
+  await stream.append(
+    subscriptionConfigured({
+      name: subscriptionName,
+      receiver: {
+        action: "processor-wake",
+        placement: "facet",
+      },
+    }),
+  );
+  const [created] = await stream.append({
+    type: "events.iterate.com/slack/created",
+    payload: { config: { connection } },
+  });
+
+  // A read must never materialize a facet: a name the committed catalog does
+  // not know is refused at the facade door instead of minting a facet.
+  await expect(
+    stream.subscriptions.get(`not-configured-${marker.slice(0, 8)}`).processor.snapshot(),
+  ).rejects.toThrow(/does not exist/);
+
+  // The processor facade is the fold barrier: waitUntilProcessed resolves off
+  // the runner's committed checkpoint through the parent→facet dial.
+  const subscription = stream.subscriptions.get(subscriptionName);
+  await subscription.processor.waitUntilProcessed({ offset: created!.offset, timeoutMs: 30_000 });
+
+  const described = await subscription.describe();
+  expect(described).toMatchObject({
+    name: subscriptionName,
+    status: "active",
+    configuration: {
+      receiver: { action: "processor-wake", placement: "facet" },
+    },
+  });
+
+  // The catalog's processor facade dials the facet directly (an own-DO or
+  // expression placement would resolve through its own host instead).
+  const snapshot = await subscription.processor.snapshot();
+  expect(snapshot.offset).toBeGreaterThanOrEqual(created!.offset);
+  expect(snapshot.state).toMatchObject({ birthCertificate: { config: { connection } } });
+
+  const listed = await stream.subscriptions.list();
+  expect(listed).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        name: subscriptionName,
+        action: "processor-wake",
+        placement: "facet",
+        status: "active",
+      }),
+    ]),
+  );
+
+  // The wake feed is a stream-opened hosted connection like any other lane.
+  expect(
+    runtimeState(await stream.runtimeState()).runtime.connections[subscriptionName],
+  ).toMatchObject({ kind: "hosted", name: subscriptionName });
 });
 
 test("an ITX-expression receiver invokes the project worker in awaited batches", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/itx/source/${marker}`;
   const outputPath = `/e2e/subscriptions/itx/output/${marker}`;
-  const subscriptionKey = `itx-${marker}`;
+  const subscriptionName = `itx-${marker}`;
   const outputType = "events.iterate.test/subscriptions/itx-received";
 
   using testProject = await openTestProject(marker);
@@ -2579,7 +2668,9 @@ test("an ITX-expression receiver invokes the project worker in awaited batches",
         content: `
             import { WorkerEntrypoint } from "cloudflare:workers";
 
-            const SUBSCRIPTION_KEY = ${JSON.stringify(subscriptionKey)};
+            // The delivered batch is a wire envelope: its name field
+            // carries the subscription's name.
+            const SUBSCRIPTION_NAME = ${JSON.stringify(subscriptionName)};
             const OUTPUT_PATH = ${JSON.stringify(outputPath)};
             const OUTPUT_TYPE = ${JSON.stringify(outputType)};
 
@@ -2587,7 +2678,7 @@ test("an ITX-expression receiver invokes the project worker in awaited batches",
               fetch() { return new Response("subscription probe"); }
 
               async processEventBatch(batch) {
-                if (batch.subscriptionKey !== SUBSCRIPTION_KEY) return;
+                if (batch.name !== SUBSCRIPTION_NAME) return;
                 const itx = await this.env.ITX.get();
                 await itx.streams.get(OUTPUT_PATH).append({
                   type: OUTPUT_TYPE,
@@ -2597,7 +2688,7 @@ test("an ITX-expression receiver invokes the project worker in awaited batches",
                     deliveryId: batch.deliveryId,
                     offsets: batch.events.map((event) => event.offset),
                     sourcePath: batch.path,
-                    subscriptionKey: batch.subscriptionKey,
+                    name: batch.name,
                   },
                 });
               }
@@ -2615,7 +2706,7 @@ test("an ITX-expression receiver invokes the project worker in awaited batches",
 
   await source.append(
     subscriptionConfigured({
-      subscriptionKey,
+      name: subscriptionName,
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
       receiver: {
         action: "itx-call",
@@ -2637,12 +2728,12 @@ test("an ITX-expression receiver invokes the project worker in awaited batches",
     attempt: 1,
     offsets: appended.map((event) => event.offset),
     sourcePath,
-    subscriptionKey,
+    name: subscriptionName,
   });
   await waitForCondition(
     async () =>
-      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]
-        ?.acknowledgedOffset ?? 0) >= appended.at(-1)!.offset,
+      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionName]
+        ?.confirmedOffset ?? 0) >= appended.at(-1)!.offset,
     { description: "the ITX receiver acknowledgement to advance the source cursor" },
   );
 });
@@ -2651,7 +2742,7 @@ test("an ITX-expression receiver isolates one repeatedly failing event, skips it
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/itx-failing-event/source/${marker}`;
   const outputPath = `/e2e/subscriptions/itx-failing-event/output/${marker}`;
-  const subscriptionKey = `itx-failing-event-${marker}`;
+  const subscriptionName = `itx-failing-event-${marker}`;
   const attemptType = "events.iterate.test/subscriptions/itx-failing-event-attempted";
   const acceptedType = "events.iterate.test/subscriptions/itx-failing-event-accepted";
 
@@ -2665,7 +2756,7 @@ test("an ITX-expression receiver isolates one repeatedly failing event, skips it
         content: `
             import { WorkerEntrypoint } from "cloudflare:workers";
 
-            const SUBSCRIPTION_KEY = ${JSON.stringify(subscriptionKey)};
+            const SUBSCRIPTION_NAME = ${JSON.stringify(subscriptionName)};
             const OUTPUT_PATH = ${JSON.stringify(outputPath)};
             const ATTEMPT_TYPE = ${JSON.stringify(attemptType)};
             const ACCEPTED_TYPE = ${JSON.stringify(acceptedType)};
@@ -2674,7 +2765,7 @@ test("an ITX-expression receiver isolates one repeatedly failing event, skips it
               fetch() { return new Response("failing-event probe"); }
 
               async processEventBatch(batch) {
-                if (batch.subscriptionKey !== SUBSCRIPTION_KEY) return;
+                if (batch.name !== SUBSCRIPTION_NAME) return;
                 const itx = await this.env.ITX.get();
                 const output = itx.streams.get(OUTPUT_PATH);
                 await output.append({
@@ -2710,7 +2801,7 @@ test("an ITX-expression receiver isolates one repeatedly failing event, skips it
 
   await source.append(
     subscriptionConfigured({
-      subscriptionKey,
+      name: subscriptionName,
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
       receiver: {
         action: "itx-call",
@@ -2732,8 +2823,8 @@ test("an ITX-expression receiver isolates one repeatedly failing event, skips it
   // backoff nominally, more with jitter and slow preview invocations).
   await waitForCondition(
     async () =>
-      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]
-        ?.acknowledgedOffset ?? 0) >= appended.at(-1)!.offset,
+      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionName]
+        ?.confirmedOffset ?? 0) >= appended.at(-1)!.offset,
     {
       description: "the ITX receiver to isolate the failing event and acknowledge later events",
       timeoutMs: 60_000,
@@ -2771,7 +2862,7 @@ test("an ITX-expression receiver isolates one repeatedly failing event, skips it
 test("the consecutive-failure limit survives stream eviction and halts before mass-skipping", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/itx-failing-event/eviction/${marker}`;
-  const subscriptionKey = `itx-failing-event-eviction-${marker}`;
+  const subscriptionName = `itx-failing-event-eviction-${marker}`;
   const releasePath = `/e2e/subscriptions/itx-failing-event/release/${marker}`;
   const releaseType = "events.iterate.test/subscriptions/fuse-released";
 
@@ -2785,7 +2876,7 @@ test("the consecutive-failure limit survives stream eviction and halts before ma
         content: `
             import { WorkerEntrypoint } from "cloudflare:workers";
 
-            const SUBSCRIPTION_KEY = ${JSON.stringify(subscriptionKey)};
+            const SUBSCRIPTION_NAME = ${JSON.stringify(subscriptionName)};
             const RELEASE_PATH = ${JSON.stringify(releasePath)};
             const RELEASE_TYPE = ${JSON.stringify(releaseType)};
 
@@ -2793,7 +2884,7 @@ test("the consecutive-failure limit survives stream eviction and halts before ma
               fetch() { return new Response("fuse probe"); }
 
               async processEventBatch(batch) {
-                if (batch.subscriptionKey !== SUBSCRIPTION_KEY) return;
+                if (batch.name !== SUBSCRIPTION_NAME) return;
                 const itx = await this.env.ITX.get();
                 const released = await itx.streams.get(RELEASE_PATH).getEvents({
                   eventTypes: [RELEASE_TYPE],
@@ -2815,7 +2906,7 @@ test("the consecutive-failure limit survives stream eviction and halts before ma
 
   await source.append(
     subscriptionConfigured({
-      subscriptionKey,
+      name: subscriptionName,
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
       receiver: {
         action: "itx-call",
@@ -2854,7 +2945,7 @@ test("the consecutive-failure limit survives stream eviction and halts before ma
   });
   await waitForCondition(
     async () =>
-      coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey]
+      coreState(await source.runtimeState()).subscriptions.outbound.byName[subscriptionName]
         ?.deliveryHalted !== undefined,
     {
       description: "the durable consecutive-failure limit to halt event sending",
@@ -2862,7 +2953,7 @@ test("the consecutive-failure limit survives stream eviction and halts before ma
     },
   );
   const state = runtimeState(await source.runtimeState());
-  expect(state.runtime.subscriptions[subscriptionKey]!.acknowledgedOffset).toBeLessThan(
+  expect(state.runtime.subscriptions[subscriptionName]!.confirmedOffset).toBeLessThan(
     thirdFailingEvent!.offset,
   );
   expect(
@@ -2877,7 +2968,7 @@ test("the consecutive-failure limit survives stream eviction and halts before ma
 
   await release.append({ type: releaseType, payload: { marker } });
   const seekAndResume = await source.setSubscriptionCursorAndResume({
-    subscriptionKey,
+    name: subscriptionName,
     afterOffset: thirdFailingEvent!.offset - 1,
   });
   expect(seekAndResume).toMatchObject({
@@ -2886,12 +2977,12 @@ test("the consecutive-failure limit survives stream eviction and halts before ma
   });
   await waitForCondition(
     async () =>
-      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]
-        ?.acknowledgedOffset ?? 0) >= thirdFailingEvent!.offset,
+      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionName]
+        ?.confirmedOffset ?? 0) >= thirdFailingEvent!.offset,
     { description: "the audited seek and resume at its explicitly selected cursor" },
   );
   expect(
-    coreState(await source.runtimeState()).subscriptions.outbound.byKey[subscriptionKey],
+    coreState(await source.runtimeState()).subscriptions.outbound.byName[subscriptionName],
   ).not.toHaveProperty("deliveryHalted");
 });
 
@@ -2899,7 +2990,7 @@ test("the consecutive-failure limit survives stream eviction and halts before ma
 test("a webhook receives one ordered lean envelope per event", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/webhook/source/${marker}`;
-  const subscriptionKey = `webhook-${marker}`;
+  const subscriptionName = `webhook-${marker}`;
   const deliveries: Array<Record<string, unknown>> = [];
 
   using testProject = await openTestProject(marker);
@@ -2912,7 +3003,7 @@ test("a webhook receives one ordered lean envelope per event", async () => {
 
   await source.append(
     subscriptionConfigured({
-      subscriptionKey,
+      name: subscriptionName,
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
       receiver: {
         action: "webhook-post",
@@ -2941,7 +3032,9 @@ test("a webhook receives one ordered lean envelope per event", async () => {
       attempt: 1,
       event: { offset: appended[index]!.offset },
       path: sourcePath,
-      subscriptionKey,
+      // The webhook envelope is wire surface: `name` carries the
+      // subscription's name.
+      name: subscriptionName,
       configuredEvent: {
         type: "events.iterate.com/stream/subscription-configured",
       },
@@ -2952,24 +3045,24 @@ test("a webhook receives one ordered lean envelope per event", async () => {
 
   await waitForCondition(
     async () =>
-      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]
-        ?.acknowledgedOffset ?? 0) >= appended.at(-1)!.offset,
+      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionName]
+        ?.confirmedOffset ?? 0) >= appended.at(-1)!.offset,
     {
       description: "the webhook acknowledgements to advance the source cursor",
       timeoutMs: 30_000,
     },
   );
   const state = runtimeState(await source.runtimeState());
-  expect(state.runtime.subscriptions[subscriptionKey]).toMatchObject({ attempt: 0 });
-  expect(state.coreProcessorState.subscriptions.outbound.byKey[subscriptionKey]).not.toHaveProperty(
-    "deliveryHalted",
-  );
+  expect(state.runtime.subscriptions[subscriptionName]).toMatchObject({ attempt: 0 });
+  expect(
+    state.coreProcessorState.subscriptions.outbound.byName[subscriptionName],
+  ).not.toHaveProperty("deliveryHalted");
 });
 
 test("skip policy confirms one repeatedly failing webhook event, skips it, and continues", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/subscriptions/webhook-failing-event/source/${marker}`;
-  const subscriptionKey = `webhook-failing-event-${marker}`;
+  const subscriptionName = `webhook-failing-event-${marker}`;
   const attempts: Array<{ attempt: number; shouldFail: boolean }> = [];
 
   using testProject = await openTestProject(marker);
@@ -2987,7 +3080,7 @@ test("skip policy confirms one repeatedly failing webhook event, skips it, and c
 
   await source.append(
     subscriptionConfigured({
-      subscriptionKey,
+      name: subscriptionName,
       filter: { eventTypes: [MATCHING_EVENT_TYPE] },
       receiver: {
         action: "webhook-post",
@@ -3005,8 +3098,8 @@ test("skip policy confirms one repeatedly failing webhook event, skips it, and c
   // run back-to-back, each behind its own exponential backoff.
   await waitForCondition(
     async () =>
-      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionKey]
-        ?.acknowledgedOffset ?? 0) >= healthyEvent!.offset,
+      (runtimeState(await source.runtimeState()).runtime.subscriptions[subscriptionName]
+        ?.confirmedOffset ?? 0) >= healthyEvent!.offset,
     {
       description: "the repeatedly failing event to be skipped and the next event acknowledged",
       timeoutMs: 60_000,
@@ -3041,7 +3134,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       key: `call-tail-${marker}`,
       message: /property step/,
       event: subscriptionConfigured({
-        subscriptionKey: `call-tail-${marker}`,
+        name: `call-tail-${marker}`,
         receiver: {
           action: "itx-call",
           expression: ["repos", ["get", "/"]],
@@ -3053,7 +3146,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       key: `reserved-itx-${reservedProperty}-${marker}`,
       message: new RegExp(`reserved property name.*${reservedProperty}`, "i"),
       event: subscriptionConfigured({
-        subscriptionKey: `reserved-itx-${reservedProperty}-${marker}`,
+        name: `reserved-itx-${reservedProperty}-${marker}`,
         receiver: {
           action: "itx-call" as const,
           expression: ["repos", reservedProperty, "processEventBatch"],
@@ -3067,7 +3160,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       event: {
         type: "events.iterate.com/stream/subscription-configured",
         payload: {
-          subscriptionKey: `webhook-url-${marker}`,
+          name: `webhook-url-${marker}`,
           receiver: {
             action: "webhook-post",
             url: `ftp://example.com/${marker}`,
@@ -3082,7 +3175,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       event: {
         type: "events.iterate.com/stream/subscription-configured",
         payload: {
-          subscriptionKey: `webhook-transform-${marker}`,
+          name: `webhook-transform-${marker}`,
           receiver: {
             action: "webhook-post",
             url: `https://example.com/${marker}`,
@@ -3096,7 +3189,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       key: `copy-transform-${marker}`,
       message: /invalid JSONata expression/i,
       event: subscriptionConfigured({
-        subscriptionKey: `copy-transform-${marker}`,
+        name: `copy-transform-${marker}`,
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: `/e2e/subscriptions/validation/receiver/${marker}`,
@@ -3109,7 +3202,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       key: `itx-transform-${marker}`,
       message: /invalid JSONata expression/i,
       event: subscriptionConfigured({
-        subscriptionKey: `itx-transform-${marker}`,
+        name: `itx-transform-${marker}`,
         receiver: {
           action: "itx-call",
           expression: ["worker", "processEventBatch"],
@@ -3120,11 +3213,12 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
     },
     {
       // Wake delivery must feed the processor its committed log verbatim, so
-      // the processor-wake receiver has no jsonataTransform field at all.
+      // the processor-wake receiver has no jsonataTransform field at all —
+      // the transform is the only invalid field here.
       key: `wake-transform-${marker}`,
       message: /unrecognized/i,
       event: subscriptionConfigured({
-        subscriptionKey: `wake-transform-${marker}`,
+        name: "agent",
         receiver: {
           action: "processor-wake",
           expression: ["agents", ["get", `/agents/${marker}`], "processor", "wakeStreamProcessor"],
@@ -3138,7 +3232,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       event: {
         type: "events.iterate.com/stream/subscription-configured",
         payload: {
-          subscriptionKey: `stream-skip-${marker}`,
+          name: `stream-skip-${marker}`,
           receiver: {
             action: "copy-to-stream",
             receivingStreamPath: `/e2e/subscriptions/validation/receiver/${marker}`,
@@ -3151,7 +3245,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       key: `condition-${marker}`,
       message: /invalid JSONata expression.*Expected .*before end of expression/i,
       event: subscriptionConfigured({
-        subscriptionKey: `condition-${marker}`,
+        name: `condition-${marker}`,
         filter: { jsonataCondition: "payload.(((" },
         receiver: {
           action: "copy-to-stream",
@@ -3166,7 +3260,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       event: {
         type: "events.iterate.com/stream/subscription-configured",
         payload: {
-          subscriptionKey: `filter-typo-${marker}`,
+          name: `filter-typo-${marker}`,
           filter: { eventType: [MATCHING_EVENT_TYPE] },
           receiver: {
             action: "copy-to-stream",
@@ -3186,14 +3280,14 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
   await expect(
     source.subscribeToEventsFrom({
       sourceStreamPath: sourcePath,
-      subscriptionKey: `self-${marker}`,
+      name: `self-${marker}`,
     }),
   ).rejects.toThrow(/cannot receive events from itself/);
   const ownSegment = sourcePath.split("/").at(-1)!;
   await expect(
     source.append(
       subscriptionConfigured({
-        subscriptionKey: `self-alias-${marker}`,
+        name: `self-alias-${marker}`,
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: `${sourcePath}/../${ownSegment}`,
@@ -3204,10 +3298,10 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
   ).rejects.toThrow(/cannot receive events from itself/);
 
   const canonicalReceiverPath = `/e2e/subscriptions/validation/canonical/${marker}`;
-  const canonicalSubscriptionKey = `canonical-${marker}`;
+  const canonicalSubscriptionName = `canonical-${marker}`;
   const [canonical] = await source.append(
     subscriptionConfigured({
-      subscriptionKey: ` ${canonicalSubscriptionKey} `,
+      name: ` ${canonicalSubscriptionName} `,
       receiver: {
         action: "copy-to-stream",
         receivingStreamPath: ` e2e/subscriptions/validation/./canonical/${marker} `,
@@ -3217,21 +3311,21 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
   );
   expect(canonical).toMatchObject({
     payload: {
-      subscriptionKey: canonicalSubscriptionKey,
+      name: canonicalSubscriptionName,
       receiver: { action: "copy-to-stream", receivingStreamPath: canonicalReceiverPath },
     },
   });
   const sourceHeadBeforeFutureRead = coreState(await source.runtimeState()).maxOffset;
   await expect(
     source.setSubscriptionCursor({
-      subscriptionKey: canonicalSubscriptionKey,
+      name: canonicalSubscriptionName,
       afterOffset: sourceHeadBeforeFutureRead + 1_000_000,
     }),
   ).rejects.toThrow(/beyond this stream's current maximum offset/);
 
   const committedKeys = (await source.getEvents({ afterOffset: 0 }))
     .filter((event) => event.type === "events.iterate.com/stream/subscription-configured")
-    .map((event) => event.payload?.subscriptionKey);
+    .map((event) => event.payload?.name);
   expect(committedKeys).not.toEqual(expect.arrayContaining(invalid.map((entry) => entry.key)));
 });
 
@@ -3250,7 +3344,7 @@ test("public callers cannot forge copied events or platform-authored stream fact
       source: {
         copiedFrom: [
           {
-            subscriptionKey: `forged-received-from-${marker}`,
+            name: `forged-received-from-${marker}`,
             streamId: crypto.randomUUID(),
             streamCreatedAt: new Date().toISOString(),
             cursorChangedAtSourceOffset: 1,
@@ -3269,7 +3363,7 @@ test("public callers cannot forge copied events or platform-authored stream fact
     {
       type: "events.iterate.com/stream/subscription-delivery-halted",
       payload: {
-        subscriptionKey: `forged-halted-${marker}`,
+        name: `forged-halted-${marker}`,
         reason: "delivery-failed",
         afterOffset: 0,
         attempts: 1,
@@ -3308,27 +3402,78 @@ test("commands on a missing subscription key fail without appending state", asyn
   const { project } = testProject;
   using source = project.streams.get(sourcePath);
 
-  const missingKey = `missing-${marker}`;
-  await expect(
-    source.setSubscriptionCursor({ subscriptionKey: missingKey, afterOffset: 0 }),
-  ).rejects.toThrow(/does not exist/);
-  await expect(source.resumeSubscription({ subscriptionKey: missingKey })).rejects.toThrow(
+  const missingName = `missing-${marker}`;
+  await expect(source.setSubscriptionCursor({ name: missingName, afterOffset: 0 })).rejects.toThrow(
     /does not exist/,
   );
+  await expect(source.resumeSubscription({ name: missingName })).rejects.toThrow(/does not exist/);
   await expect(
-    source.setSubscriptionCursorAndResume({ subscriptionKey: missingKey, afterOffset: 0 }),
+    source.setSubscriptionCursorAndResume({ name: missingName, afterOffset: 0 }),
   ).rejects.toThrow(/does not exist/);
   await expect(
     project.streams
       .get(`/e2e/subscriptions/validation/missing-receiver/${marker}`)
-      .unsubscribeFromEvents({ sourceStreamPath: sourcePath, subscriptionKey: missingKey }),
+      .unsubscribeFromEvents({ sourceStreamPath: sourcePath, name: missingName }),
   ).resolves.toEqual({ status: "already-absent" });
 
   const committedEvents = await source.getEvents({ afterOffset: 0 });
-  expect(committedEvents.filter((event) => event.payload?.subscriptionKey === missingKey)).toEqual(
-    [],
-  );
+  expect(committedEvents.filter((event) => event.payload?.name === missingName)).toEqual([]);
 });
+
+test("an ephemeral event reaches a hosted processor that named its type", async () => {
+  const marker = crypto.randomUUID();
+  const { seen, stream } = await runEphemeralEcho(marker, [
+    EPHEMERAL_FRAME_TYPE,
+    DURABLE_POKE_TYPE,
+  ]);
+
+  await stream.append({ type: EPHEMERAL_FRAME_TYPE, ephemeral: true, payload: {} });
+  await waitForCondition(async () => (await seen()).includes(EPHEMERAL_FRAME_TYPE), {
+    description: "the ephemeral frame to reach the processor that named it",
+    timeoutMs: 60_000,
+  });
+});
+
+/*
+ * THE RULE THAT KEEPS TODAY'S BEHAVIOUR. Every processor in the repo consumes
+ * durable types or `"*"`; none names an ephemeral one. If `"*"` swept them in,
+ * all of them would start receiving live traffic they never asked for the
+ * moment this shipped. Naming the type is the opt-in, and this is the test
+ * that says so against a real deployment.
+ */
+test("a star-consuming hosted processor still receives no ephemeral events", async () => {
+  const marker = crypto.randomUUID();
+  const { seen, stream } = await runEphemeralEcho(marker, ["*"]);
+
+  await stream.append({ type: EPHEMERAL_FRAME_TYPE, ephemeral: true, payload: {} });
+  /* A second durable event AFTER it: once this arrives, the frame's offset has
+   * certainly been scanned past, so its absence is a decision and not a race. */
+  await stream.append({ type: DURABLE_POKE_TYPE, payload: {}, idempotencyKey: `after-${marker}` });
+  await waitForCondition(
+    async () => (await seen()).filter((t) => t === DURABLE_POKE_TYPE).length > 0,
+    {
+      description: "the trailing durable event to be recorded",
+      timeoutMs: 60_000,
+    },
+  );
+  expect(await seen()).not.toContain(EPHEMERAL_FRAME_TYPE);
+});
+
+/*
+ * DOES AN EPHEMERAL EVENT ACTUALLY REACH A HOSTED PROCESSOR?
+ *
+ * The unit tests could not answer this. They drive the connection API
+ * directly, which skips the wake — the stretch where the stream dials a
+ * userspace worker, gets a callback and an announcement back, and only then
+ * decides what that connection may see. A capability can look correct in every
+ * one of those tests and deliver nothing, and this one did.
+ *
+ * So these two build the real thing: a processor written as userspace code,
+ * committed to a project's config repo, built as a dynamic worker, woken by a
+ * subscription. The processor proves receipt by appending a DURABLE event,
+ * because an ephemeral one leaves no trace by design — which is exactly what
+ * made this unobservable in the first place.
+ */
 
 async function openTestProject(marker: string) {
   const resources = new DisposableStack();
@@ -3368,8 +3513,148 @@ type DeliveryPolicy = {
   onFailingEvent: "halt" | "skip";
 };
 
+const ephemeralEchoSource = (consumes: string[]) => `
+import { IterateDurableObject, IterateWorkerEntrypoint, createProcessorHost } from "iterate/sdk";
+import { defineProcessorContract, StreamProcessor } from "iterate/processors";
+import { z } from "zod";
+
+export const EchoContract = defineProcessorContract({
+  slug: "eph-echo",
+  version: "1.0.0",
+  description: "Reports which events reached it.",
+  stateSchema: z.object({}),
+  events: {
+    "${EPHEMERAL_FRAME_TYPE}": {
+      description: "An ephemeral frame; never a durable stream fact.",
+      ephemeral: true,
+      payloadSchema: z.looseObject({}),
+    },
+    "${DURABLE_POKE_TYPE}": {
+      description: "An ordinary durable event.",
+      payloadSchema: z.looseObject({}),
+    },
+    "${SAW_TYPE}": {
+      description: "The processor's own record of what reached it.",
+      payloadSchema: z.object({ type: z.string() }),
+    },
+  },
+  consumes: ${JSON.stringify(consumes)},
+  emits: ["${SAW_TYPE}"],
+});
+
+class EchoProcessor extends StreamProcessor {
+  /* A PROPERTY, not a constructor argument: StreamProcessor declares
+   * \`abstract readonly contract\`, so passing it to super() lands it in deps
+   * and leaves this.contract undefined. And plain \`contract =\`, not
+   * \`readonly contract =\` — this source is JAVASCRIPT, and the TypeScript
+   * keyword fails the worker build with "Expected ; but found contract",
+   * which surfaces as a delivery-halted event rather than anything the test
+   * can see directly. */
+  contract = EchoContract;
+  reduce({ state }) { return state; }
+  processEvent({ event, append }) {
+    if (event === null) return;
+    append({
+      type: "${SAW_TYPE}",
+      idempotencyKey: "saw:" + event.type,
+      payload: { type: event.type },
+    });
+  }
+}
+
+export class EchoHost extends IterateDurableObject {
+  #host = createProcessorHost({
+    ctx: this.ctx,
+    env: this.env,
+    createProcessor: (deps) => new EchoProcessor(deps),
+  });
+  async alarm(alarmInfo) { await this.#host.handleAlarm(alarmInfo); }
+  get processor() { return this.#host.wakeProcessor; }
+}
+
+export default class EchoEntrypoint extends IterateWorkerEntrypoint {
+  async health() { return { ok: true }; }
+}
+`;
+
+/** Stand up the echo processor on its own stream and return what it recorded. */
+async function runEphemeralEcho(
+  marker: string,
+  consumes: string[],
+): Promise<{ seen: () => Promise<string[]>; stream: Stream }> {
+  const streamPath = `/eph/${marker.slice(0, 8)}`;
+  const testProject = await openTestProject(marker);
+  const { project } = testProject;
+  await project.repo.commitFiles({
+    changes: [{ content: ephemeralEchoSource(consumes), path: "eph-echo.js" }],
+    message: "A processor under ephemeral-delivery test",
+  });
+  const stream = project.streams.get(streamPath);
+  await stream.append(
+    subscriptionConfigured({
+      name: "eph-echo",
+      receiver: {
+        action: "processor-wake",
+        expression: [
+          "workers",
+          [
+            "get",
+            {
+              type: "stateful",
+              path: streamPath,
+              className: "EchoHost",
+              durableWorkerKey: "eph-echo",
+              source: {
+                createWorker: {
+                  entryPoint: "eph-echo.js",
+                  files: { type: "repo", repoPath: "/repos/config" },
+                },
+              },
+            },
+          ],
+          "processor",
+          "wakeStreamProcessor",
+        ],
+      },
+    }),
+  );
+
+  const seen = async () => {
+    const events = await stream.getEvents({ eventTypes: [SAW_TYPE] });
+    return events.map((event) => (event.payload as { type: string }).type);
+  };
+
+  /*
+   * NOT a wait for a live hosted connection, though that is the obvious
+   * barrier and it is wrong: the wake opens one, delivers, and closes it as
+   * idle within seconds, so polling `runtimeState` for a hosted connection
+   * races the close and times out on a stream that worked perfectly. What
+   * the processor RECORDED is the durable proof, and that is the barrier
+   * below — the only evidence an ephemeral event can leave.
+   */
+
+  /*
+   * A durable event first, and it is not ceremony: it forces the cold worker
+   * build and proves the processor is alive before anything ephemeral is
+   * appended. Without it, a missing frame could mean "not delivered" or "still
+   * compiling", and those need different fixes.
+   */
+  await stream.append({ type: DURABLE_POKE_TYPE, payload: {} });
+  /*
+   * A build failure in the committed worker surfaces HERE and nowhere else:
+   * it is not thrown at the caller, it lands on the stream as
+   * `subscription-delivery-halted` carrying the esbuild message. If this ever
+   * times out, read the stream — that event names the reason exactly.
+   */
+  await waitForCondition(async () => (await seen()).includes(DURABLE_POKE_TYPE), {
+    description: "the userspace processor to build and record a durable event",
+    timeoutMs: 90_000,
+  });
+  return { seen, stream };
+}
+
 function subscriptionConfigured(input: {
-  subscriptionKey: string;
+  name: string;
   description?: string;
   filter?: { eventTypes?: string[]; jsonataCondition?: string };
   receiver: Record<string, unknown>;
@@ -3390,27 +3675,32 @@ function deliveryPolicy(
   };
 }
 
+/**
+ * A `scheduler/schedule-set` payload whose one-shot occurrence is decades
+ * away: the scheduler processor reduces it into `schedules[key]` without ever
+ * actually triggering, which makes it an inert, observable state advance for
+ * the hosted-processor wake tests.
+ */
+function farFutureSchedulePayload(key: string): Record<string, unknown> {
+  return {
+    key,
+    recurrence: { at: "2099-01-01T00:00:00.000Z" },
+    action: { kind: "itx-script", script: "async () => {}" },
+  };
+}
+
 async function openAndCloseConnection(
   stream: Stream,
   args: Parameters<Stream["openConnection"]>[0],
 ): Promise<void> {
   const handle = await stream.openConnection(args);
   try {
-    await handle.connectionKey;
+    // Round-trip barrier: the open is fully live once the capability answers.
+    await handle.ping();
   } finally {
     await handle.close();
     disposeRpc(handle);
   }
-}
-
-async function forceStreamIdleTeardown(stream: Stream): Promise<void> {
-  // Test-only operator path: exercise the five-minute production policy
-  // without making this real-deployment test wait five minutes.
-  await (
-    stream as unknown as {
-      testRunIdleTeardownNow(): Promise<void>;
-    }
-  ).testRunIdleTeardownNow();
 }
 
 async function forceStreamReset(stream: Stream): Promise<void> {

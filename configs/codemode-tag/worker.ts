@@ -97,34 +97,46 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   }
 
   /**
-   * THE OPT-IN. Agent birth appends a processor-wake subscription pointing at
-   * the platform's classic agent processor; re-appending the SAME
-   * subscriptionKey with the headless slug retargets the wake (subscriptions
-   * are keyed upserts), so the classic processor stops being woken and the
-   * headless one takes over — reversible by appending the original back.
-   * Gated to plain web agents: integration agents (slack/telegram/email)
-   * keep the fenced format their channel prompts teach.
+   * THE OPT-IN. Agent birth appends a processor-wake subscription named after
+   * the platform's classic agent contract; under the subscription-model
+   * redesign the NAME is the contract selector, so the handover is two
+   * events: configure the headless name, remove the classic one — reversible
+   * by appending the mirror pair. Gated to plain web agents: integration
+   * agents (slack/telegram/email) keep the fenced format their channel
+   * prompts teach.
+   *
+   * OPEN QUESTION (experiment caveat): facet-placement subscriptions are
+   * documented as platform-internal, so this userland append may be rejected
+   * on hardened deployments — in which case the opt-in needs a platform door
+   * (e.g. the classic processor honoring a public handover event). The rest
+   * of the loop is unaffected either way.
    */
   async #retargetAgentWakeToHeadless(event: StreamEvent): Promise<void> {
     if (!event.path.startsWith("/agents/")) return;
     if (/^\/agents\/(slack|telegram|email)\//.test(event.path)) return;
     const payload = event.payload as {
-      subscriptionKey?: string;
-      receiver?: { action?: string; expression?: unknown[]; processorSlug?: string };
+      name?: string;
+      receiver?: { action?: string; placement?: string };
     };
     if (payload.receiver?.action !== "processor-wake") return;
-    if (payload.receiver.processorSlug !== CLASSIC_PROCESSOR_SLUG) return;
-    const subscriptionKey = payload.subscriptionKey || `subscription:${event.offset}`;
+    if (payload.name !== CLASSIC_PROCESSOR_SLUG) return;
     const itx = await this.itx;
     await this.#appendUnlessAlreadyRecorded(() =>
-      itx.streams.get(event.path).append({
-        type: "events.iterate.com/stream/subscription-configured",
-        idempotencyKey: `codemode-tag/retarget:${subscriptionKey}`,
-        payload: {
-          subscriptionKey,
-          receiver: { ...payload.receiver, processorSlug: HEADLESS_PROCESSOR_SLUG },
+      itx.streams.get(event.path).append(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          idempotencyKey: `codemode-tag/handover-configure:${event.offset}`,
+          payload: {
+            name: HEADLESS_PROCESSOR_SLUG,
+            receiver: { action: "processor-wake", placement: "facet" },
+          },
         },
-      }),
+        {
+          type: "events.iterate.com/stream/subscription-removed",
+          idempotencyKey: `codemode-tag/handover-remove:${event.offset}`,
+          payload: { name: CLASSIC_PROCESSOR_SLUG },
+        },
+      ),
     );
   }
 

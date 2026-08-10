@@ -130,9 +130,11 @@ doppler run --config prd -- pnpm cli itx run \
         .filter(
           (event) =>
             event.type ===
-            "events.iterate.com/stream/subscription-configured",
+              "events.iterate.com/stream/subscription-configured" &&
+            event.payload?.receiver?.action === "processor-wake",
         )
-        .map((event) => event.payload?.receiver?.processorSlug),
+        // The subscription NAME selects the contract (name == registered slug).
+        .map((event) => event.payload?.name),
     };
   '
 ```

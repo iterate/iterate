@@ -583,6 +583,10 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/resumed",
     "events.iterate.com/capability-host/script-run-requested",
     "events.iterate.com/capability-host/script-run-settled",
+    // Preamble changes on the agent's own scope transcribe into model-visible
+    // context (the model must know which symbols its scripts can reference).
+    "events.iterate.com/capability-host/preamble-set",
+    "events.iterate.com/capability-host/preamble-removed",
     // Every error on the stream — the processor's own emissions, the runner's
     // repeatedly failing events that were skipped, anything else — is transcribed into model-visible context.
     "events.iterate.com/stream/error-occurred",
@@ -715,6 +719,15 @@ function agentContextItemSchema() {
             origin: z
               .enum(["web", "mcp"])
               .meta({ description: "Which surface the user wrote from." }),
+            userId: z
+              .string()
+              .optional()
+              .meta({
+                description:
+                  "The authenticated principal who wrote the message — the same identity " +
+                  "device enrollments record as ownerId, so a chat-reply push can be " +
+                  "addressed to the sender's devices only.",
+              }),
           }),
           z.object({
             type: z.literal("agent"),

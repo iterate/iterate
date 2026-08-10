@@ -52,6 +52,7 @@ import {
   ITERATE_ROLE_CLAIM,
 } from "@iterate-com/shared/auth-claims";
 import { createCloudflareWorkerVersionOverrideFetch } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { ITERATE_BROWSER_EXTENSION_ORIGIN } from "../src/server/browser-origin.ts";
 
 function requireAuthBaseUrl(): string {
   const value = process.env.AUTH_BASE_URL?.trim();
@@ -232,10 +233,20 @@ async function mintAuthorizationCode(client: OAuthClient, cookie: string): Promi
   return code!;
 }
 
-async function exchangeToken(body: Record<string, string>): Promise<Response> {
+async function exchangeToken(body: Record<string, string>, origin?: string): Promise<Response> {
   return authFetch(`${issuer}/oauth2/token`, {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      ...(origin
+        ? {
+            origin,
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "cross-site",
+          }
+        : {}),
+    },
     body: new URLSearchParams(body),
   });
 }
@@ -344,10 +355,16 @@ describe("deployed auth OAuth2/OIDC provider", () => {
     expect(code).toBeTruthy();
 
     // 3. token exchange with the RFC 8707 resource OS itself uses.
-    const tokenResponse = await exchangeToken({
-      ...codeExchangeBody(client, code!),
-      resource: OS_RESOURCE,
-    });
+    // Chrome attaches the extension origin and Fetch Metadata headers to its
+    // service-worker fetch. The metadata forces better-auth's origin check;
+    // omitting it makes a non-browser test silently skip the failing branch.
+    const tokenResponse = await exchangeToken(
+      {
+        ...codeExchangeBody(client, code!),
+        resource: OS_RESOURCE,
+      },
+      ITERATE_BROWSER_EXTENSION_ORIGIN,
+    );
     expect(tokenResponse.status).toBe(200);
     const tokens = (await tokenResponse.json()) as {
       access_token: string;
@@ -400,6 +417,34 @@ describe("deployed auth OAuth2/OIDC provider", () => {
     expect(profile[ITERATE_ORGANIZATIONS_CLAIM]).toEqual([
       { id: fx.org.id, name: fx.org.name, slug: fx.org.slug, role: "owner" },
     ]);
+  });
+
+  test("login_hint survives into the signed /login redirect for signed-out users", async () => {
+    // The mobile preview deep-link flow (specs/mobile/preview-deeplink-hints.spec.ts)
+    // depends on this hop: an UNAUTHENTICATED authorize request carrying a
+    // login_hint must 302 to /login with the hint still in the query — the
+    // login page prefills it and offers "Continue as <email>". The stock
+    // @better-auth/oauth-provider authorize endpoint STRIPS undeclared query
+    // keys, so this is the executable spec for the login_hint entry in
+    // patches/@better-auth__oauth-provider@1.6.9.patch. If a rewrite drops
+    // the patch, this test names exactly what must be reimplemented.
+    const hint = "pr9999+test@nustom.com";
+    // No cookie: a fresh phone has no session. Like authorizeJson above, ask
+    // for the JSON envelope ({redirect: true, url}) — better-auth serves that
+    // to API clients where a browser would get the 302 with the same URL.
+    const response = await authFetch(
+      authorizeUrlFor(fx.armsClient, { login_hint: hint }).toString(),
+      { headers: { accept: "application/json" }, redirect: "manual" },
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { redirect: boolean; url: string };
+    expect(body.redirect).toBe(true);
+    const redirect = new URL(body.url, baseUrl);
+    expect(redirect.pathname).toBe("/login");
+    expect(redirect.searchParams.get("login_hint")).toBe(hint);
+    // Still the SIGNED redirect — the hint rides inside the signature, so the
+    // post-login authorize re-entry can't be tampered with.
+    expect(redirect.searchParams.get("sig")).toBeTruthy();
   });
 
   test("an unregistered redirect_uri never receives a code at authorize time", async () => {

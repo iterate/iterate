@@ -69,5 +69,5 @@ export type AgentCollectionProcessorState = ProcessorState<AgentCollectionProces
 
 /** The one canonical stream path a project's agent collection lives at. */
 export const AGENT_COLLECTION_PATH = "/agents";
-export const AGENT_COLLECTION_SUBSCRIPTION_KEY = "agent-collection";
+export const AGENT_COLLECTION_SUBSCRIPTION_NAME = "agent-collection";
 export const AGENT_COLLECTION_CREATED_EVENT_TYPE = "events.iterate.com/agent-collection/created";

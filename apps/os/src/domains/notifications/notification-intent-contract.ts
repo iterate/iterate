@@ -14,7 +14,9 @@ export const NotificationIntentContract = defineProcessorContract({
   slug: "notification-intent",
   // 0.2.0: optional top-level approvalRequestEventOffset (the suppression
   // handle for approval-batch intents on every destination kind).
-  version: "0.2.0",
+  // 0.3.0: user-scoped audience ({kind:"user"}) and optional top-level
+  // agentReplyEventOffset (the suppression handle for chat-reply intents).
+  version: "0.3.0",
   description:
     "Channel-neutral project notification intent vocabulary, shared by producers (the " +
     "notification processor) and delivery channels (device push). A contract dependency, " +
@@ -41,16 +43,44 @@ export const NotificationIntentContract = defineProcessorContract({
               "a client already showing the batch suppresses the pending push — and agent-chat " +
               "destinations carry no batch identity of their own.",
           }),
+        agentReplyEventOffset: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .meta({
+            description:
+              "Set when the intent notifies about ONE agent chat reply: the offset of its " +
+              "agents/web-message-sent event on the AGENT stream named by the agent-chat " +
+              "destination (offsets are per-stream, so the pair is the identity). Delivery " +
+              "channels match project/agent-reply-presented claims against it — a client " +
+              "already showing the reply suppresses the pending push.",
+          }),
         audience: z
-          .strictObject({
-            kind: z
-              .literal("project")
-              .meta({ description: "Everyone enrolled on the project — the only audience today." }),
-          })
+          .discriminatedUnion("kind", [
+            z
+              .strictObject({ kind: z.literal("project") })
+              .meta({ description: "Everyone enrolled on the project." }),
+            z
+              .strictObject({
+                kind: z.literal("user"),
+                userId: z
+                  .string()
+                  .trim()
+                  .min(1)
+                  .meta({
+                    description:
+                      "The one user to notify — matched against each channel's own ownership " +
+                      "record (the device processor: the enrollment's ownerId).",
+                  }),
+              })
+              .meta({ description: "One user's enrolled channels only." }),
+          ])
           .meta({
             description:
               "Who should be notified, in channel-neutral terms; each channel resolves it to " +
-              "its own recipients (the device processor: every enrolled device).",
+              "its own recipients (the device processor: every enrolled device, or only the " +
+              "named user's devices).",
           }),
         body: z
           .string()

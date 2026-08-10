@@ -106,12 +106,7 @@ review bots, address **every** CI/review comment (fix or reply + resolve),
 **never leave threads standing**, **never merge on red CI** unless the human
 explicitly said so: **[Pull requests](docs/pull-requests.md)**.
 
-**Browser testing:** use an isolated, headed `agent-browser` Chrome for Testing
-session by default so the developer can watch it. Give every concurrent agent
-a unique session; use headless mode only when explicitly requested or in CI.
-This does not mean attach to a developer's actual Chrome. See
-[Browser testing](docs/browser-testing.md). Keep the CLI and its corresponding
-agent skills up to date.
+**Browser testing:** use **Playwriter** with an isolated headless session by default (or an authorized real-Chrome session when explicitly requested). Give every concurrent agent a unique Playwriter session id. See [Browser testing](docs/browser-testing.md). Keep the Playwriter CLI and skill current.
 
 **Draft PRs don't get a preview deployment** (or preview e2e). If you open a
 PR as a draft and want a preview environment, add the `preview` label; marking
@@ -167,7 +162,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 ### Development
 
 - [Pull requests](docs/pull-requests.md) — opening PRs, absolute screenshot URLs, drafts/previews, body hygiene; after open: wait for Iterate Review, address every thread, no merge on red CI
-- [Browser testing](docs/browser-testing.md) — isolated agent-browser sessions, visible watch mode, and reusable test logins
+- [Browser testing](docs/browser-testing.md) — isolated Playwriter sessions, and reusable test logins
 - [Dev environments](docs/dev-environments.md) — local dev, minting identities, opening project-scoped or platform-wide operator sessions, browsers for agents, preview-from-local
 - [Tunnels](docs/tunnels.md) — public HTTPS URLs for local dev, webhooks, OAuth callbacks, and CI/e2e fixtures
 - [Coding style](docs/coding-style.md)

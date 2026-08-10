@@ -172,10 +172,12 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
  */
 async function readCreatedProjectAllowedSenders(projectId: string): Promise<string[]> {
   try {
-    const project = itxEnv.PROJECT.getByName(
+    // The email router runs as a facet of its own stream; the stream's
+    // processor facade serves the catch-up-backed snapshot.
+    const facade = await itxEnv.STREAM.getByName(
       DurableObjectNameCodec.stringify({ projectId, path: EMAIL_INTEGRATION_STREAM_PATH }),
-    );
-    const snapshot = await (await project.emailProcessor).snapshot();
+    ).processorFacade({ name: EmailProcessorContract.slug });
+    const snapshot = await facade.snapshot();
     const state = EmailProcessorContract.stateSchema.parse(snapshot.state);
     if (state.birthCertificate === null) {
       throw new Error(`Email router for project ${projectId} has not been created`);
