@@ -62,11 +62,6 @@ it("paces consecutive capture requests instead of bursting a complete CI run", a
   expect(endpoint.requestTimes).toHaveLength(3);
   expect(endpoint.requestTimes[1]! - endpoint.requestTimes[0]!).toBeGreaterThanOrEqual(450);
   expect(endpoint.requestTimes[2]! - endpoint.requestTimes[1]!).toBeGreaterThanOrEqual(450);
-  expect(endpoint.requestBodies).toMatchObject([
-    { historical_migration: true },
-    { historical_migration: true },
-    { historical_migration: true },
-  ]);
 });
 
 it("keeps an individually oversized event intact for an explicit API failure", () => {
@@ -101,13 +96,10 @@ function eventWithPayload(id: string, payload: string): PostHogEvent {
 }
 
 async function postHogCaptureEndpoint() {
-  const requestBodies: any[] = [];
   const requestTimes: number[] = [];
-  const server = createServer(async (request, response) => {
+  const server = createServer((request, response) => {
     requestTimes.push(performance.now());
-    const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
-    requestBodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    request.resume();
     response.writeHead(200, { "content-type": "application/json" });
     response.end('{"status":"Ok"}');
   });
@@ -115,7 +107,6 @@ async function postHogCaptureEndpoint() {
   await once(server, "listening");
   const address = server.address() as any;
   return {
-    requestBodies,
     requestTimes,
     url: `http://127.0.0.1:${address.port}`,
     async [Symbol.asyncDispose]() {

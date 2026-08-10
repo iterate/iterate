@@ -163,6 +163,15 @@ it("transmogrifies one runner-independent artifact into the shared PostHog event
   });
 });
 
+it("gives each normalized event its own stable PostHog routing key", () => {
+  const first = testTelemetryEvents(artifact);
+  const replay = testTelemetryEvents(artifact);
+  const firstDistinctIds = first.map(({ properties }) => properties.distinct_id);
+
+  expect(new Set(firstDistinctIds).size).toBe(first.length);
+  expect(replay.map(({ properties }) => properties.distinct_id)).toEqual(firstDistinctIds);
+});
+
 it("normalizes retained preview deployment evidence without reporter network I/O", () => {
   const events = testTelemetryEvents({
     ...artifact,
