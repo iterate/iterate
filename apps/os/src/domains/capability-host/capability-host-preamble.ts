@@ -187,13 +187,18 @@ function renderResultsArray(rows: RetainedScriptResult[], tsOnly: (code: string)
     `]${tsOnly(" as const")};`,
     // Positional AND stable addressing on one value: the tuple keeps
     // per-index literal types (results[0].data), byOffset names a row by its
-    // settle offset — stable while others append to a shared scope.
+    // settle offset — stable while others append to a shared scope. The
+    // generic keys on the tuple's LITERAL offset types, so byOffset(16)
+    // returns exactly the row settled at 16 (a retained error row elsewhere
+    // in the window cannot poison `.data` with a union), and an offset
+    // outside the retained window is a compile-time error before it is a
+    // runtime throw.
     `const results = Object.assign(__resultRows, {`,
-    `  /** The row settled at this stream offset (entries are labeled with it); throws for offsets outside the retained window. */`,
-    `  byOffset: (offset${tsOnly(": number")}) => {`,
+    `  /** The row settled at this stream offset (entries are labeled with it); offsets outside the retained window error at typecheck and throw at runtime. */`,
+    `  byOffset: ${tsOnly(`<O extends (typeof __resultRows)[number]["offset"]>`)}(offset${tsOnly(": O")}) => {`,
     `    const match = __resultRows.find((row) => row.offset === offset);`,
     `    if (!match) throw new Error("no retained script result settled at offset " + offset);`,
-    `    return match;`,
+    `    return match${tsOnly(" as Extract<(typeof __resultRows)[number], { offset: O }>")};`,
     `  },`,
     `});`,
   ].join("\n");

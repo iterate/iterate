@@ -32,7 +32,9 @@ function ProjectItxReplPage() {
       {/* useStreamConnection never suspends, and the route is client-only, so the
           activity tail needs no ClientOnly/Suspense wrapper. */}
       <div className="flex max-h-56 min-h-0 flex-col">
-        <ItxActivityTail />
+        {/* Tail the scope the REPL actually journals on — runs, provides,
+            revokes all land on /repl, not the project root. */}
+        <ItxActivityTail key={project.id} path={PROJECT_REPL_SCOPE_PATH} />
       </div>
     </div>
   );

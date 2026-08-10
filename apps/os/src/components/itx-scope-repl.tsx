@@ -22,6 +22,7 @@ import {
   pendingRunVisibleInEntries,
   runErrorAlreadyJournaled,
   wrapReplScript,
+  type PendingRun,
 } from "./itx-scope-repl-entries.ts";
 import { ITX_EXAMPLES } from "~/itx/examples.ts";
 
@@ -38,11 +39,16 @@ export function ItxScopeRepl({
   scopePath: string;
 }) {
   // useItxQuery suspends and itx never SSRs; the route shell still renders.
+  // Keyed by project AND scope: the scope path alone ("/repl") is the same
+  // string in every project, and TanStack keeps the route component mounted
+  // across /projects/a/repl → /projects/b/repl — without the project in the
+  // key, project A's event buffer, editor text, and mutation state would
+  // survive into project B (and the offset dedupe would swallow B's replay).
   return (
     <ClientOnly fallback={<ItxReplConnecting />}>
       <Suspense fallback={<ItxReplConnecting />}>
         <ItxScopeReplConnected
-          key={scopePath}
+          key={`${projectId}:${scopePath}`}
           initialCode={initialCode}
           projectId={projectId}
           scopePath={scopePath}
@@ -125,8 +131,10 @@ function ItxScopeReplConnected({
   // settlement lands
   // on the stream regardless — the entry list is the error's home; the
   // mutation error only surfaces for pre-journal failures (see runError).
+  // Variables carry the submit-time stream anchor so the pending row can
+  // tell ITS request event apart from an older run of the same snippet.
   const run = useMutation({
-    mutationFn: async (body: string) => {
+    mutationFn: async ({ body }: PendingRun) => {
       return await itx.capabilityHosts.get(scopePath).runScript(wrapReplScript(body));
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["itx", ...preambleQueryKey] }),
@@ -136,9 +144,11 @@ function ItxScopeReplConnected({
   const [examplesOpen, setExamplesOpen] = useState(false);
 
   const entries = useMemo(() => deriveReplEntries(events), [events]);
-  const pendingBody = run.isPending ? run.variables || null : null;
+  const pendingRun = run.isPending ? run.variables : undefined;
   const pendingCode =
-    pendingBody !== null && !pendingRunVisibleInEntries(entries, pendingBody) ? pendingBody : null;
+    pendingRun !== undefined && !pendingRunVisibleInEntries(entries, pendingRun)
+      ? pendingRun.body
+      : null;
   const runErrorMessage =
     run.error === null ? null : run.error instanceof Error ? run.error.message : String(run.error);
   const runError =
@@ -152,7 +162,7 @@ function ItxScopeReplConnected({
     const body = code.trim();
     if (body === "" || run.isPending) return;
     setCode("");
-    run.mutate(body);
+    run.mutate({ afterOffset: events.at(-1)?.offset || 0, body });
   }
 
   function selectExample(exampleCode: string) {

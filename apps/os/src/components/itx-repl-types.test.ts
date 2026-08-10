@@ -89,10 +89,10 @@ describe("itx REPL TypeScript declarations", () => {
       '  { offset: 12, executionId: "run-1", data: { count: 3 } },',
       "] as const;",
       "const results = Object.assign(__resultRows, {",
-      "  byOffset: (offset: number) => {",
+      '  byOffset: <O extends (typeof __resultRows)[number]["offset"]>(offset: O) => {',
       "    const match = __resultRows.find((row) => row.offset === offset);",
       '    if (!match) throw new Error("no retained script result settled at offset " + offset);',
-      "    return match;",
+      "    return match as Extract<(typeof __resultRows)[number], { offset: O }>;",
       "  },",
       "});",
     ].join("\n");

@@ -14,7 +14,9 @@ test("wraps a plain body with the vars declaration and unwraps it for display", 
   expect(wrapped).toBe(
     [
       "async (itx) => {",
-      "const vars: Record<string, any> = {};",
+      // JS-safe on purpose: the no-emit fallback executes raw source, and
+      // JSON.parse types vars `any` for the gate. See REPL_VARS_LINE.
+      'const vars = JSON.parse("{}");',
       "return await itx.__describe()",
       "}",
     ].join("\n"),
@@ -101,13 +103,32 @@ test("entries sort by request offset and tolerate replayed duplicates", () => {
 });
 
 test("the local pending row yields to the stream once its request lands", () => {
-  const before = deriveReplEntries([]);
-  expect(pendingRunVisibleInEntries(before, "return 1")).toBe(false);
+  const run = { afterOffset: 0, body: "return 1" };
+  expect(pendingRunVisibleInEntries(deriveReplEntries([]), run)).toBe(false);
 
   const after = deriveReplEntries([
     requested({ offset: 1, executionId: "run-1", code: wrapReplScript("return 1") }),
   ]);
-  expect(pendingRunVisibleInEntries(after, "return 1")).toBe(true);
+  expect(pendingRunVisibleInEntries(after, run)).toBe(true);
+});
+
+test("re-running the same snippet still shows a pending row (old runs cannot swallow it)", () => {
+  // A settled earlier run of the identical code sits in history; the rerun's
+  // submit-time anchor (afterOffset = newest buffered offset) means only a
+  // NEWER request event can hide the local pending row.
+  const history = deriveReplEntries([
+    requested({ offset: 1, executionId: "run-1", code: wrapReplScript("return 1") }),
+    settled({ offset: 2, executionId: "run-1", settlement: { status: "succeeded", result: 1 } }),
+  ]);
+  const rerun = { afterOffset: 2, body: "return 1" };
+  expect(pendingRunVisibleInEntries(history, rerun)).toBe(false);
+
+  const afterRerunRequested = deriveReplEntries([
+    requested({ offset: 1, executionId: "run-1", code: wrapReplScript("return 1") }),
+    settled({ offset: 2, executionId: "run-1", settlement: { status: "succeeded", result: 1 } }),
+    requested({ offset: 3, executionId: "run-2", code: wrapReplScript("return 1") }),
+  ]);
+  expect(pendingRunVisibleInEntries(afterRerunRequested, rerun)).toBe(true);
 });
 
 test("the mutation-error line hides when the newest entry already carries it", () => {

@@ -30,7 +30,13 @@ export type ReplRunEntry = {
 );
 
 const REPL_WRAPPER_HEADER = "async (itx) => {";
-const REPL_VARS_LINE = "const vars: Record<string, any> = {};";
+// JSON.parse on purpose, twice over: the no-emit execution fallback embeds
+// RAW source (a `: Record<string, any>` annotation would be a SyntaxError
+// there — seen live when the dev typechecker sidecar was down), and
+// JSON.parse types the binding `any`, so catalogue snippets reading
+// `vars.whatever` stay CLEAN through the typecheck gate (a `{}` literal
+// would demote every vars-using script to the unchecked fallback).
+const REPL_VARS_LINE = 'const vars = JSON.parse("{}");';
 
 /**
  * Wrap a typed REPL body into the `async (itx) => { … }` shape `runScript`
@@ -101,15 +107,22 @@ export function deriveReplEntries(events: readonly StreamEvent[]): ReplRunEntry[
   return [...entries.values()].sort((a, b) => a.requestedAtOffset - b.requestedAtOffset);
 }
 
+/** What the run mutation carries: the typed body plus the newest buffered
+ * stream offset at submit time — the anchor that tells the pending row's
+ * dedupe "my request event can only be NEWER than this". */
+export type PendingRun = { afterOffset: number; body: string };
+
 /**
  * Whether the in-flight Run already shows up in the stream-derived list (its
- * request event landed), so the local pending row can disappear. Run is
- * single-flight in the UI, so "newest running entry matches the pending body"
- * is exact in practice.
+ * request event landed), so the local pending row can disappear. Matching on
+ * code alone would let a PREVIOUS settled run of the same snippet swallow the
+ * pending row (a rerun would look dead until its request lands), so the match
+ * also requires the entry to be newer than the submit-time anchor.
  */
-export function pendingRunVisibleInEntries(entries: readonly ReplRunEntry[], body: string) {
-  const newest = entries.at(-1);
-  return newest !== undefined && newest.code === body;
+export function pendingRunVisibleInEntries(entries: readonly ReplRunEntry[], run: PendingRun) {
+  return entries.some(
+    (entry) => entry.requestedAtOffset > run.afterOffset && entry.code === run.body,
+  );
 }
 
 /**
