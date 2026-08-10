@@ -87,6 +87,16 @@ test("the default prompt teaches agents to share workspace files through Docs", 
   );
 });
 
+test("the default prompt teaches results retention, not defensive file copies", () => {
+  // A field agent writeFile'd a full API response AND returned the whole
+  // body because the old oversized-results bullet taught the workspace
+  // spill file + readFile as the retention mechanism. The prompt must lead
+  // with the `results` loader and draw the implication explicitly.
+  expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await results[0].load(itx)");
+  expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("never save your own copy to a file");
+  expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain("itx.workspace.readFile");
+});
+
 test("the default prompt teaches agents to share task boards through Tasks", () => {
   expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
     'itx.worker.docs.link({ workspace: "/workspaces/agents/you", repo: "/repos/config" })',

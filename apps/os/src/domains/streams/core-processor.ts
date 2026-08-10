@@ -231,11 +231,13 @@ export class StreamCoreProcessor {
         throw new Error("a stream cannot receive events from itself");
       }
       compileEventFilter(event.payload.filter);
-      // Every push receiver may carry a jsonataTransform; processor-wake never
-      // does (its schema has no such field — wake delivery must feed the
-      // processor its committed log verbatim).
+      // Every push receiver may carry a jsonataTransform; the processor
+      // actions (facet-processor / wake-processor) never do (their schema has
+      // no such field — wake delivery must feed the processor its committed log
+      // verbatim).
       if (
-        event.payload.receiver.action !== "processor-wake" &&
+        event.payload.receiver.action !== "facet-processor" &&
+        event.payload.receiver.action !== "wake-processor" &&
         event.payload.receiver.jsonataTransform !== undefined
       ) {
         compileJsonataExpression(event.payload.receiver.jsonataTransform);
@@ -271,7 +273,10 @@ export class StreamCoreProcessor {
       if (configured === undefined) {
         throw new Error(`subscription "${event.payload.name}" does not exist`);
       }
-      if (configured.configuration.receiver.action === "processor-wake") {
+      if (
+        configured.configuration.receiver.action === "facet-processor" ||
+        configured.configuration.receiver.action === "wake-processor"
+      ) {
         throw new Error(
           "hosted processors own their checkpoint; their subscription cursor cannot be set",
         );
@@ -316,7 +321,10 @@ export class StreamCoreProcessor {
       // configured event is idempotency-keyed, so removing the row would make
       // a later create retry dedupe without restoring the processor. Push
       // subscriptions remain removable through their owning domain doors.
-      if (configured.configuration.receiver.action === "processor-wake") {
+      if (
+        configured.configuration.receiver.action === "facet-processor" ||
+        configured.configuration.receiver.action === "wake-processor"
+      ) {
         throw new Error("hosted processor subscriptions cannot be removed");
       }
     }
