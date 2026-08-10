@@ -1,15 +1,15 @@
 ---
-status: in-progress
+status: done
 size: large
 ---
 
 # Agent processor split + `<codemode>` response format experiment
 
-> **Status summary** (for skimmers): phase 1 done on branch `agent-processor-split` — the
-> processor is now a ~100-line composition of three components (turn loop, LLM request,
-> codemode); nothing user-visible changed and all existing tests pass unmodified. Phase 2
-> (stacked PR) adds a HEADLESS processor variant (no codemode component) plus the
-> `configs/codemode-tag` template that implements the tag format entirely in userland.
+> **Status summary** (for skimmers): done. Phase 1 (three-component processor composition)
+> merged to main in #2421. Phase 2 (headless processor + fully-userland `configs/codemode-tag`
+> template) is #2423 — CI green, review-ready. One deferred item: the
+> project-creation-from-template e2e (needs a public ref; dogfood via
+> `github:iterate/iterate#codemode-tag-format&path:configs/codemode-tag`).
 
 ## Why
 
