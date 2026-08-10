@@ -5,6 +5,7 @@
 // capnweb socket — no separate upload endpoint.
 
 import * as ImagePicker from "expo-image-picker";
+import { normalizedImageFilename } from "./media.ts";
 
 export type PickedImage = {
   filename: string;
@@ -34,8 +35,13 @@ export async function pickImages(options: { selectionLimit: number }): Promise<P
   return result.assets.flatMap((asset, index) => {
     if (!asset.base64) return [];
     const contentType = asset.mimeType || "image/jpeg";
-    const extension = contentType.split("/")[1] || "jpg";
-    const filename = asset.fileName || `photo-${Date.now()}-${index}.${extension}`;
+    // The extension must match the recompressed payload, not the library's
+    // original fileName (often .HEIC) — see normalizedImageFilename.
+    const filename = normalizedImageFilename(
+      asset.fileName,
+      contentType,
+      `photo-${Date.now()}-${index}`,
+    );
     return [
       {
         filename,

@@ -58,6 +58,22 @@ export type MediaCapturedPayload = MediaProcessingResult & {
 
 export type MediaProcessedPayload = MediaProcessingResult & { stableKey: string };
 
+/**
+ * The picker recompresses to JPEG/PNG (quality 0.8) but iOS often keeps the
+ * original fileName — e.g. `IMG_1234.HEIC` with image/jpeg bytes. toMarkdown
+ * picks its converter from the name's extension and HEIC is unsupported, so
+ * the name must match the actual payload type.
+ */
+export function normalizedImageFilename(
+  pickedName: string | null | undefined,
+  contentType: string,
+  fallbackStem: string,
+): string {
+  const extension = contentType.split("/")[1] || "jpg";
+  const stem = (pickedName || fallbackStem).replace(/\.[^.]+$/, "");
+  return `${stem}.${extension}`;
+}
+
 export function mediaFilePath(stableKey: string, filename: string): string {
   const safe = filename.replace(/[^\w.-]+/g, "_").slice(-64);
   return `/media/inbound/${stableKey}-${safe}`;

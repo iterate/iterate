@@ -7,6 +7,7 @@ import {
   MEDIA_CAPTURED_EVENT_TYPE,
   MEDIA_PROCESSED_EVENT_TYPE,
   mediaFilePath,
+  normalizedImageFilename,
   type MediaListItem,
 } from "./media.ts";
 
@@ -189,6 +190,14 @@ test("empty tags array is preserved — conservative no-tags is a valid answer",
     itx,
   );
   expect(itx.calls.appended).toMatchObject({ payload: { tags: [], transcript: "hi" } });
+});
+
+test("normalizedImageFilename forces the extension to match the payload type", () => {
+  // iOS keeps .HEIC names on recompressed-to-JPEG picks — toMarkdown picks
+  // its converter from the extension, so the name must follow the bytes.
+  expect(normalizedImageFilename("IMG_1234.HEIC", "image/jpeg", "photo-1")).toBe("IMG_1234.jpeg");
+  expect(normalizedImageFilename("shot.png", "image/png", "photo-1")).toBe("shot.png");
+  expect(normalizedImageFilename(null, "image/jpeg", "photo-7-0")).toBe("photo-7-0.jpeg");
 });
 
 test("mediaFilePath sanitizes and bounds the filename", () => {
