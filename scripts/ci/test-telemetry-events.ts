@@ -30,16 +30,14 @@ export function testTelemetryEvents(artifact: TestTelemetryArtifact): PostHogEve
     context: TestTelemetryContext,
     properties: Record<string, unknown>,
     timestamp: string,
-  ) => {
-    const eventIdentity = `${distinctId}:${identity}`;
-    return systemEvent(
+  ) =>
+    systemEvent(
       name,
-      eventIdentity,
-      eventIdentity,
+      `${distinctId}:${identity}`,
+      distinctId,
       { ...common, ...contextProperties(context), ...properties },
       timestamp,
     );
-  };
 
   const events: PostHogEvent[] = [
     event(
@@ -301,10 +299,14 @@ function deploymentTelemetryEvents(artifact: TestTelemetryArtifact): PostHogEven
     identity: string,
     properties: Record<string, unknown>,
     timestamp: string,
-  ) => {
-    const eventIdentity = `${distinctId}:${identity}`;
-    return systemEvent(name, eventIdentity, eventIdentity, { ...common, ...properties }, timestamp);
-  };
+  ) =>
+    systemEvent(
+      name,
+      `${distinctId}:${identity}`,
+      distinctId,
+      { ...common, ...properties },
+      timestamp,
+    );
 
   const events: PostHogEvent[] = [
     event(

@@ -7,14 +7,11 @@ export type PostHogEvent = {
   properties: Record<string, unknown>;
 };
 
-// PostHog accepts batch request bodies up to 20 MB and documents no event-count
-// ceiling. Keep each request below both 5 MB and 100 events: accepted 2,000+
-// event CI bursts remained unqueryable. Space the bounded requests by 500 ms
-// because preview and unit finalizers can otherwise burst concurrently. The
-// preview suite currently emits roughly 8,000 events per run.
+// PostHog accepts batch request bodies up to 20 MB. Keep our event payload at
+// one quarter of that ceiling so the API key/envelope and future event-shape
+// growth retain generous headroom, while avoiding one HTTP round trip per 100
+// test events (the preview suite currently emits roughly 7,000 per run).
 const POSTHOG_BATCH_EVENT_BUDGET_BYTES = 5_000_000;
-const POSTHOG_BATCH_EVENT_LIMIT = 100;
-const POSTHOG_BATCH_INTERVAL_MS = 500;
 
 export function readPostHogConfig(environment = process.env): { apiKey: string; host: string } {
   const raw = environment.APP_CONFIG_POSTHOG?.trim();
@@ -32,12 +29,7 @@ export function readPostHogConfig(environment = process.env): { apiKey: string; 
 
 /** Delivers deterministic system events. Callers supply stable identities for backfill safety. */
 export async function sendPostHogEvents(events: PostHogEvent[], config = readPostHogConfig()) {
-  const batches = postHogEventBatches(
-    events,
-    POSTHOG_BATCH_EVENT_BUDGET_BYTES,
-    POSTHOG_BATCH_EVENT_LIMIT,
-  );
-  for (const [batchIndex, batch] of batches.entries()) {
+  for (const batch of postHogEventBatches(events)) {
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
@@ -57,22 +49,15 @@ export async function sendPostHogEvents(events: PostHogEvent[], config = readPos
       }
     }
     if (lastError) throw new Error("PostHog CI telemetry delivery failed", { cause: lastError });
-    if (batchIndex < batches.length - 1) {
-      await new Promise((resolve) => setTimeout(resolve, POSTHOG_BATCH_INTERVAL_MS));
-    }
   }
 }
 
 export function postHogEventBatches(
   events: readonly PostHogEvent[],
-  eventBudgetBytes: number,
-  eventLimit: number,
+  eventBudgetBytes = POSTHOG_BATCH_EVENT_BUDGET_BYTES,
 ): PostHogEvent[][] {
   if (!Number.isSafeInteger(eventBudgetBytes) || eventBudgetBytes <= 0) {
     throw new TypeError("PostHog batch event budget must be a positive safe integer");
-  }
-  if (!Number.isSafeInteger(eventLimit) || eventLimit <= 0) {
-    throw new TypeError("PostHog batch event limit must be a positive safe integer");
   }
 
   const batches: PostHogEvent[][] = [];
@@ -81,10 +66,7 @@ export function postHogEventBatches(
   for (const event of events) {
     const eventBytes = Buffer.byteLength(JSON.stringify(event));
     const separatorBytes = batch.length === 0 ? 0 : 1;
-    if (
-      batch.length > 0 &&
-      (batch.length >= eventLimit || batchBytes + separatorBytes + eventBytes > eventBudgetBytes)
-    ) {
+    if (batch.length > 0 && batchBytes + separatorBytes + eventBytes > eventBudgetBytes) {
       batches.push(batch);
       batch = [];
       batchBytes = 0;

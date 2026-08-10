@@ -5,7 +5,7 @@ import {
   writeTestTelemetryArtifact,
   type TestTelemetryArtifact,
 } from "@iterate-com/shared/test-support/ci-telemetry";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { finalizeTestTelemetry, testTelemetryEvents } from "./upload-test-telemetry.ts";
 
 const { sendPostHogEventsMock } = vi.hoisted(() => ({ sendPostHogEventsMock: vi.fn() }));
@@ -13,14 +13,6 @@ vi.mock("./posthog-events.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./posthog-events.ts")>()),
   sendPostHogEvents: sendPostHogEventsMock,
 }));
-
-beforeEach(() => {
-  process.env.CI_TELEMETRY_POSTHOG_ENABLED = "1";
-});
-afterEach(() => {
-  sendPostHogEventsMock.mockReset();
-  delete process.env.CI_TELEMETRY_POSTHOG_ENABLED;
-});
 
 const artifact: TestTelemetryArtifact = {
   artifactSchemaVersion: 1,
@@ -163,15 +155,6 @@ it("transmogrifies one runner-independent artifact into the shared PostHog event
   });
 });
 
-it("gives each normalized event its own stable PostHog routing key", () => {
-  const first = testTelemetryEvents(artifact);
-  const replay = testTelemetryEvents(artifact);
-  const firstDistinctIds = first.map(({ properties }) => properties.distinct_id);
-
-  expect(new Set(firstDistinctIds).size).toBe(first.length);
-  expect(replay.map(({ properties }) => properties.distinct_id)).toEqual(firstDistinctIds);
-});
-
 it("normalizes retained preview deployment evidence without reporter network I/O", () => {
   const events = testTelemetryEvents({
     ...artifact,
@@ -221,6 +204,7 @@ it("normalizes retained preview deployment evidence without reporter network I/O
 });
 
 it("keeps raw and normalized JSON for replay while dry-run skips delivery", async () => {
+  sendPostHogEventsMock.mockReset();
   const root = mkdtempSync(join(tmpdir(), "test-telemetry-finalizer-"));
   writeTestTelemetryArtifact(
     {
@@ -253,6 +237,7 @@ it("keeps raw and normalized JSON for replay while dry-run skips delivery", asyn
 });
 
 it("delivers complete evidence before rejecting a missing expected workspace", async () => {
+  sendPostHogEventsMock.mockReset();
   const root = mkdtempSync(join(tmpdir(), "test-telemetry-completeness-"));
   writeTestTelemetryArtifact(
     { ...artifact, context: { ...artifact.context, workspace: "iterate-root" } },
@@ -289,6 +274,7 @@ it("delivers complete evidence before rejecting a missing expected workspace", a
 });
 
 it("requires exact expected runner sources with cardinality before passing", async () => {
+  sendPostHogEventsMock.mockReset();
   const root = mkdtempSync(join(tmpdir(), "test-telemetry-runner-completeness-"));
   const expectedSource = {
     producer: "playwright-telemetry-reporter",
@@ -434,6 +420,7 @@ it("fails on an incomplete runner artifact after retaining its normalized eviden
 });
 
 it("delivers completed runner errors without misclassifying their evidence as incomplete", async () => {
+  sendPostHogEventsMock.mockReset();
   const root = mkdtempSync(join(tmpdir(), "test-telemetry-runner-error-"));
   writeTestTelemetryArtifact(
     {
@@ -478,6 +465,7 @@ it("delivers completed runner errors without misclassifying their evidence as in
 });
 
 it("retains an explicit empty manifest when cancellation happens before a reporter starts", async () => {
+  sendPostHogEventsMock.mockReset();
   const root = mkdtempSync(join(tmpdir(), "test-telemetry-cancelled-"));
 
   const result = await finalizeTestTelemetry({ artifactRoot: root, cancelled: true });

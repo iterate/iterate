@@ -41,7 +41,9 @@ async function main() {
   console.log(`[ci-telemetry] collected ${events.length} idempotent event(s)`);
   if (dryRun) {
     console.log(JSON.stringify(summarize(events), null, 2));
-  } else if (process.env.CI_TELEMETRY_POSTHOG_ENABLED === "1") await sendPostHogEvents(events);
+  } else {
+    await sendPostHogEvents(events);
+  }
   if (failures.length > 0) {
     throw new AggregateError(
       failures.map((failure) => failure.error),

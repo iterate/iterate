@@ -134,10 +134,7 @@ doppler run --project _shared --config prd -- \
 
 Every event has both a readable stable `$insert_id` property and a
 deterministic top-level `uuid`; PostHog deduplicates retries and replays by the
-UUID. A repeated normalized batch is therefore idempotent. Each anonymous
-system event also uses that readable event identity as its `distinct_id`.
-PostHog's capture overflow lane is keyed by project token plus `distinct_id`,
-so one detailed artifact cannot turn into a single hot ingestion key.
+UUID. A repeated normalized batch is therefore idempotent.
 
 The unit job also sets `TEST_TELEMETRY_EXPECTED_WORKSPACES` to all ten test
 workspaces. Preview cannot use a static workspace list because its selected app
