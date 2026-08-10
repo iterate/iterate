@@ -154,3 +154,14 @@ should a fresh deploy nudge redelivery?
       and the live vision lane as a permanent opt-in (eval candidate)
 - [x] negative assertions: the Media screen gained a "No results" empty
       state and the spec asserts it positively
+
+## Round 2 (Misha, 2026-08-10 evening)
+
+- [x] Auto-collect is fat-finger-proof: the row opens a confirm dialog
+      (chevron affordance) with a "Collect back to" window — 1 day / 1 week
+      default / 1 month / 3 months / 1 year — stored as an absolute date at
+      confirm; the sync walk stops dead at the threshold. Spec asserts
+      tap → explainer → Cancel → still Off.
+- [x] PR videos re-recorded with middlewright VIDEO_MODE (video-rendered
+      output: cursor overlays, captions, dead-air compression) from a
+      fully-passing run.
