@@ -5,6 +5,13 @@
 // all-empty placeholder: empty strings mean an unstamped local Metro bundle.
 // CI/EAS checkouts are ephemeral, so the stamp never lands in git; the one
 // local caller (`pnpm update:preview`) restores the placeholder afterwards.
+//
+// Beyond provenance, the stamp also carries the bundle's EXPECTATION —
+// which backend this JS was published to talk to (expectedBackendEnv, an
+// envs.ts config key like "preview_3") and a per-PR test identity
+// (testLoginEmail). The PR publisher supplies them via env vars; every
+// other caller (main publishes, EAS build machines, local) stamps "",
+// meaning "no recommendation" — phones default to prd.
 import { execSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
@@ -33,6 +40,8 @@ const info = {
   builtBy: env.EAS_BUILD_USERNAME || env.GITHUB_ACTOR || userInfo().username,
   machine: env.EAS_BUILD ? "eas-build" : env.CI ? "ci" : hostname(),
   builtAt: new Date().toISOString(),
+  expectedBackendEnv: env.MOBILE_EXPECTED_BACKEND_ENV || "",
+  testLoginEmail: env.MOBILE_TEST_LOGIN_EMAIL || "",
 };
 
 const out = fileURLToPath(new URL("../src/build-info.json", import.meta.url));

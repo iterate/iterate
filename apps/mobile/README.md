@@ -73,7 +73,13 @@ same merges are the ones that need a manual dev-client rebuild
 
 `eas update` publishes stamp `src/build-info.json` via
 `scripts/write-build-info.mjs` (EAS native builds run it through the
-`eas-build-pre-install` hook). The checked-in file is an all-empty
+`eas-build-pre-install` hook). Besides provenance, the stamp carries the
+bundle's _expected backend_ (`expectedBackendEnv` — the PR's leased preview
+slot — plus a `pr<N>+test@nustom.com` test identity): the app compares it
+against the phone's server/sign-in after a channel switch and on the first
+boot of any new bundle, offering a one-tap fix
+(`src/lib/expected-backend.ts`). Main and local bundles stamp it empty — no
+recommendation, phones default to prd. The checked-in file is an all-empty
 placeholder — don't commit a stamped one. Manual publish to the shared
 main channel (rare — see per-PR channels below):
 `pnpm --dir apps/mobile update:preview`.

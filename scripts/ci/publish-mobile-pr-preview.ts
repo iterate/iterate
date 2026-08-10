@@ -24,43 +24,34 @@ import {
   renderPreviewSection,
   run,
   uploadQrAsset,
-  type DeepLinkParams,
 } from "./mobile-preview.ts";
 
 /** markdownAnnotator label for the managed PR-body section. */
 export const bodySectionLabel = "mobile-pr-preview";
 
 /**
- * The recommended-backend + test-sign-in params for a PR's deep link, plus
- * the OS host that should serve its interstitial. Params: the leased preview
+ * The expected-backend + test-sign-in stamp for a PR's bundle
+ * (apps/mobile/scripts/write-build-info.mjs env vars): the leased preview
  * slot recorded in the PR body (when it names a real envs.ts preview config)
- * and a per-PR `pr<N>+test@nustom.com` identity. No slot — draft PRs don't
- * deploy previews — means no params at all: the app would default to prd,
- * where the test OTP is off and auto-login must not be offered.
- *
- * The interstitial HOST is the leased slot's own OS, not prd, whenever
- * params ride along: the interstitial must forward the query into the
- * `iterate://` bounce, and only the slot deployment is guaranteed to run the
- * same code revision as this publisher — prd runs whatever is on main, which
- * (before this feature merges, or after a future param change) may silently
- * drop the params. Bare links keep prd, which has served the channel-only
- * bounce forever.
+ * and a per-PR `pr<N>+test@nustom.com` identity. Baked into the published JS
+ * rather than the QR/deep-link URL, so it survives channel switches, OTA
+ * auto-pulls, and native installs — and a main bundle (stamped empty)
+ * recommends nothing. No slot — draft PRs used to skip previews — means no
+ * stamp at all: the app would default to prd, where the test OTP is off and
+ * auto-login must not be offered.
  */
-export function deepLinkForPr(input: { body: string; pullRequestNumber: number }): {
-  params: DeepLinkParams;
-  interstitialBaseUrl: string;
+export function bundleStampForPr(input: { body: string; pullRequestNumber: number }): {
+  MOBILE_EXPECTED_BACKEND_ENV: string;
+  MOBILE_TEST_LOGIN_EMAIL: string;
 } {
   const slot = leasedPreviewSlotFromBody(input.body);
   const slotEnv = slot
     ? deployedPreviewEnvs.find((env) => env.dopplerConfig === slot.dopplerConfig)
     : undefined;
-  if (!slotEnv) return { params: {}, interstitialBaseUrl: prdBaseUrl };
+  if (!slotEnv) return { MOBILE_EXPECTED_BACKEND_ENV: "", MOBILE_TEST_LOGIN_EMAIL: "" };
   return {
-    params: {
-      env: slotEnv.dopplerConfig,
-      email: `pr${input.pullRequestNumber}+test@nustom.com`,
-    },
-    interstitialBaseUrl: slotEnv.baseUrl,
+    MOBILE_EXPECTED_BACKEND_ENV: slotEnv.dopplerConfig,
+    MOBILE_TEST_LOGIN_EMAIL: `pr${input.pullRequestNumber}+test@nustom.com`,
   };
 }
 
@@ -79,6 +70,18 @@ async function publishMobilePrPreview() {
   const channel = channelForBranch(pullRequest.head.ref);
   const headSha = pullRequest.head.sha;
 
+  const github = getOctokit();
+  const repo = getRepo();
+  // Fresh body, not the event payload's - it may have been edited since. Also
+  // the source of the PR's leased preview slot (the Cloudflare preview deploy
+  // maintains it there), which gets stamped into the bundle as the expected
+  // backend — so it must be read BEFORE the publish, not after.
+  const { data: pr } = await github.rest.pulls.get({ ...repo, pull_number: pullRequest.number });
+  // Child processes inherit process.env; write-build-info.mjs reads these.
+  Object.assign(
+    process.env,
+    bundleStampForPr({ body: pr.body || "", pullRequestNumber: pullRequest.number }),
+  );
   run("node", ["scripts/write-build-info.mjs"], mobileDir);
   const message = `PR #${pullRequest.number}: ${(pullRequest.title || "").slice(0, 900)}`;
   // --clear-cache: CI reuses sandboxes across branches and Metro's cache
@@ -105,33 +108,18 @@ async function publishMobilePrPreview() {
   const installedRuntime = latestInstalledRuntime();
   const installBuild = ensureBuildForRuntime(publishedRuntime);
 
-  const github = getOctokit();
-  const repo = getRepo();
-  // Fresh body, not the event payload's - it may have been edited since. Also
-  // the source of the PR's leased preview slot (the Cloudflare preview deploy
-  // maintains it there), which rides the deep link as the recommended backend.
-  const { data: pr } = await github.rest.pulls.get({ ...repo, pull_number: pullRequest.number });
-  const deepLink = deepLinkForPr({
-    body: pr.body || "",
-    pullRequestNumber: pullRequest.number,
-  });
-
   const plan = planPreview({
-    baseUrl: deepLink.interstitialBaseUrl,
+    baseUrl: prdBaseUrl,
     scheme,
     channel,
     publishedRuntime,
     installedRuntime,
     installUrl: `https://expo.dev/accounts/${owner}/projects/${slug}/builds/${installBuild.id}`,
-    deepLinkParams: deepLink.params,
   });
 
   const [deepLinkQrUrl, installQrUrl] = await Promise.all([
     uploadQrAsset(
-      // The env is part of the asset name: uploads dedupe by name, and a slot
-      // leased after this sha's first publish must refresh the QR, not reuse
-      // the env-less one.
-      `mobile-pr-${pullRequest.number}-${headSha.slice(0, 9)}${deepLink.params.env ? `-${deepLink.params.env}` : ""}-ota-scheme.png`,
+      `mobile-pr-${pullRequest.number}-${headSha.slice(0, 9)}-ota-scheme.png`,
       plan.otaQrContent,
     ),
     uploadQrAsset(
@@ -149,7 +137,13 @@ async function publishMobilePrPreview() {
     installBuildSha: installBuild.gitCommitHash,
     publishedRuntime,
   });
-  const body = markdownAnnotator(pr.body || "", bodySectionLabel).update(section);
+  // Re-fetch the body just before writing: the publish above takes minutes,
+  // plenty of time for the preview deploy (or a human) to have edited it.
+  const { data: freshPr } = await github.rest.pulls.get({
+    ...repo,
+    pull_number: pullRequest.number,
+  });
+  const body = markdownAnnotator(freshPr.body || "", bodySectionLabel).update(section);
   await github.rest.pulls.update({ ...repo, pull_number: pullRequest.number, body });
   console.log(`updated mobile preview section in PR #${pullRequest.number} body`);
 }

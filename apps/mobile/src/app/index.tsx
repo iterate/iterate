@@ -6,15 +6,16 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Redirect, router, Stack, useLocalSearchParams } from "expo-router";
+import { Redirect, router, Stack } from "expo-router";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { AppDrawerButton } from "../components/project-drawer.tsx";
 import { hasSignIn, signIn } from "../lib/auth.ts";
-import { testEmailFromHint } from "../lib/deep-link-hints.ts";
+import { bundleRecommendation } from "../lib/expected-backend.ts";
+import { claimNewBundleBoot } from "../lib/new-bundle-boot.ts";
 import { getItxSession, reconnectItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing, rememberedProjectInScope } from "../lib/open-project.ts";
-import { DEFAULT_SERVER, SERVER_PRESETS, serverPresetForEnvKey } from "../lib/servers.ts";
+import { DEFAULT_SERVER, SERVER_PRESETS } from "../lib/servers.ts";
 import {
   addRecentServer,
   clearLastProject,
@@ -27,13 +28,13 @@ import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function SignInScreen() {
   const queryClient = useQueryClient();
-  // Hints ferried from a preview-channel deep link (preview-channel/[channel].tsx):
-  // `env` names the PR's leased preview slot, `email` its per-PR test identity.
-  // Suggestions only — they preselect the server and ride the sign-in as a
-  // login_hint; the user still confirms everything.
-  const hints = useLocalSearchParams<{ env?: string; email?: string }>();
-  const recommended = typeof hints.env === "string" ? serverPresetForEnvKey(hints.env) : null;
-  const hintedEmail = testEmailFromHint(hints.email);
+  // The running bundle's expectation (lib/expected-backend.ts): a PR bundle
+  // names its leased preview slot and per-PR test identity, a main/local
+  // bundle names nothing. Suggestions only — they preselect the server and
+  // ride the sign-in as a login_hint; the user still confirms everything.
+  const expectation = bundleRecommendation();
+  const recommended = expectation.server;
+  const hintedEmail = expectation.email;
   // Persisted server + sign-in state decide whether to skip this screen.
   const bootstrap = useQuery({
     queryKey: ["bootstrap"],
@@ -72,6 +73,9 @@ export default function SignInScreen() {
         signedIn,
         recents: await getRecentServers(),
         lastProject,
+        // First boot of freshly-loaded JS — the one moment the bundle's
+        // baked-in expectation may interrupt the fast boot path (below).
+        newBundle: await claimNewBundleBoot(),
       };
     },
     staleTime: 0,
@@ -114,12 +118,16 @@ export default function SignInScreen() {
       </View>
     );
   }
-  // A recommendation pointing somewhere other than the signed-in server must
-  // show this screen (that's the whole point of the hint) instead of
-  // fast-forwarding into the current server's project.
+  // On the FIRST boot of a new bundle, an expectation pointing somewhere
+  // other than the signed-in server shows this screen (that's the point of
+  // the stamp) instead of fast-forwarding into the current server's project.
+  // Later boots respect the user's choice — the expectation is baked in for
+  // the bundle's whole life, so without the newBundle gate a deliberate
+  // "no thanks, keep me on prd" would nag forever.
   const hintOverridesServer =
     recommended !== null &&
     bootstrap.data !== undefined &&
+    bootstrap.data.newBundle &&
     recommended.baseUrl !== bootstrap.data.server;
   if (bootstrap.data?.signedIn && editedServer === null && !hintOverridesServer) {
     const last = bootstrap.data.lastProject;
@@ -160,9 +168,7 @@ export default function SignInScreen() {
         </Text>
         {recommended !== null ? (
           <View style={styles.recommendation}>
-            <Text style={styles.recommendationTitle}>
-              Recommended backend for this preview channel
-            </Text>
+            <Text style={styles.recommendationTitle}>Expected backend for this build</Text>
             <Text style={styles.recommendationBody}>
               {recommended.label}
               {hintedEmail !== null ? ` · test sign-in as ${hintedEmail}` : ""}

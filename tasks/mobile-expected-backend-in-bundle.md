@@ -8,9 +8,11 @@ branch: mobile-expected-backend-in-bundle
 
 ## Status summary
 
-Fleshed-out spec, implementation not started. Assumptions below were made
-while Misha was AFK — the first commit is spec-only so the direction can be
-checked before code lands.
+Implementation done: stamp extended, CI publishers pass the env vars, QR/deep
+links are channel-only again, interstitial back to a bare prd bounce, app
+reads the running bundle's expectation (confirm screen post-switch + sign-in
+screen, gated once-per-bundle). Tests/lint/typecheck/knip green. Remaining:
+real-device verification once CI publishes a stamped bundle for this PR.
 
 ## Motivation
 
@@ -42,49 +44,49 @@ back to carrying just the channel.
 
 ## Checklist
 
-- [ ] Extend the build-info stamp with `expectedBackendEnv` and
+- [x] Extend the build-info stamp with `expectedBackendEnv` and
       `testLoginEmail` (empty string = none, matching the existing
       placeholder convention; exposed as `string | null` from
       `lib/build-info.ts`). `scripts/write-build-info.mjs` reads them from
       env vars (`MOBILE_EXPECTED_BACKEND_ENV`, `MOBILE_TEST_LOGIN_EMAIL`),
       defaulting to none.
-- [ ] `scripts/ci/publish-mobile-pr-preview.ts`: set those env vars when
+- [x] `scripts/ci/publish-mobile-pr-preview.ts`: set those env vars when
       running the stamp (leased slot from the PR body via
       `leasedPreviewSlotFromBody`, `pr<N>+test@nustom.com`), so `eas update`
       publishes a self-describing bundle. No slot leased → stamp nothing.
-- [ ] `scripts/ci/publish-mobile-update.ts` (main): stamp nothing — main
+- [x] `scripts/ci/publish-mobile-update.ts` (main): stamp nothing — main
       bundles recommend nothing, phones default to prd.
-- [ ] Strip `DeepLinkParams` out of `scripts/ci/mobile-preview.ts`: QR
+- [x] Strip `DeepLinkParams` out of `scripts/ci/mobile-preview.ts`: QR
       content and interstitial URL carry the channel only; interstitial host
       goes back to always-prd (slot-hosted interstitials existed only to
       forward params). Simplify QR asset naming (no `-<env>` suffix needed).
-- [ ] `apps/os/src/routes/m.preview-channel.$channel.ts`: drop the
+- [x] `apps/os/src/routes/m.preview-channel.$channel.ts`: drop the
       query-forwarding block — back to the bare channel bounce.
-- [ ] App: new tiny module (e.g. `lib/expected-backend.ts`) deriving the
+- [x] App: new tiny module (e.g. `lib/expected-backend.ts`) deriving the
       `Recommendation` (`deep-link-hints.ts` type) from `buildInfo` —
       `expectedBackendEnv` resolved via `serverPresetForEnvKey` (still
       preset-list-only, so a poisoned stamp can't name an arbitrary server),
       email still validated by `testEmailFromHint`.
-- [ ] `preview-channel/[channel].tsx`: stop reading `env`/`email` params.
+- [x] `preview-channel/[channel].tsx`: stop reading `env`/`email` params.
       Post-switch (the reload re-opens the screen in the NEW bundle), the
       mismatch card + one-tap plan read from the running bundle's
       expectation. Pre-switch "Recommended backend" row goes away — the old
       bundle can't know the target bundle's backend, and that's honest.
-- [ ] `index.tsx` (sign-in): stop reading hint params; read the running
+- [x] `index.tsx` (sign-in): stop reading hint params; read the running
       bundle's expectation directly. No more hint-ferrying via router params
       on Continue.
-- [ ] New-bundle hook: on launch, compare the running update
+- [x] New-bundle hook: on launch, compare the running update
       (`Updates.updateId` / `buildInfo.commit`) against a stored last-seen
       value; when the bundle changed and its expectation mismatches phone
       state (`recommendationMismatches`), surface the existing mismatch
       card/plan (reuse the pure logic + UI from the confirm screen) outside
       the QR flow too — covers auto-pulled OTA updates and fresh native
       installs. Dismissible, never auto-applies.
-- [ ] Tests: update `scripts/ci/mobile-preview.test.ts` (no more params in
+- [x] Tests: update `scripts/ci/mobile-preview.test.ts` (no more params in
       URLs/QR content), `deep-link-hints.test.ts` (logic unchanged, feeding
       changes), add coverage for the stamp env vars and the
       bundle-expectation module.
-- [ ] Docs: `apps/mobile/README.md` preview section + any doc mentioning the
+- [x] Docs: `apps/mobile/README.md` preview section + any doc mentioning the
       `?env=&email=` params.
 
 ## Assumptions (made while AFK)
@@ -110,4 +112,19 @@ back to carrying just the channel.
 
 ## Implementation log
 
-(append as work happens)
+- Folded `deep-link-hints.ts` into `expected-backend.ts` (everything in it is
+  now about the bundle's expectation, not deep links); `testEmailFromHint` →
+  `validatedTestEmail`, dropping the expo-router `+`→space corruption hack —
+  nothing rides URLs anymore. Test file renamed to `expected-backend.test.ts`.
+- `claimNewBundleBoot` lives in its own `new-bundle-boot.ts` because
+  AsyncStorage drags react-native into what must stay a pure node-lane module.
+- The once-per-bundle gate: the expectation is permanent for a bundle's life
+  (unlike a one-time deep link), so the sign-in screen's forced-show only
+  fires on the first boot after new JS loads — otherwise "no thanks, keep me
+  on prd" would nag on every launch. The QR flow is unaffected: the confirm
+  screen's mismatch card renders whenever the channel matches.
+- publish-mobile-pr-preview now reads the PR body BEFORE `eas update` (the
+  leased slot feeds the stamp), and re-fetches it just before the body write.
+- Deviation from spec: normalization to null happens in
+  `expected-backend.ts`, not `build-info.ts` — the raw JSON import stays
+  untyped-strings like the other fields.
