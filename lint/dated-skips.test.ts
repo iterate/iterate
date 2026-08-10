@@ -51,9 +51,9 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     note: "env-gated: the authenticated seeded app proof requires a real signup",
   },
   {
-    file: "specs/mobile/preview-deeplink-hints.spec.ts",
+    file: "specs/mobile/expected-backend-signin.spec.ts",
     match: "needs APP_CONFIG_BASE_URL pointing at a deployed preview slot",
-    note: "env-gated: the deep-link hint must name an envs.ts preview preset and prd keeps the fixed test OTP off",
+    note: "env-gated: the bundle stamp must name an envs.ts preview preset and prd keeps the fixed test OTP off",
   },
   {
     file: "specs/workspace-lens-board.spec.ts",
