@@ -27,9 +27,18 @@ export async function getPreviewChannelOverride() {
  * caller can show it; only "reloading" actually restarts the app. */
 export async function switchChannelAndReload(channel: string | null) {
   await setPreviewChannelOverride(channel);
+  const result = await fetchLatestUpdateAndReload();
+  return result === "up-to-date" ? ("no-update" as const) : result;
+}
+
+/** Pull the newest update for whatever channel the app is already pointed at
+ * — the check/fetch/reload dance minus the override write. checkForUpdateAsync
+ * compares the channel's latest against the RUNNING update, so calling this
+ * again right after the reload finds nothing and terminates. */
+export async function fetchLatestUpdateAndReload() {
   const result = await Updates.checkForUpdateAsync();
   if (!result.isAvailable) {
-    return "no-update" as const;
+    return "up-to-date" as const;
   }
   await Updates.fetchUpdateAsync();
   await Updates.reloadAsync();
