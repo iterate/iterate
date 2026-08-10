@@ -9,8 +9,9 @@ size: medium
 
 Implementation, local regressions, preview deployment, and the exact canonical
 spec proof are complete. The actor cycle is removed: the former 45-second
-timeout passed first-attempt in 12.2 seconds. Five other canonical retries are
-being classified before this follow-up can be called release-clean.
+timeout passed first-attempt twice in 12.2 and 11.9 seconds. The first run's
+rollout/storage burst was absent from the second; its sole retry exposed an AI
+Gateway cache-warmup contract error, now fixed pending canonical proof.
 
 ## Problem
 
@@ -42,8 +43,9 @@ test and not a source-recreation failure.
 - [ ] Run canonical preview CI without retries and audit the project-create
       trace for a bounded wake/read sequence. _Canonical run `t8l3czqmv5`
       passed the target first-attempt in 12,193 ms (`retryCount: 0`), down from
-      the prior 62,980 ms aggregate retry. Five unrelated cases retried, so the
-      run is not accepted as release-clean._
+      the prior 62,980 ms aggregate retry. Run `5cf646r0kg` repeated the proof
+      in 11,870 ms. Its sole unrelated retry was the now-bounded AI Gateway
+      cache warmup, so neither full run is accepted as release-clean._
 
 ## Implementation log
 
@@ -57,3 +59,13 @@ test and not a source-recreation failure.
   `6mohha84pjb2eum30ps0sviv`; one unrelated Vitest retry carried the explicit
   code-update reset. The remaining MITM timeout and delayed reactivity-live
   transition still require classification.
+- 2026-08-10: The delayed reactivity-live transition was a Cloudflare storage
+  reset (`p965faedfvqk7ccvdmle9d4q`) inside the `Stream.openConnection`
+  subrequest in trace `97f531953fd9e47db01194f872fd51ea`. The sandbox WSS
+  probe never reached `ProjectEgress.fetch`; both passed in the next canonical
+  run, which had no storage/reset burst.
+- 2026-08-10: The next run's only retry was a second immediate AI Gateway cache
+  MISS. Cloudflare documents cache writes as volatile, so the test now models
+  MISS as a bounded, logged warmup state instead of consuming a framework
+  retry. The pre-fix canonical failure is the red proof; canonical preview on
+  the new head is the remaining green proof.
