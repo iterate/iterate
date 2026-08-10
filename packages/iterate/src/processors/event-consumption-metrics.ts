@@ -21,9 +21,14 @@ export type EventConsumptionMetricsReport = {
   measuredSince: string;
   /**
    * The full consume-your-own-appends loop, one clock: this host called
-   * `append()` at t0, and its OWN event connection later delivered (and the host
-   * fully ingested) the committed offset. Samples only exist when the host
-   * appends — `null` is "no appends observed", never a fabricated number.
+   * `append()` at t0, and its OWN event connection later delivered (and the
+   * host fully ingested) THAT COMMITTED OFFSET.
+   *
+   * Samples only exist for appends that came back. An append of a type this
+   * host does not consume, or one the stream never hands back, contributes
+   * NOTHING here — it is not a slow loop, it is no loop, and the two must not
+   * be spelled the same. `null` is "no such append observed", never a
+   * fabricated number.
    */
   consumeOwnAppendMs: LatencyStats | null;
   /** `append()` call → commit acknowledged (the RPC round trip incl. commit). */
@@ -66,12 +71,15 @@ export class EventConsumptionMetrics {
 
   /**
    * An `append()` this host issued resolved: `t0` is when the host called it,
-   * `atMs` is when the commit came back, `maxCommittedOffset` is the highest
-   * offset the stream assigned. The loop closes in {@link noteBatchIngested}
-   * when the host receives and processes through that offset.
+   * `atMs` is when the commit came back, and `maxCommittedOffset` is the
+   * highest committed offset that CAN come back to this host — the caller's
+   * judgement, because only the caller knows what it consumes. `null` means
+   * the append carried nothing this host will ever be delivered, and is timed
+   * for its round trip alone.
    */
-  noteAppendCommitted(args: { maxCommittedOffset: number; t0: number; atMs: number }): void {
+  noteAppendCommitted(args: { maxCommittedOffset: number | null; t0: number; atMs: number }): void {
     this.#appendRoundTrip.record(args.atMs - args.t0, args.atMs);
+    if (args.maxCommittedOffset === null) return;
     // The stream fans out BEFORE the append call returns, so our own
     // event callback may have ingested the offset already — in that case the
     // loop closed the moment both halves were done, which is now. Only a
@@ -90,15 +98,22 @@ export class EventConsumptionMetrics {
   noteBatchIngested(args: {
     /** Highest offset the host has now ingested through (its cursor, not just this batch). */
     ingestedThroughOffset: number;
+    /**
+     * The offsets this batch actually CARRIED.
+     *
+     * The cursor above sweeps past rows this host was never handed — a
+     * filtered subscription skips them durably — so it cannot tell an own
+     * append that came back from one that never will. These can.
+     */
+    ingestedOffsets: readonly number[];
     /** `Date.parse(newestEvent.createdAt)` for the newest event in the batch, if any. */
     newestEventCreatedAtMs?: number;
-    eventCount: number;
     /** When the host started ingesting this batch. */
     ingestStartedAtMs: number;
     atMs: number;
   }): void {
     this.#batchesIngested += 1;
-    this.#eventsIngested += args.eventCount;
+    this.#eventsIngested += args.ingestedOffsets.length;
     this.#ingestedThroughOffset = Math.max(this.#ingestedThroughOffset, args.ingestedThroughOffset);
     this.#ingest.record(args.atMs - args.ingestStartedAtMs, args.atMs);
     if (args.newestEventCreatedAtMs !== undefined && Number.isFinite(args.newestEventCreatedAtMs)) {
@@ -106,15 +121,24 @@ export class EventConsumptionMetrics {
       this.#deliveryAge.record(hostNowOnStreamClock - args.newestEventCreatedAtMs, args.atMs);
     }
     if (this.#pendingOwnAppends.length > 0) {
-      const settled = this.#pendingOwnAppends.filter((p) => p.offset <= args.ingestedThroughOffset);
-      if (settled.length > 0) {
-        this.#pendingOwnAppends = this.#pendingOwnAppends.filter(
-          (p) => p.offset > args.ingestedThroughOffset,
-        );
-        for (const pending of settled) {
+      const stillPending: { offset: number; t0: number }[] = [];
+      for (const pending of this.#pendingOwnAppends) {
+        if (pending.offset > args.ingestedThroughOffset) {
+          stillPending.push(pending);
+          continue;
+        }
+        // The cursor is now past this correlation, so it is over either way.
+        // A SAMPLE, though, only when the batch actually carried the offset:
+        // that is the append→consume loop this metric names. Anything else —
+        // a row the subscription filtered out, an ephemeral event evicted
+        // before delivery — never looped at all, and timing the wait until
+        // some later unrelated event happened along is how this metric came
+        // to report a person's pause between sentences as consumption lag.
+        if (args.ingestedOffsets.includes(pending.offset)) {
           this.#consumeOwnAppend.record(args.atMs - pending.t0, args.atMs);
         }
       }
+      this.#pendingOwnAppends = stillPending;
     }
   }
 

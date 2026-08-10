@@ -257,8 +257,8 @@ export type StreamProcessorRunnerHooks<Contract extends StreamProcessorContract>
    */
   noteBatchIngested(args: {
     ingestedThroughOffset: number;
+    ingestedOffsets: readonly number[];
     newestEventCreatedAtMs?: number;
-    eventCount: number;
     ingestStartedAtMs: number;
     atMs: number;
   }): void;
@@ -614,12 +614,12 @@ export abstract class StreamProcessor<
       ...built,
       source: { ...built.source, processor },
     }));
-    // Home-stream appends feed the consume-own-append loop: the committed
-    // offsets come back through this processor's own subscription, and
-    // noteBatchIngested closes the sample. Sibling-stream appends (appendTo)
-    // never loop back here, so they are not timed. A sibling retains rows
-    // across deletion/recreation of the source path, so its committed key
-    // includes the source lifetime; offset 1 from A and offset 1 from B are
+    // Home-stream appends of a CONSUMED type feed the consume-own-append
+    // loop: those committed offsets come back through this processor's own
+    // subscription, and noteBatchIngested closes the sample. Sibling-stream
+    // appends (appendTo) never loop back here, so they are not timed at all.
+    // A sibling retains rows across deletion/recreation of the source path, so
+    // its committed key includes the source lifetime; offset 1 from A and offset 1 from B are
     // different causes and must both be able to land. Idempotency keys are
     // retry identities, not semantic entity identities: readers determine
     // meaning from event types or reduced processor state, never key spelling.
@@ -636,14 +636,24 @@ export abstract class StreamProcessor<
     }
     const t0 = Date.now();
     return this.stream.appendIfStreamId({ streamId: sourceStreamId, events }).then((committed) => {
-      const maxCommittedOffset = committed.reduce((max, event) => Math.max(max, event.offset), 0);
-      if (maxCommittedOffset > 0) {
-        this.eventConsumptionMetrics.noteAppendCommitted({
-          maxCommittedOffset,
-          t0,
-          atMs: Date.now(),
-        });
+      if (committed.length === 0) return committed;
+      // ONLY an event this processor itself consumes can close the loop, and
+      // most processors emit far more than they consume: the voice facet
+      // appends ~50 speaker frames a second and consumes none of them. Timing
+      // those made every sample the wait until the next thing the processor
+      // DID consume — a person's pause between sentences, published as
+      // "seconds to see my own append". An append with nothing consumable in
+      // it is timed for its round trip and nothing else.
+      let maxCommittedOffset: number | null = null;
+      for (const event of committed) {
+        if (!this.#isDeliverable(event)) continue;
+        maxCommittedOffset = Math.max(maxCommittedOffset ?? 0, event.offset);
       }
+      this.eventConsumptionMetrics.noteAppendCommitted({
+        maxCommittedOffset,
+        t0,
+        atMs: Date.now(),
+      });
       return committed;
     });
   }

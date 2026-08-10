@@ -808,6 +808,40 @@ describe("the answer", () => {
   });
 });
 
+describe("what the facet reports about itself", () => {
+  /*
+   * THE INSTRUMENT THAT LIED. A live facet published
+   *
+   *   consumeOwnAppendMs { last: 84, p50: 8661, p95: 12054, samples: 32 }
+   *   appendRoundTripMs  { last: 24, p50: 24,   p95: 35,    samples: 32 }
+   *
+   * — a processor apparently taking nine seconds to see an event it appended
+   * itself, while the append's own round trip was 24 ms. Not one of those
+   * samples was a loop. They were speaker frames: a type this facet emits
+   * fifty times a second and consumes never, retired by the acknowledgement
+   * cursor sweeping past them when the person next spoke. The published
+   * number was the gap between two sentences, and the fold it supposedly
+   * indicted was never stale at all.
+   *
+   * `call-started` is the ONE thing this facet both emits and consumes, so
+   * one turn owes exactly one sample.
+   */
+  it("times the append that comes back to it, and not the speaker firehose", async () => {
+    const { harness, providers } = harnessWithFreshProviders();
+    await takeTurn(harness, providers, 12_800);
+
+    // Twenty frames of answer, every one of them appended by this facet.
+    expect(harness.events(SPK_FRAME).length).toBeGreaterThan(10);
+    expect(harness.events(CALL_STARTED)).toHaveLength(1);
+
+    const report = harness.processor().eventConsumptionMetrics.report();
+    // Every append is timed for its round trip…
+    expect(report.appendRoundTripMs?.samples ?? 0).toBeGreaterThan(1);
+    // …and exactly one of them was a consume-your-own-append loop.
+    expect(report.consumeOwnAppendMs).toMatchObject({ samples: 1 });
+  });
+});
+
 describe("repeated end to end", () => {
   /*
    * THE REGRESSION THAT MATTERED MOST. A guard of "dial only when idle" made
