@@ -10,9 +10,12 @@
 //   channel's latest update and reloads into it. (Switching also fetches
 //   latest — switchChannelAndReload's check/fetch/reload.)
 // - Backend/identity differences from the running bundle's expectation are
-//   SHOWN, with a one-tap fix, never applied silently. The stamp resolves
-//   against the preset list only (lib/expected-backend.ts), so a poisoned
-//   bundle stamp can't name an arbitrary server.
+//   SHOWN, and the fix rides Continue as a default-checked checkbox — wanting
+//   the PR's JS almost always means wanting its backend + test identity too,
+//   but unticking keeps the plain channel switch. Never applied silently.
+//   The stamp resolves against the preset list only (lib/expected-backend.ts),
+//   so a poisoned bundle stamp can't name an arbitrary server.
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
@@ -131,6 +134,10 @@ export default function PreviewChannelScreen() {
     },
   });
 
+  // Whether Continue also applies the switch plan. Default-checked: the
+  // whole point of scanning a PR QR is running its JS against its backend.
+  const [applyPlanOnContinue, setApplyPlanOnContinue] = useState(true);
+
   const currentChannel = current.data || Updates.channel || "preview";
 
   return (
@@ -154,30 +161,21 @@ export default function PreviewChannelScreen() {
         {buildInfo.message ? <Row label="Commit" value={buildInfo.message} /> : null}
       </View>
       {alreadyOnTarget ? (
-        <>
-          {canOta ? (
-            <Text style={freshness.isError ? styles.errorNote : styles.note}>
-              {freshness.isFetching
-                ? "Checking this channel for its latest update…"
-                : freshness.data === "reloading"
-                  ? "Newer update found — fetching and restarting…"
-                  : freshness.isError
-                    ? String(freshness.error)
-                    : "You're running this channel's latest update."}
-            </Text>
-          ) : (
-            <Text style={styles.note}>
-              OTA updates don't run in dev bundles — can't pull the channel's latest here.
-            </Text>
-          )}
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => router.replace("/")}
-            style={styles.button}
-          >
-            <Text style={styles.buttonLabel}>Continue</Text>
-          </Pressable>
-        </>
+        canOta ? (
+          <Text style={freshness.isError ? styles.errorNote : styles.note}>
+            {freshness.isFetching
+              ? "Checking this channel for its latest update…"
+              : freshness.data === "reloading"
+                ? "Newer update found — fetching and restarting…"
+                : freshness.isError
+                  ? String(freshness.error)
+                  : "You're running this channel's latest update."}
+          </Text>
+        ) : (
+          <Text style={styles.note}>
+            OTA updates don't run in dev bundles — can't pull the channel's latest here.
+          </Text>
+        )
       ) : !Updates.isEnabled ? (
         <Text style={styles.note}>
           OTA updates are off in this bundle (Metro dev server) — channel switching only works in
@@ -231,22 +229,22 @@ export default function PreviewChannelScreen() {
             )}
           </View>
           {plan !== null ? (
-            // Held while a freshness reload could fire mid-flow: reloadAsync
-            // during the sign-in OAuth hop would sever it half way. The
-            // reload re-opens this screen and the button unlocks then.
+            // The fix rides Continue below rather than being its own button —
+            // "run this PR's JS" and "against its backend, as its identity"
+            // are one intent, so both happen on one tap unless unticked.
             <Pressable
-              accessibilityRole="button"
-              disabled={applyPlan.isPending || reloadImminent}
-              onPress={() => applyPlan.mutate(plan)}
-              style={[
-                styles.button,
-                (applyPlan.isPending || reloadImminent) && styles.buttonDisabled,
-              ]}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: applyPlanOnContinue }}
+              // RN-web doesn't project accessibilityState.checked onto the DOM.
+              aria-checked={applyPlanOnContinue}
+              onPress={() => setApplyPlanOnContinue(!applyPlanOnContinue)}
+              style={styles.checkboxRow}
             >
-              <Text style={styles.buttonLabel}>
-                {applyPlan.isPending
-                  ? "Switching…"
-                  : planLabel(plan, phoneState.data!.serverBaseUrl)}
+              <View style={[styles.checkbox, applyPlanOnContinue && styles.checkboxChecked]}>
+                {applyPlanOnContinue ? <Text style={styles.checkboxMark}>✓</Text> : null}
+              </View>
+              <Text style={styles.checkboxLabel}>
+                {planLabel(plan, phoneState.data!.serverBaseUrl)}
               </Text>
             </Pressable>
           ) : null}
@@ -254,6 +252,26 @@ export default function PreviewChannelScreen() {
         </>
       ) : alreadyOnTarget && recommendedServer !== null && phoneState.isSuccess ? (
         <Text style={styles.note}>Backend and sign-in match what this bundle expects.</Text>
+      ) : null}
+      {alreadyOnTarget ? (
+        // Held while a freshness reload could fire mid-flow: reloadAsync
+        // during the sign-in OAuth hop would sever it half way. The reload
+        // re-opens this screen and the button unlocks then. (Only blocking
+        // when Continue would actually start that flow.)
+        <Pressable
+          accessibilityRole="button"
+          disabled={applyPlan.isPending || (reloadImminent && plan !== null && applyPlanOnContinue)}
+          onPress={() =>
+            plan !== null && applyPlanOnContinue ? applyPlan.mutate(plan) : router.replace("/")
+          }
+          style={[
+            styles.button,
+            (applyPlan.isPending || (reloadImminent && plan !== null && applyPlanOnContinue)) &&
+              styles.buttonDisabled,
+          ]}
+        >
+          <Text style={styles.buttonLabel}>{applyPlan.isPending ? "Switching…" : "Continue"}</Text>
+        </Pressable>
       ) : null}
       <Pressable
         accessibilityRole="button"
@@ -323,6 +341,24 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.6 },
   buttonLabel: { color: colors.text, fontSize: 16, fontWeight: "600", textAlign: "center" },
+  checkboxRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+    paddingVertical: 4,
+  },
+  checkbox: {
+    alignItems: "center",
+    borderColor: colors.textFaint,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    height: 22,
+    justifyContent: "center",
+    width: 22,
+  },
+  checkboxChecked: { backgroundColor: colors.surfaceRaised, borderColor: colors.text },
+  checkboxMark: { color: colors.text, fontSize: 14, fontWeight: "700", lineHeight: 16 },
+  checkboxLabel: { color: colors.text, flexShrink: 1, fontSize: 14 },
   linkButton: { alignItems: "center", paddingVertical: 8 },
   linkLabel: { color: colors.textMuted, fontSize: 14 },
   note: { color: colors.textMuted, fontSize: 13, textAlign: "center" },

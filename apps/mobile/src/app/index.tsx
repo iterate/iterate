@@ -15,12 +15,10 @@ import { bundleRecommendation } from "../lib/expected-backend.ts";
 import { claimNewBundleBoot } from "../lib/new-bundle-boot.ts";
 import { getItxSession, reconnectItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing, rememberedProjectInScope } from "../lib/open-project.ts";
-import { DEFAULT_SERVER, SERVER_PRESETS } from "../lib/servers.ts";
+import { DEFAULT_SERVER, PRODUCTION_PRESET } from "../lib/servers.ts";
 import {
-  addRecentServer,
   clearLastProject,
   getLastProject,
-  getRecentServers,
   getServerBaseUrl,
   setServerBaseUrl,
 } from "../lib/storage.ts";
@@ -71,7 +69,6 @@ export default function SignInScreen() {
       return {
         server,
         signedIn,
-        recents: await getRecentServers(),
         lastProject,
         // First boot of freshly-loaded JS — the one moment the bundle's
         // baked-in expectation may interrupt the fast boot path (below).
@@ -90,9 +87,6 @@ export default function SignInScreen() {
     mutationFn: async () => {
       const baseUrl = normalizeBaseUrl(server);
       await setServerBaseUrl(baseUrl);
-      if (!SERVER_PRESETS.some((preset) => preset.baseUrl === baseUrl)) {
-        await addRecentServer(baseUrl);
-      }
       // The test-identity hint only accompanies its own backend: signing in
       // anywhere else (say prd, where the test OTP is off) must not suggest a
       // mailbox nobody can read.
@@ -144,12 +138,14 @@ export default function SignInScreen() {
     return <Redirect href="/projects" />;
   }
 
+  // Just two one-tap options at most: Production, plus the bundle's expected
+  // backend when it names a preview slot. Twenty preview chips helped nobody
+  // — anything else gets typed into the field.
   const serverOptions = [
-    ...SERVER_PRESETS,
-    ...(bootstrap.data?.recents || []).map((url) => ({
-      label: url.replace(/^https?:\/\//, ""),
-      baseUrl: url,
-    })),
+    PRODUCTION_PRESET,
+    ...(recommended !== null && recommended.baseUrl !== PRODUCTION_PRESET.baseUrl
+      ? [recommended]
+      : []),
   ];
 
   return (

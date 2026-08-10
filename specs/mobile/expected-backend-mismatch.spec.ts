@@ -31,8 +31,10 @@ test("a mismatched phone sees the differences and a one-tap sign-in fix", async 
   await page.getByText("This bundle expects a different setup").waitFor();
   await page.getByText("os.iterate.com → preview 3").waitFor();
   await page.getByText(`not signed in → ${HINT_EMAIL}`).waitFor();
-  // …and the planner picks the single action that fixes both.
-  await page.getByRole("button", { name: `Sign in on preview 3 as ${HINT_EMAIL}` }).waitFor();
+  // …and the single fixing action rides Continue as a default-checked
+  // checkbox, keeping Continue/Cancel as the only buttons.
+  await page.getByRole("checkbox", { name: /Sign in on preview 3/, checked: true }).waitFor();
+  await page.getByRole("button", { name: "Continue" }).waitFor();
 });
 
 test("a phone already matching the expectation is told so", async ({ page }) => {

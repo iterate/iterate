@@ -13,9 +13,24 @@
 // other caller (main publishes, EAS build machines, local) stamps "",
 // meaning "no recommendation" — phones default to prd.
 import { execSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
 import { fileURLToPath } from "node:url";
+
+const out = fileURLToPath(new URL("../src/build-info.json", import.meta.url));
+
+// EAS machines: when the uploaded project archive already carries a stamp
+// (CI stamps before triggering `eas build`, and eas-cli uploads the working
+// tree including that uncommitted change), keep it — it knows the PR branch
+// and expected backend, which this .git-less machine cannot reconstruct.
+// Only unstamped archives (local `eas build` runs) fall through to stamping.
+if (process.env.EAS_BUILD) {
+  const existing = JSON.parse(readFileSync(out, "utf8"));
+  if (existing.builtAt) {
+    console.log(`keeping existing stamp in ${out}: ${JSON.stringify(existing)}`);
+    process.exit(0);
+  }
+}
 
 const git = (args) => {
   try {
@@ -44,6 +59,5 @@ const info = {
   testLoginEmail: env.MOBILE_TEST_LOGIN_EMAIL || "",
 };
 
-const out = fileURLToPath(new URL("../src/build-info.json", import.meta.url));
 writeFileSync(out, `${JSON.stringify(info, null, 2)}\n`);
 console.log(`stamped ${out}: ${JSON.stringify(info)}`);

@@ -110,6 +110,27 @@ back to carrying just the channel.
 4. **The mismatch offer stays suggest-only** (one-tap apply, never silent),
    matching #2465's security posture.
 
+## Round 2 — Misha's nits (2026-08-10)
+
+- [x] Native installs overpower the OTA override: first boot of a new binary
+      (version/build/runtime changed) force-clears a pre-existing channel
+      override with an Alert + optional "Pull latest now"
+      (`lib/native-install-guard.ts`, wired in `_layout.tsx` so it beats any
+      deliberate same-session switch). Plus: the EAS pre-install hook now
+      KEEPS an already-stamped build-info.json (CI stamps before triggering
+      `eas build`, and eas-cli uploads the working tree), so PR install
+      builds embed the PR's branch + expected backend instead of blanks.
+- [x] Confirm screen: the fix is a default-checked checkbox riding Continue
+      ("Sign in on preview 5 as pr…") — buttons are just Continue/Cancel.
+- [x] Build info screen shows Expected backend + Test login rows (Bundle
+      section).
+- [x] "Check for update" and "Reset to default channel" now sit together
+      under the Updates card; App section moved below them.
+- [x] Sign-in quick-select chips cut to Production + the bundle's expected
+      backend; recents chips and their storage helpers removed (free-text
+      field covers everything else). `SERVER_PRESETS` stays as the
+      validation list for stamp resolution.
+
 ## Implementation log
 
 - Folded `deep-link-hints.ts` into `expected-backend.ts` (everything in it is

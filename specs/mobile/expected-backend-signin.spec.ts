@@ -44,6 +44,9 @@ test("scanning the channel you're already on shows the bundle's expected backend
   await page.goto("/preview-channel/spec-chan");
   await page.getByText("You're already on this channel").waitFor();
   await page.getByText("Expected backend").waitFor();
+  // With the fix checkbox ticked, Continue would start the OAuth flow —
+  // untick it to take the plain "just continue" path instead.
+  await page.getByRole("checkbox", { name: /Sign in/ }).click();
   await page.getByRole("button", { name: "Continue" }).click();
   // The sign-in screen reads the SAME bundle stamp — nothing to ferry.
   await page.getByText("Expected backend for this build").waitFor();
