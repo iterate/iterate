@@ -16,12 +16,12 @@ Auth, Semaphore, Artifacts, repository-birth, and deployment fixes until the
 PR reached 98 files. Those platform findings remain valid work, but they are
 not part of this restoration.
 
-This branch will contain only directly reproduced script-worker ownership,
-approval-claim ordering, live delivery recovery, bounded push settlement,
-correlated diagnostics, and the two unskips. No product fix is accepted without
-a red/green regression at its public runtime seam. Validation uses the old
-four-worker reproduction plus three canonical full previews; the targeted
-pair must pass 25 consecutive stress iterations on one exact head.
+The narrow replacement is implemented and locally green. It contains only
+directly reproduced script-worker ownership, approval-claim ordering, bounded
+push settlement, accepted-message handoff, correlated diagnostics, and the two
+unskips. The remaining work is deployed proof: the old four-worker reproduction
+plus three canonical full previews, with 25 consecutive targeted stress
+iterations on one exact head.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -89,19 +89,30 @@ notification journal.
 
 ## Work
 
-- [ ] Port only the directly reproduced fixes onto current `main`; do not pull
+- [x] Port only the directly reproduced fixes onto current `main`; do not pull
   unrelated gate discoveries into this PR.
-- [ ] Add correlated diagnostics for every transition from script fetch hold,
+  _Worker ownership, approval ordering, push settlement, and the accepted-
+  message handoff are isolated in replacement PR #2460._
+- [x] Add correlated diagnostics for every transition from script fetch hold,
   through batch creation and decision, to the device notification journal.
   A missing transition must become a bounded, classified failure rather than a
   vanished button or row.
-- [ ] Preserve one red/green regression per accepted product fix at the public
+  _`approval-delivery-diagnostics.ts` prints the durable chain and first absent
+  transition when either restored UI wait expires._
+- [x] Preserve one red/green regression per accepted product fix at the public
   Worker Loader, Device processor, Stream delivery, or Expo-send seam.
-- [ ] Minimize whether the loss occurs in the egress batching processor, the live
+  _Focused red/green tests cover one-off loading and ownership, early approval
+  claims across eviction, the terminal Expo deadline, and live activity after
+  message acceptance._
+- [x] Minimize whether the loss occurs in the egress batching processor, the live
   thread subscription, or notification journaling, then fix the owning state
   machine without polling, broader waits, or another retry layer.
-- [ ] Remove both explicit skips without changing test timeouts, assertions, or
+  _The confirmed losses were retained one-off workers and discarded early
+  approval claims; current main's Subscriber Pager already owns stream revival._
+- [x] Remove both explicit skips without changing test timeouts, assertions, or
   retry policy.
+  _Both Playwright cases are active and discoverable; no timeout or retry was
+  widened._
 - [ ] Verify that a settled script cannot lose its approval batch or device row
   across Durable Object eviction and concurrent preview load.
 - [ ] Run the prior four-worker stress reproduction for 25 consecutive paired
@@ -139,3 +150,7 @@ hide a recurrence with a timeout increase or another retry.
   Confirmed the tests exposed real load-sensitive product defects rather than
   a regression introduced by #2388. Started a clean replacement branch and
   excluded the unrelated platform fixes accumulated by the old marathon.
+- 2026-08-10: Replacement PR #2460 passes full workspace CI, workspace
+  typecheck, 56 focused worker tests, 30 Device tests, 23 mobile tests, and 66
+  current-main Stream sender/Subscriber Pager recovery tests. Added the
+  `preview` label to start the exact-head deployed gate.
