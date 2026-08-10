@@ -2407,6 +2407,83 @@ describe("StreamConnections hosted delivery watchdog", () => {
     });
   });
 
+  /*
+   * THE HOSTED MIRROR OF THE SESSION SKIP ABOVE, AND IT MUST STAY THE
+   * OPPOSITE. A state-free session whose filter rejected a window can be
+   * skipped: it owns no cursor, so the skipped window costs it nothing. A
+   * hosted processor cannot, and the empty frame is not a wasted round trip —
+   * it is the entire catch-up channel:
+   *
+   *  - Its runner is opened with `sourceScansAllEvents: true`
+   *    (stream-processor-registry.ts), which switches OFF the runner's own
+   *    journal pull. These frames are then the ONLY thing that carries
+   *    `scannedThroughOffset` across a filtered gap.
+   *  - A frame that reaches the head is what fires the runner's eventless
+   *    `processEvent({ event: null, delivery: { caughtUp: true } })` pass.
+   *    Withhold it and every obligation the processor opened strands on a
+   *    stream whose tail it does not consume — the late-agent regression.
+   *  - `scannedAfterOffset` must stay contiguous with what the processor has
+   *    acknowledged: the runner THROWS on
+   *    `scannedAfterOffset > committedThroughOffset`, so "skip the window and
+   *    resume after it" is not merely lossy, it fails the next delivery.
+   */
+  it("still hands a hosted processor the scan frame for a window its filter rejected", async () => {
+    const events = [
+      streamEvent(1, "events.example.com/ignored"),
+      streamEvent(2, "events.example.com/ignored"),
+      streamEvent(3, "events.example.com/ignored"),
+    ];
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/matching"] }),
+    });
+
+    connection.sendQueued();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.batch).toMatchObject({
+      events: [],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 3,
+      streamMaxOffset: 3,
+    });
+    // The watchdog rides an empty frame exactly as it rides a full one: the
+    // frame advances a durable cursor on the far side, so a vanished isolate
+    // must still recover as an expired attempt.
+    expect(h.store.get("processor")).toMatchObject({
+      inFlightDeadlineAt: 1_000 + DEFAULT_DELIVERY_TIMEOUT_MS,
+      inFlightConnectionGeneration: 7,
+    });
+
+    calls[0]!.report("ok");
+    await flushMicrotasks();
+    expect(h.store.get("processor")).toMatchObject({ inFlightDeadlineAt: null });
+
+    // And the frame AFTER an all-rejected one resumes exactly where that one
+    // scanned through — never after a gap the processor was never told about.
+    events.push(streamEvent(4, "events.example.com/ignored"));
+    h.state.maxOffset = 4;
+    connection.sendQueued();
+    await flushMicrotasks();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.batch).toMatchObject({
+      events: [],
+      scannedAfterOffset: 3,
+      scannedThroughOffset: 4,
+    });
+  });
+
   it("classifies a broken hosted callback capability as lifecycle unavailability", () => {
     const h = connectionsHarness();
     const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
