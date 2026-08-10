@@ -54,7 +54,12 @@ export async function signUpWithEmailOtp(
 ) {
   await page.getByTestId("email-input").fill(input.email);
   await page.getByTestId("email-submit-button").click();
-  await page.getByTestId("email-otp-input").fill("424242");
+  // The submit crosses an auth-server action before the OTP form mounts. Keep
+  // that navigation wait out of the global 1s action budget, then keep the
+  // actual fill under the normal budget once the durable UI boundary exists.
+  const emailOtpInput = page.getByTestId("email-otp-input");
+  await emailOtpInput.waitFor({ state: "visible", timeout: 15_000 });
+  await emailOtpInput.fill("424242");
   await page.getByTestId("email-verify-button").click({ timeout: 15_000 });
 
   // A brand-new user has no organization, so the OAuth post-login flow parks
