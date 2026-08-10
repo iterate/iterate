@@ -347,6 +347,48 @@ describe("StreamRpcTarget", () => {
     }
   });
 
+  it("replays a keyed root append once after an explicit Durable Object reset", async () => {
+    const reset = Object.assign(new Error("kill requested"), { durableObjectReset: true });
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      idempotencyKey: "human-approval-settled:41:0",
+      offset: 42,
+      path: "/",
+      payload: { approvalRequestEventOffset: 41, index: 0, status: 200 },
+      type: "events.iterate.com/project/human-approval-settled",
+    } satisfies StreamEvent;
+    const append = vi.fn().mockRejectedValueOnce(reset).mockResolvedValueOnce([event]);
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
+        return { append } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/",
+      projectId: "prj_test",
+    });
+
+    try {
+      await expect(
+        stream.append({
+          idempotencyKey: event.idempotencyKey,
+          payload: event.payload,
+          type: event.type,
+        }),
+      ).resolves.toEqual([event]);
+      expect(append).toHaveBeenCalledTimes(2);
+      expect(info).toHaveBeenCalledWith(
+        "keyed stream append retrying after Durable Object unavailability",
+        expect.objectContaining({ path: "/", projectId: "prj_test" }),
+      );
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it("re-acquires when a remote stream waiter is orphaned", async () => {
     vi.useFakeTimers();
     const firstWait = Promise.withResolvers<StreamEvent>();
