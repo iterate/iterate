@@ -1572,10 +1572,34 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
         expectedSetupId: setupId,
       };
       const warmStartedAt = Date.now();
-      await discardRpcResult(
-        stream.append({ type: "events.iterate.com/voice-agent/warmup", payload: { token } }),
-        "warm-up append result",
-      );
+      /*
+       * THE WAIT STARTS BEHIND THE QUESTION, and that is the whole repair.
+       *
+       * `waitForEvent` with no `afterOffset` watches from the head it finds
+       * when it opens — which is AFTER this append has returned, and by then a
+       * warm facet has already answered. MEASURED on preview-3: `warmup` at
+       * 16:04:11.970 and `warmup-ready` at 16:04:12.166, 196ms apart and both
+       * on the stream, while this call sat out its full 90-second deadline and
+       * reported `acknowledged=false`. A readiness probe that fails BECAUSE
+       * the processor was ready is worse than no probe: it cost most of a
+       * day's debugging, and the facet it condemned went on to hold a call for
+       * fifteen minutes.
+       *
+       * Anchoring the wait one offset behind the token's own commit makes the
+       * answer impossible to miss — it is replayed if it already landed — and
+       * costs nothing when the facet really is cold.
+       */
+      const warmupAppend = await stream.append({
+        type: "events.iterate.com/voice-agent/warmup",
+        payload: { token },
+      });
+      let waitAfterOffset = 0;
+      try {
+        const committed = warmupAppend.at(0);
+        waitAfterOffset = committed === undefined ? 0 : committed.offset - 1;
+      } finally {
+        disposeRpcStub(warmupAppend, "warm-up append result");
+      }
       try {
         /*
          * BOTH ANSWERS, so a failure is classified in milliseconds rather than
@@ -1584,6 +1608,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
          * setup on this long-lived stream must not satisfy or fail this one.
          */
         const answer = await stream.waitForEvent({
+          afterOffset: waitAfterOffset,
           eventTypes: [
             "events.iterate.com/voice-agent/warmup-ready",
             "events.iterate.com/voice-agent/warmup-unresolved",
@@ -2654,6 +2679,21 @@ export const VoiceAgentFacetContract = defineProcessorContract({
       description: "The facet woke for a warm-up but could not resolve its brief.",
       payloadSchema: z.looseObject({ token: z.string() }),
     },
+    /*
+     * WHERE THE IDLE COUNTDOWN GOT TO, on the stream, because from outside a
+     * loop that never ticks and a loop that ticks but never concludes are the
+     * same observation: no end requested. Durable on purpose — the whole point
+     * is to read it after fifteen minutes of nobody being connected.
+     */
+    "events.iterate.com/voice-agent/idle-countdown": {
+      description: "One step of the idle countdown: which lap, which phase, how idle.",
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+        phase: z.string(),
+        lap: z.number(),
+        idleForMs: z.number(),
+      }),
+    },
   },
   consumes: [
     "events.iterate.com/voice-agent/created",
@@ -2684,6 +2724,7 @@ export const VoiceAgentFacetContract = defineProcessorContract({
     "events.iterate.com/voice-agent/turn-timing",
     "events.iterate.com/voice-agent/warmup-ready",
     "events.iterate.com/voice-agent/warmup-unresolved",
+    "events.iterate.com/voice-agent/idle-countdown",
   ],
 });
 export type VoiceAgentFacetContract = typeof VoiceAgentFacetContract;
@@ -3229,12 +3270,22 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
        * THE OTHER HALF OF "EITHER SIDE". A ninety-second answer is the model
        * talking, and ageing the call out from under it would cut the reply off
        * mid-sentence; the provider's own turn edges and transcripts are the
-       * same conversation. xAI sends nothing on an idle session — it drops one
-       * after 900 seconds of quiet rather than pinging it — so there is no
-       * liveness traffic here to mistake for somebody speaking. Should that
-       * ever change, a keepalive event must be excluded by name.
+       * same conversation.
+       *
+       * BUT NOT ITS KEEPALIVE. This used to count every provider message and
+       * said in its own comment that "xAI sends nothing on an idle session".
+       * That was wrong: xAI sends a `ping` roughly every fifty seconds.
+       * Measured on preview, `lastSpokeAtMs` advanced every 50.002 s through
+       * a silence nobody was speaking into, so the sixty-second deadline was
+       * reset forever and the call ran until xAI's own 900 s inactivity
+       * timeout ended it — the deadline never fired once in fifteen minutes.
+       *
+       * The retiring bridge knew this and its own idle timeout excluded
+       * liveness pings by name, with the reason written down: a device
+       * pinging into an empty room is not a conversation. The same is true of
+       * a provider pinging into one.
        */
-      call.spoke();
+      if (provider.type !== "ping") call.spoke();
       /* The verbatim lane first, unconditionally — deltas included. */
       this.#forwardGrokEvent(call, provider as Record<string, unknown>, append);
       switch (provider.type) {
@@ -3544,16 +3595,22 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     call: GrokCall,
     append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
   ): Promise<void> {
+    let lap = 0;
+    this.#countdownStep(call, "entered", 0, append);
     while (!call.closed) {
+      lap += 1;
       const idleForMs = this.deps.now() - call.lastSpokeAtMs;
       if (idleForMs < IDLE_TIMEOUT_MS) {
         /* Racing `over` is what makes a call that ends by any other route —
          * a device's hang-up, a provider close, being superseded — release
          * this immediately instead of holding the object for the rest of the
          * minute it no longer has. */
+        this.#countdownStep(call, "sleeping", lap, append, IDLE_TIMEOUT_MS - idleForMs);
         await Promise.race([this.deps.sleep(IDLE_TIMEOUT_MS - idleForMs), call.over]);
+        this.#countdownStep(call, call.closed ? "woke-closed" : "woke", lap, append);
         continue;
       }
+      this.#countdownStep(call, "due", lap, append, idleForMs);
       try {
         await append({
           type: "events.iterate.com/voice-agent/conversation-end-requested",
@@ -3566,9 +3623,11 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         console.log(
           `voice call ${call.conversationId} idle end-request failed to append: ${String(error)}`,
         );
+        this.#countdownStep(call, `ask-failed: ${String(error).slice(0, 120)}`, lap, append);
         call.spoke();
         continue;
       }
+      this.#countdownStep(call, "asked", lap, append);
       /*
        * ASKED, NOT DONE. Settling now would release the keepalive between the
        * decision and the ending — the object could hibernate holding a socket
@@ -3578,6 +3637,31 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
        */
       await Promise.race([call.over, this.deps.sleep(IDLE_TIMEOUT_MS)]);
     }
+    this.#countdownStep(call, "released", lap, append);
+  }
+
+  /**
+   * Say on the stream where the countdown got to.
+   *
+   * Fire-and-forget on purpose: an instrument that can throw, block, or change
+   * the control flow it is measuring is not an instrument. Durable because the
+   * thing being measured is a stream nobody is connected to.
+   */
+  #countdownStep(
+    call: GrokCall,
+    phase: string,
+    lap: number,
+    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
+    idleForMs = this.deps.now() - call.lastSpokeAtMs,
+  ): void {
+    console.log(`voice call ${call.conversationId} countdown lap ${String(lap)}: ${phase}`);
+    void append({
+      type: "events.iterate.com/voice-agent/idle-countdown",
+      idempotencyKey: this.idempotencyKey(
+        `countdown:${call.conversationId}:${String(lap)}:${phase}`,
+      ),
+      payload: { conversationId: call.conversationId, phase, lap, idleForMs },
+    }).catch(() => undefined);
   }
 
   /**
