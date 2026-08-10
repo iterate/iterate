@@ -3268,8 +3268,6 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       children: {
         models: "List available models.",
         run: "Run one model invocation — for outputs the caller cannot produce itself (images, audio, transcription, bulk classification), not for text the caller will read or relay.",
-        aiSearch:
-          "Semantic search via a Cloudflare AI Search (AutoRAG) instance: aiSearch(instanceId, { query }). Deployments without an instance get Cloudflare's instance-not-found error.",
         toMarkdown:
           "Convert one document or an array of { name, blob } to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. Call with no args for supported formats. For emails and newsletters (mostly tracking links and giant base64 images), pass { conversionOptions: { output: { format: 'text' } } } to strip link targets and image URLs — often 10x smaller.",
       },
@@ -3304,20 +3302,6 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       body as Record<string, unknown>,
       merged as AiRunOptions | undefined,
     ) as Promise<T>;
-  }
-
-  /**
-   * Query a Cloudflare AI Search (AutoRAG) instance by id — semantic search
-   * over content the instance ingests (e.g. an R2 folder of images/docs;
-   * AI Search uses toMarkdown internally). Deployments without an instance
-   * get Cloudflare's own instance-not-found error — there is no local
-   * fallback here; callers (e.g. the userland MediaApp) degrade to keyword
-   * search. Reaches AI Search through the existing AI binding
-   * (env.AI.autorag — deprecated upstream in favor of a standalone binding;
-   * migrating is config-only and does not change this surface).
-   */
-  aiSearch(instance: string, params: { query: string }): Promise<unknown> {
-    return env.AI.autorag(instance).search(params as never) as Promise<unknown>;
   }
 
   /** Calling with no arguments lists the file formats the converter accepts. */

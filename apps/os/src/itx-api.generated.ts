@@ -370,17 +370,6 @@ export interface Ai {
    * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
    * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
-  /**
-   * Query a Cloudflare AI Search (AutoRAG) instance by id — semantic search
-   * over content the instance ingests (e.g. an R2 folder of images/docs;
-   * AI Search uses toMarkdown internally). Deployments without an instance
-   * get Cloudflare's own instance-not-found error — there is no local
-   * fallback here; callers (e.g. the userland MediaApp) degrade to keyword
-   * search. Reaches AI Search through the existing AI binding
-   * (env.AI.autorag — deprecated upstream in favor of a standalone binding;
-   * migrating is config-only and does not change this surface).
-   */
-  aiSearch(instance: string, params: { query: string }): Promise<unknown>;
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
   /** Convert one document (`{ name, blob }`) to Markdown — `blob` accepts

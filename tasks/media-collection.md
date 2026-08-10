@@ -63,10 +63,13 @@ below (worker-updated delivery latency to fresh project workers).
 
 ### D. Cloudflare AI Search (optional lane)
 
-- [x] tiny kernel passthrough: `itx.ai` gains the AI Search query surface
-      (same precedent as run/toMarkdown — the binding already reaches it;
-      no wrangler change), returning a clear "not configured" error when
-      the deployment has no instance
+- [x] ~~tiny kernel passthrough: `itx.ai` gains the AI Search query
+      surface~~ _added, then removed on Misha's call: a seam with no
+      instance to serve it is dead kernel surface. FOLLOWUP: when an AI
+      Search instance exists for a deployment (over the os-files R2 bucket,
+      per-project folder filter), re-add the one-method passthrough
+      (env.AI.autorag(id).search — note upstream deprecation in favor of a
+      standalone binding) and wire MediaApp.search to prefer it_
 - [~] MediaApp.search stays keyword-only for now — wiring untestable dead code against a nonexistent instance was worse than exposing the seam; scripts/agents can call itx.ai.aiSearch directly once an instance exists when configured, falls back to
       keyword-over-state; deployment setup documented (instance over the
       os-files R2 bucket, per-project folder filter) — creating instances
