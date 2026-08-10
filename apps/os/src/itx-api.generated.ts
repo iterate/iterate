@@ -885,10 +885,9 @@ export interface Files {
  * The SDK connection targets are thin dispatchers over the normal vendor
  * clients. A project extends the collection with ordinary
  * `provideCapability({ path: ["integrations", ...] })` — data, not deployment.
- * `completeConnect` is called by the app worker's
- * OAuth callback routes (/api/integrations/<provider>/callback); its
- * authority is the HMAC-signed OAuth state minted by startOAuthFlow,
- * verified itx-side.
+ * Native `completeConnect` calls are bound to this RPC target's authenticated
+ * user; browser callbacks use the same domain operation with their cookie
+ * session. Both re-verify the HMAC-signed state minted by startOAuthFlow.
  */
 export interface ProjectIntegrations {
   /** Slack WebClient connections. `get()` selects the first connected workspace. */
@@ -978,12 +977,10 @@ export interface ProjectIntegrations {
   startOAuthFlow(input: {
     callbackUrl?: string;
     provider: OAuthProviderSlug;
-    /** The user to bind the OAuth state to. Browser-supplied, not authority;
-     * the callback's check against the signed state is the backstop. */
-    userId: string;
   }): Promise<{ authorizationUrl: string }>;
-  /** Called by the app worker's OAuth callback route; authority is the
-   * HMAC-signed OAuth state minted by startOAuthFlow. */
+  /** Complete a native OAuth callback using this authenticated RPC session.
+   * Browser callbacks use the app worker route, which supplies its session
+   * identity directly to the same domain operation. */
   completeConnect(input: {
     /** OAuth authorization code (Slack/Google, or GitHub's proof callback). */
     code?: string;
@@ -991,7 +988,6 @@ export interface ProjectIntegrations {
     installationId?: string;
     provider: OAuthProviderSlug;
     state: string;
-    userId: string | null;
   }): Promise<CompleteConnectResult>;
   /** Move a GitHub installation after a signed, user-bound OAuth proof has
    * been returned to the dashboard for explicit confirmation. */

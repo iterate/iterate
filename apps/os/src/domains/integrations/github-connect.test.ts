@@ -43,6 +43,32 @@ describe("completeConnect (github App installation)", () => {
     vi.unstubAllGlobals();
   });
 
+  test("rejects completion without the initiating user's authenticated session", async () => {
+    const nativeState = await createOAuthState(
+      {
+        callbackUrl: "iterate://project/prj_test/integrations",
+        projectId: PROJECT_ID,
+        provider: "github",
+        userId: "user_1",
+      },
+      SECRET_ENCRYPTION_KEY,
+    );
+    await expect(
+      completeConnect({
+        config: testConfig(),
+        installationId: "789",
+        projectId: PROJECT_ID,
+        provider: "github",
+        state: nativeState,
+        userId: null,
+      }),
+    ).resolves.toEqual({
+      callbackUrl: "iterate://project/prj_test/integrations",
+      error: "github_oauth_user_mismatch",
+      ok: false,
+    });
+  });
+
   test("proves user access before claiming the installation", async () => {
     const state = await createOAuthState(
       { projectId: PROJECT_ID, provider: "github", userId: "user_1" },
