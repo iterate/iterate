@@ -35,6 +35,9 @@ import {
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const MATCHING_EVENT_TYPE = "events.iterate.test/subscriptions/matching";
 const OTHER_EVENT_TYPE = "events.iterate.test/subscriptions/other";
+const EPHEMERAL_FRAME_TYPE = "events.iterate.test/eph/live-frame";
+const DURABLE_POKE_TYPE = "events.iterate.test/eph/durable-poke";
+const SAW_TYPE = "events.iterate.test/eph/saw";
 
 /**
  * The default real-deployment test setup: one authenticated ITX session and
@@ -614,7 +617,7 @@ test("callback capabilities cross the worker proxy and disappear with their sess
         },
       },
     });
-    expect(await handle.connectionKey).toBe(connectionKey);
+    expect(await handle.ping()).toBe(true);
 
     await waitForCondition(
       async () => {
@@ -2014,7 +2017,7 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
     subscriptionConfigured({
       name: subscriptionName,
       receiver: {
-        action: "processor-wake",
+        action: "wake-processor",
         expression: ["schedulers", ["get", streamPath], "processor", "wakeStreamProcessor"],
       },
     }),
@@ -2390,7 +2393,7 @@ test.skipIf(deployedBaseUrl() === null)(
       subscriptionConfigured({
         name: subscriptionName,
         receiver: {
-          action: "processor-wake",
+          action: "wake-processor",
           expression: ["schedulers", ["get", streamPath], "processor", "wakeStreamProcessor"],
         },
       });
@@ -2511,7 +2514,7 @@ test("hosted delivery intersects the stored filter with the processor's announce
         eventTypes: ["events.iterate.com/scheduler/created", MATCHING_EVENT_TYPE],
       },
       receiver: {
-        action: "processor-wake",
+        action: "wake-processor",
         expression: ["schedulers", ["get", streamPath], "processor", "wakeStreamProcessor"],
       },
     }),
@@ -2594,8 +2597,8 @@ test("a facet-placed processor delivers in-process and serves snapshots through 
     subscriptionConfigured({
       name: subscriptionName,
       receiver: {
-        action: "processor-wake",
-        placement: "facet",
+        action: "facet-processor",
+        source: { kind: "builtin" },
       },
     }),
   );
@@ -2620,7 +2623,7 @@ test("a facet-placed processor delivers in-process and serves snapshots through 
     name: subscriptionName,
     status: "active",
     configuration: {
-      receiver: { action: "processor-wake", placement: "facet" },
+      receiver: { action: "facet-processor", source: { kind: "builtin" } },
     },
   });
 
@@ -2635,7 +2638,7 @@ test("a facet-placed processor delivers in-process and serves snapshots through 
     expect.arrayContaining([
       expect.objectContaining({
         name: subscriptionName,
-        action: "processor-wake",
+        action: "facet-processor",
         placement: "facet",
         status: "active",
       }),
@@ -3217,7 +3220,7 @@ test("invalid receiver-specific combinations and expressions never commit", asyn
       event: subscriptionConfigured({
         name: "agent",
         receiver: {
-          action: "processor-wake",
+          action: "wake-processor",
           expression: ["agents", ["get", `/agents/${marker}`], "processor", "wakeStreamProcessor"],
           jsonataTransform: "payload",
         },
@@ -3417,6 +3420,61 @@ test("commands on a missing subscription key fail without appending state", asyn
   expect(committedEvents.filter((event) => event.payload?.name === missingName)).toEqual([]);
 });
 
+test("an ephemeral event reaches a hosted processor that named its type", async () => {
+  const marker = crypto.randomUUID();
+  const { seen, stream } = await runEphemeralEcho(marker, [
+    EPHEMERAL_FRAME_TYPE,
+    DURABLE_POKE_TYPE,
+  ]);
+
+  await stream.append({ type: EPHEMERAL_FRAME_TYPE, ephemeral: true, payload: {} });
+  await waitForCondition(async () => (await seen()).includes(EPHEMERAL_FRAME_TYPE), {
+    description: "the ephemeral frame to reach the processor that named it",
+    timeoutMs: 60_000,
+  });
+});
+
+/*
+ * THE RULE THAT KEEPS TODAY'S BEHAVIOUR. Every processor in the repo consumes
+ * durable types or `"*"`; none names an ephemeral one. If `"*"` swept them in,
+ * all of them would start receiving live traffic they never asked for the
+ * moment this shipped. Naming the type is the opt-in, and this is the test
+ * that says so against a real deployment.
+ */
+test("a star-consuming hosted processor still receives no ephemeral events", async () => {
+  const marker = crypto.randomUUID();
+  const { seen, stream } = await runEphemeralEcho(marker, ["*"]);
+
+  await stream.append({ type: EPHEMERAL_FRAME_TYPE, ephemeral: true, payload: {} });
+  /* A second durable event AFTER it: once this arrives, the frame's offset has
+   * certainly been scanned past, so its absence is a decision and not a race. */
+  await stream.append({ type: DURABLE_POKE_TYPE, payload: {}, idempotencyKey: `after-${marker}` });
+  await waitForCondition(
+    async () => (await seen()).filter((t) => t === DURABLE_POKE_TYPE).length > 0,
+    {
+      description: "the trailing durable event to be recorded",
+      timeoutMs: 60_000,
+    },
+  );
+  expect(await seen()).not.toContain(EPHEMERAL_FRAME_TYPE);
+});
+
+/*
+ * DOES AN EPHEMERAL EVENT ACTUALLY REACH A HOSTED PROCESSOR?
+ *
+ * The unit tests could not answer this. They drive the connection API
+ * directly, which skips the wake — the stretch where the stream dials a
+ * userspace worker, gets a callback and an announcement back, and only then
+ * decides what that connection may see. A capability can look correct in every
+ * one of those tests and deliver nothing, and this one did.
+ *
+ * So these two build the real thing: a processor written as userspace code,
+ * committed to a project's config repo, built as a dynamic worker, woken by a
+ * subscription. The processor proves receipt by appending a DURABLE event,
+ * because an ephemeral one leaves no trace by design — which is exactly what
+ * made this unobservable in the first place.
+ */
+
 async function openTestProject(marker: string) {
   const resources = new DisposableStack();
   const session = resources.adopt(withItxSession(), disposeRpc);
@@ -3454,6 +3512,146 @@ type DeliveryPolicy = {
   start: "beginning" | "now";
   onFailingEvent: "halt" | "skip";
 };
+
+const ephemeralEchoSource = (consumes: string[]) => `
+import { IterateDurableObject, IterateWorkerEntrypoint, createProcessorHost } from "iterate/sdk";
+import { defineProcessorContract, StreamProcessor } from "iterate/processors";
+import { z } from "zod";
+
+export const EchoContract = defineProcessorContract({
+  slug: "eph-echo",
+  version: "1.0.0",
+  description: "Reports which events reached it.",
+  stateSchema: z.object({}),
+  events: {
+    "${EPHEMERAL_FRAME_TYPE}": {
+      description: "An ephemeral frame; never a durable stream fact.",
+      ephemeral: true,
+      payloadSchema: z.looseObject({}),
+    },
+    "${DURABLE_POKE_TYPE}": {
+      description: "An ordinary durable event.",
+      payloadSchema: z.looseObject({}),
+    },
+    "${SAW_TYPE}": {
+      description: "The processor's own record of what reached it.",
+      payloadSchema: z.object({ type: z.string() }),
+    },
+  },
+  consumes: ${JSON.stringify(consumes)},
+  emits: ["${SAW_TYPE}"],
+});
+
+class EchoProcessor extends StreamProcessor {
+  /* A PROPERTY, not a constructor argument: StreamProcessor declares
+   * \`abstract readonly contract\`, so passing it to super() lands it in deps
+   * and leaves this.contract undefined. And plain \`contract =\`, not
+   * \`readonly contract =\` — this source is JAVASCRIPT, and the TypeScript
+   * keyword fails the worker build with "Expected ; but found contract",
+   * which surfaces as a delivery-halted event rather than anything the test
+   * can see directly. */
+  contract = EchoContract;
+  reduce({ state }) { return state; }
+  processEvent({ event, append }) {
+    if (event === null) return;
+    append({
+      type: "${SAW_TYPE}",
+      idempotencyKey: "saw:" + event.type,
+      payload: { type: event.type },
+    });
+  }
+}
+
+export class EchoHost extends IterateDurableObject {
+  #host = createProcessorHost({
+    ctx: this.ctx,
+    env: this.env,
+    createProcessor: (deps) => new EchoProcessor(deps),
+  });
+  async alarm(alarmInfo) { await this.#host.handleAlarm(alarmInfo); }
+  get processor() { return this.#host.wakeProcessor; }
+}
+
+export default class EchoEntrypoint extends IterateWorkerEntrypoint {
+  async health() { return { ok: true }; }
+}
+`;
+
+/** Stand up the echo processor on its own stream and return what it recorded. */
+async function runEphemeralEcho(
+  marker: string,
+  consumes: string[],
+): Promise<{ seen: () => Promise<string[]>; stream: Stream }> {
+  const streamPath = `/eph/${marker.slice(0, 8)}`;
+  const testProject = await openTestProject(marker);
+  const { project } = testProject;
+  await project.repo.commitFiles({
+    changes: [{ content: ephemeralEchoSource(consumes), path: "eph-echo.js" }],
+    message: "A processor under ephemeral-delivery test",
+  });
+  const stream = project.streams.get(streamPath);
+  await stream.append(
+    subscriptionConfigured({
+      name: "eph-echo",
+      receiver: {
+        action: "wake-processor",
+        expression: [
+          "workers",
+          [
+            "get",
+            {
+              type: "stateful",
+              path: streamPath,
+              className: "EchoHost",
+              durableWorkerKey: "eph-echo",
+              source: {
+                createWorker: {
+                  entryPoint: "eph-echo.js",
+                  files: { type: "repo", repoPath: "/repos/config" },
+                },
+              },
+            },
+          ],
+          "processor",
+          "wakeStreamProcessor",
+        ],
+      },
+    }),
+  );
+
+  const seen = async () => {
+    const events = await stream.getEvents({ eventTypes: [SAW_TYPE] });
+    return events.map((event) => (event.payload as { type: string }).type);
+  };
+
+  /*
+   * NOT a wait for a live hosted connection, though that is the obvious
+   * barrier and it is wrong: the wake opens one, delivers, and closes it as
+   * idle within seconds, so polling `runtimeState` for a hosted connection
+   * races the close and times out on a stream that worked perfectly. What
+   * the processor RECORDED is the durable proof, and that is the barrier
+   * below — the only evidence an ephemeral event can leave.
+   */
+
+  /*
+   * A durable event first, and it is not ceremony: it forces the cold worker
+   * build and proves the processor is alive before anything ephemeral is
+   * appended. Without it, a missing frame could mean "not delivered" or "still
+   * compiling", and those need different fixes.
+   */
+  await stream.append({ type: DURABLE_POKE_TYPE, payload: {} });
+  /*
+   * A build failure in the committed worker surfaces HERE and nowhere else:
+   * it is not thrown at the caller, it lands on the stream as
+   * `subscription-delivery-halted` carrying the esbuild message. If this ever
+   * times out, read the stream — that event names the reason exactly.
+   */
+  await waitForCondition(async () => (await seen()).includes(DURABLE_POKE_TYPE), {
+    description: "the userspace processor to build and record a durable event",
+    timeoutMs: 90_000,
+  });
+  return { seen, stream };
+}
 
 function subscriptionConfigured(input: {
   name: string;
@@ -3497,7 +3695,8 @@ async function openAndCloseConnection(
 ): Promise<void> {
   const handle = await stream.openConnection(args);
   try {
-    await handle.connectionKey;
+    // Round-trip barrier: the open is fully live once the capability answers.
+    await handle.ping();
   } finally {
     await handle.close();
     disposeRpc(handle);

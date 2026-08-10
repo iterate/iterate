@@ -36,6 +36,16 @@ export const REQUIRED_SECRETS = [
 export const COMPATIBILITY_DATE = "2026-06-17";
 
 /**
+ * Bump `current` whenever the embedded StreamDurableObject cannot safely open
+ * storage written by the previous version. Deploys erase that Worker's DOs
+ * once before uploading the new version; unchanged deploys preserve them.
+ */
+export const STREAMS_EXAMPLE_STORAGE_VERSION = {
+  bindingName: "STREAMS_EXAMPLE_STORAGE_VERSION",
+  current: "1",
+} as const;
+
+/**
  * Env-shaping config that is NOT secret and already lives in envs.ts —
  * emitted as per-env `vars` so the worker's runtime base URL and auth issuer
  * can never drift from the envs.ts entry that names the worker.
@@ -44,6 +54,7 @@ export function envShapedVars(env: StreamsExampleEnv) {
   return {
     APP_CONFIG_BASE_URL: env.baseUrl,
     APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
+    [STREAMS_EXAMPLE_STORAGE_VERSION.bindingName]: STREAMS_EXAMPLE_STORAGE_VERSION.current,
   };
 }
 

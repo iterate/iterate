@@ -160,6 +160,173 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "idempotency key.\n",
   },
   {
+    path: "apps/example-agent/example-agent.ts",
+    content:
+      "// A minimal, self-contained example of the shape the platform's own\n" +
+      "// AgentProcessor has — written entirely in userspace and hosted as a FACET of\n" +
+      "// the stream it serves. It exists to show two things a real agent must get\n" +
+      "// right, in as little code as possible:\n" +
+      "//\n" +
+      "//   1. the OBLIGATION pattern — an event opens a \"must happen\" piece of work\n" +
+      "//      (here, produce a reply), a droppable background attempt does it, and the\n" +
+      "//      work is RESTARTED from committed stream state if the attempt is lost;\n" +
+      "//   2. RECOVERY — a facet has no alarm of its own, so the platform keeps a\n" +
+      "//      keepalive alarm on its behalf; an incarnation that dies mid-work is\n" +
+      "//      revived in a fresh one and the obligation still completes.\n" +
+      "//\n" +
+      "// A real agent's \"produce a reply\" is an LLM call; here it is a deliberate\n" +
+      "// delay, so the example needs no credentials and the recovery behaviour is the\n" +
+      "// only thing on show. See docs/writing-stream-processors.md for the full\n" +
+      "// doctrine this condenses.\n" +
+      "//\n" +
+      "// Kept intentionally minimal — a production obligation adds three things this\n" +
+      "// example omits so the recovery mechanics stay legible: an `expiresAt` on the\n" +
+      "// request so a revival long after the fact fails-closed instead of acting on a\n" +
+      "// stale intent; a single `…-settled` terminal event with a success/failure\n" +
+      "// result union (not a bare `…-produced`); and `this.idempotencyKey(...)` for\n" +
+      "// the settlement key. The doc's \"Staleness\" and \"obligation pattern\" sections\n" +
+      "// cover all three.\n" +
+      "//\n" +
+      "// To host it, a project configures one `facet-processor` subscription whose\n" +
+      "// `source` is `{ kind: \"userspace\", worker: <ref to this file's ExampleAgent> }`\n" +
+      "// (apps/os `example-agent-recovery.e2e.test.ts` does exactly that).\n" +
+      "\n" +
+      "import { StreamProcessorFacet, type ProcessorHostDeps } from \"iterate/sdk\";\n" +
+      "import {\n" +
+      "  defineProcessorContract,\n" +
+      "  StreamProcessor,\n" +
+      "  type ProcessEventArgs,\n" +
+      "  type ReduceArgs,\n" +
+      "} from \"iterate/processors\";\n" +
+      "import { z } from \"zod\";\n" +
+      "\n" +
+      "const PROMPT_RECEIVED = \"events.example/agent/prompt-received\";\n" +
+      "const REPLY_PRODUCED = \"events.example/agent/reply-produced\";\n" +
+      "\n" +
+      "export const ExampleAgentContract = defineProcessorContract({\n" +
+      "  slug: \"example-agent\",\n" +
+      "  version: \"1.0.0\",\n" +
+      "  description: \"Produces one reply per prompt via a slow, recovery-backed attempt.\",\n" +
+      "  // Reduced state is the whole source of truth: which prompts still owe a reply,\n" +
+      "  // and every reply produced. It survives eviction; the in-memory attempt does not.\n" +
+      "  stateSchema: z.object({\n" +
+      "    pending: z.array(z.object({ id: z.string(), text: z.string() })).default([]),\n" +
+      "    replies: z.array(z.object({ id: z.string(), reply: z.string() })).default([]),\n" +
+      "  }),\n" +
+      "  events: {\n" +
+      "    [PROMPT_RECEIVED]: {\n" +
+      "      description: \"Opens the obligation: this prompt now owes a reply.\",\n" +
+      "      payloadSchema: z.object({ id: z.string(), text: z.string() }),\n" +
+      "    },\n" +
+      "    [REPLY_PRODUCED]: {\n" +
+      "      description: \"Settles the obligation: the reply for this prompt.\",\n" +
+      "      payloadSchema: z.object({ id: z.string(), reply: z.string() }),\n" +
+      "    },\n" +
+      "  },\n" +
+      "  consumes: [PROMPT_RECEIVED, REPLY_PRODUCED],\n" +
+      "  emits: [REPLY_PRODUCED],\n" +
+      "});\n" +
+      "export type ExampleAgentContract = typeof ExampleAgentContract;\n" +
+      "\n" +
+      "class ExampleAgentProcessor extends StreamProcessor<ExampleAgentContract> {\n" +
+      "  readonly contract = ExampleAgentContract;\n" +
+      "\n" +
+      "  // The ids this incarnation is already generating a reply for. In-memory on\n" +
+      "  // purpose: an eviction empties it, and an empty live-set is precisely what\n" +
+      "  // makes the at-head pass below restart a reply that was lost mid-flight.\n" +
+      "  readonly #generating = new Set<string>();\n" +
+      "\n" +
+      "  protected override reduce({ state, event }: ReduceArgs<ExampleAgentContract>) {\n" +
+      "    if (event.type === PROMPT_RECEIVED) {\n" +
+      "      return { ...state, pending: [...state.pending, event.payload] };\n" +
+      "    }\n" +
+      "    // A produced reply closes its obligation: drop it from pending, record it.\n" +
+      "    return {\n" +
+      "      ...state,\n" +
+      "      pending: state.pending.filter((prompt) => prompt.id !== event.payload.id),\n" +
+      "      replies: [...state.replies, event.payload],\n" +
+      "    };\n" +
+      "  }\n" +
+      "\n" +
+      "  protected override processEvent({\n" +
+      "    state,\n" +
+      "    delivery,\n" +
+      "    append,\n" +
+      "    runInBackground,\n" +
+      "  }: ProcessEventArgs<ExampleAgentContract>): undefined {\n" +
+      "    // Act only from the at-head fold. Behind the head, `pending` may not yet\n" +
+      "    // have absorbed a reply that is already committed further up the stream, so\n" +
+      "    // starting here could generate a duplicate. This one guard is what makes\n" +
+      "    // the processor safe to replay, and it is also the recovery entry point:\n" +
+      "    // after a revival the runner calls this once with the whole fold and\n" +
+      "    // caughtUp: true.\n" +
+      "    if (!delivery.caughtUp) return;\n" +
+      "    for (const prompt of state.pending) {\n" +
+      "      if (this.#generating.has(prompt.id)) continue; // already handled this incarnation\n" +
+      "      this.#generating.add(prompt.id);\n" +
+      "      // A DROPPABLE attempt: the checkpoint advances now and an eviction loses\n" +
+      "      // this closure silently. That is fine because the obligation is recovered\n" +
+      "      // from `pending` above — this same branch restarts it. The reply's stable\n" +
+      "      // idempotency key makes the restart converge (a redelivered reply dedupes).\n" +
+      "      runInBackground(async () => {\n" +
+      "        try {\n" +
+      "          const reply = await generateReply(prompt.text);\n" +
+      "          await append({\n" +
+      "            type: REPLY_PRODUCED,\n" +
+      "            idempotencyKey: `reply@${prompt.id}`,\n" +
+      "            payload: { id: prompt.id, reply },\n" +
+      "          });\n" +
+      "        } finally {\n" +
+      "          this.#generating.delete(prompt.id);\n" +
+      "        }\n" +
+      "      });\n" +
+      "    }\n" +
+      "  }\n" +
+      "}\n" +
+      "\n" +
+      "/**\n" +
+      " * Stand in for the slow, must-complete work a real agent does (an LLM call).\n" +
+      " * The delay is the whole point of the example: kill the host while it is\n" +
+      " * running and the reply still lands, because recovery restarts the attempt.\n" +
+      " */\n" +
+      "async function generateReply(text: string): Promise<string> {\n" +
+      "  await new Promise((resolve) => setTimeout(resolve, 8_000));\n" +
+      "  return `Reply to: ${text}`;\n" +
+      "}\n" +
+      "\n" +
+      "/**\n" +
+      " * The hosted facet. A subclass writes only how to build its processor (and that\n" +
+      " * it owes background work, so `recovery` is on); the `StreamProcessorFacet` base\n" +
+      " * supplies the rest — the itx-proxied keepalive alarm, the stream handle, and\n" +
+      " * the configure/wake/handleAlarm wiring. The SAME processor would run as its own\n" +
+      " * Durable Object by extending `StreamProcessorDurableObject` instead.\n" +
+      " */\n" +
+      "export class ExampleAgent extends StreamProcessorFacet {\n" +
+      "  protected override readonly recovery = true;\n" +
+      "  protected override createProcessor(deps: ProcessorHostDeps) {\n" +
+      "    return new ExampleAgentProcessor(deps);\n" +
+      "  }\n" +
+      "}\n",
+  },
+  {
+    path: "apps/example-agent/tsconfig.json",
+    content:
+      "{\n" +
+      "  \"compilerOptions\": {\n" +
+      "    \"target\": \"ES2024\",\n" +
+      "    \"module\": \"ESNext\",\n" +
+      "    \"moduleResolution\": \"bundler\",\n" +
+      "    \"strict\": true,\n" +
+      "    \"noEmit\": true,\n" +
+      "    \"skipLibCheck\": true,\n" +
+      "    \"allowImportingTsExtensions\": true,\n" +
+      "    \"lib\": [\"ES2024\", \"ESNext.Disposable\"],\n" +
+      "    \"types\": [\"@cloudflare/workers-types\"]\n" +
+      "  },\n" +
+      "  \"include\": [\"*.ts\"]\n" +
+      "}\n",
+  },
+  {
     path: "apps/guestbook/client.tsx",
     content:
       "// Temporary source-upgrade bridge paired with server.tsx. It keeps an old\n" +

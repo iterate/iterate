@@ -1,6 +1,7 @@
 import { isIdempotencyConflict, StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs, StreamEvent } from "iterate/processors";
 import { inferJsonType } from "../../lib/infer-json-type.ts";
+import { stringifyScriptResult, truncateScriptResult } from "../../lib/script-result-render.ts";
 import { previewJson } from "../../lib/truncate-json.ts";
 import { INLINE_RESULT_PREAMBLE_LIMIT } from "../capability-host/capability-host-preamble.ts";
 import {
@@ -16,7 +17,12 @@ import {
   reduceAgentEvent,
   type AgentChatMessage,
 } from "./agent-prompt-fold.ts";
-import { resolveSlashCommand, SLASH_COMMAND_EXECUTION_PREFIX } from "./slash-commands.ts";
+import {
+  buildSlashCommandCode,
+  resolveSlashCommand,
+  SCRIPT_SLASH_COMMAND_EXECUTION_PREFIX,
+  SLASH_COMMAND_EXECUTION_PREFIX,
+} from "./slash-commands.ts";
 import {
   extractChunkText,
   jsonCompatible,
@@ -147,7 +153,8 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   //   use `runInBackground`: a lost attempt is re-derived by ANY later
   //   delivery over the same reduced state, so nothing needs to hold the cursor.
   protected override processEvent(args: ProcessEventArgs<AgentProcessorContract>): undefined {
-    const { event, state, blockProcessorWhile, runInBackground, append, delivery } = args;
+    const { event, previousState, state, blockProcessorWhile, runInBackground, append, delivery } =
+      args;
 
     switch (event?.type) {
       case "events.iterate.com/agents/web-message-sent": {
@@ -209,13 +216,14 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         if (payload.role === "user") {
           const slashCommand = resolveSlashCommand(payload.content);
           if (slashCommand !== null) {
+            const executionId = `${SLASH_COMMAND_EXECUTION_PREFIX}${slashCommand.command}:${event.offset}`;
             blockProcessorWhile(() =>
               this.#appendUnlessLostIdempotencyRace(append, [
                 {
                   type: "events.iterate.com/capability-host/script-run-requested",
                   payload: {
-                    code: slashCommand.code,
-                    executionId: `${SLASH_COMMAND_EXECUTION_PREFIX}${event.offset}`,
+                    code: buildSlashCommandCode(slashCommand, executionId),
+                    executionId,
                     expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
                   },
                   idempotencyKey: this.idempotencyKey(`slash-command@${event.offset}`),
@@ -382,9 +390,16 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       }
       case "events.iterate.com/capability-host/script-run-settled": {
         const { executionId, settlement } = event.payload;
+        // Settlement reduction removes the execution from `state`, so inspect
+        // the immediately preceding projection. Only a request provenance-
+        // stamped by this agent processor can enter that active set.
+        if (!previousState.activeScriptExecutionIds.includes(executionId)) break;
+        // `/script` publishes its successful result directly as interruptive
+        // context, then returns the same value so the capability host keeps it
+        // in the script-results preamble. Only its failures render here.
         if (
-          !executionId.startsWith("agent-output:") &&
-          !executionId.startsWith(SLASH_COMMAND_EXECUTION_PREFIX)
+          executionId.startsWith(SCRIPT_SLASH_COMMAND_EXECUTION_PREFIX) &&
+          settlement.status === "succeeded"
         ) {
           break;
         }
@@ -1354,25 +1369,6 @@ async function renderScriptSettlement(input: {
     }
   }
   return `Your script returned:\n${fence}\n${truncateScriptResult(text, historyLimit)}\n\`\`\`${preambleNote}`;
-}
-
-function stringifyScriptResult(result: unknown): string {
-  // A returned string renders as itself: JSON.stringify would escape every
-  // newline and quote, turning a fetched page or file into one unreadable
-  // escaped line the model pays to mentally unescape (seen live: an 8.8KB
-  // worker.ts as a single escape-riddled JSON string). Non-strings keep the
-  // pretty-printed JSON shape.
-  if (typeof result === "string") return result;
-  try {
-    return JSON.stringify(result, null, 2) ?? String(result);
-  } catch {
-    return String(result);
-  }
-}
-
-function truncateScriptResult(text: string, historyLimit: number): string {
-  if (text.length <= historyLimit) return text;
-  return `${text.slice(0, historyLimit)}\n… truncated (${text.length} chars total; up to ${historyLimit} render inline — return less: slice arrays, pick fields)`;
 }
 
 /**

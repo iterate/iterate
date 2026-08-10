@@ -41,22 +41,31 @@ export function buildFacetProcessorSubscriptionConfiguredEvent(input: {
     payload: {
       name: input.name,
       receiver: {
-        action: "processor-wake",
-        placement: "facet",
+        action: "facet-processor",
+        source: { kind: "builtin" },
       },
     } satisfies SubscriptionConfiguredPayload,
   });
 }
 
+/** Stable across Workers RPC, which does not preserve custom error classes. */
+const UNCONFIGURED_SUBSCRIPTION_ERROR_PREFIX = "stream-subscription-unconfigured: ";
+
+/** Build the Stream DO refusal for a processor name absent from its committed catalog. */
+export function unconfiguredSubscriptionError(name: string): Error {
+  return new Error(
+    `${UNCONFIGURED_SUBSCRIPTION_ERROR_PREFIX}subscription ${JSON.stringify(name)} does not exist`,
+  );
+}
+
 /**
  * The Stream DO's processor doors refuse a name the committed catalog does not
- * configure — a read must never MATERIALIZE a facet (`ctx.facets.get` creates
- * one on first dial). Domain doors that read a fold BEFORE its birth batch
- * commits (a secret's create-time offset probe, a device's pre-enrollment
- * read, an unborn project's catalog) use this to substitute the unborn shape
- * the facade used to fabricate. Matched on the message because this crosses a
- * Workers RPC hop, which does not carry error classes.
+ * configure — a read must never materialize a facet (`ctx.facets.get` creates
+ * one on first dial). Selected domain reads classify that refusal and answer
+ * with the processor contract's initial fold while preserving every other
+ * error. The owned prefix prevents unrelated "does not exist" errors from
+ * being mistaken for this condition across Workers RPC.
  */
 export function isUnconfiguredSubscriptionError(error: unknown): boolean {
-  return error instanceof Error && /^subscription ".*" does not exist$/.test(error.message);
+  return error instanceof Error && error.message.startsWith(UNCONFIGURED_SUBSCRIPTION_ERROR_PREFIX);
 }

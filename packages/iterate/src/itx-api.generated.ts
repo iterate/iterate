@@ -78,6 +78,7 @@ export interface Session {
  * host, chaining up to the project root.
  */
 export interface Project {
+  [Symbol.dispose](): void;
   /** The project this itx is scoped into. */
   projectId: string;
   /**
@@ -185,6 +186,8 @@ export interface Project {
   streams: ProjectStreamCollection;
   /** Agent catalog: get(path), list(). */
   agents: AgentCollection;
+  /** Connected clients: the project processor's catalog plus each scope's capability host. */
+  clients: Clients;
   /** Project-attributed outbound fetch (+ intercept). */
   egress: ProjectEgress;
   /** Project email: send(...) and the connection-scoped inbound address. */
@@ -267,6 +270,34 @@ export interface ProjectCollection {
    * on the resolved id — the access check runs on the id, never the raw input.
    */
   get(idOrSlug: string): Promise<Project>;
+  /**
+   * `get` plus presence: connect as a project CLIENT. A client is nothing
+   * platform-specific — it is a capability-host scope at the caller-chosen
+   * `path` (e.g. `"/clients/desk-robot"`; encode a tab id or device serial in
+   * the path if you want several). Connect appends the scope's idempotent
+   * birth batch (reconnecting dedupes to a no-op) plus one narrow copy
+   * subscription that sends the scope's provider connect/disconnect facts to
+   * the project root, where the project processor reduces the clients
+   * catalog (`itx.clients.list()`). When `capabilities` is passed, it is
+   * provided as a LIVE capability mounted at `capabilities` on the scope —
+   * the shipped capability machinery holds it behind a hibernating Provider
+   * Pager (no pinned Durable Objects), journals the provision, and journals
+   * the disconnect when this session's socket dies; the mount is retired
+   * with it. Callers invoke it through the scope's capability host:
+   * `itx.clients.get(path).capabilities.browser.navigate(url)`.
+   * Returns the project itx, exactly like `get`.
+   */
+  connect(
+    idOrSlug: string,
+    opts: {
+      /** The client's identity: an absolute stream path, e.g. "/clients/chrome". */
+      path: string;
+      /** Human label for this client; journals as the provision's instructions. */
+      description: string;
+      /** Live capabilities target (an RpcTarget or plain object in the caller's process). */
+      capabilities?: unknown;
+    },
+  ): Promise<Project>;
   /**
    * The session's projects, enriched: identity (id/slug/org) from the auth
    * claims or the project directory, deployment status from a concurrent
@@ -667,6 +698,28 @@ export interface AgentCollection {
   get(path: string): Agent;
   /** Known agents, read from the collection processor's reduced database. */
   list(): Promise<StreamListItem[]>;
+}
+
+/**
+ * Connected clients within one project (`itx.clients`). A client is a
+ * capability-host scope — typically under `/clients/**` — that
+ * `projects.connect` provided a live capability to; nothing client-specific
+ * exists at the platform layer. The birth batch every connect appends
+ * configures a narrow copy subscription sending the scope's
+ * `capability-provider-pager-connected` / `-disconnected` facts to the
+ * project root, where the project processor reduces the clients catalog
+ * (`list()`). Presence is last-known but honest: the platform journals the
+ * disconnect when the provider's Pager socket dies. `get(path)` returns the
+ * scope's capability host — `get(path).capabilities.browser.navigate(url)`
+ * invokes the live capability mounted there through the shipped capability
+ * machinery (hibernating Provider Pager, no pinned Durable Objects).
+ */
+export interface Clients {
+  __describe(): Promise<Description>;
+  /** The client scope's capability host — the full shipped surface, no wrapper. */
+  get(path: string): CapabilityHost;
+  /** Known clients, read from the project processor's reduced catalog. */
+  list(): Promise<ProjectClientListItem[]>;
 }
 
 /**
@@ -1327,6 +1380,13 @@ export interface Stream {
   liveState: LiveStateRpc<StreamRuntimeDebugState>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
+  /** Arm the stream's shared facet-alarm slot, min-merged to the earliest desired ms. */
+  proxySetAlarm(scheduledTimeMs: number): Promise<void>;
+  /** Clear a facet's alarm desire (a no-op on the shared slot: no per-facet
+   * identity, and one spurious level-triggered fire is harmless). */
+  proxyDeleteAlarm(): Promise<void>;
+  /** The shared facet-alarm slot's currently desired fire time, or null. */
+  proxyGetAlarm(): Promise<number | null>;
   /**
    * Open one session-owned callback connection to this stream.
    *
@@ -2097,6 +2157,16 @@ export type ProjectProcessorState = {
   repos: { createdAt: string; path: string }[];
   secrets: { createdAt: string; path: string }[];
   streams: { createdAt: string; path: string }[];
+  clients: Record<
+    string,
+    {
+      path: string;
+      connected: boolean;
+      lastConnectedAt: string;
+      lastDisconnectedAt?: string | undefined;
+      connectedAtOffsets: number[];
+    }
+  >;
   customDomains: { hostname: string; kind: "cloudflare" | "direct" }[];
   egressRules: {
     ruleKey: string;
@@ -2897,6 +2967,14 @@ export type AgentCollectionProcessorState = {
   waitingForSinceOffsets: Record<string, number>;
 };
 
+/** What `itx.clients.list()` returns per client: the catalog record minus reducer bookkeeping. */
+export type ProjectClientListItem = {
+  path: string;
+  connected: boolean;
+  lastConnectedAt: string;
+  lastDisconnectedAt?: string | undefined;
+};
+
 /**
  * What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned
  * to `Promise<unknown>` ahead of the ambient signature. Pinned because the
@@ -3547,14 +3625,20 @@ export type SubscriptionConfigurationForDelivery = {
     };
     receiver:
       | {
-          action: "processor-wake";
-          /** `"facet"`: the processor runs as a facet of the stream's own
-           * Durable Object (the subscription name IS the facet name and the
-           * registered contract slug; no expression). Omitted: the wake dials
-           * `expression` as before. Either way the subscription NAME selects
-           * which registered contract runs. */
-          placement?: "facet";
-          expression?: Array<string | [method: string, ...args: unknown[]]>;
+          /** The processor runs as a facet of the stream's own Durable Object:
+           * the subscription NAME is the facet name and the registered-contract
+           * selector; delivery is an in-process parent→facet dial (no wake
+           * lane). `source` chooses the class — `builtin` (resolved by the
+           * stream's path-family registration) or `userspace` (the DurableObject
+           * class is loaded from `worker` and hosted as a facet). */
+          action: "facet-processor";
+          source: { kind: "builtin" } | { kind: "userspace"; worker: StatefulDynamicWorkerRef };
+        }
+      | {
+          /** The processor runs in ANOTHER Durable Object, woken by dialing this
+           * itx expression (own-DO or userspace-worker placement). */
+          action: "wake-processor";
+          expression: Array<string | [method: string, ...args: unknown[]]>;
         }
       | {
           action: "copy-to-stream";
@@ -3821,10 +3905,142 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
         | undefined;
       receiver:
         | {
-            action: "processor-wake";
-            placement?: "facet" | undefined;
-            expression?: ItxExpression | undefined;
+            action: "facet-processor";
+            source:
+              | { kind: "builtin" }
+              | {
+                  kind: "userspace";
+                  worker: {
+                    path: string;
+                    source:
+                      | {
+                          createApp: {
+                            bundle?: boolean | undefined;
+                            conditions?: string[] | undefined;
+                            define?: Record<string, string> | undefined;
+                            externals?: string[] | undefined;
+                            jsx?: "automatic" | "preserve" | "transform" | undefined;
+                            jsxImportSource?: string | undefined;
+                            loader?:
+                              | Record<
+                                  string,
+                                  | "base64"
+                                  | "binary"
+                                  | "css"
+                                  | "dataurl"
+                                  | "js"
+                                  | "json"
+                                  | "jsx"
+                                  | "text"
+                                  | "ts"
+                                  | "tsx"
+                                >
+                              | undefined;
+                            minify?: boolean | undefined;
+                            registry?: string | undefined;
+                            sourcemap?: boolean | undefined;
+                            target?: string | undefined;
+                            assetConfig?:
+                              | {
+                                  headers?:
+                                    | Record<
+                                        string,
+                                        {
+                                          set?: Record<string, string> | undefined;
+                                          unset?: string[] | undefined;
+                                        }
+                                      >
+                                    | undefined;
+                                  html_handling?:
+                                    | "auto-trailing-slash"
+                                    | "drop-trailing-slash"
+                                    | "force-trailing-slash"
+                                    | "none"
+                                    | undefined;
+                                  not_found_handling?:
+                                    | "404-page"
+                                    | "none"
+                                    | "single-page-application"
+                                    | undefined;
+                                  redirects?:
+                                    | {
+                                        dynamic?:
+                                          | Record<string, { status: number; to: string }>
+                                          | undefined;
+                                        static?:
+                                          | Record<string, { status: number; to: string }>
+                                          | undefined;
+                                      }
+                                    | undefined;
+                                }
+                              | undefined;
+                            assets?: Record<string, string> | undefined;
+                            client?: string | string[] | undefined;
+                            files:
+                              | { files: Record<string, string>; type: "inline" }
+                              | {
+                                  exclude?: string[] | undefined;
+                                  include?: string[] | undefined;
+                                  ref?:
+                                    | { branch: string }
+                                    | { branch?: string | undefined; commitOid: string }
+                                    | undefined;
+                                  repoPath: string;
+                                  type: "repo";
+                                };
+                            server?: string | undefined;
+                          };
+                        }
+                      | {
+                          createWorker: {
+                            bundle?: boolean | undefined;
+                            conditions?: string[] | undefined;
+                            define?: Record<string, string> | undefined;
+                            externals?: string[] | undefined;
+                            jsx?: "automatic" | "preserve" | "transform" | undefined;
+                            jsxImportSource?: string | undefined;
+                            loader?:
+                              | Record<
+                                  string,
+                                  | "base64"
+                                  | "binary"
+                                  | "css"
+                                  | "dataurl"
+                                  | "js"
+                                  | "json"
+                                  | "jsx"
+                                  | "text"
+                                  | "ts"
+                                  | "tsx"
+                                >
+                              | undefined;
+                            minify?: boolean | undefined;
+                            registry?: string | undefined;
+                            sourcemap?: boolean | undefined;
+                            target?: string | undefined;
+                            entryPoint?: string | undefined;
+                            files:
+                              | { files: Record<string, string>; type: "inline" }
+                              | {
+                                  exclude?: string[] | undefined;
+                                  include?: string[] | undefined;
+                                  ref?:
+                                    | { branch: string }
+                                    | { branch?: string | undefined; commitOid: string }
+                                    | undefined;
+                                  repoPath: string;
+                                  type: "repo";
+                                };
+                            virtualModules?: Record<string, string> | undefined;
+                          };
+                        };
+                    className: string;
+                    durableWorkerKey: string;
+                    type: "stateful";
+                  };
+                };
           }
+        | { action: "wake-processor"; expression: ItxExpression }
         | {
             action: "copy-to-stream";
             receivingStreamPath: string;
@@ -3853,10 +4069,142 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
         | undefined;
       receiver:
         | {
-            action: "processor-wake";
-            placement?: "facet" | undefined;
-            expression?: ItxExpression | undefined;
+            action: "facet-processor";
+            source:
+              | { kind: "builtin" }
+              | {
+                  kind: "userspace";
+                  worker: {
+                    path: string;
+                    source:
+                      | {
+                          createApp: {
+                            bundle?: boolean | undefined;
+                            conditions?: string[] | undefined;
+                            define?: Record<string, string> | undefined;
+                            externals?: string[] | undefined;
+                            jsx?: "automatic" | "preserve" | "transform" | undefined;
+                            jsxImportSource?: string | undefined;
+                            loader?:
+                              | Record<
+                                  string,
+                                  | "base64"
+                                  | "binary"
+                                  | "css"
+                                  | "dataurl"
+                                  | "js"
+                                  | "json"
+                                  | "jsx"
+                                  | "text"
+                                  | "ts"
+                                  | "tsx"
+                                >
+                              | undefined;
+                            minify?: boolean | undefined;
+                            registry?: string | undefined;
+                            sourcemap?: boolean | undefined;
+                            target?: string | undefined;
+                            assetConfig?:
+                              | {
+                                  headers?:
+                                    | Record<
+                                        string,
+                                        {
+                                          set?: Record<string, string> | undefined;
+                                          unset?: string[] | undefined;
+                                        }
+                                      >
+                                    | undefined;
+                                  html_handling?:
+                                    | "auto-trailing-slash"
+                                    | "drop-trailing-slash"
+                                    | "force-trailing-slash"
+                                    | "none"
+                                    | undefined;
+                                  not_found_handling?:
+                                    | "404-page"
+                                    | "none"
+                                    | "single-page-application"
+                                    | undefined;
+                                  redirects?:
+                                    | {
+                                        dynamic?:
+                                          | Record<string, { status: number; to: string }>
+                                          | undefined;
+                                        static?:
+                                          | Record<string, { status: number; to: string }>
+                                          | undefined;
+                                      }
+                                    | undefined;
+                                }
+                              | undefined;
+                            assets?: Record<string, string> | undefined;
+                            client?: string | string[] | undefined;
+                            files:
+                              | { files: Record<string, string>; type: "inline" }
+                              | {
+                                  exclude?: string[] | undefined;
+                                  include?: string[] | undefined;
+                                  ref?:
+                                    | { branch: string }
+                                    | { branch?: string | undefined; commitOid: string }
+                                    | undefined;
+                                  repoPath: string;
+                                  type: "repo";
+                                };
+                            server?: string | undefined;
+                          };
+                        }
+                      | {
+                          createWorker: {
+                            bundle?: boolean | undefined;
+                            conditions?: string[] | undefined;
+                            define?: Record<string, string> | undefined;
+                            externals?: string[] | undefined;
+                            jsx?: "automatic" | "preserve" | "transform" | undefined;
+                            jsxImportSource?: string | undefined;
+                            loader?:
+                              | Record<
+                                  string,
+                                  | "base64"
+                                  | "binary"
+                                  | "css"
+                                  | "dataurl"
+                                  | "js"
+                                  | "json"
+                                  | "jsx"
+                                  | "text"
+                                  | "ts"
+                                  | "tsx"
+                                >
+                              | undefined;
+                            minify?: boolean | undefined;
+                            registry?: string | undefined;
+                            sourcemap?: boolean | undefined;
+                            target?: string | undefined;
+                            entryPoint?: string | undefined;
+                            files:
+                              | { files: Record<string, string>; type: "inline" }
+                              | {
+                                  exclude?: string[] | undefined;
+                                  include?: string[] | undefined;
+                                  ref?:
+                                    | { branch: string }
+                                    | { branch?: string | undefined; commitOid: string }
+                                    | undefined;
+                                  repoPath: string;
+                                  type: "repo";
+                                };
+                            virtualModules?: Record<string, string> | undefined;
+                          };
+                        };
+                    className: string;
+                    durableWorkerKey: string;
+                    type: "stateful";
+                  };
+                };
           }
+        | { action: "wake-processor"; expression: ItxExpression }
         | {
             action: "copy-to-stream";
             receivingStreamPath: string;
@@ -4411,10 +4759,119 @@ export type CoreProcessorState = {
               | undefined;
             receiver:
               | {
-                  action: "processor-wake";
-                  placement?: "facet" | undefined;
-                  expression?: ItxExpression | undefined;
+                  action: "facet-processor";
+                  source:
+                    | { kind: "builtin" }
+                    | {
+                        kind: "userspace";
+                        worker: {
+                          path: string;
+                          source:
+                            | {
+                                createApp: {
+                                  bundle?: boolean | undefined;
+                                  conditions?: string[] | undefined;
+                                  define?: Record<string, string> | undefined;
+                                  externals?: string[] | undefined;
+                                  jsx?: "automatic" | "preserve" | "transform" | undefined;
+                                  jsxImportSource?: string | undefined;
+                                  loader?:
+                                    | Record<
+                                        string,
+                                        | "base64"
+                                        | "binary"
+                                        | "css"
+                                        | "dataurl"
+                                        | "js"
+                                        | "json"
+                                        | "jsx"
+                                        | "text"
+                                        | "ts"
+                                        | "tsx"
+                                      >
+                                    | undefined;
+                                  minify?: boolean | undefined;
+                                  registry?: string | undefined;
+                                  sourcemap?: boolean | undefined;
+                                  target?: string | undefined;
+                                  assetConfig?:
+                                    | {
+                                        headers?: Record<string, any> | undefined;
+                                        html_handling?:
+                                          | "auto-trailing-slash"
+                                          | "drop-trailing-slash"
+                                          | "force-trailing-slash"
+                                          | "none"
+                                          | undefined;
+                                        not_found_handling?:
+                                          | "404-page"
+                                          | "none"
+                                          | "single-page-application"
+                                          | undefined;
+                                        redirects?: any | undefined;
+                                      }
+                                    | undefined;
+                                  assets?: Record<string, string> | undefined;
+                                  client?: string | string[] | undefined;
+                                  files:
+                                    | { files: Record<string, string>; type: "inline" }
+                                    | {
+                                        exclude?: string[] | undefined;
+                                        include?: string[] | undefined;
+                                        ref?: any | any | undefined;
+                                        repoPath: string;
+                                        type: "repo";
+                                      };
+                                  server?: string | undefined;
+                                };
+                              }
+                            | {
+                                createWorker: {
+                                  bundle?: boolean | undefined;
+                                  conditions?: string[] | undefined;
+                                  define?: Record<string, string> | undefined;
+                                  externals?: string[] | undefined;
+                                  jsx?: "automatic" | "preserve" | "transform" | undefined;
+                                  jsxImportSource?: string | undefined;
+                                  loader?:
+                                    | Record<
+                                        string,
+                                        | "base64"
+                                        | "binary"
+                                        | "css"
+                                        | "dataurl"
+                                        | "js"
+                                        | "json"
+                                        | "jsx"
+                                        | "text"
+                                        | "ts"
+                                        | "tsx"
+                                      >
+                                    | undefined;
+                                  minify?: boolean | undefined;
+                                  registry?: string | undefined;
+                                  sourcemap?: boolean | undefined;
+                                  target?: string | undefined;
+                                  entryPoint?: string | undefined;
+                                  files:
+                                    | { files: Record<string, string>; type: "inline" }
+                                    | {
+                                        exclude?: string[] | undefined;
+                                        include?: string[] | undefined;
+                                        ref?: any | any | undefined;
+                                        repoPath: string;
+                                        type: "repo";
+                                      };
+                                  virtualModules?: Record<string, string> | undefined;
+                                };
+                              };
+                          className: string;
+                          durableWorkerKey: string;
+                          type: "stateful";
+                        };
+                      };
                 }
+              | { action: "wake-processor"; expression: ItxExpression }
               | {
                   action: "copy-to-stream";
                   receivingStreamPath: string;

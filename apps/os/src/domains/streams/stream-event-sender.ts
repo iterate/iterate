@@ -200,7 +200,7 @@ function initialCursor(start: SubscriptionStart, configuredEventOffset: number):
  * copy, ITX-call, and webhook rows start where their delivery policy says.
  */
 function initialCursorFor(config: SubscriptionConfiguredPayload, configOffset: number): number {
-  return config.receiver.action === "processor-wake"
+  return config.receiver.action === "facet-processor" || config.receiver.action === "wake-processor"
     ? 0
     : initialCursor(config.receiver.delivery.start, configOffset);
 }
@@ -258,7 +258,7 @@ export type SubscriptionRuntimeState = {
 export type SubscriptionReceiverCalls = {
   /** Start or revive a hosted processor and retain its returned callback. */
   wakeStreamProcessor(
-    receiver: Extract<SubscriptionReceiver, { action: "processor-wake" }>,
+    receiver: Extract<SubscriptionReceiver, { action: "facet-processor" | "wake-processor" }>,
     request: StreamProcessorWakeRequest,
     expectedDelivery: ExpectedHostedDeliveryState,
   ): Promise<RetainedProcessorWakeResponse>;
@@ -515,7 +515,8 @@ export class StreamEventSender {
       let row = this.#hooks.store.get(name);
       if (
         entry.cursorSet !== undefined &&
-        config.receiver.action !== "processor-wake" &&
+        config.receiver.action !== "facet-processor" &&
+        config.receiver.action !== "wake-processor" &&
         row !== undefined &&
         row.cursorChangedAtOffset < entry.cursorSet.setAtSourceOffset
       ) {
@@ -545,7 +546,10 @@ export class StreamEventSender {
         continue;
       }
       if (row.nextAttemptAt !== null && row.nextAttemptAt > now) continue; // alarm owns it
-      if (config.receiver.action === "processor-wake") {
+      if (
+        config.receiver.action === "facet-processor" ||
+        config.receiver.action === "wake-processor"
+      ) {
         if (this.connections.has(name) || this.#hostedWakesInFlight.has(name)) {
           continue;
         }
@@ -602,7 +606,7 @@ export class StreamEventSender {
    */
   #wakeStreamProcessor(
     name: string,
-    receiver: Extract<SubscriptionReceiver, { action: "processor-wake" }>,
+    receiver: Extract<SubscriptionReceiver, { action: "facet-processor" | "wake-processor" }>,
     expectedDelivery: ExpectedHostedDeliveryState,
   ): void {
     const state = this.#hooks.coreState();
@@ -646,7 +650,8 @@ export class StreamEventSender {
         const current = this.#hooks.coreState().subscriptions.outbound.byName[name];
         if (
           !this.#deliveryStillMatches(name, expectedDelivery) ||
-          current?.configuration.receiver.action !== "processor-wake"
+          (current?.configuration.receiver.action !== "facet-processor" &&
+            current?.configuration.receiver.action !== "wake-processor")
         ) {
           response.processEventBatch[Symbol.dispose]();
           // This wake response no longer matches, but the current configuration
@@ -687,6 +692,21 @@ export class StreamEventSender {
         const configuredFilter = compileEventFilter(current.configuration.filter);
         const announcedFilter =
           consumes === undefined ? undefined : compileEventFilter({ eventTypes: [...consumes] });
+        /*
+         * NAMING THE TYPE IS THE OPT-IN, and it is the only one.
+         *
+         * An ephemeral event reaches a hosted processor when its contract
+         * lists that exact type in `consumes` — never through the `"*"`
+         * wildcard, which exists for durable facts and must not hand anyone a
+         * microphone firehose they did not ask for. That single rule is why
+         * ephemeral types live in `consumes` beside durable ones instead of in
+         * a parallel list: one vocabulary, and the explicitness IS the
+         * permission.
+         *
+         * A processor that announces nothing gets durable events only, which
+         * is what every processor written before this did.
+         */
+        const explicitlyConsumed = new Set((consumes ?? []).filter((type) => type !== "*"));
         const connection = this.connections.openHosted({
           connectionKey: name,
           expectedHostedDelivery: expectedDelivery,
@@ -694,10 +714,9 @@ export class StreamEventSender {
           replayAfterOffset: response.checkpointOffset,
           filter: {
             matches(event) {
-              return (
-                configuredFilter.matches(event) &&
-                (announcedFilter === undefined || announcedFilter.matches(event))
-              );
+              if (!configuredFilter.matches(event)) return false;
+              if (event.ephemeral === true) return explicitlyConsumed.has(event.type);
+              return announcedFilter === undefined || announcedFilter.matches(event);
             },
           },
           openedBy,
@@ -753,7 +772,7 @@ export class StreamEventSender {
           }
           const config = entry.configuration;
           const receiver = config.receiver;
-          if (receiver.action === "processor-wake") return;
+          if (receiver.action === "facet-processor" || receiver.action === "wake-processor") return;
           const row = this.#hooks.store.get(name);
           if (row === undefined) return;
           if (row.nextAttemptAt !== null && row.nextAttemptAt > this.#hooks.now()) return;
@@ -1041,7 +1060,8 @@ export class StreamEventSender {
           activeDeliveryState !== undefined &&
           this.#deliveryStillMatches(name, activeDeliveryState) &&
           entry !== undefined &&
-          entry.configuration.receiver.action !== "processor-wake"
+          entry.configuration.receiver.action !== "facet-processor" &&
+          entry.configuration.receiver.action !== "wake-processor"
         ) {
           this.#onDeliveryFailure(name, error);
         } else {
@@ -1196,7 +1216,8 @@ export class StreamEventSender {
       return "stop";
     }
     if (
-      config.receiver.action !== "processor-wake" &&
+      config.receiver.action !== "facet-processor" &&
+      config.receiver.action !== "wake-processor" &&
       config.receiver.delivery.onFailingEvent === "skip"
     ) {
       if (matched.length > 1) {
@@ -1294,7 +1315,8 @@ export class StreamEventSender {
         entry === undefined ||
         entry.deliveryHalted !== undefined ||
         entry.configuredAtOffset !== row.configuredAtOffset ||
-        entry.configuration.receiver.action !== "processor-wake"
+        (entry.configuration.receiver.action !== "facet-processor" &&
+          entry.configuration.receiver.action !== "wake-processor")
       ) {
         this.#hooks.store.clearInFlight(row.name, {
           connectionGeneration: row.inFlightConnectionGeneration ?? -1,
@@ -2183,10 +2205,12 @@ export class StreamConnections {
               deliveredThroughOffset = Math.max(deliveredThroughOffset, currentMaxOffset);
             } else {
               deliveredThroughOffset = lastOffset;
-              const visible =
-                kind === "hosted"
-                  ? readEvents.filter((entry) => entry.event.ephemeral !== true)
-                  : readEvents;
+              // Ephemeral events reach the filter for every connection kind;
+              // for hosted ones the filter admits only types the processor
+              // named explicitly in `consumes`. Session connections have
+              // always received them — they own no durable cursor, so a hole
+              // costs them nothing.
+              const visible = readEvents;
               const matched =
                 args.filter === undefined
                   ? visible

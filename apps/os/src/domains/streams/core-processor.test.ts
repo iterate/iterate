@@ -426,6 +426,31 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     );
   });
 
+  test("hosted processor subscriptions cannot be removed", () => {
+    const { processor } = harness(SOURCE_PATH);
+    const state = reduce(
+      processor,
+      coreState(SOURCE_PATH),
+      committed(
+        2,
+        "events.iterate.com/stream/subscription-configured",
+        streamSubscription({
+          name: "agent",
+          receiver: { action: "facet-processor", source: { kind: "builtin" } },
+        }),
+        { path: SOURCE_PATH },
+      ),
+    );
+    const removal: StreamEventInput = {
+      type: "events.iterate.com/stream/subscription-removed",
+      payload: { name: "agent", reason: "requested" },
+    };
+
+    expect(() => processor.validate({ event: removal, state, authority: "public" })).toThrow(
+      "hosted processor subscriptions cannot be removed",
+    );
+  });
+
   test("a paused receiver rejects copied product appends as unavailable", () => {
     const { processor, state } = harness();
     const paused = { ...state, paused: true, pauseReason: "operator boundary" };
@@ -1080,7 +1105,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
           payload: {
             name: "wake-transformed",
             receiver: {
-              action: "processor-wake",
+              action: "wake-processor",
               expression: [
                 "agents",
                 ["get", "/agents/reviewer"],
@@ -1097,7 +1122,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     ).toThrow(/unrecognized/i);
   });
 
-  test("processor-wake requires exactly one placement", () => {
+  test("facet-processor and wake-processor are distinct actions", () => {
     const { processor, state } = harness(SOURCE_PATH);
     const configure = (receiver: Record<string, unknown>) => () =>
       processor.validate({
@@ -1110,16 +1135,19 @@ describe("StreamCoreProcessor validation and dispatch", () => {
       });
     const expression = ["agents", ["get", "/agents/reviewer"], "processor", "wakeStreamProcessor"];
 
-    // Neither placement: nothing to dial.
-    expect(configure({ action: "processor-wake" })).toThrow(/exactly one of placement/);
-    // Both placements: ambiguous.
-    expect(configure({ action: "processor-wake", placement: "facet", expression })).toThrow(
-      /exactly one of placement/,
-    );
-    // Facet placement: the subscription name IS the facet name; no expression.
-    expect(configure({ action: "processor-wake", placement: "facet" })).not.toThrow();
-    // Expression placement: today's own-DO / userspace-worker wake.
-    expect(configure({ action: "processor-wake", expression })).not.toThrow();
+    // A built-in facet: the subscription name IS the facet name; `source`
+    // chooses the class, no expression.
+    expect(configure({ action: "facet-processor", source: { kind: "builtin" } })).not.toThrow();
+    // A remote wake: an itx expression, no source.
+    expect(configure({ action: "wake-processor", expression })).not.toThrow();
+    // facet-processor without a source is invalid.
+    expect(configure({ action: "facet-processor" })).toThrow();
+    // wake-processor without an expression is invalid.
+    expect(configure({ action: "wake-processor" })).toThrow();
+    // A facet-processor is in-process — it carries no expression (strictObject).
+    expect(
+      configure({ action: "facet-processor", source: { kind: "builtin" }, expression }),
+    ).toThrow();
   });
 
   test("resumed requires a halted subscription", () => {
@@ -1145,7 +1173,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     ).toThrow(/not halted/);
   });
 
-  test("processor-wake accepts any name at configure time", () => {
+  test("facet-processor accepts any name at configure time", () => {
     const { processor, state } = harness(SOURCE_PATH);
     const configure = (name: string) => () =>
       processor.validate({
@@ -1153,7 +1181,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
             name,
-            receiver: { action: "processor-wake", placement: "facet" },
+            receiver: { action: "facet-processor", source: { kind: "builtin" } },
           },
         },
         state,
