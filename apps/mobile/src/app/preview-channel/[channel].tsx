@@ -82,23 +82,32 @@ export default function PreviewChannelScreen() {
 
   // Scanning always means "the latest": once the channel matches, pull its
   // newest update and reload into it, visibly. A query rather than an effect
-  // — run-on-mount work is what queries are for here — single-shot per scan
-  // (staleTime Infinity, no retry). Post-reload re-entry runs it again,
-  // finds the now-running update is the latest, and stops: no loop.
+  // — run-on-mount work is what queries are for here — and "per scan" means
+  // per MOUNT (refetchOnMount "always"), not per process: the queryClient
+  // outlives this screen, and a rescan after CI publishes again must check
+  // again, not reuse a cached "up-to-date". Post-reload re-entry runs it
+  // once more, finds the now-running update is the latest, and stops: no
+  // loop.
   const freshness = useQuery({
     queryKey: ["qr-channel-freshness", channel],
     enabled: alreadyOnTarget && canOta,
     queryFn: fetchLatestUpdateAndReload,
     staleTime: Infinity,
+    refetchOnMount: "always",
     retry: false,
   });
+  // While this is true a reloadAsync may fire at any moment — nothing that
+  // opens a flow the reload would sever (OAuth, most of all) may start.
+  const reloadImminent = freshness.isFetching || freshness.data === "reloading";
 
   // Where the phone actually points and who it's signed in as — compared
   // against the QR's recommendation below. The identity read may cost one
-  // token refresh; fine for a scan flow.
+  // token refresh; fine for a scan flow. Only once the channel matches: the
+  // mismatch card renders post-switch only (see below), and pre-switch the
+  // imminent reload would throw the read away.
   const phoneState = useQuery({
     queryKey: ["qr-phone-state", recommendedServer?.baseUrl || null],
-    enabled: recommendedServer !== null,
+    enabled: alreadyOnTarget && recommendedServer !== null,
     queryFn: async () => {
       const serverBaseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
       const email = await getSignedInEmail(serverBaseUrl);
@@ -155,7 +164,7 @@ export default function PreviewChannelScreen() {
         <>
           {canOta ? (
             <Text style={freshness.isError ? styles.errorNote : styles.note}>
-              {freshness.isLoading
+              {freshness.isFetching
                 ? "Checking this channel for its latest update…"
                 : freshness.data === "reloading"
                   ? "Newer update found — fetching and restarting…"
@@ -203,7 +212,12 @@ export default function PreviewChannelScreen() {
       {switchChannel.error ? (
         <Text style={styles.errorNote}>{String(switchChannel.error)}</Text>
       ) : null}
-      {recommendedServer !== null && mismatches.length > 0 ? (
+      {/* Backend/identity come AFTER the channel: pre-switch, the one action
+          on screen is the channel switch — showing the plan button too would
+          let a tap route away with the switch never made (running the old
+          channel's JS against the new backend). The post-switch reload
+          re-opens this deep link, and the card appears then. */}
+      {alreadyOnTarget && recommendedServer !== null && mismatches.length > 0 ? (
         <>
           <Text style={styles.mismatchHeading}>This QR expects a different setup</Text>
           <View style={styles.card}>
@@ -224,11 +238,17 @@ export default function PreviewChannelScreen() {
             )}
           </View>
           {plan !== null ? (
+            // Held while a freshness reload could fire mid-flow: reloadAsync
+            // during the sign-in OAuth hop would sever it half way. The
+            // reload re-opens this screen and the button unlocks then.
             <Pressable
               accessibilityRole="button"
-              disabled={applyPlan.isPending}
+              disabled={applyPlan.isPending || reloadImminent}
               onPress={() => applyPlan.mutate(plan)}
-              style={[styles.button, applyPlan.isPending && styles.buttonDisabled]}
+              style={[
+                styles.button,
+                (applyPlan.isPending || reloadImminent) && styles.buttonDisabled,
+              ]}
             >
               <Text style={styles.buttonLabel}>
                 {applyPlan.isPending
@@ -239,7 +259,7 @@ export default function PreviewChannelScreen() {
           ) : null}
           {applyPlan.error ? <Text style={styles.errorNote}>{String(applyPlan.error)}</Text> : null}
         </>
-      ) : recommendedServer !== null && phoneState.isSuccess ? (
+      ) : alreadyOnTarget && recommendedServer !== null && phoneState.isSuccess ? (
         <Text style={styles.note}>Backend and sign-in match this QR's recommendation.</Text>
       ) : null}
       <Pressable
