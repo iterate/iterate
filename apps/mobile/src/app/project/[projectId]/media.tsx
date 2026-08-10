@@ -30,6 +30,7 @@ import { MediaViewer } from "../../../components/media-viewer.tsx";
 import { getProjectItx } from "../../../lib/itx.ts";
 import {
   buildProcessScript,
+  buildWipeScript,
   deriveMediaList,
   filterMedia,
   mapWithConcurrency,
@@ -136,6 +137,15 @@ export default function MediaScreen() {
     enabled: baseUrl !== undefined && settings?.enabled === true,
     staleTime: 5 * 60_000,
     retry: false,
+  });
+  const wipe = useMutation({
+    mutationFn: async () => {
+      const project = await getProjectItx(baseUrl!, projectId);
+      await project.capabilityHost.runScript(buildWipeScript(Date.now().toString(36)));
+      // The wiped tombstone arrives over the live stream; deriveMediaList
+      // resets on it — nothing to invalidate.
+      setSyncDialogOpen(false);
+    },
   });
   const applySyncSettings = (next: MediaSyncSettings) => {
     queryClient.setQueryData(["media-sync-settings", projectId], next);
@@ -366,9 +376,12 @@ export default function MediaScreen() {
         visible={syncDialogOpen}
       >
         <SyncDialog
+          itemCount={items.length}
           onApply={applySyncSettings}
           onCancel={() => setSyncDialogOpen(false)}
+          onWipe={() => wipe.mutate()}
           settings={settings || null}
+          wipePending={wipe.isPending}
         />
       </Modal>
       <Modal
@@ -409,14 +422,21 @@ function shortDate(iso: string): string {
  * the same dialog with a longer choice. */
 function SyncDialog({
   settings,
+  itemCount,
   onApply,
   onCancel,
+  onWipe,
+  wipePending,
 }: {
   settings: MediaSyncSettings | null;
+  itemCount: number;
   onApply: (next: MediaSyncSettings) => void;
   onCancel: () => void;
+  onWipe: () => void;
+  wipePending: boolean;
 }) {
   const [windowDays, setWindowDays] = useState(7);
+  const [confirmingWipe, setConfirmingWipe] = useState(false);
   const sinceIso = new Date(Date.now() - windowDays * 86_400_000).toISOString();
   const enabled = settings?.enabled === true;
   return (
@@ -452,6 +472,29 @@ function SyncDialog({
           <Text
             style={styles.dialogHint}
           >{`Currently on, back to ${shortDate(settings.sinceIso)}.`}</Text>
+        ) : null}
+        {itemCount > 0 ? (
+          confirmingWipe ? (
+            <View style={styles.wipeConfirm}>
+              <Text style={styles.wipeWarning}>
+                {`Deletes all ${itemCount} items and their image files from this project, for everyone. This cannot be undone.`}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                disabled={wipePending}
+                onPress={onWipe}
+                style={[styles.dialogButton, styles.wipeButton]}
+              >
+                <Text style={styles.wipeButtonText}>
+                  {wipePending ? "Deleting…" : "Yes, delete everything"}
+                </Text>
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable accessibilityRole="button" onPress={() => setConfirmingWipe(true)}>
+              <Text style={styles.wipeLink}>Delete all media…</Text>
+            </Pressable>
+          )
         ) : null}
         <View style={styles.dialogActions}>
           <Pressable accessibilityRole="button" onPress={onCancel} style={styles.dialogButton}>
@@ -704,6 +747,11 @@ const styles = StyleSheet.create({
   },
   dialogButtonText: { color: colors.text, fontSize: 14 },
   dialogButtonPrimary: { backgroundColor: colors.accent, borderColor: colors.accent },
+  wipeLink: { color: colors.danger, fontSize: 13, marginTop: 4 },
+  wipeConfirm: { gap: spacing.sm, marginTop: 4 },
+  wipeWarning: { color: colors.danger, fontSize: 12, lineHeight: 17 },
+  wipeButton: { alignSelf: "flex-start", borderColor: colors.danger },
+  wipeButtonText: { color: colors.danger, fontSize: 14, fontWeight: "600" },
   dialogButtonPrimaryText: { color: colors.background, fontSize: 14, fontWeight: "600" },
   syncStatusRow: {
     alignItems: "center",

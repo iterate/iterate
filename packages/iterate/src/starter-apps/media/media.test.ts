@@ -85,6 +85,21 @@ test("fold: captured inserts, processed overlays latest, unknown processed is sk
   });
 });
 
+test("fold: wiped clears everything; later captures start fresh", () => {
+  const state = reduceAll([
+    captured("k1"),
+    {
+      type: "events.iterate.com/media/wiped",
+      path: "/media",
+      offset: 2,
+      createdAt: "t2",
+      payload: { deletedFiles: 1, items: 1 },
+    },
+    captured("k2", { offset: 3 }),
+  ]);
+  expect(Object.keys(state.items)).toEqual(["k2"]);
+});
+
 test("search: terms AND across description/transcript/filename/tags, tag filters, newest first", () => {
   const state = reduceAll([
     captured("k1", { payload: { capturedAt: "2026-08-01T00:00:00.000Z" } }),

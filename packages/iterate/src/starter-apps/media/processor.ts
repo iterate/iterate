@@ -84,6 +84,18 @@ export const MediaProcessorContract = defineProcessorContract({
         },
       ],
     },
+    "events.iterate.com/media/wiped": {
+      description:
+        "Everything before this tombstone is gone: the wipe script deleted the stored files and " +
+        "every derivation (phone list, this fold) resets. Deliberate per-invocation idempotency key.",
+      payloadSchema: z.object({
+        deletedFiles: z.number().meta({ description: "Files actually deleted." }),
+        items: z.number().meta({ description: "Items that existed at wipe time." }),
+      }),
+      examples: [
+        { description: "A from-scratch reset.", payload: { deletedFiles: 24, items: 24 } },
+      ],
+    },
     "events.iterate.com/media/processed": {
       description:
         "A re-analysis of an existing item (Re-analyze in the app, or batch re-tagging): " +
@@ -106,7 +118,11 @@ export const MediaProcessorContract = defineProcessorContract({
       ],
     },
   },
-  consumes: ["events.iterate.com/media/captured", "events.iterate.com/media/processed"],
+  consumes: [
+    "events.iterate.com/media/captured",
+    "events.iterate.com/media/processed",
+    "events.iterate.com/media/wiped",
+  ],
   emits: [],
 });
 export type MediaProcessorContract = typeof MediaProcessorContract;
@@ -129,6 +145,8 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract> {
           },
         };
       }
+      case "events.iterate.com/media/wiped":
+        return { ...state, items: {} };
       case "events.iterate.com/media/processed": {
         const existing = state.items[event.payload.stableKey];
         // A processed event for an unknown item (e.g. pre-rename history)

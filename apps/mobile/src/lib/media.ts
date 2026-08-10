@@ -15,7 +15,12 @@ import type { StreamEvent } from "iterate/sdk/itx/react";
 export const MEDIA_STREAM_PATH = "/media";
 export const MEDIA_CAPTURED_EVENT_TYPE = "events.iterate.com/media/captured";
 export const MEDIA_PROCESSED_EVENT_TYPE = "events.iterate.com/media/processed";
-export const MEDIA_EVENT_TYPES = [MEDIA_CAPTURED_EVENT_TYPE, MEDIA_PROCESSED_EVENT_TYPE];
+export const MEDIA_WIPED_EVENT_TYPE = "events.iterate.com/media/wiped";
+export const MEDIA_EVENT_TYPES = [
+  MEDIA_CAPTURED_EVENT_TYPE,
+  MEDIA_PROCESSED_EVENT_TYPE,
+  MEDIA_WIPED_EVENT_TYPE,
+];
 /** Sees the pixels: transcribes text verbatim and picks tags. */
 export const MEDIA_VISION_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
 
@@ -249,6 +254,48 @@ export function buildProcessScript(input: ProcessScriptInput): string {
 }`;
 }
 
+/**
+ * Delete-everything, as a product event on the append-only stream: the
+ * script deletes every stored file it can find via the captured events,
+ * then appends media/wiped — the tombstone every derivation (phone list,
+ * MediaApp fold) resets on. Idempotency-keyed per invocation, not content:
+ * each deliberate wipe is its own fact.
+ */
+export function buildWipeScript(nonce: string): string {
+  const scriptInput = {
+    streamPath: MEDIA_STREAM_PATH,
+    capturedType: MEDIA_CAPTURED_EVENT_TYPE,
+    wipedType: MEDIA_WIPED_EVENT_TYPE,
+    idempotencyKey: `media-wiped-${nonce}`,
+  };
+  return `async (itx) => {
+  const input = ${asJsLiteral(scriptInput)};
+  const stream = itx.streams.get(input.streamPath);
+  const events = [];
+  let cursor = 0;
+  while (true) {
+    const page = await stream.getEvents({ afterOffset: cursor, eventTypes: [input.capturedType] });
+    if (page.length === 0) break;
+    events.push(...page);
+    cursor = page[page.length - 1].offset;
+  }
+  const paths = [...new Set(events.map((event) => event.payload.path).filter(Boolean))];
+  let deleted = 0;
+  for (const path of paths) {
+    try {
+      await itx.files.get(path).delete();
+      deleted += 1;
+    } catch {}
+  }
+  const [event] = await stream.append({
+    type: input.wipedType,
+    idempotencyKey: input.idempotencyKey,
+    payload: { deletedFiles: deleted, items: paths.length },
+  });
+  return event;
+}`;
+}
+
 function visionPrompt(): string {
   const lines = MEDIA_TAGS.map(({ tag, hint }) => `- "${tag}": ${hint}`);
   return [
@@ -284,15 +331,18 @@ export type MediaListItem = {
  * you see without rewriting history.
  */
 export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
+  // A wiped tombstone resets everything before it.
+  const lastWipeIndex = events.findLastIndex((event) => event.type === MEDIA_WIPED_EVENT_TYPE);
+  const liveEvents = lastWipeIndex === -1 ? events : events.slice(lastWipeIndex + 1);
   const latestProcessed = new Map<string, MediaProcessedPayload>();
-  for (const event of events) {
+  for (const event of liveEvents) {
     // Events arrive offset-ascending, so later wins by insertion order.
     if (event.type === MEDIA_PROCESSED_EVENT_TYPE) {
       const payload = event.payload as MediaProcessedPayload;
       latestProcessed.set(payload.stableKey, payload);
     }
   }
-  return events
+  return liveEvents
     .filter((event) => event.type === MEDIA_CAPTURED_EVENT_TYPE)
     .map((event) => {
       const captured = event.payload as MediaCapturedPayload;

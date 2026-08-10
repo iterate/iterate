@@ -1,11 +1,13 @@
 import { expect, test } from "vitest";
 import {
   buildProcessScript,
+  buildWipeScript,
   deriveMediaList,
   filterMedia,
   mapWithConcurrency,
   MEDIA_CAPTURED_EVENT_TYPE,
   MEDIA_PROCESSED_EVENT_TYPE,
+  MEDIA_WIPED_EVENT_TYPE,
   mediaFilePath,
   normalizedImageFilename,
   type MediaListItem,
@@ -325,6 +327,44 @@ test("mapWithConcurrency bounds in-flight work and preserves order", async () =>
   expect(peak).toBe(2);
 });
 
+test("wipe script deletes every stored file then appends the tombstone", async () => {
+  const itx = fakeItx({
+    toMarkdown: { format: "markdown", data: "unused" },
+    visionAnswer: { choices: [{ message: { content: "{}" } }] },
+    streamEvents: [
+      { type: MEDIA_CAPTURED_EVENT_TYPE, offset: 1, payload: { path: "/media/a-x.png" } },
+      { type: MEDIA_CAPTURED_EVENT_TYPE, offset: 2, payload: { path: "/media/b-y.png" } },
+      { type: MEDIA_CAPTURED_EVENT_TYPE, offset: 3, payload: { path: "/media/a-x.png" } },
+    ],
+  });
+  await runScript(buildWipeScript("n1"), itx);
+  expect(itx.calls.deletedPaths).toEqual(["/media/a-x.png", "/media/b-y.png"]); // deduped
+  expect(itx.calls.appended).toMatchObject({
+    type: MEDIA_WIPED_EVENT_TYPE,
+    idempotencyKey: "media-wiped-n1",
+    payload: { deletedFiles: 2, items: 2 },
+  });
+});
+
+test("deriveMediaList resets at the last wiped tombstone", () => {
+  const events: any[] = [
+    {
+      type: MEDIA_CAPTURED_EVENT_TYPE,
+      offset: 1,
+      createdAt: "t1",
+      payload: { stableKey: "old", markdown: "gone", transcript: "", tags: [] },
+    },
+    { type: MEDIA_WIPED_EVENT_TYPE, offset: 2, createdAt: "t2", payload: {} },
+    {
+      type: MEDIA_CAPTURED_EVENT_TYPE,
+      offset: 3,
+      createdAt: "t3",
+      payload: { stableKey: "new", markdown: "kept", transcript: "", tags: [] },
+    },
+  ];
+  expect(deriveMediaList(events)).toMatchObject([{ payload: { stableKey: "new" } }]);
+});
+
 // --- helpers ---------------------------------------------------------------
 
 function item(offset: number, markdown: string, transcript: string, tags: string[]): MediaListItem {
@@ -355,6 +395,7 @@ function fakeItx(behavior: {
   visionAnswer: any;
   existingEvent?: any;
   fileBytes?: Uint8Array;
+  streamEvents?: any[];
 }): any {
   const calls: any = {};
   return {
@@ -362,6 +403,7 @@ function fakeItx(behavior: {
     streams: {
       get: () => ({
         getEvent: async () => behavior.existingEvent,
+        getEvents: async (args: any) => (args.afterOffset === 0 ? behavior.streamEvents || [] : []),
         append: async (event: any) => {
           calls.appended = event;
           return [{ ...event, offset: 1 }];
@@ -370,6 +412,9 @@ function fakeItx(behavior: {
     },
     files: {
       get: (path: string) => ({
+        delete: async () => {
+          (calls.deletedPaths ||= []).push(path);
+        },
         bytes: async () => {
           calls.bytesPath = path;
           return behavior.fileBytes || new Uint8Array([1, 2, 3]);

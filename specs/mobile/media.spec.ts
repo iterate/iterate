@@ -88,9 +88,13 @@ test("renders, searches, and views seeded media", async ({ page }, testInfo) => 
   await page.getByText("Nothing happens until you confirm here.").waitFor();
   await page.getByText("1 week", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Turn on" }).waitFor();
-  await page.getByRole("button", { name: "Cancel" }).click();
-  await page.getByText("Nothing happens until you confirm here.").waitFor({ state: "hidden" });
-  await page.getByText("Off", { exact: true }).waitFor();
+
+  // Delete-all lives behind its own inline confirm, then the wiped
+  // tombstone clears the list live.
+  await page.getByText("Delete all media…").click();
+  await page.getByText(/cannot be undone/).waitFor();
+  await page.getByRole("button", { name: "Yes, delete everything" }).click();
+  await page.getByText("Nothing here yet").waitFor();
 });
 
 test("captures through the live vision pipeline", async ({ page }, testInfo) => {
