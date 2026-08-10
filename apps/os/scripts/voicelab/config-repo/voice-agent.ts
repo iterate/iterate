@@ -94,6 +94,88 @@ const PACE_MAX_BATCH = 50;
  */
 const IDLE_TIMEOUT_MS = 60_000;
 /**
+ * THE ONE SENTENCE AN IDLE END IS ASKED FOR IN, and it has to be one sentence.
+ *
+ * Two things can notice the minute has passed — the countdown on a live call
+ * and the at-head pass on a revived one (see {@link idleDeadlinePassed}) — and
+ * both append the SAME `conversation-end-requested` under the SAME idempotency
+ * key, so whichever gets there first wins and the other collapses into it.
+ * That only works while the payload is byte-identical: the stream REJECTS a
+ * same-key append with a different body rather than deduplicating it. Hence a
+ * constant, not two sentences that happen to agree today.
+ */
+const IDLE_END_REASON = `no utterance from either side for ${IDLE_TIMEOUT_MS / 1000}s`;
+
+/**
+ * Has this call gone a whole minute with nothing said, as far as the FOLD
+ * knows?
+ *
+ * THE SECOND OF TWO CLOCKS, and the only one that survives an eviction.
+ *
+ * The first is the countdown in `#holdUntilIdle`: a keepalive-backed loop
+ * reading `GrokCall.lastSpokeAtMs`, which everything either side says moves,
+ * and the one that ends a call on a Durable Object that is still up. It cannot
+ * survive the object dying, and the object dying is exactly the case an
+ * abandoned call is in.
+ *
+ * So the deadline is also derivable from reduced state. `lastHeardAtMs` is
+ * folded from the events a client speaks with — the press verbs, every
+ * microphone frame, a typed turn — using each event's own commit stamp, which
+ * costs NOTHING: reduced state is already committed once per delivered batch,
+ * so this rides a write that happens anyway. It is deliberately not a
+ * heartbeat event; that is the thing deleted this morning for pinning four
+ * Durable Objects awake around the clock.
+ *
+ * WHY THE TWO CANNOT DISAGREE, which is the whole argument. The fold's clock
+ * is BLIND TO THE PROVIDER: a ninety-second answer is the model talking, and
+ * none of it reaches the fold (`grok-event` is not consumed, and consuming it
+ * would put the provider's whole firehose back on the delivery lane). So the
+ * fold's clock can only be BEHIND the truth, never ahead — it can only call a
+ * call dead early, never keep a dead one alive. That would be a real hazard,
+ * except for where it is read: ONLY on an at-head pass for a call this
+ * incarnation does not hold. A provider can only speak through a socket, a
+ * socket belongs to the incarnation that opened it, and an incarnation that
+ * holds no socket therefore has nothing left that could be speaking. The most
+ * this can cost is ending a call whose answer died with its socket — an answer
+ * nobody can hear any more.
+ *
+ * A live incarnation reads its own countdown and never this.
+ */
+export function idleDeadlinePassed(lastHeardAtMs: number, nowMs: number): boolean {
+  return nowMs - lastHeardAtMs >= IDLE_TIMEOUT_MS;
+}
+
+/**
+ * When the stream committed this event, in epoch milliseconds.
+ *
+ * `reduce` is pure and cannot ask a clock — and does not need to: every event
+ * carries the stamp the Stream Durable Object gave it at commit. That is the
+ * SAME Durable Object the facet runs inside, so a deadline folded from this
+ * and compared against `deps.now()` is one clock read twice, not two clocks.
+ * (Two clock bases quietly disagreeing is what left every board mute for a
+ * day; it is worth saying out loud which one this is.)
+ */
+function eventTimeMs(event: { createdAt: string }): number {
+  return Date.parse(event.createdAt);
+}
+
+/**
+ * Does an event naming `named` speak about the call this stream is on?
+ *
+ * Worker-minted ids are eight hex chars, so a matching 8-hex id names its own
+ * call, a MISMATCHED 8-hex id is a stale message about a predecessor and must
+ * not touch the successor, and an id that is not 8-hex at all cannot possibly
+ * name a predecessor: it is the device speaking about the one call it is on,
+ * under its own name ("scdev", "havpedev" — the firmware does not yet echo the
+ * real id). An exact-match-only rule made those self-named hang-ups fold to
+ * nothing, which left the call IMMORTAL: every fresh incarnation's at-head
+ * pass re-dialled the corpse, and every press folded into it in silence. Both
+ * open-mic boards were wedged exactly this way.
+ */
+export function namesThisCall(liveId: string, named: string): boolean {
+  return liveId === named || !/^[0-9a-f]{8}$/.test(named);
+}
+/**
  * The agent that does the actual thinking. Grok is a mouth and a pair of
  * ears with a ~200ms budget; anything that needs reading a repo, calling a
  * tool, or being RIGHT belongs to a text model with no clock on it.
@@ -1848,11 +1930,42 @@ class GrokCall {
   #visemes: ReturnType<typeof createVisemeEmitter>;
   #answerSeq = 0;
   #answerFrames = 0;
+  /*
+   * THE OBLIGATION THAT KEEPS THE DURABLE OBJECT UP, and its one release.
+   *
+   * A call is work in flight for as long as it is open, so the processor
+   * registers this promise as `runInBackground` work at the dial (see `#dial`)
+   * and the runner's keepalive holds the object — and revives it — until the
+   * promise settles. There is no `setAlarm` anywhere in this file, and there
+   * must not be: the keepalive already parks a durable alarm ahead of tracked
+   * work, and a second timer would be a second answer to the same question.
+   *
+   * It resolves in {@link close}, which is deliberate rather than convenient:
+   * `close` is the ONE route out of a call — the idle end, a device's own, a
+   * provider close, a failed dial, being superseded — so "the object may
+   * hibernate" and "this call is over" are the same event by construction and
+   * cannot come apart.
+   */
+  #declareOver!: () => void;
+  readonly over: Promise<void>;
 
-  constructor(conversationId: string, now: number) {
+  /** The processor's clock, so `spoke` stays a one-line assignment at every
+   * call site — including `send`, where forgetting it would silently stop a
+   * whole class of traffic counting as somebody talking. */
+  readonly #now: () => number;
+
+  constructor(conversationId: string, now: () => number) {
     this.conversationId = conversationId;
-    this.#openedAtMs = now;
+    this.#now = now;
+    this.#openedAtMs = now();
+    /* Opening a call IS somebody speaking; the minute starts here, so a dial
+     * that neither completes nor errors ages out on the same clock as a
+     * silence rather than never. */
+    this.lastSpokeAtMs = this.#openedAtMs;
     this.#visemes = createVisemeEmitter(conversationId);
+    this.over = new Promise<void>((resolve) => {
+      this.#declareOver = resolve;
+    });
   }
 
   get ready(): boolean {
@@ -1860,6 +1973,18 @@ class GrokCall {
   }
   get closed(): boolean {
     return this.#closed;
+  }
+  /**
+   * When THIS dial began — the identity of one attempt at a conversation.
+   *
+   * A rescued call re-dials under the SAME conversationId, so anything keyed
+   * on the conversation alone claims to be the same fact twice. For a
+   * statement that is genuinely per-dial (how long the handshake took, how
+   * much audio it held) that is a lie the stream REJECTS rather than
+   * deduplicates, and the rejection takes its whole append batch with it.
+   */
+  get openedAtMs(): number {
+    return this.#openedAtMs;
   }
 
   /**
@@ -2177,7 +2302,8 @@ class GrokCall {
   droppedAfterEnd = 0;
 
   /*
-   * THE IDLE COUNTDOWN, and the only clock that ends a quiet call.
+   * WHEN SOMEBODY LAST SPOKE, whichever way round — a timestamp and nothing
+   * more.
    *
    * A provider socket held open keeps this stream's Durable Object awake, and
    * xAI only drops an idle session after 900 seconds — so a call nobody ends
@@ -2186,55 +2312,36 @@ class GrokCall {
    * over: streams are not meant to hibernate between button presses, and a
    * push-to-talk caller ended up re-dialling the provider on every press.
    *
-   * A DO awake DURING a conversation is correct — somebody is talking to it —
-   * so this is an ordinary `setTimeout`: restarted by {@link spoke} on every
-   * message in either direction, cancelled by {@link close}, which is what
-   * makes it impossible for a call that has already ended to fire a second
-   * hang-up. Nothing durable, nothing on a heartbeat.
+   * THIS USED TO BE A `setTimeout` AND IT NEVER FIRED. MEASURED on preview-3:
+   * a call went live, nobody spoke for 150 seconds, and no end was ever
+   * requested — the facet was demonstrably alive throughout (it answered a
+   * warm-up probe in 154ms) and the stream carried no traffic at all, so
+   * nothing had restarted the countdown. A timer armed from the SYNCHRONOUS
+   * body of a delivery belongs to a request context that ends with that
+   * delivery; whatever the callback then tries to do, it does with no I/O
+   * context to do it in. The pacer's `sleep` loop works for the opposite
+   * reason: it runs inside a `runInBackground` closure the keepalive holds.
    *
-   * IT ONLY FIRES WHILE THE OBJECT IS ALIVE, and that is the honest limit of
-   * it. MEASURED on preview-3: a held provider socket does NOT keep a stream's
-   * Durable Object up through a silence — a 5-second deadline fired, a
-   * 30-second one never did, and neither a `waitUntil` hold nor registering
-   * the wait as keepalive-backed background work changed that. So in practice
-   * eviction usually ends a forgotten call before this does, taking the
-   * provider socket with it; the fold still names the call until the next
-   * press, whose at-head pass re-dials or supersedes it. Both routes are the
-   * recovery this processor already had. What this countdown guarantees is the
-   * case that matters: a call nobody has abandoned — the object alive, the
-   * socket up, xAI's meter running — does not sit there for the provider's own
-   * fifteen-minute timeout.
+   * So the countdown is that same shape now — `VoiceAgentFacetProcessor`'s
+   * `#holdUntilIdle`, one keepalive-backed loop that sleeps exactly as long as
+   * this call has left and reads this field when it wakes. All this has to do
+   * is be current, which makes {@link spoke} a single assignment on a path
+   * that runs fifty times a second.
+   *
+   * It is the FAST and COMPLETE half of the deadline: it sees both directions,
+   * so a long answer cannot age a call out. It cannot outlive the object,
+   * which is what the other half — {@link idleDeadlinePassed}, read off the
+   * fold when no socket is held — is for. Neither half hangs up by itself:
+   * both append `conversation-end-requested` and let the ordinary delivery
+   * lane do the ending, so there stays exactly one way to end a call and three
+   * things that can decide to.
    */
-  #startIdleTimer: (() => () => void) | null = null;
-  #cancelIdleTimer: (() => void) | null = null;
+  lastSpokeAtMs: number;
 
-  /**
-   * Begin watching this call for silence.
-   *
-   * `startTimer` is the processor's injected `setTimeout`, which hands back
-   * its own `clearTimeout`; `fire` is what happens when a whole minute passes
-   * with nothing said. Called once, at the dial.
-   */
-  watchIdle(
-    startTimer: (ms: number, fire: () => Promise<void>) => () => void,
-    fire: () => Promise<void>,
-  ): void {
-    this.#startIdleTimer = () => startTimer(IDLE_TIMEOUT_MS, fire);
-    this.spoke();
-  }
-
-  /**
-   * Something was said, whichever way round: the minute starts again.
-   *
-   * The replacement is armed BEFORE the old one is dropped, deliberately, so
-   * there is never an instant with no countdown on a live call — this runs
-   * fifty times a second while somebody is speaking.
-   */
+  /** Something was said, whichever way round: the minute starts again. */
   spoke(): void {
-    if (this.#closed || this.#startIdleTimer === null) return;
-    const previous = this.#cancelIdleTimer;
-    this.#cancelIdleTimer = this.#startIdleTimer();
-    previous?.();
+    if (this.#closed) return;
+    this.lastSpokeAtMs = this.#now();
   }
 
   /** The turn is complete: commit what was captured and ask for an answer. */
@@ -2274,14 +2381,11 @@ class GrokCall {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
-    /* EVERY route out of a call comes through here — the idle hang-up, a
-     * device's own, a provider close, a failed dial, being superseded — so
-     * these lines are what guarantee a spent call cannot fire a countdown at a
-     * conversation that has already moved on, and what let the Durable Object
-     * hibernate the moment the last call on it is over. */
-    this.#cancelIdleTimer?.();
-    this.#cancelIdleTimer = null;
-    this.#startIdleTimer = null;
+    /* EVERY route out of a call comes through here — the idle end, a device's
+     * own, a provider close, a failed dial, being superseded — so this line is
+     * what ends the countdown loop, releases the keepalive, and lets the
+     * Durable Object hibernate the moment the last call on it is over. */
+    this.#declareOver();
     this.#pending = null;
     this.#paced.length = 0;
     try {
@@ -2320,6 +2424,24 @@ const VoiceFacetState = z.object({
     .object({
       /** Server-minted, and stamped on everything belonging to this call. */
       conversationId: z.string(),
+      /**
+       * When a client was last heard on this call, on the stream's own clock.
+       *
+       * The durable half of the idle deadline — see {@link idleDeadlinePassed}
+       * for why it is folded rather than appended, and why "a client" rather
+       * than "either side" is the honest name for what it can see.
+       */
+      lastHeardAtMs: z.number(),
+      /**
+       * Somebody has decided this call is over, and why.
+       *
+       * The obligation, in the ordinary shape: the request is the durable
+       * desire, `conversation-ended` is the completion, and the at-head pass
+       * is what performs one and recovers the other. Holding the reason here
+       * is what lets a revived incarnation finish a teardown it did not start
+       * and still write the same sentence the decider gave.
+       */
+      endRequested: z.strictObject({ reason: z.string() }).nullable(),
     })
     .nullable()
     .default(null),
@@ -2371,7 +2493,11 @@ export const VoiceAgentFacetContract = defineProcessorContract({
    * named for this slug. They are one identity; drifting them apart is the
    * failure that took every board offline on the v30 flag day. */
   slug: VOICE_AGENT_PROCESSOR_SLUG,
-  version: "2.0.0",
+  /* 2.1.0: the fold gained the idle deadline and the end-request. A persisted
+   * 2.0.0 fold has no `lastHeardAtMs`, so it must be re-reduced rather than
+   * trusted — bumping is how the runner is told to, and re-reducing a call
+   * whose ephemeral utterances are long gone correctly concludes it is over. */
+  version: "2.1.0",
   description: "Runs a voice call in the stream's own Durable Object, holding the Grok socket.",
   stateSchema: VoiceFacetState,
   events: {
@@ -2385,6 +2511,24 @@ export const VoiceAgentFacetContract = defineProcessorContract({
     },
     "events.iterate.com/voice-agent/conversation-failed": {
       description: "The call is not happening, and why.",
+      payloadSchema: z.looseObject({ conversationId: z.string(), reason: z.string() }),
+    },
+    /*
+     * SOMEBODY HAS DECIDED, and this is where they say so.
+     *
+     * ONE WAY TO END A CALL AND THREE THINGS THAT CAN DECIDE TO: the person,
+     * the model, and the clock. Deciding and doing are separated because the
+     * decider is often not holding the socket — the clock notices a minute has
+     * passed in an incarnation that was revived precisely because the old one
+     * (and its socket) died. So the decision is an append with a reason, the
+     * facet consumes it on its ordinary delivery lane, and the ending itself
+     * stays exactly one code path.
+     *
+     * Deliberately provider-agnostic: nothing here says "Grok", "socket" or
+     * "disconnect". What ends is the conversation.
+     */
+    "events.iterate.com/voice-agent/conversation-end-requested": {
+      description: "Somebody has decided this call is over, and why.",
       payloadSchema: z.looseObject({ conversationId: z.string(), reason: z.string() }),
     },
     "events.iterate.com/voice-agent/conversation-ended": {
@@ -2514,6 +2658,7 @@ export const VoiceAgentFacetContract = defineProcessorContract({
   consumes: [
     "events.iterate.com/voice-agent/created",
     "events.iterate.com/voice-agent/call-started",
+    "events.iterate.com/voice-agent/conversation-end-requested",
     "events.iterate.com/voice-agent/conversation-ended",
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/device-presence",
@@ -2531,6 +2676,7 @@ export const VoiceAgentFacetContract = defineProcessorContract({
     "events.iterate.com/voice-agent/buffer-flushed",
     "events.iterate.com/voice-agent/provider-error",
     "events.iterate.com/voice-agent/conversation-accepted",
+    "events.iterate.com/voice-agent/conversation-end-requested",
     "events.iterate.com/voice-agent/conversation-ended",
     "events.iterate.com/voice-agent/conversation-failed",
     "events.iterate.com/voice-agent/spk-frame",
@@ -2562,21 +2708,17 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
   VoiceAgentFacetContract,
   {
     now(): number;
+    /**
+     * The ONLY way this processor waits, and there is deliberately no second
+     * one. Both the pacer's drain loop and the idle countdown are
+     * `runInBackground` closures that sleep, which is what puts their wakes
+     * inside a context the keepalive holds — see `#holdUntilIdle` for the
+     * measurement that says a bare `setTimeout` is not a substitute. Injected
+     * so a sixty-second deadline is tested on a virtual clock rather than by
+     * waiting a minute.
+     */
     sleep(ms: number): Promise<void>;
     dialGrok(): Promise<WebSocket | null>;
-    /**
-     * `setTimeout`, and the returned function is its `clearTimeout`.
-     *
-     * The idle countdown must be CANCELLABLE — a call that ends by any other
-     * route has to take its timer with it, or a spent countdown fires at the
-     * conversation that replaced it — which the plain `sleep` above cannot do.
-     * Injected rather than called directly so a sixty-second deadline can be
-     * tested on a virtual clock instead of by waiting a minute.
-     *
-     * `fire` is awaited, so the host can keep itself alive until the hang-up
-     * it triggers has actually been written.
-     */
-    setTimer(ms: number, fire: () => Promise<void>): () => void;
   }
 > {
   readonly contract = VoiceAgentFacetContract;
@@ -2626,35 +2768,59 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         };
       case "events.iterate.com/voice-agent/call-started":
         /* The server's own record that a call is up. Deterministic under
-         * replay because the id was minted INTO the event, not here. */
+         * replay because the id was minted INTO the event, not here — and the
+         * deadline starts here for the same reason: minting a call IS somebody
+         * speaking, so the stamp the stream gave this event is the floor under
+         * every later utterance, including for a call whose first press was
+         * ephemeral and is already gone. */
         return {
           ...state,
-          call: { conversationId: event.payload.conversationId },
+          call: {
+            conversationId: event.payload.conversationId,
+            lastHeardAtMs: eventTimeMs(event),
+            endRequested: null,
+          },
         };
+      case "events.iterate.com/voice-agent/ptt-start":
+      case "events.iterate.com/voice-agent/mic-frame":
+      case "events.iterate.com/voice-agent/ptt-end":
+      case "events.iterate.com/voice-agent/say":
+        /*
+         * SOMEBODY IS TALKING, which is the only fact these four leave behind.
+         *
+         * Their BODIES still never reach the fold — reduced state that
+         * depended on a buffer no restart can replay would be a lie — but
+         * their commit STAMPS are as durable as any event's, and folding the
+         * newest is what makes the idle deadline outlive an eviction without
+         * a single extra append. `max` because a redelivered batch must not
+         * be able to walk the deadline backwards.
+         */
+        return state.call === null
+          ? state
+          : {
+              ...state,
+              call: {
+                ...state.call,
+                lastHeardAtMs: Math.max(state.call.lastHeardAtMs, eventTimeMs(event)),
+              },
+            };
+      case "events.iterate.com/voice-agent/conversation-end-requested":
+        /* Decided, not yet done. The call stays open in the fold until the
+         * obituary lands — what changes is that nothing will re-dial it, and
+         * that any incarnation reaching head now owes the ending. */
+        return state.call !== null &&
+          namesThisCall(state.call.conversationId, String(event.payload.conversationId))
+          ? { ...state, call: { ...state.call, endRequested: { reason: event.payload.reason } } }
+          : state;
       case "events.iterate.com/voice-agent/conversation-ended":
       case "events.iterate.com/voice-agent/conversation-failed":
-        /*
-         * An obituary closes the call it NAMES — and a mis-named one still
-         * closes the current call. Worker-minted ids are eight hex chars, so a
-         * matching 8-hex id closes its call, a MISMATCHED 8-hex id is a stale
-         * obituary for a predecessor and must not close the successor, and an
-         * id that is not 8-hex at all cannot possibly name a predecessor: it
-         * is the device ending the one call it is on, under its own name
-         * ("scdev", "havpedev" — the firmware does not yet echo the real id).
-         * The old exact-match rule made those self-named hang-ups fold to
-         * nothing, which left `state.call` IMMORTAL: every fresh incarnation's
-         * at-head pass re-dialled the corpse, and every press folded into it
-         * in silence. Both open-mic boards were wedged exactly this way.
-         */
+        /* An obituary closes the call it NAMES — and a mis-named one still
+         * closes the current call; see {@link namesThisCall}. */
         return state.call !== null &&
-          (state.call.conversationId === event.payload.conversationId ||
-            !/^[0-9a-f]{8}$/.test(String(event.payload.conversationId)))
+          namesThisCall(state.call.conversationId, String(event.payload.conversationId))
           ? { ...state, call: null }
           : state;
       default:
-        /* Ephemeral audio NEVER reaches the fold. Its body lives only in this
-         * incarnation's buffer, so folding one would make reduced state depend
-         * on something a restart cannot replay. */
         return state;
     }
   }
@@ -2671,30 +2837,58 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
      * event switch and is the only thing that ever dials.
      */
     const wanted = state.call;
-    if (
-      delivery.caughtUp &&
-      wanted !== null &&
-      wanted.conversationId !== this.#retiredId &&
-      this.#call?.conversationId !== wanted.conversationId
-    ) {
-      /*
-       * A NEWER CALL SUPERSEDES THE ONE IN FLIGHT, and getting this wrong
-       * wedges the stream completely.
-       *
-       * The guard used to be `this.#call === null`, which reads as "only dial
-       * when idle" and is really "dial once, ever". Nothing ends a call except
-       * an explicit hang-up, so ONE test call that was never hung up made this
-       * incarnation refuse every later request in silence — nine consecutive
-       * requests on one stream without a single acceptance between them, which
-       * from the client looks exactly like a server that is not there.
-       *
-       * Comparing the id makes the rule the honest one: whatever the fold says
-       * the current call is, that is the call this incarnation holds. A repeat
-       * of the SAME id is still a no-op, so a redelivery or a revival does not
-       * churn a live socket.
-       */
-      this.#endCall("superseded by a newer call on this stream");
-      this.#dial(wanted.conversationId, append, runInBackground);
+    if (delivery.caughtUp && wanted !== null) {
+      if (wanted.endRequested !== null) {
+        /*
+         * THE OBLIGATION'S RECOVERY PASS, and its ordinary execution too.
+         *
+         * Somebody has decided this call is over. Doing it from here rather
+         * than from the per-event switch is what makes a dropped attempt
+         * self-healing: the desire is in the fold, so an incarnation that dies
+         * — or merely fails to write the obituary — is simply asked again the
+         * next time anything reaches head. It is also the only place that CAN
+         * do it after an eviction, where the decider left no socket behind.
+         *
+         * Deliberately NOT behind the `#retiredId` guard. That guard exists to
+         * stop a DIAL resurrecting a call this incarnation has already let go
+         * of; re-running the ending is the opposite — idempotent by key, and
+         * the only thing that ever retries a refused obituary.
+         */
+        this.#endAsRequested(wanted.conversationId, wanted.endRequested.reason, append);
+      } else if (
+        wanted.conversationId !== this.#retiredId &&
+        this.#call?.conversationId !== wanted.conversationId
+      ) {
+        /*
+         * THE FOLD OWES A CALL THIS INCARNATION IS NOT HOLDING, which is
+         * either a call to rescue or a call to bury, and telling those two
+         * apart is what stops the loop below.
+         *
+         * THE LOOP, measured: a call held open as background work arms the
+         * runner's keepalive, the keepalive revives the processor every ten
+         * seconds, and every revival's at-head pass re-dialled — burning one
+         * provider session per lap and, because the deadline lived only in the
+         * dead incarnation's memory, starting the minute again on each one. An
+         * abandoned call kept alive forever by the machinery meant to rescue
+         * it. The cure is that the deadline is derivable from the fold: a
+         * revival can ask "is this past due" instead of "is this open".
+         *
+         * A NEWER CALL STILL SUPERSEDES THE ONE IN FLIGHT. The guard used to
+         * be `this.#call === null`, which reads as "only dial when idle" and
+         * is really "dial once, ever": one test call that was never ended made
+         * this incarnation refuse every later request in silence. Comparing
+         * the id makes the rule the honest one — whatever the fold says the
+         * current call is, that is the call this incarnation holds — and a
+         * repeat of the SAME id stays a no-op, so a redelivery does not churn
+         * a live socket.
+         */
+        if (idleDeadlinePassed(wanted.lastHeardAtMs, this.deps.now())) {
+          this.#requestEnd(wanted.conversationId, IDLE_END_REASON, append, runInBackground);
+        } else {
+          this.#endCall("superseded by a newer call on this stream");
+          this.#dial(wanted.conversationId, append, runInBackground);
+        }
+      }
     }
     if (event === null) return;
     const call = this.#call;
@@ -2849,17 +3043,11 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
         return;
       }
       case "events.iterate.com/voice-agent/conversation-ended": {
-        /*
-         * Same rule as the fold: a matching id ends its call, a non-8-hex id
-         * is the device ending the call it is on under its own name, and only
-         * a MISMATCHED worker-shaped id is a stale obituary to ignore. The log
-         * keeps the firmware defect visible until the device echoes the real
-         * id.
-         */
+        /* Same rule as the fold — see {@link namesThisCall}. The log keeps the
+         * firmware's self-naming visible until the device echoes the real id. */
         if (call !== null) {
           const named = String(event.payload.conversationId);
-          const closes = call.conversationId === named || !/^[0-9a-f]{8}$/.test(named);
-          if (!closes) return;
+          if (!namesThisCall(call.conversationId, named)) return;
           if (call.conversationId !== named) {
             console.log(
               `conversation-ended self-named: live=${call.conversationId} ` +
@@ -2891,21 +3079,51 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
     runInBackground: ProcessEventArgs<VoiceAgentFacetContract>["runInBackground"],
     serverVad = false,
   ): void {
-    const call = new GrokCall(conversationId, this.deps.now());
+    const call = new GrokCall(conversationId, this.deps.now);
     call.serverVad = serverVad;
     this.#call = call;
     /*
-     * The countdown starts with the call, so a dial that neither completes nor
-     * errors ages out on the same clock as a silence rather than never.
+     * A LIVE CALL IS WORK IN FLIGHT, and saying so is the whole keepalive.
      *
-     * Deliberately NOT registered as `runInBackground` work: a promise that
-     * stays in flight for the life of a call arms the runner's keepalive every
-     * ten seconds and REVIVES the processor after an eviction, whose at-head
-     * pass re-dials the call and starts the minute again — an idle call kept
-     * alive forever by the machinery meant to rescue it. That is the eternal
-     * re-dial loop this stream has already been wedged by once.
+     * `runInBackground` is keepalive-backed: while this promise is unsettled
+     * the runner parks a durable alarm ahead of it, so the object stays up
+     * through a silence and a dead incarnation is revived rather than
+     * forgotten. The loop ends when `GrokCall.close` resolves `over`, which is
+     * why there is no alarm code in this file and no second definition of
+     * "the call is over".
+     *
+     * Its answer to "what recovers the OUTCOME if this attempt drops?" is the
+     * at-head pass above, reading `lastHeardAtMs` out of the fold: a revival
+     * either re-dials a conversation that is still going or asks for the end
+     * of one that is not. Without that reading, this registration IS the
+     * eternal re-dial loop — which is exactly how it was measured.
+     *
+     * AND IT IS A CORRECTNESS FIX, NOT ONLY A COST ONE. MEASURED on the
+     * platform: a worker-loader facet whose PARENT goes 73 seconds (±2)
+     * without inbound activity is CORRUPTED rather than reaped — its timers
+     * keep firing and its outbound socket keeps sending (one ran 15+ hours),
+     * its storage writes begin throwing, and the next `facets.get()` hands out
+     * a SECOND fresh facet beside the zombie still holding the provider
+     * socket. A periodic alarm on the parent is the measured cure (30s 9/9
+     * intact, 45s 6/6, 60s 4/4, 120s 0/3), and this registration is exactly
+     * that alarm: the keepalive re-arms ten seconds ahead of in-flight work on
+     * EVERY fire, not once, so a silent call pokes its parent six or seven
+     * times inside the minute it has left. The margin that matters is that
+     * ten, not the thirteen seconds between the deadline and the threshold.
+     * (Checked, not assumed: "keeps the parent poked on a ten-second cadence"
+     * in voice-agent.facet.test.ts.)
+     *
+     * The keepalive's own wedge detector — 90 consecutive fires with nothing
+     * settling, after which the cadence decays into the revival backoff and
+     * would cross the threshold — sits at ~15 minutes, fourteen past the
+     * deadline that ends a silent call. It cannot be reached from here.
+     *
+     * The countdown rides the SAME registration rather than a timer of its
+     * own, because "this call is still open" and "this call has been quiet
+     * long enough" are one question asked twice. See `#holdUntilIdle` for why
+     * a bare `setTimeout` could not answer it.
      */
-    call.watchIdle(this.deps.setTimer, () => this.#hangUpIdle(call));
+    runInBackground(() => this.#holdUntilIdle(call, append));
     runInBackground(async () => {
       let failure: string | null = null;
       try {
@@ -3037,7 +3255,14 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
             },
             {
               type: "events.iterate.com/voice-agent/buffer-flushed",
-              idempotencyKey: this.idempotencyKey(`flushed:${call.conversationId}`),
+              /* Per DIAL, not per conversation — see GrokCall.openedAtMs. A
+               * call rescued after an eviction handshakes again, and its
+               * numbers are its own; keyed on the conversation, the second
+               * handshake's append was rejected outright and took the
+               * acceptance beside it down too. */
+              idempotencyKey: this.idempotencyKey(
+                `flushed:${call.conversationId}:${call.openedAtMs}`,
+              ),
               payload: {
                 conversationId: call.conversationId,
                 frames: framesQueued,
@@ -3289,36 +3514,135 @@ export class VoiceAgentFacetProcessor extends StreamProcessor<
   }
 
   /**
-   * A whole minute with nothing said either way: end the call.
+   * Stay in flight for the life of this call, and ASK for its end when a whole
+   * minute has passed with nothing said either way.
    *
-   * Deliberately an APPEND of the ORDINARY `conversation-ended` — the same
-   * event a device writes when somebody presses the hang-up button and the
-   * same one the assistant's own hang-up tool writes. There is one way to end
-   * a call and three things that can decide to: the person, the model, and the
-   * clock. So the fold, the `#retiredId` guard and the provider-close handling
-   * all keep working unchanged, rather than needing a second copy of the same
-   * reasoning for an expiry that is not special.
+   * TWO JOBS, ONE PROMISE, and they belong together. Unsettled, this is the
+   * obligation that keeps the Durable Object up (and its parent poked, which
+   * is what stops a facet being corrupted at 73 seconds); settled, it is the
+   * release that lets the object hibernate. Asking for the end is simply the
+   * last thing it does before settling.
+   *
+   * IT IS A LOOP AND NOT A TIMER, and that is the whole repair. A
+   * `setTimeout` armed from the synchronous body of a delivery belongs to a
+   * request context that ends with that delivery — MEASURED on preview-3: a
+   * live call, 150 seconds of silence, a facet demonstrably alive (it answered
+   * a warm-up probe in 154ms), a stream with no traffic on it at all, and no
+   * end ever requested. Running inside a `runInBackground` closure is what
+   * gives the wake somewhere to happen and the append something to happen in;
+   * the pacer's drain loop has always worked for exactly this reason.
+   *
+   * The sleep is EXACTLY as long as the call has left, so somebody speaking
+   * costs nothing (the next wake simply recomputes) and the deadline is the
+   * deadline rather than a polling interval rounded up.
+   *
+   * Not a hang-up: this appends the decision and lets the delivery lane do the
+   * ending in {@link #endAsRequested}, so there stays one code path that
+   * closes a socket and writes an obituary however the decision was reached.
    */
-  async #hangUpIdle(call: GrokCall): Promise<void> {
-    /* Superseded or already gone: the countdown belongs to a call this
-     * processor no longer holds, and burying it would bury its successor. */
-    if (call.closed || this.#call !== call) return;
-    try {
-      await this.append({
-        type: "events.iterate.com/voice-agent/conversation-ended",
-        payload: {
-          conversationId: call.conversationId,
-          reason: `no utterance from either side for ${IDLE_TIMEOUT_MS / 1000}s`,
-        },
-      });
-    } catch (error) {
-      /* The countdown is spent and the call is still up, so nothing else would
-       * ever end it. Start another minute rather than leak the conversation. */
-      console.log(
-        `voice call ${call.conversationId} idle hang-up failed to append: ${String(error)}`,
-      );
-      call.spoke();
+  async #holdUntilIdle(
+    call: GrokCall,
+    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
+  ): Promise<void> {
+    while (!call.closed) {
+      const idleForMs = this.deps.now() - call.lastSpokeAtMs;
+      if (idleForMs < IDLE_TIMEOUT_MS) {
+        /* Racing `over` is what makes a call that ends by any other route —
+         * a device's hang-up, a provider close, being superseded — release
+         * this immediately instead of holding the object for the rest of the
+         * minute it no longer has. */
+        await Promise.race([this.deps.sleep(IDLE_TIMEOUT_MS - idleForMs), call.over]);
+        continue;
+      }
+      try {
+        await append({
+          type: "events.iterate.com/voice-agent/conversation-end-requested",
+          idempotencyKey: this.idempotencyKey(`end-requested:${call.conversationId}`),
+          payload: { conversationId: call.conversationId, reason: IDLE_END_REASON },
+        });
+      } catch (error) {
+        /* Nothing was decided, so nothing will end this call unless the next
+         * minute is started here. */
+        console.log(
+          `voice call ${call.conversationId} idle end-request failed to append: ${String(error)}`,
+        );
+        call.spoke();
+        continue;
+      }
+      /*
+       * ASKED, NOT DONE. Settling now would release the keepalive between the
+       * decision and the ending — the object could hibernate holding a socket
+       * nobody has closed. So wait for the delivery lane to close the call;
+       * if a minute passes and it somehow has not, ask again (the idempotency
+       * key collapses the repeat into the request already on the log).
+       */
+      await Promise.race([call.over, this.deps.sleep(IDLE_TIMEOUT_MS)]);
     }
+  }
+
+  /**
+   * Ask for a call to end, from inside a delivery.
+   *
+   * Keyed on the conversation, so the countdown and the at-head pass racing
+   * each other collapse into ONE request rather than a queue of identical
+   * decisions. Within one incarnation they cannot race — a live one reads only
+   * its countdown, a revived one only the fold — so the key is for the case
+   * across incarnations, where a dying incarnation's request is still in
+   * flight as its successor concludes the same thing. That race is real and no
+   * unit test here can stage it (a crash drops in-flight closures), which is
+   * exactly why {@link IDLE_END_REASON} is a constant: same key, same body,
+   * collapse rather than the rejection a differing body would earn.
+   *
+   * Registered as background work so the append rides the keepalive; if it
+   * drops, the next at-head pass asks again — the same recovery the request
+   * itself provides for the obituary.
+   */
+  #requestEnd(
+    conversationId: string,
+    reason: string,
+    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgentFacetContract>["runInBackground"],
+  ): void {
+    console.log(`voice call ${conversationId} end requested: ${reason}`);
+    runInBackground(async () => {
+      await append({
+        type: "events.iterate.com/voice-agent/conversation-end-requested",
+        idempotencyKey: this.idempotencyKey(`end-requested:${conversationId}`),
+        payload: { conversationId, reason },
+      });
+    });
+  }
+
+  /**
+   * Somebody decided; do it. Close the provider socket if this incarnation is
+   * the one holding it, and write the obituary either way.
+   *
+   * EITHER WAY is the load-bearing half. A revived incarnation holds no
+   * socket, and if it declined to write the obituary on that account the fold
+   * would name an open call forever and every later pass would ask for the
+   * same ending again. The idempotency key makes the retry free and the
+   * duplicate impossible.
+   */
+  #endAsRequested(
+    conversationId: string,
+    reason: string,
+    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
+  ): void {
+    /* Only if it is THIS call: an in-flight `call-started` can mean the socket
+     * in hand is a successor the fold has not heard about yet. */
+    if (this.#call?.conversationId === conversationId) this.#endCall(reason);
+    this.#retiredId = conversationId;
+    void append({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      idempotencyKey: this.idempotencyKey(`ended:${conversationId}`),
+      payload: { conversationId, reason },
+    }).catch((error: unknown) => {
+      /* CAUGHT, for the reason `#endCall` spells out: this is the last thing
+       * the facet does before the object is allowed to hibernate. Losing it
+       * costs one more pass — the fold still says an end was requested, so the
+       * next incarnation to reach head writes it. */
+      console.log(`voice call ${conversationId} obituary failed to append: ${String(error)}`);
+    });
   }
 
   /**
@@ -3375,15 +3699,14 @@ export class VoiceAgentFacet extends StreamProcessorFacet {
     return new VoiceAgentFacetProcessor({
       ...deps,
       now: () => Date.now(),
+      /* A plain `setTimeout`, and it is safe to be one BECAUSE of where it is
+       * awaited: every wait in this processor happens inside a
+       * `runInBackground` closure the keepalive holds, so the object is up to
+       * receive it and there is an I/O context to append from. What covers the
+       * silence a live object cannot — because it died anyway — is the same
+       * deadline folded into reduced state. Nothing here needs to know either. */
       sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
       dialGrok: () => dialGrokSocket(),
-      /* Plain `setTimeout`/`clearTimeout`. What keeps it alive across the
-       * silence it is measuring is the processor registering the call as
-       * background work, not anything here — see `#dial`. */
-      setTimer: (ms: number, fire: () => Promise<void>) => {
-        const handle = setTimeout(() => void fire(), ms);
-        return () => clearTimeout(handle);
-      },
     });
   }
 }

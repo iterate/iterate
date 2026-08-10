@@ -15,6 +15,7 @@ const PTT_START = "events.iterate.com/voice-agent/ptt-start";
 const PTT_END = "events.iterate.com/voice-agent/ptt-end";
 const MIC_FRAME = "events.iterate.com/voice-agent/mic-frame";
 const CALL_STARTED = "events.iterate.com/voice-agent/call-started";
+const END_REQUESTED = "events.iterate.com/voice-agent/conversation-end-requested";
 const ACCEPTED = "events.iterate.com/voice-agent/conversation-accepted";
 const FLUSHED = "events.iterate.com/voice-agent/buffer-flushed";
 const SPK_FRAME = "events.iterate.com/voice-agent/spk-frame";
@@ -98,25 +99,13 @@ function fakeGrok() {
   };
 }
 
-/**
- * `setTimeout`/`clearTimeout` on the harness's VIRTUAL clock.
- *
- * The idle countdown is a minute long, so waiting one out is not a test.
- * `advanceTime` releases the harness's sleeps, which is what makes the whole
- * deadline observable in a millisecond; `cancel` is honoured exactly as
- * `clearTimeout` is, so a call that ends early really does take its timer with
- * it (the abandoned sleep resolves and does nothing).
+/*
+ * THE MINUTE IS A SLEEP ON THE HARNESS'S VIRTUAL CLOCK, which is what makes a
+ * sixty-second deadline observable in a millisecond. `advanceTime` releases
+ * due sleeps, so the same `deps.sleep` the pacer's drain loop uses is also
+ * what the idle countdown waits on — there is deliberately no second timing
+ * seam to keep in step with it.
  */
-function virtualTimer(deps: { sleep: (ms: number) => Promise<void> }) {
-  return (ms: number, fire: () => Promise<void>) => {
-    let live = true;
-    void deps.sleep(ms).then(() => (live ? fire() : undefined));
-    return () => {
-      live = false;
-    };
-  };
-}
-
 function harnessWith(provider: ReturnType<typeof fakeGrok>, dialMs = 0) {
   return makeProcessorHarness<VoiceAgentFacetContract, VoiceAgentFacetProcessor>({
     path: "/agents/voice/harness",
@@ -124,7 +113,6 @@ function harnessWith(provider: ReturnType<typeof fakeGrok>, dialMs = 0) {
       new VoiceAgentFacetProcessor({
         ...deps,
         now: deps.now,
-        setTimer: virtualTimer(deps),
         dialGrok: async () => {
           if (dialMs > 0) await deps.sleep(dialMs);
           return provider.socket;
@@ -152,7 +140,6 @@ function harnessWithFreshProviders() {
       new VoiceAgentFacetProcessor({
         ...deps,
         now: deps.now,
-        setTimer: virtualTimer(deps),
         dialGrok: async () => {
           const provider = fakeGrok();
           providers.push(provider);
@@ -460,7 +447,7 @@ describe("letting the Durable Object sleep", () => {
   const ENDED = "events.iterate.com/voice-agent/conversation-ended";
   const IDLE_REASON = "no utterance from either side for 60s";
 
-  it("hangs up a minute after the last thing either side said", async () => {
+  it("asks for the end a minute after the last thing either side said", async () => {
     const provider = fakeGrok();
     const harness = harnessWith(provider);
     await harness.append({ type: PTT_START, payload: {} });
@@ -476,9 +463,18 @@ describe("letting the Durable Object sleep", () => {
     expect(provider.closed).toBe(false);
     expect(harness.state().call).not.toBeNull();
 
-    /* ...and a second later it is over, said out loud on the stream. */
+    /* ...and a second later it is over, in two steps that are both readable
+     * from the log: somebody decided, with a reason, and then the facet did
+     * it. That order is the whole design — the decider need not be holding
+     * the socket, and here it happens to be. */
     await harness.advanceTime(1_000);
-    expect(harness.events(ENDED).at(-1)?.payload).toMatchObject({ reason: IDLE_REASON });
+    const requested = harness.events(END_REQUESTED);
+    const ended = harness.events(ENDED);
+    expect(requested).toHaveLength(1);
+    expect(requested[0]!.payload).toMatchObject({ reason: IDLE_REASON });
+    expect(ended).toHaveLength(1);
+    expect(ended[0]!.payload).toMatchObject({ reason: IDLE_REASON });
+    expect(requested[0]!.offset).toBeLessThan(ended[0]!.offset);
     expect(harness.state().call).toBeNull();
     expect(provider.closed).toBe(true);
   });
@@ -562,6 +558,17 @@ describe("letting the Durable Object sleep", () => {
     const quiet = harness.events().length;
     await harness.advanceTime(300_000);
     expect(harness.events().length).toBe(quiet);
+    /*
+     * AND THE KEEPALIVE HAS LET GO, which is what "the Durable Object may
+     * hibernate" actually means. A call is registered as background work, so
+     * an unreleased one would leave the runner's alarm re-arming every ten
+     * seconds forever — invisible in the event count while the incarnation
+     * lives, and a revival the moment it does not. An eviction now brings
+     * nobody back.
+     */
+    harness.crash();
+    await harness.advanceTime(300_000);
+    expect(harness.events()).toHaveLength(quiet);
   });
 
   it("re-dials on the press after an idle hang-up, so it costs a caller nothing", async () => {
@@ -616,13 +623,44 @@ describe("letting the Durable Object sleep", () => {
   });
 
   /*
-   * THE CLOCK ENDS A CALL THE SAME WAY A PERSON DOES: by appending the
-   * ordinary `conversation-ended`. That is what keeps the fold, the
-   * just-buried guard above and the provider-close handling all working
-   * unchanged — but it also means the hang-up can be REFUSED, and the
-   * countdown that would have retried it has already been spent.
+   * THE CLOCK ENDS A CALL THE SAME WAY A PERSON DOES: by appending, which
+   * means it can be REFUSED — and the countdown that would have retried it
+   * has already been spent by the time it finds out.
    */
-  it("starts another minute when the idle hang-up cannot be written", async () => {
+  it("starts another minute when the decision cannot be written", async () => {
+    const provider = fakeGrok();
+    const harness = harnessWith(provider);
+    await harness.append({ type: PTT_START, payload: {} });
+    provider.greet();
+    provider.ready();
+    await harness.settle();
+
+    harness.stream.failAppendsOfType = END_REQUESTED;
+    await harness.advanceTime(60_000);
+    /* Nobody decided anything, so nothing ended — and the call is still HELD
+     * rather than orphaned with no clock on it. */
+    expect(harness.events(END_REQUESTED)).toHaveLength(0);
+    expect(harness.events(ENDED)).toHaveLength(0);
+    expect(harness.state().call).not.toBeNull();
+    expect(provider.closed).toBe(false);
+
+    harness.stream.failAppendsOfType = undefined;
+    await harness.advanceTime(60_000);
+    expect(harness.events(ENDED).at(-1)?.payload).toMatchObject({ reason: IDLE_REASON });
+    expect(provider.closed).toBe(true);
+  });
+
+  /*
+   * A DECISION THAT IS ALREADY DURABLE IS NOT UNDONE BY A FAILED FOLLOW-UP.
+   *
+   * Once the request is on the log the call is over, so the socket goes even
+   * if the obituary cannot be written — keeping a provider session alive
+   * because a second append failed is the opposite of what any of this is
+   * for. What the failure costs is a fold that still names the call, and the
+   * fold is exactly what makes the retry free: it says an end was requested,
+   * so the next pass to reach head writes the obituary again.
+   */
+  it("lets the socket go even when the obituary cannot be written", async () => {
     const provider = fakeGrok();
     const harness = harnessWith(provider);
     await harness.append({ type: PTT_START, payload: {} });
@@ -632,16 +670,201 @@ describe("letting the Durable Object sleep", () => {
 
     harness.stream.failAppendsOfType = ENDED;
     await harness.advanceTime(60_000);
-    /* Nothing was written, so nothing ended — and the call is still HELD
-     * rather than orphaned with no clock on it. */
+    expect(harness.events(END_REQUESTED)).toHaveLength(1);
+    expect(harness.events(ENDED)).toHaveLength(0);
+    expect(provider.closed).toBe(true);
+    expect(harness.state().call).not.toBeNull();
+
+    /* Anything at all reaching head is enough to finish it. */
+    harness.stream.failAppendsOfType = undefined;
+    await harness.append({
+      type: "events.iterate.com/voice-agent/device-presence",
+      payload: { connected: true },
+    });
+    expect(harness.events(ENDED)).toHaveLength(1);
+    expect(harness.events(ENDED)[0]!.payload).toMatchObject({ reason: IDLE_REASON });
+    expect(harness.state().call).toBeNull();
+  });
+});
+
+/*
+ * THE EVICTION, which is where every version of this has gone wrong.
+ *
+ * A call is registered as background work so the Durable Object stays up
+ * through the silence it is measuring. That registration also arms the
+ * runner's keepalive, which REVIVES the processor after an eviction — and a
+ * revived incarnation holds no socket while the fold still says a call is
+ * open. MEASURED: the at-head pass re-dialled on every revival, roughly every
+ * ten seconds, restarting the in-memory minute each time. An abandoned call
+ * kept alive forever by the machinery meant to rescue it, one provider session
+ * per lap.
+ *
+ * `crash()` is that eviction exactly: runtime state and pending closures die,
+ * the stream, the progress record and the clock survive, and the armed alarm
+ * brings a fresh incarnation back. So the fix has to be visible here or it is
+ * not a fix.
+ */
+describe("an eviction mid-call", () => {
+  const ENDED = "events.iterate.com/voice-agent/conversation-ended";
+  const REVIVED = "events.iterate.com/stream/processor-revived";
+
+  /*
+   * THE CADENCE, WHICH IS A CORRECTNESS PROPERTY AND NOT A COST ONE.
+   *
+   * MEASURED on the platform: a worker-loader facet whose PARENT sees no
+   * inbound activity for 73 seconds (±2) is corrupted — not reaped. Its timers
+   * keep firing and its outbound socket keeps sending (one ran 15+ hours),
+   * its storage writes start throwing, and `facets.get()` on the new parent
+   * hands out a SECOND, fresh facet while the first runs on. Two live
+   * incarnations, one of them a zombie holding the provider socket, which is a
+   * worse failure than the idle call this whole file is about. A periodic
+   * alarm on the parent is the measured fix (30s 9/9 intact, 45s 6/6, 60s 4/4,
+   * 120s 0/3).
+   *
+   * A held call is `runInBackground` work, and the runner's keepalive re-arms
+   * a durable alarm ten seconds ahead of in-flight work on EVERY fire, not
+   * once — so the parent is poked six or seven times inside the minute a
+   * silent call has left to live, and never approaches the threshold. This
+   * test is that claim, checked rather than asserted in a comment: each crash
+   * proves the alarm standing at the moment of the crash was less than eleven
+   * seconds out, and doing it three times proves the re-arm rather than a
+   * single park.
+   */
+  it("keeps the parent poked on a ten-second cadence while a call is open", async () => {
+    const { harness, providers } = harnessWithFreshProviders();
+    await takeTurn(harness, providers);
+
+    for (let lap = 1; lap <= 3; lap++) {
+      /* Twenty-five seconds of held call, which is two keepalive fires. A
+       * keepalive owed NOTHING confirms quiet on the first of them and
+       * DISARMS — leaving no alarm at all to poke the parent with — so this
+       * wait is what makes the crash below measure the obligation rather than
+       * some leftover alarm from the turn. */
+      await harness.advanceTime(25_000);
+      const revivedBefore = harness.events(REVIVED).length;
+      harness.crash();
+      await harness.advanceTime(11_000);
+
+      /* The alarm standing when the incarnation died was less than eleven
+       * seconds out — three laps running, so a re-arm and not a single park. */
+      expect(harness.events(REVIVED).length).toBeGreaterThan(revivedBefore);
+      expect(harness.state().call).not.toBeNull();
+
+      /* The rescue is a working call again, and somebody speaks on it, so the
+       * next lap measures the cadence rather than the deadline. */
+      const rescued = providers.at(-1)!;
+      rescued.greet();
+      rescued.ready();
+      await harness.settle();
+      await harness.append({ type: PTT_START, payload: {} });
+    }
+    expect(harness.events(ENDED)).toHaveLength(0);
+  });
+
+  it("buries a call that is already past due rather than re-dialling it", async () => {
+    const { harness, providers } = harnessWithFreshProviders();
+    await takeTurn(harness, providers);
+
+    /* A second short of the minute — then the incarnation holding the
+     * countdown dies, taking the countdown with it. Nothing in memory can end
+     * this call now; only the deadline in the fold can. */
+    await harness.advanceTime(59_000);
+    harness.crash();
+    await harness.advanceTime(20_000);
+
+    expect(providers).toHaveLength(1);
+    expect(harness.events(END_REQUESTED)).toHaveLength(1);
+    expect(harness.events(END_REQUESTED)[0]!.payload).toMatchObject({
+      reason: "no utterance from either side for 60s",
+    });
+    expect(harness.events(ENDED)).toHaveLength(1);
+    expect(harness.state().call).toBeNull();
+  });
+
+  it("gives a call its full minute even when its press is already gone", async () => {
+    /*
+     * THE FLOOR UNDER THE DEADLINE. A press is EPHEMERAL: it exists in the
+     * incarnation that handled it and nowhere else, so an eviction seconds
+     * after the dial leaves `call-started` as the only durable trace that
+     * anybody spoke at all. If the fold did not take its stamp as the start of
+     * the minute, a revival would read "never heard from" as "heard from at
+     * the epoch" and bury a call one second old.
+     */
+    const { harness, providers } = harnessWithFreshProviders();
+    await harness.append({ type: PTT_START, payload: {} });
+    await harness.settle();
+    expect(harness.events(CALL_STARTED)).toHaveLength(1);
+
+    harness.crash();
+    await harness.advanceTime(15_000);
+
+    expect(harness.events(END_REQUESTED)).toHaveLength(0);
+    expect(harness.state().call).not.toBeNull();
+    expect(providers).toHaveLength(2);
+  });
+
+  it("re-dials a conversation that is still going, so a pause is not a hang-up", async () => {
+    const { harness, providers } = harnessWithFreshProviders();
+    await takeTurn(harness, providers);
+
+    /* Twenty seconds into a pause, which is a person thinking. */
+    await harness.advanceTime(20_000);
+    harness.crash();
+    await harness.advanceTime(15_000);
+
+    expect(providers).toHaveLength(2);
+    expect(harness.events(END_REQUESTED)).toHaveLength(0);
+    expect(harness.state().call).not.toBeNull();
+    /* And it is the SAME conversation, rescued — not a new one. */
+    expect(harness.events(CALL_STARTED)).toHaveLength(1);
+  });
+
+  it("cannot be kept alive forever by the machinery meant to rescue it", async () => {
+    const { harness, providers } = harnessWithFreshProviders();
+    await takeTurn(harness, providers);
+
+    /* Five minutes of eviction after eviction with nobody speaking. The old
+     * shape dialled a fresh provider session on every lap; the deadline in the
+     * fold does not move without an utterance, so the laps run out. */
+    for (let round = 0; round < 20; round++) {
+      harness.crash();
+      await harness.advanceTime(15_000);
+    }
+
+    expect(harness.events(ENDED)).toHaveLength(1);
+    expect(harness.state().call).toBeNull();
+    /* Every rescue happened inside the first minute — four laps, not twenty. */
+    expect(providers.length).toBeLessThanOrEqual(5);
+
+    const dialled = providers.length;
+    harness.crash();
+    await harness.advanceTime(120_000);
+    expect(providers).toHaveLength(dialled);
+    expect(harness.events(ENDED)).toHaveLength(1);
+  });
+
+  it("never ages out a board that streams continuously, across an eviction", async () => {
+    /* An open-mic board has no press to re-dial on, so an eviction must not be
+     * allowed to read its silence-free stream as silence. Every frame it sends
+     * moves the deadline in the fold, which is the only thing a revived
+     * incarnation can read. */
+    const { harness, providers } = harnessWithFreshProviders();
+    await harness.append({ type: PTT_START, payload: { client: "/clients/stackchan" } });
+    await harness.settle();
+    providers[0]!.greet();
+    providers[0]!.ready();
+    await harness.settle();
+
+    for (let second = 0; second < 120; second++) {
+      if (second === 40 || second === 80) harness.crash();
+      await harness.append(micFrame(second));
+      await harness.advanceTime(1_000);
+    }
+
+    expect(harness.events(END_REQUESTED)).toHaveLength(0);
     expect(harness.events(ENDED)).toHaveLength(0);
     expect(harness.state().call).not.toBeNull();
-    expect(provider.closed).toBe(false);
-
-    harness.stream.failAppendsOfType = undefined;
-    await harness.advanceTime(60_000);
-    expect(harness.events(ENDED).at(-1)?.payload).toMatchObject({ reason: IDLE_REASON });
-    expect(provider.closed).toBe(true);
+    expect(harness.events(CALL_STARTED)).toHaveLength(1);
   });
 });
 

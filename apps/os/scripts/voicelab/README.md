@@ -71,6 +71,47 @@ pnpm cli voicelab bench --project prj_… --seconds 120 --rate 50
 Every command prints a JSON summary with nearest-rank percentiles; `client`
 and `direct` share a summary shape so overhead subtracts cleanly.
 
+## Ending a conversation
+
+A conversation is a **session**, not a press and not an answer: one provider
+socket across many presses and several minutes. It ends when nobody has spoken
+in EITHER direction for sixty seconds, or when a person or the model hangs up.
+
+There is one way to end a call and three things that can decide to. Whoever
+decides appends `voice-agent/conversation-end-requested` with a reason; the
+facet consumes it on its ordinary delivery lane, lets the provider socket go,
+and appends `voice-agent/conversation-ended`. Both are on the stream, so a
+teardown is readable after the fact rather than inferred from silence.
+
+The deadline is kept twice, deliberately. An in-memory countdown ends a call on
+a Durable Object that is still up and sees both directions — a keepalive-backed
+`runInBackground` loop that sleeps exactly as long as the call has left, NOT a
+`setTimeout` (one of those, armed from a delivery whose request context has
+already ended, silently never fires; measured on preview-3). The same deadline
+is also derivable from the fold (`call.lastHeardAtMs`, folded from the press
+verbs and every microphone frame using their own commit stamps, with no extra
+appends), which is the half that survives the eviction the first cannot — and
+which is what stops a revived incarnation re-dialling an abandoned call every
+ten seconds forever. `voice-agent.ts`'s `idleDeadlinePassed` explains why the
+two cannot disagree.
+
+Proving it takes a real deployment and real silence, because the interesting
+case is the Durable Object being evicted underneath the call:
+
+```bash
+# one press, then 150s of nobody saying anything: expect the request and the end
+doppler run --config preview_3 -- pnpm cli voicelab teardown \
+  --project marginal-1 --stream-path /agents/voice/teardown-1
+
+# the negative: four presses 45s apart stay on ONE call, and only then end
+doppler run --config preview_3 -- pnpm cli voicelab teardown \
+  --project marginal-1 --stream-path /agents/voice/teardown-2 \
+  --presses 4 --gap-ms 45000
+```
+
+The quiet phase drops the itx connection entirely rather than polling — a poll
+every few seconds keeps the object awake and proves the easy half.
+
 ## Against a real device
 
 Ask the board; do not wait to be told. Every number a device has is served on

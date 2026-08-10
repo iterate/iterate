@@ -12,6 +12,7 @@ export { prove } from "./prove.ts";
 export { reveal } from "./reveal.ts";
 export { reliability } from "./reliability.ts";
 export { talk } from "./talk.ts";
+export { teardown } from "./teardown.ts";
 export { pttBaseline } from "./ptt-baseline.ts";
 export { pttLatency } from "./ptt-latency.ts";
 export { pttMarginal } from "./ptt-marginal.ts";
