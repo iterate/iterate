@@ -2148,7 +2148,9 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
   const booted = runtimeState(await stream.runtimeState());
   expect(booted.coreProcessorState.subscriptions.outbound.byName[subscriptionName]).toBeDefined();
   expect(booted.coreProcessorState.maxOffset).toBeGreaterThanOrEqual(bootWoken.offset);
-  const quietAfterOffset = bootWoken.offset;
+  // waitForEvent briefly opens and closes its own session after the boot fact;
+  // start the quiet window after those barrier-owned lifecycle facts too.
+  const quietAfterOffset = booted.coreProcessorState.maxOffset;
   await new Promise((resolve) => setTimeout(resolve, 25_000));
   const quietEndedAt = Date.now();
   const lifecycleEventsDuringQuiet = (
