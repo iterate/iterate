@@ -27,6 +27,7 @@ import {
 } from "react-native";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
 import { Markdown } from "../../../components/markdown.tsx";
+import { MediaViewer } from "../../../components/media-viewer.tsx";
 import { getProjectItx } from "../../../lib/itx.ts";
 import {
   buildProcessScript,
@@ -69,7 +70,9 @@ export default function MediaScreen() {
   const [query, setQuery] = useState(q || "");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [pending, setPending] = useState<PendingItem[]>([]);
-  const [viewerUri, setViewerUri] = useState<string | null>(null);
+  const [viewer, setViewer] = useState<{ uri: string; tags: string[]; markdown: string } | null>(
+    null,
+  );
 
   const server = useQuery({
     queryKey: ["server"],
@@ -283,7 +286,11 @@ export default function MediaScreen() {
             pending.length > 0 ? (
               <View style={{ gap: spacing.sm, marginBottom: spacing.sm }}>
                 {pending.map((row) => (
-                  <PendingRow key={row.previewUri} onViewImage={setViewerUri} row={row} />
+                  <PendingRow
+                    key={row.previewUri}
+                    onViewImage={(uri) => setViewer({ uri, tags: [], markdown: "" })}
+                    row={row}
+                  />
                 ))}
               </View>
             ) : null
@@ -292,7 +299,9 @@ export default function MediaScreen() {
             <MediaRow
               baseUrl={baseUrl!}
               item={item}
-              onViewImage={setViewerUri}
+              onViewImage={(uri) =>
+                setViewer({ uri, tags: item.payload.tags, markdown: item.payload.markdown })
+              }
               projectId={projectId}
             />
           )}
@@ -300,20 +309,19 @@ export default function MediaScreen() {
       )}
       <Modal
         animationType="fade"
-        onRequestClose={() => setViewerUri(null)}
+        onRequestClose={() => setViewer(null)}
         statusBarTranslucent
         transparent
-        visible={viewerUri !== null}
+        visible={viewer !== null}
       >
-        <Pressable
-          accessibilityLabel="Close image"
-          onPress={() => setViewerUri(null)}
-          style={styles.viewer}
-        >
-          {viewerUri ? (
-            <Image resizeMode="contain" source={{ uri: viewerUri }} style={styles.viewerImage} />
-          ) : null}
-        </Pressable>
+        {viewer ? (
+          <MediaViewer
+            markdown={viewer.markdown}
+            onClose={() => setViewer(null)}
+            tags={viewer.tags}
+            uri={viewer.uri}
+          />
+        ) : null}
       </Modal>
     </View>
   );
@@ -592,11 +600,4 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   reanalyzeText: { color: colors.textMuted, fontSize: 12, fontWeight: "500" },
-  viewer: {
-    alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.92)",
-    flex: 1,
-    justifyContent: "center",
-  },
-  viewerImage: { height: "100%", width: "100%" },
 });

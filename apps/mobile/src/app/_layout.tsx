@@ -2,6 +2,7 @@ import "react-native-url-polyfill/auto";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Stack, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { initialWindowMetrics, SafeAreaProvider } from "react-native-safe-area-context";
 import { queryClient } from "../lib/query.ts";
 import { routeInitialNotification } from "../lib/push-device.ts";
@@ -9,11 +10,15 @@ import { colors } from "../lib/theme.ts";
 
 export default function RootLayout() {
   return (
-    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-      <QueryClientProvider client={queryClient}>
-        <RootStack />
-      </QueryClientProvider>
-    </SafeAreaProvider>
+    // GestureHandlerRootView: required once at the root for GestureDetector
+    // (the media viewer's pinch/pan/tap) to receive events.
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+        <QueryClientProvider client={queryClient}>
+          <RootStack />
+        </QueryClientProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
