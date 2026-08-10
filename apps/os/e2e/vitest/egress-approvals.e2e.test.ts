@@ -449,6 +449,76 @@ test("a script run's parked hold survives a stream Durable Object restart", asyn
   }
 }, 120_000);
 
+test("an approved fetch never succeeds without its durable settlement fact", async () => {
+  const echo = await startEgressEcho();
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+
+  try {
+    using project = await itx.projects
+      .get(`egress-settlement-required-${crypto.randomUUID()}`)
+      .create({});
+    const root = project.streams.get("/");
+    await root.append({
+      type: RULES_CONFIGURED,
+      payload: {
+        rules: [
+          {
+            ruleKey: "needs-human",
+            description: "POSTs to the echo need a human",
+            match: { hosts: [new URL(echo.url).hostname], methods: ["POST"] },
+            verdict: "hold",
+            approvalTimeoutMs: 60_000,
+          },
+        ],
+      },
+    });
+    await waitForCondition(
+      async () => (await project.processor.snapshot()).state.egressRules.length === 1,
+      { description: "project processor to fold the hold rule" },
+    );
+
+    // Normalize capnweb's callable RpcPromise into a native Promise so Vitest
+    // does not mistake it for a function matcher target.
+    const heldFetch = (async () =>
+      await project.egress.fetch(
+        new Request(echo.url, {
+          method: "POST",
+          body: "settlement is part of success",
+        }),
+      ))();
+    const requested = await root.waitForEvent({
+      afterOffset: 0,
+      eventTypes: [REQUESTED],
+      timeoutMs: 30_000,
+    });
+
+    // Occupy the deterministic settlement key with a different durable fact.
+    // This injects a non-retryable journal failure through the public stream
+    // API, without reaching into Stream DO storage or mocking the egress door.
+    await root.append({
+      type: "events.iterate.com/test/occupied-egress-settlement-key",
+      idempotencyKey: `human-approval-settled:${requested.offset}:0`,
+      payload: { injectedBy: "egress settlement durability e2e" },
+    });
+    await root.append({
+      type: DECIDED,
+      payload: {
+        approvalRequestEventOffset: requested.offset,
+        verdicts: ["approve"],
+        decidedBy: "human",
+      },
+    });
+
+    await expect(heldFetch).rejects.toThrow(/idempotency/i);
+    await expect(
+      root.getEvents({ afterOffset: requested.offset, eventTypes: [SETTLED] }),
+    ).resolves.toEqual([]);
+  } finally {
+    await echo.close();
+  }
+}, 120_000);
+
 test("approved worker WebSocket egress stays on the fetch-native transport", async () => {
   await using echo = await startWebSocketEcho();
   using session = withItxSession();
