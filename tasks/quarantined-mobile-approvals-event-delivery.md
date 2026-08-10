@@ -165,3 +165,12 @@ hide a recurrence with a timeout increase or another retry.
   index. The unchanged four-worker/eight-outcome shape subsequently passed 8/8
   against preview 8. Formal counters remain at zero until the new exact head is
   deployed.
+- 2026-08-10: Canonical preview on `ec841aa78` deployed OS version
+  `12a99a85-d3bc-4831-a44b-8e5823be2649`; both restored flows passed first try
+  in 53.5s and 58.7s. The workflow still failed because the unrelated
+  `clients-os-app` spec called `capabilities.browser.url` as soon as the client
+  catalog saw its provider Pager, before the following capability-provided
+  event reduced. The product contract documents those as separate durable
+  transitions. The spec now polls the public call through that one classified
+  mounting outcome; its four-worker replay passed 4/4. This gate-discovered
+  test fix changes the head, so the formal mobile and canonical counters reset.
