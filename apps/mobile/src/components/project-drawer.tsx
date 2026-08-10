@@ -162,7 +162,7 @@ function DrawerButton({ project }: { project: { projectId: string; projectSlug: 
                       onPress={() => close(projectRoute("/project/[projectId]/media"))}
                     />
                     <DrawerItem
-                      label="Notifications"
+                      label="/notifications"
                       onPress={() => close(projectRoute("/project/[projectId]/notifications"))}
                     />
                     <View style={styles.separator} />
