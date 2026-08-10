@@ -3627,10 +3627,9 @@ class PostHogIntegrationRpcTarget extends RpcTarget {
  * The SDK connection targets are thin dispatchers over the normal vendor
  * clients. A project extends the collection with ordinary
  * `provideCapability({ path: ["integrations", ...] })` — data, not deployment.
- * `completeConnect` is called by the app worker's
- * OAuth callback routes (/api/integrations/<provider>/callback); its
- * authority is the HMAC-signed OAuth state minted by startOAuthFlow,
- * verified itx-side.
+ * Native `completeConnect` calls are bound to this RPC target's authenticated
+ * user; browser callbacks use the same domain operation with their cookie
+ * session. Both re-verify the HMAC-signed state minted by startOAuthFlow.
  */
 class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations"> {
   constructor(
@@ -4074,7 +4073,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       children: {
         cf: "Cloudflare first-party platform bindings: ai, browser, images, videos.",
         completeConnect:
-          "OAuth callback completion; authority is the HMAC-signed state minted by startOAuthFlow.",
+          "Complete a native OAuth callback with this RPC session and the signed state from startOAuthFlow.",
         confirmGithubSteal:
           "Move a GitHub installation after explicit confirmation: { state } — state is the signed user/project/installation proof returned by completeConnect.",
         connectTelegram:
@@ -4204,21 +4203,21 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
   startOAuthFlow(input: {
     callbackUrl?: string;
     provider: OAuthProviderSlug;
-    /** The user to bind the OAuth state to. Browser-supplied, not authority;
-     * the callback's check against the signed state is the backstop. */
-    userId: string;
   }): Promise<{ authorizationUrl: string }> {
+    const user = userPrincipalOf(this.props.auth);
+    if (!user) throw new Error("Starting an OAuth connection requires a signed-in user.");
     return startOAuthFlow({
       callbackUrl: input.callbackUrl,
       config: parseConfig(env),
       projectId: this.props.projectId,
       provider: input.provider,
-      userId: input.userId,
+      userId: user.userId,
     });
   }
 
-  /** Called by the app worker's OAuth callback route; authority is the
-   * HMAC-signed OAuth state minted by startOAuthFlow. */
+  /** Complete a native OAuth callback using this authenticated RPC session.
+   * Browser callbacks use the app worker route, which supplies its session
+   * identity directly to the same domain operation. */
   completeConnect(input: {
     /** OAuth authorization code (Slack/Google, or GitHub's proof callback). */
     code?: string;
@@ -4226,8 +4225,9 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     installationId?: string;
     provider: OAuthProviderSlug;
     state: string;
-    userId: string | null;
   }): Promise<CompleteConnectResult> {
+    const user = userPrincipalOf(this.props.auth);
+    if (!user) throw new Error("Completing an OAuth connection requires a signed-in user.");
     return completeConnect({
       code: input.code,
       config: parseConfig(env),
@@ -4235,7 +4235,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       projectId: this.props.projectId,
       provider: input.provider,
       state: input.state,
-      userId: input.userId,
+      userId: user.userId,
     });
   }
 

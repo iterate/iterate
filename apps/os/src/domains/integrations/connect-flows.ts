@@ -421,8 +421,7 @@ export async function startOAuthFlow(input: {
   config: AppConfig;
   projectId: string;
   provider: OAuthProviderSlug;
-  /** The user to bind the OAuth state to. Browser-supplied, not authority; the
-   * callback's user check against the signed state is the backstop. */
+  /** The authenticated initiating user, resolved by the RPC boundary. */
   userId: string;
 }): Promise<{ authorizationUrl: string }> {
   const baseUrl = requestBaseUrl(input);
