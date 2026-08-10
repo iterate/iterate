@@ -238,6 +238,26 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     });
     expect(llmRequests).toEqual([]);
 
+    // A decision releases the script immediately, while the notification
+    // intent is projected by a separate root-stream processor. Synchronize
+    // on the reject batch's exact device copy before asking the mounted UI to
+    // project two rows; once this durable boundary exists, the normal 1s UI
+    // action budget remains the assertion for the client projection itself.
+    const rootStream = itx.streams.get("/");
+    const approvalRequests = await rootStream.getEvents({
+      eventTypes: ["events.iterate.com/project/human-approval-requested"],
+    });
+    expect(approvalRequests).toHaveLength(2);
+    const rejectedApprovalRequest = approvalRequests.at(-1)!;
+    await itx.streams.get(`/devices/${DEVICE_ID}`).waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/notification/requested"],
+      predicate: (event) =>
+        (event.payload as { approvalRequestEventOffset?: number }).approvalRequestEventOffset ===
+        rejectedApprovalRequest.offset,
+      timeoutMs: 15_000,
+    });
+
     // ── The run's approvals read IN CONTEXT: each settled "ran code" card
     // wears a status glyph while collapsed (✓ for the approved lane, ✗ for
     // the rejected one), and its code step expands into Script | Approvals
