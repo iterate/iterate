@@ -26,6 +26,7 @@ const captured = (stableKey: string, overrides: any = {}) => ({
   createdAt: overrides.createdAt || "2026-08-10T10:00:00.000Z",
   payload: {
     stableKey,
+    title: "Trenitalia ticket",
     path: `/media/${stableKey}-shot.png`,
     filename: "shot.png",
     contentType: "image/png",
@@ -52,6 +53,7 @@ test("fold: captured inserts, processed overlays latest, unknown processed is sk
       createdAt: "t2",
       payload: {
         stableKey: "k1",
+        title: "Trenitalia ticket (retagged)",
         markdown: "Better description.",
         transcript: "Trenitalia 09:45 Platform 3",
         tags: ["screenshot", "logistics", "receipt"],
@@ -63,7 +65,14 @@ test("fold: captured inserts, processed overlays latest, unknown processed is sk
       path: "/media",
       offset: 3,
       createdAt: "t3",
-      payload: { stableKey: "ghost", markdown: "x", transcript: "", tags: [], processedBy: "m" },
+      payload: {
+        stableKey: "ghost",
+        title: "",
+        markdown: "x",
+        transcript: "",
+        tags: [],
+        processedBy: "m",
+      },
     },
   ]);
   expect(Object.keys(state.items)).toEqual(["k1"]);

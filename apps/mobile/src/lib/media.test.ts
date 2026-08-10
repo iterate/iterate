@@ -24,7 +24,7 @@ test("capture script describes, transcribes, tags, and appends one idempotent ev
         {
           message: {
             content:
-              'Here is the JSON: {"transcript": "Train to Florence\\nSeat 21A", "tags": ["logistics", "Screenshot!", "screenshot"]}',
+              'Here is the JSON: {"title": "Trenitalia ticket to Florence", "transcript": "Train to Florence\\nSeat 21A", "tags": ["logistics", "Screenshot!", "screenshot"]}',
           },
         },
       ],
@@ -54,6 +54,7 @@ test("capture script describes, transcribes, tags, and appends one idempotent ev
     idempotencyKey: "media-captured-abc123",
     payload: {
       stableKey: "abc123",
+      title: "Trenitalia ticket to Florence",
       markdown: "A train ticket from Rome to Florence.",
       transcript: "Train to Florence\nSeat 21A",
       // lowercased, punctuation folded, deduped
@@ -98,6 +99,38 @@ test("reprocess mode appends a processed event and skips the dedup check", async
   });
   // Reprocess payloads carry no file facts — the captured event owns those.
   expect(itx.calls.appended.payload.path).toBeUndefined();
+});
+
+test("oversized images are downscaled for the vision call only", async () => {
+  const itx = fakeItx({
+    toMarkdown: { format: "markdown", data: "desc" },
+    visionAnswer: {
+      choices: [{ message: { content: '{"title": "t", "transcript": "", "tags": []}' } }],
+    },
+    fileBytes: new Uint8Array(1_500_000),
+  });
+  await runScript(
+    buildProcessScript({
+      stableKey: "big",
+      filename: "tall.png",
+      contentType: "image/png",
+      width: 1170,
+      height: 20_000,
+      source: "picker",
+      capturedAt: null,
+      isScreenshot: null,
+      mode: "capture",
+    }),
+    itx,
+  );
+  expect(itx.calls.transformInput).toMatchObject({
+    transforms: [{ width: 1280 }],
+    output: { format: "image/jpeg" },
+  });
+  // The AI call got the small jpeg; the stored original was untouched.
+  expect(itx.calls.visionBody.messages[0].content[1].image_url.url).toMatch(
+    /^data:image\/jpeg;base64,/,
+  );
 });
 
 test("hostile filenames cannot break out of the script", async () => {
@@ -305,6 +338,7 @@ function item(offset: number, markdown: string, transcript: string, tags: string
       contentType: "image/png",
       width: 1,
       height: 1,
+      title: "",
       markdown,
       transcript,
       tags,
@@ -316,7 +350,12 @@ function item(offset: number, markdown: string, transcript: string, tags: string
   };
 }
 
-function fakeItx(behavior: { toMarkdown: any; visionAnswer: any; existingEvent?: any }): any {
+function fakeItx(behavior: {
+  toMarkdown: any;
+  visionAnswer: any;
+  existingEvent?: any;
+  fileBytes?: Uint8Array;
+}): any {
   const calls: any = {};
   return {
     calls,
@@ -333,9 +372,19 @@ function fakeItx(behavior: { toMarkdown: any; visionAnswer: any; existingEvent?:
       get: (path: string) => ({
         bytes: async () => {
           calls.bytesPath = path;
-          return new Uint8Array([1, 2, 3]);
+          return behavior.fileBytes || new Uint8Array([1, 2, 3]);
         },
       }),
+    },
+    integrations: {
+      cf: {
+        images: {
+          transformBytes: async (input: any) => {
+            calls.transformInput = input;
+            return { bytes: new Uint8Array([9, 9]), contentType: "image/jpeg" };
+          },
+        },
+      },
     },
     ai: {
       toMarkdown: async (doc: any) => {

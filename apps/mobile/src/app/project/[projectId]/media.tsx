@@ -70,9 +70,12 @@ export default function MediaScreen() {
   const [query, setQuery] = useState(q || "");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [pending, setPending] = useState<PendingItem[]>([]);
-  const [viewer, setViewer] = useState<{ uri: string; tags: string[]; markdown: string } | null>(
-    null,
-  );
+  const [viewer, setViewer] = useState<{
+    uri: string;
+    title: string;
+    tags: string[];
+    markdown: string;
+  } | null>(null);
 
   const server = useQuery({
     queryKey: ["server"],
@@ -103,6 +106,28 @@ export default function MediaScreen() {
           project,
           since: settings!.sinceIso,
           onProgress: setSyncProgress,
+          // Discovered screenshots appear immediately as pending cards with
+          // local previews, exactly like picked ones, and resolve into real
+          // rows as their captured events land on the live stream.
+          onCandidate: (candidate) =>
+            setPending((current) => [
+              ...current,
+              {
+                previewUri: candidate.previewUri,
+                filename: candidate.filename,
+                status: "analyzing",
+              },
+            ]),
+          onCandidateDone: (candidate, error) =>
+            setPending((current) =>
+              error === null
+                ? current.filter((row) => row.previewUri !== candidate.previewUri)
+                : current.map((row) =>
+                    row.previewUri === candidate.previewUri
+                      ? { ...row, status: "error", error }
+                      : row,
+                  ),
+            ),
         });
       } finally {
         setSyncProgress(null);
@@ -309,7 +334,7 @@ export default function MediaScreen() {
                 {pending.map((row) => (
                   <PendingRow
                     key={row.previewUri}
-                    onViewImage={(uri) => setViewer({ uri, tags: [], markdown: "" })}
+                    onViewImage={(uri) => setViewer({ uri, title: "", tags: [], markdown: "" })}
                     row={row}
                   />
                 ))}
@@ -321,7 +346,12 @@ export default function MediaScreen() {
               baseUrl={baseUrl!}
               item={item}
               onViewImage={(uri) =>
-                setViewer({ uri, tags: item.payload.tags, markdown: item.payload.markdown })
+                setViewer({
+                  uri,
+                  title: item.payload.title,
+                  tags: item.payload.tags,
+                  markdown: item.payload.markdown,
+                })
               }
               projectId={projectId}
             />
@@ -353,6 +383,7 @@ export default function MediaScreen() {
             markdown={viewer.markdown}
             onClose={() => setViewer(null)}
             tags={viewer.tags}
+            title={viewer.title}
             uri={viewer.uri}
           />
         ) : null}
@@ -453,7 +484,8 @@ function syncSummary(result: SyncPassResult | undefined): string {
   if (result.status === "denied") return "Photo access denied — allow it in Settings";
   const limited = result.accessPrivileges === "limited" ? " · limited access" : "";
   const more = result.more ? " · more next pass" : "";
-  return `Synced ${result.synced} new · ${result.known} already captured${more}${limited}`;
+  const failed = result.failed > 0 ? ` · ${result.failed} failed (will retry)` : "";
+  return `Synced ${result.synced} new · ${result.known} already captured${failed}${more}${limited}`;
 }
 
 function PendingRow({
@@ -546,6 +578,11 @@ function MediaRow({
         )}
       </Pressable>
       <View style={styles.rowBody}>
+        {item.payload.title ? (
+          <Text numberOfLines={expanded ? undefined : 1} style={styles.rowTitle}>
+            {item.payload.title}
+          </Text>
+        ) : null}
         {item.payload.markdown ? (
           // Same renderer as chat messages; collapsed rows clip to a few
           // lines' height instead of clamping (EnrichedMarkdownText has no
@@ -625,7 +662,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
   },
-  syncLabel: { color: colors.text, fontSize: 14 },
+  syncLabel: { color: colors.text, flex: 1, fontSize: 14 },
   syncRowValue: { alignItems: "center", flexDirection: "row", gap: spacing.xs },
   syncChevron: { color: colors.textFaint, fontSize: 18 },
   dialogBackdrop: {
@@ -723,6 +760,7 @@ const styles = StyleSheet.create({
   thumb: { borderRadius: radius.sm, height: 96, width: 54 },
   thumbPlaceholder: { backgroundColor: colors.border },
   rowBody: { flex: 1, gap: spacing.xs },
+  rowTitle: { color: colors.text, fontSize: 14, fontWeight: "600" },
   markdown: { color: colors.text, fontSize: 13, lineHeight: 18 },
   markdownCollapsed: { maxHeight: 76, overflow: "hidden" },
   transcript: {

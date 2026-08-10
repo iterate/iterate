@@ -165,3 +165,24 @@ should a fresh deploy nudge redelivery?
 - [x] PR videos re-recorded with middlewright VIDEO_MODE (video-rendered
       output: cursor overlays, captions, dead-air compression) from a
       fully-passing run.
+
+## Round 3 (Misha dogfood on preview-12, 2026-08-10)
+
+- [x] "Off ›" hugging the label on device — syncLabel gets flex: 1
+- [x] sync opacity: discovered screenshots now appear immediately as
+      pending cards with local previews (same UI as picked ones), resolving
+      into rows as their events land; stage labels read "Checking library
+      (n seen)…" / "Analyzing n of m new…"; one failed item no longer sinks
+      the pass (card shows the error, next pass retries)
+- [x] "3006: Request is too large" — Workers AI rejecting oversized vision
+      calls (long screenshots), which also caused the retry loop. Fixed
+      server-side: the pipeline downscales >1MB images via the Images
+      binding for the AI call only (original stored untouched). Kernel:
+      CfImageTransformInput.image widened to FileData + transformBytes
+      added (streams/Responses don't cross the sandbox RPC hop — the
+      toMarkdown precedent). Verified live: a 4.4MB noise screenshot now
+      captures, title "Dentist appointment Thursday 3pm".
+- [x] awkward huge headings: vision call now also returns a one-line title
+      ("what the image IS", shown bold on rows and viewer chrome; old items
+      pick it up via Re-analyze), and preview-mode markdown renders
+      headings at body size bold instead of huge.

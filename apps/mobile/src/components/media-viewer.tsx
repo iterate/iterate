@@ -17,11 +17,13 @@ const DISMISS_VELOCITY = 800;
 
 export function MediaViewer({
   uri,
+  title,
   tags,
   markdown,
   onClose,
 }: {
   uri: string;
+  title: string;
   tags: string[];
   markdown: string;
   onClose: () => void;
@@ -95,6 +97,7 @@ export function MediaViewer({
             <Text style={styles.closeText}>✕</Text>
           </Pressable>
           <View style={styles.panel}>
+            {title ? <Text style={styles.panelTitle}>{title}</Text> : null}
             {tags.length > 0 ? (
               <View style={styles.tagRow}>
                 {tags.map((tag) => (
@@ -162,6 +165,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
   },
+  panelTitle: { color: colors.text, fontSize: 15, fontWeight: "600" },
   collapsedDescription: { color: colors.text, fontSize: 13, lineHeight: 18 },
   expandedScroll: { flexGrow: 0 },
   seeMore: { color: colors.accent, fontSize: 13, fontWeight: "600" },

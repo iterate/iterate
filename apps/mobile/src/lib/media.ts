@@ -38,6 +38,10 @@ export const MEDIA_TAGS: { tag: string; hint: string }[] = [
 ];
 
 export type MediaProcessingResult = {
+  /** One-line description of what the image IS ("Pooya Parsi X post —
+   * announcing Rangi"), from the vision call — the row's bold first line.
+   * toMarkdown's own headings are generic ("Screenshot Overview"). */
+  title: string;
   /** The vision model's natural-language description — half the search corpus. */
   markdown: string;
   /** Verbatim text visible in the image — the other half. */
@@ -155,19 +159,39 @@ export function buildProcessScript(input: ProcessScriptInput): string {
   }
   const markdown = (described.data || "").trim();
 
-  // One vision call over the actual pixels: verbatim transcript + tags in a
-  // single JSON answer. Parse defensively — an unparseable answer degrades
-  // to an empty transcript and ["untagged"] so failures stay visible.
+  // Workers AI rejects oversized request bodies (error 3006) — long
+  // full-page screenshots hit it. Downscale for the AI call only (the
+  // stored original is untouched); if the Images binding can't (e.g. some
+  // local dev setups), fall through with the original and let the model
+  // call answer.
+  let visionBytes = bytes;
+  let visionType = input.contentType;
+  if (bytes.length > 1_000_000) {
+    try {
+      const resized = await itx.integrations.cf.images.transformBytes({
+        image: bytes,
+        transforms: [{ width: 1280 }],
+        output: { format: "image/jpeg", quality: 80 },
+      });
+      visionBytes = resized.bytes;
+      visionType = resized.contentType;
+    } catch {}
+  }
+
+  // One vision call over the actual pixels: title + verbatim transcript +
+  // tags in a single JSON answer. Parse defensively — an unparseable answer
+  // degrades to empty title/transcript and ["untagged"] so failures stay
+  // visible.
   let binary = "";
-  for (let i = 0; i < bytes.length; i += 32768) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+  for (let i = 0; i < visionBytes.length; i += 32768) {
+    binary += String.fromCharCode(...visionBytes.subarray(i, i + 32768));
   }
   const answer = await itx.ai.run(input.visionModel, {
     messages: [{
       role: "user",
       content: [
         { type: "text", text: input.visionPrompt },
-        { type: "image_url", image_url: { url: "data:" + input.contentType + ";base64," + btoa(binary) } },
+        { type: "image_url", image_url: { url: "data:" + visionType + ";base64," + btoa(binary) } },
       ],
     }],
     max_tokens: 1024,
@@ -177,12 +201,14 @@ export function buildProcessScript(input: ProcessScriptInput): string {
     : typeof answer?.choices?.[0]?.message?.content === "string"
       ? answer.choices[0].message.content
       : "";
+  let title = "";
   let transcript = "";
   let tags = ["untagged"];
   const match = text.match(/\\{[\\s\\S]*\\}/);
   if (match) {
     try {
       const parsed = JSON.parse(match[0]);
+      if (typeof parsed.title === "string") title = parsed.title.trim().slice(0, 120);
       if (typeof parsed.transcript === "string") transcript = parsed.transcript.trim();
       if (Array.isArray(parsed.tags)) {
         tags = [...new Set(
@@ -200,6 +226,7 @@ export function buildProcessScript(input: ProcessScriptInput): string {
     idempotencyKey: input.idempotencyKey,
     payload: {
       stableKey: input.stableKey,
+      title,
       markdown,
       transcript,
       tags,
@@ -225,7 +252,8 @@ export function buildProcessScript(input: ProcessScriptInput): string {
 function visionPrompt(): string {
   const lines = MEDIA_TAGS.map(({ tag, hint }) => `- "${tag}": ${hint}`);
   return [
-    'Reply with ONLY a JSON object: {"transcript": string, "tags": string[]}.',
+    'Reply with ONLY a JSON object: {"title": string, "transcript": string, "tags": string[]}.',
+    "title: ONE line saying what the image IS, specific not generic — 'Trenitalia ticket Rome→Florence 09:45', never 'Screenshot' or 'Image Description'.",
     "transcript: ALL text visible in the image, verbatim, reading order. Empty string if there is none.",
     "tags: pick from the list below. Include a tag ONLY when the image clearly shows it — no guesses.",
     "Fewer tags is better; an empty array is a fine answer. Overlap is allowed.",
@@ -290,7 +318,7 @@ export function filterMedia(
 ): MediaListItem[] {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   return items.filter((item) => {
-    const { markdown, transcript, filename, path, tags } = item.payload;
+    const { title, markdown, transcript, filename, path, tags } = item.payload;
     // The stored name (path minus directory and hash prefix) is the
     // SANITIZED filename in-app deep links search by (lib/in-app-links.ts),
     // so names with spaces still match — but only that segment joins the
@@ -298,7 +326,7 @@ export function filterMedia(
     // "media" match everything.
     const storedName = (path.split("/").at(-1) || "").replace(/^[0-9a-f]{32,}-/, "");
     const haystack =
-      `${markdown} ${transcript} ${filename} ${storedName} ${tags.join(" ")}`.toLowerCase();
+      `${title} ${markdown} ${transcript} ${filename} ${storedName} ${tags.join(" ")}`.toLowerCase();
     return (
       terms.every((term) => haystack.includes(term)) &&
       selectedTags.every((tag) => tags.includes(tag))

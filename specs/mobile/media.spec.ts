@@ -47,6 +47,7 @@ test("renders, searches, and views seeded media", async ({ page }, testInfo) => 
     idempotencyKey: `media-captured-${stableKey}`,
     payload: {
       stableKey,
+      title: "Trenitalia ticket to Florence",
       path,
       filename: "ticket.png",
       contentType: "image/png",

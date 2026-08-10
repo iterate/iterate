@@ -29,6 +29,7 @@ export type SyncPassResult =
       accessPrivileges: "all" | "limited";
       synced: number;
       known: number;
+      failed: number;
       /** True when the pass hit its per-pass cap — another pass will find more. */
       more: boolean;
     };
@@ -38,12 +39,18 @@ export type SyncPassResult =
  * already has, capture the rest through the standard pipeline. Safe to run
  * repeatedly — the stop rule makes caught-up passes cheap.
  */
+export type SyncCandidate = { previewUri: string; filename: string };
+
 export async function runSyncPass(input: {
   project: ProjectStub;
   /** Hard floor: assets created before this ISO instant are never touched.
    * The newest-first walk stops outright at the first older asset. */
   since: string;
   onProgress: (message: string) => void;
+  /** A new (not-yet-captured) screenshot was found — show it immediately. */
+  onCandidate: (candidate: SyncCandidate) => void;
+  /** Its server-side processing settled; error is null on success. */
+  onCandidateDone: (candidate: SyncCandidate, error: string | null) => void;
 }): Promise<SyncPassResult> {
   const permission = await MediaLibrary.requestPermissionsAsync();
   if (!permission.granted) return { status: "denied" };
@@ -63,6 +70,7 @@ export async function runSyncPass(input: {
     width: number;
     height: number;
     capturedAt: string | null;
+    previewUri: string;
   }[] = [];
 
   // Discovery: walk newest-first, sequentially (the point is to stop early).
@@ -79,7 +87,7 @@ export async function runSyncPass(input: {
     for (const asset of page.assets) {
       if (!tracker.shouldContinue()) break scan;
       if (asset.creationTime && asset.creationTime < sinceMs) break scan;
-      input.onProgress(`Checking ${candidates.length + known + 1}…`);
+      input.onProgress(`Checking library (${candidates.length + known + 1} seen)…`);
       const read = await readAssetBase64(asset);
       if (read === null) continue; // e.g. iCloud asset without a local copy
       const stableKey = await Crypto.digestStringAsync(
@@ -91,7 +99,7 @@ export async function runSyncPass(input: {
         known += 1;
       } else {
         tracker.markNew();
-        candidates.push({
+        const candidate = {
           stableKey,
           base64: read.base64,
           filename: read.filename,
@@ -99,7 +107,10 @@ export async function runSyncPass(input: {
           width: asset.width,
           height: asset.height,
           capturedAt: asset.creationTime ? new Date(asset.creationTime).toISOString() : null,
-        });
+          previewUri: read.previewUri,
+        };
+        candidates.push(candidate);
+        input.onCandidate(candidate);
       }
     }
     if (!page.hasNextPage) break;
@@ -108,26 +119,35 @@ export async function runSyncPass(input: {
 
   // Processing: the discovered new ones, 3-wide like the picker flow.
   let synced = 0;
+  let failed = 0;
   await mapWithConcurrency(candidates, 3, async (candidate) => {
-    input.onProgress(`Syncing ${synced + 1}/${candidates.length}…`);
-    await input.project.files.get(mediaFilePath(candidate.stableKey, candidate.filename)).put({
-      data: candidate.base64,
-      contentType: candidate.contentType,
-    });
-    await input.project.capabilityHost.runScript(
-      buildProcessScript({
-        stableKey: candidate.stableKey,
-        filename: candidate.filename,
+    input.onProgress(`Analyzing ${synced + 1} of ${candidates.length} new…`);
+    try {
+      await input.project.files.get(mediaFilePath(candidate.stableKey, candidate.filename)).put({
+        data: candidate.base64,
         contentType: candidate.contentType,
-        width: candidate.width,
-        height: candidate.height,
-        source: "library-sync",
-        capturedAt: candidate.capturedAt,
-        isScreenshot: true,
-        mode: "capture",
-      }),
-    );
-    synced += 1;
+      });
+      await input.project.capabilityHost.runScript(
+        buildProcessScript({
+          stableKey: candidate.stableKey,
+          filename: candidate.filename,
+          contentType: candidate.contentType,
+          width: candidate.width,
+          height: candidate.height,
+          source: "library-sync",
+          capturedAt: candidate.capturedAt,
+          isScreenshot: true,
+          mode: "capture",
+        }),
+      );
+      input.onCandidateDone(candidate, null);
+      synced += 1;
+    } catch (error) {
+      // One oversized/failed screenshot must not sink the whole pass; its
+      // card shows the error and the next pass will retry it.
+      input.onCandidateDone(candidate, error instanceof Error ? error.message : String(error));
+      failed += 1;
+    }
   });
 
   return {
@@ -135,13 +155,17 @@ export async function runSyncPass(input: {
     accessPrivileges,
     synced,
     known,
+    failed,
     more: candidates.length >= MAX_NEW_PER_PASS,
   };
 }
 
-async function readAssetBase64(
-  asset: MediaLibrary.Asset,
-): Promise<{ base64: string; filename: string; contentType: string } | null> {
+async function readAssetBase64(asset: MediaLibrary.Asset): Promise<{
+  base64: string;
+  filename: string;
+  contentType: string;
+  previewUri: string;
+} | null> {
   const info = await MediaLibrary.getAssetInfoAsync(asset);
   if (!info.localUri) return null;
   const response = await fetch(info.localUri);
@@ -153,5 +177,5 @@ async function readAssetBase64(
     filename.toLowerCase().endsWith(".jpg") || filename.toLowerCase().endsWith(".jpeg")
       ? "image/jpeg"
       : "image/png";
-  return { base64: uint8ArrayToBase64(bytes), filename, contentType };
+  return { base64: uint8ArrayToBase64(bytes), filename, contentType, previewUri: info.localUri };
 }

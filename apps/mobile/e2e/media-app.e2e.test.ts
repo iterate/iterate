@@ -47,6 +47,7 @@ test("the seeded MediaApp answers search over appended /media events, via worker
     idempotencyKey: `media-captured-${stableKey}`,
     payload: {
       stableKey,
+      title: "Trenitalia ticket to Florence",
       path,
       filename: "ticket.png",
       contentType: "image/png",

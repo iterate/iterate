@@ -8,6 +8,9 @@ import { defineProcessorContract, StreamProcessor } from "../../processors/index
 import type { ProcessorState, ReduceArgs } from "../../processors/index.ts";
 
 const processingFields = {
+  title: z.string().default("").meta({
+    description: "One-line description of what the image IS (pre-title events fold to empty).",
+  }),
   markdown: z.string().meta({ description: "Vision-model description — half the search corpus." }),
   transcript: z.string().meta({ description: "Verbatim OCR of visible text — the other half." }),
   tags: z.array(z.string()).meta({ description: "Conservative multi-label tags." }),
@@ -159,7 +162,7 @@ export function searchMediaItems(
     .filter((item) => {
       const storedName = (item.path.split("/").at(-1) || "").replace(/^[0-9a-f]{32,}-/, "");
       const haystack =
-        `${item.markdown} ${item.transcript} ${item.filename} ${storedName} ${item.tags.join(" ")}`.toLowerCase();
+        `${item.title} ${item.markdown} ${item.transcript} ${item.filename} ${storedName} ${item.tags.join(" ")}`.toLowerCase();
       return (
         terms.every((term) => haystack.includes(term)) &&
         requiredTags.every((tag) => item.tags.includes(tag))
