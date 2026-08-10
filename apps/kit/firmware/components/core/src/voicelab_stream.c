@@ -316,7 +316,22 @@ static void handle_spk_frame(
         encoding_text[0] == 'u') {
       pcm_length = mulaw_expand(
           voicelab->pcm_buffer, pcm_length, sizeof(voicelab->pcm_buffer));
-      if (pcm_length == 0U) {
+      /*
+       * A FRAME WITH NO AUDIO IS NOT A BROKEN FRAME.
+       *
+       * The sender's closing frame carries the answer's leftover remainder,
+       * and when the audio divided evenly by 640 there is no remainder — so
+       * `pcm` is empty and this expands to nothing. That is the ordinary case
+       * roughly half the time, not a decode failure.
+       *
+       * Returning here skipped the `last` handling below, so the end of the
+       * answer was never announced: the owner never drained, never released
+       * the half-duplex fence, and the next answer played into a queue that
+       * was still holding the previous one. Heard as speech that speeds up and
+       * then stops, after two or three turns of a conversation, depending on
+       * whether the deltas happened to land on a frame boundary.
+       */
+      if (pcm_length == 0U && b64_length > 0U) {
         ++voicelab->spk_decode_failures;
         return;
       }

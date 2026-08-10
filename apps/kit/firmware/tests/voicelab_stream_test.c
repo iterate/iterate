@@ -375,6 +375,35 @@ static void downlink_flow(void) {
   assert(order_length == 2U);
   assert(memcmp(order_log, "fl", 2U) == 0);
 
+  /*
+   * A CLOSING FRAME WITH NO AUDIO STILL ENDS THE ANSWER.
+   *
+   * The sender's last frame carries the answer's leftover remainder, and when
+   * the audio divided evenly by 640 there is no remainder — `pcm` is empty.
+   * That is the ordinary case roughly half the time.
+   *
+   * The decode used to treat zero samples as a failure and return BEFORE
+   * reading `last`, so the end of the answer was never announced: the owner
+   * never drained and never released its half-duplex fence, and the next
+   * answer played into a queue still holding the previous one. Heard on a HA
+   * Voice PE as speech that speeds up and then stops, two or three turns into
+   * a conversation — the turn it bites depends on whether that answer's deltas
+   * happened to land on a frame boundary, which is why it looked intermittent.
+   */
+  order_length = 0U;
+  response_done_count = 0;
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":44,"
+      "\"payload\":{\"seq\":3,\"answer\":1,\"frame\":2,\"last\":true,"
+      "\"enc\":\"u\",\"pcm\":\"\"}}"
+      "]],\"scannedThroughOffset\":44,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",3,1]");
+  assert(response_done_count == 1);
+  /* And it is not counted as a broken frame. */
+  assert(fixture.voicelab.spk_decode_failures == 0U);
+
   /* conversation-accepted on the stream is what makes a call live. */
   assert(!fixture.voicelab.call_active);
   receive(
@@ -383,7 +412,7 @@ static void downlink_flow(void) {
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\",\"offset\":50,"
       "\"payload\":{\"conversationId\":\"wsdev\",\"bridge\":\"worker\"}}"
       "]],\"scannedThroughOffset\":50,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",3,1]");
+  receive(&fixture, "[\"release\",4,1]");
   assert(fixture.voicelab.call_active);
 
   /*
@@ -404,8 +433,8 @@ static void downlink_flow(void) {
       "\"payload\":{\"seq\":2,\"answer\":1,\"frame\":1,\"last\":true,"
       "\"pcm\":\"SUpLTA\"}}"
       "]],\"scannedThroughOffset\":43,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",4,1]");
-  assert(fixture.voicelab.spk_frames_received == 3U);
+  receive(&fixture, "[\"release\",5,1]");
+  assert(fixture.voicelab.spk_frames_received == 4U);  /* +1: the empty closing frame is a frame. */
   assert(response_done_count == 1);
   assert(order_length == 0U);
   assert(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
