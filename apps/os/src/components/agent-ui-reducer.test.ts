@@ -1732,13 +1732,10 @@ describe("interpreted responses (userland response formats)", () => {
           llmRequestOffset: 1,
         },
       },
-      // The userland interpreter's derived events: extracted prose (marked
-      // with the request offset) and the script extracted from the assistant
-      // event (offset 2).
-      {
-        type: "events.iterate.com/agents/web-message-sent",
-        payload: { message: "Hi!", llmRequestOffset: 1 },
-      },
+      // The userland interpreter's derived events, in its committed order:
+      // the script extracted from the assistant event (offset 2) FIRST — so
+      // the code step joins the request's still-open activity — then the
+      // extracted prose (marked with the request offset).
       {
         type: "events.iterate.com/capability-host/script-run-requested",
         payload: {
@@ -1746,6 +1743,10 @@ describe("interpreted responses (userland response formats)", () => {
           executionId: "agent-output:2",
           expiresAt: SCRIPT_EXPIRES_AT,
         },
+      },
+      {
+        type: "events.iterate.com/agents/web-message-sent",
+        payload: { message: "Hi!", llmRequestOffset: 1 },
       },
     ]);
     const llmStep = reduced.live?.steps.find((step) => step.kind === "llm");
@@ -1790,5 +1791,45 @@ describe("interpreted responses (userland response formats)", () => {
     expect(reduced.live?.steps.find((step) => step.kind === "llm")).toMatchObject({
       interpreted: true,
     });
+  });
+});
+
+describe("interpreted turn grouping", () => {
+  test("script-before-prose keeps the whole turn in ONE activity, rounds paired", () => {
+    const reduced = reduceAll([
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "assistant",
+          content: 'Hi!\n<codemode status="Working">\nreturn 1\n</codemode>',
+          llmRequestOffset: 1,
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: { requestOffset: 1, result: { status: "succeeded", text: "…" } },
+      },
+      // Userland order: script first (joins the request's activity), prose
+      // second (defers — the activity is now working again).
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: {
+          code: "async (itx) => 1",
+          executionId: "agent-output:2",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/web-message-sent",
+        payload: { message: "Hi!", llmRequestOffset: 1 },
+      },
+    ]);
+    // No settled activity item was flushed mid-turn: the request and its
+    // extracted code live in the SAME activity.
+    expect(reduced.items.filter((item) => item.kind === "activity")).toHaveLength(0);
+    expect(reduced.live?.steps.map((step) => step.kind)).toEqual(["llm", "code"]);
+    // The prose deferred (the activity is working) instead of splitting it.
+    expect(reduced.deferredAssistantMessages).toMatchObject([{ text: "Hi!" }]);
   });
 });

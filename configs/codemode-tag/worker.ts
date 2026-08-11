@@ -354,6 +354,12 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     }
     const { code, status, prose } = outcome;
     const llmRequestOffset = payload.llmRequestOffset;
+    // Order matters twice over: the status precedes the script so the code
+    // step is born with its activity label, and the script precedes the
+    // prose so the feed groups the turn as ONE activity — an assistant
+    // bubble arriving at an idle activity is a settle boundary, but arriving
+    // while the extracted script runs it defers exactly like a classic
+    // mid-script sendMessage.
     await this.#appendUnlessAlreadyRecorded(() =>
       agent.append(
         ...(status === undefined
@@ -363,15 +369,6 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
                 type: "events.iterate.com/agent/summary-updated" as const,
                 idempotencyKey: `agent/codemode-status@${event.offset}`,
                 payload: { activity: status },
-              },
-            ]),
-        ...(prose === undefined
-          ? []
-          : [
-              {
-                type: "events.iterate.com/agents/web-message-sent" as const,
-                idempotencyKey: `agent/codemode-prose@${event.offset}`,
-                payload: { message: prose, llmRequestOffset },
               },
             ]),
         {
@@ -385,6 +382,15 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
             expiresAt: Date.parse(event.createdAt) + SCRIPT_EXPIRY_MS,
           },
         },
+        ...(prose === undefined
+          ? []
+          : [
+              {
+                type: "events.iterate.com/agents/web-message-sent" as const,
+                idempotencyKey: `agent/codemode-prose@${event.offset}`,
+                payload: { message: prose, llmRequestOffset },
+              },
+            ]),
       ),
     );
   }

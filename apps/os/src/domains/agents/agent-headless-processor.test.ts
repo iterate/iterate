@@ -78,16 +78,16 @@ it("the full userland loop: worker-appended consequences drive scripts, chat, an
       payload: { activity: "Checking" },
     },
     {
-      type: WEB_MESSAGE_SENT,
-      payload: { message: "On it!", llmRequestOffset: requestOffset },
-    },
-    {
       type: SCRIPT_REQUESTED,
       payload: {
         code: "async (itx) => {\nreturn await itx.doWhatever()\n}",
         executionId: `agent-output:${assistantOffset}`,
         expiresAt: Date.parse("2030-01-01T00:00:00Z"),
       },
+    },
+    {
+      type: WEB_MESSAGE_SENT,
+      payload: { message: "On it!", llmRequestOffset: requestOffset },
     },
   ]);
 
