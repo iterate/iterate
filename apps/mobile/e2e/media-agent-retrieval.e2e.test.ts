@@ -49,11 +49,15 @@ test("an agent-style media-search run finds the swimming lesson among decoys", a
       .put({ data: new Uint8Array(png), contentType: "image/png" });
     await project.capabilityHost.runScript(
       buildProcessScript({
+        wipeGeneration: 0,
         stableKey,
         filename,
         contentType: "image/png",
         width: 0,
         height: 0,
+        source: "picker",
+        capturedAt: null,
+        isScreenshot: null,
         mode: "capture",
       }),
     );

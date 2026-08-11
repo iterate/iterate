@@ -6,14 +6,11 @@
 // through to Linking.openURL for everything else. Add rows to SPECIAL_PATHS
 // as more streams grow in-app lenses.
 
-export type InAppLink = {
-  pathname:
-    | "/project/[projectId]/media"
-    | "/project/[projectId]/repo"
-    | "/project/[projectId]/repos"
-    | "/project/[projectId]/integrations";
-  params: Record<string, string>;
-};
+export type InAppLink =
+  | { pathname: "/project/[projectId]/media"; params: { projectId: string; q?: string } }
+  | { pathname: "/project/[projectId]/repo"; params: { projectId: string; repoPath: string } }
+  | { pathname: "/project/[projectId]/repos"; params: { projectId: string } }
+  | { pathname: "/project/[projectId]/integrations"; params: { projectId: string } };
 
 const SPECIAL_PATHS: {
   prefix: string;

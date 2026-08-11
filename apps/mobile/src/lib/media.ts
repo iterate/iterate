@@ -15,7 +15,12 @@ import type { StreamEvent } from "iterate/sdk/itx/react";
 export const MEDIA_STREAM_PATH = "/media";
 export const MEDIA_CAPTURED_EVENT_TYPE = "events.iterate.com/media/captured";
 export const MEDIA_PROCESSED_EVENT_TYPE = "events.iterate.com/media/processed";
-export const MEDIA_EVENT_TYPES = [MEDIA_CAPTURED_EVENT_TYPE, MEDIA_PROCESSED_EVENT_TYPE];
+export const MEDIA_WIPED_EVENT_TYPE = "events.iterate.com/media/wiped";
+export const MEDIA_EVENT_TYPES = [
+  MEDIA_CAPTURED_EVENT_TYPE,
+  MEDIA_PROCESSED_EVENT_TYPE,
+  MEDIA_WIPED_EVENT_TYPE,
+];
 /** Sees the pixels: transcribes text verbatim and picks tags. */
 export const MEDIA_VISION_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
 
@@ -38,6 +43,10 @@ export const MEDIA_TAGS: { tag: string; hint: string }[] = [
 ];
 
 export type MediaProcessingResult = {
+  /** One-line description of what the image IS ("Pooya Parsi X post —
+   * announcing Rangi"), from the vision call — the row's bold first line.
+   * toMarkdown's own headings are generic ("Screenshot Overview"). */
+  title: string;
   /** The vision model's natural-language description — half the search corpus. */
   markdown: string;
   /** Verbatim text visible in the image — the other half. */
@@ -54,6 +63,13 @@ export type MediaCapturedPayload = MediaProcessingResult & {
   contentType: string;
   width: number;
   height: number;
+  /** Where the item entered: hand-picked or the library sync engine. */
+  source: "picker" | "library-sync";
+  /** Asset creation time (ISO) when the source knows it; null from the
+   * picker, which strips asset metadata on recompression. */
+  capturedAt: string | null;
+  /** iOS's own screenshot flag (mediaSubtypes) — null when unknowable. */
+  isScreenshot: boolean | null;
 };
 
 export type MediaProcessedPayload = MediaProcessingResult & { stableKey: string };
@@ -83,16 +99,52 @@ export function mediaFilePath(stableKey: string, filename: string): string {
   return `/media/${stableKey}-${safe}`;
 }
 
-export function mediaIdempotencyKey(stableKey: string): string {
-  return `media-captured-${stableKey}`;
+/**
+ * Capture identity = content hash + wipe generation. Without the
+ * generation, re-capturing a screenshot after Delete-all would dedup
+ * against the pre-wipe event and silently never come back.
+ */
+export function mediaIdempotencyKey(stableKey: string, wipeGeneration: number): string {
+  return wipeGeneration === 0
+    ? `media-captured-${stableKey}`
+    : `media-captured-${stableKey}-g${wipeGeneration}`;
+}
+
+/** The last wiped tombstone's offset (0 when never wiped) — the capture
+ * dedup generation. */
+export async function readWipeGeneration(stream: {
+  getEvents: (args: { afterOffset: number; eventTypes: string[] }) => Promise<StreamEvent[]>;
+}): Promise<number> {
+  const wipes = await stream.getEvents({ afterOffset: 0, eventTypes: [MEDIA_WIPED_EVENT_TYPE] });
+  return wipes.at(-1)?.offset || 0;
+}
+
+/**
+ * The absolute back-to instant an Update resolves to: the chosen window,
+ * except it can only EXTEND an enabled setting backwards — re-confirming
+ * with a shorter chip never silently shrinks the window.
+ */
+export function extendedSinceIso(
+  existingSinceIso: string | null,
+  windowDays: number,
+  nowMs: number,
+): string {
+  const chosen = nowMs - windowDays * 86_400_000;
+  const existing = existingSinceIso === null ? Infinity : new Date(existingSinceIso).getTime();
+  return new Date(Math.min(chosen, existing)).toISOString();
 }
 
 export type ProcessScriptInput = {
   stableKey: string;
+  /** From readWipeGeneration — capture dedup identity; reprocess ignores it. */
+  wipeGeneration: number;
   filename: string;
   contentType: string;
   width: number;
   height: number;
+  source: "picker" | "library-sync";
+  capturedAt: string | null;
+  isScreenshot: boolean | null;
   /**
    * "capture" appends the media/captured birth event (idempotent per
    * stableKey — a re-run returns the existing event). A reprocess appends a
@@ -114,11 +166,14 @@ export function buildProcessScript(input: ProcessScriptInput): string {
     contentType: input.contentType,
     width: input.width,
     height: input.height,
+    source: input.source,
+    capturedAt: input.capturedAt,
+    isScreenshot: input.isScreenshot,
     path: mediaFilePath(input.stableKey, input.filename),
     capture: input.mode === "capture",
     idempotencyKey:
       input.mode === "capture"
-        ? mediaIdempotencyKey(input.stableKey)
+        ? mediaIdempotencyKey(input.stableKey, input.wipeGeneration)
         : `media-processed-${input.stableKey}-${input.mode.reprocessNonce}`,
     eventType: input.mode === "capture" ? MEDIA_CAPTURED_EVENT_TYPE : MEDIA_PROCESSED_EVENT_TYPE,
     streamPath: MEDIA_STREAM_PATH,
@@ -142,19 +197,39 @@ export function buildProcessScript(input: ProcessScriptInput): string {
   }
   const markdown = (described.data || "").trim();
 
-  // One vision call over the actual pixels: verbatim transcript + tags in a
-  // single JSON answer. Parse defensively — an unparseable answer degrades
-  // to an empty transcript and ["untagged"] so failures stay visible.
+  // Workers AI rejects oversized request bodies (error 3006) — long
+  // full-page screenshots hit it. Downscale for the AI call only (the
+  // stored original is untouched); if the Images binding can't (e.g. some
+  // local dev setups), fall through with the original and let the model
+  // call answer.
+  let visionBytes = bytes;
+  let visionType = input.contentType;
+  if (bytes.length > 1_000_000) {
+    try {
+      const resized = await itx.integrations.cf.images.transformBytes({
+        image: bytes,
+        transforms: [{ width: 1280 }],
+        output: { format: "image/jpeg", quality: 80 },
+      });
+      visionBytes = resized.bytes;
+      visionType = resized.contentType;
+    } catch {}
+  }
+
+  // One vision call over the actual pixels: title + verbatim transcript +
+  // tags in a single JSON answer. Parse defensively — an unparseable answer
+  // degrades to empty title/transcript and ["untagged"] so failures stay
+  // visible.
   let binary = "";
-  for (let i = 0; i < bytes.length; i += 32768) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+  for (let i = 0; i < visionBytes.length; i += 32768) {
+    binary += String.fromCharCode(...visionBytes.subarray(i, i + 32768));
   }
   const answer = await itx.ai.run(input.visionModel, {
     messages: [{
       role: "user",
       content: [
         { type: "text", text: input.visionPrompt },
-        { type: "image_url", image_url: { url: "data:" + input.contentType + ";base64," + btoa(binary) } },
+        { type: "image_url", image_url: { url: "data:" + visionType + ";base64," + btoa(binary) } },
       ],
     }],
     max_tokens: 1024,
@@ -164,12 +239,14 @@ export function buildProcessScript(input: ProcessScriptInput): string {
     : typeof answer?.choices?.[0]?.message?.content === "string"
       ? answer.choices[0].message.content
       : "";
+  let title = "";
   let transcript = "";
   let tags = ["untagged"];
   const match = text.match(/\\{[\\s\\S]*\\}/);
   if (match) {
     try {
       const parsed = JSON.parse(match[0]);
+      if (typeof parsed.title === "string") title = parsed.title.trim().slice(0, 120);
       if (typeof parsed.transcript === "string") transcript = parsed.transcript.trim();
       if (Array.isArray(parsed.tags)) {
         tags = [...new Set(
@@ -187,6 +264,7 @@ export function buildProcessScript(input: ProcessScriptInput): string {
     idempotencyKey: input.idempotencyKey,
     payload: {
       stableKey: input.stableKey,
+      title,
       markdown,
       transcript,
       tags,
@@ -198,6 +276,9 @@ export function buildProcessScript(input: ProcessScriptInput): string {
             contentType: input.contentType,
             width: input.width,
             height: input.height,
+            source: input.source,
+            capturedAt: input.capturedAt,
+            isScreenshot: input.isScreenshot,
           }
         : {}),
     },
@@ -206,10 +287,53 @@ export function buildProcessScript(input: ProcessScriptInput): string {
 }`;
 }
 
+/**
+ * Delete-everything, as a product event on the append-only stream: the
+ * script deletes every stored file it can find via the captured events,
+ * then appends media/wiped — the tombstone every derivation (phone list,
+ * MediaApp fold) resets on. Idempotency-keyed per invocation, not content:
+ * each deliberate wipe is its own fact.
+ */
+export function buildWipeScript(nonce: string): string {
+  const scriptInput = {
+    streamPath: MEDIA_STREAM_PATH,
+    capturedType: MEDIA_CAPTURED_EVENT_TYPE,
+    wipedType: MEDIA_WIPED_EVENT_TYPE,
+    idempotencyKey: `media-wiped-${nonce}`,
+  };
+  return `async (itx) => {
+  const input = ${asJsLiteral(scriptInput)};
+  const stream = itx.streams.get(input.streamPath);
+  const events = [];
+  let cursor = 0;
+  while (true) {
+    const page = await stream.getEvents({ afterOffset: cursor, eventTypes: [input.capturedType] });
+    if (page.length === 0) break;
+    events.push(...page);
+    cursor = page[page.length - 1].offset;
+  }
+  const paths = [...new Set(events.map((event) => event.payload.path).filter(Boolean))];
+  let deleted = 0;
+  for (const path of paths) {
+    try {
+      await itx.files.get(path).delete();
+      deleted += 1;
+    } catch {}
+  }
+  const [event] = await stream.append({
+    type: input.wipedType,
+    idempotencyKey: input.idempotencyKey,
+    payload: { deletedFiles: deleted, items: paths.length },
+  });
+  return event;
+}`;
+}
+
 function visionPrompt(): string {
   const lines = MEDIA_TAGS.map(({ tag, hint }) => `- "${tag}": ${hint}`);
   return [
-    'Reply with ONLY a JSON object: {"transcript": string, "tags": string[]}.',
+    'Reply with ONLY a JSON object: {"title": string, "transcript": string, "tags": string[]}.',
+    "title: ONE line saying what the image IS, specific not generic — 'Trenitalia ticket Rome→Florence 09:45', never 'Screenshot' or 'Image Description'.",
     "transcript: ALL text visible in the image, verbatim, reading order. Empty string if there is none.",
     "tags: pick from the list below. Include a tag ONLY when the image clearly shows it — no guesses.",
     "Fewer tags is better; an empty array is a fine answer. Overlap is allowed.",
@@ -240,15 +364,18 @@ export type MediaListItem = {
  * you see without rewriting history.
  */
 export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
+  // A wiped tombstone resets everything before it.
+  const lastWipeIndex = events.findLastIndex((event) => event.type === MEDIA_WIPED_EVENT_TYPE);
+  const liveEvents = lastWipeIndex === -1 ? events : events.slice(lastWipeIndex + 1);
   const latestProcessed = new Map<string, MediaProcessedPayload>();
-  for (const event of events) {
+  for (const event of liveEvents) {
     // Events arrive offset-ascending, so later wins by insertion order.
     if (event.type === MEDIA_PROCESSED_EVENT_TYPE) {
       const payload = event.payload as MediaProcessedPayload;
       latestProcessed.set(payload.stableKey, payload);
     }
   }
-  return events
+  return liveEvents
     .filter((event) => event.type === MEDIA_CAPTURED_EVENT_TYPE)
     .map((event) => {
       const captured = event.payload as MediaCapturedPayload;
@@ -274,7 +401,7 @@ export function filterMedia(
 ): MediaListItem[] {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   return items.filter((item) => {
-    const { markdown, transcript, filename, path, tags } = item.payload;
+    const { title, markdown, transcript, filename, path, tags } = item.payload;
     // The stored name (path minus directory and hash prefix) is the
     // SANITIZED filename in-app deep links search by (lib/in-app-links.ts),
     // so names with spaces still match — but only that segment joins the
@@ -282,7 +409,7 @@ export function filterMedia(
     // "media" match everything.
     const storedName = (path.split("/").at(-1) || "").replace(/^[0-9a-f]{32,}-/, "");
     const haystack =
-      `${markdown} ${transcript} ${filename} ${storedName} ${tags.join(" ")}`.toLowerCase();
+      `${title} ${markdown} ${transcript} ${filename} ${storedName} ${tags.join(" ")}`.toLowerCase();
     return (
       terms.every((term) => haystack.includes(term)) &&
       selectedTags.every((tag) => tags.includes(tag))

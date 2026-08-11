@@ -426,6 +426,7 @@ import { EmailAgentProcessorContract } from "./domains/email/email-agent-process
 import {
   agentCollectionCreationEvents,
   agentCreationForPath,
+  type AgentBirthDefaults,
   type AgentCreateInput,
 } from "./domains/agents/agent-defaults.ts";
 import { ChatReplyNotifyProcessorContract } from "./domains/notifications/chat-reply-notify-contract.ts";
@@ -2132,6 +2133,40 @@ class ClientsRpcTarget extends IterateRpcTarget<"Clients"> {
  * bases normalize). Absent (id-only boot line) when the directory has no
  * record yet — never a birth blocker.
  */
+/**
+ * The project's agent birth defaults, read from the project processor's fold
+ * (`state.agentBirthDefaults` — the LATEST defaults event, already validated
+ * event-by-event against the agent-consumed vocabulary at fold time). Absent,
+ * non-matching, or unreadable → no defaults — a broken or missing defaults
+ * declaration must degrade to platform-default births, never break agent
+ * creation.
+ */
+async function agentBirthDefaultsForProject(props: {
+  agentPath: string;
+  auth: ItxAuth;
+  projectId: string;
+}): Promise<{ defaults?: AgentBirthDefaults }> {
+  try {
+    const { state } = await facetProcessorRelay<ProjectProcessorState>({
+      auth: props.auth,
+      name: ProjectProcessorContract.slug,
+      path: "/",
+      projectId: props.projectId,
+    }).snapshot();
+    const defaults = state.agentBirthDefaults;
+    if (defaults === null) return {};
+    const pathPrefix = defaults.matches?.pathPrefix;
+    if (pathPrefix !== undefined && !props.agentPath.startsWith(pathPrefix)) return {};
+    return { defaults };
+  } catch (error) {
+    console.warn("[agent] agent birth defaults read failed; using platform defaults", {
+      error: String(error),
+      projectId: props.projectId,
+    });
+    return {};
+  }
+}
+
 async function agentBootProjectFacts(
   projectId: string,
 ): Promise<{ project?: { name: string; slug: string; workerUrl?: string } }> {
@@ -3406,7 +3441,9 @@ class CfImagesCapabilityRpcTarget extends IterateRpcTarget<"CfImagesCapability">
       children: {
         info: "Inspect an image stream for format/dimensions/file size.",
         transform:
-          "Apply ordered image transforms/draws and output a Response, e.g. transform({ image: resp.body, transforms: [{ width: 800 }], output: { format: 'image/webp' } }).",
+          "Apply ordered image transforms/draws and output a Response, e.g. transform({ image: resp.body, transforms: [{ width: 800 }], output: { format: 'image/webp' } }). image accepts bytes/base64 too (streams don't cross the RPC hop from scripts).",
+        transformBytes:
+          "transform, buffered to { bytes, contentType } — the shape scripts need (Response bodies don't cross the RPC hop).",
       },
       parent: "itx.integrations.cf.images",
     });
@@ -3419,12 +3456,12 @@ class CfImagesCapabilityRpcTarget extends IterateRpcTarget<"CfImagesCapability">
 
   /** Apply ordered image transforms/draws and output a Response. */
   async transform(input: CfImageTransformInput): Promise<Response> {
-    let image = env.IMAGES.input(input.image);
+    let image = env.IMAGES.input(await coerceImageSource(input.image));
     for (const transform of input.transforms ?? []) {
       image = image.transform(transform as ImageTransform);
     }
     for (const draw of input.draws ?? []) {
-      let overlay = env.IMAGES.input(draw.image);
+      let overlay = env.IMAGES.input(await coerceImageSource(draw.image));
       for (const transform of draw.transforms ?? []) {
         overlay = overlay.transform(transform as ImageTransform);
       }
@@ -3432,6 +3469,32 @@ class CfImagesCapabilityRpcTarget extends IterateRpcTarget<"CfImagesCapability">
     }
     return (await image.output(input.output as ImageOutputOptions)).response();
   }
+
+  /**
+   * `transform`, buffered: Response bodies (like streams and Blobs) cannot
+   * cross the RPC boundary back into a script sandbox, so scripts use this
+   * to get plain bytes — e.g. downscaling an oversized screenshot before a
+   * vision-model call.
+   */
+  async transformBytes(
+    input: CfImageTransformInput,
+  ): Promise<{ bytes: Uint8Array; contentType: string }> {
+    const response = await this.transform(input);
+    return {
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      contentType: response.headers.get("content-type") || "application/octet-stream",
+    };
+  }
+}
+
+/** Streams pass through; every FileData shape becomes one via the same
+ * coercion the file-writing surfaces use. */
+async function coerceImageSource(
+  image: ReadableStream<Uint8Array> | FileData,
+): Promise<ReadableStream<Uint8Array>> {
+  if (image instanceof ReadableStream) return image;
+  const bytes = (await projectFileDataToBytes(image)) as Uint8Array<ArrayBuffer>;
+  return new Blob([bytes]).stream();
 }
 
 /** Cloudflare Media Transformations binding exposed through itx as one-call helpers. */
@@ -4945,6 +5008,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       projectId: this.#props.projectId,
       ...(payload === undefined ? {} : { payload }),
       ...(await agentBootProjectFacts(this.#props.projectId)),
+      // Project-level birth defaults (driver, prompt, extra processor
+      // subscriptions) apply to every agent born through this generic door;
+      // integration routers use their own creation calls with explicit
+      // policies and never pick these up.
+      ...(await agentBirthDefaultsForProject({ ...this.#props, agentPath: this.#path })),
       // Plain chat threads (mobile + web — everything born through this
       // generic door) get the chat-reply push producer as their sibling.
       // Integration threads (Slack/Telegram/Email) are born elsewhere with

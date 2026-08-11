@@ -6,13 +6,14 @@ import { ITX_EXAMPLES } from "../apps/os/src/itx/examples.ts";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
-const REPL_EXAMPLES = Object.entries(EXAMPLE_CASES).map(([id, exampleCase]) => {
+const REPL_EXAMPLES = Object.entries(EXAMPLE_CASES).flatMap(([id, exampleCase]) => {
   const example = ITX_EXAMPLES.find((candidate) => candidate.id === id);
   if (!example) throw new Error(`example-cases.ts references missing example ${id}`);
-  if (!example.runtimes.includes("browser")) {
-    throw new Error(`example-cases.ts example ${id} is not marked runnable in the browser REPL`);
-  }
-  return { example, exampleCase };
+  // REPL Runs execute server-side as scope scripts, so entries needing a
+  // live caller-owned session (live capability providers) carry no browser
+  // runtime; the node/cli matrix proves those instead of this spec.
+  if (!example.runtimes.includes("browser")) return [];
+  return [{ example, exampleCase }];
 });
 
 test.describe("itx REPL catalogue examples", () => {
@@ -109,7 +110,13 @@ test.describe("itx REPL catalogue examples", () => {
               failFastOnError(exampleCase.completionTimeoutMs!),
             );
           } else {
-            await failFastOnError(30_000);
+            // A REPL Run is a real scope script now: first runs in a fresh
+            // project pay scope birth + the typecheck gate + dynamic-worker
+            // spin-up on top of the script itself — the run-script matrix
+            // lane budgets 90s for the same path. The pending row shows a
+            // spinner the whole time, so bypass spinner-waiter's 30s cap here
+            // too.
+            await spinnerWaiter.settings.run({ disabled: true }, () => failFastOnError(90_000));
           }
 
           const resultJson = await entry.getByTestId("itx-repl-result-json").textContent();

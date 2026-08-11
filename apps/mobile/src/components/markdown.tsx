@@ -23,7 +23,7 @@ export function Markdown({ markdown, preview = false }: { markdown: string; prev
       <EnrichedMarkdownText
         flavor="github"
         markdown={markdown}
-        markdownStyle={markdownStyle}
+        markdownStyle={preview ? previewMarkdownStyle : markdownStyle}
         md4cFlags={{ latexMath: false, underline: false }}
         onLinkPress={({ url }) => {
           const inApp = resolveInAppLink(url, { baseUrl: server.data, projectId });
@@ -99,6 +99,20 @@ const markdownStyle: MarkdownStyle = {
   },
   taskList: { borderColor: colors.textMuted, checkedColor: colors.accent },
   thematicBreak: { color: colors.border, height: 1, marginBottom: 12, marginTop: 12 },
+};
+
+// Preview contexts (media rows, viewer chrome): toMarkdown loves to open
+// with "# Screenshot Overview" — huge heading text reads absurd in a list
+// row, so headings collapse to bold body-sized text.
+const previewMarkdownStyle: MarkdownStyle = {
+  ...markdownStyle,
+  h1: { color: colors.text, fontSize: 14, lineHeight: 19, marginBottom: 4, marginTop: 2 },
+  h2: { color: colors.text, fontSize: 14, lineHeight: 19, marginBottom: 4, marginTop: 4 },
+  h3: { color: colors.text, fontSize: 13, lineHeight: 18, marginBottom: 4, marginTop: 4 },
+  h4: { color: colors.text, fontSize: 13, lineHeight: 18, marginBottom: 4, marginTop: 4 },
+  h5: { color: colors.textMuted, fontSize: 13, lineHeight: 18, marginBottom: 4, marginTop: 4 },
+  h6: { color: colors.textMuted, fontSize: 13, lineHeight: 18, marginBottom: 4, marginTop: 4 },
+  paragraph: { color: colors.text, fontSize: 13, lineHeight: 18, marginBottom: 6 },
 };
 
 const styles = StyleSheet.create({
