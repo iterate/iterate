@@ -143,8 +143,12 @@ export default function PreviewChannelScreen() {
   return (
     <View style={styles.container}>
       <Stack.Screen options={{ title: "Switch preview channel" }} />
+      {/* One screen, two states: "switch?" before, "you're on it" after the
+          switch-reload re-opens this deep link in the target bundle. The
+          post-switch state is deliberately not a redirect — it confirms the
+          switch landed and owns the freshness check + setup fix below. */}
       <Text style={styles.heading}>
-        {alreadyOnTarget ? "You're already on this channel" : "Point this app at another channel?"}
+        {alreadyOnTarget ? "You're on this channel" : "Point this app at another channel?"}
       </Text>
       <View style={styles.card}>
         <Row label="Current" value={currentChannel} />
@@ -182,16 +186,24 @@ export default function PreviewChannelScreen() {
           installed builds.
         </Text>
       ) : (
-        <Pressable
-          accessibilityRole="button"
-          disabled={switchChannel.isPending}
-          onPress={() => switchChannel.mutate()}
-          style={[styles.button, switchChannel.isPending && styles.buttonDisabled]}
-        >
-          <Text style={styles.buttonLabel}>
-            {switchChannel.isPending ? "Switching…" : `Switch to ${channel}`}
+        <>
+          <Pressable
+            accessibilityRole="button"
+            disabled={switchChannel.isPending}
+            onPress={() => switchChannel.mutate()}
+            style={[styles.button, switchChannel.isPending && styles.buttonDisabled]}
+          >
+            <Text style={styles.buttonLabel}>
+              {switchChannel.isPending ? "Switching…" : `Switch to ${channel}`}
+            </Text>
+          </Pressable>
+          {/* Pre-switch, the running (old) bundle can't know the target's
+              backend — set the expectation that the offer comes after. */}
+          <Text style={styles.note}>
+            After the switch this screen reloads into the new bundle and offers its expected backend
+            and test sign-in, if it names them.
           </Text>
-        </Pressable>
+        </>
       )}
       {switchChannel.data === "no-update" ? (
         <Text style={styles.note}>

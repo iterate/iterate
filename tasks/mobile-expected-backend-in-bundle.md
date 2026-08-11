@@ -131,6 +131,36 @@ back to carrying just the channel.
       field covers everything else). `SERVER_PRESETS` stays as the
       validation list for stamp resolution.
 
+## Round 3 — simplify after Misha's device test (2026-08-11)
+
+Misha's native install showed none of the machinery — root cause: the
+install build was a REUSED compatible binary (built from a main-ish commit),
+embedding channel `preview`, so first launch OTA-pulled MAIN's JS — which
+doesn't contain this PR's code at all. The PR's behavior can only run once
+its JS runs (post-channel-switch today; from boot once merged to main).
+The QR flow did work end-to-end (checkbox appeared post-switch), but the
+"You're already on this channel" framing made it read as a no-op.
+
+Simplifications:
+
+- [x] Removed the first-boot forced interrupt entirely (`new-bundle-boot.ts`,
+      the `newBundle` bootstrap gate, "Keep current setup") — it was the
+      twice-Bugbot-flagged complexity and its trigger conditions are rare.
+      The QR confirm screen is now the ONE surface that acts on the stamp;
+      the sign-in screen (signed out) and Build info only display/suggest.
+- [x] Confirm screen: post-switch heading is "You're on this channel" (a
+      calm arrival state, not "already"), and the pre-switch state says the
+      backend/test-login offer comes after the reload — so its absence
+      pre-switch reads as sequencing, not a bug.
+- [x] PR-body install section now says installing gets a compatible binary
+      on the default channel and the OTA link is what switches it to the
+      PR's JS — the two-QR dance is explicit.
+- Kept: the stamp, the checkbox-on-Continue fix, the native-install override
+  guard (dormant until this merges — the guard runs in whatever JS the
+  binary boots, which is main's until then), and the EAS hook stamp
+  preservation (only helps fresh PR-triggered builds; reused builds embed
+  whatever they were built from, which is fine — the QR flow recovers).
+
 ## Implementation log
 
 - Folded `deep-link-hints.ts` into `expected-backend.ts` (everything in it is

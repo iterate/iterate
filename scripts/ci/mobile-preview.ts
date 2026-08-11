@@ -141,6 +141,8 @@ const qrDetails = (opts: {
   qrImageUrl: string;
   href: string;
   caption: string;
+  /** Fine print under the QR — "" for none. */
+  note: string;
 }) =>
   [
     `<details${opts.open ? " open" : ""}><summary>${opts.summary}</summary>`,
@@ -152,6 +154,7 @@ const qrDetails = (opts: {
     "",
     `<a href="${opts.href}"><img src="${opts.qrImageUrl}" width="90" alt="QR code" /></a>`,
     "",
+    ...(opts.note ? [`<sub>${opts.note}</sub>`, ""] : []),
     "</details>",
   ].join("\n");
 
@@ -187,6 +190,7 @@ export const renderPreviewSection = (input: {
       caption: forMain
         ? "Switch this phone back to the default channel now"
         : "Switch this phone to the PR channel",
+      note: "",
     }),
     qrDetails({
       open: !plan.runtimeMatchesInstalled,
@@ -196,6 +200,11 @@ export const renderPreviewSection = (input: {
       qrImageUrl: input.installQrUrl,
       href: plan.installUrl,
       caption: "Open the EAS build install page",
+      // A fresh install boots on the default channel (often running main's
+      // JS, not this PR's) — the OTA link is what points it here.
+      note: forMain
+        ? ""
+        : "Installing gets you a compatible binary on the default channel — then use the OTA link above to switch it to this PR's JS.",
     }),
     "",
     forMain

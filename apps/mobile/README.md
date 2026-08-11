@@ -75,12 +75,14 @@ same merges are the ones that need a manual dev-client rebuild
 `scripts/write-build-info.mjs` (EAS native builds run it through the
 `eas-build-pre-install` hook). Besides provenance, the stamp carries the
 bundle's _expected backend_ (`expectedBackendEnv` — the PR's leased preview
-slot — plus a `pr<N>+test@nustom.com` test identity): the app compares it
-against the phone's server/sign-in after a channel switch and on the first
-boot of any new bundle, offering a one-tap fix
-(`src/lib/expected-backend.ts`). Main and local bundles stamp it empty — no
-recommendation, phones default to prd. The checked-in file is an all-empty
-placeholder — don't commit a stamped one. Manual publish to the shared
+slot — plus a `pr<N>+test@nustom.com` test identity). The QR confirm screen
+is the ONE surface that acts on it: after a channel switch it compares the
+new bundle's expectation against the phone's server/sign-in and offers the
+fix as a default-checked checkbox on Continue
+(`src/lib/expected-backend.ts`); the sign-in screen and Build info only
+display it. Main and local bundles stamp it empty — no recommendation,
+phones default to prd. The checked-in file is an all-empty placeholder —
+don't commit a stamped one. Manual publish to the shared
 main channel (rare — see per-PR channels below):
 `pnpm --dir apps/mobile update:preview`.
 

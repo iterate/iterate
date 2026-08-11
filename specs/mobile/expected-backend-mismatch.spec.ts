@@ -24,7 +24,7 @@ test("a mismatched phone sees the differences and a one-tap sign-in fix", async 
     );
   });
   await page.goto("/preview-channel/spec-chan");
-  await page.getByText("You're already on this channel").waitFor();
+  await page.getByText("You're on this channel").waitFor();
   // Web dev bundles can't OTA — the freshness slot must explain, not sit silent.
   await page.getByText("OTA updates don't run in dev bundles", { exact: false }).waitFor();
   // The mismatch card names both differences…
