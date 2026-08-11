@@ -142,9 +142,18 @@ function ItxScopeReplConnected({
       // Put the session in the URL only once the run SETTLES: replacing
       // mid-run would remount the console (new component key), resetting the
       // editor and dropping the local pending row while the script still
-      // executes. Settled either way — a failed first run also created the
-      // stream and journaled its error, which the session page replays.
-      if (scopePath === null) onSessionEstablished(variables.path);
+      // executes. A failed SCRIPT still establishes (the stream exists and
+      // journaled the error, which the session page replays) — but a failed
+      // BIRTH must not: the primed cache doubles as the created-successfully
+      // signal, and without it we stay on the unborn page with the mutation
+      // error visible.
+      const born = (
+        queryClient.getQueryData<StreamListItem[]>([
+          "itx",
+          ...KNOWN_STREAMS_QUERY.key(projectId),
+        ]) || []
+      ).some((stream) => stream.path === variables.path);
+      if (scopePath === null && born) onSessionEstablished(variables.path);
     },
   });
 

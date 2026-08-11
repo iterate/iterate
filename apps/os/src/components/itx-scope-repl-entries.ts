@@ -86,9 +86,12 @@ function replScriptBody(body: string): string {
     if (expression.trim() === "") continue;
     // ASI guard: when the line above is unterminated and this slice starts
     // with a continuation character, JavaScript reads ONE statement across
-    // the break (`const total = a` ⏎ `+ b` is `a + b`) — splitting there
-    // would return `+ b` and change the meaning. Same character set the
-    // deleted browser evaluator's scanner used.
+    // the break (`const total = a` ⏎ `+ b` is `a + b`; `foo()` ⏎ `(bar)` is
+    // a call) — splitting there would change the program's meaning, so no
+    // echo: exactly what running the input as written does. Same character
+    // set the deleted browser evaluator's scanner used. `;`/`}` endings lift
+    // the guard (known heuristic edge: a semicolon-less `const x = {}`
+    // also ends in `}`; terminate lines to disambiguate, as in plain JS).
     const statementsEnd = statements.trimEnd().at(-1);
     const expressionStart = expression.trimStart()[0];
     if (
