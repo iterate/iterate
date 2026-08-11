@@ -16,7 +16,7 @@ const Empty = z.strictObject({});
 
 export const BrowserFeedContract = defineProcessorContract({
   slug: "browser-feed",
-  version: "0.5.0",
+  version: "0.6.0",
   description:
     "Browser-side projector reducing every stream event into the single feed_items table (pretty agent rows and grouped raw rows in one total order) plus live in-flight agent state.",
   // itx derives the initial reduce state from stateSchema.parse({}). Only that
