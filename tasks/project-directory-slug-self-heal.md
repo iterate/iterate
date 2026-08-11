@@ -33,7 +33,7 @@ born. Auth D1 (source of truth) knew only `prj_NEW`.
 When create() receives an explicit `projectId` that disagrees with the
 handle's id, treat the auth worker as tiebreaker instead of failing:
 
-- [ ] `readProjectBySlugAuthoritative(directory, slug)` in
+- [x] `readProjectBySlugAuthoritative(directory, slug)` in
       `project-directory.ts`: skip the positive KV cache, ask
       `AUTH.getProjectBySlug` directly; on a hit re-prime the cache
       (best-effort) and return the record; null when auth has no row
