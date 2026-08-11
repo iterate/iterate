@@ -95,7 +95,7 @@ Sequencing: builds on #2423's defaults event and headless processor — a follow
 
 ## Status (skim me)
 
-Implementation complete; remaining work is live verification on a preview slot. Both halves landed: (1) birth defaults generalized to a validated birth-events list (fold + snapshot read + codemode-tag migration), (2) all prompt text moved to `configs/default/prompts/*.md` with content-hash revisions — the default worker publishes its prompt file as birth defaults at runtime, byte-identical outputs verified against the old constants.
+Done — implemented and live-verified on preview-15. Both halves landed: (1) birth defaults generalized to a validated birth-events list (fold + snapshot read + codemode-tag migration), (2) all prompt text moved to `configs/default/prompts/*.md` with content-hash revisions — the default worker publishes its prompt file as birth defaults at runtime, byte-identical outputs verified against the old constants.
 
 ## Checklist
 
@@ -108,10 +108,12 @@ Implementation complete; remaining work is live verification on a preview slot. 
 - [x] channel prompts → `configs/default/prompts/{slack,telegram,email}.md` + thin interpolators _(`{{postMessage}}`, `{{telegramConnection}}`/`{{agentPathJson}}`/`{{chatIdNote}}`, `{{agentSummaryInstruction}}`; exported names/signatures unchanged so routers and tests didn't move; interpolation throws on unfilled placeholders)_
 - [x] prompt-budget test reads the template file; template worker adds publish-time token warning _(budget test unchanged by design — the constants it reads are now file-sourced; worker warns at ~6k tokens)_
 - [x] acceptance: no-defaults birth batches byte-identical (`agent-processor.test.ts`, `agent-headless-processor.test.ts` unmodified) _(all 7 prompt outputs byte-compared old-vs-new: identical; full apps/os unit lane green — 263 files, 2730 tests)_
-- [ ] live verification on a preview slot: fresh default project first turn; edit prompt file + commit → new agents born with it; codemode smoke on the migrated list form
+- [x] live verification on a preview slot _(preview-15, projects uad-lab1 + uad-cmtag1: default worker published prompt defaults at project birth; agent born with prompt under `agent/birth-defaults:*` key and NO platform fallback slot; prompt-file commit → superseding defaults event → next agent born with the edited prompt, zero deploys; codemode template published the 3-event list form, agent born driver=agent-headless with codemode prompt + subscription, full turn interpreted → `web-message-sent: "LIST-FORM-SMOKE-OK"`)_
 
 ## Implementation log
 
 - (start) worktree `../worktrees/iterate/userland-agent-defaults`, stacked on codemode-tag-format @ 1baac37f5.
 - Chunk 1 (c559e40dc): birth-events list, project-processor fold, snapshot read, codemode-tag migration.
 - Chunk 2: prompts → configs/default/prompts/*.md. Old constants deleted from agent-defaults.ts; interpolators keep the exported names (slackAgentSystemPrompt etc.) so router callsites and channel tests are untouched. Revisions = djb2 content hashes (prompt-slot idempotency keys change once — equivalent to a revision bump; existing agents unaffected, birth-only events). MCP/onboarding composite `1.<rev>` scheme retired: hashing the composed prompt covers constituents automatically. Byte-compared all 7 prompt outputs (default, email, slack, telegram ×2, mcp, onboarding) against HEAD's constants: identical.
+- CI caught a formatting drift: oxfmt reformats markdown (incl. embedded ts fences); prompts are now in .oxfmtrc.json ignorePatterns and restored byte-identical (8d7c1d06e).
+- Live verification on preview-15 (2026-08-11): uad-lab1 (default template) and uad-cmtag1 (codemode-tag via `github:iterate/iterate#userland-agent-defaults&path:configs/codemode-tag`). All checks passed — see checklist.
