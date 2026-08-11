@@ -5,7 +5,7 @@ size: medium
 
 # Monitor the restored mobile approval flows for 25 natural previews
 
-Status: 19/25 qualifying post-merge natural canonical preview occurrences are queryable. The restored approval and notification specs passed first attempt in all nineteen; six natural occurrences remain. Eleven post-merge natural runs are excluded and classified below: seven failed both targets because the Notifications drawer entry was absent, one target notification spec retried after preview auth returned HTTP 429, and three had unrelated stream-fence failures. Two other finished post-merge workflows explicitly skipped both targets and are not occurrences. The corrected stream quiet-window fence passed first attempt in two canonical previews. No excluded run left incomplete telemetry.
+Status: 20/25 qualifying post-merge natural canonical preview occurrences are queryable. The restored approval and notification specs passed first attempt in all twenty; five natural occurrences remain. Eleven post-merge natural runs are excluded and classified below: seven failed both targets because the Notifications drawer entry was absent, one target notification spec retried after preview auth returned HTTP 429, and three had unrelated stream-fence failures. Two other finished post-merge workflows explicitly skipped both targets and are not occurrences. The corrected stream quiet-window fence passed first attempt in two canonical previews. No excluded run left incomplete telemetry.
 
 - [x] Define the post-merge gate from durable telemetry. *A qualifying occurrence is a normally triggered canonical preview workflow with both restored specs passed, `retry_count = 0`, `passed_after_retry = false`, and one complete non-failed telemetry finalizer.*
 - [x] Preserve the accepted baseline evidence. *Workflows `497719938401885`, `105920886681524`, and `114044928448857` are queryable qualifying occurrences.*
@@ -29,7 +29,8 @@ Status: 19/25 qualifying post-merge natural canonical preview occurrences are qu
 - [x] Count the next natural #2473 preview. *Depot run `twfx4x35nt` records a normal `pull_request` trigger. Workflow `510094541966125` had both restored targets clean, no failed or retried test anywhere, and a complete 8-artifact / 6,576-runner-event finalizer.*
 - [x] Count another natural #2473 preview. *Depot run `drgz0tz315` records a normal `pull_request` trigger. Workflow `251613642035735` had both restored targets clean, no failed or retried test anywhere, and a complete 8-artifact / 6,675-runner-event finalizer.*
 - [x] Audit #2473's merge-cancelled preview. *Natural Depot run `kgjt38hmk0` was cancelled when #2473 merged after 1m41s. It retained only the separate unit-test artifact: no preview artifact, target execution, or preview finalizer exists, so it is not an occurrence.*
-- [ ] Observe 6 more qualifying natural canonical preview occurrences.
+- [x] Count the natural #2466 ready-for-review preview. *Depot run `6fc8mfmhrv` records a normal `pull_request` trigger. Workflow `126874174757216` had both restored targets clean, no failed or retried test anywhere, and a complete 8-artifact / 6,691-runner-event finalizer.*
+- [ ] Observe 5 more qualifying natural canonical preview occurrences.
 - [ ] Investigate any target retry, failure, incomplete finalizer, or missing-transition diagnostic before allowing the streak to continue.
 - [ ] Record the final 25-workflow evidence set and close the restoration goal.
 
@@ -64,6 +65,7 @@ Status: 19/25 qualifying post-merge natural canonical preview occurrences are qu
 | 17 | `134965373738416` | `ff906eb0` | #2473 | both targets clean; zero run-wide retries or failures; complete 8-artifact / 6,795-runner-event finalizer |
 | 18 | `510094541966125` | `0a177172` | #2473 | both targets clean; zero run-wide retries or failures; complete 8-artifact / 6,576-runner-event finalizer |
 | 19 | `251613642035735` | `b03fcb40` | #2473 | both targets clean; zero run-wide retries or failures; complete 8-artifact / 6,675-runner-event finalizer |
+| 20 | `126874174757216` | `312d8825` | #2466 | both targets clean; zero run-wide retries or failures; complete 8-artifact / 6,691-runner-event finalizer |
 
 Manual workflow `350306797014989` on `081ff01f` proved default PostHog delivery and is intentionally excluded from the counter.
 
