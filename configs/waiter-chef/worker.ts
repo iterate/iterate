@@ -70,10 +70,6 @@ const WAITER_BOOT_CONTEXT = [
   "You have no tools, no code scope, and no workspace.",
 ].join("\n");
 
-const chefPathForWaiter = (waiterPath: string) =>
-  CHEF_PREFIX + waiterPath.slice(WAITER_PREFIX.length);
-const waiterPathForChef = (chefPath: string) => WAITER_PREFIX + chefPath.slice(CHEF_PREFIX.length);
-
 const excerpt = (text: string) =>
   text.length <= RELAY_EXCERPT_CHARS ? text : `${text.slice(0, RELAY_EXCERPT_CHARS)}…`;
 
@@ -370,7 +366,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     }
     // Orders first (so "I've sent it to the kitchen" is true by the time the
     // diner reads it), then the prose, then any peek report.
-    const chefPath = chefPathForWaiter(event.path);
+    const chefPath = CHEF_PREFIX + event.path.slice(WAITER_PREFIX.length);
     if (outcome.orders.length > 0) {
       await this.#ensureChef(chefPath);
       const chef = itx.agents.get(chefPath);
@@ -469,7 +465,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     const payload = event.payload as { message?: string };
     if (typeof payload.message !== "string" || payload.message.trim() === "") return;
     const message = payload.message;
-    const waiterPath = waiterPathForChef(event.path);
+    const waiterPath = WAITER_PREFIX + event.path.slice(CHEF_PREFIX.length);
     const itx = await this.itx;
     await this.#appendUnlessAlreadyRecorded(() =>
       itx.agents.get(waiterPath).append({
