@@ -343,6 +343,14 @@ function AgentActivityRow({
 }) {
   const summary = summarizeAgentUiActivity(activity);
   const failed = summary.outcome === "failed";
+  // The agent's own latest activity line for this stretch of work
+  // ("Factoring the number") — from the status attribute / summary-updated
+  // fold stamped onto code steps. Leads the quiet stats so the header says
+  // WHAT happened, not just how much.
+  const activityLabel = [...activity.steps]
+    .reverse()
+    .flatMap((step) => (step.kind === "code" && step.activitySummary ? [step.activitySummary] : []))
+    .at(0);
 
   return (
     <div className="flex flex-col py-0.5">
@@ -364,10 +372,15 @@ function AgentActivityRow({
         ) : (
           <CodeIcon data-icon="inline-start" className="text-muted-foreground/60" />
         )}
-        {formatAgentUiActivitySummary(activity, {
-          summary,
-          interruptedPartialHint: "click to see partial response",
-        })}
+        {activityLabel == null
+          ? formatAgentUiActivitySummary(activity, {
+              summary,
+              interruptedPartialHint: "click to see partial response",
+            })
+          : `${activityLabel} · ${formatAgentUiActivitySummary(activity, {
+              summary,
+              interruptedPartialHint: "click to see partial response",
+            })}`}
         <ChevronRightIcon
           data-icon="inline-end"
           className={cn("text-muted-foreground/50 transition-transform", expanded && "rotate-90")}
