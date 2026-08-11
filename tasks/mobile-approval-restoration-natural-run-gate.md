@@ -5,7 +5,7 @@ size: medium
 
 # Monitor the restored mobile approval flows for 25 natural previews
 
-Status: 22/25 qualifying post-merge natural canonical preview occurrences are queryable. The restored approval and notification specs passed first attempt in all twenty-two; three natural occurrences remain. Thirteen post-merge natural runs are excluded and classified below: seven failed both targets because the Notifications drawer entry was absent, one target notification spec retried after preview auth returned HTTP 429, three had unrelated stream-fence failures, one had an unrelated retry in the deliberate stream-restart egress test, and the newest had three unrelated retries. Two other finished post-merge workflows explicitly skipped both targets and are not occurrences. The corrected stream quiet-window fence passed first attempt in two canonical previews. No excluded run left incomplete telemetry.
+Status: 23/25 qualifying post-merge natural canonical preview occurrences are queryable. The restored approval and notification specs passed first attempt in all twenty-three; two natural occurrences remain. Thirteen post-merge natural runs are excluded and classified below: seven failed both targets because the Notifications drawer entry was absent, one target notification spec retried after preview auth returned HTTP 429, three had unrelated stream-fence failures, one had an unrelated retry in the deliberate stream-restart egress test, and one had three unrelated retries. Two other finished post-merge workflows explicitly skipped both targets and are not occurrences. The corrected stream quiet-window fence passed first attempt in two canonical previews. No excluded run left incomplete telemetry.
 
 - [x] Define the post-merge gate from durable telemetry. *A qualifying occurrence is a normally triggered canonical preview workflow with both restored specs passed, `retry_count = 0`, `passed_after_retry = false`, and one complete non-failed telemetry finalizer.*
 - [x] Preserve the accepted baseline evidence. *Workflows `497719938401885`, `105920886681524`, and `114044928448857` are queryable qualifying occurrences.*
@@ -35,7 +35,8 @@ Status: 22/25 qualifying post-merge natural canonical preview occurrences are qu
 - [x] Classify #2423's unrelated chaos-test retry. *Depot run `9czt0t3krs` records a normal `pull_request` trigger. Workflow `185016575347014` had both restored targets clean and a complete 11-artifact / 7,752-runner-event finalizer, but the deliberate stream-restart egress test retried after its post-kill settlement verification hit Cloudflare storage-reset reference `p4jvkh9q4hff3ird94movskg`; it is excluded under the run-wide-clean rule.*
 - [x] Audit #2423's superseded preview. *Natural Depot run `m5lw827w3b` was cancelled after 2m54s when #2423 advanced from `5e5f0429` to `14ec844f`. It retained only the independent unit-test artifact: no preview artifact, target execution, or preview finalizer exists, so it is not an occurrence.*
 - [x] Classify #2423's three unrelated retries. *Workflow `538117825091232` had both restored targets clean and a complete 11-artifact / 7,694-runner-event finalizer. The deliberate stream-restart egress test reached its unchanged 30-second public settlement deadline after recovery re-armed its one-shot wait. Two live-capability tests independently reached the 90-second project-bootstrap deadline after root and config-repo processors missed their 20-second hosted acknowledgement deadlines. Fresh framework attempts passed; the run remains excluded under the run-wide-clean rule.*
-- [ ] Observe 3 more qualifying natural canonical preview occurrences.
+- [x] Count the latest natural #2423 preview. *Depot run `f0l2jhlhtk` records a normal `pull_request` trigger. Workflow `256274519450267` had both restored targets clean, no failed or retried test anywhere, and a complete 11-artifact / 7,657-runner-event finalizer.*
+- [ ] Observe 2 more qualifying natural canonical preview occurrences.
 - [ ] Investigate any target retry, failure, incomplete finalizer, or missing-transition diagnostic before allowing the streak to continue.
 - [ ] Record the final 25-workflow evidence set and close the restoration goal.
 
@@ -73,6 +74,7 @@ Status: 22/25 qualifying post-merge natural canonical preview occurrences are qu
 | 20 | `126874174757216` | `312d8825` | #2466 | both targets clean; zero run-wide retries or failures; complete 8-artifact / 6,691-runner-event finalizer |
 | 21 | `513181893898101` | `6deab555` | #2466 | both targets clean; zero run-wide retries or failures; complete 8-artifact / 6,751-runner-event finalizer |
 | 22 | `216851759908341` | `c33bcbea` | #2423 | both targets clean; zero run-wide retries or failures; complete 11-artifact / 7,796-runner-event finalizer |
+| 23 | `256274519450267` | `0f72b1e0` | #2423 | both targets clean; zero run-wide retries or failures; complete 11-artifact / 7,657-runner-event finalizer |
 
 Manual workflow `350306797014989` on `081ff01f` proved default PostHog delivery and is intentionally excluded from the counter.
 
