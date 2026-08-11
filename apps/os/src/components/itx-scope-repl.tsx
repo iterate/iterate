@@ -119,13 +119,21 @@ function ItxScopeReplConnected({
   // tab racing it appends the identical events and both proceed), put the
   // session in the URL, then submit the script. The ONE code path that
   // creates anything.
+  // Session paths THIS component successfully birthed. Deliberately local
+  // state, not a query derivation: it is the race-free birth signal — a
+  // background streams-list refetch can briefly overwrite the primed cache
+  // while stream/created is still propagating into project state, and the
+  // signal must also stay false when create() itself fails.
+  const [bornPaths, setBornPaths] = useState<readonly string[]>([]);
   const run = useMutation({
     mutationFn: async ({ body, path }: PendingRun & { path: string }) => {
       const host = itx.capabilityHosts.get(path);
       await host.create();
-      // The remount after onSessionEstablished's URL replace must know the
-      // stream exists without waiting for stream/created to reach project
-      // state — prime the shared cache first.
+      // Two records of the successful birth: bornPaths is the local
+      // race-free signal; the primed cache is what lets the REMOUNTED
+      // session page consider itself born after the URL replace, without
+      // waiting for stream/created to reach project state.
+      setBornPaths((previous) => (previous.includes(path) ? previous : [...previous, path]));
       queryClient.setQueryData(
         ["itx", ...KNOWN_STREAMS_QUERY.key(projectId)],
         (previous: StreamListItem[] | undefined) =>
@@ -144,28 +152,26 @@ function ItxScopeReplConnected({
       // editor and dropping the local pending row while the script still
       // executes. A failed SCRIPT still establishes (the stream exists and
       // journaled the error, which the session page replays) — but a failed
-      // BIRTH must not: the primed cache doubles as the created-successfully
-      // signal, and without it we stay on the unborn page with the mutation
-      // error visible.
-      const born = (
-        queryClient.getQueryData<StreamListItem[]>([
-          "itx",
-          ...KNOWN_STREAMS_QUERY.key(projectId),
-        ]) || []
-      ).some((stream) => stream.path === variables.path);
-      if (scopePath === null && born) onSessionEstablished(variables.path);
+      // BIRTH must not: bornPaths is only recorded after create() resolves,
+      // so a birth failure stays on the unborn page with the mutation error
+      // visible.
+      if (scopePath === null && bornPaths.includes(variables.path)) {
+        onSessionEstablished(variables.path);
+      }
     },
   });
 
-  // Born = safe to touch the session stream: it provably exists, or this
-  // very component just submitted the Run that births it, or events already
-  // arrived (sticky evidence across background list refetches).
+  // Born = safe to touch the session stream: it provably exists, this very
+  // component birthed it, or events already arrived (sticky evidence across
+  // background list refetches). NOT merely "a Run was submitted" — opening
+  // the read connection would itself wake (and therefore birth) the stream,
+  // so a failed create() must leave every clause false.
   const [events, setEvents] = useState<readonly StreamEvent[]>([]);
   const activeScopePath = scopePath || (run.variables ? run.variables.path : null);
   const born =
     activeScopePath !== null &&
     (events.length > 0 ||
-      run.submittedAt !== 0 ||
+      bornPaths.includes(activeScopePath) ||
       (knownStreams.data || []).some((stream) => stream.path === activeScopePath));
 
   // 3. History: one kernel subscription from the start of the scope stream,
