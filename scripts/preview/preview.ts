@@ -2926,7 +2926,7 @@ async function updateCloudflarePreviewState(params: {
 
   await writePullRequestBody({
     ...params,
-    body: renderCloudflarePreviewPullRequestBody(current.body, nextState),
+    body: renderCloudflarePreviewPullRequestBody(current.body, nextState, params.pullRequestNumber),
   });
 
   return { state: nextState };
@@ -2960,13 +2960,36 @@ function parseCloudflarePreviewState(body: string): CloudflarePreviewState {
   }
 }
 
-function renderCloudflarePreviewPullRequestBody(body: string, state: CloudflarePreviewState) {
+function renderCloudflarePreviewPullRequestBody(
+  body: string,
+  state: CloudflarePreviewState,
+  pullRequestNumber: number,
+) {
   return markdownAnnotator(body, cloudflarePreviewSectionLabel).update(
-    renderCloudflarePreviewSection(CloudflarePreviewState.parse(state)),
+    renderCloudflarePreviewSection(CloudflarePreviewState.parse(state), pullRequestNumber),
   );
 }
 
-function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
+/**
+ * One-click login into the leased slot's os deployment: `+test@nustom.com`
+ * emails get a fixed OTP outside production, and a per-PR login_hint keeps
+ * each PR's poking on its own throwaway user.
+ */
+function previewLoginUrl(lease: CloudflarePreviewSlotDisplay, pullRequestNumber: number) {
+  let baseUrl: string;
+  try {
+    baseUrl = cloudflarePreviewApps.os.resolvePreviewAppConfig(lease.dopplerConfig).baseUrl;
+  } catch {
+    // A body can carry a doppler config this checkout doesn't know (e.g. a
+    // retired slot) — drop the link rather than failing the whole render.
+    return null;
+  }
+  const url = new URL("/api/iterate-auth/login", baseUrl);
+  url.searchParams.set("login_hint", `pr${pullRequestNumber}+test@nustom.com`);
+  return url.toString();
+}
+
+function renderCloudflarePreviewSection(state: CloudflarePreviewState, pullRequestNumber: number) {
   const entries = Object.values(state.apps).sort((left, right) =>
     left.appDisplayName.localeCompare(right.appDisplayName),
   );
@@ -2977,8 +3000,12 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
     ? ["> [!CAUTION]", ...state.notice.split("\n").map((line) => `> ${line}`)].join("\n")
     : null;
 
+  const loginUrl = state.environmentConfigLease
+    ? previewLoginUrl(state.environmentConfigLease, pullRequestNumber)
+    : null;
+
   return [
-    "## Environment Config Lease",
+    `## Environment Config Lease${loginUrl ? ` [Login ↗](${loginUrl})` : ""}`,
     notice,
     markdownAnnotator("", cloudflarePreviewStateLabel).update(wrapHiddenStateBlock(state)),
     renderPreviewAppTableDetails({
