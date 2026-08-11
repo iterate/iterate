@@ -88,6 +88,8 @@ import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "./files/project-
 import { agentWorkspacePath } from "./workspaces/utils.ts";
 import { DynamicWorkerRunner } from "./workers/worker-runner.ts";
 
+const EXPO_PUSH_SEND_TIMEOUT_MS = 15_000;
+
 /**
  * The Stream DO stub surface the facet dials back to its parent for
  * platform-event appends and cross-facet presentation forwards.
@@ -867,6 +869,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         repointGraceAlarm: (atMs: number | null) =>
           registry.setAlarmSlice("device-approval-grace", atMs),
         repointReceiptAlarm: (atMs) => registry.setAlarmSlice("device-receipts", atMs),
+        sendTimeoutMs: EXPO_PUSH_SEND_TIMEOUT_MS,
         send: async ({
           notification,
           pushTokenSecretPath,

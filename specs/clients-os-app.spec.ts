@@ -44,11 +44,35 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
 
   // Map catalog paths to tabs via each client's own url() capability — the
   // call executes INSIDE the owning tab, so it self-identifies (the two tabs
-  // were tagged with distinct SPA locations above).
+  // were tagged with distinct SPA locations above). `connected` is the
+  // provider Pager's durable presence fact; the capability mount is the next
+  // durable fact. Under a fully parallel preview the catalog can therefore
+  // lead the callable surface briefly, so synchronize on the public call.
   const tabUrl = async (clientPath: string): Promise<string> => {
-    using host = project.clients.get(clientPath);
-    // @ts-expect-error - dynamic capability member
-    return (await host.capabilities.browser.url()) as string;
+    let url: string | undefined;
+    await expect
+      .poll(
+        async () => {
+          using host = project.clients.get(clientPath);
+          try {
+            // @ts-expect-error - dynamic capability member
+            url = (await host.capabilities.browser.url()) as string;
+            return "ready";
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              error.message === 'no capability "capabilities.browser.url"'
+            ) {
+              return "mounting";
+            }
+            throw error;
+          }
+        },
+        { timeout: 15_000 },
+      )
+      .toBe("ready");
+    if (url === undefined) throw new Error(`client ${clientPath} reported ready without a URL`);
+    return url;
   };
   const urls = await Promise.all(bothPaths.map((clientPath) => tabUrl(clientPath)));
   const ofPage = bothPaths[urls.findIndex((url) => url.endsWith(`/projects/${slug}/repl`))];
