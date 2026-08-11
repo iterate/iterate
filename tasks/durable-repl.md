@@ -236,3 +236,13 @@ feeding the scope's derived `results` preamble.
   - specs/repl-lazy.spec.ts proves it end to end: visit + New REPL create
     nothing (settle window + streams.list []), first Run births exactly one
     stream at the URL's path.
+- Laziness Bugbot rounds (4 threads fixed, 1 rebutted): ASI continuation
+  guard in the echo split (`const total = a` newline `+ b` is ONE statement —
+  never auto-return `+ b`; guard lifts on `;`/`}`, matching real JS); the
+  bare-/repl URL establish moved to settle time (mid-run replace remounted
+  the console); a failed create() neither establishes nor opens the read
+  connection (which would itself birth the stream) — bornPaths, a local
+  twin-record signal (ref for settle callbacks, state for the born gate),
+  recorded only after create() resolves, gates both. Rebutted: "ASI guard
+  blocks valid echoes" — the guard refuses exactly where JavaScript reads a
+  continuation; echoing there would change program meaning.
