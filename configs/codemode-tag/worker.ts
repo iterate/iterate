@@ -116,9 +116,12 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     if (/^\/agents\/(slack|telegram|email)\//.test(event.path)) return;
     const payload = event.payload as {
       name?: string;
-      receiver?: { action?: string; placement?: string };
+      receiver?: { action?: string; source?: { kind?: string } };
     };
-    if (payload.receiver?.action !== "processor-wake") return;
+    // The birth event this matches: { name: "agent", receiver:
+    // { action: "facet-processor", source: { kind: "builtin" } } } — see
+    // buildFacetProcessorSubscriptionConfiguredEvent in the platform.
+    if (payload.receiver?.action !== "facet-processor") return;
     if (payload.name !== CLASSIC_PROCESSOR_SLUG) return;
     const itx = await this.itx;
     await this.#appendUnlessAlreadyRecorded(() =>
@@ -128,13 +131,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
           idempotencyKey: `codemode-tag/handover-configure:${event.offset}`,
           payload: {
             name: HEADLESS_PROCESSOR_SLUG,
-            receiver: { action: "processor-wake", placement: "facet" },
+            receiver: { action: "facet-processor", source: { kind: "builtin" } },
           },
         },
         {
           type: "events.iterate.com/stream/subscription-removed",
           idempotencyKey: `codemode-tag/handover-remove:${event.offset}`,
-          payload: { name: CLASSIC_PROCESSOR_SLUG },
+          payload: { name: CLASSIC_PROCESSOR_SLUG, reason: "requested" },
         },
       ),
     );
