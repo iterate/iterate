@@ -63,6 +63,15 @@ const RELAY_EXCERPT_CHARS = 1_500;
  * harmony-style call syntax into diner-visible replies. Static on purpose so
  * it can ride the birth batch (defaults append last, so it supersedes the
  * platform slot atomically at birth). */
+/** The post-create flow hands the user to the onboarding agent, which sits
+ * OUTSIDE the waiter prefix (it needs tools) — observed to be the first place
+ * a new user types "what's on the menu". Teach it to redirect. */
+const ONBOARDING_AGENT_PATH = "/agents/onboarding";
+const ONBOARDING_NOTE = [
+  "This project runs the waiter/chef experiment: every NEW chat the user starts from the project home is a fast front-of-house waiter that relays real work to a back-of-house chef agent.",
+  "You (the onboarding agent) are NOT part of that pair. If the user asks about the menu, the waiter, or seems to expect the experiment, briefly explain and point them to start a new chat from the project home — that chat is their waiter.",
+].join("\n");
+
 const WAITER_BOOT_CONTEXT = [
   "Context for this agent: you are the front-of-house waiter for one table (this chat).",
   "A dedicated chef agent is paired with this table: your <kitchen> tags reach it and its notes come back to you automatically — you never need to address it by name or path.",
@@ -133,6 +142,12 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         }
         if (event.path.startsWith(CHEF_PREFIX)) {
           await this.#syncChefBriefing([event.path]);
+        }
+        if (event.path === ONBOARDING_AGENT_PATH) {
+          await this.#syncKeyedContext([event.path], {
+            key: "waiter-chef/onboarding-note",
+            content: ONBOARDING_NOTE,
+          });
         }
         break;
       }
@@ -232,6 +247,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       content: WAITER_BOOT_CONTEXT,
     });
     await this.#syncChefBriefing(chefs);
+    const onboarding = agents.some((agent) => agent.path === ONBOARDING_AGENT_PATH);
+    if (onboarding) {
+      await this.#syncKeyedContext([ONBOARDING_AGENT_PATH], {
+        key: "waiter-chef/onboarding-note",
+        content: ONBOARDING_NOTE,
+      });
+    }
   }
 
   /**
