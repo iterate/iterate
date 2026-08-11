@@ -159,6 +159,28 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         await this.#relayChefMessage(event);
         break;
       }
+      case "events.iterate.com/stream/error-occurred": {
+        // The kitchen catching fire is news the waiter must hear — seen live:
+        // a chef's processor host died mid-dish and the waiter kept saying
+        // "still cooking" off stale busy-state.
+        if (!event.path.startsWith(CHEF_PREFIX)) break;
+        const message = String((event.payload as { message?: string }).message || "unknown error");
+        const itx = await this.itx;
+        await this.#appendUnlessAlreadyRecorded(() =>
+          itx.agents.get(WAITER_PREFIX + event.path.slice(CHEF_PREFIX.length)).append({
+            type: "events.iterate.com/agents/context-added",
+            idempotencyKey: `waiter-chef/kitchen-error:${event.path}@${event.offset}`,
+            payload: {
+              role: "developer",
+              content:
+                `Kitchen problem (a platform error on the chef's side, not the chef speaking):\n\n${excerpt(message)}\n\n` +
+                "Tell the diner honestly that the kitchen has hit a problem. If it mentions backing off or revival, the current dish is likely stuck — offer to re-place the order in a fresh chat.",
+              llmRequestPolicy: { behaviour: "after-current-request" },
+            },
+          }),
+        );
+        break;
+      }
       default:
         break;
     }
@@ -442,14 +464,25 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   }
 
   /** The over-the-shoulder glance: honest kitchen state from the chef's
-   * processor snapshot, without appending anything to the chef's stream. */
+   * processor snapshot, without appending anything to the chef's stream. A
+   * snapshot FAILURE is reported as breakage, never as "not started" — seen
+   * live: a wedged processor host (revival backoff) made a working-looking
+   * chef unreachable, and conflating that with "no chef" would make the
+   * waiter lie in both directions. */
   async #peekAtChef(chefPath: string): Promise<string> {
     const itx = await this.itx;
-    const snapshot = await itx.agents
-      .get(chefPath)
-      .processor.snapshot()
-      .catch(() => null);
-    if (snapshot === null || snapshot.state.contextItems.length === 0) {
+    let snapshot;
+    try {
+      snapshot = await itx.agents.get(chefPath).processor.snapshot();
+    } catch (error) {
+      console.error("[waiter-chef] peek: chef snapshot failed", { chefPath, error });
+      return (
+        "Kitchen report: the kitchen is NOT responding — something is broken on the chef's side " +
+        "(this is a fault, not slowness). Tell the diner honestly that the kitchen has a problem; " +
+        "suggest starting a fresh chat to re-place the order if it persists."
+      );
+    }
+    if (snapshot.state.contextItems.length === 0) {
       return "Kitchen report: the kitchen hasn't been fired up for this table yet — no order has reached the chef.";
     }
     const state = snapshot.state;
