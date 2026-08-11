@@ -18,6 +18,7 @@ import {
   type SessionResponse,
 } from "./session.ts";
 import { createSingleFlight } from "./single-flight.ts";
+import { forwardableLoginHint } from "./forwardable-login-hint.ts";
 
 const DEFAULT_ISSUER = "https://auth.iterate.com/api/auth";
 const DEFAULT_AUTH_HANDLER_BASE_PATH = "/api/iterate-auth";
@@ -525,8 +526,8 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     url.searchParams.set("nonce", nonce);
     url.searchParams.set("code_challenge", challenge);
     url.searchParams.set("code_challenge_method", "S256");
-    const loginHint = requestURL.searchParams.get("login_hint");
-    if (loginHint === "email" || loginHint === "google") {
+    const loginHint = forwardableLoginHint(requestURL.searchParams.get("login_hint"));
+    if (loginHint) {
       url.searchParams.set("login_hint", loginHint);
     }
     if (requestURL.searchParams.get("prompt") === "select_account") {

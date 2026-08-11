@@ -83,6 +83,25 @@ so every button gated on `isSubmitting` stays disabled through the navigation.
       isn't worth it. The behavior is covered by the docstring + preview e2e
       exercising the flow.)_
 
+## Follow-up: email login_hint was dropped at the os hop
+
+Misha tried the deployed link and didn't get the "Login with <email>" page.
+Root cause: the login page (utils/login-hint.ts, from the mobile QR deep-link
+work in #2429/#2433) and the auth worker's authorize→login hop (oauth-provider
+patch, pinned by e2e) both already handle email-address hints — but the
+relying-party `/login` route in `apps/auth/src/lib/server.ts` (which serves
+os's `/api/iterate-auth/login`, the URL the PR comment links to) only
+forwarded `login_hint=email|google` and silently dropped email addresses.
+Mobile QRs link to auth directly, which is why they never hit this.
+
+- [x] `forwardableLoginHint` in `apps/auth/src/lib/forwardable-login-hint.ts`
+      (mode selectors + `z.email()`-valid addresses, matching the login page's
+      search schema); used by the RP `/login` route and the worker's redirect
+      param preservation
+- [x] widened `LoginOptions.loginHint` on the RP client to allow email strings
+- [x] email case added to the forwarding matrix in
+      `relying-party-behavior.test.ts`
+
 ## Implementation log
 
 - Worktree `../worktrees/iterate/preview-login-link-and-create-project-pending`,

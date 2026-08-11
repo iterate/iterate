@@ -17,8 +17,11 @@ export type PublicSessionResponse =
 type LoginOptions = {
   /** Destination after OAuth callback. Defaults to the current origin. */
   returnTo?: string;
-  /** Preferred sign-in method for the auth server login page. */
-  loginHint?: "email" | "google";
+  /**
+   * Preferred sign-in method for the auth server login page, or an email
+   * address (standard OIDC semantics) the page prefills as "Continue as".
+   */
+  loginHint?: "email" | "google" | (string & {});
   /** Require the authorization server to let the user choose an account. */
   prompt?: "select_account";
   /**

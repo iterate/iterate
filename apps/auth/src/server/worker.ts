@@ -22,6 +22,7 @@ import { cors } from "hono/cors";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { onError, ORPCError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
+import { forwardableLoginHint } from "../lib/forwardable-login-hint.ts";
 import { auth } from "./auth.ts";
 import { resolveAllowedBrowserOrigin } from "./browser-origin.ts";
 import { db } from "./db/index.ts";
@@ -150,8 +151,7 @@ app.all("*", (c) =>
 export function preserveOAuthResourceRedirect(request: Request, response: Response) {
   const requestUrl = new URL(request.url);
   const paramNames = [OAUTH_RESOURCE_PARAMETER];
-  const loginHint = requestUrl.searchParams.get("login_hint");
-  if (loginHint === "email" || loginHint === "google") {
+  if (forwardableLoginHint(requestUrl.searchParams.get("login_hint"))) {
     paramNames.push("login_hint");
   }
   return preserveRedirectSearchParams(request, response, paramNames);
