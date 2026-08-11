@@ -54,6 +54,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   });
 
   protected override processEvent(args: ProcessEventArgs<AgentProcessorContract>): undefined {
+    // Stand down entirely when another registered processor drives this
+    // stream (config.driver — hosted-processor subscriptions cannot be
+    // removed, so streams subscribed to both rely on this selection). The
+    // fold still runs above, so reads and a later hand-back stay coherent.
+    if (args.state.config.driver !== "agent") return;
     for (const component of this.#components) component.processEvent(args);
   }
 
@@ -85,7 +90,7 @@ function buildAgentComponents(
  * class's members are protected, so the adapter reaches them through a
  * scoped cast rather than widening them to public. `idempotencyKey` is
  * pinned to the `agent/` namespace on purpose; see the class doc. */
-function agentComponentHost(processor: object): AgentHost {
+export function agentComponentHost(processor: object): AgentHost {
   const p = processor as {
     deps: AgentProcessorDeps;
     stream: { readEvents: AgentHost["readEvents"] };

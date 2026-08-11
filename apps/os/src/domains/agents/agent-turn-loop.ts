@@ -51,6 +51,12 @@ export class AgentTurnLoop implements AgentComponent {
         // precedence merely by passing through sendMessage. Blocked: a
         // per-event consequence — the event is delivered once, and losing the
         // mirror would silently drop the agent's own words from its memory.
+        //
+        // EXCEPT extracted prose (llmRequestOffset set): a userland response
+        // interpreter delivering text lifted from an assistant output whose
+        // raw form is ALREADY in history — mirroring would make the model
+        // read its own words twice.
+        if (event.payload.llmRequestOffset !== undefined) break;
         const files = event.payload.files;
         blockProcessorWhile(() =>
           appendUnlessLostIdempotencyRace(append, [

@@ -4,7 +4,7 @@
 // processor exists on a stream.
 
 import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
-import type { z } from "zod";
+import { z } from "zod";
 import type { StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
@@ -446,6 +446,41 @@ export type AgentCreateInput = z.input<
  * an EXISTING agent with a different payload is rejected by the stream's
  * same-key-different-body rule — the loud duplicate-create failure.
  */
+/**
+ * PROJECT-LEVEL AGENT BIRTH DEFAULTS — the format-agnostic door that makes
+ * the agent processor swappable in userland WITHOUT a race: a project
+ * appends this event (latest occurrence wins) to its root stream, and the
+ * generic agent-creation door folds it into every birth batch — so an agent
+ * is BORN with the chosen driver, prompt, and processor subscriptions
+ * instead of being converted a delivery-hop after its first turn already
+ * started. The platform validates shape here and the config patch through
+ * the agent/configured vocabulary; it never learns what any of it means.
+ * Explicit per-call policies (integration routers' systemPromptPolicy)
+ * always win over project defaults.
+ */
+export const AGENT_BIRTH_DEFAULTS_EVENT_TYPE =
+  "events.iterate.com/project/agent-birth-defaults-configured";
+
+export const AgentBirthDefaults = z.object({
+  /** Partial agent config patch (the agent/configured payload's shape),
+   * applied as a birth-batch configured event. */
+  config: z.record(z.string(), z.unknown()).optional(),
+  /** Replaces the platform default prompt in the birth batch's canonical
+   * system-prompt slot. `id`/`revision` identify the occurrence (bump the
+   * revision when content changes — a content hash works well). */
+  systemPrompt: z
+    .object({
+      content: z.string().min(1),
+      id: z.string().trim().min(1),
+      revision: z.string().trim().min(1),
+    })
+    .optional(),
+  /** Additional registered processor names subscribed at birth (the same
+   * platform lane the classic subscription uses). */
+  extraProcessorSubscriptions: z.array(z.string().trim().min(1)).max(4).optional(),
+});
+export type AgentBirthDefaults = z.infer<typeof AgentBirthDefaults>;
+
 export function agentCreationForPath<
   const SiblingBirthCertificate extends StreamEventInput = never,
   const InitialEvent extends StreamEventInput = never,
@@ -466,6 +501,9 @@ export function agentCreationForPath<
   project?: { name: string; slug: string; workerUrl?: string };
   /** Initial execution policy for a routed agent. */
   systemPromptPolicy?: AgentSystemPromptPolicy;
+  /** Project-level birth defaults (see AgentBirthDefaults). An explicit
+   * systemPromptPolicy wins over the defaults' prompt. */
+  defaults?: AgentBirthDefaults;
   sibling?: {
     birthCertificate: SiblingBirthCertificate;
     /** The sibling's subscription name — the sibling contract's slug. */
@@ -476,11 +514,20 @@ export function agentCreationForPath<
   // The platform default model IS the contract's config default — parsing the
   // empty config surfaces it without a second constant that could drift.
   const model = AgentProcessorContract.stateSchema.shape.config.parse({}).llm.model;
-  const systemPromptPolicy: AgentSystemPromptPolicy = input.systemPromptPolicy ?? {
-    content: DEFAULT_AGENT_SYSTEM_PROMPT,
-    id: "default",
-    revision: DEFAULT_AGENT_SYSTEM_PROMPT_REVISION,
-  };
+  const defaultsPrompt = input.defaults?.systemPrompt;
+  const systemPromptPolicy: AgentSystemPromptPolicy =
+    input.systemPromptPolicy ??
+    (defaultsPrompt !== undefined
+      ? {
+          content: defaultsPrompt.content,
+          id: defaultsPrompt.id,
+          revision: defaultsPrompt.revision,
+        }
+      : {
+          content: DEFAULT_AGENT_SYSTEM_PROMPT,
+          id: "default",
+          revision: DEFAULT_AGENT_SYSTEM_PROMPT_REVISION,
+        });
   const systemPrompt = systemPromptPolicy.content;
 
   const birthCertificate = AgentProcessorContract.buildEvent({
@@ -518,6 +565,25 @@ export function agentCreationForPath<
     idempotencyKey: `agent/model-configured:v${AGENT_MODEL_POLICY_REVISION}:${projectId}:${agentPath}`,
     payload: { config: { llm: { model } } },
   });
+  // Defaults config patch: content rides the key (bootContext pattern), so a
+  // create replayed after the project changed its defaults appends a fresh
+  // occurrence instead of tripping same-key-different-body.
+  const defaultsConfigured =
+    input.defaults?.config === undefined
+      ? []
+      : [
+          AgentProcessorContract.buildEvent({
+            type: "events.iterate.com/agent/configured",
+            idempotencyKey: `agent/birth-defaults-configured:${projectId}:${agentPath}:${JSON.stringify(input.defaults.config)}`,
+            payload: { config: input.defaults.config },
+          }),
+        ];
+  const defaultsSubscriptions = (input.defaults?.extraProcessorSubscriptions ?? []).map((name) =>
+    buildFacetProcessorSubscriptionConfiguredEvent({
+      idempotencyKey: `stream/subscription-configured:${name}`,
+      name,
+    }),
+  );
   const systemPromptContext = agentSystemPromptContextEvent({
     content: systemPrompt,
     idempotencyKey: `agent/system-prompt:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
@@ -609,10 +675,12 @@ export function agentCreationForPath<
       capabilityHostBirthCertificate,
       ...siblingBirthCertificates,
       configured,
+      ...defaultsConfigured,
       systemPromptContext,
       workspaceProvided,
       bootContext,
       agentSubscription,
+      ...defaultsSubscriptions,
       capabilityHostSubscription,
       collectionSubscription,
       ...siblingSubscriptions,

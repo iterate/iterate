@@ -178,10 +178,13 @@ function RoundBody({
 }
 
 /**
- * A round with no code step: a request that was cancelled, failed, or whose
- * code half never arrived. No tab bar (mirroring mobile's LlmStepView) — the
- * stat line renders in place, with the partial response/thinking below and
- * the full trace sheet one click away.
+ * A round with no code step: a plain reply, a cancelled/failed request, or a
+ * request whose code half never arrived. No tab bar (mirroring mobile's
+ * LlmStepView) — model + stats render as one quiet line with an explicit
+ * "Full trace" button, and the response body below. An INTERPRETED response
+ * (a userland format extracted its consequences — the chat bubble outside
+ * this group is the real reply) renders muted: it is source material, one
+ * group-expand away instead of double-nested.
  */
 function LlmOnlyRound({
   llm,
@@ -192,15 +195,7 @@ function LlmOnlyRound({
 }) {
   return (
     <div className="flex flex-col items-start gap-1.5">
-      <Button
-        variant="ghost"
-        size="xs"
-        title="Open this LLM request trace"
-        data-testid="agent-feed-inspect-llm-request"
-        disabled={onInspectLlmRequest == null}
-        onClick={() => onInspectLlmRequest?.(llm.llmRequestOffset)}
-        className="-ml-2 self-start font-normal disabled:opacity-100"
-      >
+      <div className="flex items-center gap-2 px-1.5">
         <span
           className={cn(
             "font-mono text-xs text-foreground/70",
@@ -211,20 +206,39 @@ function LlmOnlyRound({
         </span>
         <span className="font-mono text-xs text-muted-foreground/70">{llmStepMeta(llm)}</span>
         {onInspectLlmRequest == null ? null : (
-          <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground/50" />
+          <Button
+            variant="ghost"
+            size="xs"
+            title="Open this LLM request trace"
+            data-testid="agent-feed-inspect-llm-request"
+            onClick={() => onInspectLlmRequest(llm.llmRequestOffset)}
+            className="-ml-1 font-normal text-muted-foreground"
+          >
+            Full trace
+            <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground/50" />
+          </Button>
         )}
-      </Button>
+      </div>
       {llm.thinkingText === "" ? null : (
         <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm italic leading-relaxed text-muted-foreground">
           {llm.thinkingText}
         </div>
       )}
       {llm.responseText === "" ? null : looksLikeCode(llm.responseText) ? (
-        <div className="w-full max-w-2xl">
+        <div
+          className={cn("w-full max-w-2xl", llm.interpreted && "opacity-75")}
+          data-testid={llm.interpreted ? "agent-feed-raw-response" : undefined}
+        >
           <SourceCodeBlock code={llm.responseText} language="typescript" showLineNumbers={false} />
         </div>
       ) : (
-        <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed">
+        <div
+          className={cn(
+            "max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed",
+            llm.interpreted && "text-muted-foreground",
+          )}
+          data-testid={llm.interpreted ? "agent-feed-raw-response" : undefined}
+        >
           {llm.responseText}
         </div>
       )}
@@ -237,14 +251,6 @@ function LlmOnlyRound({
   );
 }
 
-/**
- * One code round as tabs. Script is always there; Result only once the run
- * settled with a value or an error; Meta always trails with the round's stats
- * and replayed prompt. (Mobile renders an Approvals tab between Script and
- * Result — the web feed has no approval events wired in yet, so that slot is
- * intentionally empty here.) Tab choice falls back to Script whenever the
- * chosen tab isn't offered.
- */
 function RoundTabs({
   llm,
   code,
@@ -544,7 +550,12 @@ function RoundMetaWithPrompt({
 function MetaYamlBlock({ yamlText }: { yamlText: string }) {
   return (
     <div className="max-h-96 overflow-y-auto rounded-lg">
-      <SourceCodeBlock code={yamlText} language="yaml" showLineNumbers={false} />
+      <SourceCodeBlock
+        code={yamlText}
+        language="yaml"
+        showLineNumbers={false}
+        showFoldGutter={true}
+      />
     </div>
   );
 }
