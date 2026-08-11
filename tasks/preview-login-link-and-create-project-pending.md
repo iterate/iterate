@@ -94,13 +94,12 @@ os's `/api/iterate-auth/login`, the URL the PR comment links to) only
 forwarded `login_hint=email|google` and silently dropped email addresses.
 Mobile QRs link to auth directly, which is why they never hit this.
 
-- [x] `forwardableLoginHint` in `apps/auth/src/lib/forwardable-login-hint.ts`
-      (mode selectors + `z.email()`-valid addresses, matching the login page's
-      search schema); used by the RP `/login` route and the worker's redirect
-      param preservation
-- [x] widened `LoginOptions.loginHint` on the RP client to allow email strings
-- [x] email case added to the forwarding matrix in
-      `relying-party-behavior.test.ts`
+- ~~[x] `forwardableLoginHint` helper + RP forwarding + client type + test~~
+      _(superseded: main landed the identical fix in parallel via the
+      click-and-login work — inline predicate in `lib/server.ts`, same client
+      type widening, same test case. Resolved the merge in main's favor and
+      deleted this branch's duplicates (`a2aa1fe40`); this branch is back to
+      just the Login ↗ link + project-access pending fix.)_
 
 ## Implementation log
 
