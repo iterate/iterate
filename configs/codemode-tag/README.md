@@ -67,5 +67,9 @@ wholesale switch is a commit: overwrite `/repos/config` with this template's
 files (one multi-file workspace commit — delete what the old config had,
 write these). The commit auto-redeploys the project worker, whose
 `project/worker-updated` sweep then hands every existing agent to the
-headless driver and syncs the prompt. In-flight fenced turns finish under the
-old rules; the next turn speaks `<codemode>`.
+headless driver and syncs the prompt. The driver flip waits for each agent to
+go idle (no open request, no running script, no pending trigger) and retries
+on settle events, so in-flight fenced turns genuinely finish under the old
+rules; the next turn speaks `<codemode>`. A message racing into the gap
+between the idle check and the flip commit can still double-dial one turn —
+accepted experiment caveat; a platform-side adopt guard would close it.

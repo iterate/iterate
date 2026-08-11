@@ -98,6 +98,14 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       }
       case "events.iterate.com/capability-host/script-run-settled": {
         await this.#renderScriptSettlement(event);
+        // A settle is when a busy agent may have gone idle — retry the
+        // deferred driver flip (no-op once flipped; see #handoverToHeadless).
+        if (event.path.startsWith("/agents/")) await this.#handoverToHeadless([event.path]);
+        break;
+      }
+      case "events.iterate.com/agent/llm-request-settled": {
+        // Same idle-retry lane for turns that produced no script.
+        if (event.path.startsWith("/agents/")) await this.#handoverToHeadless([event.path]);
         break;
       }
       default:
@@ -114,6 +122,16 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    * by flipping the knob back. Gated to plain web agents: integration agents
    * (slack/telegram/email) keep the fenced format their channel prompts
    * teach.
+   *
+   * The DRIVER FLIP WAITS FOR IDLE: flipping while a request is open would
+   * make the headless processor adopt and re-dial the classic processor's
+   * in-flight call (isExecuting is per-instance), and whichever settlement
+   * wins, a classic-stamped assistant item would be interpreted by nobody —
+   * the turn dies quietly. So a busy agent is left alone here, and the
+   * settle-event retries below flip it the moment its current turn chain
+   * finishes. (A message landing in the gap between the idle check and the
+   * flip commit can still recreate the race — accepted as an experiment
+   * caveat; closing it fully needs a platform-side adopt guard.)
    */
   async #handoverToHeadless(agentPaths: string[]): Promise<void> {
     const itx = await this.itx;
@@ -130,6 +148,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
           },
         }),
       );
+      const snapshot = await itx.agents.get(path).processor.snapshot();
+      if (snapshot.state.config.driver === HEADLESS_PROCESSOR_SLUG) continue;
+      const busy =
+        snapshot.state.openRequest !== null ||
+        snapshot.state.activeScriptExecutionIds.length > 0 ||
+        snapshot.state.pendingLlmRequestTrigger !== null;
+      if (busy) continue;
       await this.#appendUnlessAlreadyRecorded(() =>
         itx.agents.get(path).append({
           type: "events.iterate.com/agent/configured",
