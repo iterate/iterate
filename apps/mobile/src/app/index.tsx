@@ -12,7 +12,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { AppDrawerButton } from "../components/project-drawer.tsx";
 import { hasSignIn, signIn } from "../lib/auth.ts";
 import { bundleRecommendation } from "../lib/expected-backend.ts";
-import { claimNewBundleBoot } from "../lib/new-bundle-boot.ts";
+import { claimNewBundleBoot, dismissNewBundleBoot } from "../lib/new-bundle-boot.ts";
 import { getItxSession, reconnectItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing, rememberedProjectInScope } from "../lib/open-project.ts";
 import { DEFAULT_SERVER, PRODUCTION_PRESET } from "../lib/servers.ts";
@@ -169,6 +169,22 @@ export default function SignInScreen() {
               {recommended.label}
               {hintedEmail !== null ? ` · test sign-in as ${hintedEmail}` : ""}
             </Text>
+            {/* The decline path: this screen interrupted a signed-in fast
+                boot, so it must be leavable without an OAuth round-trip.
+                Dismissing ends the offer for this bundle's first boot; the
+                bootstrap refetch then takes the normal Redirect. */}
+            {hintOverridesServer && bootstrap.data?.signedIn ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  dismissNewBundleBoot();
+                  void queryClient.invalidateQueries({ queryKey: ["bootstrap"] });
+                }}
+                style={styles.recommendationDecline}
+              >
+                <Text style={styles.recommendationDeclineText}>Keep current setup</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -248,6 +264,8 @@ const styles = StyleSheet.create({
   },
   recommendationTitle: { color: colors.text, fontSize: 13, fontWeight: "600" },
   recommendationBody: { color: colors.textMuted, fontSize: 13 },
+  recommendationDecline: { alignSelf: "flex-start", marginTop: 4, paddingVertical: 4 },
+  recommendationDeclineText: { color: colors.accent, fontSize: 13, fontWeight: "600" },
   title: { color: colors.text, fontSize: 34, fontWeight: "700", letterSpacing: -0.5 },
   subtitle: { color: colors.textMuted, fontSize: 15, lineHeight: 22 },
   form: { gap: spacing.sm, paddingBottom: spacing.xl },
