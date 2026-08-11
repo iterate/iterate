@@ -78,6 +78,7 @@ test("the bundle's expectation survives to a real auth screen with the test OTP 
 
   // Sign in opens the REAL auth deployment in a popup (OIDC discovery +
   // client registration + authorize happen live against the slot).
+  // timeout: cold cross-server auth navigation — no loading UI for the spinner waiter
   const popupPromise = context.waitForEvent("page", { timeout: 45_000 });
   await page.getByRole("button", { name: "Sign in" }).click();
   const popup = await popupPromise;
@@ -85,6 +86,7 @@ test("the bundle's expectation survives to a real auth screen with the test OTP 
   // The signed /login redirect carried the login_hint: the page offers the
   // hinted identity as its primary action.
   const continueAs = popup.getByRole("button", { name: `Continue as ${HINT_EMAIL}` });
+  // timeout: the popup is outside the wrapped page, so no spinner waiter covers it
   await continueAs.waitFor({ timeout: 45_000 });
   await continueAs.click();
 
@@ -92,8 +94,10 @@ test("the bundle's expectation survives to a real auth screen with the test OTP 
   // fixed test OTP. The user only confirms.
   await popup
     .getByText(`Enter the 6-digit code sent to ${HINT_EMAIL}`)
+    // timeout: unwrapped popup — the spinner waiter cannot see it
     .waitFor({ timeout: 30_000 });
   await expect
+    // timeout: unwrapped popup — the spinner waiter cannot see it
     .poll(() => popup.getByTestId("email-otp-input").inputValue(), { timeout: 10_000 })
     .toBe("424242");
 });

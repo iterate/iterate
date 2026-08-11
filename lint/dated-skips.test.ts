@@ -56,6 +56,11 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     note: "env-gated: the bundle stamp must name an envs.ts preview preset and prd keeps the fixed test OTP off",
   },
   {
+    file: "specs/mobile/media.spec.ts",
+    match: "structural: seeding needs the deployment's admin API secret",
+    note: "env-gated: the deterministic lane seeds media over the admin API; environments without the secret cannot run it",
+  },
+  {
     file: "specs/workspace-lens-board.spec.ts",
     match: "demo recording — run locally with DEMO_RECORDING=1",
     note: "env-gated: a demo RECORDING, never a CI test (drives a standing preview project)",

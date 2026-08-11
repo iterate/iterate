@@ -18,21 +18,20 @@ test("opens the project integration catalogue from the mobile drawer", async ({
 
   await page.goto("/");
   await page.getByPlaceholder("https://os.iterate.com").fill(osBaseUrl);
-  // This event begins only after issuer discovery, OIDC discovery, and dynamic
-  // client registration on another worker. It is not a UI action a visible
-  // spinner can extend, and a cold preview regularly needs more than 1s.
+  // timeout: OIDC discovery + client registration have no loading UI for the spinner waiter
   const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
   await page.getByRole("button", { name: "Sign in" }).click();
   const popup = await popupPromise;
-  // The popup is outside middlewright's wrapped page and may still be crossing
-  // a cold auth-worker navigation, so it gets the repo's cross-server bound.
+  // timeout: the popup is outside the wrapped page, so no spinner waiter covers it
   await popup.getByTestId("email-login-button").click({ timeout: 15_000 });
   await signUpWithEmailOtp(popup, {
     email: uniqueSignupEmail("mobile-integrations"),
     projectSlug,
     testInfo,
   });
+  // timeout: same unwrapped popup — the spinner waiter cannot see it.
   await popup.getByRole("button", { name: "Continue" }).click({ timeout: 15_000 });
+  // timeout: same unwrapped popup — the spinner waiter cannot see it.
   await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
 
   await page.getByText(projectSlug).click();

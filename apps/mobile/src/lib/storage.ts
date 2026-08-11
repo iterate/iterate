@@ -75,3 +75,32 @@ export async function setStoredAuth(baseUrl: string, auth: StoredAuth): Promise<
 export async function clearStoredAuth(baseUrl: string): Promise<void> {
   await SecureStore.deleteItemAsync(authKey(baseUrl));
 }
+
+/** Per-project, device-local: this phone auto-collects screenshots into the
+ * project when its Media screen opens, back to an ABSOLUTE date chosen at
+ * enable time (so the window never silently creeps forward; extending
+ * backwards is an explicit re-choice). Deliberately device state — the
+ * device is the actor (it decides to run a sync pass), so there is no
+ * server-side registry to reconcile. */
+export type MediaSyncSettings = {
+  enabled: boolean;
+  /** Collect screenshots created at or after this ISO instant. */
+  sinceIso: string;
+};
+
+export async function getMediaSyncSettings(projectId: string): Promise<MediaSyncSettings | null> {
+  const raw = await SecureStore.getItemAsync(`iterate.mediaSync.${projectId}`);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.enabled === "boolean" && typeof parsed.sinceIso === "string") return parsed;
+  } catch {}
+  return null;
+}
+
+export async function setMediaSyncSettings(
+  projectId: string,
+  settings: MediaSyncSettings,
+): Promise<void> {
+  await SecureStore.setItemAsync(`iterate.mediaSync.${projectId}`, JSON.stringify(settings));
+}
