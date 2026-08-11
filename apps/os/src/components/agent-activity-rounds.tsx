@@ -219,7 +219,25 @@ function LlmOnlyRound({
           {llm.thinkingText}
         </div>
       )}
-      {llm.responseText === "" ? null : looksLikeCode(llm.responseText) ? (
+      {llm.responseText === "" ? null : llm.interpreted ? (
+        // Derived events (an extracted chat message, an extracted script)
+        // already tell this response's story through their own steps and
+        // bubbles — the raw text is the source material, folded away but one
+        // click from view. Streaming still shows live text above; this
+        // replaces it once interpretation lands.
+        <details className="w-full max-w-2xl px-1.5" data-testid="agent-feed-raw-response">
+          <summary className="cursor-pointer select-none font-mono text-xs text-muted-foreground/70">
+            raw model response
+          </summary>
+          <div className="mt-1.5 w-full">
+            <SourceCodeBlock
+              code={llm.responseText}
+              language="typescript"
+              showLineNumbers={false}
+            />
+          </div>
+        </details>
+      ) : looksLikeCode(llm.responseText) ? (
         <div className="w-full max-w-2xl">
           <SourceCodeBlock code={llm.responseText} language="typescript" showLineNumbers={false} />
         </div>

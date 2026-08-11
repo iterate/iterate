@@ -1719,3 +1719,76 @@ describe("agent-ui reducer", () => {
     });
   });
 });
+
+describe("interpreted responses (userland response formats)", () => {
+  test("derived events mark the llm step interpreted; uninterpreted turns stay plain", () => {
+    const reduced = reduceAll([
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "assistant",
+          content: 'Hi!\n<codemode status="Working">\nreturn 1\n</codemode>',
+          llmRequestOffset: 1,
+        },
+      },
+      // The userland interpreter's derived events: extracted prose (marked
+      // with the request offset) and the script extracted from the assistant
+      // event (offset 2).
+      {
+        type: "events.iterate.com/agents/web-message-sent",
+        payload: { message: "Hi!", llmRequestOffset: 1 },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: {
+          code: "async (itx) => {\nreturn 1\n}",
+          executionId: "agent-output:2",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+    ]);
+    const llmStep = reduced.live?.steps.find((step) => step.kind === "llm");
+    expect(llmStep).toMatchObject({ assistantEventOffset: 2, interpreted: true });
+    // The extracted prose still becomes the assistant bubble (deferred until
+    // the live round settles, like any mid-turn assistant message).
+    expect(reduced.deferredAssistantMessages).toMatchObject([{ text: "Hi!" }]);
+
+    // A plain turn (no derived events) is NOT marked.
+    const plain = reduceAll([
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "assistant", content: "Just prose.", llmRequestOffset: 1 },
+      },
+    ]);
+    const plainStep = plain.live?.steps.find((step) => step.kind === "llm");
+    expect(plainStep).toMatchObject({ assistantEventOffset: 2 });
+    expect(plainStep).not.toHaveProperty("interpreted");
+  });
+
+  test("a classic fenced turn's extracted script also marks its step interpreted", () => {
+    const reduced = reduceAll([
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "assistant",
+          content: "```ts\nasync (itx) => 1\n```",
+          llmRequestOffset: 1,
+        },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: {
+          code: "async (itx) => 1",
+          executionId: "agent-output:2",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+    ]);
+    expect(reduced.live?.steps.find((step) => step.kind === "llm")).toMatchObject({
+      interpreted: true,
+    });
+  });
+});
