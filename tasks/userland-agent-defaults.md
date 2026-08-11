@@ -95,7 +95,7 @@ Sequencing: builds on #2423's defaults event and headless processor — a follow
 
 ## Status (skim me)
 
-Roughly half done. The birth-defaults generalization (list form, fold, snapshot read, codemode-tag migration) is complete and tested; the prompt-to-template move (default + channel prompts, budget test, publish-time warning) is the main missing piece.
+Implementation complete; remaining work is live verification on a preview slot. Both halves landed: (1) birth defaults generalized to a validated birth-events list (fold + snapshot read + codemode-tag migration), (2) all prompt text moved to `configs/default/prompts/*.md` with content-hash revisions — the default worker publishes its prompt file as birth defaults at runtime, byte-identical outputs verified against the old constants.
 
 ## Checklist
 
@@ -103,12 +103,15 @@ Roughly half done. The birth-defaults generalization (list form, fold, snapshot 
 - [x] `agent-defaults.ts`: `AgentBirthDefaults` → birthEvents list; builder collapses to "append the validated list"; platform-minted content-hash keys _(`agent/birth-defaults:<djb2>:<index>:<projectId>:<agentPath>`; prompt-slot events replace the platform fallback slot; explicit systemPromptPolicy drops them; `Defaults` generic keeps router `satisfies EmittedInput<...>` exact)_
 - [x] `rpc-targets.ts`: read defaults from the project processor snapshot; delete the raw-event scan _(`agentBirthDefaultsForProject` reads `facetProcessorRelay(project).snapshot()`, applies `matches.pathPrefix` against the agent path)_
 - [x] `configs/codemode-tag/worker.ts`: publish list-form defaults _(same content-hash key; three birth events: driver config, prompt slot, headless subscription)_
-- [ ] `configs/default/prompts/agent-system-prompt.md`: prompt text moves; `DEFAULT_AGENT_SYSTEM_PROMPT`/revision constants deleted; fallback reads `PROJECT_REPO_INITIAL_FILES`; hash identity
-- [ ] `configs/default/worker.ts`: publish prompt birth default on worker-updated
-- [ ] channel prompts → `configs/default/prompts/{slack,telegram,email}.md` + thin interpolators
-- [ ] prompt-budget test reads the template file; template worker adds publish-time token warning
-- [ ] acceptance: no-defaults birth batches byte-identical (`agent-processor.test.ts`, `agent-headless-processor.test.ts` unmodified)
+- [x] `configs/default/prompts/agent-system-prompt.md`: prompt text moves; `DEFAULT_AGENT_SYSTEM_PROMPT`/revision constants deleted; fallback reads `PROJECT_REPO_INITIAL_FILES`; hash identity _(constant is now `embeddedTemplateFile("prompts/agent-system-prompt.md")`; all revisions are `contentHash(...)` — the manual bump comments are gone)_
+- [x] `configs/default/worker.ts`: publish prompt birth default on worker-updated _(`#publishAgentBirthDefaults`: newline-stripped file content as one prompt-slot birth event, content-hash key; deleted file publishes an EMPTY list → embedded fallback; pinned in config-repo-template.test.ts)_
+- [x] channel prompts → `configs/default/prompts/{slack,telegram,email}.md` + thin interpolators _(`{{postMessage}}`, `{{telegramConnection}}`/`{{agentPathJson}}`/`{{chatIdNote}}`, `{{agentSummaryInstruction}}`; exported names/signatures unchanged so routers and tests didn't move; interpolation throws on unfilled placeholders)_
+- [x] prompt-budget test reads the template file; template worker adds publish-time token warning _(budget test unchanged by design — the constants it reads are now file-sourced; worker warns at ~6k tokens)_
+- [x] acceptance: no-defaults birth batches byte-identical (`agent-processor.test.ts`, `agent-headless-processor.test.ts` unmodified) _(all 7 prompt outputs byte-compared old-vs-new: identical; full apps/os unit lane green — 263 files, 2730 tests)_
+- [ ] live verification on a preview slot: fresh default project first turn; edit prompt file + commit → new agents born with it; codemode smoke on the migrated list form
 
 ## Implementation log
 
 - (start) worktree `../worktrees/iterate/userland-agent-defaults`, stacked on codemode-tag-format @ 1baac37f5.
+- Chunk 1 (c559e40dc): birth-events list, project-processor fold, snapshot read, codemode-tag migration.
+- Chunk 2: prompts → configs/default/prompts/*.md. Old constants deleted from agent-defaults.ts; interpolators keep the exported names (slackAgentSystemPrompt etc.) so router callsites and channel tests are untouched. Revisions = djb2 content hashes (prompt-slot idempotency keys change once — equivalent to a revision bump; existing agents unaffected, birth-only events). MCP/onboarding composite `1.<rev>` scheme retired: hashing the composed prompt covers constituents automatically. Byte-compared all 7 prompt outputs (default, email, slack, telegram ×2, mcp, onboarding) against HEAD's constants: identical.

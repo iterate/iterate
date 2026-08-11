@@ -426,8 +426,7 @@ import { EmailAgentProcessorContract } from "./domains/email/email-agent-process
 import {
   agentCollectionCreationEvents,
   agentCreationForPath,
-  AGENT_BIRTH_DEFAULTS_EVENT_TYPE,
-  AgentBirthDefaults,
+  type AgentBirthDefaults,
   type AgentCreateInput,
 } from "./domains/agents/agent-defaults.ts";
 import { ChatReplyNotifyProcessorContract } from "./domains/notifications/chat-reply-notify-contract.ts";

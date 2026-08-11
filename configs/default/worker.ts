@@ -105,6 +105,58 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     if (failed !== undefined && failed.status === "rejected") throw failed.reason;
   }
 
+  /**
+   * THE PROJECT'S PROMPT, published as data: the platform's generic
+   * agent-creation door folds the LATEST agent-birth-defaults event on the
+   * project root into every agent birth batch, so agents in this project are
+   * BORN with this repo's prompts/agent-system-prompt.md as their system
+   * prompt. Edit that file and commit to change it — the content-hash key
+   * re-publishes and the newest event wins; no platform deploy. Deleting the
+   * file publishes an EMPTY list, which restores the platform's embedded
+   * fallback prompt (identical text until you fork the file). Rough token
+   * budget: prompts ride every LLM request, so a much larger file mostly
+   * buys latency and cost — keep it lean.
+   */
+  async #publishAgentBirthDefaults(): Promise<void> {
+    const itx = await this.itx;
+    const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
+    const birthEvents =
+      file === null
+        ? []
+        : [
+            {
+              type: "events.iterate.com/agents/context-added",
+              payload: {
+                // The platform's embedded copy of this file is newline-stripped;
+                // publishing the same normalization keeps "unchanged file" a
+                // byte-identical no-op.
+                content: file.content.replace(/\n$/, ""),
+                key: "agent/system-prompt",
+                role: "system",
+              },
+            },
+          ];
+    // Best-effort size guard (~4 chars/token): the platform's own default
+    // prompt is budget-tested at ~4.3k tokens; warn well before a fork's
+    // edits silently double every request's cost.
+    if (file !== null && file.content.length > 6_000 * 4) {
+      console.warn(
+        `prompts/agent-system-prompt.md is ~${Math.round(file.content.length / 4)} tokens; ` +
+          "it rides every LLM request of every agent — consider trimming.",
+      );
+    }
+    const encoded = new TextEncoder().encode(JSON.stringify(birthEvents));
+    const digest = await crypto.subtle.digest("SHA-256", encoded);
+    const hash = [...new Uint8Array(digest).slice(0, 8)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    await itx.streams.get("/").append({
+      type: "events.iterate.com/project/agent-birth-defaults-configured",
+      idempotencyKey: `iterate/config/agent-birth-defaults:${hash}`,
+      payload: { birthEvents },
+    });
+  }
+
   // The base class delivers committed events on ANY stream here at least once and in
   // per-stream order.
   protected override async processEvent(event: StreamEvent): Promise<void> {
@@ -155,6 +207,9 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
             });
           }`,
         });
+        // Any commit MAY have changed the prompt file; unchanged content
+        // dedupes on the content-hash key.
+        await this.#publishAgentBirthDefaults();
         break;
       }
       default:
