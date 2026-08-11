@@ -149,8 +149,7 @@ function RouteComponent() {
     onSuccess: async (project) => {
       if (!hasOAuthClientId) {
         // Back to the app that sent us here (usually the OS dashboard).
-        window.location.href = redirectTarget ?? "/";
-        return;
+        return redirectAndStayPending(redirectTarget || "/");
       }
       if (!needsProjectSelection) {
         const result = await authClient.oauth2.continue({ postLogin: true });
@@ -158,8 +157,7 @@ function RouteComponent() {
           throw new Error("Could not continue the OAuth redirect");
         }
 
-        window.location.href = result.url;
-        return;
+        return redirectAndStayPending(result.url);
       }
       setSelectedProjectIds([project.id]);
       await queryClient.invalidateQueries({ queryKey: organizationsQueryOptions().queryKey });
@@ -179,8 +177,7 @@ function RouteComponent() {
       setIsCreateProjectDialogOpen(false);
       if (!hasOAuthClientId) {
         // Back to the app that sent us here (usually the OS dashboard).
-        window.location.href = redirectTarget ?? "/";
-        return;
+        return redirectAndStayPending(redirectTarget || "/");
       }
       setSelectedProjectIds((current) => {
         const existingProjectIds =
@@ -207,8 +204,7 @@ function RouteComponent() {
         throw new Error("Could not continue the OAuth redirect");
       }
 
-      window.location.href = preserveOAuthResourceSearchParam(result.url);
-      return result;
+      return redirectAndStayPending(preserveOAuthResourceSearchParam(result.url));
     },
   });
 
@@ -219,8 +215,7 @@ function RouteComponent() {
         throw new Error("Could not continue the OAuth redirect");
       }
 
-      window.location.href = result.url;
-      return result;
+      return redirectAndStayPending(result.url);
     },
   });
 
@@ -815,6 +810,19 @@ function CreateProjectForm(props: {
       ) : null}
     </form>
   );
+}
+
+/**
+ * Leave the page and keep the caller's mutation pending until the browser
+ * actually unloads. A bare `window.location.href = ...` returns immediately,
+ * react-query flips `isPending` off, and every `isSubmitting`-gated button
+ * re-enables mid-navigation — "Create project" then invites a double submit.
+ * Returning this never-resolving promise (from `onSuccess`, or awaited in a
+ * `mutationFn`) keeps the mutation pending for the page's remaining lifetime.
+ */
+function redirectAndStayPending(href: string): Promise<never> {
+  window.location.href = href;
+  return new Promise<never>(() => {});
 }
 
 /**
