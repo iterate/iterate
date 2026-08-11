@@ -7,13 +7,12 @@ size: small
 
 ## Status summary
 
-Complete. Keyed root appends now get one bounded availability replay, approval
-decisions are replay-safe, and a fetch cannot report success until its
-settlement fact is durable. Focused preview proofs and the full preview suite
-passed without retries at the product head. A later docs-only CI run exposed a
-separate Stream Facet wake cycle, now tracked in
-`tasks/stream-facet-wake-does-not-read-source-inline.md`; PR #2467 remains draft
-until that release gate is green.
+Complete. Keyed root appends now get one bounded availability replay, exact
+approval submissions are replay-safe without blocking a corrected decision,
+and a fetch cannot report success until its settlement fact is durable. Focused
+preview proofs and the full preview suite passed without retries at the product
+head. A later docs-only CI run exposed a separate Stream Facet wake cycle,
+fixed in this PR; its release gate is green and PR #2467 is ready for review.
 
 ## Problem
 
@@ -74,6 +73,10 @@ divergent result.
 - 2026-08-10: Added deterministic decision idempotency keys so the bounded
   append replay cannot duplicate an approval decision after an ambiguous
   reset.
+- 2026-08-11: Cursor Bugbot found that keying only by request offset made an
+  ignored invalid decision collide with a corrected retry. Decision keys are
+  now content-addressed: an exact append replay dedupes, while a changed
+  verdict, key, reason, or signature is a distinct submission.
 - 2026-08-10: The first follow-up preview exposed a merge-integration gap:
   #2460 contained the Notifications screen and specs, while its drawer link
   existed only in that branch's old base history. Restored the link alongside

@@ -15,6 +15,7 @@
 // grant-vs-stray-reject race to reason about.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { createHash } from "node:crypto";
 import type { RpcStub } from "@iterate-com/capnweb";
 
 import {
@@ -185,16 +186,20 @@ export async function decide(input: {
   // Cap to the contract's 1000-char bound so a long pasted reason survives
   // truncated instead of degrading to absent via the schema's catch.
   const reason = input.reason?.trim().slice(0, 1_000);
+  const decisionPayload = {
+    approvalRequestEventOffset: input.offset,
+    verdicts: [...input.verdicts],
+    decidedBy: "human" as const,
+    ...(reason ? { reason } : {}),
+    ...(signs ? { keyId: input.key!.keyId, signature } : {}),
+  };
+  // The exact submission is replay-safe, while a corrected verdict, key, or
+  // signature remains a new attempt after the door ignores an invalid one.
+  const decisionHash = createHash("sha256").update(JSON.stringify(decisionPayload)).digest("hex");
   await input.stream.append({
     type: EVENT.decided,
-    idempotencyKey: `human-approval-decided:${input.offset}`,
-    payload: {
-      approvalRequestEventOffset: input.offset,
-      verdicts: [...input.verdicts],
-      decidedBy: "human",
-      ...(reason ? { reason } : {}),
-      ...(signs ? { keyId: input.key!.keyId, signature } : {}),
-    },
+    idempotencyKey: `human-approval-decided:${input.offset}:${decisionHash}`,
+    payload: decisionPayload,
   });
 }
 

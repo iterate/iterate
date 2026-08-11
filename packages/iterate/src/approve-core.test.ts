@@ -49,19 +49,17 @@ const REQUEST_OFFSET = 10;
 // A short settlement window so the no-match cases resolve fast under test.
 const WINDOW_MS = 40;
 
-test("decide gives one approval request a replay-safe event identity", async () => {
-  let appended: any;
+test("decide keys the submitted decision, so a corrected retry does not collide", async () => {
+  const appended: any[] = [];
   const stream: any = {
     append: async (event: any) => {
-      appended = event;
+      appended.push(event);
       return [];
     },
   };
-
-  await decide({
+  const request: any = {
     stream,
     projectId: "prj_test",
-    key: null,
     offset: 41,
     payload: {
       requests: [],
@@ -71,13 +69,52 @@ test("decide gives one approval request a replay-safe event identity", async () 
       expiresAt: "2026-08-10T15:00:00.000Z",
     },
     verdicts: [],
+  };
+
+  // A stale client can submit an unsigned decision after the project has
+  // enrolled a key. The door ignores it, then the client reloads the key and
+  // submits the corrected signed decision for the same request offset.
+  await decide({ ...request, key: null });
+  await decide({
+    ...request,
+    key: {
+      kind: "secure-enclave",
+      keyId: "approval-key-1",
+      publicKey: "public-key",
+      label: "Test key",
+      keyBlob: "key-blob",
+    },
+    verdicts: ["approve"],
+    signature: "correct-signature",
+  });
+  await decide({
+    ...request,
+    key: {
+      kind: "secure-enclave",
+      keyId: "approval-key-1",
+      publicKey: "public-key",
+      label: "Test key",
+      keyBlob: "key-blob",
+    },
+    verdicts: ["approve"],
+    signature: "correct-signature",
   });
 
-  expect(appended).toMatchObject({
+  expect(appended[0]).toMatchObject({
     type: EVENT.decided,
-    idempotencyKey: "human-approval-decided:41",
     payload: { approvalRequestEventOffset: 41, decidedBy: "human" },
   });
+  expect(appended[1]).toMatchObject({
+    type: EVENT.decided,
+    payload: {
+      approvalRequestEventOffset: 41,
+      decidedBy: "human",
+      keyId: "approval-key-1",
+      signature: "correct-signature",
+    },
+  });
+  expect(appended[0].idempotencyKey).not.toBe(appended[1].idempotencyKey);
+  expect(appended[1].idempotencyKey).toBe(appended[2].idempotencyKey);
 });
 
 test("safeHost preserves the port that identifies a destination", () => {
