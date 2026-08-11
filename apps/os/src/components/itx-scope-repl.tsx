@@ -1,20 +1,28 @@
 // The durable REPL container: every Run executes as a real scope script —
 // `itx.capabilityHosts.get(scopePath).runScript`, the same path agent scripts
-// take — in a dedicated per-user scope, and HISTORY IS THE STREAM: the entry
-// list derives from the scope's script-run-requested/settled events, so a
-// reload replays the same session (tasks/durable-repl.md). The only local run
-// state is the
-// in-flight mutation, and even that hands off to the stream as soon as the
-// request event lands.
+// take — in a session scope, and HISTORY IS THE STREAM: the entry list
+// derives from the scope's script-run-requested/settled events, so a reload
+// replays the same session (tasks/durable-repl.md). The only local run state
+// is the in-flight mutation, and even that hands off to the stream as soon as
+// the request event lands.
+//
+// LAZY BY DESIGN: nothing exists until the first Run. Waking a Stream
+// Durable Object BIRTHS it (stream/created on first boot), so while a
+// session is unborn this component makes NO calls that touch the session
+// path — no capability-host reads, no stream connection, no activity tail.
+// Existence is read from `itx.streams.list()` (a project-root read), and the
+// first Run's mutation is the one code path that births the scope
+// (idempotent create) and submits the script.
 //
 // Renders under a <ProjectScope> (the project layout provides it); rides the
 // tab's ONE itx session socket like every other project component.
 
 import { Suspense, useMemo, useState } from "react";
 import { ClientOnly } from "@tanstack/react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { StreamEvent } from "iterate/processors";
-import { useItx, useItxQuery, useStreamConnection } from "iterate/sdk/itx/react";
+import { useItx, useStreamConnection } from "iterate/sdk/itx/react";
+import { ItxActivityTail } from "./itx-activity-tail.tsx";
 import { ItxRepl } from "./itx-repl.tsx";
 import {
   REPL_SCRIPT_EVENT_TYPES,
@@ -25,6 +33,8 @@ import {
   type PendingRun,
 } from "./itx-scope-repl-entries.ts";
 import { ITX_EXAMPLES } from "~/itx/examples.ts";
+import { KNOWN_STREAMS_QUERY, newReplSessionPath } from "~/lib/repl-session.ts";
+import type { StreamListItem } from "~/itx-api.generated.ts";
 
 /** History window: plenty for a REPL session, bounded for pathological scopes. */
 const MAX_BUFFERED_SCRIPT_EVENTS = 1_000;
@@ -32,28 +42,35 @@ const MAX_BUFFERED_SCRIPT_EVENTS = 1_000;
 export function ItxScopeRepl({
   initialCode,
   onNewSession,
+  onSessionEstablished,
   projectId,
   scopePath,
 }: {
   initialCode: string;
-  /** Mint a fresh session stream and navigate to it (the page header button). */
+  /** Navigate to a fresh unborn session URL (the page header button). */
   onNewSession: () => void;
+  /** The first Run minted+birthed this session — put its path in the URL
+   * (router replace). Only called when scopePath was null. */
+  onSessionEstablished: (sessionPath: string) => void;
   projectId: string;
-  scopePath: string;
+  /** The session's stream path, or null for an unborn bare-/repl visit —
+   * the first Run mints the path (so its timestamp reflects when work
+   * actually started, not when the page was opened). */
+  scopePath: string | null;
 }) {
-  // useItxQuery suspends and itx never SSRs; the route shell still renders.
-  // Keyed by project AND scope: the scope path alone ("/repl") is the same
-  // string in every project, and TanStack keeps the route component mounted
-  // across /projects/a/repl → /projects/b/repl — without the project in the
-  // key, project A's event buffer, editor text, and mutation state would
-  // survive into project B (and the offset dedupe would swallow B's replay).
+  // useItx suspends once on first connect and itx never SSRs; the route
+  // shell still renders. Keyed by project AND session: the same component
+  // stays mounted across route param changes, so without the key project A's
+  // event buffer, editor text, and mutation state would survive into
+  // project B (and the offset dedupe would swallow B's replay).
   return (
     <ClientOnly fallback={<ItxReplConnecting />}>
       <Suspense fallback={<ItxReplConnecting />}>
         <ItxScopeReplConnected
-          key={`${projectId}:${scopePath}`}
+          key={`${projectId}:${scopePath || "unborn"}`}
           initialCode={initialCode}
           onNewSession={onNewSession}
+          onSessionEstablished={onSessionEstablished}
           projectId={projectId}
           scopePath={scopePath}
         />
@@ -73,45 +90,76 @@ function ItxReplConnecting() {
 function ItxScopeReplConnected({
   initialCode,
   onNewSession,
+  onSessionEstablished,
   projectId,
   scopePath,
 }: {
   initialCode: string;
   onNewSession: () => void;
+  onSessionEstablished: (sessionPath: string) => void;
   projectId: string;
-  scopePath: string;
+  scopePath: string | null;
 }) {
   const itx = useItx();
   const queryClient = useQueryClient();
 
-  // 1. Scope birth — the standard idempotent create batch (default birth
-  // certificate = one-hop capability fallback to the project root host).
-  // Suspends, so everything below always targets a live scope.
-  useItxQuery({
-    key: ["repl-scope-created", projectId, scopePath],
-    query: async (itx) => {
-      await itx.capabilityHosts.get(scopePath).create();
-      return true;
+  // 1. Does this session's stream exist yet? A project-root read — it never
+  // wakes (and therefore never births) the session stream. Non-suspending so
+  // the editor renders immediately; failures degrade to "unborn", which
+  // still runs fine (the Run mutation's create is idempotent).
+  const knownStreams = useQuery({
+    queryKey: ["itx", ...KNOWN_STREAMS_QUERY.key(projectId)],
+    queryFn: () => itx.streams.list().catch((): StreamListItem[] => []),
+    staleTime: KNOWN_STREAMS_QUERY.staleTimeMs,
+  });
+
+  // 2. The Run: mint the path if this is the first Run of an unborn bare
+  // visit, birth the scope (the standard idempotent create batch — a second
+  // tab racing it appends the identical events and both proceed), put the
+  // session in the URL, then submit the script. The ONE code path that
+  // creates anything.
+  const run = useMutation({
+    mutationFn: async ({ body, path }: PendingRun & { path: string }) => {
+      const host = itx.capabilityHosts.get(path);
+      await host.create();
+      // The remount after onSessionEstablished's URL replace must know the
+      // stream exists without waiting for stream/created to reach project
+      // state — prime the shared cache first.
+      queryClient.setQueryData(
+        ["itx", ...KNOWN_STREAMS_QUERY.key(projectId)],
+        (previous: StreamListItem[] | undefined) =>
+          (previous || []).some((stream) => stream.path === path)
+            ? previous
+            : [...(previous || []), { createdAt: new Date().toISOString(), path }],
+      );
+      if (scopePath === null) onSessionEstablished(path);
+      return await host.runScript(wrapReplScript(body));
     },
+    onSettled: (_result, _error, variables) =>
+      queryClient.invalidateQueries({
+        queryKey: ["itx", "repl-scope-preamble", projectId, variables.path],
+      }),
   });
 
-  // 2. The scope's assembled preamble — feeds the editor's TS worker so
-  // `results` autocompletes with real types. Refetched after every settled
-  // Run; stale-while-revalidate keeps this from ever re-suspending.
-  const preambleQueryKey = ["repl-scope-preamble", projectId, scopePath];
-  const preamble = useItxQuery({
-    key: preambleQueryKey,
-    query: (itx) => itx.capabilityHosts.get(scopePath).getPreamble(),
-  });
-
-  // 3. History: one kernel subscription from the start of the scope stream.
-  // Re-subscribing after a reconnect replays from 0; offsets dedupe overlap.
-  // (useState-in-callback is the blessed shape for push streams — see
-  // itx-activity-tail.tsx; a push connection is not a query.)
+  // Born = safe to touch the session stream: it provably exists, or this
+  // very component just submitted the Run that births it, or events already
+  // arrived (sticky evidence across background list refetches).
   const [events, setEvents] = useState<readonly StreamEvent[]>([]);
+  const activeScopePath = scopePath || (run.variables ? run.variables.path : null);
+  const born =
+    activeScopePath !== null &&
+    (events.length > 0 ||
+      run.submittedAt !== 0 ||
+      (knownStreams.data || []).some((stream) => stream.path === activeScopePath));
+
+  // 3. History: one kernel subscription from the start of the scope stream,
+  // opened only once born. Re-subscribing after a reconnect replays from 0;
+  // offsets dedupe overlap. (useState-in-callback is the blessed shape for
+  // push streams — see itx-activity-tail.tsx; a push connection is not a
+  // query.)
   useStreamConnection(
     (itx) =>
-      itx.streams.get(scopePath).openConnection({
+      itx.streams.get(activeScopePath!).openConnection({
         replayAfterOffset: 0,
         processEventBatch: (batch) => {
           const scriptEvents = batch.events.filter((event) =>
@@ -129,21 +177,24 @@ function ItxScopeReplConnected({
           });
         },
       }),
-    [scopePath],
+    [activeScopePath],
+    { enabled: born },
   );
 
-  // 4. The Run: wrap the typed body into the `async (itx) => { … }` shape
-  // runScript expects and call it. A failed script throws here too, but its
-  // settlement lands
-  // on the stream regardless — the entry list is the error's home; the
-  // mutation error only surfaces for pre-journal failures (see runError).
-  // Variables carry the submit-time stream anchor so the pending row can
-  // tell ITS request event apart from an older run of the same snippet.
-  const run = useMutation({
-    mutationFn: async ({ body }: PendingRun) => {
-      return await itx.capabilityHosts.get(scopePath).runScript(wrapReplScript(body));
-    },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["itx", ...preambleQueryKey] }),
+  // 4. The scope's assembled preamble — feeds the editor's TS worker so
+  // `results` autocompletes with real types. Best-effort and unborn-safe:
+  // disabled until born (no preamble exists before the first settle anyway),
+  // errors fall back to the itx-only types. Refetched after every settled
+  // Run (see the mutation's onSettled).
+  const preamble = useQuery({
+    enabled: born,
+    queryKey: ["itx", "repl-scope-preamble", projectId, activeScopePath],
+    queryFn: () =>
+      itx.capabilityHosts
+        .get(activeScopePath!)
+        .getPreamble()
+        .catch(() => null),
+    staleTime: 5_000,
   });
 
   const [code, setCode] = useState(initialCode);
@@ -168,7 +219,11 @@ function ItxScopeReplConnected({
     const body = code.trim();
     if (body === "" || run.isPending) return;
     setCode("");
-    run.mutate({ afterOffset: events.at(-1)?.offset || 0, body });
+    run.mutate({
+      afterOffset: events.at(-1)?.offset || 0,
+      body,
+      path: activeScopePath || newReplSessionPath(new Date()),
+    });
   }
 
   function selectExample(exampleCode: string) {
@@ -177,22 +232,33 @@ function ItxScopeReplConnected({
   }
 
   return (
-    <ItxRepl
-      canRun={!run.isPending && code.trim() !== ""}
-      code={code}
-      entries={entries}
-      examples={ITX_EXAMPLES}
-      examplesOpen={examplesOpen}
-      onChangeCode={setCode}
-      onNewSession={onNewSession}
-      onRun={handleRun}
-      onSelectExample={selectExample}
-      onSetExamplesOpen={setExamplesOpen}
-      pendingCode={pendingCode}
-      runError={runError}
-      scopePath={scopePath}
-      scopePreamble={preamble?.text || null}
-      status={run.isPending ? "Running..." : "Ready"}
-    />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1">
+        <ItxRepl
+          canRun={!run.isPending && code.trim() !== ""}
+          code={code}
+          entries={entries}
+          examples={ITX_EXAMPLES}
+          examplesOpen={examplesOpen}
+          onChangeCode={setCode}
+          onNewSession={onNewSession}
+          onRun={handleRun}
+          onSelectExample={selectExample}
+          onSetExamplesOpen={setExamplesOpen}
+          pendingCode={pendingCode}
+          runError={runError}
+          scopePath={activeScopePath}
+          scopePreamble={preamble.data?.text || null}
+          status={run.isPending ? "Running..." : "Ready"}
+        />
+      </div>
+      {/* The tail rides the session stream too, so it must stay lazy: mounting
+          it opens a connection, and a connection wakes (births) the stream. */}
+      {born && activeScopePath !== null ? (
+        <div className="flex max-h-56 min-h-0 flex-col">
+          <ItxActivityTail key={`${projectId}:${activeScopePath}`} path={activeScopePath} />
+        </div>
+      ) : null}
+    </div>
   );
 }

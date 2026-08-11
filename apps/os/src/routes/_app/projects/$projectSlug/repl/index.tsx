@@ -1,14 +1,22 @@
 // Bare /repl: resume the project's MOST RECENT REPL session — a console
-// should be where you left it — minting a fresh timestamped session stream
-// only when none exists. Either way this page immediately REPLACES itself
-// with the session's full URL (/projects/<slug>/repl/<timestamp-slug>), so
-// the address bar always shows the real stream path and the back button
-// never lands on the resolver.
+// should be where you left it — by replacing the URL with that session's
+// full stream path. When the project has NO sessions, this page renders the
+// console UNBORN instead: nothing (no stream, no scope) exists until the
+// first Run, which mints the timestamp path (so it reflects when work
+// actually started), births the scope, and router-replaces the URL with the
+// new session's path.
 
 import { Suspense } from "react";
-import { ClientOnly, Navigate, createFileRoute } from "@tanstack/react-router";
+import { ClientOnly, Navigate, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useItxQuery } from "iterate/sdk/itx/react";
-import { newReplSessionPath, newestReplSessionPath, replSessionSlug } from "~/lib/repl-session.ts";
+import { ItxScopeRepl } from "~/components/itx-scope-repl.tsx";
+import {
+  KNOWN_STREAMS_QUERY,
+  PROJECT_REPL_INITIAL_CODE,
+  newReplSessionPath,
+  newestReplSessionPath,
+  replSessionSlug,
+} from "~/lib/repl-session.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repl/")({
   staticData: {
@@ -39,17 +47,48 @@ function ReplResolving() {
 
 function ReplSessionResolver() {
   const { project } = Route.useRouteContext();
+  const navigate = useNavigate();
   const streams = useItxQuery({
-    key: ["repl-sessions", project.id],
+    key: [...KNOWN_STREAMS_QUERY.key(project.id)],
     query: (itx) => itx.streams.list(),
   });
-  const sessionPath = newestReplSessionPath(streams) || newReplSessionPath(new Date());
+  const latest = newestReplSessionPath(streams);
+  if (latest !== null) {
+    return (
+      <Navigate
+        params={{ projectSlug: project.slug, _splat: replSessionSlug(latest) }}
+        replace
+        search={{}}
+        to="/projects/$projectSlug/repl/$"
+      />
+    );
+  }
+  // No sessions yet: an unborn console at the bare URL. The first Run mints
+  // the session and lands its path in the URL (replace — the back button
+  // must not return to this resolver state).
   return (
-    <Navigate
-      params={{ projectSlug: project.slug, _splat: replSessionSlug(sessionPath) }}
-      replace
-      search={{}}
-      to="/projects/$projectSlug/repl/$"
+    <ItxScopeRepl
+      initialCode={PROJECT_REPL_INITIAL_CODE}
+      onNewSession={() =>
+        void navigate({
+          params: {
+            projectSlug: project.slug,
+            _splat: replSessionSlug(newReplSessionPath(new Date())),
+          },
+          search: {},
+          to: "/projects/$projectSlug/repl/$",
+        })
+      }
+      onSessionEstablished={(sessionPath) =>
+        void navigate({
+          params: { projectSlug: project.slug, _splat: replSessionSlug(sessionPath) },
+          replace: true,
+          search: {},
+          to: "/projects/$projectSlug/repl/$",
+        })
+      }
+      projectId={project.id}
+      scopePath={null}
     />
   );
 }

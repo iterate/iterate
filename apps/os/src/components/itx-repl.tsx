@@ -61,8 +61,9 @@ interface ItxReplProps {
   pendingCode: string | null;
   /** A Run failure with no journaled settlement (transport, scope birth). */
   runError: string | null;
-  /** The per-user capability scope Runs execute in, e.g. /repl/usr123. */
-  scopePath: string;
+  /** The session stream Runs execute on (e.g. /repl/2026-…), or null while
+   * the session is unborn — nothing exists until the first Run. */
+  scopePath: string | null;
   /** The scope's assembled preamble (typed `results`) for the editor worker. */
   scopePreamble: string | null;
   status: string;
@@ -108,9 +109,15 @@ export function ItxRepl({
                 <p>
                   <span className="text-foreground">Run TypeScript as real project scripts.</span>{" "}
                   Scripts execute server-side in this session&apos;s stream (
-                  <code className="font-mono text-xs">{scopePath}</code> — the URL), typechecked and
-                  journaled — reload and the session is still here, and anyone on this URL shares
-                  the console. A trailing expression echoes its value back (or{" "}
+                  {scopePath === null ? (
+                    "created on your first Run"
+                  ) : (
+                    <>
+                      <code className="font-mono text-xs">{scopePath}</code> — the URL
+                    </>
+                  )}
+                  ), typechecked and journaled — reload and the session is still here, and anyone on
+                  this URL shares the console. A trailing expression echoes its value back (or{" "}
                   <code className="font-mono text-xs">return</code> explicitly); prior results stay
                   in scope as <code className="font-mono text-xs">results[0].data</code> (or{" "}
                   <code className="font-mono text-xs">await results[0].load(itx)</code> for large

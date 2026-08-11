@@ -8,6 +8,10 @@ import type { StreamListItem } from "~/itx-api.generated.ts";
 
 export const REPL_SESSION_PATH_PREFIX = "/repl/";
 
+// Deliberately a bare expression: the default Run doubles as a demo of the
+// REPL echo (a trailing expression answers with its value).
+export const PROJECT_REPL_INITIAL_CODE = "await itx.__describe()";
+
 /** A fresh session's stream path, e.g. /repl/2026-08-12t09-15-42-123z. */
 export function newReplSessionPath(date: Date) {
   const slug = date
@@ -35,3 +39,15 @@ export function newestReplSessionPath(streams: readonly StreamListItem[]): strin
 export function replSessionSlug(sessionPath: string): string {
   return sessionPath.slice(REPL_SESSION_PATH_PREFIX.length);
 }
+
+/**
+ * The project's known-streams read the REPL routes and container share (one
+ * cache entry). staleTime is load-bearing: after the first Run births a
+ * session and the URL is replaced, the remounted container must see the
+ * primed cache (see the run mutation in itx-scope-repl.tsx) instead of
+ * racing a refetch against stream/created propagating into project state.
+ */
+export const KNOWN_STREAMS_QUERY = {
+  key: (projectId: string) => ["repl-streams", projectId] as const,
+  staleTimeMs: 30_000,
+};

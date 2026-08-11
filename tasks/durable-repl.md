@@ -210,3 +210,29 @@ feeding the scope's derived `results` preamble.
   untouched). Live-verified end to end: mint → URL replace → reload resume →
   bare-/repl resume → two tabs sharing one console live → New REPL fresh
   stream → sidebar navigation.
+- Laziness revision (Misha): nothing exists until the first Run. Key fact:
+  ANY wake of a Stream Durable Object births it (stream/created on first
+  boot), so pre-birth the page makes NO session-stream calls — existence
+  comes from itx.streams.list() (a project-root read, non-suspending with a
+  30s staleTime), and the stream connection, preamble query, and activity
+  tail are all gated on `born` (exists || this component submitted a Run ||
+  events already buffered). The Run mutation is the ONE creating code path:
+  mint path (bare visits mint at Run time, so the timestamp reflects when
+  work started) → idempotent create (identical default batch — a racing
+  second tab dedupes and both proceed) → prime the known-streams cache →
+  router-replace the URL (bare case) → runScript. Pre-birth editor typing
+  falls back to itx-only types (preamble query disabled until born).
+  - Delineated deviation from the suggested New-REPL shape: New REPL
+    navigates to a fresh /repl/<ts> URL (still unborn — a URL costs
+    nothing) rather than bare-/repl-plus-ephemeral-intent. Same laziness
+    guarantee, no intent state, and it makes the not-yet-born shared-link
+    case (open a session URL before anyone ran) first-class; reloading an
+    unborn URL keeps you on that empty console instead of resume-latest —
+    arguably truer to "where you left it" than the suggested fallback.
+  - Platform note: the first child birth also registers the PARENT /repl
+    stream (stream/child-stream-created) — that is platform bookkeeping
+    after the first Run, not an early wake; the lazy spec's prefix filter
+    accounts for it.
+  - specs/repl-lazy.spec.ts proves it end to end: visit + New REPL create
+    nothing (settle window + streams.list []), first Run births exactly one
+    stream at the URL's path.
