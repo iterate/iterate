@@ -106,11 +106,16 @@ function RouteComponent() {
   const queryClient = useQueryClient();
   const session = useSession();
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[] | null>(null);
-  const [organizationName, setOrganizationName] = useState(() =>
-    suggestOrganizationName({
-      name: session.user.name,
-      email: session.user.email,
-    }),
+  const [organizationName, setOrganizationName] = useState(
+    () =>
+      // A hinted project slug names the org too: every test signup shares the
+      // same email domain, so the domain-derived suggestion ("Nustom") would
+      // collide with the previous link-clicker's organization.
+      hintedProjectSlug ||
+      suggestOrganizationName({
+        name: session.user.name,
+        email: session.user.email,
+      }),
   );
   // null = still deriving the first project's slug from the organization name.
   // Once the user edits the field (including clearing it), we keep their

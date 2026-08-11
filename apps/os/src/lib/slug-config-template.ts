@@ -41,40 +41,46 @@ export function configRepoTemplateFromSlug(slug: string): string | null {
 }
 
 /**
- * The convention's existence gate: only a template folder GitHub can list
- * turns the slug into a template birth — a slug that merely LOOKS like the
- * convention (or names a template that never landed) produces an ordinary
- * stock project rather than a failed one. Network/rate-limit failures count
- * as "missing" too (creation must not depend on GitHub being reachable);
- * the caller logs the downgrade.
- */
-/**
  * The one-call form create() uses: parse the convention, gate on existence,
- * log which way it went. Undefined = ordinary stock project.
+ * log which way it went. Undefined = ordinary stock project — but ONLY when
+ * GitHub definitively says the template folder is absent. A rate-limited or
+ * unreachable GitHub errs toward recording the template: the slug explicitly
+ * asked for one, and a visible seed failure the user can retry beats
+ * silently birthing a stock project that looks like the feature not working
+ * (observed live: a 403-limited existence check on preview-14 quietly
+ * produced a guestbook project from a waiter-chef link).
  */
 export async function resolveSlugConventionTemplate(slug: string): Promise<string | undefined> {
   const derived = configRepoTemplateFromSlug(slug);
   if (derived === null) return undefined;
-  if (await slugConfigTemplateExists(derived)) {
+  const existence = await checkSlugConfigTemplate(derived);
+  if (existence === "missing") {
+    console.warn(
+      "[project-create] slug names a config template that does not exist; creating without one",
+      { slug, configRepoTemplate: derived },
+    );
+    return undefined;
+  }
+  if (existence === "unknown") {
+    console.warn(
+      "[project-create] could not verify the slug's config template (rate limit or outage); recording it anyway — the repo seed will surface a definitive failure",
+      { slug, configRepoTemplate: derived },
+    );
+  } else {
     console.log("[project-create] slug template convention resolved", {
       slug,
       configRepoTemplate: derived,
     });
-    return derived;
   }
-  console.warn(
-    "[project-create] slug names a config template that does not exist; creating without one",
-    { slug, configRepoTemplate: derived },
-  );
-  return undefined;
+  return derived;
 }
 
-export async function slugConfigTemplateExists(
+export async function checkSlugConfigTemplate(
   templateReference: string,
   githubFetch: (url: string, init: RequestInit) => Promise<Response> = globalThis.fetch,
-): Promise<boolean> {
+): Promise<"exists" | "missing" | "unknown"> {
   const match = /^github:([^/]+)\/([^#]+)#(?:(.+)&)?path:(.+)$/.exec(templateReference);
-  if (match === null) return false;
+  if (match === null) return "missing";
   const [, owner, repo, ref, path] = match;
   const url = new URL(
     `https://api.github.com/repos/${encodeURIComponent(owner!)}/${encodeURIComponent(repo!)}/contents/${path}`,
@@ -85,8 +91,11 @@ export async function slugConfigTemplateExists(
       headers: { "User-Agent": "iterate-os", Accept: "application/vnd.github+json" },
       signal: AbortSignal.timeout(5_000),
     });
-    return response.ok;
+    if (response.ok) return "exists";
+    // 404 is GitHub's definitive "no such folder at that ref"; everything
+    // else (403 rate limit, 5xx) proves nothing about the template.
+    return response.status === 404 ? "missing" : "unknown";
   } catch {
-    return false;
+    return "unknown";
   }
 }

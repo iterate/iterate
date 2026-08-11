@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { configRepoTemplateFromSlug, slugConfigTemplateExists } from "./slug-config-template.ts";
+import { checkSlugConfigTemplate, configRepoTemplateFromSlug } from "./slug-config-template.ts";
 
 describe("configRepoTemplateFromSlug", () => {
   it("pins a pr-prefixed slug to that pull request's head ref", () => {
@@ -33,34 +33,42 @@ describe("configRepoTemplateFromSlug", () => {
   });
 });
 
-describe("slugConfigTemplateExists", () => {
+describe("checkSlugConfigTemplate", () => {
   it("asks the GitHub contents API for the template folder at the pinned ref", async () => {
     const githubFetch = vi.fn().mockResolvedValue(new Response("[]", { status: 200 }));
 
     await expect(
-      slugConfigTemplateExists(
+      checkSlugConfigTemplate(
         "github:iterate/iterate#pull/2477/head&path:configs/waiter-chef",
         githubFetch,
       ),
-    ).resolves.toBe(true);
+    ).resolves.toBe("exists");
     expect(githubFetch.mock.calls[0]?.[0]).toBe(
       "https://api.github.com/repos/iterate/iterate/contents/configs/waiter-chef?ref=pull%2F2477%2Fhead",
     );
   });
 
-  it("treats a 404 as missing", async () => {
+  it("treats a 404 as definitively missing", async () => {
     const githubFetch = vi.fn().mockResolvedValue(new Response("nope", { status: 404 }));
 
     await expect(
-      slugConfigTemplateExists("github:iterate/iterate#path:configs/ghost", githubFetch),
-    ).resolves.toBe(false);
+      checkSlugConfigTemplate("github:iterate/iterate#path:configs/ghost", githubFetch),
+    ).resolves.toBe("missing");
   });
 
-  it("treats network failure as missing rather than failing project creation", async () => {
+  it("treats a rate limit as unknown, not missing — the birth must not silently go stock", async () => {
+    const githubFetch = vi.fn().mockResolvedValue(new Response("rate limited", { status: 403 }));
+
+    await expect(
+      checkSlugConfigTemplate("github:iterate/iterate#path:configs/with-voice", githubFetch),
+    ).resolves.toBe("unknown");
+  });
+
+  it("treats network failure as unknown", async () => {
     const githubFetch = vi.fn().mockRejectedValue(new Error("github unreachable"));
 
     await expect(
-      slugConfigTemplateExists("github:iterate/iterate#path:configs/with-voice", githubFetch),
-    ).resolves.toBe(false);
+      checkSlugConfigTemplate("github:iterate/iterate#path:configs/with-voice", githubFetch),
+    ).resolves.toBe("unknown");
   });
 });

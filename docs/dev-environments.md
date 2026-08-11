@@ -138,10 +138,13 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   prefix starting `pr<N>` pins the ref to `pull/<N>/head` — so a
   config-template PR can link to a project born from its own in-flight
   template, and `pr<N>-<anything>-template-<name>` gives everyone their own
-  collision-free slug for the same template. If the template
-  folder doesn't exist, the project is created stock (never blocked). Hints
-  are suggestions only: the user still confirms every step, and explicit
-  `configRepoTemplate` arguments always win over the convention.
+  collision-free slug for the same template. A template folder GitHub
+  definitively reports absent (404) creates the project stock; a
+  rate-limited or unreachable GitHub records the template anyway, so a
+  quota'd birth fails visibly instead of silently going stock. Hints are
+  suggestions only: the user still confirms every step (the hint also names
+  the first-run organization, keeping test signups collision-free), and
+  explicit `configRepoTemplate` arguments always win over the convention.
 
 The dev-global auth deploys from `main` (alongside prd auth) and reseeds its
 OAuth clients from Doppler on every deploy — see
