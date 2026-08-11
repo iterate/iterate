@@ -65,6 +65,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         await this.#handoverToHeadless([event.path]);
         await this.#syncSystemPromptContext([event.path]);
         await this.#syncAgentsMdContext([event.path]);
+        await this.#restartRacingFirstTurn(event.path);
         break;
       }
       case "events.iterate.com/project/worker-updated": {
@@ -170,6 +171,41 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         }),
       );
     }
+  }
+
+  /**
+   * THE FIRST-TURN RACE, closed. A web chat sends its first message within
+   * milliseconds of creating the agent, while this worker's handover takes
+   * seconds to arrive — so the first turn reliably starts under the CLASSIC
+   * processor with the default fenced prompt. When the birth handler finds
+   * that racing turn already pending, it appends an interrupting developer
+   * note: the platform cancels the in-flight request, and the interrupt's
+   * own trigger re-runs the turn — now under the headless driver with the
+   * codemode prompt just synced above. One idempotent append per agent,
+   * ever; an agent created idle (no pending message) appends nothing, so
+   * script-created agents are never woken spuriously.
+   */
+  async #restartRacingFirstTurn(agentPath: string): Promise<void> {
+    if (!agentPath.startsWith("/agents/")) return;
+    if (/^\/agents\/(slack|telegram|email)\//.test(agentPath)) return;
+    const itx = await this.itx;
+    const agent = itx.agents.get(agentPath);
+    const snapshot = await agent.processor.snapshot();
+    if (snapshot.state.openRequest === null && snapshot.state.pendingLlmRequestTrigger === null) {
+      return;
+    }
+    await this.#appendUnlessAlreadyRecorded(() =>
+      agent.append({
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: `codemode-tag/first-turn-restart:${agentPath}`,
+        payload: {
+          role: "developer",
+          content:
+            "(This project's codemode response format finished activating for this new agent; the first turn was restarted so every reply uses it. Answer the user's pending message.)",
+          llmRequestPolicy: { behaviour: "interrupt-current-request" },
+        },
+      }),
+    );
   }
 
   /**

@@ -51,9 +51,13 @@ rendering — is a commit to this repo. No platform deploy.**
   kills that turn (a new message starts fresh). If the experiment graduates,
   the promotion path is a real hosted stream processor (`createProcessorHost`)
   or platformizing the proven format.
-- First-turn race: an agent's first turn can start under the classic
-  processor before the handover lands — that one turn uses the fenced format,
-  then self-heals (shared idempotency keys make the handover dedupe).
+- First-turn race, mitigated: a new chat's first message reliably beats the
+  worker's birth handover, so the worker interrupts the racing classic turn
+  and lets the interrupt re-run it under the headless driver — first replies
+  arrive a beat slower but in the right format. The wider window is project
+  birth itself: until the config worker's FIRST deploy finishes, deliveries
+  to it are skipped (not retried), and the `project/worker-updated` sweep is
+  what converts any agents created in that window.
 - Slash commands (`/example`, `/script`) are platform interpretation and are
   inert here.
 - Web agents only: slack/telegram/email agent paths are excluded from the
