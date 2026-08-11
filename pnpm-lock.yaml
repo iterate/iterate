@@ -143,8 +143,8 @@ importers:
         specifier: ^16.2.7
         version: 16.3.2
       middlewright:
-        specifier: 0.1.4
-        version: 0.1.4(patch_hash=f7dbe0f4bb32aee1bcb06b07a5db2f18ecbd15cb21748c08d5bd8e9c44855074)(@playwright/test@1.60.0)
+        specifier: https://pkg.pr.new/middlewright@71c68659aa18eee7b34d5b3ab79a6f3d0c3a85ea
+        version: https://pkg.pr.new/middlewright@71c68659aa18eee7b34d5b3ab79a6f3d0c3a85ea(patch_hash=f7dbe0f4bb32aee1bcb06b07a5db2f18ecbd15cb21748c08d5bd8e9c44855074)(@playwright/test@1.60.0)
       oxfmt:
         specifier: ^0.35.0
         version: 0.35.0
@@ -646,6 +646,9 @@ importers:
       expo-linking:
         specifier: ~8.0.12
         version: 8.0.12(expo@54.0.36)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
+      expo-media-library:
+        specifier: ~18.2.1
+        version: 18.2.1(expo@54.0.36)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))
       expo-notifications:
         specifier: ~0.32.17
         version: 0.32.17(expo@54.0.36)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)(typescript@5.9.3)
@@ -9105,6 +9108,12 @@ packages:
     peerDependencies:
       expo: '*'
 
+  expo-media-library@18.2.1:
+    resolution: {integrity: sha512-dV1acx6Aseu+I5hmF61wY8UkD4vdt8d7YXHDfgNp6ZSs06qxayUxgrBsiG2eigLe54VLm3ycbFBbWi31lhfsCA==}
+    peerDependencies:
+      expo: '*'
+      react-native: '*'
+
   expo-modules-autolinking@3.0.26:
     resolution: {integrity: sha512-WOaud6UKg16ciCOj8raKcMOoKFMHLXKI29U29yhgu1lf+Y7VxJyCktUcYo6AM+ccZ7zLD1uWZdMtgnpf+95OXA==}
     hasBin: true
@@ -10783,8 +10792,9 @@ packages:
     resolution: {integrity: sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA==}
     engines: {node: '>=8.6'}
 
-  middlewright@0.1.4:
-    resolution: {integrity: sha512-19aZN/yCYOlh3CmpUNmKsQu8709Zbw72VFWXtCidjj5tqi2eLu6QCT1nDqhqKB4eurkQsEFB5vHVYbh03UkuxA==}
+  middlewright@https://pkg.pr.new/middlewright@71c68659aa18eee7b34d5b3ab79a6f3d0c3a85ea:
+    resolution: {tarball: https://pkg.pr.new/middlewright@71c68659aa18eee7b34d5b3ab79a6f3d0c3a85ea}
+    version: 0.1.0
     engines: {node: '>=20'}
     peerDependencies:
       '@playwright/test': '>=1.49.0'
@@ -23165,6 +23175,11 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  expo-media-library@18.2.1(expo@54.0.36)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0)):
+    dependencies:
+      expo: 54.0.36(@babel/core@7.29.0)(@expo/metro-runtime@6.1.2)(expo-router@6.0.24)(graphql@16.14.2)(react-native-webview@13.15.0(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)(typescript@5.9.3)
+      react-native: 0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0)
+
   expo-modules-autolinking@3.0.26:
     dependencies:
       '@expo/spawn-async': 1.8.0
@@ -25518,7 +25533,7 @@ snapshots:
       braces: 3.0.3
       picomatch: 2.3.1
 
-  middlewright@0.1.4(patch_hash=f7dbe0f4bb32aee1bcb06b07a5db2f18ecbd15cb21748c08d5bd8e9c44855074)(@playwright/test@1.60.0):
+  middlewright@https://pkg.pr.new/middlewright@71c68659aa18eee7b34d5b3ab79a6f3d0c3a85ea(patch_hash=f7dbe0f4bb32aee1bcb06b07a5db2f18ecbd15cb21748c08d5bd8e9c44855074)(@playwright/test@1.60.0):
     dependencies:
       '@playwright/test': 1.60.0
       dedent: 1.7.2

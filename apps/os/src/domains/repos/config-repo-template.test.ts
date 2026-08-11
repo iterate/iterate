@@ -69,6 +69,8 @@ test("project lifecycle cases directly install and handle the default heartbeat"
   const project = {
     repos: { list: async () => [] },
     scheduler: { set },
+    // The MediaApp glue mounts itx.media on worker-updated.
+    capabilityHosts: { get: () => ({ provideCapability: async () => null }) },
     [Symbol.dispose]: vi.fn(),
   };
   const get = vi.fn(async () => project);

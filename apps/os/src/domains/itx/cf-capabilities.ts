@@ -120,10 +120,13 @@ export type CfImageDrawOptions = Record<string, unknown>;
  * ordered transform steps, optional overlay draws (watermarks — each with its
  * own transforms), and the output encoding. */
 export type CfImageTransformInput = {
-  image: ReadableStream<Uint8Array>;
+  /** Source image: a stream, or any FileData shape (bytes/base64/Blob) —
+   * coerced server-side; streams and Blobs do not survive the RPC hop from
+   * script sandboxes, so pass bytes or base64 from scripts. */
+  image: ReadableStream<Uint8Array> | FileData;
   transforms?: CfImageTransformOptions[];
   draws?: Array<{
-    image: ReadableStream<Uint8Array>;
+    image: ReadableStream<Uint8Array> | FileData;
     options?: CfImageDrawOptions;
     transforms?: CfImageTransformOptions[];
   }>;

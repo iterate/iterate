@@ -1025,11 +1025,13 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfImagesCapability",
     kind: "interface",
     sourceText:
-      "/** Cloudflare Images binding exposed through itx as one-call helpers. */\nexport interface CfImagesCapability {\n  __describe(): Promise<Description>;\n  /** Inspect an image stream for format/dimensions/file size. */\n  info(image: ReadableStream<Uint8Array>): Promise<unknown>;\n  /** Apply ordered image transforms/draws and output a Response. */\n  transform(input: CfImageTransformInput): Promise<Response>;\n}",
+      "/** Cloudflare Images binding exposed through itx as one-call helpers. */\nexport interface CfImagesCapability {\n  __describe(): Promise<Description>;\n  /** Inspect an image stream for format/dimensions/file size. */\n  info(image: ReadableStream<Uint8Array>): Promise<unknown>;\n  /** Apply ordered image transforms/draws and output a Response. */\n  transform(input: CfImageTransformInput): Promise<Response>;\n  /**\n   * `transform`, buffered: Response bodies (like streams and Blobs) cannot\n   * cross the RPC boundary back into a script sandbox, so scripts use this\n   * to get plain bytes — e.g. downscaling an oversized screenshot before a\n   * vision-model call.\n   */\n  transformBytes(input: CfImageTransformInput): Promise<{ bytes: Uint8Array; contentType: string }>;\n}",
     summary: "Cloudflare Images binding exposed through itx as one-call helpers.",
     memberSummaries: {
       info: "Inspect an image stream for format/dimensions/file size.",
       transform: "Apply ordered image transforms/draws and output a Response.",
+      transformBytes:
+        "`transform`, buffered: Response bodies (like streams and Blobs) cannot cross the RPC boundary back into a script sandbox, so scripts use this to get plain bytes — e.g.",
     },
     referencedTypeNames: ["Description", "CfImageTransformInput"],
   },
@@ -2537,11 +2539,16 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfImageTransformInput",
     kind: "typeAlias",
     sourceText:
-      "/** Input to the Images capability's `transform`: the source image stream,\n * ordered transform steps, optional overlay draws (watermarks — each with its\n * own transforms), and the output encoding. */\nexport type CfImageTransformInput = {\n  image: ReadableStream<Uint8Array>;\n  transforms?: CfImageTransformOptions[];\n  draws?: Array<{\n    image: ReadableStream<Uint8Array>;\n    options?: CfImageDrawOptions;\n    transforms?: CfImageTransformOptions[];\n  }>;\n  output: CfImageOutputOptions;\n};",
+      "/** Input to the Images capability's `transform`: the source image stream,\n * ordered transform steps, optional overlay draws (watermarks — each with its\n * own transforms), and the output encoding. */\nexport type CfImageTransformInput = {\n  /** Source image: a stream, or any FileData shape (bytes/base64/Blob) —\n   * coerced server-side; streams and Blobs do not survive the RPC hop from\n   * script sandboxes, so pass bytes or base64 from scripts. */\n  image: ReadableStream<Uint8Array> | FileData;\n  transforms?: CfImageTransformOptions[];\n  draws?: Array<{\n    image: ReadableStream<Uint8Array> | FileData;\n    options?: CfImageDrawOptions;\n    transforms?: CfImageTransformOptions[];\n  }>;\n  output: CfImageOutputOptions;\n};",
     summary:
       "Input to the Images capability's `transform`: the source image stream, ordered transform steps, optional overlay draws (watermarks — each with its own transforms), and the output encoding.",
     memberSummaries: {},
-    referencedTypeNames: ["CfImageTransformOptions", "CfImageDrawOptions", "CfImageOutputOptions"],
+    referencedTypeNames: [
+      "FileData",
+      "CfImageTransformOptions",
+      "CfImageDrawOptions",
+      "CfImageOutputOptions",
+    ],
   },
   {
     name: "CfVideoTransformInput",
