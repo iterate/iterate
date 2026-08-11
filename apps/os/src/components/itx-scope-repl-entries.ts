@@ -84,6 +84,21 @@ function replScriptBody(body: string): string {
     const statements = lines.slice(0, index).join("\n");
     const expression = lines.slice(index).join("\n");
     if (expression.trim() === "") continue;
+    // ASI guard: when the line above is unterminated and this slice starts
+    // with a continuation character, JavaScript reads ONE statement across
+    // the break (`const total = a` ⏎ `+ b` is `a + b`) — splitting there
+    // would return `+ b` and change the meaning. Same character set the
+    // deleted browser evaluator's scanner used.
+    const statementsEnd = statements.trimEnd().at(-1);
+    const expressionStart = expression.trimStart()[0];
+    if (
+      statementsEnd !== ";" &&
+      statementsEnd !== "}" &&
+      expressionStart !== undefined &&
+      LINE_BREAK_CONTINUATION_STARTS.has(expressionStart)
+    ) {
+      continue;
+    }
     if (!parsesAsExpression(expression)) continue;
     if (!parsesAsStatements(statements)) continue;
     const rewritten = `${statements}\nreturn (\n${expression}\n);`;
@@ -92,6 +107,11 @@ function replScriptBody(body: string): string {
   }
   return body;
 }
+
+// prettier-ignore
+const LINE_BREAK_CONTINUATION_STARTS = new Set([
+  "%", "&", "(", "*", "+", "-", ".", "/", ":", "<", "=", ">", "?", "[", "^", "`", "|",
+]);
 
 /** Does the input parse as ONE JavaScript expression (in an async context,
  * so top-level `await` is fine)? TS-only syntax fails conservatively. */

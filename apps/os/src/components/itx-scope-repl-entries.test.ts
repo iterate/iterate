@@ -52,6 +52,18 @@ test("REPL echo: a multi-statement body auto-returns its trailing expression", (
   expect(scriptBodyForDisplay(wrapped)).toBe(body);
 });
 
+test("REPL echo: ASI continuations are never split into a bogus return", () => {
+  // `const total = a` ⏎ `+ b` is ONE statement under ASI — auto-returning
+  // `+ b` would answer the wrong value entirely.
+  const continuation = "const a = 1;\nconst total = a\n+ 2;";
+  expect(wrapReplScript(continuation)).not.toContain("return (");
+
+  // A terminated line above lifts the guard: a deliberate parenthesized
+  // trailing expression still echoes.
+  const wrapped = wrapReplScript("const x = 5;\n(x * 2)");
+  expect(wrapped).toContain("const x = 5;\nreturn (\n(x * 2)\n);");
+});
+
 test("REPL echo: a body ending in a declaration runs as written", () => {
   const body = "const x = {\n  a: 1,\n};";
   const wrapped = wrapReplScript(body);

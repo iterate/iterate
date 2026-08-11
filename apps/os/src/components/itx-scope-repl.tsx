@@ -50,7 +50,8 @@ export function ItxScopeRepl({
   /** Navigate to a fresh unborn session URL (the page header button). */
   onNewSession: () => void;
   /** The first Run minted+birthed this session — put its path in the URL
-   * (router replace). Only called when scopePath was null. */
+   * (router replace). Called when that run settles (never mid-run — the
+   * replace remounts the console) and only when scopePath was null. */
   onSessionEstablished: (sessionPath: string) => void;
   projectId: string;
   /** The session's stream path, or null for an unborn bare-/repl visit —
@@ -132,13 +133,19 @@ function ItxScopeReplConnected({
             ? previous
             : [...(previous || []), { createdAt: new Date().toISOString(), path }],
       );
-      if (scopePath === null) onSessionEstablished(path);
       return await host.runScript(wrapReplScript(body));
     },
-    onSettled: (_result, _error, variables) =>
-      queryClient.invalidateQueries({
+    onSettled: (_result, _error, variables) => {
+      void queryClient.invalidateQueries({
         queryKey: ["itx", "repl-scope-preamble", projectId, variables.path],
-      }),
+      });
+      // Put the session in the URL only once the run SETTLES: replacing
+      // mid-run would remount the console (new component key), resetting the
+      // editor and dropping the local pending row while the script still
+      // executes. Settled either way — a failed first run also created the
+      // stream and journaled its error, which the session page replays.
+      if (scopePath === null) onSessionEstablished(variables.path);
+    },
   });
 
   // Born = safe to touch the session stream: it provably exists, or this
