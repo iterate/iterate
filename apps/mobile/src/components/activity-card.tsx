@@ -18,7 +18,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Document, Scalar, visit } from "yaml";
 import type { StreamEvent } from "iterate/sdk/itx/react";
-import { llmResponseForDisplay } from "../lib/activity-display.ts";
+import { llmResponseForDisplay, looksLikeCode } from "../lib/activity-display.ts";
 import {
   deriveBatchesForExecution,
   summarizeBatchOutcomes,
@@ -260,9 +260,14 @@ function LlmStepView({ code, step }: { code: AgentUiCodeStep | null; step: Agent
       {step.thinkingText !== "" ? (
         <Text style={styles.thinking}>{tail(step.thinkingText, 600)}</Text>
       ) : null}
-      {responseText !== "" ? (
-        <CodeBlock language="typescript" muted={false} text={responseText} />
-      ) : null}
+      {responseText === "" ? null : step.interpreted && !looksLikeCode(responseText) ? (
+        // An interpreted prose response (a userland format extracted the real
+        // reply into a chat bubble): source material, not code — muted text,
+        // parity with the os feed's LlmOnlyRound.
+        <Text style={styles.thinking}>{responseText}</Text>
+      ) : (
+        <CodeBlock language="typescript" muted={step.interpreted === true} text={responseText} />
+      )}
       {step.errorMessage ? <Text style={styles.error}>{step.errorMessage}</Text> : null}
     </View>
   );
@@ -464,6 +469,10 @@ function metaYaml(
           })),
         }
       : {}),
+    // The raw model response the round's consequences were derived from —
+    // after the prompt, so the doc reads request → answer (parity with the
+    // os feed's buildRoundMetaYaml).
+    ...(llm?.responseText ? { response: llm.responseText } : {}),
   });
   visit(doc, {
     // Multiline strings as |- blocks: readable and highlightable, instead of
