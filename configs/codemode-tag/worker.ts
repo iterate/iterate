@@ -38,6 +38,15 @@ const HEADLESS_PROCESSOR_SLUG = "agent-headless";
 const SYSTEM_PROMPT_KEY = "agent/system-prompt";
 const SCRIPT_EXPIRY_MS = 10 * 60_000;
 const RESULT_HISTORY_LIMIT = 30_000;
+/** Inline budget once the full copy is spilled — the inline copy is a map of
+ * the data, not the data. */
+const RESULT_SPILL_PREVIEW_CHARS = 10_000;
+
+/** The agent's own workspace path: /workspaces + the agent stream path (the
+ * platform's agentWorkspacePath convention). */
+function itxWorkspacePathForAgent(agentPath: string): string {
+  return `/workspaces${agentPath}`;
+}
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
   #docsApp = DocsApp.create(this.env, {
@@ -436,7 +445,12 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       const text = isRawText
         ? (settlement.result as string)
         : JSON.stringify(settlement.result, null, 2);
-      content = `Your script returned:\n${isRawText ? "```" : "```json"}\n${truncate(text)}\n\`\`\``;
+      content = await this.#renderResult({
+        agentPath: event.path,
+        executionId,
+        isRawText,
+        text,
+      });
     }
     const itx = await this.itx;
     await this.#appendUnlessAlreadyRecorded(() =>
@@ -451,6 +465,52 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         },
       }),
     );
+  }
+
+  /**
+   * An oversized result SPILLS to the agent's own workspace (mirroring the
+   * platform codemode component): the inline copy becomes a preview plus a
+   * read-it-back recipe, and the model pages through the file with plain
+   * TypeScript instead of re-running the expensive fetch. Best-effort — a
+   * workspace that cannot write falls back to inline truncation.
+   */
+  async #renderResult(input: {
+    agentPath: string;
+    executionId: string;
+    isRawText: boolean;
+    text: string;
+  }): Promise<string> {
+    const { agentPath, executionId, isRawText, text } = input;
+    const fence = isRawText ? "```" : "```json";
+    if (text.length <= RESULT_HISTORY_LIMIT) {
+      return `Your script returned:\n${fence}\n${text}\n\`\`\``;
+    }
+    try {
+      // One file per execution, so replays overwrite idempotently. The agent
+      // workspace lives at /workspaces/<agent path>; relative paths in the
+      // agent's own scripts resolve there, so the recipe uses the relative
+      // form.
+      const relativePath = `script-results/${executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}.${isRawText ? "txt" : "json"}`;
+      const workspace = itxWorkspacePathForAgent(agentPath);
+      const itx = await this.itx;
+      await itx.workspaces.get(workspace).writeFile(`${workspace}/${relativePath}`, text);
+      const shown = text.slice(0, RESULT_SPILL_PREVIEW_CHARS);
+      return [
+        "Your script returned:",
+        fence,
+        shown,
+        "```",
+        `…truncated: showing the first ${shown.length.toLocaleString("en-US")} of ${text.length.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(relativePath)} — don't re-fetch; read and filter it with plain TypeScript in your next script, e.g.:`,
+        "```ts",
+        isRawText
+          ? `const text = await itx.workspace.readFile(${JSON.stringify(relativePath)});`
+          : `const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(relativePath)}));`,
+        "```",
+      ].join("\n");
+    } catch (error) {
+      console.error("[codemode-tag] failed to spill oversized script result", { error });
+      return `Your script returned:\n${fence}\n${truncate(text)}\n\`\`\``;
+    }
   }
 
   /** An idempotency conflict means another writer (a redelivery of ourselves,
