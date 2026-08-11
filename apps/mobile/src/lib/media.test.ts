@@ -2,6 +2,9 @@ import { expect, test } from "vitest";
 import {
   buildProcessScript,
   buildWipeScript,
+  extendedSinceIso,
+  mediaIdempotencyKey,
+  readWipeGeneration,
   deriveMediaList,
   filterMedia,
   mapWithConcurrency,
@@ -34,6 +37,7 @@ test("capture script describes, transcribes, tags, and appends one idempotent ev
   });
   const result = await runScript(
     buildProcessScript({
+      wipeGeneration: 0,
       stableKey: "abc123",
       filename: "IMG_0001.PNG",
       contentType: "image/png",
@@ -82,6 +86,7 @@ test("reprocess mode appends a processed event and skips the dedup check", async
   });
   await runScript(
     buildProcessScript({
+      wipeGeneration: 0,
       stableKey: "abc123",
       filename: "IMG_0001.PNG",
       contentType: "image/png",
@@ -113,6 +118,7 @@ test("oversized images are downscaled for the vision call only", async () => {
   });
   await runScript(
     buildProcessScript({
+      wipeGeneration: 0,
       stableKey: "big",
       filename: "tall.png",
       contentType: "image/png",
@@ -145,6 +151,7 @@ test("hostile filenames cannot break out of the script", async () => {
   });
   await runScript(
     buildProcessScript({
+      wipeGeneration: 0,
       stableKey: "k1",
       filename,
       contentType: "image/png",
@@ -169,6 +176,7 @@ test("already-captured stableKey short-circuits before any AI call", async () =>
   });
   const result = await runScript(
     buildProcessScript({
+      wipeGeneration: 0,
       stableKey: "dup",
       filename: "a.png",
       contentType: "image/png",
@@ -193,6 +201,7 @@ test("unparseable vision output degrades to untagged + empty transcript; convers
   });
   await runScript(
     buildProcessScript({
+      wipeGeneration: 0,
       stableKey: "k2",
       filename: "a.png",
       contentType: "image/png",
@@ -214,6 +223,7 @@ test("unparseable vision output degrades to untagged + empty transcript; convers
   await expect(
     runScript(
       buildProcessScript({
+        wipeGeneration: 0,
         stableKey: "k3",
         filename: "b.png",
         contentType: "image/png",
@@ -236,6 +246,7 @@ test("empty tags array is preserved — conservative no-tags is a valid answer",
   });
   await runScript(
     buildProcessScript({
+      wipeGeneration: 0,
       stableKey: "k4",
       filename: "a.png",
       contentType: "image/png",
@@ -363,6 +374,29 @@ test("deriveMediaList resets at the last wiped tombstone", () => {
     },
   ];
   expect(deriveMediaList(events)).toMatchObject([{ payload: { stableKey: "new" } }]);
+});
+
+test("wipe generation changes the capture identity so re-captures work after Delete-all", async () => {
+  expect(mediaIdempotencyKey("abc", 0)).toBe("media-captured-abc");
+  expect(mediaIdempotencyKey("abc", 42)).toBe("media-captured-abc-g42");
+  const stream: any = {
+    getEvents: async (args: any) =>
+      args.eventTypes[0] === MEDIA_WIPED_EVENT_TYPE && args.afterOffset === 0
+        ? [{ offset: 7 }, { offset: 42 }]
+        : [],
+  };
+  expect(await readWipeGeneration(stream)).toBe(42);
+  expect(await readWipeGeneration({ getEvents: async () => [] })).toBe(0);
+});
+
+test("extendedSinceIso only ever extends an enabled window backwards", () => {
+  const now = Date.parse("2026-08-11T12:00:00.000Z");
+  const week = extendedSinceIso(null, 7, now);
+  expect(week).toBe("2026-08-04T12:00:00.000Z");
+  // Re-confirming with a SHORTER chip keeps the older boundary…
+  expect(extendedSinceIso("2026-07-01T00:00:00.000Z", 7, now)).toBe("2026-07-01T00:00:00.000Z");
+  // …and a longer chip extends it.
+  expect(extendedSinceIso("2026-08-10T00:00:00.000Z", 30, now)).toBe("2026-07-12T12:00:00.000Z");
 });
 
 // --- helpers ---------------------------------------------------------------

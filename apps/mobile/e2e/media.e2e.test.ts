@@ -56,6 +56,7 @@ test("media capture: bytes → description → transcript+tags → captured even
 
   const captureScript = buildProcessScript({
     stableKey,
+    wipeGeneration: 0,
     filename,
     contentType: "image/png",
     width: 280,
@@ -92,6 +93,7 @@ test("media capture: bytes → description → transcript+tags → captured even
   const reprocess = await project.capabilityHost.runScript(
     buildProcessScript({
       stableKey,
+      wipeGeneration: 0,
       filename,
       contentType: "image/png",
       width: 280,

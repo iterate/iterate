@@ -99,12 +99,45 @@ export function mediaFilePath(stableKey: string, filename: string): string {
   return `/media/${stableKey}-${safe}`;
 }
 
-export function mediaIdempotencyKey(stableKey: string): string {
-  return `media-captured-${stableKey}`;
+/**
+ * Capture identity = content hash + wipe generation. Without the
+ * generation, re-capturing a screenshot after Delete-all would dedup
+ * against the pre-wipe event and silently never come back.
+ */
+export function mediaIdempotencyKey(stableKey: string, wipeGeneration: number): string {
+  return wipeGeneration === 0
+    ? `media-captured-${stableKey}`
+    : `media-captured-${stableKey}-g${wipeGeneration}`;
+}
+
+/** The last wiped tombstone's offset (0 when never wiped) — the capture
+ * dedup generation. */
+export async function readWipeGeneration(stream: {
+  getEvents: (args: { afterOffset: number; eventTypes: string[] }) => Promise<StreamEvent[]>;
+}): Promise<number> {
+  const wipes = await stream.getEvents({ afterOffset: 0, eventTypes: [MEDIA_WIPED_EVENT_TYPE] });
+  return wipes.at(-1)?.offset || 0;
+}
+
+/**
+ * The absolute back-to instant an Update resolves to: the chosen window,
+ * except it can only EXTEND an enabled setting backwards — re-confirming
+ * with a shorter chip never silently shrinks the window.
+ */
+export function extendedSinceIso(
+  existingSinceIso: string | null,
+  windowDays: number,
+  nowMs: number,
+): string {
+  const chosen = nowMs - windowDays * 86_400_000;
+  const existing = existingSinceIso === null ? Infinity : new Date(existingSinceIso).getTime();
+  return new Date(Math.min(chosen, existing)).toISOString();
 }
 
 export type ProcessScriptInput = {
   stableKey: string;
+  /** From readWipeGeneration — capture dedup identity; reprocess ignores it. */
+  wipeGeneration: number;
   filename: string;
   contentType: string;
   width: number;
@@ -140,7 +173,7 @@ export function buildProcessScript(input: ProcessScriptInput): string {
     capture: input.mode === "capture",
     idempotencyKey:
       input.mode === "capture"
-        ? mediaIdempotencyKey(input.stableKey)
+        ? mediaIdempotencyKey(input.stableKey, input.wipeGeneration)
         : `media-processed-${input.stableKey}-${input.mode.reprocessNonce}`,
     eventType: input.mode === "capture" ? MEDIA_CAPTURED_EVENT_TYPE : MEDIA_PROCESSED_EVENT_TYPE,
     streamPath: MEDIA_STREAM_PATH,

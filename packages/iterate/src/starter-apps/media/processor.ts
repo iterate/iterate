@@ -24,12 +24,17 @@ const MediaItem = z.object({
   contentType: z.string(),
   width: z.number(),
   height: z.number(),
-  source: z.string().meta({ description: '"picker" or "library-sync".' }),
+  source: z.string().default("picker").meta({ description: '"picker" or "library-sync".' }),
   capturedAt: z
     .string()
     .nullable()
+    .default(null)
     .meta({ description: "Asset creation time (ISO) when the source knew it." }),
-  isScreenshot: z.boolean().nullable().meta({ description: "iOS mediaSubtypes screenshot flag." }),
+  isScreenshot: z
+    .boolean()
+    .nullable()
+    .default(null)
+    .meta({ description: "iOS mediaSubtypes screenshot flag." }),
   capturedEventAt: z.string().meta({ description: "Stream time the capture committed." }),
   ...processingFields,
 });
@@ -58,9 +63,9 @@ export const MediaProcessorContract = defineProcessorContract({
         contentType: z.string(),
         width: z.number(),
         height: z.number(),
-        source: z.string(),
-        capturedAt: z.string().nullable(),
-        isScreenshot: z.boolean().nullable(),
+        source: z.string().default("picker"),
+        capturedAt: z.string().nullable().default(null),
+        isScreenshot: z.boolean().nullable().default(null),
         ...processingFields,
       }),
       examples: [

@@ -31,6 +31,8 @@ import { getProjectItx } from "../../../lib/itx.ts";
 import {
   buildProcessScript,
   buildWipeScript,
+  extendedSinceIso,
+  readWipeGeneration,
   deriveMediaList,
   filterMedia,
   mapWithConcurrency,
@@ -186,6 +188,7 @@ export default function MediaScreen() {
         );
       const project = await getProjectItx(baseUrl!, projectId);
       const stream = project.streams.get(MEDIA_STREAM_PATH);
+      const wipeGeneration = await readWipeGeneration(stream);
       await mapWithConcurrency(picked, 3, async (image) => {
         try {
           setStatus(image, "analyzing");
@@ -193,7 +196,11 @@ export default function MediaScreen() {
             Crypto.CryptoDigestAlgorithm.SHA256,
             image.base64,
           );
-          if (await stream.getEvent({ idempotencyKey: mediaIdempotencyKey(stableKey) })) {
+          if (
+            await stream.getEvent({
+              idempotencyKey: mediaIdempotencyKey(stableKey, wipeGeneration),
+            })
+          ) {
             setStatus(image, "skipped");
             return;
           }
@@ -204,6 +211,7 @@ export default function MediaScreen() {
           await project.capabilityHost.runScript(
             buildProcessScript({
               stableKey,
+              wipeGeneration,
               filename: image.filename,
               contentType: image.contentType,
               width: image.width,
@@ -435,10 +443,22 @@ function SyncDialog({
   onWipe: () => void;
   wipePending: boolean;
 }) {
-  const [windowDays, setWindowDays] = useState(7);
-  const [confirmingWipe, setConfirmingWipe] = useState(false);
-  const sinceIso = new Date(Date.now() - windowDays * 86_400_000).toISOString();
   const enabled = settings?.enabled === true;
+  // Start on the chip closest to the CURRENT window when already on —
+  // defaulting to "1 week" would make a reflexive Update silently shrink a
+  // longer window (and apply extends only backwards regardless).
+  const currentDays = enabled
+    ? (Date.now() - new Date(settings!.sinceIso).getTime()) / 86_400_000
+    : 7;
+  const [windowDays, setWindowDays] = useState(
+    () => BACKFILL_WINDOWS.find((option) => option.days >= currentDays - 0.5)?.days || 365,
+  );
+  const [confirmingWipe, setConfirmingWipe] = useState(false);
+  const sinceIso = extendedSinceIso(
+    enabled && settings ? settings.sinceIso : null,
+    windowDays,
+    Date.now(),
+  );
   return (
     <View style={styles.dialogBackdrop}>
       <View style={styles.dialog}>
@@ -592,6 +612,7 @@ function MediaRow({
       await project.capabilityHost.runScript(
         buildProcessScript({
           stableKey: item.payload.stableKey,
+          wipeGeneration: 0, // reprocess keys on its nonce, not the capture identity
           filename: item.payload.filename,
           contentType: item.payload.contentType,
           width: item.payload.width,

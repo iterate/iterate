@@ -15,6 +15,7 @@ import {
   MEDIA_STREAM_PATH,
   mediaFilePath,
   mediaIdempotencyKey,
+  readWipeGeneration,
 } from "./media.ts";
 import {
   CONSECUTIVE_KNOWN_TO_STOP,
@@ -57,6 +58,7 @@ export async function runSyncPass(input: {
   const accessPrivileges = permission.accessPrivileges === "limited" ? "limited" : "all";
 
   const stream = input.project.streams.get(MEDIA_STREAM_PATH);
+  const wipeGeneration = await readWipeGeneration(stream);
   const tracker = createSyncPassTracker({
     consecutiveKnownToStop: CONSECUTIVE_KNOWN_TO_STOP,
     maxNewPerPass: MAX_NEW_PER_PASS,
@@ -94,7 +96,9 @@ export async function runSyncPass(input: {
         Crypto.CryptoDigestAlgorithm.SHA256,
         read.base64,
       );
-      if (await stream.getEvent({ idempotencyKey: mediaIdempotencyKey(stableKey) })) {
+      if (
+        await stream.getEvent({ idempotencyKey: mediaIdempotencyKey(stableKey, wipeGeneration) })
+      ) {
         tracker.markKnown();
         known += 1;
       } else {
@@ -130,6 +134,7 @@ export async function runSyncPass(input: {
       await input.project.capabilityHost.runScript(
         buildProcessScript({
           stableKey: candidate.stableKey,
+          wipeGeneration,
           filename: candidate.filename,
           contentType: candidate.contentType,
           width: candidate.width,
