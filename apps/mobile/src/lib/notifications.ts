@@ -226,6 +226,8 @@ function settledStatus(outcome: { kind?: string } | undefined): DeviceNotificati
     case "rejected-by-expo":
     case "rejected-by-push-service":
       return { kind: "failed", label: "Send failed" };
+    case "uncertain":
+      return { kind: "unknown", label: "Delivery uncertain" };
     default:
       return { kind: "unknown", label: "Delivery unknown" };
   }

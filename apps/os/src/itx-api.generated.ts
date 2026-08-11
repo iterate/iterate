@@ -372,9 +372,11 @@ export interface Ai {
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
-  /** Convert one document (`{ name, blob }`) to Markdown — an in-hand HTML
-   * string (a fetched page, an email body) converts via
-   * `new Blob([html], { type: "text/html" })`; never strip HTML by hand.
+  /** Convert one document (`{ name, blob }`) to Markdown — `blob` accepts
+   * bytes or base64 (a Blob made in a script cannot cross the RPC
+   * boundary). An in-hand HTML string (a fetched page, an email body)
+   * converts via `new TextEncoder().encode(html)` with a `.html` name;
+   * never strip HTML by hand.
    * `{ conversionOptions: { output: { format: "text" } } }` returns plain
    * text with link targets and image URLs stripped — the compact choice for
    * emails and newsletters, whose bytes are mostly tracking links. */
@@ -883,10 +885,9 @@ export interface Files {
  * The SDK connection targets are thin dispatchers over the normal vendor
  * clients. A project extends the collection with ordinary
  * `provideCapability({ path: ["integrations", ...] })` — data, not deployment.
- * `completeConnect` is called by the app worker's
- * OAuth callback routes (/api/integrations/<provider>/callback); its
- * authority is the HMAC-signed OAuth state minted by startOAuthFlow,
- * verified itx-side.
+ * Native `completeConnect` calls are bound to this RPC target's authenticated
+ * user; browser callbacks use the same domain operation with their cookie
+ * session. Both re-verify the HMAC-signed state minted by startOAuthFlow.
  */
 export interface ProjectIntegrations {
   /** Slack WebClient connections. `get()` selects the first connected workspace. */
@@ -976,12 +977,10 @@ export interface ProjectIntegrations {
   startOAuthFlow(input: {
     callbackUrl?: string;
     provider: OAuthProviderSlug;
-    /** The user to bind the OAuth state to. Browser-supplied, not authority;
-     * the callback's check against the signed state is the backstop. */
-    userId: string;
   }): Promise<{ authorizationUrl: string }>;
-  /** Called by the app worker's OAuth callback route; authority is the
-   * HMAC-signed OAuth state minted by startOAuthFlow. */
+  /** Complete a native OAuth callback using this authenticated RPC session.
+   * Browser callbacks use the app worker route, which supplies its session
+   * identity directly to the same domain operation. */
   completeConnect(input: {
     /** OAuth authorization code (Slack/Google, or GitHub's proof callback). */
     code?: string;
@@ -989,7 +988,6 @@ export interface ProjectIntegrations {
     installationId?: string;
     provider: OAuthProviderSlug;
     state: string;
-    userId: string | null;
   }): Promise<CompleteConnectResult>;
   /** Move a GitHub installation after a signed, user-bound OAuth proof has
    * been returned to the dashboard for explicit confirmation. */
@@ -2488,11 +2486,14 @@ export type CfMarkdownSupportedFormat = {
 };
 
 /** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
- * a filename plus the raw bytes as a Blob. */
+ * a filename plus the raw bytes. */
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
   name: string;
-  blob: Blob;
+  /** The document bytes: any `FileData` shape (Uint8Array, base64 string,
+   * Blob, …), coerced server-side. Blob does not survive the capnweb hop
+   * from script sandboxes, so pass bytes or base64 from scripts. */
+  blob: FileData;
 };
 
 /** Per-format tuning for `ai.toMarkdown`: output format (markdown, or plain

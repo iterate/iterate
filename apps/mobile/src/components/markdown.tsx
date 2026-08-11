@@ -1,8 +1,23 @@
+import { useQuery } from "@tanstack/react-query";
+import { router, useLocalSearchParams } from "expo-router";
 import { EnrichedMarkdownText, type MarkdownStyle } from "react-native-enriched-markdown";
 import { Linking, StyleSheet, View } from "react-native";
+import { resolveInAppLink } from "../lib/in-app-links.ts";
+import { DEFAULT_SERVER } from "../lib/servers.ts";
+import { getServerBaseUrl } from "../lib/storage.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 export function Markdown({ markdown, preview = false }: { markdown: string; preview?: boolean }) {
+  // Same-deployment special links (/media/..., /repos/...) open the rich
+  // in-app screen; everything else goes to the system browser. Rendered
+  // inside a project route this knows the project; outside one, projectId is
+  // undefined and the resolver declines.
+  const { projectId } = useLocalSearchParams<{ projectId?: string }>();
+  const server = useQuery({
+    queryKey: ["server"],
+    queryFn: async () => (await getServerBaseUrl()) || DEFAULT_SERVER,
+    staleTime: Infinity,
+  });
   return (
     <View style={preview ? styles.preview : styles.message}>
       <EnrichedMarkdownText
@@ -10,7 +25,14 @@ export function Markdown({ markdown, preview = false }: { markdown: string; prev
         markdown={markdown}
         markdownStyle={markdownStyle}
         md4cFlags={{ latexMath: false, underline: false }}
-        onLinkPress={({ url }) => void Linking.openURL(url)}
+        onLinkPress={({ url }) => {
+          const inApp = resolveInAppLink(url, { baseUrl: server.data, projectId });
+          if (inApp) {
+            router.push(inApp);
+          } else {
+            void Linking.openURL(url);
+          }
+        }}
         selectable
         streamingAnimation={!preview}
       />

@@ -5,6 +5,7 @@
 // capnweb socket — no separate upload endpoint.
 
 import * as ImagePicker from "expo-image-picker";
+import { normalizedImageFilename } from "./media.ts";
 
 export type PickedImage = {
   filename: string;
@@ -13,14 +14,17 @@ export type PickedImage = {
   base64: string;
   /** Local uri for the composer thumbnail. */
   previewUri: string;
+  /** Post-recompression pixel dimensions (0 when the picker omits them). */
+  width: number;
+  height: number;
 };
 
 /** Open the photo library; resolves [] when the user cancels. */
-export async function pickImages(): Promise<PickedImage[]> {
+export async function pickImages(options: { selectionLimit: number }): Promise<PickedImage[]> {
   const result = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: "images",
     allowsMultipleSelection: true,
-    selectionLimit: 6,
+    selectionLimit: options.selectionLimit,
     // Recompress: keeps giant camera HEICs from becoming 10MB+ websocket
     // frames, and normalizes to JPEG/PNG which every downstream consumer
     // (signed-url <img>, LLM vision) understands.
@@ -31,9 +35,23 @@ export async function pickImages(): Promise<PickedImage[]> {
   return result.assets.flatMap((asset, index) => {
     if (!asset.base64) return [];
     const contentType = asset.mimeType || "image/jpeg";
-    const extension = contentType.split("/")[1] || "jpg";
-    const filename = asset.fileName || `photo-${Date.now()}-${index}.${extension}`;
-    return [{ filename, contentType, base64: asset.base64, previewUri: asset.uri }];
+    // The extension must match the recompressed payload, not the library's
+    // original fileName (often .HEIC) — see normalizedImageFilename.
+    const filename = normalizedImageFilename(
+      asset.fileName,
+      contentType,
+      `photo-${Date.now()}-${index}`,
+    );
+    return [
+      {
+        filename,
+        contentType,
+        base64: asset.base64,
+        previewUri: asset.uri,
+        width: asset.width || 0,
+        height: asset.height || 0,
+      },
+    ];
   });
 }
 

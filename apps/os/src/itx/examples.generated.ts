@@ -1590,19 +1590,22 @@ return {
     e2eProven: false,
     title: "Convert a document or HTML to Markdown with Workers AI",
     description:
-      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). It also converts an in-hand HTML string — a fetched page, an email body — via new Blob([html], { type: 'text/html' }): never strip HTML with regex. conversionOptions.output.format 'text' returns plain text with link targets and image URLs stripped — often 10x smaller on emails and newsletters, whose bytes are mostly tracking links and base64 images. Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
+      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary; the extension in name picks the converter). It also converts an in-hand HTML string — a fetched page, an email body — via new TextEncoder().encode(html): never strip HTML with regex. conversionOptions.output.format 'text' returns plain text with link targets and image URLs stripped — often 10x smaller on emails and newsletters, whose bytes are mostly tracking links and base64 images. Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
 const supported = await itx.ai.toMarkdown();
-const csv = new Blob(["name,value\\nalpha,1\\nbeta,2\\n"], { type: "text/csv" });
+// blob takes bytes or base64 — the .csv/.html extension in \`name\`
+// picks the converter. (A Blob would die at the RPC boundary when this
+// runs in a script sandbox.)
+const csv = new TextEncoder().encode("name,value\\nalpha,1\\nbeta,2\\n");
 const converted = await itx.integrations.cf.ai.toMarkdown({ name: "sample.csv", blob: csv });
 
 // An HTML string already in hand (fetched page, email body) is a
-// document too — wrap it in a Blob instead of regex-stripping tags.
+// document too — encode it instead of regex-stripping tags.
 const html =
   '<h1>Report</h1><p><a href="https://example.com/very-long-tracking-url">Everything</a> is <em>fine</em>.</p>';
-const doc = { name: "page.html", blob: new Blob([html], { type: "text/html" }) };
+const doc = { name: "page.html", blob: new TextEncoder().encode(html) };
 const fromHtml = await itx.ai.toMarkdown(doc);
 // output.format "text": link/image URLs stripped, text kept — the
 // compact choice when the URLs don't matter (emails, newsletters).
@@ -1615,6 +1618,62 @@ return {
   fromHtml: fromHtml.data,
   asText: asText.data,
 };
+`.trim(),
+  },
+  {
+    id: "media-search",
+    e2eProven: false,
+    title: "Search captured media (screenshots/photos) by content",
+    description:
+      "The mobile app's Media screen captures screenshots and photos into project file storage and appends events.iterate.com/media/captured onto the /media stream (re-analyses append events.iterate.com/media/processed; the LATEST processed payload per stableKey supersedes the captured one). Each payload carries a vision-model description (markdown), a verbatim OCR transcript (transcript), tags, and the itx.files path holding the bytes — a media file's path is /media/<sha256>-<original-filename>, one flat content-addressed namespace. To answer questions like 'find my train ticket screenshot', read the stream, overlay processed results, and filter over those text fields; mint signed URLs with itx.files.get(path).url() to share the actual images.",
+    context: "project",
+    runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
+    code: `
+const query = (vars.query ?? "ticket").toLowerCase();
+
+const events = [];
+let cursor = 0;
+while (true) {
+  const page = await itx.streams.get("/media").getEvents({
+    afterOffset: cursor,
+    eventTypes: ["events.iterate.com/media/captured", "events.iterate.com/media/processed"],
+  });
+  if (page.length === 0) break;
+  events.push(...page);
+  cursor = page[page.length - 1].offset;
+}
+
+// Latest processed result per item supersedes its captured payload
+// (events arrive offset-ascending, so later set() calls win).
+const processed = new Map();
+for (const event of events) {
+  if (event.type.endsWith("/processed")) {
+    const payload = event.payload || {};
+    processed.set(payload.stableKey, payload);
+  }
+}
+const items = events
+  .filter((event) => event.type.endsWith("/captured"))
+  .map((event) => {
+    const captured = event.payload || {};
+    return { ...captured, ...processed.get(captured.stableKey) };
+  });
+
+const hits = items.filter((item) =>
+  \`\${item.markdown} \${item.transcript} \${item.filename} \${item.tags.join(" ")}\`
+    .toLowerCase()
+    .includes(query),
+);
+return await Promise.all(
+  hits.slice(0, 5).map(async (hit) => ({
+    filename: hit.filename,
+    tags: hit.tags,
+    description: hit.markdown,
+    transcript: hit.transcript,
+    // Signed https URL — paste into chat to show the image.
+    url: await itx.files.get(hit.path).url(),
+  })),
+);
 `.trim(),
   },
   {

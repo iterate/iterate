@@ -75,9 +75,14 @@ test("terminal outcomes map to their human statuses", () => {
       "Send failed",
     ],
     [
+      { kind: "uncertain", phase: "expo-send", reason: "deadline" },
+      "unknown",
+      "Delivery uncertain",
+    ],
+    [
       { kind: "uncertain", phase: "receipt", reason: "window lapsed" },
       "unknown",
-      "Delivery unknown",
+      "Delivery uncertain",
     ],
     [{ kind: "some-future-outcome" }, "unknown", "Delivery unknown"],
   ] as const;

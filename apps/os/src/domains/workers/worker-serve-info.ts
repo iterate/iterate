@@ -1,3 +1,5 @@
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
+
 /** Trusted build metadata stamped by OS onto dynamic-worker responses. */
 export const WORKER_SERVE_HEADER = "x-iterate-worker-serve";
 
@@ -19,5 +21,10 @@ export function withWorkerCommit(response: Response, commitOid: string | undefin
   const stamped = new Response(response.body, response);
   stamped.headers.delete(WORKER_SERVE_HEADER);
   if (commitOid !== undefined) stamped.headers.set(WORKER_SERVE_HEADER, commitOid);
+  if (Symbol.dispose in response) {
+    Object.defineProperty(stamped, Symbol.dispose, {
+      value: () => disposeIgnoredRpcResult(response),
+    });
+  }
   return stamped;
 }

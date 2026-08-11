@@ -205,6 +205,7 @@ export function loadResolvedWorker({
   bindings,
   globalOutbound,
   loaderInstanceNonce,
+  mode,
   projectId,
   resolved,
   scopePath,
@@ -214,11 +215,24 @@ export function loadResolvedWorker({
   globalOutbound: Fetcher;
   /** The runner lifetime that minted these loopback RPC bindings. */
   loaderInstanceNonce: string;
+  /** Reusable apps keep a content-addressed isolate warm; one-off code-mode
+   * executions must not leave a cache entry behind after every unique run. */
+  mode: "cached" | "one-off";
   projectId: string;
   resolved: ResolvedWorkerSource;
   scopePath: string;
   streamContext: StreamContext;
 }): WorkerStub {
+  const workerCode: WorkerLoaderWorkerCode = {
+    compatibilityDate: resolved.wranglerConfig?.compatibilityDate || WORKER_COMPATIBILITY_DATE,
+    compatibilityFlags: resolved.wranglerConfig?.compatibilityFlags || WORKER_COMPATIBILITY_FLAGS,
+    env: { ...bindings, ITERATE_WORKER_VERSION: resolved.cacheKey },
+    globalOutbound,
+    mainModule: resolved.mainModule,
+    modules: resolved.modules,
+  };
+  if (mode === "one-off") return env.LOADER.load(workerCode);
+
   // Loader isolates capture this runner's loopback RPC bindings. They must not
   // survive the runner that minted them: a stateless ingress runner lives for
   // one request, while a Durable Object runner lives for one incarnation.
@@ -237,12 +251,5 @@ export function loadResolvedWorker({
     resolved.cacheKey,
   ].join(":");
   const cacheKey = [loaderIdentity, loaderInstanceNonce].join(":");
-  return env.LOADER.get(cacheKey, () => ({
-    compatibilityDate: resolved.wranglerConfig?.compatibilityDate ?? WORKER_COMPATIBILITY_DATE,
-    compatibilityFlags: resolved.wranglerConfig?.compatibilityFlags ?? WORKER_COMPATIBILITY_FLAGS,
-    env: { ...bindings, ITERATE_WORKER_VERSION: resolved.cacheKey },
-    globalOutbound,
-    mainModule: resolved.mainModule,
-    modules: resolved.modules,
-  }));
+  return env.LOADER.get(cacheKey, () => workerCode);
 }

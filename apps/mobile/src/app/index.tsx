@@ -6,20 +6,18 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Redirect, router, Stack, useLocalSearchParams } from "expo-router";
+import { Redirect, router, Stack } from "expo-router";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { AppDrawerButton } from "../components/project-drawer.tsx";
 import { hasSignIn, signIn } from "../lib/auth.ts";
-import { testEmailFromHint } from "../lib/deep-link-hints.ts";
+import { bundleRecommendation } from "../lib/expected-backend.ts";
 import { getItxSession, reconnectItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing, rememberedProjectInScope } from "../lib/open-project.ts";
-import { DEFAULT_SERVER, SERVER_PRESETS, serverPresetForEnvKey } from "../lib/servers.ts";
+import { DEFAULT_SERVER, PRODUCTION_PRESET } from "../lib/servers.ts";
 import {
-  addRecentServer,
   clearLastProject,
   getLastProject,
-  getRecentServers,
   getServerBaseUrl,
   setServerBaseUrl,
 } from "../lib/storage.ts";
@@ -27,13 +25,13 @@ import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function SignInScreen() {
   const queryClient = useQueryClient();
-  // Hints ferried from a preview-channel deep link (preview-channel/[channel].tsx):
-  // `env` names the PR's leased preview slot, `email` its per-PR test identity.
-  // Suggestions only — they preselect the server and ride the sign-in as a
-  // login_hint; the user still confirms everything.
-  const hints = useLocalSearchParams<{ env?: string; email?: string }>();
-  const recommended = typeof hints.env === "string" ? serverPresetForEnvKey(hints.env) : null;
-  const hintedEmail = testEmailFromHint(hints.email);
+  // The running bundle's expectation (lib/expected-backend.ts): a PR bundle
+  // names its leased preview slot and per-PR test identity, a main/local
+  // bundle names nothing. Suggestions only — they preselect the server and
+  // ride the sign-in as a login_hint; the user still confirms everything.
+  const expectation = bundleRecommendation();
+  const recommended = expectation.server;
+  const hintedEmail = expectation.email;
   // Persisted server + sign-in state decide whether to skip this screen.
   const bootstrap = useQuery({
     queryKey: ["bootstrap"],
@@ -70,7 +68,6 @@ export default function SignInScreen() {
       return {
         server,
         signedIn,
-        recents: await getRecentServers(),
         lastProject,
       };
     },
@@ -86,9 +83,6 @@ export default function SignInScreen() {
     mutationFn: async () => {
       const baseUrl = normalizeBaseUrl(server);
       await setServerBaseUrl(baseUrl);
-      if (!SERVER_PRESETS.some((preset) => preset.baseUrl === baseUrl)) {
-        await addRecentServer(baseUrl);
-      }
       // The test-identity hint only accompanies its own backend: signing in
       // anywhere else (say prd, where the test OTP is off) must not suggest a
       // mailbox nobody can read.
@@ -114,14 +108,12 @@ export default function SignInScreen() {
       </View>
     );
   }
-  // A recommendation pointing somewhere other than the signed-in server must
-  // show this screen (that's the whole point of the hint) instead of
-  // fast-forwarding into the current server's project.
-  const hintOverridesServer =
-    recommended !== null &&
-    bootstrap.data !== undefined &&
-    recommended.baseUrl !== bootstrap.data.server;
-  if (bootstrap.data?.signedIn && editedServer === null && !hintOverridesServer) {
+  // Signed-in boots always fast-forward. The bundle's expectation never
+  // interrupts here — the QR confirm screen (preview-channel/[channel].tsx)
+  // is the one surface that offers the backend/identity switch, and this
+  // screen only SUGGESTS (preselected server + login_hint) when you land on
+  // it signed out anyway.
+  if (bootstrap.data?.signedIn && editedServer === null) {
     const last = bootstrap.data.lastProject;
     if (last) {
       return (
@@ -136,12 +128,14 @@ export default function SignInScreen() {
     return <Redirect href="/projects" />;
   }
 
+  // Just two one-tap options at most: Production, plus the bundle's expected
+  // backend when it names a preview slot. Twenty preview chips helped nobody
+  // — anything else gets typed into the field.
   const serverOptions = [
-    ...SERVER_PRESETS,
-    ...(bootstrap.data?.recents || []).map((url) => ({
-      label: url.replace(/^https?:\/\//, ""),
-      baseUrl: url,
-    })),
+    PRODUCTION_PRESET,
+    ...(recommended !== null && recommended.baseUrl !== PRODUCTION_PRESET.baseUrl
+      ? [recommended]
+      : []),
   ];
 
   return (
@@ -160,9 +154,7 @@ export default function SignInScreen() {
         </Text>
         {recommended !== null ? (
           <View style={styles.recommendation}>
-            <Text style={styles.recommendationTitle}>
-              Recommended backend for this preview channel
-            </Text>
+            <Text style={styles.recommendationTitle}>Expected backend for this build</Text>
             <Text style={styles.recommendationBody}>
               {recommended.label}
               {hintedEmail !== null ? ` · test sign-in as ${hintedEmail}` : ""}

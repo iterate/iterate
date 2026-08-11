@@ -283,7 +283,7 @@ import type {
   WaitroseConnection,
 } from "./domains/integrations/types.ts";
 import type { EmailAttachmentInput } from "./domains/email/utils.ts";
-import type { FileData } from "./domains/files/file-url-signing.ts";
+import { projectFileDataToBytes, type FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import {
   AgentProcessorContract,
@@ -3264,12 +3264,12 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents — including an in-hand HTML string via new Blob([html], { type: 'text/html' }) — to Markdown. run() is for what YOU cannot do: image/audio/video generation, transcription, embeddings, classification at volume. Don't run() a text model to summarize, draft, or answer over content you are about to read or relay — you are usually a more intelligent model; return the data and write it yourself. Text models take { messages: [{ role, content }, …] } and answer in result.response. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
+        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. run() is for what YOU cannot do: image/audio/video generation, transcription, embeddings, classification at volume. Don't run() a text model to summarize, draft, or answer over content you are about to read or relay — you are usually a more intelligent model; return the data and write it yourself. Text models take { messages: [{ role, content }, …] } and answer in result.response. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
       children: {
         models: "List available models.",
         run: "Run one model invocation — for outputs the caller cannot produce itself (images, audio, transcription, bulk classification), not for text the caller will read or relay.",
         toMarkdown:
-          "Convert one document or an array of { name, blob } to Markdown — an in-hand HTML string converts via new Blob([html], { type: 'text/html' }); call with no args for supported formats. For emails and newsletters (mostly tracking links and giant base64 images), pass { conversionOptions: { output: { format: 'text' } } } to strip link targets and image URLs — often 10x smaller.",
+          "Convert one document or an array of { name, blob } to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. Call with no args for supported formats. For emails and newsletters (mostly tracking links and giant base64 images), pass { conversionOptions: { output: { format: 'text' } } } to strip link targets and image URLs — often 10x smaller.",
       },
       parent: "a project itx (itx.ai)",
     });
@@ -3306,9 +3306,11 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
 
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
-  /** Convert one document (`{ name, blob }`) to Markdown — an in-hand HTML
-   * string (a fetched page, an email body) converts via
-   * `new Blob([html], { type: "text/html" })`; never strip HTML by hand.
+  /** Convert one document (`{ name, blob }`) to Markdown — `blob` accepts
+   * bytes or base64 (a Blob made in a script cannot cross the RPC
+   * boundary). An in-hand HTML string (a fetched page, an email body)
+   * converts via `new TextEncoder().encode(html)` with a `.html` name;
+   * never strip HTML by hand.
    * `{ conversionOptions: { output: { format: "text" } } }` returns plain
    * text with link targets and image URLs stripped — the compact choice for
    * emails and newsletters, whose bytes are mostly tracking links. */
@@ -3321,7 +3323,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
     documents: CfMarkdownDocument[],
     options?: CfMarkdownConversionOptions,
   ): Promise<CfMarkdownConversionResult[]>;
-  toMarkdown(
+  async toMarkdown(
     ...args: CfMarkdownConversionArgs
   ): Promise<
     CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]
@@ -3330,7 +3332,21 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       return env.AI.toMarkdown().supported();
     }
     const [documents, options] = args;
-    return env.AI.toMarkdown(documents as never, options as never) as Promise<
+    // Blob cannot cross the capnweb hop from script sandboxes, so `blob`
+    // accepts the whole FileData union and the Blob is minted here.
+    const coerce = async (document: CfMarkdownDocument) => ({
+      name: document.name,
+      blob:
+        document.blob instanceof Blob
+          ? document.blob
+          : new Blob([(await projectFileDataToBytes(document.blob)) as Uint8Array<ArrayBuffer>], {
+              type: "application/octet-stream",
+            }),
+    });
+    const coerced = Array.isArray(documents)
+      ? await Promise.all(documents.map(coerce))
+      : await coerce(documents);
+    return env.AI.toMarkdown(coerced as never, options as never) as Promise<
       CfMarkdownConversionResult | CfMarkdownConversionResult[]
     >;
   }
@@ -3611,10 +3627,9 @@ class PostHogIntegrationRpcTarget extends RpcTarget {
  * The SDK connection targets are thin dispatchers over the normal vendor
  * clients. A project extends the collection with ordinary
  * `provideCapability({ path: ["integrations", ...] })` — data, not deployment.
- * `completeConnect` is called by the app worker's
- * OAuth callback routes (/api/integrations/<provider>/callback); its
- * authority is the HMAC-signed OAuth state minted by startOAuthFlow,
- * verified itx-side.
+ * Native `completeConnect` calls are bound to this RPC target's authenticated
+ * user; browser callbacks use the same domain operation with their cookie
+ * session. Both re-verify the HMAC-signed state minted by startOAuthFlow.
  */
 class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations"> {
   constructor(
@@ -4058,7 +4073,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       children: {
         cf: "Cloudflare first-party platform bindings: ai, browser, images, videos.",
         completeConnect:
-          "OAuth callback completion; authority is the HMAC-signed state minted by startOAuthFlow.",
+          "Complete a native OAuth callback with this RPC session and the signed state from startOAuthFlow.",
         confirmGithubSteal:
           "Move a GitHub installation after explicit confirmation: { state } — state is the signed user/project/installation proof returned by completeConnect.",
         connectTelegram:
@@ -4188,21 +4203,21 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
   startOAuthFlow(input: {
     callbackUrl?: string;
     provider: OAuthProviderSlug;
-    /** The user to bind the OAuth state to. Browser-supplied, not authority;
-     * the callback's check against the signed state is the backstop. */
-    userId: string;
   }): Promise<{ authorizationUrl: string }> {
+    const user = userPrincipalOf(this.props.auth);
+    if (!user) throw new Error("Starting an OAuth connection requires a signed-in user.");
     return startOAuthFlow({
       callbackUrl: input.callbackUrl,
       config: parseConfig(env),
       projectId: this.props.projectId,
       provider: input.provider,
-      userId: input.userId,
+      userId: user.userId,
     });
   }
 
-  /** Called by the app worker's OAuth callback route; authority is the
-   * HMAC-signed OAuth state minted by startOAuthFlow. */
+  /** Complete a native OAuth callback using this authenticated RPC session.
+   * Browser callbacks use the app worker route, which supplies its session
+   * identity directly to the same domain operation. */
   completeConnect(input: {
     /** OAuth authorization code (Slack/Google, or GitHub's proof callback). */
     code?: string;
@@ -4210,8 +4225,9 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     installationId?: string;
     provider: OAuthProviderSlug;
     state: string;
-    userId: string | null;
   }): Promise<CompleteConnectResult> {
+    const user = userPrincipalOf(this.props.auth);
+    if (!user) throw new Error("Completing an OAuth connection requires a signed-in user.");
     return completeConnect({
       code: input.code,
       config: parseConfig(env),
@@ -4219,7 +4235,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       projectId: this.props.projectId,
       provider: input.provider,
       state: input.state,
-      userId: input.userId,
+      userId: user.userId,
     });
   }
 
