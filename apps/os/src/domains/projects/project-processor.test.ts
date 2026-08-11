@@ -979,3 +979,38 @@ describe("ProjectProcessor full replay", () => {
     });
   });
 });
+
+// =============================================================================
+// Agent birth defaults fold
+// =============================================================================
+
+describe("ProjectProcessor agent birth defaults", () => {
+  it("folds the latest validated defaults payload; a bad latest folds to null, not to stale defaults", async () => {
+    const h = makeProjectHarness();
+    await h.append({
+      type: "events.iterate.com/project/agent-birth-defaults-configured",
+      payload: {
+        birthEvents: [
+          {
+            type: "events.iterate.com/agent/configured",
+            payload: { config: { driver: "agent-headless" } },
+          },
+        ],
+      },
+    });
+    expect(h.state().agentBirthDefaults).toMatchObject({
+      birthEvents: [{ type: "events.iterate.com/agent/configured" }],
+    });
+
+    // Foreign vocabulary (a project event is not an agent birth event): the
+    // creation door must never see it — and the project must not silently
+    // stay on the defaults this event was trying to replace.
+    await h.append({
+      type: "events.iterate.com/project/agent-birth-defaults-configured",
+      payload: {
+        birthEvents: [{ type: "events.iterate.com/project/created", payload: {} }],
+      },
+    });
+    expect(h.state().agentBirthDefaults).toBeNull();
+  });
+});

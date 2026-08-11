@@ -93,12 +93,16 @@ Sequencing: builds on #2423's defaults event and headless processor — a follow
 - The embedded fallback and a project's live file *can* drift — by design (projects fork on purpose); the codegen lint keeps the embedded copy itself honest.
 
 
+## Status (skim me)
+
+Roughly half done. The birth-defaults generalization (list form, fold, snapshot read, codemode-tag migration) is complete and tested; the prompt-to-template move (default + channel prompts, budget test, publish-time warning) is the main missing piece.
+
 ## Checklist
 
-- [ ] project processor: consume `project/agent-birth-defaults-configured` (list form), fold into `state.agentBirthDefaults` with parse/allowlist validation
-- [ ] `agent-defaults.ts`: `AgentBirthDefaults` → birthEvents list; builder collapses to "append the validated list"; platform-minted content-hash keys
-- [ ] `rpc-targets.ts`: read defaults from the project processor snapshot; delete the raw-event scan
-- [ ] `configs/codemode-tag/worker.ts`: publish list-form defaults
+- [x] project processor: consume `project/agent-birth-defaults-configured` (list form), fold into `state.agentBirthDefaults` with parse/allowlist validation _(contract event + `state.agentBirthDefaults`; reduce validates via `validateAgentBirthEvents`, malformed latest folds to null; spec in project-processor.test.ts)_
+- [x] `agent-defaults.ts`: `AgentBirthDefaults` → birthEvents list; builder collapses to "append the validated list"; platform-minted content-hash keys _(`agent/birth-defaults:<djb2>:<index>:<projectId>:<agentPath>`; prompt-slot events replace the platform fallback slot; explicit systemPromptPolicy drops them; `Defaults` generic keeps router `satisfies EmittedInput<...>` exact)_
+- [x] `rpc-targets.ts`: read defaults from the project processor snapshot; delete the raw-event scan _(`agentBirthDefaultsForProject` reads `facetProcessorRelay(project).snapshot()`, applies `matches.pathPrefix` against the agent path)_
+- [x] `configs/codemode-tag/worker.ts`: publish list-form defaults _(same content-hash key; three birth events: driver config, prompt slot, headless subscription)_
 - [ ] `configs/default/prompts/agent-system-prompt.md`: prompt text moves; `DEFAULT_AGENT_SYSTEM_PROMPT`/revision constants deleted; fallback reads `PROJECT_REPO_INITIAL_FILES`; hash identity
 - [ ] `configs/default/worker.ts`: publish prompt birth default on worker-updated
 - [ ] channel prompts → `configs/default/prompts/{slack,telegram,email}.md` + thin interpolators
