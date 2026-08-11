@@ -1,5 +1,5 @@
 ---
-status: ready
+status: in-review
 size: small
 ---
 
@@ -20,7 +20,10 @@ Two small auth/preview-deploy annoyances, from Misha:
 
 ## Status
 
-Spec written, implementation not started.
+Both parts implemented and tested (133 preview unit tests, 95 auth tests,
+typecheck/lint/knip green). PR: https://github.com/iterate/iterate/pull/2475.
+Remaining: live verification of the Login ↗ link via this PR's own preview
+comment (added the `preview` label to trigger it despite draft).
 
 ## 1. `Login ↗` suffix on the preview PR comment heading
 
@@ -46,10 +49,14 @@ Decisions (assumptions, since Misha was brief):
 - No link when there's no lease recorded, or the doppler config isn't a known
   os environment (render must never throw).
 
-- [ ] thread `pullRequestNumber` into `renderCloudflarePreviewPullRequestBody`
-      / `renderCloudflarePreviewSection` (required param, callers all have it)
-- [ ] heading suffix with login URL derived from lease doppler config
-- [ ] update/extend `scripts/preview/preview.test.ts`
+- [x] thread `pullRequestNumber` into `renderCloudflarePreviewPullRequestBody`
+      / `renderCloudflarePreviewSection` _(required third param; the one
+      production callsite in `updateCloudflarePreviewState` already had it)_
+- [x] heading suffix with login URL derived from lease doppler config
+      _(`previewLoginUrl` in `scripts/preview/preview.ts`, resolved through
+      `cloudflarePreviewApps.os.resolvePreviewAppConfig`)_
+- [x] update/extend `scripts/preview/preview.test.ts` _(link asserted in the
+      round-trip test; no-lease and unknown-config cases assert no link)_
 
 ## 2. Create-project button stays enabled during post-success redirect
 
@@ -66,12 +73,15 @@ never-resolving promise. Returned from `onSuccess` (or awaited in
 `mutationFn`), react-query keeps the mutation pending until the page unloads,
 so every button gated on `isSubmitting` stays disabled through the navigation.
 
-- [ ] `redirect()` helper; use it for all `window.location.href` assignments in
+- [x] `redirect()` helper; use it for all `window.location.href` assignments in
       `project-access.tsx` (create org+project, create project, save selection,
-      deny)
-- [ ] regression test if practical — note apps/auth has no component-test
-      (jsdom) infra today; if adding one isn't worth it for a 3-line helper,
-      skip and say so here
+      deny) _(`redirectAndStayPending` at the bottom of the file; the
+      `ExternalRedirect` component's `window.location.replace` is untouched —
+      it renders nothing, so there's no button to re-enable)_
+- ~~[ ] regression test~~ _(skipped: apps/auth has no jsdom/component-test
+      infra and the helper is 3 lines; standing up React test infra for it
+      isn't worth it. The behavior is covered by the docstring + preview e2e
+      exercising the flow.)_
 
 ## Implementation log
 
