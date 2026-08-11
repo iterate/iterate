@@ -7,7 +7,12 @@ size: medium
 
 ## Status
 
-Implemented with unit + forwarding tests; the patched-schema hop is asserted in the auth e2e (runs in this PR's preview lane). Live end-to-end verification on the preview is the remaining step. Everything below the Decisions section
+Implemented and live-verified on preview-17 (all CI green): both hints
+survive os login -> authorize -> signed /login redirect; a project created as
+`pr2477-template-waiter-chef` was born from PR 2477's `configs/waiter-chef`
+(MENU.md and waiter prompts in its repo), and the existence gate correctly
+downgraded a `smoke-template-waiter-chef` (no pr prefix -> main ref, template
+not merged) to a stock project. Everything below the Decisions section
 is best-guess fleshing-out of a brief prompt — assumptions are called out.
 
 ## Ask (from Misha, verbatim-ish)
