@@ -148,6 +148,38 @@ export async function readProjectBySlug(
   return record;
 }
 
+/**
+ * Authoritative slug read: skip the positive KV cache and ask the auth worker
+ * directly, re-priming the cache on a hit. The heal path for stale positive
+ * entries — a slug whose auth row was deleted and later re-registered with a
+ * fresh id (preview erase cycles, prod delete-then-recreate) keeps its old KV
+ * record forever otherwise. Null when auth has no row: admin-lane projects
+ * live only in KV, so a null here must never be used to evict them.
+ */
+export async function readProjectBySlugAuthoritative(
+  directory: KVNamespace,
+  slug: string,
+): Promise<ProjectDirectoryRecord | null> {
+  const project = await itxEnv.AUTH.getProjectBySlug({ projectSlug: slug });
+  if (!project) return null;
+  const record = {
+    id: project.id,
+    slug: project.slug,
+    organizationId: project.organizationId,
+    name: project.name,
+  };
+  try {
+    await primeProjectDirectory(directory, record);
+  } catch (error) {
+    // Auth's answer stands on its own; a failed re-prime only means the next
+    // cached read may still see the stale record and heal again.
+    console.warn("[project-directory] authoritative re-prime failed; using auth result", {
+      reason: errorMessage(error),
+    });
+  }
+  return record;
+}
+
 /** Fast existence/metadata check by project id (KV only — no auth fallback:
  * ids are primed at create and re-primed by every slug read). */
 export async function readProjectById(

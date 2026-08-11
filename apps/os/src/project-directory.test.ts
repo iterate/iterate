@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   primeProjectDirectory,
   readProjectBySlug,
+  readProjectBySlugAuthoritative,
   type ProjectDirectoryRecord,
 } from "./project-directory.ts";
 
@@ -267,6 +268,69 @@ describe("readProjectBySlug", () => {
     } finally {
       warn.mockRestore();
       vi.useRealTimers();
+    }
+  });
+});
+
+describe("readProjectBySlugAuthoritative", () => {
+  beforeEach(() => auth.getProjectBySlug.mockReset());
+
+  it("re-primes a stale positive cache entry from the auth answer", async () => {
+    const stale = { id: "prj_dead", slug: "reborn", organizationId: null, name: "reborn" };
+    const fresh = { id: "prj_live", slug: "reborn", organizationId: "org_new", name: "reborn" };
+    const directory = {
+      delete: vi.fn().mockResolvedValue(undefined),
+      get: vi.fn().mockResolvedValue(stale),
+      put: vi.fn().mockResolvedValue(undefined),
+    } as unknown as KVNamespace;
+
+    // The cached read path serves the stale record — the bug this heals.
+    await expect(readProjectBySlug(directory, "reborn")).resolves.toEqual(stale);
+
+    auth.getProjectBySlug.mockResolvedValue(fresh);
+    await expect(readProjectBySlugAuthoritative(directory, "reborn")).resolves.toEqual(fresh);
+    expect(auth.getProjectBySlug).toHaveBeenCalledExactlyOnceWith({ projectSlug: "reborn" });
+    expect((directory.put as ReturnType<typeof vi.fn>).mock.calls.map(([key]) => key)).toEqual([
+      "slug:reborn",
+      "project:prj_live",
+    ]);
+
+    // The heal refreshes the in-isolate memo too: cached reads now serve the
+    // live record without waiting for KV visibility.
+    await expect(readProjectBySlug(directory, "reborn")).resolves.toEqual(fresh);
+  });
+
+  it("returns null and writes nothing when auth has no row (admin-lane projects stay cached)", async () => {
+    auth.getProjectBySlug.mockResolvedValue(null);
+    const directory = {
+      delete: vi.fn(),
+      get: vi.fn(),
+      put: vi.fn(),
+    } as unknown as KVNamespace;
+
+    await expect(readProjectBySlugAuthoritative(directory, "kv-only")).resolves.toBeNull();
+    expect(directory.put).not.toHaveBeenCalled();
+    expect(directory.delete).not.toHaveBeenCalled();
+  });
+
+  it("still returns the auth record when the re-prime fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const fresh = { id: "prj_live2", slug: "reborn-2", organizationId: null, name: "reborn-2" };
+      auth.getProjectBySlug.mockResolvedValue(fresh);
+      const directory = {
+        delete: vi.fn().mockResolvedValue(undefined),
+        get: vi.fn().mockResolvedValue(null),
+        put: vi.fn().mockRejectedValue(new Error("KV unavailable")),
+      } as unknown as KVNamespace;
+
+      await expect(readProjectBySlugAuthoritative(directory, "reborn-2")).resolves.toEqual(fresh);
+      expect(warn).toHaveBeenCalledWith(
+        "[project-directory] authoritative re-prime failed; using auth result",
+        expect.objectContaining({ reason: expect.stringContaining("KV unavailable") }),
+      );
+    } finally {
+      warn.mockRestore();
     }
   });
 });

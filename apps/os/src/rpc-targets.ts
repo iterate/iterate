@@ -74,6 +74,7 @@ import {
   listProjectDirectory,
   primeProjectDirectory,
   readProjectById,
+  readProjectBySlugAuthoritative,
   resolveProjectIdBySlug,
   type ProjectIdentity,
 } from "./project-directory.ts";
@@ -6348,12 +6349,46 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       existing.auth.assertCanAccessProject(existing.projectId);
       this.#props = existing;
     } else {
+      let identity = await this.identity();
       if (args.projectId !== undefined && args.projectId !== this.#projectId) {
-        throw new Error(
-          `project create() received id "${args.projectId}" for handle "${this.#projectId}"`,
+        // The handle's id came from the KV directory cache; the caller's from
+        // auth claims (e.g. the welcome page's ?ensureBirth retry). On
+        // disagreement the auth worker is the tiebreaker: an erase cycle
+        // (previews) or a delete-then-recreate leaves a stale positive
+        // `slug:` key shadowing the real project. If auth maps this slug to
+        // the caller's id, re-key the handle and continue as that project
+        // instead of failing setup forever.
+        const authoritative = await readProjectBySlugAuthoritative(
+          env.PROJECT_DIRECTORY,
+          identity.slug,
         );
+        if (authoritative === null || authoritative.id !== args.projectId) {
+          throw new Error(
+            `project create() received id "${args.projectId}" for handle "${this.#projectId}"`,
+          );
+        }
+        widenProjectAccess(this.#props.auth, authoritative.id);
+        const healed: ExistingProjectRpcTargetProps = {
+          auth: this.#props.auth,
+          capabilityHost: new CapabilityHostRpcTarget({
+            auth: this.#props.auth,
+            ctx: this.#props.ctx,
+            path: "/",
+            projectId: authoritative.id,
+          }),
+          ctx: this.#props.ctx,
+          streamContext: streamContextForAuth(this.#props.auth),
+          projectId: authoritative.id,
+        };
+        healed.auth.assertCanAccessProject(healed.projectId);
+        this.#props = healed;
+        identity = {
+          projectId: authoritative.id,
+          slug: authoritative.slug,
+          organizationId: authoritative.organizationId,
+          name: authoritative.name,
+        };
       }
-      const identity = await this.identity();
       registered = {
         organizationId: identity.organizationId,
         projectId: identity.projectId,

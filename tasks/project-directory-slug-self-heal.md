@@ -38,11 +38,11 @@ handle's id, treat the auth worker as tiebreaker instead of failing:
       `AUTH.getProjectBySlug` directly; on a hit re-prime the cache
       (best-effort) and return the record; null when auth has no row
       (admin-lane projects live only in KV — never heal those away).
-- [ ] in `ProjectRpcTarget.create()`: on id mismatch, resolve the handle's
+- [x] in `ProjectRpcTarget.create()`: on id mismatch, resolve the handle's
       current slug authoritatively; if auth maps it to the caller's id,
       re-key the handle to that project (widen + assert access, rebuild
       props) and continue; otherwise throw the original mismatch error.
-- [ ] unit tests for the helper (auth hit → record + re-prime + memo
+- [x] unit tests for the helper (auth hit → record + re-prime + memo
       refresh; auth miss → null, no prime).
 
 Out of scope: proactively invalidating KV on auth-side project delete
