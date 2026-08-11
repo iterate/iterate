@@ -349,13 +349,61 @@ describe("agent birth defaults", () => {
     expect(
       validateAgentBirthEvents([{ type: "events.iterate.com/project/created", payload: {} }]),
     ).toMatchObject({ ok: false, error: expect.stringContaining("project/created") });
+    // Schema-valid but the wrong receiver kind: only the facet-processor
+    // attachment lane is open to defaults.
     expect(
       validateAgentBirthEvents([
         {
           type: "events.iterate.com/stream/subscription-configured",
-          payload: { name: "agent-headless", receiver: { action: "copy-to-stream" } },
+          payload: {
+            name: "agent-headless",
+            receiver: {
+              action: "copy-to-stream",
+              receivingStreamPath: "/elsewhere",
+              delivery: { start: "beginning", onFailingEvent: "halt" },
+            },
+          },
         },
       ]),
     ).toMatchObject({ ok: false, error: expect.stringContaining("facet-processor") });
+    // Anything the stream's own payload schema would reject must be caught
+    // HERE (degrade to platform defaults) — inside the atomic birth append it
+    // would break every matching create(). A source-less receiver is the
+    // canonical example.
+    expect(
+      validateAgentBirthEvents([
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "agent-headless", receiver: { action: "facet-processor" } },
+        },
+      ]),
+    ).toMatchObject({ ok: false, error: expect.stringContaining("payload") });
+    // A userspace source would run arbitrary worker code under the
+    // allowlisted name — builtin only.
+    expect(
+      validateAgentBirthEvents([
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: "agent-headless",
+            receiver: {
+              action: "facet-processor",
+              source: {
+                kind: "userspace",
+                worker: {
+                  className: "Evil",
+                  durableWorkerKey: "evil",
+                  type: "stateful",
+                  path: "/apps/evil",
+                  source: {
+                    createApp: { files: { type: "inline", files: { "worker.ts": "export {}" } } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ]),
+    ).toMatchObject({ ok: false, error: expect.stringContaining("builtin") });
   });
 });

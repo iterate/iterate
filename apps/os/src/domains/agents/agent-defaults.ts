@@ -335,16 +335,35 @@ export function validateAgentBirthEvents(
 ): { ok: true } | { ok: false; error: string } {
   for (const [index, event] of birthEvents.entries()) {
     if (event.type === "events.iterate.com/stream/subscription-configured") {
+      // The FULL payload schema first: anything that would fail the stream's
+      // own validation must be rejected HERE, where it degrades to
+      // platform-default births — inside the atomic birth append it would
+      // break every matching create() instead.
+      const payloadCheck = CoreProcessorContract.events[
+        "events.iterate.com/stream/subscription-configured"
+      ].payloadSchema.safeParse(event.payload);
+      if (!payloadCheck.success) {
+        return {
+          ok: false,
+          error: `birthEvents[${index}]: invalid subscription-configured payload: ${payloadCheck.error.message}`,
+        };
+      }
+      // Then the gate: a BUILTIN facet processor under an allowlisted
+      // agent-family name — a userspace source would run arbitrary worker
+      // code under the allowlisted name.
       const subscription = z
         .looseObject({
           name: z.string(),
-          receiver: z.looseObject({ action: z.literal("facet-processor") }),
+          receiver: z.looseObject({
+            action: z.literal("facet-processor"),
+            source: z.looseObject({ kind: z.literal("builtin") }),
+          }),
         })
         .safeParse(event.payload);
       if (!subscription.success) {
         return {
           ok: false,
-          error: `birthEvents[${index}]: only facet-processor subscriptions may ride a birth batch`,
+          error: `birthEvents[${index}]: only builtin facet-processor subscriptions may ride a birth batch`,
         };
       }
       if (!BIRTH_DEFAULTS_SUBSCRIPTION_ALLOWLIST.has(subscription.data.name)) {
