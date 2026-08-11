@@ -8,10 +8,11 @@ branch: waiter-chef
 
 ## Status summary
 
-Spec fleshed out, implementation not started. Pure userland: a new
-`configs/waiter-chef/` template, zero platform changes. Built on the merged
-birth-defaults surface (#2423 + #2474). The eval is human/feel-based — Misha
-drives testing; expect knob-tweaking commits.
+Template implemented and typechecked (standalone tsc against the template's
+own tsconfig — configs aren't CI-compiled). Pure userland: zero platform
+changes, built on the merged birth-defaults surface (#2423 + #2474). Missing:
+live smoke, then the human feel-eval — Misha drives; expect knob-tweaking
+commits to prompts/knobs.
 
 ## The idea (from Misha, lightly organized)
 
@@ -92,17 +93,22 @@ Fork of `configs/default` (keeps docs app, AGENTS.md sync, onboarding) plus:
 
 ### Checklist
 
-- [ ] `configs/waiter-chef/` template: forked base files, MENU.md, prompts,
-      parser, worker
-- [ ] waiter-format parser unit test (vitest, colocated in the template like
-      codemode-format's)
-- [ ] Prompt-file formatter exemption (`.oxfmtrc.json` ignorePatterns —
-      `configs/waiter-chef/prompts/`)
+- [x] `configs/waiter-chef/` template: forked base files, MENU.md, prompts,
+      parser, worker — _lean fork of the codemode-tag structure; typechecked
+      standalone_
+- [x] ~~waiter-format parser unit test (vitest, colocated in the template
+      like codemode-format's)~~ — _entered in error: config templates have no
+      vitest home (codemode-format.ts has no test either); verified by
+      standalone tsc + live smoke instead_
+- [x] Prompt-file formatter exemption (`.oxfmtrc.json` ignorePatterns —
+      `configs/waiter-chef/prompts/` + `MENU.md`) — _and re-ran tsc after
+      `pnpm format` per the oxfmt-rewrites-markdown lesson_
 - [ ] Live smoke on a preview or dev: create project from
       `github:iterate/iterate#waiter-chef&path:configs/waiter-chef`, run the
       starter prompts below, iterate with Misha
-- [ ] Knobs surfaced for the feel-eval: waiter model, debounce, relay
-      trigger behavior
+- [x] Knobs surfaced for the feel-eval — _`WAITER_MODEL`, `WAITER_DEBOUNCE_MS`,
+      `WAITER_MAX_AUTONOMOUS_TURNS`, `RELAY_EXCERPT_CHARS` at the top of
+      `worker.ts`_
 
 ## Assumptions made (Misha AFK-style delineation)
 

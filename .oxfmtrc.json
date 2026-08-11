@@ -25,6 +25,8 @@
     "config-repo-template.generated.ts",
     "configs/default/prompts/",
     "configs/codemode-tag/prompts/",
+    "configs/waiter-chef/prompts/",
+    "configs/waiter-chef/MENU.md",
     "worker-configuration.d.ts",
     "apps/auth/wrangler.jsonc",
     "apps/semaphore/wrangler.jsonc",
