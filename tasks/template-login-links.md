@@ -7,7 +7,7 @@ size: medium
 
 ## Status
 
-Spec written; implementation starting. Everything below the Decisions section
+Implemented with unit + forwarding tests; the patched-schema hop is asserted in the auth e2e (runs in this PR's preview lane). Live end-to-end verification on the preview is the remaining step. Everything below the Decisions section
 is best-guess fleshing-out of a brief prompt — assumptions are called out.
 
 ## Ask (from Misha, verbatim-ish)
@@ -77,14 +77,14 @@ OS creates the project **from that PR's `configs/waiter-chef`**.
 
 ## Checklist
 
-- [ ] os: `configRepoTemplateFromSlug` helper (pure parse) + existence check
+- [x] os: `configRepoTemplateFromSlug` helper (pure parse) + existence check
       with injectable fetch; unit tests
-- [ ] os: derive in `ProjectRpcTarget.create()` when `configRepoTemplate`
+- [x] os: derive in `ProjectRpcTarget.create()` when `configRepoTemplate`
       arg is absent
-- [ ] auth: extend oauth-provider patch with `project_hint`
-- [ ] auth: RP `/login` forwards valid `project_hint`
+- [x] auth: extend oauth-provider patch with `project_hint`
+- [x] auth: RP `/login` forwards valid `project_hint`
       (+ forwarding matrix test in relying-party-behavior.test.ts)
-- [ ] auth: `/project-access` prefills project slug from the hint
-- [ ] auth e2e: `project_hint` survives into the signed /login redirect
+- [x] auth: `/project-access` prefills project slug from the hint
+- [x] auth e2e: `project_hint` survives into the signed /login redirect
       (sibling of the login_hint case in oauth-code-exchange.e2e.test.ts)
-- [ ] docs: login-link recipe in docs/dev-environments.md
+- [x] docs: login-link recipe in docs/dev-environments.md

@@ -535,6 +535,19 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     if (loginHint === "email" || loginHint === "google" || loginHint?.includes("@")) {
       url.searchParams.set("login_hint", loginHint);
     }
+    const projectHint = requestURL.searchParams.get("project_hint");
+    // A suggested project slug for the auth app's first-run setup — pairs
+    // with login_hint so a single PR-body link preselects both the test user
+    // and the project (see docs/dev-environments.md, "Template-carrying
+    // login links"). Slug-shaped or dropped; a hint never creates anything
+    // by itself.
+    if (
+      projectHint !== null &&
+      projectHint.length <= 50 &&
+      /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(projectHint)
+    ) {
+      url.searchParams.set("project_hint", projectHint);
+    }
     if (requestURL.searchParams.get("prompt") === "select_account") {
       url.searchParams.set("prompt", "select_account");
     }

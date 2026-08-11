@@ -63,6 +63,12 @@ export const Route = createFileRoute("/_auth/project-access")({
     client_id: z.string().optional(),
     scope: z.string().optional(),
     redirect: z.string().optional(),
+    // Suggested project slug, forwarded through the OAuth flow like
+    // login_hint (see the oauth-provider patch). Prefills the create forms
+    // below instead of the derived-from-email suggestion; the user still
+    // confirms. Powers template-carrying PR-body login links
+    // (docs/dev-environments.md) via os' `-template-<name>` slug convention.
+    project_hint: z.string().optional().catch(undefined),
   }),
   loader: () => getProjectAccessConfig(),
 });
@@ -89,8 +95,13 @@ const CreateProjectInput = z.object({
 });
 
 function RouteComponent() {
-  const { client_id, scope, redirect } = Route.useSearch();
+  const { client_id, scope, redirect, project_hint } = Route.useSearch();
   const { projectHostnameBase } = Route.useLoaderData();
+  // Only a well-formed slug counts; anything else falls back to the derived
+  // suggestion as if no hint arrived.
+  const hintedProjectSlug = ProjectSlugInput.safeParse(project_hint).success
+    ? project_hint
+    : undefined;
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
   const session = useSession();
@@ -105,7 +116,7 @@ function RouteComponent() {
   // Once the user edits the field (including clearing it), we keep their
   // value — empty string stays empty and does not snap back to the suggestion.
   const [projectSlugOverride, setProjectSlugOverride] = useState<string | null>(null);
-  const [projectSlug, setProjectSlug] = useState("");
+  const [projectSlug, setProjectSlug] = useState(hintedProjectSlug || "");
   const [selectedOrganizationSlug, setSelectedOrganizationSlug] = useState("");
   const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
   const hasOAuthClientId = Boolean(client_id);
@@ -308,7 +319,8 @@ function RouteComponent() {
   const effectiveSelectedProjectIds = selectedProjectIds ?? allProjectIds;
   const canContinue = effectiveSelectedProjectIds.length > 0;
   const isCreatingFirstOrganization = organizations.length === 0;
-  const suggestedProjectSlug = organizationName.trim() ? slugify(organizationName) : "";
+  const suggestedProjectSlug =
+    hintedProjectSlug || (organizationName.trim() ? slugify(organizationName) : "");
   const firstProjectSlug = projectSlugOverride ?? suggestedProjectSlug;
   const parsedOrganizationWithProject = CreateOrganizationWithProjectInput.safeParse({
     name: organizationName,
