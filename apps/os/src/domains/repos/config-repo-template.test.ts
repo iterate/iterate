@@ -66,8 +66,16 @@ test("template ships packaged apps behind a thin router", () => {
 
 test("project lifecycle cases directly install and handle the default heartbeat", async () => {
   const set = vi.fn(async (input: { key: string; recurrence: unknown; script: string }) => input);
+  const append = vi.fn(async (input: unknown) => [input]);
   const project = {
     repos: { list: async () => [] },
+    // The worker-updated case re-publishes the repo's prompt file as the
+    // project's agent birth defaults.
+    repo: {
+      readFile: async (input: { path: string }) =>
+        input.path === "prompts/agent-system-prompt.md" ? { content: "PROMPT TEXT\n" } : null,
+    },
+    streams: { get: () => ({ append }) },
     scheduler: { set },
     // The MediaApp glue mounts itx.media on worker-updated.
     capabilityHosts: { get: () => ({ provideCapability: async () => null }) },
@@ -111,6 +119,24 @@ test("project lifecycle cases directly install and handle the default heartbeat"
     'idempotencyKey: "iterate/config/heartbeat:" + trigger.executionId',
   );
   expect(configured.script).toContain("payload: { scheduleKey: schedule.key }");
+
+  // The same case publishes the repo's prompt file as birth defaults: one
+  // prompt-slot event, newline-stripped (matching the platform's embedded
+  // copy), under a content-hash key — an unchanged file republishes the SAME
+  // occurrence, so redeliveries dedupe server-side.
+  expect(append).toHaveBeenCalledTimes(2);
+  expect(append.mock.calls[0]![0]).toMatchObject({
+    type: "events.iterate.com/project/agent-birth-defaults-configured",
+    payload: {
+      birthEvents: [
+        {
+          type: "events.iterate.com/agents/context-added",
+          payload: { content: "PROMPT TEXT", key: "agent/system-prompt", role: "system" },
+        },
+      ],
+    },
+  });
+  expect(append.mock.calls[1]![0]).toEqual(append.mock.calls[0]![0]);
 
   const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
   await deliver(worker, {
