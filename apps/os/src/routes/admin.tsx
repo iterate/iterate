@@ -7,13 +7,7 @@
 
 import { Suspense, useEffect, useState, type CSSProperties } from "react";
 import { ClientOnly, createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
-import {
-  FolderKanbanIcon,
-  RadioTowerIcon,
-  ShieldIcon,
-  SquareTerminalIcon,
-  WaypointsIcon,
-} from "lucide-react";
+import { FolderKanbanIcon, RadioTowerIcon, ShieldIcon, WaypointsIcon } from "lucide-react";
 import { Separator } from "@iterate-com/ui/components/separator";
 import {
   Sidebar,
@@ -197,16 +191,6 @@ function AdminSidebar() {
                   >
                     <FolderKanbanIcon aria-hidden="true" />
                     <span>Projects</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    tooltip="Repl"
-                    isActive={pathname.startsWith("/admin/repl")}
-                    render={<Link to="/admin/repl" />}
-                  >
-                    <SquareTerminalIcon aria-hidden="true" />
-                    <span>Repl</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               </SidebarMenu>

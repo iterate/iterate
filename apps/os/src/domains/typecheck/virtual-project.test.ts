@@ -910,6 +910,32 @@ test("the assembled results preamble typechecks end to end: literal data, typed 
   });
   expect(trapped.length).toBeGreaterThan(0);
   expect(trapped[0]).toContain("never");
+
+  // Stable addressing keeps EXACT per-offset row types: byOffset(57) is the
+  // data row alone — the retained error row at 33 must not widen it to a
+  // union that would poison `.data` for every stable read.
+  const stable = await checkItxScript({
+    capabilities: [],
+    code: `async (itx) => {
+      const name: string = results.byOffset(57).data.users[0];
+      const failed: string = results.byOffset(33).error;
+      const big = await results.byOffset(42).load(itx);
+      return { name, failed, ids: big.items.map((item) => item.id) };
+    }`,
+    preamble: preamble!.ts,
+    typechecker,
+  });
+  expect(stable).toEqual([]);
+
+  // An offset outside the retained window is a compile error before it is a
+  // runtime throw.
+  const unknownOffset = await checkItxScript({
+    capabilities: [],
+    code: "async (itx) => results.byOffset(999)",
+    preamble: preamble!.ts,
+    typechecker,
+  });
+  expect(unknownOffset.length).toBeGreaterThan(0);
 });
 
 test("a broken preamble never blocks a script: the gate downgrades to unchecked", async () => {

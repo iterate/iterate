@@ -16,7 +16,7 @@ export const ITX_EXAMPLES: ItxExample[] = [
     description:
       "The top-level REPL holds the OS Session — the catalog authenticate() returned; it is not an itx. __describe() works on every node; on a Session its `principal` is who the socket carries.",
     context: "session",
-    runtimes: ["browser", "node", "cli"],
+    runtimes: ["node", "cli"],
     code: `
 const description = await itx.__describe();
 return description.principal;
@@ -29,7 +29,7 @@ return description.principal;
     description:
       "A Session vends itxs: projects.list() shows the projects you can reach (id, slug, org, deployment status), and projects.get(id) returns the project-scoped itx — the same handle a project REPL holds. Every project-context example starts there.",
     context: "session",
-    runtimes: ["browser", "node", "cli"],
+    runtimes: ["node", "cli"],
     code: `
 // Every project you have access to (admins see all; users see their own):
 // { id, slug, organizationId, organizationName, deploymentStatus }.
@@ -206,7 +206,7 @@ return {
     description:
       "provideCapability({ type: 'live', … }) mounts a plain object of functions (nested at any depth) on the project. The client gives the CapabilityHost a hibernatable Capability Provider Pager: after releasing ordinary RPC references, the host Pages that return channel when it needs the provider again. One Pager may back many mounts. The returned provision owns this mount: provision.revoke() removes it. Its calls go offline when that Pager disconnects.",
     context: "project",
-    runtimes: ["browser", "node", "cli"],
+    runtimes: ["node", "cli"],
     code: `
 // No wrapper, no registration ceremony — the object you already have is the
 // capability. Its methods run HERE, in your process; the project calls back
@@ -244,7 +244,7 @@ return { deep, revoked, ultimate };
     description:
       "flattenNestedPaths: true delivers the whole dotted path as data to ONE method, invokeCapability({ path, args }). This is how 'use itx.fakeSlack exactly like the Slack SDK' works — the public SDK docs become the tool docs, with a tiny forwarder.",
     context: "project",
-    runtimes: ["browser", "node", "cli"],
+    runtimes: ["node", "cli"],
     code: `
 // One method handles the entire method tree. itx.fakeSlack.chat.postMessage(x)
 // arrives here as { path: ["chat","postMessage"], args: [x] } — the provider
@@ -832,7 +832,7 @@ return;
     id: "journal-is-the-record",
     title: "The stream IS the record: provide, revoke, read it back",
     description:
-      "provideCapability and revokeCapability are appends to the scope's stream (the project root, '/'). Read the stream back and watch the record happen — there is no hidden registry to drift from it.",
+      "provideCapability and revokeCapability are appends to YOUR scope's stream — the project root '/' for a plain project itx, your personal scope in the REPL. Read the stream back and watch the record happen — there is no hidden registry to drift from it.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
@@ -846,8 +846,10 @@ const provision = await itx.provideCapability({
 });
 await provision.revoke();
 
-// The scope's stream is an ordinary stream — same getEvents API as anything.
-const events = await itx.streams.get("/").getEvents();
+// The scope's stream is an ordinary stream — same getEvents API as
+// anything. capabilityHost.path names the scope this itx mounts on.
+const scopePath = await itx.capabilityHost.path;
+const events = await itx.streams.get(scopePath).getEvents();
 const record = events
   .filter(
     (event) => Array.isArray(event.payload?.path) && event.payload.path.join(".") === capPath,

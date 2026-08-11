@@ -75,7 +75,10 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
     return url;
   };
   const urls = await Promise.all(bothPaths.map((clientPath) => tabUrl(clientPath)));
-  const ofPage = bothPaths[urls.findIndex((url) => url.endsWith(`/projects/${slug}/repl`))];
+  // Bare /repl resolves to a session URL (/repl/<timestamp-slug>) on arrival,
+  // so tab one matches on the prefix, not an exact suffix.
+  const replUrl = new RegExp(`/projects/${slug}/repl(/|$)`);
+  const ofPage = bothPaths[urls.findIndex((url) => replUrl.test(url))];
   const ofPageTwo =
     bothPaths[urls.findIndex((url) => url.endsWith(`/projects/${slug}/integrations`))];
   if (ofPage === undefined || ofPageTwo === undefined || ofPage === ofPageTwo) {
@@ -86,11 +89,9 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
     using host = project.clients.get(ofPageTwo);
     // @ts-expect-error - dynamic capability member
     await host.capabilities.browser.navigate(`/projects/${slug}/repl`);
-    await expect
-      .poll(() => pageTwo.url(), { timeout: 15_000 })
-      .toMatch(new RegExp(`/projects/${slug}/repl$`));
+    await expect.poll(() => pageTwo.url(), { timeout: 15_000 }).toMatch(replUrl);
     // Tab one stays on its own tag, unchanged.
-    await expect.poll(() => page.url()).toMatch(new RegExp(`/projects/${slug}/repl$`));
+    await expect.poll(() => page.url()).toMatch(replUrl);
   });
 
   await test.step("navigate ONLY tab one to a third route; tab two stays put", async () => {
@@ -100,7 +101,7 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
     await expect
       .poll(() => page.url(), { timeout: 15_000 })
       .toMatch(new RegExp(`/projects/${slug}/settings`));
-    await expect.poll(() => pageTwo.url()).toMatch(new RegExp(`/projects/${slug}/repl$`));
+    await expect.poll(() => pageTwo.url()).toMatch(replUrl);
   });
 
   await test.step("a DUPLICATED tab (copied sessionStorage) mints its own client", async () => {

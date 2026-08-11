@@ -34,8 +34,21 @@ const ALL_RUNTIMES: ItxExampleRuntime[] = [
   "project-worker",
 ];
 
-/** Live providers must outlive the calls, so these stay in caller-owned sessions. */
-const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["browser", "node", "cli"];
+/**
+ * Runtimes that hold a LIVE caller-owned session for the whole call: live
+ * capability providers must outlive the calls, and the Session catalog only
+ * exists where authenticate() ran. The browser REPL is no longer one of these
+ * — its Runs execute server-side as scope scripts — so these entries are
+ * reading material there.
+ */
+const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["node", "cli"];
+
+/**
+ * Entries the unattended matrix skips for practical reasons (remote models,
+ * connected accounts, long latency) but which are structurally fine to run
+ * interactively — including from the project REPL.
+ */
+const INTERACTIVE_RUNTIMES: ItxExampleRuntime[] = ["browser", "node", "cli"];
 
 /** The recursive MIME tree of a Gmail message payload (`format: "full"`);
  * body bytes are base64url in `body.data`. Used by gmail-search-inbox. */
@@ -906,7 +919,7 @@ return await itx.projects.get(pid).__describe();
     id: "journal-is-the-record",
     title: "The stream IS the record: provide, revoke, read it back",
     description:
-      "provideCapability and revokeCapability are appends to the scope's stream (the project root, '/'). Read the stream back and watch the record happen — there is no hidden registry to drift from it.",
+      "provideCapability and revokeCapability are appends to YOUR scope's stream — the project root '/' for a plain project itx, your personal scope in the REPL. Read the stream back and watch the record happen — there is no hidden registry to drift from it.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { capPath?: string }) => {
       // Use a unique mount path so the record slice below is unambiguous.
@@ -919,8 +932,10 @@ return await itx.projects.get(pid).__describe();
       });
       await provision.revoke();
 
-      // The scope's stream is an ordinary stream — same getEvents API as anything.
-      const events = await itx.streams.get("/").getEvents();
+      // The scope's stream is an ordinary stream — same getEvents API as
+      // anything. capabilityHost.path names the scope this itx mounts on.
+      const scopePath = await itx.capabilityHost.path;
+      const events = await itx.streams.get(scopePath).getEvents();
       const record = events
         .filter(
           (event) => Array.isArray(event.payload?.path) && event.payload.path.join(".") === capPath,
@@ -1255,7 +1270,7 @@ return {
     title: "Workers AI is a built-in capability",
     description:
       "itx.ai proxies the platform's Workers AI binding: models() lists the catalog, run(model, body) executes one, toMarkdown() converts documents. Model availability and latency depend on the deployment's upstream account, so this entry is reading material for the matrix — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const models = await itx.ai.models();
       const list = Array.isArray(models) ? models : [];
@@ -1607,7 +1622,7 @@ return {
     title: "GitHub's MCP server as a provided integration",
     description:
       "The provided-integration lane, using GitHub's official MCP server: store a fine-grained PAT as a project secret, mount the server into the collection with one durable provideCapability, and call it through the same `.get(connection?)` selector a builtin uses. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. (The BUILT-IN github integration — dashboard connect, the wrapped Octokit at itx.integrations.github.get(), sandbox gh — is separate; this mounts under the github-mcp slug because built-in slugs cannot be shadowed.) Needs a real PAT in vars.githubPat — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx, vars: { connection?: string; githubPat?: string }) => {
       const connection = vars.connection ?? "main";
       const tokenPath = `/secrets/integrations/github-mcp/${connection}/token`;
@@ -1652,7 +1667,7 @@ return {
     title: "GitHub webhooks land on the project's own host",
     description:
       "Per-project webhook ingress already exists: every project host routes to the repo-backed worker.ts, whose fetch can append inbound requests to the connection's /integrations/github/{connection} stream. A configured worker or agent processor then receives those events. Point the GitHub repo/app webhook URL at https://<project-slug>.<base>/webhooks/github/<random-token> (the unguessable token in the path is the auth — worker code cannot hold the HMAC signing secret, by design). MUTATING: this REPLACES the seeded worker.ts (homepage + app router) wholesale — merge the route into your existing fetch instead if you have one. Run it interactively.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx, vars: { connection?: string; urlToken?: string }) => {
       const connection = vars.connection ?? "main";
       const urlToken = vars.urlToken ?? crypto.randomUUID();
@@ -1705,7 +1720,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Convert a document or HTML to Markdown with Workers AI",
     description:
       "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary; the extension in name picks the converter). It also converts an in-hand HTML string — a fetched page, an email body — via new TextEncoder().encode(html): never strip HTML with regex. conversionOptions.output.format 'text' returns plain text with link targets and image URLs stripped — often 10x smaller on emails and newsletters, whose bytes are mostly tracking links and base64 images. Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const supported = await itx.ai.toMarkdown();
       // blob takes bytes or base64 — the .csv/.html extension in `name`
@@ -1834,7 +1849,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Generate an image with a Workers AI model",
     description:
       "Generates an image with Cloudflare-hosted FLUX.2 [klein] 9B through itx.ai.run(). The model accepts multipart input and returns a base64 image in image. First-party docs: https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ . Uses paid/remote AI infrastructure — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const form = new FormData();
       form.append(
@@ -1869,7 +1884,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Generate speech audio with a Workers AI model",
     description:
       "Speaks text with xAI Grok TTS via itx.ai.run(). The model returns a hosted MP3 URL in result.audio. ElevenLabs is available through Cloudflare AI Gateway provider-native calls with an ElevenLabs token, not this zero-key env.AI.run path. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-tts/ . Uses paid/remote AI infrastructure — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const response = await itx.ai.run("xai/grok-tts", {
         text: "Hello from itx. This audio was generated with a Cloudflare Workers AI speech model.",
@@ -1902,7 +1917,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Transcribe audio with a Workers AI model",
     description:
       "Transcribes audio with xAI Grok STT via itx.ai.run() against a small public MP3 URL and returns the transcription. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-stt/ . Uses paid/remote AI infrastructure and a public fetch — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const response = await itx.ai.run("xai/grok-stt", {
         url: "https://storage.googleapis.com/cloud-samples-data/speech/brooklyn_bridge.mp3",
@@ -1930,7 +1945,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Generate video with a Workers AI model",
     description:
       "Runs xAI Grok Imagine Video through itx.ai.run(). The model returns a hosted MP4 URL in result.video. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ . Uses paid/remote AI infrastructure — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const response = await itx.ai.run("xai/grok-imagine-video", {
         prompt: "A slow cinematic dolly shot across a clean workspace with a glowing laptop screen",
@@ -1955,7 +1970,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Render a page to Markdown with Browser Run",
     description:
       "Cloudflare Browser Run quick actions are available as itx.browser.quickAction() and itx.integrations.cf.browser.quickAction(). This renders a real page and converts it to Markdown. External service — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const markdown = await itx.browser.quickAction("markdown", {
         url: "https://developers.cloudflare.com/browser-run/quick-actions/",
@@ -1983,7 +1998,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Resize and convert an image with Cloudflare Images",
     description:
       "Cloudflare Images transformations are available as itx.integrations.cf.images.transform({ image, transforms, output }). It accepts private streams too, not just public URLs. External fetch + Images binding — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const source = await fetch("https://developers.cloudflare.com/img/logo-cloudflare-dark.svg");
       const output = await itx.integrations.cf.images.transform({
@@ -2016,7 +2031,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Extract a video frame with Media Transformations",
     description:
       "Cloudflare Media Transformations are available as itx.integrations.cf.videos.transform({ video, transform, output }). Use output.mode = frame, spritesheet, audio, or video. External fetch + Media binding — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const source = await fetch(
         "https://pub-d9fcbc1abcd244c1821f38b99017347f.r2.dev/aus-mobile.mp4",
@@ -2038,7 +2053,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Send an email from the project's address",
     description:
       "itx.email.send() delivers real mail through Cloudflare Email Service from the project's own address (<slug>@<hostname base>); an explicit `from` must match it. Needs the deployment's sender domain onboarded for Email Sending, and it emails a real recipient — interactive-only, with an address you own.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const receipt = await itx.email.send({
         to: "you@example.com", // a mailbox you own — this sends real mail

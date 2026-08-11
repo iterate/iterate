@@ -473,23 +473,6 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
-      <SidebarSeparator />
-      <SidebarGroup>
-        <SidebarGroupContent>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                tooltip="Repl"
-                render={<Link to="/itx-repl" />}
-                isActive={Boolean(matchRoute({ to: "/itx-repl", fuzzy: false }))}
-              >
-                <SquareTerminal />
-                <span>Repl</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
     </>
   );
 }
@@ -599,20 +582,6 @@ function ProjectSidebarGroup({
                 }),
               )}
             />
-            <ProjectSidebarMenuItem
-              icon={SquareTerminal}
-              label="Repl"
-              render={
-                <Link to="/projects/$projectSlug/repl" params={{ projectSlug }} search={{}} />
-              }
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$projectSlug/repl",
-                  params: { projectSlug },
-                  fuzzy: false,
-                }),
-              )}
-            />
             {projectWorkerUrl ? (
               <ProjectSidebarMenuItem
                 icon={ExternalLink}
@@ -683,6 +652,7 @@ type ProjectStreamNavItemConfig = {
     | "/projects/$projectSlug/sandboxes"
     | "/projects/$projectSlug/scheduler"
     | "/projects/$projectSlug/secrets"
+    | "/projects/$projectSlug/repl"
     | "/projects/$projectSlug/repos"
     | "/projects/$projectSlug/streams";
 };
@@ -708,6 +678,14 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     label: "/secrets",
     streamPath: StreamPath.parse("/secrets"),
     to: "/projects/$projectSlug/secrets",
+  },
+  {
+    // fuzzy: session URLs (/repl/<timestamp-slug>) keep the entry active.
+    fuzzy: true,
+    icon: SquareTerminal,
+    label: "/repl",
+    streamPath: StreamPath.parse("/repl"),
+    to: "/projects/$projectSlug/repl",
   },
   {
     fuzzy: true,
