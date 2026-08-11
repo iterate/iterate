@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { BookOpen, ChevronDown, Play } from "lucide-react";
+import { BookOpen, ChevronDown, Play, SquareTerminal } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Collapsible,
@@ -52,6 +52,8 @@ interface ItxReplProps {
   examples: ItxExample[];
   examplesOpen: boolean;
   onChangeCode: (code: string) => void;
+  /** Mint a fresh session stream and navigate to it. */
+  onNewSession: () => void;
   onRun: () => void;
   onSelectExample: (code: string) => void;
   onSetExamplesOpen: (open: boolean) => void;
@@ -73,6 +75,7 @@ export function ItxRepl({
   examples,
   examplesOpen,
   onChangeCode,
+  onNewSession,
   onRun,
   onSelectExample,
   onSetExamplesOpen,
@@ -104,10 +107,10 @@ export function ItxRepl({
               <div className="min-w-0 space-y-1 text-sm text-muted-foreground">
                 <p>
                   <span className="text-foreground">Run TypeScript as real project scripts.</span>{" "}
-                  Scripts execute server-side in the project&apos;s shared REPL scope (
-                  <code className="font-mono text-xs">{scopePath}</code>), typechecked and journaled
-                  — reload and the session is still here, and teammates see the same history. A
-                  trailing expression echoes its value back (or{" "}
+                  Scripts execute server-side in this session&apos;s stream (
+                  <code className="font-mono text-xs">{scopePath}</code> — the URL), typechecked and
+                  journaled — reload and the session is still here, and anyone on this URL shares
+                  the console. A trailing expression echoes its value back (or{" "}
                   <code className="font-mono text-xs">return</code> explicitly); prior results stay
                   in scope as <code className="font-mono text-xs">results[0].data</code> (or{" "}
                   <code className="font-mono text-xs">await results[0].load(itx)</code> for large
@@ -121,15 +124,22 @@ export function ItxRepl({
                   and run again.
                 </p>
               </div>
-              <Button
-                className="shrink-0"
-                variant="ghost"
-                onClick={() => onSetExamplesOpen(true)}
-                size="sm"
-              >
-                <BookOpen data-icon="inline-start" />
-                Examples
-              </Button>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button variant="ghost" onClick={() => onSetExamplesOpen(true)} size="sm">
+                  <BookOpen data-icon="inline-start" />
+                  Examples
+                </Button>
+                <Button
+                  data-testid="itx-repl-new-session"
+                  variant="ghost"
+                  onClick={onNewSession}
+                  size="sm"
+                  title="Start a fresh REPL session stream (this one stays at its URL)"
+                >
+                  <SquareTerminal data-icon="inline-start" />
+                  New REPL
+                </Button>
+              </div>
             </div>
             {entries.map((entry, index) => (
               <ReplEntryRow key={entry.executionId} entry={entry} index={index} />

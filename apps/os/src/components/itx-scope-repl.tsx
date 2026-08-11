@@ -31,10 +31,13 @@ const MAX_BUFFERED_SCRIPT_EVENTS = 1_000;
 
 export function ItxScopeRepl({
   initialCode,
+  onNewSession,
   projectId,
   scopePath,
 }: {
   initialCode: string;
+  /** Mint a fresh session stream and navigate to it (the page header button). */
+  onNewSession: () => void;
   projectId: string;
   scopePath: string;
 }) {
@@ -50,6 +53,7 @@ export function ItxScopeRepl({
         <ItxScopeReplConnected
           key={`${projectId}:${scopePath}`}
           initialCode={initialCode}
+          onNewSession={onNewSession}
           projectId={projectId}
           scopePath={scopePath}
         />
@@ -68,10 +72,12 @@ function ItxReplConnecting() {
 
 function ItxScopeReplConnected({
   initialCode,
+  onNewSession,
   projectId,
   scopePath,
 }: {
   initialCode: string;
+  onNewSession: () => void;
   projectId: string;
   scopePath: string;
 }) {
@@ -178,6 +184,7 @@ function ItxScopeReplConnected({
       examples={ITX_EXAMPLES}
       examplesOpen={examplesOpen}
       onChangeCode={setCode}
+      onNewSession={onNewSession}
       onRun={handleRun}
       onSelectExample={selectExample}
       onSetExamplesOpen={setExamplesOpen}

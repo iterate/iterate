@@ -32,17 +32,21 @@ feeding the scope's derived `results` preamble.
    (src/itx/browser-repl.ts) goes away wholesale; the REPL always has a project
    context. Session-context catalogue examples repointed or retired (audited
    below).
-4. Runs execute in the project's ONE shared scope `/repl` (REVISED by Misha
-   mid-implementation — was per-user `/repl/<user-id>`: singleton-scope
-   consistency with `/scheduler/primary`, a guessable stream name, and the
-   REPL becomes a shared project console — teammates see one Out[n] history
-   and one set of pinned preamble helpers). Reached via
-   `itx.capabilityHosts.get("/repl")`; birth = the standard
-   `capabilityHosts.get(path).create()` batch (default birth certificate
-   already records the one-hop fallback to the project root host via
-   `capabilityFallbackForScope`), so capability reads resolve project-wide.
-   Consequence: STABLE ADDRESSING moved into this task (see below) — in a
-   shared scope, `results[0]` can shift between typing and running.
+4. Runs execute in SESSION STREAMS `/repl/<timestamp-slug>` (REVISED by
+   Misha a second time — supersedes the shared-singleton `/repl`, which
+   itself superseded per-user `/repl/<user-id>`): now that REPLs are real
+   streams they get full agent-style paths (the `/agents/web/<timestamp>`
+   convention, see ~/lib/repl-session.ts), the URL carries the suffix
+   (`/projects/<slug>/repl/<timestamp-slug>` — the URL IS the stream path,
+   so sharing it shares the console), and `/repl` joins the sidebar's
+   path-style surfaces. Bare `/repl` resumes the MOST RECENT session
+   (a console should be where you left it), minting a fresh stream only
+   when none exists (router `replace`, so back-button behavior stays sane);
+   a "New REPL" header button mints a fresh session explicitly. Birth is
+   unchanged: the standard `capabilityHosts.get(path).create()` batch with
+   the one-hop fallback to the project root host, so capability resolution
+   is identical. `results` continuity is per-session — a fresh console is a
+   fresh Out[n] — and stable byOffset addressing is per-stream, unaffected.
 5. History is STREAM-DERIVED: the entry list renders from the scope's
    `script-run-requested`/`script-run-settled` events plus local in-flight
    state for the pending Run only. Reload restores the session. No useEffect,
@@ -88,7 +92,13 @@ feeding the scope's derived `results` preamble.
 - **`/_app/itx-repl` deleted** (revision follow-through): briefly a project
   chooser; with the route settled as `/projects/<slug>/repl` (matching the
   `/media` convention) the session-level page and its global sidebar entry
-  went away — the project sidebar's Repl entry is the way in.
+  went away — the project sidebar's `/repl` entry (path-style group,
+  alongside /repos, /agents, /integrations; OS app only, NOT the mobile
+  drawer) is the way in.
+- **Bare-`/repl` resume policy** (delineated, per Misha's stated assumption):
+  most-recent-session resume, fresh mint only when the project has none. No
+  session switcher for now (the resolver + New REPL cover the flows; a
+  listing UI is a follow-up if sessions proliferate).
 - **Examples audit outcome**:
   - Session-context entries (`whoami`, `list-projects`) lose the `browser`
     runtime (node/cli reading material; the examples sheet marks them
@@ -191,3 +201,12 @@ feeding the scope's derived `results` preamble.
   null is preserved as null). Live-verified: `1 + 1` → 2, bare `results[0]`
   echoes the retained row, trailing expression after statements works,
   value-less run renders the undefined note.
+- Session-streams revision (Misha, third scope shape): /repl/<timestamp-slug>
+  session streams with the web-agent slug convention; URL = stream path;
+  bare /repl resumes newest (itx.streams.list() filtered on the /repl/
+  prefix — streams register in project state via stream/created); New REPL
+  button mints; sidebar /repl moved into the path-style nav group (fuzzy
+  match keeps it active on session URLs; mobile drawer deliberately
+  untouched). Live-verified end to end: mint → URL replace → reload resume →
+  bare-/repl resume → two tabs sharing one console live → New REPL fresh
+  stream → sidebar navigation.

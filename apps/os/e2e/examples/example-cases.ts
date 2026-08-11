@@ -173,8 +173,8 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
         scope: string;
       };
       // "/" when the harness holds a plain project itx (node, run-script,
-      // project-worker); the REPL runs in the project's shared /repl scope.
-      expect(["/", "/repl"]).toContain(shaped.scope);
+      // project-worker); the REPL runs in a session scope /repl/<timestamp>.
+      expect(shaped.scope).toMatch(/^\/(repl\/.+)?$/);
       expect(Object.keys(shaped.rootChildren)).toEqual(
         expect.arrayContaining(["capabilityHost", "capabilityHosts", "streams"]),
       );
