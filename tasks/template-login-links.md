@@ -93,3 +93,15 @@ OS creates the project **from that PR's `configs/waiter-chef`**.
 - [x] auth e2e: `project_hint` survives into the signed /login redirect
       (sibling of the login_hint case in oauth-code-exchange.e2e.test.ts)
 - [x] docs: login-link recipe in docs/dev-environments.md
+
+## Known limitation (found in live verification)
+
+Template downloads use unauthenticated api.github.com from the worker; under
+GitHub's shared-egress-IP rate limits the repo seed can fail with
+`Config repo creation failed: GitHub returned HTTP 403` (observed on
+preview-14; preview-17 sailed through minutes earlier). This is pre-existing
+for every `configRepoTemplate` create — the form lane included — not specific
+to the slug convention; the convention adds one `contents/` existence call
+(which itself degrades safely to a stock project when rate-limited).
+Follow-up: authenticate the template downloader (platform GitHub token or
+app installation) so template births stop depending on shared-IP quota.
