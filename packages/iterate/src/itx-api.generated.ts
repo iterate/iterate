@@ -1776,6 +1776,13 @@ export interface CfImagesCapability {
   info(image: ReadableStream<Uint8Array>): Promise<unknown>;
   /** Apply ordered image transforms/draws and output a Response. */
   transform(input: CfImageTransformInput): Promise<Response>;
+  /**
+   * `transform`, buffered: Response bodies (like streams and Blobs) cannot
+   * cross the RPC boundary back into a script sandbox, so scripts use this
+   * to get plain bytes — e.g. downscaling an oversized screenshot before a
+   * vision-model call.
+   */
+  transformBytes(input: CfImageTransformInput): Promise<{ bytes: Uint8Array; contentType: string }>;
 }
 
 /** Cloudflare Media Transformations binding exposed through itx as one-call helpers. */
@@ -2187,6 +2194,10 @@ export type ProjectProcessorState = {
     revokedAt: string | null;
   }[];
   notificationReady: boolean;
+  agentBirthDefaults: {
+    matches?: { pathPrefix: string } | undefined;
+    birthEvents: { type: string; payload?: Record<string, unknown> | undefined }[];
+  } | null;
 };
 
 /**
@@ -2573,6 +2584,7 @@ export type AgentProcessorState = {
     maxAutonomousTurns: number;
     scriptResultHistoryLimit: number;
     compactionTriggerFraction: number;
+    driver: "agent" | "agent-headless";
   };
   contextItems: {
     offset: number;
@@ -2694,6 +2706,7 @@ export type AgentEventInput =
           maxAutonomousTurns?: number | undefined;
           scriptResultHistoryLimit?: number | undefined;
           compactionTriggerFraction?: number | undefined;
+          driver?: "agent" | "agent-headless" | undefined;
         };
       }
     >
@@ -2817,6 +2830,7 @@ export type AgentEventInput =
         files?:
           | { contentType: string; filename: string; path: string; size: number; url: string }[]
           | undefined;
+        llmRequestOffset?: number | undefined;
       }
     >
   | TypedConsumedEventInput<"events.iterate.com/capability-host/preamble-removed", { key: string }>
@@ -5039,10 +5053,13 @@ type TypedStreamEventInput<Type extends string = string, Payload = Record<string
  * ordered transform steps, optional overlay draws (watermarks — each with its
  * own transforms), and the output encoding. */
 export type CfImageTransformInput = {
-  image: ReadableStream<Uint8Array>;
+  /** Source image: a stream, or any FileData shape (bytes/base64/Blob) —
+   * coerced server-side; streams and Blobs do not survive the RPC hop from
+   * script sandboxes, so pass bytes or base64 from scripts. */
+  image: ReadableStream<Uint8Array> | FileData;
   transforms?: CfImageTransformOptions[];
   draws?: Array<{
-    image: ReadableStream<Uint8Array>;
+    image: ReadableStream<Uint8Array> | FileData;
     options?: CfImageDrawOptions;
     transforms?: CfImageTransformOptions[];
   }>;

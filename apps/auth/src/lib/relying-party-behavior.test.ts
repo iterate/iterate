@@ -66,6 +66,11 @@ describe("relying-party routes and sessions", () => {
       forwarded: "google" as string | null,
     },
     {
+      name: "forwards email-address login hints (preview click-and-login deep links)",
+      hint: encodeURIComponent("pr123+test@nustom.com"),
+      forwarded: "pr123+test@nustom.com",
+    },
+    {
       name: "drops unknown login hints from the auth worker authorization request",
       hint: "github",
       forwarded: null,

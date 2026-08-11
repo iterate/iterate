@@ -24,7 +24,7 @@ test("project home hydrates the dashboard and REPL still server-renders", async 
   const replResponse = await page.goto(`/projects/${fixture.project.slug}/repl`);
   if (replResponse === null) throw new Error("Direct project REPL navigation returned no response");
   expect(await replResponse.text()).toContain("Connecting to itx...");
-  await page.getByText("Run TypeScript against your iterate context.").waitFor();
+  await page.getByText("Run TypeScript as real project scripts.").waitFor();
 
   expect(pageErrors).toEqual([]);
 });

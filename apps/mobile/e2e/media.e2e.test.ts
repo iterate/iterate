@@ -56,10 +56,14 @@ test("media capture: bytes → description → transcript+tags → captured even
 
   const captureScript = buildProcessScript({
     stableKey,
+    wipeGeneration: 0,
     filename,
     contentType: "image/png",
     width: 280,
     height: 110,
+    source: "picker",
+    capturedAt: null,
+    isScreenshot: null,
     mode: "capture",
   });
   const execution = await project.capabilityHost.runScript(captureScript);
@@ -89,10 +93,14 @@ test("media capture: bytes → description → transcript+tags → captured even
   const reprocess = await project.capabilityHost.runScript(
     buildProcessScript({
       stableKey,
+      wipeGeneration: 0,
       filename,
       contentType: "image/png",
       width: 280,
       height: 110,
+      source: "picker",
+      capturedAt: null,
+      isScreenshot: null,
       mode: { reprocessNonce: "e2e-1" },
     }),
   );

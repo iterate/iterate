@@ -1,15 +1,15 @@
 ---
-status: in-progress
+status: done
 size: large
 ---
 
 # Agent processor split + `<codemode>` response format experiment
 
-> **Status summary** (for skimmers): phase 1 done on branch `agent-processor-split` — the
-> processor is now a ~100-line composition of three components (turn loop, LLM request,
-> codemode); nothing user-visible changed and all existing tests pass unmodified. Phase 2
-> (stacked PR) adds a HEADLESS processor variant (no codemode component) plus the
-> `configs/codemode-tag` template that implements the tag format entirely in userland.
+> **Status summary** (for skimmers): done. Phase 1 (three-component processor composition)
+> merged to main in #2421. Phase 2 (headless processor + fully-userland `configs/codemode-tag`
+> template) is #2423 — CI green, review-ready. One deferred item: the
+> project-creation-from-template e2e (needs a public ref; dogfood via
+> `github:iterate/iterate#codemode-tag-format&path:configs/codemode-tag`).
 
 ## Why
 
@@ -88,15 +88,26 @@ actually userland):
 
 ### Phase 2 — headless processor + userland codemode-tag template (stacked PR)
 
-- [ ] contract: optional `llmRequestOffset` on `web-message-sent` + mirror-skip in the turn
-      loop; `web-message-sent` in emits; version bump
-- [ ] `HeadlessAgentProcessor`: same wiring minus the codemode component, own contract slug,
-      registered in AgentDurableObject
-- [ ] `configs/codemode-tag/` template: prompt file, vendored tag parser, worker.ts doing the
-      retarget + parse + appends + settlement rendering, README with caveats
-- [ ] `feed-format.ts` `looksLikeCode` matches `<codemode` (streamed responses render as code)
-- [ ] tests: headless processor unit tests (turn runs, nothing interpreted, mirror-skip),
-      template typecheck lane, project-creation-from-template e2e
+- [x] contract: optional `llmRequestOffset` on `web-message-sent` + mirror-skip in the turn
+      loop; `web-message-sent` in emits; version 5.2.0 — _itx API regenerated so the sdk
+      types carry the new field_
+- [x] `HeadlessAgentProcessor`: same wiring minus the codemode component —
+      _agent-headless-processor.ts; contract = the agent contract verbatim under slug
+      `agent-headless` (shared version so they never drift); registered in AgentDurableObject
+      via a shared `#agentArgs()` deps recipe; live-state runtimeChange reads whichever
+      processor holds state_
+- [x] `configs/codemode-tag/` template — _worker.ts retargets each agent's wake subscription
+      (keyed upsert, same subscriptionKey → slug `agent-headless`), supersedes the
+      system-prompt slot from `prompts/agent-system-prompt.md`, parses tags with the vendored
+      `codemode-format.ts`, appends consequences under the platform's `agent/` key namespace
+      (cross-processor dedupe), and renders settlements; README documents mechanics + limits_
+- [x] `feed-format.ts` `looksLikeCode` matches `<codemode` (streamed responses render as code)
+- [x] tests: `agent-headless-processor.test.ts` (turn runs + nothing interpreted, slash inert,
+      full userland loop driven by hand-played worker appends, mirror-skip + plain-sendMessage
+      mirror), template typecheck lane green
+- [ ] project-creation-from-template e2e (`configRepoTemplate` → `configs/codemode-tag`) —
+      _deferred: needs a preview/e2e lane with a public GitHub ref to this branch; manual
+      dogfood is the next step_
 
 ## Implementation log
 

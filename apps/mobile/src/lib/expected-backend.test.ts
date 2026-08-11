@@ -2,8 +2,8 @@ import { expect, test } from "vitest";
 import {
   recommendationMismatches,
   recommendationSwitchPlan,
-  testEmailFromHint,
-} from "./deep-link-hints.ts";
+  validatedTestEmail,
+} from "./expected-backend.ts";
 
 const preview14 = { baseUrl: "https://os.iterate-preview-14.com", label: "preview 14" };
 const prd = "https://os.iterate.com";
@@ -92,20 +92,19 @@ test("backend matches but the identity differs: sign in as the test identity, sa
 });
 
 test("no recommended server: nothing to compare, even with an email hint", () => {
-  // Without `env` we don't know which deployment's test OTP the identity
-  // rides — mirrors the sign-in screen's refusal to login_hint anywhere else.
+  // Without an expected env we don't know which deployment's test OTP the
+  // identity rides — mirrors the sign-in screen's refusal to login_hint
+  // anywhere else.
   const phone = { serverBaseUrl: prd, email: null, recommendedServerEmail: null };
   const qr = { server: null, email: "pr2462+test@nustom.com" };
   expect(recommendationMismatches(phone, qr)).toEqual([]);
   expect(recommendationSwitchPlan(phone, qr)).toBeNull();
 });
 
-test("test-email hint recovers the native +→space corruption and rejects everything else", () => {
-  expect(testEmailFromHint("pr2462+test@nustom.com")).toBe("pr2462+test@nustom.com");
-  // expo-router's native deep-link extraction double-decodes %2B into a space.
-  expect(testEmailFromHint("pr2462 test@nustom.com")).toBe("pr2462+test@nustom.com");
-  expect(testEmailFromHint("misha@example.com")).toBeNull();
-  expect(testEmailFromHint("pr2462+test@evil.com")).toBeNull();
-  expect(testEmailFromHint(undefined)).toBeNull();
-  expect(testEmailFromHint(42)).toBeNull();
+test("only per-PR test addresses survive validation", () => {
+  expect(validatedTestEmail("pr2462+test@nustom.com")).toBe("pr2462+test@nustom.com");
+  expect(validatedTestEmail("misha@example.com")).toBeNull();
+  expect(validatedTestEmail("pr2462+test@evil.com")).toBeNull();
+  expect(validatedTestEmail(undefined)).toBeNull();
+  expect(validatedTestEmail(42)).toBeNull();
 });

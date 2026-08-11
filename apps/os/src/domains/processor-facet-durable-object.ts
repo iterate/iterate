@@ -42,7 +42,9 @@ import { facetProcessorFamilyForPath } from "./processor-facet-families.ts";
 import type { CapabilityDescription } from "./itx/describe.ts";
 import { DurableObjectNameCodec } from "./durable-object-names.ts";
 import { AgentProcessor } from "./agents/agent-processor-implementation.ts";
+import { HeadlessAgentProcessor } from "./agents/agent-headless-processor.ts";
 import {
+  type AgentFileAttachment,
   type AgentLiveState,
   type AgentRuntimeTransition,
 } from "./agents/agent-processor-contract.ts";
@@ -526,59 +528,87 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         projectId,
       }),
     );
+    // Constructor args shared by the classic and headless agent processors —
+    // one stream, one deps recipe, two compositions.
+    const agentArgs = {
+      stream,
+      path,
+      projectId,
+      ai: this.env.AI,
+      // Resolved per attempt (not at construction) so a config problem
+      // fails the turn with a journaled error instead of bricking the host.
+      // The OpenAI prompt_cache_key is per agent stream: repeated turns
+      // grow a shared prefix, and a stable key routes them to the same
+      // provider-side prompt-cache shard.
+      cloudflareAiGatewayTransport: () => {
+        const gateway = parseConfig(this.env).cloudflareAiGateway;
+        if (gateway.transport === "unified") return { kind: "unified" as const };
+        return {
+          kind: "byok" as const,
+          gatewayId: gateway.id,
+          openaiApiKey: parseConfig(this.env).openAiApiKey.exposeSecret(),
+          openaiPromptCacheKey: `${projectId}:${path}`,
+          responseCacheTtlSeconds: gateway.responseCacheTtlSeconds,
+        };
+      },
+      resolveModelFileUrl: (file: AgentFileAttachment) =>
+        mintProjectFileUrl({
+          config: parseConfig(this.env),
+          expiresInSeconds: MODEL_FILE_URL_TTL_SECONDS,
+          path: file.path,
+          projectId,
+        }),
+      // Oversized script results spill into the agent's OWN workspace
+      // directory (private scratch under its stream path — never
+      // committable), so the model can page through the file instead of
+      // blowing its context window.
+      writeWorkspaceFile: async ({
+        content,
+        path: filePath,
+      }: {
+        content: string;
+        path: string;
+      }) => {
+        const absolutePath = `${agentWorkspacePath(path)}/${filePath}`;
+        await this.env.WORKSPACE_V2.getByName(
+          DurableObjectNameCodec.stringify({
+            path: agentWorkspacePath(path),
+            projectId,
+          }),
+        ).writeFile(absolutePath, content);
+        return { absolutePath };
+      },
+    };
     // Registered WITH recovery: LLM turns are consequential `runInBackground`
     // work (stream-committed requested/started obligations whose OUTCOME
     // matters). An incarnation that dies owing either must be revived.
-    const agentProcessor = registry.register(
-      new AgentProcessor({
-        stream,
-        path,
-        projectId,
-        ai: this.env.AI,
-        // Resolved per attempt (not at construction) so a config problem
-        // fails the turn with a journaled error instead of bricking the host.
-        // The OpenAI prompt_cache_key is per agent stream: repeated turns
-        // grow a shared prefix, and a stable key routes them to the same
-        // provider-side prompt-cache shard.
-        cloudflareAiGatewayTransport: () => {
-          const gateway = parseConfig(this.env).cloudflareAiGateway;
-          if (gateway.transport === "unified") return { kind: "unified" };
-          return {
-            kind: "byok",
-            gatewayId: gateway.id,
-            openaiApiKey: parseConfig(this.env).openAiApiKey.exposeSecret(),
-            openaiPromptCacheKey: `${projectId}:${path}`,
-            responseCacheTtlSeconds: gateway.responseCacheTtlSeconds,
-          };
-        },
-        resolveModelFileUrl: (file) =>
-          mintProjectFileUrl({
-            config: parseConfig(this.env),
-            expiresInSeconds: MODEL_FILE_URL_TTL_SECONDS,
-            path: file.path,
-            projectId,
-          }),
-        // Oversized script results spill into the agent's OWN workspace
-        // directory (private scratch under its stream path — never
-        // committable), so the model can page through the file instead of
-        // blowing its context window.
-        writeWorkspaceFile: async ({ content, path: filePath }) => {
-          const absolutePath = `${agentWorkspacePath(path)}/${filePath}`;
-          await this.env.WORKSPACE_V2.getByName(
-            DurableObjectNameCodec.stringify({
-              path: agentWorkspacePath(path),
-              projectId,
-            }),
-          ).writeFile(absolutePath, content);
-          return { absolutePath };
-        },
-      }),
-      { recovery: true },
-    );
-    const agentReads = registry.reads(agentProcessor);
-    this.#getLiveState = (): AgentLiveState => ({
-      runtimeChange: agentReads.currentState.runtimeChange,
+    const agentProcessor = registry.register(new AgentProcessor(agentArgs), { recovery: true });
+    // The headless variant (same wiring minus the codemode component; see
+    // agent-headless-processor.ts). Registered on every agent facet host,
+    // woken only on streams subscribed to its name — an agent runs under
+    // exactly ONE of the two, so shared `agent/` idempotency keys make a
+    // handover dedupe instead of double-executing.
+    const headlessProcessor = registry.register(new HeadlessAgentProcessor(agentArgs), {
+      recovery: true,
     });
+    const agentReads = registry.reads(agentProcessor);
+    const headlessReads = registry.reads(headlessProcessor);
+    this.#getLiveState = (): AgentLiveState => {
+      // An agent runs under the classic OR the headless processor. After a
+      // handover the retired processor's fold stays FROZEN at its last
+      // transition, so precedence must go to the newer stamp — a
+      // classic-first fallback would mask every headless update behind the
+      // frozen classic fold on opted-in agents.
+      const classic = agentReads.currentState.runtimeChange;
+      const headless = headlessReads.currentState.runtimeChange;
+      const newer =
+        classic === undefined
+          ? headless
+          : headless === undefined || classic.sinceOffset >= headless.sinceOffset
+            ? classic
+            : headless;
+      return { runtimeChange: newer };
+    };
 
     // The Slack presentation processor — see the retired agent DO's block
     // comment. Its cross-processor `present()` wiring is split across sibling

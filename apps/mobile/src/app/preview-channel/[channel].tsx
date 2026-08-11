@@ -1,20 +1,21 @@
-// Deep-link target for PR preview QRs:
-//   iterate://preview-channel/<channel>[?env=<envs.ts key>&email=<*+test@nustom.com>]
-// `env` is the PR's leased preview slot — the backend this channel's JS
-// expects — and `email` a per-PR test identity (CI bakes both in,
-// scripts/ci/publish-mobile-pr-preview.ts). This screen owns TWO decisions
-// and one non-decision:
+// Deep-link target for PR preview QRs: iterate://preview-channel/<channel>.
+// The channel is ALL the link carries — the expected backend + test identity
+// are stamped into the published bundle itself (lib/expected-backend.ts), so
+// after the switch-reload the NEW bundle self-describes. This screen owns TWO
+// decisions and one non-decision:
 // - The channel switch stays a confirm, not an auto-switch: a stray link tap
 //   shouldn't silently repoint the app at another PR's JS.
 // - Freshness is automatic: once the channel already matches, the scan itself
 //   is the intent ("run what this QR shows"), so the screen pulls the
 //   channel's latest update and reloads into it. (Switching also fetches
 //   latest — switchChannelAndReload's check/fetch/reload.)
-// - Backend/identity differences from the QR's recommendation are SHOWN, with
-//   a one-tap fix, never applied silently. `env` resolves against the preset
-//   list only (serverPresetForEnvKey), so a crafted link can't name an
-//   arbitrary server; the hints also still ferry to the sign-in screen via
-//   Continue.
+// - Backend/identity differences from the running bundle's expectation are
+//   SHOWN, and the fix rides Continue as a default-checked checkbox — wanting
+//   the PR's JS almost always means wanting its backend + test identity too,
+//   but unticking keeps the plain channel switch. Never applied silently.
+//   The stamp resolves against the preset list only (lib/expected-backend.ts),
+//   so a poisoned bundle stamp can't name an arbitrary server.
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
@@ -22,23 +23,23 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { getSignedInEmail, signIn } from "../../lib/auth.ts";
 import { buildInfo } from "../../lib/build-info.ts";
 import {
+  bundleRecommendation,
   recommendationMismatches,
   recommendationSwitchPlan,
-  testEmailFromHint,
   type SwitchPlan,
-} from "../../lib/deep-link-hints.ts";
+} from "../../lib/expected-backend.ts";
 import { reconnectItxSession } from "../../lib/itx.ts";
 import {
   fetchLatestUpdateAndReload,
   getPreviewChannelOverride,
   switchChannelAndReload,
 } from "../../lib/preview-channel.ts";
-import { DEFAULT_SERVER, serverPresetForEnvKey } from "../../lib/servers.ts";
+import { DEFAULT_SERVER } from "../../lib/servers.ts";
 import { getServerBaseUrl, setServerBaseUrl } from "../../lib/storage.ts";
 import { colors, radius, spacing } from "../../lib/theme.ts";
 
 export default function PreviewChannelScreen() {
-  const params = useLocalSearchParams<{ channel: string; env?: string; email?: string }>();
+  const params = useLocalSearchParams<{ channel: string }>();
   const { channel } = params;
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -47,17 +48,12 @@ export default function PreviewChannelScreen() {
     queryFn: getPreviewChannelOverride,
   });
 
-  const recommendedServer =
-    typeof params.env === "string" ? serverPresetForEnvKey(params.env) : null;
-  // The test-identity hint ferries onward for per-PR test addresses only;
-  // anything else in the param is dropped rather than suggested.
-  const testEmail = testEmailFromHint(params.email);
-  // What the sign-in screen receives on Continue. Hints only — nothing here
-  // changes state; the sign-in screen suggests, the user decides.
-  const hintParams = {
-    ...(recommendedServer !== null && typeof params.env === "string" ? { env: params.env } : {}),
-    ...(testEmail !== null ? { email: testEmail } : {}),
-  };
+  // The RUNNING bundle's expectation. Pre-switch this describes the old
+  // bundle, so nothing below uses it until the channel matches — the
+  // switch-reload re-opens this screen in the target bundle, and only then
+  // is the recommendation the one the QR's channel implies.
+  const expectation = bundleRecommendation();
+  const recommendedServer = expectation.server;
 
   const switchChannel = useMutation({
     mutationFn: () => switchChannelAndReload(channel),
@@ -71,8 +67,7 @@ export default function PreviewChannelScreen() {
   // switch, where the deep link URL re-opens this screen. Deliberately NOT a
   // silent redirect: scanning a QR for the channel you're already on should
   // SHOW you that (Current = Target, plus the running commit) rather than
-  // leave you wondering whether anything happened. Continue hands the hints
-  // to the sign-in screen.
+  // leave you wondering whether anything happened.
   const alreadyOnTarget = current.isSuccess && current.data === channel;
 
   // Dev bundles (Metro native OR expo web dev, where isEnabled is true but
@@ -101,7 +96,7 @@ export default function PreviewChannelScreen() {
   const reloadImminent = freshness.isFetching || freshness.data === "reloading";
 
   // Where the phone actually points and who it's signed in as — compared
-  // against the QR's recommendation below. The identity read may cost one
+  // against the bundle's expectation below. The identity read may cost one
   // token refresh; fine for a scan flow. Only once the channel matches: the
   // mismatch card renders post-switch only (see below), and pre-switch the
   // imminent reload would throw the read away.
@@ -118,9 +113,8 @@ export default function PreviewChannelScreen() {
       return { serverBaseUrl, email, recommendedServerEmail };
     },
   });
-  const qr = { server: recommendedServer, email: testEmail };
-  const mismatches = phoneState.data ? recommendationMismatches(phoneState.data, qr) : [];
-  const plan = phoneState.data ? recommendationSwitchPlan(phoneState.data, qr) : null;
+  const mismatches = phoneState.data ? recommendationMismatches(phoneState.data, expectation) : [];
+  const plan = phoneState.data ? recommendationSwitchPlan(phoneState.data, expectation) : null;
 
   const applyPlan = useMutation({
     mutationFn: async (input: SwitchPlan) => {
@@ -140,19 +134,29 @@ export default function PreviewChannelScreen() {
     },
   });
 
+  // Whether Continue also applies the switch plan. Default-checked: the
+  // whole point of scanning a PR QR is running its JS against its backend.
+  const [applyPlanOnContinue, setApplyPlanOnContinue] = useState(true);
+
   const currentChannel = current.data || Updates.channel || "preview";
 
   return (
     <View style={styles.container}>
       <Stack.Screen options={{ title: "Switch preview channel" }} />
+      {/* One screen, two states: "switch?" before, "you're on it" after the
+          switch-reload re-opens this deep link in the target bundle. The
+          post-switch state is deliberately not a redirect — it confirms the
+          switch landed and owns the freshness check + setup fix below. */}
       <Text style={styles.heading}>
-        {alreadyOnTarget ? "You're already on this channel" : "Point this app at another channel?"}
+        {alreadyOnTarget ? "You're on this channel" : "Point this app at another channel?"}
       </Text>
       <View style={styles.card}>
         <Row label="Current" value={currentChannel} />
         <Row label="Target" value={channel} />
-        {recommendedServer !== null ? (
-          <Row label="Recommended backend" value={recommendedServer.label} />
+        {/* Only once the channel matches: pre-switch, the running (old)
+            bundle's expectation says nothing about the target channel. */}
+        {alreadyOnTarget && recommendedServer !== null ? (
+          <Row label="Expected backend" value={recommendedServer.label} />
         ) : null}
         <Row
           label="Running"
@@ -161,46 +165,45 @@ export default function PreviewChannelScreen() {
         {buildInfo.message ? <Row label="Commit" value={buildInfo.message} /> : null}
       </View>
       {alreadyOnTarget ? (
-        <>
-          {canOta ? (
-            <Text style={freshness.isError ? styles.errorNote : styles.note}>
-              {freshness.isFetching
-                ? "Checking this channel for its latest update…"
-                : freshness.data === "reloading"
-                  ? "Newer update found — fetching and restarting…"
-                  : freshness.isError
-                    ? String(freshness.error)
-                    : "You're running this channel's latest update."}
-            </Text>
-          ) : (
-            <Text style={styles.note}>
-              OTA updates don't run in dev bundles — can't pull the channel's latest here.
-            </Text>
-          )}
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => router.replace({ pathname: "/", params: hintParams })}
-            style={styles.button}
-          >
-            <Text style={styles.buttonLabel}>Continue</Text>
-          </Pressable>
-        </>
+        canOta ? (
+          <Text style={freshness.isError ? styles.errorNote : styles.note}>
+            {freshness.isFetching
+              ? "Checking this channel for its latest update…"
+              : freshness.data === "reloading"
+                ? "Newer update found — fetching and restarting…"
+                : freshness.isError
+                  ? String(freshness.error)
+                  : "You're running this channel's latest update."}
+          </Text>
+        ) : (
+          <Text style={styles.note}>
+            OTA updates don't run in dev bundles — can't pull the channel's latest here.
+          </Text>
+        )
       ) : !Updates.isEnabled ? (
         <Text style={styles.note}>
           OTA updates are off in this bundle (Metro dev server) — channel switching only works in
           installed builds.
         </Text>
       ) : (
-        <Pressable
-          accessibilityRole="button"
-          disabled={switchChannel.isPending}
-          onPress={() => switchChannel.mutate()}
-          style={[styles.button, switchChannel.isPending && styles.buttonDisabled]}
-        >
-          <Text style={styles.buttonLabel}>
-            {switchChannel.isPending ? "Switching…" : `Switch to ${channel}`}
+        <>
+          <Pressable
+            accessibilityRole="button"
+            disabled={switchChannel.isPending}
+            onPress={() => switchChannel.mutate()}
+            style={[styles.button, switchChannel.isPending && styles.buttonDisabled]}
+          >
+            <Text style={styles.buttonLabel}>
+              {switchChannel.isPending ? "Switching…" : `Switch to ${channel}`}
+            </Text>
+          </Pressable>
+          {/* Pre-switch, the running (old) bundle can't know the target's
+              backend — set the expectation that the offer comes after. */}
+          <Text style={styles.note}>
+            After the switch this screen reloads into the new bundle and offers its expected backend
+            and test sign-in, if it names them.
           </Text>
-        </Pressable>
+        </>
       )}
       {switchChannel.data === "no-update" ? (
         <Text style={styles.note}>
@@ -219,7 +222,7 @@ export default function PreviewChannelScreen() {
           re-opens this deep link, and the card appears then. */}
       {alreadyOnTarget && recommendedServer !== null && mismatches.length > 0 ? (
         <>
-          <Text style={styles.mismatchHeading}>This QR expects a different setup</Text>
+          <Text style={styles.mismatchHeading}>This bundle expects a different setup</Text>
           <View style={styles.card}>
             {mismatches.map((mismatch) =>
               mismatch.kind === "backend" ? (
@@ -238,29 +241,49 @@ export default function PreviewChannelScreen() {
             )}
           </View>
           {plan !== null ? (
-            // Held while a freshness reload could fire mid-flow: reloadAsync
-            // during the sign-in OAuth hop would sever it half way. The
-            // reload re-opens this screen and the button unlocks then.
+            // The fix rides Continue below rather than being its own button —
+            // "run this PR's JS" and "against its backend, as its identity"
+            // are one intent, so both happen on one tap unless unticked.
             <Pressable
-              accessibilityRole="button"
-              disabled={applyPlan.isPending || reloadImminent}
-              onPress={() => applyPlan.mutate(plan)}
-              style={[
-                styles.button,
-                (applyPlan.isPending || reloadImminent) && styles.buttonDisabled,
-              ]}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: applyPlanOnContinue }}
+              // RN-web doesn't project accessibilityState.checked onto the DOM.
+              aria-checked={applyPlanOnContinue}
+              onPress={() => setApplyPlanOnContinue(!applyPlanOnContinue)}
+              style={styles.checkboxRow}
             >
-              <Text style={styles.buttonLabel}>
-                {applyPlan.isPending
-                  ? "Switching…"
-                  : planLabel(plan, phoneState.data!.serverBaseUrl)}
+              <View style={[styles.checkbox, applyPlanOnContinue && styles.checkboxChecked]}>
+                {applyPlanOnContinue ? <Text style={styles.checkboxMark}>✓</Text> : null}
+              </View>
+              <Text style={styles.checkboxLabel}>
+                {planLabel(plan, phoneState.data!.serverBaseUrl)}
               </Text>
             </Pressable>
           ) : null}
           {applyPlan.error ? <Text style={styles.errorNote}>{String(applyPlan.error)}</Text> : null}
         </>
       ) : alreadyOnTarget && recommendedServer !== null && phoneState.isSuccess ? (
-        <Text style={styles.note}>Backend and sign-in match this QR's recommendation.</Text>
+        <Text style={styles.note}>Backend and sign-in match what this bundle expects.</Text>
+      ) : null}
+      {alreadyOnTarget ? (
+        // Held while a freshness reload could fire mid-flow: reloadAsync
+        // during the sign-in OAuth hop would sever it half way. The reload
+        // re-opens this screen and the button unlocks then. (Only blocking
+        // when Continue would actually start that flow.)
+        <Pressable
+          accessibilityRole="button"
+          disabled={applyPlan.isPending || (reloadImminent && plan !== null && applyPlanOnContinue)}
+          onPress={() =>
+            plan !== null && applyPlanOnContinue ? applyPlan.mutate(plan) : router.replace("/")
+          }
+          style={[
+            styles.button,
+            (applyPlan.isPending || (reloadImminent && plan !== null && applyPlanOnContinue)) &&
+              styles.buttonDisabled,
+          ]}
+        >
+          <Text style={styles.buttonLabel}>{applyPlan.isPending ? "Switching…" : "Continue"}</Text>
+        </Pressable>
       ) : null}
       <Pressable
         accessibilityRole="button"
@@ -330,6 +353,24 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.6 },
   buttonLabel: { color: colors.text, fontSize: 16, fontWeight: "600", textAlign: "center" },
+  checkboxRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+    paddingVertical: 4,
+  },
+  checkbox: {
+    alignItems: "center",
+    borderColor: colors.textFaint,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    height: 22,
+    justifyContent: "center",
+    width: 22,
+  },
+  checkboxChecked: { backgroundColor: colors.surfaceRaised, borderColor: colors.text },
+  checkboxMark: { color: colors.text, fontSize: 14, fontWeight: "700", lineHeight: 16 },
+  checkboxLabel: { color: colors.text, flexShrink: 1, fontSize: 14 },
   linkButton: { alignItems: "center", paddingVertical: 8 },
   linkLabel: { color: colors.textMuted, fontSize: 14 },
   note: { color: colors.textMuted, fontSize: 13, textAlign: "center" },

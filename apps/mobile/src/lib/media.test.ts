@@ -1,11 +1,16 @@
 import { expect, test } from "vitest";
 import {
   buildProcessScript,
+  buildWipeScript,
+  extendedSinceIso,
+  mediaIdempotencyKey,
+  readWipeGeneration,
   deriveMediaList,
   filterMedia,
   mapWithConcurrency,
   MEDIA_CAPTURED_EVENT_TYPE,
   MEDIA_PROCESSED_EVENT_TYPE,
+  MEDIA_WIPED_EVENT_TYPE,
   mediaFilePath,
   normalizedImageFilename,
   type MediaListItem,
@@ -24,7 +29,7 @@ test("capture script describes, transcribes, tags, and appends one idempotent ev
         {
           message: {
             content:
-              'Here is the JSON: {"transcript": "Train to Florence\\nSeat 21A", "tags": ["logistics", "Screenshot!", "screenshot"]}',
+              'Here is the JSON: {"title": "Trenitalia ticket to Florence", "transcript": "Train to Florence\\nSeat 21A", "tags": ["logistics", "Screenshot!", "screenshot"]}',
           },
         },
       ],
@@ -32,11 +37,15 @@ test("capture script describes, transcribes, tags, and appends one idempotent ev
   });
   const result = await runScript(
     buildProcessScript({
+      wipeGeneration: 0,
       stableKey: "abc123",
       filename: "IMG_0001.PNG",
       contentType: "image/png",
       width: 1170,
       height: 2532,
+      source: "picker",
+      capturedAt: null,
+      isScreenshot: null,
       mode: "capture",
     }),
     itx,
@@ -51,12 +60,16 @@ test("capture script describes, transcribes, tags, and appends one idempotent ev
     idempotencyKey: "media-captured-abc123",
     payload: {
       stableKey: "abc123",
+      title: "Trenitalia ticket to Florence",
       markdown: "A train ticket from Rome to Florence.",
       transcript: "Train to Florence\nSeat 21A",
       // lowercased, punctuation folded, deduped
       tags: ["logistics", "screenshot"],
       width: 1170,
       height: 2532,
+      source: "picker",
+      capturedAt: null,
+      isScreenshot: null,
     },
   });
   expect(result).toMatchObject({ offset: 1 });
@@ -73,11 +86,15 @@ test("reprocess mode appends a processed event and skips the dedup check", async
   });
   await runScript(
     buildProcessScript({
+      wipeGeneration: 0,
       stableKey: "abc123",
       filename: "IMG_0001.PNG",
       contentType: "image/png",
       width: 10,
       height: 10,
+      source: "picker",
+      capturedAt: null,
+      isScreenshot: null,
       mode: { reprocessNonce: "n1" },
     }),
     itx,
@@ -91,6 +108,39 @@ test("reprocess mode appends a processed event and skips the dedup check", async
   expect(itx.calls.appended.payload.path).toBeUndefined();
 });
 
+test("oversized images are downscaled for the vision call only", async () => {
+  const itx = fakeItx({
+    toMarkdown: { format: "markdown", data: "desc" },
+    visionAnswer: {
+      choices: [{ message: { content: '{"title": "t", "transcript": "", "tags": []}' } }],
+    },
+    fileBytes: new Uint8Array(1_500_000),
+  });
+  await runScript(
+    buildProcessScript({
+      wipeGeneration: 0,
+      stableKey: "big",
+      filename: "tall.png",
+      contentType: "image/png",
+      width: 1170,
+      height: 20_000,
+      source: "picker",
+      capturedAt: null,
+      isScreenshot: null,
+      mode: "capture",
+    }),
+    itx,
+  );
+  expect(itx.calls.transformInput).toMatchObject({
+    transforms: [{ width: 1280 }],
+    output: { format: "image/jpeg" },
+  });
+  // The AI call got the small jpeg; the stored original was untouched.
+  expect(itx.calls.visionBody.messages[0].content[1].image_url.url).toMatch(
+    /^data:image\/jpeg;base64,/,
+  );
+});
+
 test("hostile filenames cannot break out of the script", async () => {
   const filename = 'x"; process.exit(1);   //`${boom}`.png';
   const itx = fakeItx({
@@ -101,11 +151,15 @@ test("hostile filenames cannot break out of the script", async () => {
   });
   await runScript(
     buildProcessScript({
+      wipeGeneration: 0,
       stableKey: "k1",
       filename,
       contentType: "image/png",
       width: 10,
       height: 10,
+      source: "picker",
+      capturedAt: null,
+      isScreenshot: null,
       mode: "capture",
     }),
     itx,
@@ -122,11 +176,15 @@ test("already-captured stableKey short-circuits before any AI call", async () =>
   });
   const result = await runScript(
     buildProcessScript({
+      wipeGeneration: 0,
       stableKey: "dup",
       filename: "a.png",
       contentType: "image/png",
       width: 1,
       height: 1,
+      source: "picker",
+      capturedAt: null,
+      isScreenshot: null,
       mode: "capture",
     }),
     itx,
@@ -143,11 +201,15 @@ test("unparseable vision output degrades to untagged + empty transcript; convers
   });
   await runScript(
     buildProcessScript({
+      wipeGeneration: 0,
       stableKey: "k2",
       filename: "a.png",
       contentType: "image/png",
       width: 1,
       height: 1,
+      source: "picker",
+      capturedAt: null,
+      isScreenshot: null,
       mode: "capture",
     }),
     itx,
@@ -161,11 +223,15 @@ test("unparseable vision output degrades to untagged + empty transcript; convers
   await expect(
     runScript(
       buildProcessScript({
+        wipeGeneration: 0,
         stableKey: "k3",
         filename: "b.png",
         contentType: "image/png",
         width: 1,
         height: 1,
+        source: "picker",
+        capturedAt: null,
+        isScreenshot: null,
         mode: "capture",
       }),
       failing,
@@ -180,11 +246,15 @@ test("empty tags array is preserved — conservative no-tags is a valid answer",
   });
   await runScript(
     buildProcessScript({
+      wipeGeneration: 0,
       stableKey: "k4",
       filename: "a.png",
       contentType: "image/png",
       width: 1,
       height: 1,
+      source: "picker",
+      capturedAt: null,
+      isScreenshot: null,
       mode: "capture",
     }),
     itx,
@@ -268,6 +338,67 @@ test("mapWithConcurrency bounds in-flight work and preserves order", async () =>
   expect(peak).toBe(2);
 });
 
+test("wipe script deletes every stored file then appends the tombstone", async () => {
+  const itx = fakeItx({
+    toMarkdown: { format: "markdown", data: "unused" },
+    visionAnswer: { choices: [{ message: { content: "{}" } }] },
+    streamEvents: [
+      { type: MEDIA_CAPTURED_EVENT_TYPE, offset: 1, payload: { path: "/media/a-x.png" } },
+      { type: MEDIA_CAPTURED_EVENT_TYPE, offset: 2, payload: { path: "/media/b-y.png" } },
+      { type: MEDIA_CAPTURED_EVENT_TYPE, offset: 3, payload: { path: "/media/a-x.png" } },
+    ],
+  });
+  await runScript(buildWipeScript("n1"), itx);
+  expect(itx.calls.deletedPaths).toEqual(["/media/a-x.png", "/media/b-y.png"]); // deduped
+  expect(itx.calls.appended).toMatchObject({
+    type: MEDIA_WIPED_EVENT_TYPE,
+    idempotencyKey: "media-wiped-n1",
+    payload: { deletedFiles: 2, items: 2 },
+  });
+});
+
+test("deriveMediaList resets at the last wiped tombstone", () => {
+  const events: any[] = [
+    {
+      type: MEDIA_CAPTURED_EVENT_TYPE,
+      offset: 1,
+      createdAt: "t1",
+      payload: { stableKey: "old", markdown: "gone", transcript: "", tags: [] },
+    },
+    { type: MEDIA_WIPED_EVENT_TYPE, offset: 2, createdAt: "t2", payload: {} },
+    {
+      type: MEDIA_CAPTURED_EVENT_TYPE,
+      offset: 3,
+      createdAt: "t3",
+      payload: { stableKey: "new", markdown: "kept", transcript: "", tags: [] },
+    },
+  ];
+  expect(deriveMediaList(events)).toMatchObject([{ payload: { stableKey: "new" } }]);
+});
+
+test("wipe generation changes the capture identity so re-captures work after Delete-all", async () => {
+  expect(mediaIdempotencyKey("abc", 0)).toBe("media-captured-abc");
+  expect(mediaIdempotencyKey("abc", 42)).toBe("media-captured-abc-g42");
+  const stream: any = {
+    getEvents: async (args: any) =>
+      args.eventTypes[0] === MEDIA_WIPED_EVENT_TYPE && args.afterOffset === 0
+        ? [{ offset: 7 }, { offset: 42 }]
+        : [],
+  };
+  expect(await readWipeGeneration(stream)).toBe(42);
+  expect(await readWipeGeneration({ getEvents: async () => [] })).toBe(0);
+});
+
+test("extendedSinceIso only ever extends an enabled window backwards", () => {
+  const now = Date.parse("2026-08-11T12:00:00.000Z");
+  const week = extendedSinceIso(null, 7, now);
+  expect(week).toBe("2026-08-04T12:00:00.000Z");
+  // Re-confirming with a SHORTER chip keeps the older boundary…
+  expect(extendedSinceIso("2026-07-01T00:00:00.000Z", 7, now)).toBe("2026-07-01T00:00:00.000Z");
+  // …and a longer chip extends it.
+  expect(extendedSinceIso("2026-08-10T00:00:00.000Z", 30, now)).toBe("2026-07-12T12:00:00.000Z");
+});
+
 // --- helpers ---------------------------------------------------------------
 
 function item(offset: number, markdown: string, transcript: string, tags: string[]): MediaListItem {
@@ -281,21 +412,32 @@ function item(offset: number, markdown: string, transcript: string, tags: string
       contentType: "image/png",
       width: 1,
       height: 1,
+      title: "",
       markdown,
       transcript,
       tags,
       processedBy: "test",
+      source: "picker" as const,
+      capturedAt: null,
+      isScreenshot: null,
     },
   };
 }
 
-function fakeItx(behavior: { toMarkdown: any; visionAnswer: any; existingEvent?: any }): any {
+function fakeItx(behavior: {
+  toMarkdown: any;
+  visionAnswer: any;
+  existingEvent?: any;
+  fileBytes?: Uint8Array;
+  streamEvents?: any[];
+}): any {
   const calls: any = {};
   return {
     calls,
     streams: {
       get: () => ({
         getEvent: async () => behavior.existingEvent,
+        getEvents: async (args: any) => (args.afterOffset === 0 ? behavior.streamEvents || [] : []),
         append: async (event: any) => {
           calls.appended = event;
           return [{ ...event, offset: 1 }];
@@ -304,11 +446,24 @@ function fakeItx(behavior: { toMarkdown: any; visionAnswer: any; existingEvent?:
     },
     files: {
       get: (path: string) => ({
+        delete: async () => {
+          (calls.deletedPaths ||= []).push(path);
+        },
         bytes: async () => {
           calls.bytesPath = path;
-          return new Uint8Array([1, 2, 3]);
+          return behavior.fileBytes || new Uint8Array([1, 2, 3]);
         },
       }),
+    },
+    integrations: {
+      cf: {
+        images: {
+          transformBytes: async (input: any) => {
+            calls.transformInput = input;
+            return { bytes: new Uint8Array([9, 9]), contentType: "image/jpeg" };
+          },
+        },
+      },
     },
     ai: {
       toMarkdown: async (doc: any) => {

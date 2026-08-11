@@ -21,6 +21,7 @@ import { isWorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
 import { WORKER_SERVE_HEADER } from "../workers/worker-serve-info.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
+import { validateAgentBirthEvents } from "../agents/agent-defaults.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import {
   parseProjectCreationTerminal,
@@ -651,6 +652,22 @@ export class ProjectProcessor extends StreamProcessor<
       }
       case "events.iterate.com/project/onboarding-completed":
         return { ...state, onboardingActive: false, onboardingCompletedAt: event.createdAt };
+      case "events.iterate.com/project/agent-birth-defaults-configured": {
+        // Userland data reaching platform-assembled birth batches: every
+        // event must pass the agent-vocabulary check HERE, so the creation
+        // door reads a snapshot it can trust. A malformed latest payload
+        // folds to null — degrade to platform-default births, never to the
+        // stale defaults this event was trying to replace.
+        const check = validateAgentBirthEvents(event.payload.birthEvents);
+        if (!check.ok) {
+          console.warn("[project] ignoring invalid agent birth defaults", {
+            error: check.error,
+            offset: event.offset,
+          });
+          return { ...state, agentBirthDefaults: null };
+        }
+        return { ...state, agentBirthDefaults: event.payload };
+      }
       case "events.iterate.com/notification/created":
         return { ...state, notificationReady: true };
       case "events.iterate.com/stream/created":
