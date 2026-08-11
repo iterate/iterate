@@ -426,6 +426,8 @@ import { EmailAgentProcessorContract } from "./domains/email/email-agent-process
 import {
   agentCollectionCreationEvents,
   agentCreationForPath,
+  AGENT_BIRTH_DEFAULTS_EVENT_TYPE,
+  AgentBirthDefaults,
   type AgentCreateInput,
 } from "./domains/agents/agent-defaults.ts";
 import { ChatReplyNotifyProcessorContract } from "./domains/notifications/chat-reply-notify-contract.ts";
@@ -2130,6 +2132,69 @@ class ClientsRpcTarget extends IterateRpcTarget<"Clients"> {
  * bases normalize). Absent (id-only boot line) when the directory has no
  * record yet — never a birth blocker.
  */
+/**
+ * The project's agent birth defaults: the LATEST
+ * `project/agent-birth-defaults-configured` event on the project root stream,
+ * validated at read (shape via AgentBirthDefaults, the config patch via the
+ * agent/configured vocabulary). Absent, malformed, or unreadable → no
+ * defaults — a broken defaults event must degrade to platform-default births,
+ * never break agent creation. One filtered page read per create; the event
+ * type is rare so the last page IS the history.
+ */
+async function agentBirthDefaultsForProject(props: {
+  auth: ItxAuth;
+  projectId: string;
+}): Promise<{ defaults?: AgentBirthDefaults }> {
+  try {
+    const root = new StreamRpcTarget({ auth: props.auth, projectId: props.projectId, path: "/" });
+    let latest: StreamEvent | undefined;
+    let afterOffset = 0;
+    for (;;) {
+      const page = await root.getEvents({
+        afterOffset,
+        eventTypes: [AGENT_BIRTH_DEFAULTS_EVENT_TYPE],
+        limit: 100,
+      });
+      if (page.length > 0) {
+        latest = page[page.length - 1];
+        afterOffset = latest.offset;
+      }
+      if (page.length < 100) break;
+    }
+    if (latest === undefined) return {};
+    const parsed = AgentBirthDefaults.safeParse(latest.payload);
+    if (!parsed.success) {
+      console.warn("[agent] ignoring malformed agent birth defaults", {
+        offset: latest.offset,
+        projectId: props.projectId,
+      });
+      return {};
+    }
+    if (parsed.data.config !== undefined) {
+      // The birth batch will commit this as an agent/configured event — parse
+      // it through that vocabulary NOW so a bad patch drops the defaults here
+      // instead of failing every create.
+      const configCheck = AgentProcessorContract.events[
+        "events.iterate.com/agent/configured"
+      ].payloadSchema.safeParse({ config: parsed.data.config });
+      if (!configCheck.success) {
+        console.warn("[agent] ignoring agent birth defaults with invalid config patch", {
+          offset: latest.offset,
+          projectId: props.projectId,
+        });
+        return {};
+      }
+    }
+    return { defaults: parsed.data };
+  } catch (error) {
+    console.warn("[agent] agent birth defaults read failed; using platform defaults", {
+      error: String(error),
+      projectId: props.projectId,
+    });
+    return {};
+  }
+}
+
 async function agentBootProjectFacts(
   projectId: string,
 ): Promise<{ project?: { name: string; slug: string; workerUrl?: string } }> {
@@ -4943,6 +5008,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       projectId: this.#props.projectId,
       ...(payload === undefined ? {} : { payload }),
       ...(await agentBootProjectFacts(this.#props.projectId)),
+      // Project-level birth defaults (driver, prompt, extra processor
+      // subscriptions) apply to every agent born through this generic door;
+      // integration routers use their own creation calls with explicit
+      // policies and never pick these up.
+      ...(await agentBirthDefaultsForProject(this.#props)),
       // Plain chat threads (mobile + web — everything born through this
       // generic door) get the chat-reply push producer as their sibling.
       // Integration threads (Slack/Telegram/Email) are born elsewhere with

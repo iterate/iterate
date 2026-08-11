@@ -62,18 +62,22 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // The birth event on the agent's own stream (copies carry
         // source.copiedFrom and must not re-target the collection stream).
         if (event.source?.copiedFrom !== undefined) break;
+        // Agents are normally BORN converted (the birth defaults below);
+        // these syncs only matter for agents created in the window before the
+        // defaults event existed, and no-op otherwise.
         await this.#handoverToHeadless([event.path]);
         await this.#syncSystemPromptContext([event.path]);
         await this.#syncAgentsMdContext([event.path]);
-        await this.#restartRacingFirstTurn(event.path);
         break;
       }
       case "events.iterate.com/project/worker-updated": {
         // Runs after every config deploy — including the FIRST deploy after a
-        // project switches its config repo to this template wholesale. Sweep
-        // every existing agent onto the headless driver (idempotent per
-        // agent, so later deploys no-op).
+        // project switches its config repo to this template wholesale.
+        // Publish the birth defaults (so NEW agents are BORN headless with
+        // the codemode prompt — no race), then sweep every existing agent
+        // (idempotent per agent, so later deploys no-op).
         if (event.path !== "/") break;
+        await this.#publishAgentBirthDefaults();
         const itx = await this.itx;
         const agents = await itx.agents.list();
         await this.#handoverToHeadless(agents.map((agent) => agent.path));
@@ -174,35 +178,29 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   }
 
   /**
-   * THE FIRST-TURN RACE, closed. A web chat sends its first message within
-   * milliseconds of creating the agent, while this worker's handover takes
-   * seconds to arrive — so the first turn reliably starts under the CLASSIC
-   * processor with the default fenced prompt. When the birth handler finds
-   * that racing turn already pending, it appends an interrupting developer
-   * note: the platform cancels the in-flight request, and the interrupt's
-   * own trigger re-runs the turn — now under the headless driver with the
-   * codemode prompt just synced above. One idempotent append per agent,
-   * ever; an agent created idle (no pending message) appends nothing, so
-   * script-created agents are never woken spuriously.
+   * THE OPT-IN, made constitutive: the platform's generic agent-creation
+   * door reads the project's latest agent-birth-defaults event and folds it
+   * into every birth batch — so new agents are BORN under the headless
+   * driver with the codemode prompt and subscription, and there is no
+   * first-turn race at all. Content-hash keyed: editing the prompt file and
+   * committing re-publishes, and the newest event wins at read.
    */
-  async #restartRacingFirstTurn(agentPath: string): Promise<void> {
-    if (!agentPath.startsWith("/agents/")) return;
-    if (/^\/agents\/(slack|telegram|email)\//.test(agentPath)) return;
+  async #publishAgentBirthDefaults(): Promise<void> {
     const itx = await this.itx;
-    const agent = itx.agents.get(agentPath);
-    const snapshot = await agent.processor.snapshot();
-    if (snapshot.state.openRequest === null && snapshot.state.pendingLlmRequestTrigger === null) {
-      return;
-    }
+    const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
+    if (file === null) return;
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(file.content));
+    const hash = [...new Uint8Array(digest).slice(0, 8)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
     await this.#appendUnlessAlreadyRecorded(() =>
-      agent.append({
-        type: "events.iterate.com/agents/context-added",
-        idempotencyKey: `codemode-tag/first-turn-restart:${agentPath}`,
+      itx.streams.get("/").append({
+        type: "events.iterate.com/project/agent-birth-defaults-configured",
+        idempotencyKey: `codemode-tag/agent-birth-defaults:${hash}`,
         payload: {
-          role: "developer",
-          content:
-            "(This project's codemode response format finished activating for this new agent; the first turn was restarted so every reply uses it. Answer the user's pending message.)",
-          llmRequestPolicy: { behaviour: "interrupt-current-request" },
+          config: { driver: HEADLESS_PROCESSOR_SLUG },
+          systemPrompt: { content: file.content, id: "codemode-tag", revision: hash },
+          extraProcessorSubscriptions: [HEADLESS_PROCESSOR_SLUG],
         },
       }),
     );
