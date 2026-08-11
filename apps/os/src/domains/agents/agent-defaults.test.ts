@@ -3,6 +3,8 @@ import {
   agentCreationForPath,
   agentSystemPromptContextEvent,
   DEFAULT_AGENT_SYSTEM_PROMPT,
+  validateAgentBirthEvents,
+  type AgentBirthDefaults,
 } from "./agent-defaults.ts";
 
 const PROJECT_ID = "prj_defaults_test";
@@ -237,26 +239,42 @@ describe("agentSystemPromptContextEvent", () => {
 
 describe("agent birth defaults", () => {
   const base = { agentPath: "/agents/defaults-test", projectId: "prj_test" };
-  const defaults = {
-    config: { driver: "agent-headless" as const },
-    systemPrompt: { content: "You speak codemode.", id: "codemode-tag", revision: "abc123" },
-    extraProcessorSubscriptions: ["agent-headless"],
+  // A project's contribution as plain events: a driver choice, a prompt, and
+  // an allowlisted processor attachment — the codemode-template shape.
+  const defaults: AgentBirthDefaults = {
+    birthEvents: [
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { driver: "agent-headless" } },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "system", key: "agent/system-prompt", content: "You speak codemode." },
+      },
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          name: "agent-headless",
+          receiver: { action: "facet-processor", source: { kind: "builtin" } },
+        },
+      },
+    ],
   };
+  const promptSlots = (creation: { events: { payload?: unknown }[] }) =>
+    creation.events.filter(
+      (event) => (event.payload as { key?: string })?.key === "agent/system-prompt",
+    );
 
-  test("defaults fold into the birth batch: driver config, prompt slot, extra subscription", () => {
+  test("defaults ride the birth batch: driver config, prompt slot, processor attachment", () => {
     const creation = agentCreationForPath({ ...base, defaults });
 
     const configured = creation.events.filter(
       (event) => event.type === "events.iterate.com/agent/configured",
     );
     expect(configured.at(-1)).toMatchObject({ payload: { config: { driver: "agent-headless" } } });
-    expect(creation.systemPrompt).toBe("You speak codemode.");
-    const promptSlot = creation.events.find(
-      (event) => (event.payload as { key?: string }).key === "agent/system-prompt",
-    );
-    expect(promptSlot).toMatchObject({
-      idempotencyKey: expect.stringContaining("codemode-tag:vabc123"),
-    });
+    // The project's prompt-slot event REPLACES the platform fallback — one
+    // prompt per birth.
+    expect(promptSlots(creation)).toMatchObject([{ payload: { content: "You speak codemode." } }]);
     expect(
       creation.events.filter(
         (event) =>
@@ -266,25 +284,126 @@ describe("agent birth defaults", () => {
     ).toHaveLength(1);
   });
 
-  test("an explicit systemPromptPolicy wins over the defaults' prompt", () => {
+  test("an explicit systemPromptPolicy wins: the defaults' prompt-slot event is dropped", () => {
     const creation = agentCreationForPath({
       ...base,
       defaults,
       systemPromptPolicy: { content: "Channel policy.", id: "slack", revision: "1" },
     });
     expect(creation.systemPrompt).toBe("Channel policy.");
+    expect(promptSlots(creation)).toMatchObject([{ payload: { content: "Channel policy." } }]);
+    // The non-prompt defaults still ride.
+    expect(
+      creation.events
+        .filter((event) => event.type === "events.iterate.com/agent/configured")
+        .at(-1),
+    ).toMatchObject({ payload: { config: { driver: "agent-headless" } } });
   });
 
-  test("a changed defaults config patch mints a different idempotency key (replay-safe)", () => {
+  test("changed defaults content mints different platform keys (replay-safe supersession)", () => {
     const first = agentCreationForPath({ ...base, defaults });
     const changed = agentCreationForPath({
       ...base,
-      defaults: { ...defaults, config: { driver: "agent" as const } },
+      defaults: {
+        birthEvents: [
+          { type: "events.iterate.com/agent/configured", payload: { config: { driver: "agent" } } },
+        ],
+      },
     });
-    const keyOf = (creation: typeof first) =>
-      creation.events.find((event) =>
-        String(event.idempotencyKey).startsWith("agent/birth-defaults-configured:"),
-      )!.idempotencyKey;
-    expect(keyOf(first)).not.toBe(keyOf(changed));
+    const keysOf = (creation: typeof first) =>
+      creation.events
+        .map((event) => String(event.idempotencyKey))
+        .filter((key) => key.startsWith("agent/birth-defaults:"));
+    expect(keysOf(first)).toHaveLength(3);
+    expect(keysOf(changed)).toHaveLength(1);
+    expect(keysOf(first)).not.toContain(keysOf(changed)[0]);
+    // Deterministic: same content, same keys.
+    expect(keysOf(agentCreationForPath({ ...base, defaults }))).toEqual(keysOf(first));
+  });
+
+  test("an invalid list degrades to platform-default births — never breaks creation", () => {
+    const creation = agentCreationForPath({
+      ...base,
+      defaults: {
+        birthEvents: [
+          // Not an allowlisted agent-family processor: the whole list is dropped.
+          {
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: { name: "project", receiver: { action: "facet-processor" } },
+          },
+        ],
+      },
+    });
+    expect(
+      creation.events.filter((event) =>
+        String(event.idempotencyKey).startsWith("agent/birth-defaults:"),
+      ),
+    ).toHaveLength(0);
+    expect(promptSlots(creation)).toMatchObject([
+      { payload: { content: DEFAULT_AGENT_SYSTEM_PROMPT } },
+    ]);
+  });
+
+  test("validateAgentBirthEvents: agent vocabulary passes, foreign vocabulary is rejected", () => {
+    expect(validateAgentBirthEvents(defaults.birthEvents)).toEqual({ ok: true });
+    expect(
+      validateAgentBirthEvents([{ type: "events.iterate.com/project/created", payload: {} }]),
+    ).toMatchObject({ ok: false, error: expect.stringContaining("project/created") });
+    // Schema-valid but the wrong receiver kind: only the facet-processor
+    // attachment lane is open to defaults.
+    expect(
+      validateAgentBirthEvents([
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: "agent-headless",
+            receiver: {
+              action: "copy-to-stream",
+              receivingStreamPath: "/elsewhere",
+              delivery: { start: "beginning", onFailingEvent: "halt" },
+            },
+          },
+        },
+      ]),
+    ).toMatchObject({ ok: false, error: expect.stringContaining("facet-processor") });
+    // Anything the stream's own payload schema would reject must be caught
+    // HERE (degrade to platform defaults) — inside the atomic birth append it
+    // would break every matching create(). A source-less receiver is the
+    // canonical example.
+    expect(
+      validateAgentBirthEvents([
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "agent-headless", receiver: { action: "facet-processor" } },
+        },
+      ]),
+    ).toMatchObject({ ok: false, error: expect.stringContaining("payload") });
+    // A userspace source would run arbitrary worker code under the
+    // allowlisted name — builtin only.
+    expect(
+      validateAgentBirthEvents([
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: "agent-headless",
+            receiver: {
+              action: "facet-processor",
+              source: {
+                kind: "userspace",
+                worker: {
+                  className: "Evil",
+                  durableWorkerKey: "evil",
+                  type: "stateful",
+                  path: "/apps/evil",
+                  source: {
+                    createApp: { files: { type: "inline", files: { "worker.ts": "export {}" } } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ]),
+    ).toMatchObject({ ok: false, error: expect.stringContaining("builtin") });
   });
 });

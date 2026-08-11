@@ -23,6 +23,8 @@
     ".wrangler/",
     "routeTree.gen.ts",
     "config-repo-template.generated.ts",
+    "configs/default/prompts/",
+    "configs/codemode-tag/prompts/",
     "worker-configuration.d.ts",
     "apps/auth/wrangler.jsonc",
     "apps/semaphore/wrangler.jsonc",

@@ -2194,6 +2194,10 @@ export type ProjectProcessorState = {
     revokedAt: string | null;
   }[];
   notificationReady: boolean;
+  agentBirthDefaults: {
+    matches?: { pathPrefix: string } | undefined;
+    birthEvents: { type: string; payload?: Record<string, unknown> | undefined }[];
+  } | null;
 };
 
 /**

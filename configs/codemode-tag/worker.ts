@@ -206,10 +206,28 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       itx.streams.get("/").append({
         type: "events.iterate.com/project/agent-birth-defaults-configured",
         idempotencyKey: `codemode-tag/agent-birth-defaults:${hash}`,
+        // Plain birth events — the platform validates each against the agent
+        // vocabulary at fold time and mints per-event content-hash keys, so
+        // this list needs no keys of its own. The prompt-slot event replaces
+        // the platform's fallback prompt in the same keyed slot.
         payload: {
-          config: { driver: HEADLESS_PROCESSOR_SLUG },
-          systemPrompt: { content: file.content, id: "codemode-tag", revision: hash },
-          extraProcessorSubscriptions: [HEADLESS_PROCESSOR_SLUG],
+          birthEvents: [
+            {
+              type: "events.iterate.com/agent/configured",
+              payload: { config: { driver: HEADLESS_PROCESSOR_SLUG } },
+            },
+            {
+              type: "events.iterate.com/agents/context-added",
+              payload: { role: "system", key: SYSTEM_PROMPT_KEY, content: file.content },
+            },
+            {
+              type: "events.iterate.com/stream/subscription-configured",
+              payload: {
+                name: HEADLESS_PROCESSOR_SLUG,
+                receiver: { action: "facet-processor", source: { kind: "builtin" } },
+              },
+            },
+          ],
         },
       }),
     );
