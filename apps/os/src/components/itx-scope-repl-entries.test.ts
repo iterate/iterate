@@ -24,6 +24,50 @@ test("wraps a plain body with the vars declaration and unwraps it for display", 
   expect(scriptBodyForDisplay(wrapped)).toBe(body);
 });
 
+test("REPL echo: a bare expression is auto-returned (and unwraps for display)", () => {
+  for (const body of [
+    "1 + 1",
+    "results[0]",
+    "await itx.identity()",
+    "x = 5", // assignments echo their value, like node's REPL
+  ]) {
+    const wrapped = wrapReplScript(body);
+    expect(wrapped).toContain(`return (\n${body}\n);`);
+    expect(scriptBodyForDisplay(wrapped)).toBe(body);
+  }
+});
+
+test("REPL echo: an object literal is an expression, not a block", () => {
+  const wrapped = wrapReplScript("{ a: 1 }");
+  // The parenthesized wrap disambiguates: without it `{ a: 1 }` would parse
+  // as a block with a labeled statement and echo nothing.
+  expect(wrapped).toContain("return (\n{ a: 1 }\n);");
+  expect(scriptBodyForDisplay(wrapped)).toBe("{ a: 1 }");
+});
+
+test("REPL echo: a multi-statement body auto-returns its trailing expression", () => {
+  const body = "const x = 5;\nx * 2";
+  const wrapped = wrapReplScript(body);
+  expect(wrapped).toContain("const x = 5;\nreturn (\nx * 2\n);");
+  expect(scriptBodyForDisplay(wrapped)).toBe(body);
+});
+
+test("REPL echo: a body ending in a declaration runs as written", () => {
+  const body = "const x = {\n  a: 1,\n};";
+  const wrapped = wrapReplScript(body);
+  expect(wrapped).not.toContain("return (");
+  expect(scriptBodyForDisplay(wrapped)).toBe(body);
+});
+
+test("REPL echo: an explicit top-level return is never doubled", () => {
+  const body = "return 1 + 1";
+  const wrapped = wrapReplScript(body);
+  expect(wrapped).toBe(
+    ["async (itx) => {", 'const vars = JSON.parse("{}");', "return 1 + 1", "}"].join("\n"),
+  );
+  expect(scriptBodyForDisplay(wrapped)).toBe(body);
+});
+
 test("a body declaring its own vars keeps it (specs prepend const vars = {…})", () => {
   const body = 'const vars = { projectId: "p1" };\n\nreturn vars.projectId';
   const wrapped = wrapReplScript(body);
@@ -64,7 +108,7 @@ test("derives running → success entries from requested/settled events", () => 
   ]);
 });
 
-test("a failed settlement renders the error; undefined results render as null", () => {
+test("a failed settlement renders the error; a value-less success stays undefined, not null", () => {
   const entries = deriveReplEntries([
     requested({ offset: 1, executionId: "boom", code: wrapReplScript("throw new Error('nope')") }),
     settled({
@@ -79,13 +123,20 @@ test("a failed settlement renders the error; undefined results render as null", 
         status: "failed",
       },
     }),
-    requested({ offset: 3, executionId: "void", code: wrapReplScript("return undefined") }),
+    requested({ offset: 3, executionId: "void", code: wrapReplScript("await Promise.resolve();") }),
     settled({ offset: 4, executionId: "void", settlement: { status: "succeeded" } }),
+    requested({ offset: 5, executionId: "nil", code: wrapReplScript("return null") }),
+    settled({ offset: 6, executionId: "nil", settlement: { status: "succeeded", result: null } }),
   ]);
   expect(entries).toMatchObject([
     { error: "nope", executionId: "boom", status: "error" },
-    { executionId: "void", result: null, status: "success" },
+    { executionId: "void", status: "success" },
+    { executionId: "nil", status: "success" },
   ]);
+  // "returned nothing" and "returned null" are different answers — the UI
+  // renders undefined as "undefined (nothing returned)".
+  expect((entries[1] as { result?: unknown }).result).toBeUndefined();
+  expect((entries[2] as { result?: unknown }).result).toBeNull();
 });
 
 test("entries sort by request offset and tolerate replayed duplicates", () => {

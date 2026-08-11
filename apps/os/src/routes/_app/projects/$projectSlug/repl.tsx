@@ -2,7 +2,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ItxActivityTail } from "~/components/itx-activity-tail.tsx";
 import { ItxScopeRepl } from "~/components/itx-scope-repl.tsx";
 
-const PROJECT_REPL_INITIAL_CODE = "return await itx.__describe()";
+// Deliberately a bare expression: the default Run doubles as a demo of the
+// REPL echo (a trailing expression answers with its value).
+const PROJECT_REPL_INITIAL_CODE = "await itx.__describe()";
 
 /** The project's ONE shared REPL scope — a singleton like /scheduler/primary,
  * so the stream has a guessable name and teammates share one Out[n] history

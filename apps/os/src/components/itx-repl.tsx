@@ -106,10 +106,10 @@ export function ItxRepl({
                   <span className="text-foreground">Run TypeScript as real project scripts.</span>{" "}
                   Scripts execute server-side in the project&apos;s shared REPL scope (
                   <code className="font-mono text-xs">{scopePath}</code>), typechecked and journaled
-                  — reload and the session is still here, and teammates see the same history. Use{" "}
-                  <code className="font-mono text-xs">return</code> to produce a result; prior
-                  results stay in scope as{" "}
-                  <code className="font-mono text-xs">results[0].data</code> (or{" "}
+                  — reload and the session is still here, and teammates see the same history. A
+                  trailing expression echoes its value back (or{" "}
+                  <code className="font-mono text-xs">return</code> explicitly); prior results stay
+                  in scope as <code className="font-mono text-xs">results[0].data</code> (or{" "}
                   <code className="font-mono text-xs">await results[0].load(itx)</code> for large
                   ones), and each entry&apos;s <code className="font-mono text-xs">#offset</code>{" "}
                   label addresses it stably as{" "}
@@ -117,8 +117,8 @@ export function ItxRepl({
                   others run scripts.
                 </p>
                 <p>
-                  Try <code className="font-mono text-xs">return await itx.__describe()</code>, then
-                  edit and run again.
+                  Try <code className="font-mono text-xs">await itx.__describe()</code>, then edit
+                  and run again.
                 </p>
               </div>
               <Button
@@ -272,14 +272,22 @@ function ReplEntryRow({ entry, index }: { entry: ReplRunEntry; index: number }) 
       </ReplPromptRow>
       <ReplCodeBlock code={entry.code} language="typescript" />
       {entry.status === "success" ? (
-        <>
-          <div data-testid="itx-repl-visible-result">
-            <ReplCollapsibleSerializedBlock data={entry.result} title="Result" />
-          </div>
-          <pre data-testid="itx-repl-result-json" hidden>
-            {JSON.stringify(entry.result, null, 2)}
-          </pre>
-        </>
+        entry.result === undefined ? (
+          // Returned nothing — deliberately NOT rendered as null (null is a
+          // value a script can return; undefined means no value came back).
+          <p className="text-xs text-muted-foreground italic" data-testid="itx-repl-visible-result">
+            undefined (nothing returned)
+          </p>
+        ) : (
+          <>
+            <div data-testid="itx-repl-visible-result">
+              <ReplCollapsibleSerializedBlock data={entry.result} title="Result" />
+            </div>
+            <pre data-testid="itx-repl-result-json" hidden>
+              {JSON.stringify(entry.result, null, 2)}
+            </pre>
+          </>
+        )
       ) : entry.status === "error" ? (
         <>
           <div data-testid="itx-repl-visible-error">

@@ -177,3 +177,17 @@ feeding the scope's derived `results` preamble.
   sidecar down: the injected vars line was TS syntax, a SyntaxError on the
   no-emit fallback path — now `const vars = JSON.parse("{}")` (JS-safe,
   any-typed so vars-reading snippets stay clean through the gate).
+- REPL-echo round (Misha, live-testing the preview): bare expressions
+  returned null because the wrapper only surfaced explicit `return`. Fixed in
+  the wrap decision (itx-scope-repl-entries.ts): the whole input parsing as
+  one expression auto-returns parenthesized (`{ a: 1 }` stays an object
+  literal); otherwise a Node-REPL-style trailing-line-run rewrite
+  (`const x = 5;\nx * 2` answers 10); otherwise run-as-written. `new
+  Function` is the parser — synchronous, dependency-free, the deleted
+  browser evaluator's own trick; TS-only syntax falls back conservatively.
+  Display unwraps the echo rewrite so history shows what was typed. Also
+  value-less successes now render "undefined (nothing returned)" instead of
+  a dishonest null (the settlement carries no `result` key for undefined;
+  null is preserved as null). Live-verified: `1 + 1` → 2, bare `results[0]`
+  echoes the retained row, trailing expression after statements works,
+  value-less run renders the undefined note.

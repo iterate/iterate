@@ -44,21 +44,103 @@ const REPL_VARS_LINE = 'const vars = JSON.parse("{}");';
  * envelope use). `vars` is injected so catalogue examples run unchanged —
  * unless the body declares its own `vars`, which the specs and the examples
  * sheet's "edit the vars" flow both do.
+ *
+ * REPL ECHO: a trailing expression is auto-returned ({@link replScriptBody}),
+ * so `1 + 1` answers 2 like any real REPL — `return` stays for multi-path
+ * bodies.
  */
 export function wrapReplScript(body: string): string {
   const declaresVars = /(?:^|\n)\s*(?:const|let|var)\s+vars\b/.test(body);
-  return [REPL_WRAPPER_HEADER, ...(declaresVars ? [] : [REPL_VARS_LINE]), body, "}"].join("\n");
+  return [
+    REPL_WRAPPER_HEADER,
+    ...(declaresVars ? [] : [REPL_VARS_LINE]),
+    replScriptBody(body),
+    "}",
+  ].join("\n");
+}
+
+/**
+ * The REPL-echo decision, synchronous and dependency-free (`new Function` is
+ * the parser — same trick the deleted browser evaluator used, and it must
+ * not delay Run by a worker round trip):
+ *
+ * 1. The WHOLE input parses as one expression → `return (input);`. The
+ *    parentheses make `{ a: 1 }` an object literal, never a block.
+ * 2. Otherwise, Node-REPL-style: if a trailing LINE RUN parses as an
+ *    expression while everything above it parses as statements (and the
+ *    combined rewrite still parses), auto-return that trailing expression —
+ *    `const x = 5;\nx * 2` answers 10.
+ * 3. Otherwise (ends in a declaration, has its own top-level `return`, or
+ *    uses TS-only syntax `new Function` cannot parse) the body runs as
+ *    written. A user-written `return` never gates an auto-return being
+ *    APPENDED (rule 2 can add an unreachable one after an early return —
+ *    harmless), but a body that IS a return statement parses as neither an
+ *    expression nor a trailing-expression split, so it is never doubled.
+ */
+function replScriptBody(body: string): string {
+  if (parsesAsExpression(body)) return `return (\n${body}\n);`;
+  const lines = body.split("\n");
+  for (let index = lines.length - 1; index > 0; index -= 1) {
+    const statements = lines.slice(0, index).join("\n");
+    const expression = lines.slice(index).join("\n");
+    if (expression.trim() === "") continue;
+    if (!parsesAsExpression(expression)) continue;
+    if (!parsesAsStatements(statements)) continue;
+    const rewritten = `${statements}\nreturn (\n${expression}\n);`;
+    if (!parsesAsStatements(rewritten)) continue;
+    return rewritten;
+  }
+  return body;
+}
+
+/** Does the input parse as ONE JavaScript expression (in an async context,
+ * so top-level `await` is fine)? TS-only syntax fails conservatively. */
+function parsesAsExpression(code: string): boolean {
+  try {
+    // oxlint-disable-next-line no-new-func -- parse test only, never invoked; see replScriptBody.
+    new Function(`return async (itx) => (\n${code}\n);`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Does the input parse as an async function BODY (statements)? */
+function parsesAsStatements(code: string): boolean {
+  try {
+    // oxlint-disable-next-line no-new-func -- parse test only, never invoked; see replScriptBody.
+    new Function(`return async (itx) => {\n${code}\n};`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * The inverse of {@link wrapReplScript} for rendering history: strips exactly
- * the wrapper this REPL appends. Scripts that reached the scope some other
- * way (an agent, a hand `runScript`) display verbatim.
+ * the wrapper this REPL appends, including the echo rewrite's
+ * `return (\n…\n);` shape, so history shows what the user TYPED. Scripts
+ * that reached the scope some other way (an agent, a hand `runScript`)
+ * display verbatim. (A user who literally types the rewrite's exact shape
+ * displays without it — cosmetic, and the round trip is stable: re-running
+ * the displayed text wraps back to the identical script.)
  */
 export function scriptBodyForDisplay(code: string): string {
   if (!code.startsWith(`${REPL_WRAPPER_HEADER}\n`) || !code.endsWith("\n}")) return code;
   let body = code.slice(REPL_WRAPPER_HEADER.length + 1, -2);
   if (body.startsWith(`${REPL_VARS_LINE}\n`)) body = body.slice(REPL_VARS_LINE.length + 1);
+  const RETURN_OPEN = "return (\n";
+  const RETURN_CLOSE = "\n);";
+  if (body.startsWith(RETURN_OPEN) && body.endsWith(RETURN_CLOSE)) {
+    return body.slice(RETURN_OPEN.length, -RETURN_CLOSE.length);
+  }
+  const splitMarker = `\n${RETURN_OPEN}`;
+  if (body.endsWith(RETURN_CLOSE) && body.includes(splitMarker)) {
+    const markerIndex = body.lastIndexOf(splitMarker);
+    const statements = body.slice(0, markerIndex);
+    const expression = body.slice(markerIndex + splitMarker.length, -RETURN_CLOSE.length);
+    return `${statements}\n${expression}`;
+  }
   return body;
 }
 
@@ -98,7 +180,10 @@ export function deriveReplEntries(events: readonly StreamEvent[]): ReplRunEntry[
           : {
               ...requested,
               status: "success",
-              result: settlement.data.result ?? null,
+              // undefined stays undefined — "the script returned nothing" and
+              // "the script returned null" are different answers, and the UI
+              // renders them differently.
+              result: settlement.data.result,
               settledAtOffset,
             };
       entries.set(executionId, settled);
