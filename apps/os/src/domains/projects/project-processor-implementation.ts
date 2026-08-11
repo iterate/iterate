@@ -21,10 +21,7 @@ import { isWorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
 import { WORKER_SERVE_HEADER } from "../workers/worker-serve-info.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
-import {
-  AGENT_BIRTH_DEFAULTS_EVENT_TYPE,
-  validateAgentBirthEvents,
-} from "../agents/agent-defaults.ts";
+import { validateAgentBirthEvents } from "../agents/agent-defaults.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import {
   parseProjectCreationTerminal,
@@ -655,7 +652,7 @@ export class ProjectProcessor extends StreamProcessor<
       }
       case "events.iterate.com/project/onboarding-completed":
         return { ...state, onboardingActive: false, onboardingCompletedAt: event.createdAt };
-      case AGENT_BIRTH_DEFAULTS_EVENT_TYPE: {
+      case "events.iterate.com/project/agent-birth-defaults-configured": {
         // Userland data reaching platform-assembled birth batches: every
         // event must pass the agent-vocabulary check HERE, so the creation
         // door reads a snapshot it can trust. A malformed latest payload

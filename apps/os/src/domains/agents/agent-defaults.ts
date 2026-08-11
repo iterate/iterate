@@ -292,9 +292,6 @@ export type AgentCreateInput = z.input<
  * Explicit per-call policies (integration routers' systemPromptPolicy)
  * always win over project defaults.
  */
-export const AGENT_BIRTH_DEFAULTS_EVENT_TYPE =
-  "events.iterate.com/project/agent-birth-defaults-configured";
-
 export const AgentBirthDefaults = z.object({
   /** Which agents these defaults apply to. Absent = every agent born through
    * the generic creation door. */
@@ -338,23 +335,31 @@ export function validateAgentBirthEvents(
 ): { ok: true } | { ok: false; error: string } {
   for (const [index, event] of birthEvents.entries()) {
     if (event.type === "events.iterate.com/stream/subscription-configured") {
-      const receiver = (event.payload as { receiver?: { action?: string } } | undefined)?.receiver;
-      const name = (event.payload as { name?: string } | undefined)?.name;
-      if (receiver?.action !== "facet-processor" || typeof name !== "string") {
+      const subscription = z
+        .looseObject({
+          name: z.string(),
+          receiver: z.looseObject({ action: z.literal("facet-processor") }),
+        })
+        .safeParse(event.payload);
+      if (!subscription.success) {
         return {
           ok: false,
           error: `birthEvents[${index}]: only facet-processor subscriptions may ride a birth batch`,
         };
       }
-      if (!BIRTH_DEFAULTS_SUBSCRIPTION_ALLOWLIST.has(name)) {
+      if (!BIRTH_DEFAULTS_SUBSCRIPTION_ALLOWLIST.has(subscription.data.name)) {
         return {
           ok: false,
-          error: `birthEvents[${index}]: subscription name ${JSON.stringify(name)} is not an allowlisted agent-family processor`,
+          error: `birthEvents[${index}]: subscription name ${JSON.stringify(subscription.data.name)} is not an allowlisted agent-family processor`,
         };
       }
       continue;
     }
     try {
+      // parseConsumedInput's input type is the typed consumed-event union so
+      // AUTHORED appends catch typos at compile time; this callsite is the
+      // other use — runtime validation of untrusted data, where the cast
+      // exists purely to hand the parser something to accept or reject.
       AgentProcessorContract.parseConsumedInput({
         type: event.type,
         ...(event.payload === undefined ? {} : { payload: event.payload }),

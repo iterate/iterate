@@ -28,7 +28,7 @@ import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-con
 import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
 import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
-import { AGENT_BIRTH_DEFAULTS_EVENT_TYPE, AgentBirthDefaults } from "../agents/agent-defaults.ts";
+import { AgentBirthDefaults } from "../agents/agent-defaults.ts";
 import { parseConfigRepoTemplateReference } from "../../lib/config-repo-template-reference.ts";
 import { ApprovalPresentedEvents } from "./approval-presented-contract.ts";
 import { AgentReplyPresentedEvents } from "./agent-reply-presented-contract.ts";
@@ -294,7 +294,7 @@ export const ProjectProcessorContract = defineProcessorContract({
           .meta({ description: "The scheduler key whose heartbeat fired." }),
       }),
     },
-    [AGENT_BIRTH_DEFAULTS_EVENT_TYPE]: {
+    "events.iterate.com/project/agent-birth-defaults-configured": {
       description:
         "The project's config worker declares birth defaults for agents born through the " +
         "generic creation door: a list of plain agent-vocabulary events (a prompt is a keyed " +
@@ -544,7 +544,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/custom-domain-remove-requested",
     "events.iterate.com/project/custom-domain-removed",
     "events.iterate.com/project/onboarding-completed",
-    AGENT_BIRTH_DEFAULTS_EVENT_TYPE,
+    "events.iterate.com/project/agent-birth-defaults-configured",
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
