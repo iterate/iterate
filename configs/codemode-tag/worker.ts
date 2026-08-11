@@ -35,7 +35,6 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 // plain `/agents/…` web agents.
 
 const HEADLESS_PROCESSOR_SLUG = "agent-headless";
-const CLASSIC_PROCESSOR_SLUG = "agent";
 const SYSTEM_PROMPT_KEY = "agent/system-prompt";
 const SCRIPT_EXPIRY_MS = 10 * 60_000;
 const RESULT_HISTORY_LIMIT = 30_000;
