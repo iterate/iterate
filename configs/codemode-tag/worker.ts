@@ -99,13 +99,20 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       case "events.iterate.com/capability-host/script-run-settled": {
         await this.#renderScriptSettlement(event);
         // A settle is when a busy agent may have gone idle — retry the
-        // deferred driver flip (no-op once flipped; see #handoverToHeadless).
-        if (event.path.startsWith("/agents/")) await this.#handoverToHeadless([event.path]);
+        // deferred driver flip, and sync the prompt right behind it (the
+        // prompt sync is gated on the flipped driver, so ordering is safe).
+        if (event.path.startsWith("/agents/")) {
+          await this.#handoverToHeadless([event.path]);
+          await this.#syncSystemPromptContext([event.path]);
+        }
         break;
       }
       case "events.iterate.com/agent/llm-request-settled": {
         // Same idle-retry lane for turns that produced no script.
-        if (event.path.startsWith("/agents/")) await this.#handoverToHeadless([event.path]);
+        if (event.path.startsWith("/agents/")) {
+          await this.#handoverToHeadless([event.path]);
+          await this.#syncSystemPromptContext([event.path]);
+        }
         break;
       }
       default:
@@ -187,6 +194,12 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       agentPaths.map(async (path) => {
         const agent = itx.agents.get(path);
         const snapshot = await agent.processor.snapshot();
+        // COUPLED TO THE DRIVER FLIP: an agent still driven by the classic
+        // processor keeps the fenced prompt — teaching it <codemode> while
+        // the fenced parser still interprets its output would break every
+        // turn until the deferred flip lands. The settle-event retry lane
+        // calls this again right after the flip, so the prompt follows it.
+        if (snapshot.state.config.driver !== HEADLESS_PROCESSOR_SLUG) return;
         const slot = snapshot.state.contextItems.findLast(
           (item) => item.payload.key === SYSTEM_PROMPT_KEY,
         );
