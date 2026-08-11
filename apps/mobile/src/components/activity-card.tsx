@@ -18,7 +18,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Document, Scalar, visit } from "yaml";
 import type { StreamEvent } from "iterate/sdk/itx/react";
-import { llmResponseForDisplay, looksLikeCode } from "../lib/activity-display.ts";
+import { looksLikeCode } from "../lib/activity-display.ts";
 import {
   deriveBatchesForExecution,
   summarizeBatchOutcomes,
@@ -244,9 +244,12 @@ function liveSummary(activity: AgentUiActivity): string {
 }
 
 function LlmStepView({ code, step }: { code: AgentUiCodeStep | null; step: AgentUiLlmStep }) {
-  // Same next-step dedupe as before the rounds layout: the llm's response IS
-  // the round's script, so it renders only where it differs from the code.
-  const responseText = llmResponseForDisplay(step.responseText, code?.code);
+  // Once the round has a code step, the raw response is REDUNDANT here: the
+  // extracted script sits in the Script tab, extracted prose in the chat
+  // bubbles, and the verbatim text in Meta → response. It renders only for
+  // code-less moments — the live stream before a script lands, or a round
+  // whose code half never arrived.
+  const responseText = code === null ? step.responseText : "";
   return (
     <View style={styles.stepBody}>
       {/* Once the round has a code step, this stat line lives in its Meta
