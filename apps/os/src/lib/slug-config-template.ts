@@ -28,7 +28,10 @@ export function configRepoTemplateFromSlug(slug: string): string | null {
   const match = /^(.+?)-template-([a-z0-9][a-z0-9-]*)$/.exec(slug);
   if (match === null) return null;
   const [, prefix, templateName] = match;
-  const pullRequest = /^pr(\d{1,7})$/.exec(prefix!);
+  // The prefix only needs to START with pr<N> — `pr2477-alice-template-x`
+  // still pins to PR 2477, so several people can demo one PR's template
+  // without fighting over a single slug.
+  const pullRequest = /^pr(\d{1,7})(?:-|$)/.exec(prefix!);
   const reference: ConfigRepoTemplateReference = {
     ...CANONICAL_TEMPLATE_REPOSITORY,
     path: `configs/${templateName}`,

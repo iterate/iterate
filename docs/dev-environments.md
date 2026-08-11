@@ -134,9 +134,11 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   and prefills the first-run project slug instead of the derived-from-email
   suggestion. The slug convention does the rest on the OS side: a slug ending
   `-template-<name>` makes `create()` use `configs/<name>` from
-  `github:iterate/iterate` as the project's config template, and a `pr<N>`
-  slug prefix pins the ref to `pull/<N>/head` — so a config-template PR can
-  link to a project born from its own in-flight template. If the template
+  `github:iterate/iterate` as the project's config template, and a slug
+  prefix starting `pr<N>` pins the ref to `pull/<N>/head` — so a
+  config-template PR can link to a project born from its own in-flight
+  template, and `pr<N>-<anything>-template-<name>` gives everyone their own
+  collision-free slug for the same template. If the template
   folder doesn't exist, the project is created stock (never blocked). Hints
   are suggestions only: the user still confirms every step, and explicit
   `configRepoTemplate` arguments always win over the convention.

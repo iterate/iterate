@@ -8,6 +8,12 @@ describe("configRepoTemplateFromSlug", () => {
     );
   });
 
+  it("pins the ref when the prefix merely starts with pr<N> (collision-free slugs)", () => {
+    expect(configRepoTemplateFromSlug("pr2477-alice-template-waiter-chef")).toBe(
+      "github:iterate/iterate#pull/2477/head&path:configs/waiter-chef",
+    );
+  });
+
   it("leaves the ref on the default branch for ordinary prefixes", () => {
     expect(configRepoTemplateFromSlug("acme-template-with-voice")).toBe(
       "github:iterate/iterate#path:configs/with-voice",
