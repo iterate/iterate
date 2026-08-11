@@ -103,9 +103,12 @@ Fork of `configs/default` (keeps docs app, AGENTS.md sync, onboarding) plus:
 - [x] Prompt-file formatter exemption (`.oxfmtrc.json` ignorePatterns —
       `configs/waiter-chef/prompts/` + `MENU.md`) — _and re-ran tsc after
       `pnpm format` per the oxfmt-rewrites-markdown lesson_
-- [ ] Live smoke on a preview or dev: create project from
-      `github:iterate/iterate#waiter-chef&path:configs/waiter-chef`, run the
-      starter prompts below, iterate with Misha
+- [x] Live smoke on local dev — _project `waiter-smoke-1` created from the
+      template ref; menu question answered waiter-only; Subbuteo + wordle
+      orders cooked end-to-end by real chefs with links served back; peek
+      answered honestly mid-cook; mid-cook adjustment relayed. Two model
+      bugs found and fixed (see log)_
+- [ ] Feel-eval with Misha (chat first, voice later)
 - [x] Knobs surfaced for the feel-eval — _`WAITER_MODEL`, `WAITER_DEBOUNCE_MS`,
       `WAITER_MAX_AUTONOMOUS_TURNS`, `RELAY_EXCERPT_CHARS` at the top of
       `worker.ts`_
@@ -157,3 +160,21 @@ Fork of `configs/default` (keeps docs app, AGENTS.md sync, onboarding) plus:
   in), worker-scope `message()` stamps user actor, web chats born at
   `/agents/web/<iso-slug>`, onboarding at `/agents/onboarding` unaffected by
   the `/agents/web/` prefix.
+- (2026-08-11) Live smoke on local dev (`waiter-smoke-1`). Findings:
+  - **Tool-call leak**: the platform's boot context teaches every agent its
+    itx scope/workspace; the tool-less waiter then attempted harmony-style
+    tool calls (`{Jsiiassistant to=itx.agents.get?…`) which leaked as
+    diner-visible garbage. Fixed two ways: an explicit no-tools house rule in
+    the prompt, and superseding the keyed `agent/boot-context` slot with a
+    static waiter version IN the birth defaults (defaults append last, so it
+    supersedes atomically at birth).
+  - **`@offset` imitation**: the prompt projection prefixes every context
+    item with `@<offset>` bookkeeping; the waiter imitated it at the start of
+    replies. Fixed with a prompt rule plus a worker-side strip backstop.
+  - Iterating genuinely required no platform deploy: both fixes were
+    `commitFiles` into the live project's config repo.
+  - The chef built real, working dishes (flick-football, pomodoro, wordle)
+    and served links; the waiter relayed each with the link intact.
+  - Deliberately not done: waiter loses the project-hostname fact with the
+    boot-context supersession (chef supplies links, so nothing user-visible
+    broke) — revisit if the waiter ever needs to mint URLs itself.

@@ -57,12 +57,31 @@ const WAITER_MAX_AUTONOMOUS_TURNS = 100;
 /** Longest chef-note / peek excerpt relayed into the waiter's context. */
 const RELAY_EXCERPT_CHARS = 1_500;
 
+/** Supersedes the platform's boot context (key agent/boot-context) for
+ * waiters: the stock text teaches every agent its itx scope and workspace,
+ * which primes a tool-less waiter to attempt tool calls — observed leaking
+ * harmony-style call syntax into diner-visible replies. Static on purpose so
+ * it can ride the birth batch (defaults append last, so it supersedes the
+ * platform slot atomically at birth). */
+const WAITER_BOOT_CONTEXT = [
+  "Context for this agent: you are the front-of-house waiter for one table (this chat).",
+  "A dedicated chef agent is paired with this table: your <kitchen> tags reach it and its notes come back to you automatically — you never need to address it by name or path.",
+  "The diner can watch the kitchen directly from the project's agents list (the chef chat shares this chat's name).",
+  "You have no tools, no code scope, and no workspace.",
+].join("\n");
+
 const chefPathForWaiter = (waiterPath: string) =>
   CHEF_PREFIX + waiterPath.slice(WAITER_PREFIX.length);
 const waiterPathForChef = (chefPath: string) => WAITER_PREFIX + chefPath.slice(CHEF_PREFIX.length);
 
 const excerpt = (text: string) =>
   text.length <= RELAY_EXCERPT_CHARS ? text : `${text.slice(0, RELAY_EXCERPT_CHARS)}…`;
+
+/** The prompt projection prefixes every context item with `@<offset>`
+ * bookkeeping, and the waiter model sometimes imitates it at the start of a
+ * reply. The prompt tells it not to; this strip is the backstop so the diner
+ * never sees one either way. */
+const stripLeadingOffsetMarker = (text: string) => text.replace(/^@\d+\s*\n?/, "").trim();
 
 async function contentHash(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -111,6 +130,10 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         if (event.source?.copiedFrom !== undefined) break;
         if (event.path.startsWith(WAITER_PREFIX)) {
           await this.#syncMenuContext([event.path]);
+          await this.#syncKeyedContext([event.path], {
+            key: "agent/boot-context",
+            content: WAITER_BOOT_CONTEXT,
+          });
         }
         if (event.path.startsWith(CHEF_PREFIX)) {
           await this.#syncChefBriefing([event.path]);
@@ -168,6 +191,14 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
               },
             },
             {
+              type: "events.iterate.com/agents/context-added",
+              payload: {
+                content: WAITER_BOOT_CONTEXT,
+                key: "agent/boot-context",
+                role: "system",
+              },
+            },
+            {
               type: "events.iterate.com/stream/subscription-configured",
               payload: {
                 name: HEADLESS_PROCESSOR_SLUG,
@@ -200,6 +231,10 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     const chefs = agents.map((agent) => agent.path).filter((path) => path.startsWith(CHEF_PREFIX));
     await this.#syncWaiterPromptContext(waiters);
     await this.#syncMenuContext(waiters);
+    await this.#syncKeyedContext(waiters, {
+      key: "agent/boot-context",
+      content: WAITER_BOOT_CONTEXT,
+    });
     await this.#syncChefBriefing(chefs);
   }
 
@@ -352,8 +387,8 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         );
       }
     }
-    if (outcome.prose !== undefined) {
-      const prose = outcome.prose;
+    if (outcome.prose !== undefined && stripLeadingOffsetMarker(outcome.prose) !== "") {
+      const prose = stripLeadingOffsetMarker(outcome.prose);
       await this.#appendUnlessAlreadyRecorded(() =>
         waiter.append({
           type: "events.iterate.com/agents/web-message-sent",
