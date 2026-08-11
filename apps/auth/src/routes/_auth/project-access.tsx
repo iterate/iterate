@@ -63,6 +63,12 @@ export const Route = createFileRoute("/_auth/project-access")({
     client_id: z.string().optional(),
     scope: z.string().optional(),
     redirect: z.string().optional(),
+    // Suggested project slug, forwarded through the OAuth flow like
+    // login_hint (see the oauth-provider patch). Prefills the create forms
+    // below instead of the derived-from-email suggestion; the user still
+    // confirms. Powers template-carrying PR-body login links
+    // (docs/dev-environments.md) via os' `-template-<name>` slug convention.
+    project_hint: z.string().optional().catch(undefined),
   }),
   loader: () => getProjectAccessConfig(),
 });
@@ -89,23 +95,33 @@ const CreateProjectInput = z.object({
 });
 
 function RouteComponent() {
-  const { client_id, scope, redirect } = Route.useSearch();
+  const { client_id, scope, redirect, project_hint } = Route.useSearch();
   const { projectHostnameBase } = Route.useLoaderData();
+  // Only a well-formed slug counts; anything else falls back to the derived
+  // suggestion as if no hint arrived.
+  const hintedProjectSlug = ProjectSlugInput.safeParse(project_hint).success
+    ? project_hint
+    : undefined;
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
   const session = useSession();
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[] | null>(null);
-  const [organizationName, setOrganizationName] = useState(() =>
-    suggestOrganizationName({
-      name: session.user.name,
-      email: session.user.email,
-    }),
+  const [organizationName, setOrganizationName] = useState(
+    () =>
+      // A hinted project slug names the org too: every test signup shares the
+      // same email domain, so the domain-derived suggestion ("Nustom") would
+      // collide with the previous link-clicker's organization.
+      hintedProjectSlug ||
+      suggestOrganizationName({
+        name: session.user.name,
+        email: session.user.email,
+      }),
   );
   // null = still deriving the first project's slug from the organization name.
   // Once the user edits the field (including clearing it), we keep their
   // value — empty string stays empty and does not snap back to the suggestion.
   const [projectSlugOverride, setProjectSlugOverride] = useState<string | null>(null);
-  const [projectSlug, setProjectSlug] = useState("");
+  const [projectSlug, setProjectSlug] = useState(hintedProjectSlug || "");
   const [selectedOrganizationSlug, setSelectedOrganizationSlug] = useState("");
   const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
   const hasOAuthClientId = Boolean(client_id);
@@ -149,8 +165,7 @@ function RouteComponent() {
     onSuccess: async (project) => {
       if (!hasOAuthClientId) {
         // Back to the app that sent us here (usually the OS dashboard).
-        window.location.href = redirectTarget ?? "/";
-        return;
+        return redirectAndStayPending(redirectTarget || "/");
       }
       if (!needsProjectSelection) {
         const result = await authClient.oauth2.continue({ postLogin: true });
@@ -158,8 +173,7 @@ function RouteComponent() {
           throw new Error("Could not continue the OAuth redirect");
         }
 
-        window.location.href = result.url;
-        return;
+        return redirectAndStayPending(result.url);
       }
       setSelectedProjectIds([project.id]);
       await queryClient.invalidateQueries({ queryKey: organizationsQueryOptions().queryKey });
@@ -179,8 +193,7 @@ function RouteComponent() {
       setIsCreateProjectDialogOpen(false);
       if (!hasOAuthClientId) {
         // Back to the app that sent us here (usually the OS dashboard).
-        window.location.href = redirectTarget ?? "/";
-        return;
+        return redirectAndStayPending(redirectTarget || "/");
       }
       setSelectedProjectIds((current) => {
         const existingProjectIds =
@@ -207,8 +220,7 @@ function RouteComponent() {
         throw new Error("Could not continue the OAuth redirect");
       }
 
-      window.location.href = preserveOAuthResourceSearchParam(result.url);
-      return result;
+      return redirectAndStayPending(preserveOAuthResourceSearchParam(result.url));
     },
   });
 
@@ -219,8 +231,7 @@ function RouteComponent() {
         throw new Error("Could not continue the OAuth redirect");
       }
 
-      window.location.href = result.url;
-      return result;
+      return redirectAndStayPending(result.url);
     },
   });
 
@@ -308,7 +319,8 @@ function RouteComponent() {
   const effectiveSelectedProjectIds = selectedProjectIds ?? allProjectIds;
   const canContinue = effectiveSelectedProjectIds.length > 0;
   const isCreatingFirstOrganization = organizations.length === 0;
-  const suggestedProjectSlug = organizationName.trim() ? slugify(organizationName) : "";
+  const suggestedProjectSlug =
+    hintedProjectSlug || (organizationName.trim() ? slugify(organizationName) : "");
   const firstProjectSlug = projectSlugOverride ?? suggestedProjectSlug;
   const parsedOrganizationWithProject = CreateOrganizationWithProjectInput.safeParse({
     name: organizationName,
@@ -815,6 +827,19 @@ function CreateProjectForm(props: {
       ) : null}
     </form>
   );
+}
+
+/**
+ * Leave the page and keep the caller's mutation pending until the browser
+ * actually unloads. A bare `window.location.href = ...` returns immediately,
+ * react-query flips `isPending` off, and every `isSubmitting`-gated button
+ * re-enables mid-navigation — "Create project" then invites a double submit.
+ * Returning this never-resolving promise (from `onSuccess`, or awaited in a
+ * `mutationFn`) keeps the mutation pending for the page's remaining lifetime.
+ */
+function redirectAndStayPending(href: string): Promise<never> {
+  window.location.href = href;
+  return new Promise<never>(() => {});
 }
 
 /**

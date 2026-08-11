@@ -440,6 +440,7 @@ import { describeSecretState } from "./domains/secrets/secret-durable-object.ts"
 import { SlackProcessorContract } from "./domains/integrations/slack-processor-contract.ts";
 import { WorkspaceProcessorContract } from "./domains/workspaces/workspace-processor-contract.ts";
 import { normalizeConfigRepoTemplateReference } from "./lib/config-repo-template-reference.ts";
+import { resolveSlugConventionTemplate } from "./lib/slug-config-template.ts";
 
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
@@ -6301,7 +6302,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     options?: { waitUntilCreated?: boolean },
   ): Promise<ProjectRpcTarget> {
     const projectCreateDeadline = Date.now() + PROJECT_CREATE_TIMEOUT_MS;
-    const configRepoTemplate =
+    const explicitConfigRepoTemplate =
       args.configRepoTemplate === undefined
         ? undefined
         : normalizeConfigRepoTemplateReference(args.configRepoTemplate);
@@ -6362,6 +6363,15 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         slug: identity.slug,
       };
     }
+
+    // The `-template-<name>` slug convention (docs/dev-environments.md):
+    // covers creates that never see a template field — the auth app's
+    // first-run form and the welcome page's ?ensureBirth retry. An explicit
+    // arg always wins and skips the convention entirely.
+    const configRepoTemplate =
+      explicitConfigRepoTemplate !== undefined
+        ? explicitConfigRepoTemplate
+        : await resolveSlugConventionTemplate(registered.slug);
 
     const timing = { projectId: registered.projectId };
     const creatorEmail = userPrincipalOf(this.#props.auth)?.email;

@@ -1581,11 +1581,14 @@ describe("cloudflare preview state helpers", () => {
     const body = renderCloudflarePreviewPullRequestBody(
       "## Summary\n\nExisting user-authored description.",
       state,
+      2474,
     );
 
     expect(parseCloudflarePreviewState(body)).toEqual(state);
     expect(body).toContain("## Summary");
-    expect(body).toContain("## Environment Config Lease");
+    expect(body).toContain(
+      "## Environment Config Lease [Login ↗](https://os.iterate-preview-2.com/api/iterate-auth/login?login_hint=pr2474%2Btest%40nustom.com)",
+    );
     expect(body).toContain(
       "<summary>Slot: preview-2 | Doppler config: preview_2</summary>\n\n| app | status | commit | preview | size (gzip) | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
     );
@@ -1613,24 +1616,31 @@ describe("cloudflare preview state helpers", () => {
       "Footer",
     ].join("\n");
 
-    const body = renderCloudflarePreviewPullRequestBody(initialBody, {
-      apps: {
-        os: CloudflarePreviewAppEntry.parse({
-          appDisplayName: "OS",
-          appSlug: "os",
-          message: "AssertionError: expected 2 to be +0",
-          runUrl: "https://github.com/iterate/iterate/actions/runs/456",
-          shortSha: "1234567",
-          status: "tests-failed" as const,
-          updatedAt: "2026-04-02T10:00:00.000Z",
-        }),
+    const body = renderCloudflarePreviewPullRequestBody(
+      initialBody,
+      {
+        apps: {
+          os: CloudflarePreviewAppEntry.parse({
+            appDisplayName: "OS",
+            appSlug: "os",
+            message: "AssertionError: expected 2 to be +0",
+            runUrl: "https://github.com/iterate/iterate/actions/runs/456",
+            shortSha: "1234567",
+            status: "tests-failed" as const,
+            updatedAt: "2026-04-02T10:00:00.000Z",
+          }),
+        },
+        environmentConfigLease: null,
+        notice: null,
       },
-      environmentConfigLease: null,
-      notice: null,
-    });
+      9999,
+    );
 
     expect(body).toContain("# User content");
     expect(body).toContain("Footer");
+    // No lease recorded — the heading carries no login link.
+    expect(body).toContain("## Environment Config Lease\n");
+    expect(body).not.toContain("[Login ↗]");
     expect(body).toContain("<summary>No preview slot recorded.</summary>");
     expect(body).toContain(
       "| OS | tests failed | `1234567` |  |  |  |  |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/456) | 2026-04-02T10:00:00.000Z | AssertionError: expected 2 to be +0 |",
@@ -1651,23 +1661,43 @@ describe("cloudflare preview state helpers", () => {
     // Old bodies persisted the full lease (leaseId, leasedUntil, type). The
     // display schema keeps only slot + doppler config; the rest must parse
     // away cleanly rather than blanking the whole recorded state.
-    const body = renderCloudflarePreviewPullRequestBody("", {
-      apps: {},
-      environmentConfigLease: {
-        dopplerConfig: "preview_2",
-        leasedUntil: 1_700_000_000_000,
-        leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
-        slug: "preview-2",
-        type: "environment-config-lease",
-        // oxlint-disable-next-line no-explicit-any
-      } as any,
-      notice: null,
-    });
+    const body = renderCloudflarePreviewPullRequestBody(
+      "",
+      {
+        apps: {},
+        environmentConfigLease: {
+          dopplerConfig: "preview_2",
+          leasedUntil: 1_700_000_000_000,
+          leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+          slug: "preview-2",
+          type: "environment-config-lease",
+          // oxlint-disable-next-line no-explicit-any
+        } as any,
+        notice: null,
+      },
+      9999,
+    );
 
     expect(parseCloudflarePreviewState(body).environmentConfigLease).toEqual({
       dopplerConfig: "preview_2",
       slug: "preview-2",
     });
+  });
+
+  test("skips the heading login link when the lease's doppler config is unknown", () => {
+    const body = renderCloudflarePreviewPullRequestBody(
+      "",
+      {
+        apps: {},
+        environmentConfigLease: { dopplerConfig: "preview_999", slug: "preview-999" },
+        notice: null,
+        // oxlint-disable-next-line no-explicit-any
+      } as any,
+      9999,
+    );
+
+    expect(body).toContain("## Environment Config Lease\n");
+    expect(body).not.toContain("[Login ↗]");
   });
 
   test("returns empty state when the managed state block is malformed", () => {
@@ -1958,6 +1988,7 @@ describe("preview section notice banner", () => {
         environmentConfigLease: null,
         notice: "All preview slots are leased.\n  preview-1  leased by pr-1601",
       } as any,
+      9999,
     );
     expect(body).toContain("> [!CAUTION]");
     expect(body).toContain("> All preview slots are leased.");
@@ -1969,6 +2000,7 @@ describe("preview section notice banner", () => {
       "",
       // oxlint-disable-next-line no-explicit-any
       { apps: {}, environmentConfigLease: null, notice: null } as any,
+      9999,
     );
     expect(body).not.toContain("[!CAUTION]");
   });

@@ -122,6 +122,29 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   and sends no real email. This is controlled by
   `APP_CONFIG_FIXED_TEST_OTP_ENABLED`; production sets it false and always sends
   a real email OTP.
+- Template-carrying login links: a single URL can preselect the test user AND
+  the project to create — maximally useful in PR bodies:
+
+  ```
+  https://os.<env-host>/api/iterate-auth/login?login_hint=pr<N>%2Btest%40nustom.com&project_hint=pr<N>-template-<name>
+  ```
+
+  `login_hint` (an email) prefills sign-in ("Continue as …", fixed OTP as
+  above). `project_hint` (a project slug) rides the OAuth flow the same way
+  and prefills the first-run project slug instead of the derived-from-email
+  suggestion. The slug convention does the rest on the OS side: a slug ending
+  `-template-<name>` makes `create()` use `configs/<name>` from
+  `github:iterate/iterate` as the project's config template, and a slug
+  prefix starting `pr<N>` pins the ref to `pull/<N>/head` — so a
+  config-template PR can link to a project born from its own in-flight
+  template, and `pr<N>-<anything>-template-<name>` gives everyone their own
+  collision-free slug for the same template. A template folder GitHub
+  definitively reports absent (404) creates the project stock; a
+  rate-limited or unreachable GitHub records the template anyway, so a
+  quota'd birth fails visibly instead of silently going stock. Hints are
+  suggestions only: the user still confirms every step (the hint also names
+  the first-run organization, keeping test signups collision-free), and
+  explicit `configRepoTemplate` arguments always win over the convention.
 
 The dev-global auth deploys from `main` (alongside prd auth) and reseeds its
 OAuth clients from Doppler on every deploy — see
