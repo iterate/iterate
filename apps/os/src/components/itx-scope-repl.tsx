@@ -17,7 +17,7 @@
 // Renders under a <ProjectScope> (the project layout provides it); rides the
 // tab's ONE itx session socket like every other project component.
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo, useRef, useState } from "react";
 import { ClientOnly } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { StreamEvent } from "iterate/processors";
@@ -119,21 +119,25 @@ function ItxScopeReplConnected({
   // tab racing it appends the identical events and both proceed), put the
   // session in the URL, then submit the script. The ONE code path that
   // creates anything.
-  // Session paths THIS component successfully birthed. Deliberately local
-  // state, not a query derivation: it is the race-free birth signal — a
-  // background streams-list refetch can briefly overwrite the primed cache
-  // while stream/created is still propagating into project state, and the
-  // signal must also stay false when create() itself fails.
+  // Session paths THIS component successfully birthed. Deliberately local,
+  // not a query derivation: it is the race-free birth signal — a background
+  // streams-list refetch can briefly overwrite the primed cache while
+  // stream/created is still propagating into project state, and the signal
+  // must also stay false when create() itself fails. Twin records on
+  // purpose: the ref is what settle-time callbacks read (immune to closure
+  // staleness — a settle racing the post-create re-render still sees the
+  // birth), the state is what re-renders `born` below.
+  const bornPathsRef = useRef(new Set<string>());
   const [bornPaths, setBornPaths] = useState<readonly string[]>([]);
   const run = useMutation({
     mutationFn: async ({ body, path }: PendingRun & { path: string }) => {
       const host = itx.capabilityHosts.get(path);
       await host.create();
-      // Two records of the successful birth: bornPaths is the local
-      // race-free signal; the primed cache is what lets the REMOUNTED
-      // session page consider itself born after the URL replace, without
-      // waiting for stream/created to reach project state.
+      bornPathsRef.current.add(path);
       setBornPaths((previous) => (previous.includes(path) ? previous : [...previous, path]));
+      // The primed cache is what lets the REMOUNTED session page consider
+      // itself born after the URL replace, without waiting for
+      // stream/created to reach project state.
       queryClient.setQueryData(
         ["itx", ...KNOWN_STREAMS_QUERY.key(projectId)],
         (previous: StreamListItem[] | undefined) =>
@@ -155,7 +159,7 @@ function ItxScopeReplConnected({
       // BIRTH must not: bornPaths is only recorded after create() resolves,
       // so a birth failure stays on the unborn page with the mutation error
       // visible.
-      if (scopePath === null && bornPaths.includes(variables.path)) {
+      if (scopePath === null && bornPathsRef.current.has(variables.path)) {
         onSessionEstablished(variables.path);
       }
     },
