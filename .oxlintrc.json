@@ -287,8 +287,8 @@
       "files": [
         "specs/mobile/media.spec.ts",
         "specs/mobile/integrations.spec.ts",
-        "specs/mobile/preview-deeplink-hints.spec.ts",
-        "specs/mobile/preview-deeplink-mismatch.spec.ts"
+        "specs/mobile/expected-backend-mismatch.spec.ts",
+        "specs/mobile/expected-backend-signin.spec.ts"
       ],
       "rules": {
         "middlewright/require-timeout-comment": "error"
