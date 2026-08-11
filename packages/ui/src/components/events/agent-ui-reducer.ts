@@ -32,6 +32,14 @@ export type AgentUiLlmStep = {
   thinkingText: string;
   /** Streamed response text — for code-mode agents this is source code. */
   responseText: string;
+  /** Offset of the committed assistant context-added event carrying this
+   * step's final text; links interpretation events back to the step. */
+  assistantEventOffset?: number;
+  /** True once ANOTHER event derived from this response committed (an
+   * extracted chat message pointing at the request, or a script extracted
+   * from the assistant event). The derived views are then the story: pretty
+   * rendering collapses the raw response text behind the raw toggles. */
+  interpreted?: boolean;
   inputTokens?: number;
   outputTokens?: number;
   durationMs?: number;
@@ -360,6 +368,8 @@ const AgentUiLlmStepSchema = z
     model: z.string().optional(),
     thinkingText: z.string(),
     responseText: z.string(),
+    assistantEventOffset: z.number().int().positive().optional(),
+    interpreted: z.boolean().optional(),
     inputTokens: z.number().int().nonnegative().optional(),
     outputTokens: z.number().int().nonnegative().optional(),
     durationMs: z.number().finite().nonnegative().optional(),
@@ -645,7 +655,9 @@ function reduceAgentUiEvent(
         const llmRequestOffset = readLlmRequestOffset(event);
         if (llmRequestOffset == null) return contextState;
         return updateLlmStep(contextState, llmRequestOffset, (step) =>
-          step.status === "running" ? { ...step, responseText: text } : step,
+          step.status === "running"
+            ? { ...step, responseText: text, assistantEventOffset: event.offset }
+            : step,
         );
       }
       if (role === "system") return contextState;
@@ -697,6 +709,14 @@ function reduceAgentUiEvent(
     case "events.iterate.com/agents/web-message-sent": {
       const text = readString(event, "message");
       if (text == null) return state;
+      // An llmRequestOffset marks the message as EXTRACTED from that request's
+      // response (a userland response interpreter) — the raw response text is
+      // now redundant in pretty rendering.
+      const extractedFromRequest = readLlmRequestOffset(event);
+      const marked =
+        extractedFromRequest == null
+          ? state
+          : updateLlmStep(state, extractedFromRequest, (step) => ({ ...step, interpreted: true }));
       const files = readFileAttachments(event);
       const item: AgentUiMessageItem = {
         kind: "assistant",
@@ -705,7 +725,7 @@ function reduceAgentUiEvent(
         ...(files.length === 0 ? {} : { files }),
         timestampMs,
       };
-      return emitAssistantMessageItem(state, items, item);
+      return emitAssistantMessageItem(marked, items, item);
     }
 
     case AGENT_LLM_REQUEST_REQUESTED: {
@@ -801,7 +821,15 @@ function reduceAgentUiEvent(
       ) {
         return state;
       }
-      const live = ensureLive(state, event.offset, timestampMs);
+      // A script extracted from an assistant response (`agent-output:<offset>`)
+      // marks that response's llm step interpreted: the Script tab now carries
+      // the code, so pretty rendering can fold the raw response away.
+      const extractedFromAssistantOffset = /^agent-output:(\d+)$/.exec(executionId);
+      const interpretedState =
+        extractedFromAssistantOffset === null
+          ? state
+          : markLlmStepInterpretedByAssistantOffset(state, Number(extractedFromAssistantOffset[1]));
+      const live = ensureLive(interpretedState, event.offset, timestampMs);
       const step: AgentUiCodeStep = {
         kind: "code",
         id: `code-${executionId}`,
@@ -814,7 +842,7 @@ function reduceAgentUiEvent(
         // inferred (deadline/idle) closes carry it — not only durable settles.
         ...(state.summaryActivity == null ? {} : { activitySummary: state.summaryActivity }),
       };
-      return { ...state, live: { ...live, steps: [...live.steps, step] } };
+      return { ...interpretedState, live: { ...live, steps: [...live.steps, step] } };
     }
 
     case SCRIPT_EXECUTION_COMPLETED: {
@@ -1300,6 +1328,20 @@ function applyDurableCodeOutcome(
     outcomeSource: "durable",
     ...outcome,
   };
+}
+
+/** Mark the llm step whose committed assistant event is `assistantEventOffset`
+ * as interpreted (a script was extracted from it). */
+function markLlmStepInterpretedByAssistantOffset(
+  state: AgentUiState,
+  assistantEventOffset: number,
+): AgentUiState {
+  if (state.live == null) return state;
+  const match = state.live.steps.find(
+    (step) => step.kind === "llm" && step.assistantEventOffset === assistantEventOffset,
+  );
+  if (match == null || match.kind !== "llm") return state;
+  return updateLlmStep(state, match.llmRequestOffset, (step) => ({ ...step, interpreted: true }));
 }
 
 function updateLlmStep(

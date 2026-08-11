@@ -66,13 +66,9 @@ describe("relying-party routes and sessions", () => {
       forwarded: "google" as string | null,
     },
     {
-      // Standard OIDC login_hint: the auth login page prefills the address
-      // and offers "Continue as <email>" (utils/login-hint.ts) — the preview
-      // PR comment's `Login ↗` link and mobile preview deep links rely on
-      // this hop not swallowing it.
-      name: "forwards email-address login hints to the auth worker authorization request",
-      hint: encodeURIComponent("pr2475+test@nustom.com"),
-      forwarded: "pr2475+test@nustom.com",
+      name: "forwards email-address login hints (preview click-and-login deep links)",
+      hint: encodeURIComponent("pr123+test@nustom.com"),
+      forwarded: "pr123+test@nustom.com",
     },
     {
       name: "drops unknown login hints from the auth worker authorization request",

@@ -234,3 +234,57 @@ describe("agentSystemPromptContextEvent", () => {
     expect(changed.payload).toMatchObject({ key: "agent/system-prompt", role: "system" });
   });
 });
+
+describe("agent birth defaults", () => {
+  const base = { agentPath: "/agents/defaults-test", projectId: "prj_test" };
+  const defaults = {
+    config: { driver: "agent-headless" as const },
+    systemPrompt: { content: "You speak codemode.", id: "codemode-tag", revision: "abc123" },
+    extraProcessorSubscriptions: ["agent-headless"],
+  };
+
+  test("defaults fold into the birth batch: driver config, prompt slot, extra subscription", () => {
+    const creation = agentCreationForPath({ ...base, defaults });
+
+    const configured = creation.events.filter(
+      (event) => event.type === "events.iterate.com/agent/configured",
+    );
+    expect(configured.at(-1)).toMatchObject({ payload: { config: { driver: "agent-headless" } } });
+    expect(creation.systemPrompt).toBe("You speak codemode.");
+    const promptSlot = creation.events.find(
+      (event) => (event.payload as { key?: string }).key === "agent/system-prompt",
+    );
+    expect(promptSlot).toMatchObject({
+      idempotencyKey: expect.stringContaining("codemode-tag:vabc123"),
+    });
+    expect(
+      creation.events.filter(
+        (event) =>
+          event.type === "events.iterate.com/stream/subscription-configured" &&
+          (event.payload as { name?: string }).name === "agent-headless",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("an explicit systemPromptPolicy wins over the defaults' prompt", () => {
+    const creation = agentCreationForPath({
+      ...base,
+      defaults,
+      systemPromptPolicy: { content: "Channel policy.", id: "slack", revision: "1" },
+    });
+    expect(creation.systemPrompt).toBe("Channel policy.");
+  });
+
+  test("a changed defaults config patch mints a different idempotency key (replay-safe)", () => {
+    const first = agentCreationForPath({ ...base, defaults });
+    const changed = agentCreationForPath({
+      ...base,
+      defaults: { ...defaults, config: { driver: "agent" as const } },
+    });
+    const keyOf = (creation: typeof first) =>
+      creation.events.find((event) =>
+        String(event.idempotencyKey).startsWith("agent/birth-defaults-configured:"),
+      )!.idempotencyKey;
+    expect(keyOf(first)).not.toBe(keyOf(changed));
+  });
+});
