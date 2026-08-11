@@ -59,6 +59,11 @@ export class HeadlessAgentProcessor extends StreamProcessor<
   protected override processEvent(
     args: ProcessEventArgs<HeadlessAgentProcessorContract>,
   ): undefined {
+    // Act only when SELECTED (config.driver): hosted-processor subscriptions
+    // cannot be removed, so the handover is additive — subscribe this
+    // processor, flip the driver knob — and this guard is what makes exactly
+    // one loop act while both stay subscribed.
+    if (args.state.config.driver !== "agent-headless") return;
     for (const component of this.#components) component.processEvent(args);
   }
 

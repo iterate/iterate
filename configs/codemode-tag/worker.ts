@@ -59,16 +59,26 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   // and in per-stream order.
   protected override async processEvent(event: StreamEvent): Promise<void> {
     switch (event.type) {
-      case "events.iterate.com/stream/subscription-configured": {
-        await this.#retargetAgentWakeToHeadless(event);
-        break;
-      }
       case "events.iterate.com/agent/created": {
         // The birth event on the agent's own stream (copies carry
         // source.copiedFrom and must not re-target the collection stream).
         if (event.source?.copiedFrom !== undefined) break;
+        await this.#handoverToHeadless([event.path]);
         await this.#syncSystemPromptContext([event.path]);
         await this.#syncAgentsMdContext([event.path]);
+        break;
+      }
+      case "events.iterate.com/project/worker-updated": {
+        // Runs after every config deploy — including the FIRST deploy after a
+        // project switches its config repo to this template wholesale. Sweep
+        // every existing agent onto the headless driver (idempotent per
+        // agent, so later deploys no-op).
+        if (event.path !== "/") break;
+        const itx = await this.itx;
+        const agents = await itx.agents.list();
+        await this.#handoverToHeadless(agents.map((agent) => agent.path));
+        await this.#syncSystemPromptContext(agents.map((agent) => agent.path));
+        await this.#syncAgentsMdContext(agents.map((agent) => agent.path));
         break;
       }
       case "events.iterate.com/repo/commit-completed": {
@@ -97,50 +107,38 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   }
 
   /**
-   * THE OPT-IN. Agent birth appends a processor-wake subscription named after
-   * the platform's classic agent contract; under the subscription-model
-   * redesign the NAME is the contract selector, so the handover is two
-   * events: configure the headless name, remove the classic one — reversible
-   * by appending the mirror pair. Gated to plain web agents: integration
-   * agents (slack/telegram/email) keep the fenced format their channel
-   * prompts teach.
-   *
-   * OPEN QUESTION (experiment caveat): facet-placement subscriptions are
-   * documented as platform-internal, so this userland append may be rejected
-   * on hardened deployments — in which case the opt-in needs a platform door
-   * (e.g. the classic processor honoring a public handover event). The rest
-   * of the loop is unaffected either way.
+   * THE OPT-IN. Hosted-processor subscriptions cannot be removed, so the
+   * handover to the headless processor is ADDITIVE: subscribe the
+   * `agent-headless` name (a public subscription-configured append) and flip
+   * the agent's `config.driver` knob — the platform guarantees exactly one
+   * of the two subscribed processors acts, selected by that knob. Reversible
+   * by flipping the knob back. Gated to plain web agents: integration agents
+   * (slack/telegram/email) keep the fenced format their channel prompts
+   * teach.
    */
-  async #retargetAgentWakeToHeadless(event: StreamEvent): Promise<void> {
-    if (!event.path.startsWith("/agents/")) return;
-    if (/^\/agents\/(slack|telegram|email)\//.test(event.path)) return;
-    const payload = event.payload as {
-      name?: string;
-      receiver?: { action?: string; source?: { kind?: string } };
-    };
-    // The birth event this matches: { name: "agent", receiver:
-    // { action: "facet-processor", source: { kind: "builtin" } } } — see
-    // buildFacetProcessorSubscriptionConfiguredEvent in the platform.
-    if (payload.receiver?.action !== "facet-processor") return;
-    if (payload.name !== CLASSIC_PROCESSOR_SLUG) return;
+  async #handoverToHeadless(agentPaths: string[]): Promise<void> {
     const itx = await this.itx;
-    await this.#appendUnlessAlreadyRecorded(() =>
-      itx.streams.get(event.path).append(
-        {
+    for (const path of agentPaths) {
+      if (!path.startsWith("/agents/")) continue;
+      if (/^\/agents\/(slack|telegram|email)\//.test(path)) continue;
+      await this.#appendUnlessAlreadyRecorded(() =>
+        itx.streams.get(path).append({
           type: "events.iterate.com/stream/subscription-configured",
-          idempotencyKey: `codemode-tag/handover-configure:${event.offset}`,
+          idempotencyKey: `codemode-tag/handover-subscribe:${path}`,
           payload: {
             name: HEADLESS_PROCESSOR_SLUG,
             receiver: { action: "facet-processor", source: { kind: "builtin" } },
           },
-        },
-        {
-          type: "events.iterate.com/stream/subscription-removed",
-          idempotencyKey: `codemode-tag/handover-remove:${event.offset}`,
-          payload: { name: CLASSIC_PROCESSOR_SLUG, reason: "requested" },
-        },
-      ),
-    );
+        }),
+      );
+      await this.#appendUnlessAlreadyRecorded(() =>
+        itx.agents.get(path).append({
+          type: "events.iterate.com/agent/configured",
+          idempotencyKey: `codemode-tag/handover-driver:${path}`,
+          payload: { config: { driver: HEADLESS_PROCESSOR_SLUG } },
+        }),
+      );
+    }
   }
 
   /**

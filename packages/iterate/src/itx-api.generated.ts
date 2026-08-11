@@ -2573,6 +2573,7 @@ export type AgentProcessorState = {
     maxAutonomousTurns: number;
     scriptResultHistoryLimit: number;
     compactionTriggerFraction: number;
+    driver: "agent" | "agent-headless";
   };
   contextItems: {
     offset: number;
@@ -2694,6 +2695,7 @@ export type AgentEventInput =
           maxAutonomousTurns?: number | undefined;
           scriptResultHistoryLimit?: number | undefined;
           compactionTriggerFraction?: number | undefined;
+          driver?: "agent" | "agent-headless" | undefined;
         };
       }
     >

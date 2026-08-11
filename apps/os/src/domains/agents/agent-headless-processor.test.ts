@@ -14,6 +14,8 @@ import {
   HeadlessAgentProcessor,
   HeadlessAgentProcessorContract,
 } from "./agent-headless-processor.ts";
+import { AgentProcessor } from "./agent-processor-implementation.ts";
+import type { AgentProcessorContract } from "./agent-processor-contract.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
 
 const CONTEXT_ADDED = "events.iterate.com/agents/context-added";
@@ -144,6 +146,44 @@ it("a plain sendMessage (no llmRequestOffset) still mirrors into assistant histo
   });
 });
 
+it("the driver knob makes exactly one loop act: headless idles without it, classic idles with it", async () => {
+  // Hosted-processor subscriptions cannot be removed, so a handed-over
+  // stream stays subscribed to BOTH processors; config.driver is what makes
+  // exactly one of them act. Undriven headless: fully inert.
+  const idleHeadless = makeHeadlessHarness();
+  await idleHeadless.play(
+    [
+      "append",
+      { type: "events.iterate.com/agent/created", payload: {} },
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { model: "test-model" } } },
+      },
+      {
+        type: CONTEXT_ADDED,
+        payload: { role: "system", key: "agent/system-prompt", content: "prompt" },
+      },
+      userMessage("anyone home?"),
+    ],
+    ["advanceTime", 60_000],
+  );
+  expect(idleHeadless.llm.calls).toHaveLength(0);
+  expect(idleHeadless.events("events.iterate.com/agent/llm-request-requested")).toHaveLength(0);
+
+  // Classic under a headless driver: equally inert — no turn, no mirror.
+  const llm = makeScriptedLlm();
+  const classic = makeProcessorHarness<AgentProcessorContract>({
+    createProcessor: (deps) => new AgentProcessor({ ...deps, callLlm: llm.transport }),
+    path: "/agents/handed-over",
+  });
+  await classic.play(
+    ["append", ...NEW_AGENT_EVENTS, userMessage("anyone home?")],
+    ["advanceTime", 60_000],
+  );
+  expect(llm.calls).toHaveLength(0);
+  expect(classic.events("events.iterate.com/agent/llm-request-requested")).toHaveLength(0);
+});
+
 // -----------------------------------------------------------------------------
 // Harness: the generic step harness plus a minimal scripted LLM (mirrors
 // agent-processor.test.ts).
@@ -155,7 +195,7 @@ const NEW_AGENT_EVENTS = [
   { type: "events.iterate.com/agent/created", payload: {} },
   {
     type: "events.iterate.com/agent/configured",
-    payload: { config: { llm: { model: "test-model" } } },
+    payload: { config: { llm: { model: "test-model" }, driver: "agent-headless" } },
   },
   {
     type: CONTEXT_ADDED,

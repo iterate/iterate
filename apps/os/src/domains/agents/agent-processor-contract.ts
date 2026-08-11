@@ -156,6 +156,18 @@ export const AgentProcessorContract = defineProcessorContract({
               "turns before the window actually fills, so a slow or failed summary attempt " +
               "never races an imminent context overflow.",
           }),
+        driver: z
+          .enum(["agent", "agent-headless"])
+          .default("agent")
+          .meta({
+            description:
+              "Which registered agent processor DRIVES this stream (by contract slug); the " +
+              "other stands down entirely. Hosted-processor subscriptions cannot be removed, " +
+              "so a stream subscribed to both processors needs exactly one to act — this knob " +
+              "is that selection, and appending it is the public half of the headless " +
+              "handover (see agent-headless-processor.ts). Format-agnostic on purpose: what " +
+              "a headless stream's responses MEAN is decided in userland, never here.",
+          }),
       })
       .prefault({})
       .meta({ description: "The agent's complete configuration, every knob defaulted." }),
@@ -359,6 +371,7 @@ export const AgentProcessorContract = defineProcessorContract({
             maxAutonomousTurns: z.number().int().positive().optional(),
             scriptResultHistoryLimit: z.number().int().positive().optional(),
             compactionTriggerFraction: z.number().positive().max(1).optional(),
+            driver: z.enum(["agent", "agent-headless"]).optional(),
           })
           .strict()
           .meta({ description: "Partial patch, deep-merged into the current config." }),

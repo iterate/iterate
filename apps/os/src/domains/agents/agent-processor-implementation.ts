@@ -54,6 +54,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   });
 
   protected override processEvent(args: ProcessEventArgs<AgentProcessorContract>): undefined {
+    // Stand down entirely when another registered processor drives this
+    // stream (config.driver — hosted-processor subscriptions cannot be
+    // removed, so streams subscribed to both rely on this selection). The
+    // fold still runs above, so reads and a later hand-back stay coherent.
+    if (args.state.config.driver !== "agent") return;
     for (const component of this.#components) component.processEvent(args);
   }
 

@@ -23,13 +23,12 @@ The platform runs each agent under its **headless** processor — turn
 scheduling and the LLM call, with no response interpretation. `worker.ts`
 here is the interpreter:
 
-1. On each agent's birth subscription event, it hands the wake over to the
-   headless processor: configure the `agent-headless` subscription, remove the
-   `agent` one (subscription names are contract selectors; the handover is
-   reversible by appending the mirror pair). Note: facet subscriptions are
-   documented as platform-internal, so this userland append is the
-   experiment's shakiest joint — if a deployment rejects it, the opt-in needs
-   a small platform door instead.
+1. On each agent's birth (and, after every config deploy, for every existing
+   agent), it hands the stream to the headless processor. Hosted-processor
+   subscriptions cannot be removed, so the handover is ADDITIVE: subscribe
+   the `agent-headless` name, then flip the agent's `config.driver` knob —
+   the platform guarantees exactly one of the two subscribed processors acts,
+   selected by that knob. Reversible by flipping the knob back.
 2. It supersedes each agent's keyed system-prompt slot with
    `prompts/agent-system-prompt.md`, and injects `AGENTS.md` as standing
    context, re-syncing both on every config-repo commit.
@@ -53,9 +52,20 @@ rendering — is a commit to this repo. No platform deploy.**
   the promotion path is a real hosted stream processor (`createProcessorHost`)
   or platformizing the proven format.
 - First-turn race: an agent's first turn can start under the classic
-  processor before the retarget lands — that one turn uses the fenced format,
+  processor before the handover lands — that one turn uses the fenced format,
   then self-heals (shared idempotency keys make the handover dedupe).
 - Slash commands (`/example`, `/script`) are platform interpretation and are
   inert here.
 - Web agents only: slack/telegram/email agent paths are excluded from the
   retarget and keep the classic fenced format.
+
+## Switching an existing project to this template
+
+There is no first-class "re-template" door yet (`configRepoTemplate` applies
+at creation; `cli config-repo reset` targets only the default template). The
+wholesale switch is a commit: overwrite `/repos/config` with this template's
+files (one multi-file workspace commit — delete what the old config had,
+write these). The commit auto-redeploys the project worker, whose
+`project/worker-updated` sweep then hands every existing agent to the
+headless driver and syncs the prompt. In-flight fenced turns finish under the
+old rules; the next turn speaks `<codemode>`.
