@@ -74,7 +74,7 @@ AppState.addEventListener("change", (state) => {
     lastLeftForegroundAt !== 0 &&
     Date.now() - lastLeftForegroundAt > NOTE_COMPOSER_REAPPEAR_AFTER_MS
   ) {
-    queryClient.setQueryData(composerOpenKey, true);
+    queryClient.setQueryData(composerOpenKey, "auto");
     // A fresh "app open": drain prompts get another chance (D4).
     queryClient.setQueryData(drainGenerationKey, (generation: any) => (generation || 0) + 1);
   }
@@ -149,16 +149,27 @@ export function NoteCaptureOverlay() {
   const insets = useSafeAreaInsets();
   const cache = useQueryClient();
   const projectId = typeof params.projectId === "string" ? params.projectId : "";
-  const inProject = segments[0] === "project" && projectId !== "";
+  // Widened: expo-router's typed segments omit the index route, but at
+  // runtime the sign-in screen yields [].
+  const segmentList: string[] = segments;
+  const inProject = segmentList[0] === "project" && projectId !== "";
   // Chat has its own composer — never stack two inputs.
-  const onChatScreen = segments.includes("chat");
+  const onChatScreen = segmentList.includes("chat");
+  // The sign-in screen's CTA sits where the sheet docks — the expanded
+  // composer would cover it (the notes Playwright spec caught exactly that).
+  // Capture stays reachable there via the pill; notes land in the pending
+  // queue like anywhere else outside a project.
+  const pillOnly = segmentList.length === 0 || segmentList[0] === "index";
 
-  const open = useQuery({
+  // "auto" = expanded everywhere except pill-only screens; "open" = the user
+  // tapped the pill (expanded even there); "closed" = the user tapped ✕.
+  const open = useQuery<"auto" | "open" | "closed">({
     queryKey: composerOpenKey,
-    queryFn: async () => true,
-    initialData: true,
+    queryFn: async () => "auto" as const,
+    initialData: "auto",
     staleTime: Infinity,
   });
+  const expanded = open.data === "open" || (open.data === "auto" && !pillOnly);
   const drainGeneration = useQuery({
     queryKey: drainGenerationKey,
     queryFn: async () => 0,
@@ -279,7 +290,7 @@ export function NoteCaptureOverlay() {
 
   if (onChatScreen) return null;
 
-  if (!open.data) {
+  if (!expanded) {
     return (
       <View
         pointerEvents="box-none"
@@ -288,7 +299,7 @@ export function NoteCaptureOverlay() {
         <Pressable
           accessibilityLabel="Capture a note"
           accessibilityRole="button"
-          onPress={() => cache.setQueryData(composerOpenKey, true)}
+          onPress={() => cache.setQueryData(composerOpenKey, "open")}
           style={styles.pill}
         >
           <Text style={styles.pillText}>📝</Text>
@@ -344,7 +355,7 @@ export function NoteCaptureOverlay() {
             accessibilityLabel="Close note composer"
             accessibilityRole="button"
             hitSlop={10}
-            onPress={() => cache.setQueryData(composerOpenKey, false)}
+            onPress={() => cache.setQueryData(composerOpenKey, "closed")}
           >
             <Text style={styles.close}>✕</Text>
           </Pressable>

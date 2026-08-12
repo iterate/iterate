@@ -11,7 +11,6 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Image,
   Modal,
@@ -156,6 +155,10 @@ function NoteRow({
   projectId: string;
 }) {
   const [expanded, setExpanded] = useState(false);
+  // Inline two-step confirm (the media wipe-link shape), not Alert.alert —
+  // react-native-web leaves Alert unimplemented, and the Playwright spec
+  // lane drives the web build.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const remove = useMutation({
     mutationFn: async () => {
       const project = await getProjectItx(baseUrl, projectId);
@@ -172,16 +175,12 @@ function NoteRow({
         .append(buildReanalyzeEvent(item.payload.noteKey, Date.now().toString(36)));
     },
   });
-  const confirmDelete = () => {
-    Alert.alert("Delete this note?", item.displayTitle, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: () => remove.mutate() },
-    ]);
-  };
-
   return (
     <Pressable
-      onLongPress={confirmDelete}
+      onLongPress={() => {
+        setExpanded(true);
+        setConfirmingDelete(true);
+      }}
       onPress={() => setExpanded(!expanded)}
       style={styles.row}
     >
@@ -237,15 +236,26 @@ function NoteRow({
                 {reanalyze.isPending ? "Re-analyzing…" : "Re-analyze"}
               </Text>
             </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              onPress={confirmDelete}
-              style={styles.actionButton}
-            >
-              <Text style={[styles.actionText, { color: colors.danger }]}>
-                {remove.isPending ? "Deleting…" : "Delete"}
-              </Text>
-            </Pressable>
+            {confirmingDelete ? (
+              <Pressable
+                accessibilityRole="button"
+                disabled={remove.isPending}
+                onPress={() => remove.mutate()}
+                style={[styles.actionButton, { borderColor: colors.danger }]}
+              >
+                <Text style={[styles.actionText, { color: colors.danger }]}>
+                  {remove.isPending ? "Deleting…" : "Yes, delete this note"}
+                </Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setConfirmingDelete(true)}
+                style={styles.actionButton}
+              >
+                <Text style={[styles.actionText, { color: colors.danger }]}>Delete…</Text>
+              </Pressable>
+            )}
           </View>
         ) : null}
         {remove.isError ? (
