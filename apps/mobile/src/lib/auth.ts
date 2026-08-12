@@ -122,16 +122,33 @@ export async function signIn(baseUrl: string, options: { loginHint?: string } = 
     extraParams: {
       resource,
       // Rides the OAuth authorize request into the auth worker's login page,
-      // which prefills it — and, for `*+test@nustom.com` on deployments with
-      // the test OTP enabled, signs in with it automatically (preview QR
-      // deep links carry a per-PR test identity).
+      // which prefills it (preview QR deep links carry a per-PR test
+      // identity). For test addresses the browser doesn't even land there —
+      // see the /test-login wrap below — but the hint stays on the authorize
+      // request so the fallback (endpoint missing on a stale deployment) is
+      // the prefilled login page, not a blank one.
       ...(options.loginHint ? { login_hint: options.loginHint } : {}),
     },
   });
+  const discovery = { authorizationEndpoint: config.authorization_endpoint };
+  // Test identities skip the login screen entirely: route the browser through
+  // the auth worker's /test-login (fixed-test-OTP deployments only — 404 in
+  // production, apps/auth/src/server/test-login.ts), which completes the
+  // fixed-OTP sign-in server-side and bounces straight into this same
+  // authorize URL with the session cookie set. The user's first page is the
+  // consent screen — deliberately kept, since the app is a userland client.
+  const testLoginHint =
+    options.loginHint && /\+test@nustom\.com$/i.test(options.loginHint) ? options.loginHint : null;
+  const promptUrl = testLoginHint
+    ? await (async () => {
+        const url = new URL("/test-login", issuer);
+        url.searchParams.set("email", testLoginHint);
+        url.searchParams.set("return_to", await request.makeAuthUrlAsync(discovery));
+        return url.toString();
+      })()
+    : undefined;
   console.log(`[auth] prompting: redirectUri=${REDIRECT_URI} clientId=${clientId}`);
-  const result = await request.promptAsync({
-    authorizationEndpoint: config.authorization_endpoint,
-  });
+  const result = await request.promptAsync(discovery, promptUrl ? { url: promptUrl } : {});
   console.log(
     `[auth] prompt result: type=${result.type}` +
       (result.type === "success" ? ` params=${JSON.stringify(Object.keys(result.params))}` : "") +
