@@ -7,10 +7,13 @@ size: small
 
 Three small fixes for the Media screen, from dogfooding in prod (2026-08-12).
 
-**Status:** done pending review — PR #2481 (draft). Original three fixes plus
-Misha's follow-up (declutter the controls: ⋯ options button, no inline Sync
-now, clearer delete-all copy). Typecheck, lint, knip, format, and the full
-apps/mobile vitest suite pass locally.
+**Status:** done pending review — PR #2481 now ALSO carries the pipeline
+split from tasks/media-uploaded-event.md (branch media-uploaded-event merged
+in here; PR #2482 closed as superseded). This file covers only the niggles +
+toolbar rework. Original three fixes plus Misha's follow-up (declutter the
+controls: ⋯ options button, no inline Sync now, clearer delete-all copy).
+Typecheck, lint, knip, format, and the full apps/mobile vitest suite pass
+locally.
 Main pieces: byte-sniffing (`lib/image-format.ts`) + `compatible` picker
 representation + phone-side HEIC gate; stock RefreshControl on the list;
 filename in expanded row detail. Nothing known missing.
@@ -99,3 +102,7 @@ The Off/On settings row, "+ Add", and "Sync now" sat too close together.
   step; mislabeling was the shared bug and that part is fixed for both.
 - media-sync.ts (screenshots album) untouched — screenshots are PNGs and its
   filename-extension trust has not misfired.
+- Post-merge with media-uploaded-event: pending cards say "Uploading…" (the
+  slow analysis half moved server-side), the pull-to-refresh filter keeps
+  waiting/uploading cards, and the HEIC gate's "doomed server-side" rationale
+  still holds — the server analysis pipeline calls toMarkdown the same way.

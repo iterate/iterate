@@ -1,17 +1,20 @@
 // The Expo-welded half of the screenshot sync engine: permission flow,
 // screenshots-album enumeration, byte reads, and driving each new asset
-// through the same capture pipeline the picker uses (media.ts). The pure
-// pass-planning rules live in media-sync-core.ts. Sync is device-initiated
-// push per the original spec: the phone with the toggle on decides to run a
-// pass (Media screen open, pull-to-refresh, or the ⋯ dialog's Sync now);
-// there is no background task.
+// through the same capture pipeline the picker uses (media.ts) — now just
+// hash + upload + one durable media/uploaded append per item; analysis is
+// server-side (the MediaApp processor reacts to the event), so a pass is
+// fast and backgrounding mid-pass loses ~nothing. The pure pass-planning
+// rules live in media-sync-core.ts. Sync is device-initiated push per the
+// original spec: the phone with the toggle on decides to run a pass (Media
+// screen open, pull-to-refresh, or the ⋯ dialog's Sync now); there is no
+// background task.
 
 import * as Crypto from "expo-crypto";
 import * as MediaLibrary from "expo-media-library";
 import type { ProjectStub } from "iterate/sdk/itx/react";
 import { uint8ArrayToBase64 } from "./encoding.ts";
 import {
-  buildProcessScript,
+  buildUploadedEvent,
   mapWithConcurrency,
   MEDIA_STREAM_PATH,
   mediaFilePath,
@@ -38,7 +41,7 @@ export type SyncPassResult =
 
 /**
  * One sync pass: newest screenshots first, hash each, skip what the stream
- * already has, capture the rest through the standard pipeline. Safe to run
+ * already has, upload the rest and append their birth events. Safe to run
  * repeatedly — the stop rule makes caught-up passes cheap.
  */
 export type SyncCandidate = { previewUri: string; filename: string };
@@ -51,7 +54,7 @@ export async function runSyncPass(input: {
   onProgress: (message: string) => void;
   /** A new (not-yet-captured) screenshot was found — show it immediately. */
   onCandidate: (candidate: SyncCandidate) => void;
-  /** Its server-side processing settled; error is null on success. */
+  /** Its upload settled; error is null on success. */
   onCandidateDone: (candidate: SyncCandidate, error: string | null) => void;
 }): Promise<SyncPassResult> {
   const permission = await MediaLibrary.requestPermissionsAsync();
@@ -122,18 +125,19 @@ export async function runSyncPass(input: {
     after = page.endCursor;
   }
 
-  // Processing: the discovered new ones, 3-wide like the picker flow.
+  // Upload the discovered new ones, 3-wide like the picker flow: bytes to
+  // files, then the durable birth event. Analysis follows server-side.
   let synced = 0;
   let failed = 0;
   await mapWithConcurrency(candidates, 3, async (candidate) => {
-    input.onProgress(`Analyzing ${synced + 1} of ${candidates.length} new…`);
+    input.onProgress(`Uploading ${synced + 1} of ${candidates.length} new…`);
     try {
       await input.project.files.get(mediaFilePath(candidate.stableKey, candidate.filename)).put({
         data: candidate.base64,
         contentType: candidate.contentType,
       });
-      await input.project.capabilityHost.runScript(
-        buildProcessScript({
+      await stream.append(
+        buildUploadedEvent({
           stableKey: candidate.stableKey,
           wipeGeneration,
           filename: candidate.filename,
@@ -143,14 +147,13 @@ export async function runSyncPass(input: {
           source: "library-sync",
           capturedAt: candidate.capturedAt,
           isScreenshot: true,
-          mode: "capture",
         }),
       );
       input.onCandidateDone(candidate, null);
       synced += 1;
     } catch (error) {
-      // One oversized/failed screenshot must not sink the whole pass; its
-      // card shows the error and the next pass will retry it.
+      // One failed upload must not sink the whole pass; its card shows the
+      // error and the next pass will retry it.
       input.onCandidateDone(candidate, error instanceof Error ? error.message : String(error));
       failed += 1;
     }

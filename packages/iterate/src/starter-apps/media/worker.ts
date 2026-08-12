@@ -1,12 +1,14 @@
-// The MediaApp Durable Object: hosts the media stream processor and exposes
-// the query surface (search/list/get) that gets mounted at `itx.media`.
-// Search returns signed image URLs so an agent's answer can show the actual
+// The MediaApp Durable Object: hosts the media stream processor — the fold
+// AND the server-side analysis obligations (processor.ts) — and exposes the
+// query surface (search/list/get) that gets mounted at `itx.media`. Search
+// returns signed image URLs so an agent's answer can show the actual
 // screenshot. No HTTP page — this app is an API, not a site.
 import {
   StreamProcessorDurableObject,
   type ProcessorHostDeps,
   type StreamEvent,
 } from "../../sdk.ts";
+import { analyzeMediaImage } from "./analysis.ts";
 import { mediaStreamPath } from "./app-ref.ts";
 import { MediaProcessor, searchMediaItems, type MediaItem, type MediaState } from "./processor.ts";
 
@@ -17,8 +19,19 @@ export type MediaSearchHit = MediaItem & {
 
 export class MediaApp extends StreamProcessorDurableObject<MediaState> {
   protected readonly streamPath = mediaStreamPath;
+  /** Analysis obligations must survive eviction: the keepalive revives this
+   * DO and the caught-up pass restarts still-open work from reduced state. */
+  protected override readonly recovery = true;
   protected createProcessor(deps: ProcessorHostDeps) {
-    return new MediaProcessor(deps);
+    return new MediaProcessor({
+      ...deps,
+      now: Date.now,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      analyze: async (input) => {
+        using project = await this.env.ITX.get();
+        return await analyzeMediaImage(project, input);
+      },
+    });
   }
 
   /** Project-worker event delivery calls this after a durable /media event

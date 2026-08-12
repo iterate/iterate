@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import {
-  buildProcessScript,
+  buildReanalyzeEvent,
+  buildUploadedEvent,
   buildWipeScript,
   extendedSinceIso,
   mediaIdempotencyKey,
@@ -10,35 +11,24 @@ import {
   mapWithConcurrency,
   MEDIA_CAPTURED_EVENT_TYPE,
   MEDIA_PROCESSED_EVENT_TYPE,
+  MEDIA_REANALYZE_REQUESTED_EVENT_TYPE,
+  MEDIA_UPLOADED_EVENT_TYPE,
   MEDIA_WIPED_EVENT_TYPE,
   mediaFilePath,
   normalizedImageFilename,
   type MediaListItem,
 } from "./media.ts";
 
-// The script builder's output is what actually runs server-side, so the
-// tests EVALUATE it against a fake itx rather than asserting on the string.
+// Analysis is server-side now (iterate/starter-apps/media — analysis.test.ts
+// and media-analysis.test.ts over there own the pipeline and obligation
+// behavior); these tests cover the phone's half: the durable event builders,
+// the list derivation with its analysis states, and the wipe script.
 
-test("capture script describes, transcribes, tags, and appends one idempotent event", async () => {
-  const itx = fakeItx({
-    toMarkdown: { format: "markdown", data: "A train ticket from Rome to Florence.\n" },
-    // OpenAI-style answer shape (what llama on Workers AI actually returns),
-    // wrapped in chatter the JSON extractor must see through.
-    visionAnswer: {
-      choices: [
-        {
-          message: {
-            content:
-              'Here is the JSON: {"title": "Trenitalia ticket to Florence", "transcript": "Train to Florence\\nSeat 21A", "tags": ["logistics", "Screenshot!", "screenshot"]}',
-          },
-        },
-      ],
-    },
-  });
-  const result = await runScript(
-    buildProcessScript({
-      wipeGeneration: 0,
+test("buildUploadedEvent: the whole durable capture is one metadata append", () => {
+  expect(
+    buildUploadedEvent({
       stableKey: "abc123",
+      wipeGeneration: 0,
       filename: "IMG_0001.PNG",
       contentType: "image/png",
       width: 1170,
@@ -46,25 +36,17 @@ test("capture script describes, transcribes, tags, and appends one idempotent ev
       source: "picker",
       capturedAt: null,
       isScreenshot: null,
-      mode: "capture",
     }),
-    itx,
-  );
-
-  expect(itx.calls.bytesPath).toBe("/media/abc123-IMG_0001.PNG");
-  expect(itx.calls.visionBody.messages[0].content[1].image_url.url).toMatch(
-    /^data:image\/png;base64,/,
-  );
-  expect(itx.calls.appended).toMatchObject({
-    type: MEDIA_CAPTURED_EVENT_TYPE,
+  ).toEqual({
+    type: MEDIA_UPLOADED_EVENT_TYPE,
+    // Shared spelling with legacy captured events: an item captured before
+    // the uploaded-event split can never re-enter as a duplicate.
     idempotencyKey: "media-captured-abc123",
     payload: {
       stableKey: "abc123",
-      title: "Trenitalia ticket to Florence",
-      markdown: "A train ticket from Rome to Florence.",
-      transcript: "Train to Florence\nSeat 21A",
-      // lowercased, punctuation folded, deduped
-      tags: ["logistics", "screenshot"],
+      path: "/media/abc123-IMG_0001.PNG",
+      filename: "IMG_0001.PNG",
+      contentType: "image/png",
       width: 1170,
       height: 2532,
       source: "picker",
@@ -72,194 +54,28 @@ test("capture script describes, transcribes, tags, and appends one idempotent ev
       isScreenshot: null,
     },
   });
-  expect(result).toMatchObject({ offset: 1 });
-});
-
-test("reprocess mode appends a processed event and skips the dedup check", async () => {
-  const existing = { offset: 7, type: MEDIA_CAPTURED_EVENT_TYPE };
-  const itx = fakeItx({
-    existingEvent: existing, // would short-circuit a capture — must be ignored
-    toMarkdown: { format: "markdown", data: "Better description." },
-    visionAnswer: {
-      choices: [{ message: { content: '{"transcript": "", "tags": ["receipt"]}' } }],
-    },
-  });
-  await runScript(
-    buildProcessScript({
-      wipeGeneration: 0,
+  // Wipe generation flows into the key, so post-wipe re-captures come back.
+  expect(
+    buildUploadedEvent({
       stableKey: "abc123",
-      filename: "IMG_0001.PNG",
-      contentType: "image/png",
-      width: 10,
-      height: 10,
-      source: "picker",
-      capturedAt: null,
-      isScreenshot: null,
-      mode: { reprocessNonce: "n1" },
-    }),
-    itx,
-  );
-  expect(itx.calls.appended).toMatchObject({
-    type: MEDIA_PROCESSED_EVENT_TYPE,
-    idempotencyKey: "media-processed-abc123-n1",
-    payload: { stableKey: "abc123", markdown: "Better description.", tags: ["receipt"] },
-  });
-  // Reprocess payloads carry no file facts — the captured event owns those.
-  expect(itx.calls.appended.payload.path).toBeUndefined();
-});
-
-test("oversized images are downscaled for the vision call only", async () => {
-  const itx = fakeItx({
-    toMarkdown: { format: "markdown", data: "desc" },
-    visionAnswer: {
-      choices: [{ message: { content: '{"title": "t", "transcript": "", "tags": []}' } }],
-    },
-    fileBytes: new Uint8Array(1_500_000),
-  });
-  await runScript(
-    buildProcessScript({
-      wipeGeneration: 0,
-      stableKey: "big",
-      filename: "tall.png",
-      contentType: "image/png",
-      width: 1170,
-      height: 20_000,
-      source: "picker",
-      capturedAt: null,
-      isScreenshot: null,
-      mode: "capture",
-    }),
-    itx,
-  );
-  expect(itx.calls.transformInput).toMatchObject({
-    transforms: [{ width: 1280 }],
-    output: { format: "image/jpeg" },
-  });
-  // The AI call got the small jpeg; the stored original was untouched.
-  expect(itx.calls.visionBody.messages[0].content[1].image_url.url).toMatch(
-    /^data:image\/jpeg;base64,/,
-  );
-});
-
-test("hostile filenames cannot break out of the script", async () => {
-  const filename = 'x"; process.exit(1);   //`${boom}`.png';
-  const itx = fakeItx({
-    toMarkdown: { format: "markdown", data: "desc" },
-    visionAnswer: {
-      choices: [{ message: { content: '{"transcript": "", "tags": ["clipping"]}' } }],
-    },
-  });
-  await runScript(
-    buildProcessScript({
-      wipeGeneration: 0,
-      stableKey: "k1",
-      filename,
-      contentType: "image/png",
-      width: 10,
-      height: 10,
-      source: "picker",
-      capturedAt: null,
-      isScreenshot: null,
-      mode: "capture",
-    }),
-    itx,
-  );
-  expect(itx.calls.appended).toMatchObject({ payload: { filename, tags: ["clipping"] } });
-});
-
-test("already-captured stableKey short-circuits before any AI call", async () => {
-  const existing = { offset: 7, type: MEDIA_CAPTURED_EVENT_TYPE };
-  const itx = fakeItx({
-    existingEvent: existing,
-    toMarkdown: { format: "markdown", data: "unused" },
-    visionAnswer: { choices: [{ message: { content: "{}" } }] },
-  });
-  const result = await runScript(
-    buildProcessScript({
-      wipeGeneration: 0,
-      stableKey: "dup",
+      wipeGeneration: 42,
       filename: "a.png",
       contentType: "image/png",
       width: 1,
       height: 1,
-      source: "picker",
-      capturedAt: null,
-      isScreenshot: null,
-      mode: "capture",
+      source: "library-sync",
+      capturedAt: "2026-08-10T09:00:00.000Z",
+      isScreenshot: true,
     }),
-    itx,
-  );
-  expect(result).toBe(existing);
-  expect(itx.calls.bytesPath).toBeUndefined();
-  expect(itx.calls.appended).toBeUndefined();
+  ).toMatchObject({ idempotencyKey: "media-captured-abc123-g42" });
 });
 
-test("unparseable vision output degrades to untagged + empty transcript; conversion error throws", async () => {
-  const itx = fakeItx({
-    toMarkdown: { format: "markdown", data: "desc" },
-    visionAnswer: { choices: [{ message: { content: "I could not decide, sorry!" } }] },
+test("buildReanalyzeEvent keys each request separately", () => {
+  expect(buildReanalyzeEvent("abc123", "n1")).toEqual({
+    type: MEDIA_REANALYZE_REQUESTED_EVENT_TYPE,
+    idempotencyKey: "media-reanalyze-abc123-n1",
+    payload: { stableKey: "abc123" },
   });
-  await runScript(
-    buildProcessScript({
-      wipeGeneration: 0,
-      stableKey: "k2",
-      filename: "a.png",
-      contentType: "image/png",
-      width: 1,
-      height: 1,
-      source: "picker",
-      capturedAt: null,
-      isScreenshot: null,
-      mode: "capture",
-    }),
-    itx,
-  );
-  expect(itx.calls.appended).toMatchObject({ payload: { tags: ["untagged"], transcript: "" } });
-
-  const failing = fakeItx({
-    toMarkdown: { format: "error", error: "unsupported" },
-    visionAnswer: { choices: [{ message: { content: "{}" } }] },
-  });
-  await expect(
-    runScript(
-      buildProcessScript({
-        wipeGeneration: 0,
-        stableKey: "k3",
-        filename: "b.png",
-        contentType: "image/png",
-        width: 1,
-        height: 1,
-        source: "picker",
-        capturedAt: null,
-        isScreenshot: null,
-        mode: "capture",
-      }),
-      failing,
-    ),
-  ).rejects.toThrow(/toMarkdown failed for b.png: unsupported/);
-});
-
-test("empty tags array is preserved — conservative no-tags is a valid answer", async () => {
-  const itx = fakeItx({
-    toMarkdown: { format: "markdown", data: "desc" },
-    visionAnswer: { choices: [{ message: { content: '{"transcript": "hi", "tags": []}' } }] },
-  });
-  await runScript(
-    buildProcessScript({
-      wipeGeneration: 0,
-      stableKey: "k4",
-      filename: "a.png",
-      contentType: "image/png",
-      width: 1,
-      height: 1,
-      source: "picker",
-      capturedAt: null,
-      isScreenshot: null,
-      mode: "capture",
-    }),
-    itx,
-  );
-  expect(itx.calls.appended).toMatchObject({ payload: { tags: [], transcript: "hi" } });
 });
 
 test("normalizedImageFilename forces the extension to match the payload type", () => {
@@ -275,31 +91,154 @@ test("mediaFilePath sanitizes and bounds the filename", () => {
   expect(mediaFilePath("abc", "x".repeat(200) + ".png")).toMatch(/^.{0,100}\.png$/);
 });
 
-test("deriveMediaList overlays the latest processed result per item, newest first", () => {
+test("deriveMediaList: uploaded rows are pending until a processed settlement overlays them", () => {
   const events: any[] = [
-    {
-      type: MEDIA_CAPTURED_EVENT_TYPE,
-      offset: 1,
-      createdAt: "t1",
-      payload: { stableKey: "a", markdown: "first", transcript: "", tags: ["untagged"] },
-    },
-    {
-      type: MEDIA_CAPTURED_EVENT_TYPE,
-      offset: 2,
-      createdAt: "t2",
-      payload: { stableKey: "b", markdown: "other", transcript: "", tags: [] },
-    },
+    uploadedEvent("a", 1),
+    uploadedEvent("b", 2),
     {
       type: MEDIA_PROCESSED_EVENT_TYPE,
       offset: 3,
       createdAt: "t3",
-      payload: { stableKey: "a", markdown: "better", transcript: "text!", tags: ["receipt"] },
+      payload: {
+        stableKey: "a",
+        title: "Trenitalia ticket",
+        markdown: "A train ticket.",
+        transcript: "Trenitalia 09:45",
+        tags: ["logistics"],
+        processedBy: "m",
+        error: null,
+        requestOffset: 1,
+      },
     },
   ];
   expect(deriveMediaList(events)).toMatchObject([
-    { offset: 2, payload: { markdown: "other" } },
-    { offset: 1, payload: { markdown: "better", transcript: "text!", tags: ["receipt"] } },
+    { offset: 2, analysis: { status: "pending" }, payload: { markdown: "", title: "" } },
+    {
+      offset: 1,
+      analysis: { status: "done" },
+      payload: {
+        title: "Trenitalia ticket",
+        markdown: "A train ticket.",
+        tags: ["logistics"],
+        // file facts from the uploaded event survive the overlay
+        filename: "a.png",
+        path: "/media/a-a.png",
+      },
+    },
   ]);
+});
+
+test("deriveMediaList: a failed settlement keeps the row (and its fields) and shows the error", () => {
+  const events: any[] = [
+    uploadedEvent("a", 1),
+    {
+      type: MEDIA_PROCESSED_EVENT_TYPE,
+      offset: 2,
+      createdAt: "t2",
+      payload: {
+        stableKey: "a",
+        title: "",
+        markdown: "",
+        transcript: "",
+        tags: [],
+        processedBy: "",
+        error: "8005: Internal server error",
+        requestOffset: 1,
+      },
+    },
+  ];
+  expect(deriveMediaList(events)).toMatchObject([
+    {
+      offset: 1,
+      analysis: { status: "failed", error: "8005: Internal server error" },
+      payload: { filename: "a.png" },
+    },
+  ]);
+});
+
+test("deriveMediaList: reanalyze flips a settled row back to pending until the next settlement", () => {
+  const processed = (offset: number, title: string) => ({
+    type: MEDIA_PROCESSED_EVENT_TYPE,
+    offset,
+    createdAt: `t${offset}`,
+    payload: {
+      stableKey: "a",
+      title,
+      markdown: "d",
+      transcript: "",
+      tags: [],
+      processedBy: "m",
+      error: null,
+      requestOffset: null,
+    },
+  });
+  const base: any[] = [
+    uploadedEvent("a", 1),
+    processed(2, "first"),
+    {
+      type: MEDIA_REANALYZE_REQUESTED_EVENT_TYPE,
+      offset: 3,
+      createdAt: "t3",
+      payload: { stableKey: "a" },
+    },
+  ];
+  // Request open: pending, but the previous processing stays visible.
+  expect(deriveMediaList(base)).toMatchObject([
+    { analysis: { status: "pending" }, payload: { title: "first" } },
+  ]);
+  // Settled again: the newer result overlays.
+  expect(deriveMediaList([...base, processed(4, "second")])).toMatchObject([
+    { analysis: { status: "done" }, payload: { title: "second" } },
+  ]);
+});
+
+test("deriveMediaList: legacy captured rows render as before, latest processed overlays", () => {
+  const events: any[] = [
+    capturedEvent("a", 1, { markdown: "first" }),
+    capturedEvent("b", 2, { markdown: "other" }),
+    {
+      type: MEDIA_PROCESSED_EVENT_TYPE,
+      offset: 3,
+      createdAt: "t3",
+      // Legacy phone-scripted re-analysis payload: no error/requestOffset.
+      payload: {
+        stableKey: "a",
+        title: "",
+        markdown: "better",
+        transcript: "text!",
+        tags: ["receipt"],
+        processedBy: "m",
+      },
+    },
+  ];
+  expect(deriveMediaList(events)).toMatchObject([
+    { offset: 2, analysis: { status: "done" }, payload: { markdown: "other" } },
+    {
+      offset: 1,
+      analysis: { status: "done" },
+      payload: { markdown: "better", transcript: "text!", tags: ["receipt"] },
+    },
+  ]);
+});
+
+test("deriveMediaList: one row per stableKey even when captured AND uploaded events exist", () => {
+  const events: any[] = [
+    capturedEvent("a", 1, { markdown: "inline analysis" }),
+    uploadedEvent("a", 2),
+  ];
+  expect(deriveMediaList(events)).toMatchObject([
+    { offset: 1, payload: { markdown: "inline analysis" }, analysis: { status: "done" } },
+  ]);
+});
+
+test("deriveMediaList resets at the last wiped tombstone", () => {
+  const events: any[] = [
+    capturedEvent("old", 1, { markdown: "gone" }),
+    uploadedEvent("pending-old", 2),
+    { type: MEDIA_WIPED_EVENT_TYPE, offset: 3, createdAt: "t3", payload: {} },
+    capturedEvent("new", 4, { markdown: "kept" }),
+  ];
+  expect(deriveMediaList(events)).toMatchObject([{ payload: { stableKey: "new" } }]);
 });
 
 test("filterMedia: terms AND together over markdown+transcript+filename+tags, chips must all match", () => {
@@ -338,42 +277,22 @@ test("mapWithConcurrency bounds in-flight work and preserves order", async () =>
   expect(peak).toBe(2);
 });
 
-test("wipe script deletes every stored file then appends the tombstone", async () => {
+test("wipe script deletes files from BOTH birth event types then appends the tombstone", async () => {
   const itx = fakeItx({
-    toMarkdown: { format: "markdown", data: "unused" },
-    visionAnswer: { choices: [{ message: { content: "{}" } }] },
     streamEvents: [
       { type: MEDIA_CAPTURED_EVENT_TYPE, offset: 1, payload: { path: "/media/a-x.png" } },
-      { type: MEDIA_CAPTURED_EVENT_TYPE, offset: 2, payload: { path: "/media/b-y.png" } },
+      { type: MEDIA_UPLOADED_EVENT_TYPE, offset: 2, payload: { path: "/media/b-y.png" } },
       { type: MEDIA_CAPTURED_EVENT_TYPE, offset: 3, payload: { path: "/media/a-x.png" } },
     ],
   });
   await runScript(buildWipeScript("n1"), itx);
+  expect(itx.calls.eventTypesRead).toEqual([MEDIA_CAPTURED_EVENT_TYPE, MEDIA_UPLOADED_EVENT_TYPE]);
   expect(itx.calls.deletedPaths).toEqual(["/media/a-x.png", "/media/b-y.png"]); // deduped
   expect(itx.calls.appended).toMatchObject({
     type: MEDIA_WIPED_EVENT_TYPE,
     idempotencyKey: "media-wiped-n1",
     payload: { deletedFiles: 2, items: 2 },
   });
-});
-
-test("deriveMediaList resets at the last wiped tombstone", () => {
-  const events: any[] = [
-    {
-      type: MEDIA_CAPTURED_EVENT_TYPE,
-      offset: 1,
-      createdAt: "t1",
-      payload: { stableKey: "old", markdown: "gone", transcript: "", tags: [] },
-    },
-    { type: MEDIA_WIPED_EVENT_TYPE, offset: 2, createdAt: "t2", payload: {} },
-    {
-      type: MEDIA_CAPTURED_EVENT_TYPE,
-      offset: 3,
-      createdAt: "t3",
-      payload: { stableKey: "new", markdown: "kept", transcript: "", tags: [] },
-    },
-  ];
-  expect(deriveMediaList(events)).toMatchObject([{ payload: { stableKey: "new" } }]);
 });
 
 test("wipe generation changes the capture identity so re-captures work after Delete-all", async () => {
@@ -401,10 +320,54 @@ test("extendedSinceIso only ever extends an enabled window backwards", () => {
 
 // --- helpers ---------------------------------------------------------------
 
+function uploadedEvent(stableKey: string, offset: number) {
+  return {
+    type: MEDIA_UPLOADED_EVENT_TYPE,
+    offset,
+    createdAt: `t${offset}`,
+    payload: {
+      stableKey,
+      path: `/media/${stableKey}-${stableKey}.png`,
+      filename: `${stableKey}.png`,
+      contentType: "image/png",
+      width: 100,
+      height: 200,
+      source: "picker",
+      capturedAt: null,
+      isScreenshot: null,
+    },
+  };
+}
+
+function capturedEvent(stableKey: string, offset: number, processing: { markdown: string }) {
+  return {
+    type: MEDIA_CAPTURED_EVENT_TYPE,
+    offset,
+    createdAt: `t${offset}`,
+    payload: {
+      stableKey,
+      path: `/media/${stableKey}-${stableKey}.png`,
+      filename: `${stableKey}.png`,
+      contentType: "image/png",
+      width: 100,
+      height: 200,
+      source: "picker",
+      capturedAt: null,
+      isScreenshot: null,
+      title: "",
+      markdown: processing.markdown,
+      transcript: "",
+      tags: [],
+      processedBy: "m",
+    },
+  };
+}
+
 function item(offset: number, markdown: string, transcript: string, tags: string[]): MediaListItem {
   return {
     offset,
     capturedAt: `2026-08-10T00:00:0${offset}Z`,
+    analysis: { status: "done", error: null },
     payload: {
       stableKey: `k${offset}`,
       path: `/media/k${offset}-f.png`,
@@ -424,20 +387,16 @@ function item(offset: number, markdown: string, transcript: string, tags: string
   };
 }
 
-function fakeItx(behavior: {
-  toMarkdown: any;
-  visionAnswer: any;
-  existingEvent?: any;
-  fileBytes?: Uint8Array;
-  streamEvents?: any[];
-}): any {
+function fakeItx(behavior: { streamEvents: any[] }): any {
   const calls: any = {};
   return {
     calls,
     streams: {
       get: () => ({
-        getEvent: async () => behavior.existingEvent,
-        getEvents: async (args: any) => (args.afterOffset === 0 ? behavior.streamEvents || [] : []),
+        getEvents: async (args: any) => {
+          calls.eventTypesRead = args.eventTypes;
+          return args.afterOffset === 0 ? behavior.streamEvents : [];
+        },
         append: async (event: any) => {
           calls.appended = event;
           return [{ ...event, offset: 1 }];
@@ -449,32 +408,7 @@ function fakeItx(behavior: {
         delete: async () => {
           (calls.deletedPaths ||= []).push(path);
         },
-        bytes: async () => {
-          calls.bytesPath = path;
-          return behavior.fileBytes || new Uint8Array([1, 2, 3]);
-        },
       }),
-    },
-    integrations: {
-      cf: {
-        images: {
-          transformBytes: async (input: any) => {
-            calls.transformInput = input;
-            return { bytes: new Uint8Array([9, 9]), contentType: "image/jpeg" };
-          },
-        },
-      },
-    },
-    ai: {
-      toMarkdown: async (doc: any) => {
-        calls.toMarkdownDoc = doc;
-        return behavior.toMarkdown;
-      },
-      run: async (model: string, body: any) => {
-        calls.visionModel = model;
-        calls.visionBody = body;
-        return behavior.visionAnswer;
-      },
     },
   };
 }
