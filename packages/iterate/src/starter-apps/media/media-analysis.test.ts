@@ -279,6 +279,34 @@ test("a wipe in the same batch cancels the obligation before any attempt starts"
   expect(h.state()).toMatchObject({ items: {}, pendingAnalyses: {} });
 });
 
+test("a stale settlement landing AFTER the fresh one neither overlays nor poisons the item", async () => {
+  const h = makeHarness(async () => result({ title: "fresh analysis", tags: ["screenshot"] }));
+  await h.append(uploaded("k1"));
+  expect(h.state()).toMatchObject({ items: { k1: { title: "fresh analysis" } } });
+
+  // A superseded attempt's settlement commits late (raw external append —
+  // same door legacy re-analysis uses), answering an OLDER request.
+  await h.append({
+    type: "events.iterate.com/media/processed",
+    idempotencyKey: "stale-late-settlement",
+    payload: {
+      stableKey: "k1",
+      title: "",
+      markdown: "",
+      transcript: "",
+      tags: [],
+      processedBy: "",
+      error: "pre-wipe attempt died",
+      requestOffset: 0,
+    },
+  });
+
+  expect(h.state()).toMatchObject({
+    items: { k1: { title: "fresh analysis", tags: ["screenshot"], analysisError: null } },
+    pendingAnalyses: {},
+  });
+});
+
 test("attempts are capped per pass; settlements pull the next wave through", async () => {
   // 19 uploads at once must not fire 19 parallel vision pipelines (observed
   // in prod: Workers AI 8004s + 60s binding timeouts under the burst). At

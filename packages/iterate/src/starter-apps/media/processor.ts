@@ -93,6 +93,16 @@ const MediaItem = z.object({
         "The latest analysis settlement's failure, or null. Rows born from " +
         "media/uploaded exist regardless of analysis outcome; a terminal failure lands here.",
     }),
+  settledRequestOffset: z
+    .number()
+    .nullable()
+    .default(null)
+    .meta({
+      description:
+        "requestOffset of the last APPLIED settlement — settlements apply monotonically, so " +
+        "a late one answering an older request can never overwrite a newer result (null until " +
+        "a requestOffset-carrying settlement lands; legacy settlements don't advance it).",
+    }),
 });
 
 export type MediaItem = z.infer<typeof MediaItem>;
@@ -118,7 +128,7 @@ type PendingAnalysis = z.infer<typeof PendingAnalysis>;
 
 export const MediaProcessorContract = defineProcessorContract({
   slug: "media",
-  version: "0.2.0",
+  version: "0.2.1",
   description:
     "Reduces captured media (screenshots/photos) on /media into a searchable index, and drives " +
     "server-side vision analysis of uploaded items (obligation pattern).",
@@ -297,6 +307,7 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract, Medi
               tags: [],
               processedBy: "",
               analysisError: null,
+              settledRequestOffset: null,
             },
           },
           pendingAnalyses: {
@@ -338,6 +349,7 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract, Medi
               ...event.payload,
               capturedEventAt: event.createdAt,
               analysisError: null,
+              settledRequestOffset: null,
             },
           },
         };
@@ -346,28 +358,33 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract, Medi
         return { ...state, items: {}, pendingAnalyses: {} };
       case "events.iterate.com/media/processed": {
         const pendingEntry = state.pendingAnalyses[event.payload.stableKey];
-        // Stale-result guard: a late settlement answering a SUPERSEDED
-        // request — e.g. a pre-wipe attempt racing Delete-all + re-upload —
-        // must neither clear the newer generation's obligation nor poison
-        // its item with an old failure. Legacy appends carry no
-        // requestOffset (`|| null` folds them in) and settle whatever is
-        // pending, as before.
-        const requestOffset = event.payload.requestOffset || null;
-        if (
-          pendingEntry !== undefined &&
-          requestOffset !== null &&
-          requestOffset < pendingEntry.requestOffset
-        ) {
-          return state;
-        }
-        const { [event.payload.stableKey]: _settled, ...pendingAnalyses } = state.pendingAnalyses;
         const existing = state.items[event.payload.stableKey];
+        // Stale-result guard, MONOTONIC by requestOffset: a late settlement
+        // answering a SUPERSEDED request — e.g. a pre-wipe attempt racing
+        // Delete-all + re-upload — must neither clear the newer generation's
+        // obligation nor overwrite/poison an already-applied newer result,
+        // regardless of commit order. The floor is whichever is higher: the
+        // open obligation's request or the last applied settlement's. Legacy
+        // appends carry no requestOffset (explicit undefined check — `||`
+        // would swallow a legitimate offset of 0), always apply, and never
+        // advance the floor — kept in lockstep with the phone's
+        // deriveMediaList.
+        const requestOffset =
+          event.payload.requestOffset === undefined ? null : event.payload.requestOffset;
+        const settledFloor = Math.max(
+          pendingEntry === undefined ? 0 : pendingEntry.requestOffset,
+          existing?.settledRequestOffset || 0,
+        );
+        if (requestOffset !== null && requestOffset < settledFloor) return state;
+        const { [event.payload.stableKey]: _settled, ...pendingAnalyses } = state.pendingAnalyses;
         // A processed event for an unknown item (e.g. pre-rename history)
         // has nothing to overlay — skip rather than invent a partial item.
         if (existing === undefined) return { ...state, pendingAnalyses };
         // `||` folds legacy payloads (no error field, reduced without the
         // contract parse in old states) into the success arm.
         const error = event.payload.error || null;
+        const settledRequestOffset =
+          requestOffset === null ? existing.settledRequestOffset : requestOffset;
         const item =
           error === null
             ? {
@@ -378,10 +395,11 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract, Medi
                 tags: event.payload.tags,
                 processedBy: event.payload.processedBy,
                 analysisError: null,
+                settledRequestOffset,
               }
             : // A failed analysis keeps whatever the item already shows; the
               // failure itself becomes visible on the row.
-              { ...existing, analysisError: error };
+              { ...existing, analysisError: error, settledRequestOffset };
         return {
           ...state,
           items: { ...state.items, [event.payload.stableKey]: item },

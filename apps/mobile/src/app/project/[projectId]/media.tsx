@@ -309,8 +309,16 @@ export default function MediaScreen() {
     <RefreshControl
       refreshing={events.isRefetching}
       onRefresh={() => {
+        // Keep "done" too: those cards bridge until their row arrives —
+        // dropping them mid-refetch re-opened the vanish-reappear gap.
+        // Ghosts stay impossible without the drop: the feed supersedes a
+        // done card once a wipe passes its offset, and only a wipe ever
+        // removes a derived row.
         setPending((current) =>
-          current.filter((row) => row.status === "waiting" || row.status === "uploading"),
+          current.filter(
+            (row) =>
+              row.status === "waiting" || row.status === "uploading" || row.status === "done",
+          ),
         );
         void events.refetch();
         if (settings?.enabled === true && !syncPass.isFetching) void syncPass.refetch();

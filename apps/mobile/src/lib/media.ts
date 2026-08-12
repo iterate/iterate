@@ -280,14 +280,32 @@ export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
   // A wiped tombstone resets everything before it.
   const wipedThroughOffset = lastWipeOffset(events);
   const liveEvents = events.filter((event) => event.offset > wipedThroughOffset);
-  const latestProcessed = new Map<string, { payload: MediaProcessedPayload; offset: number }>();
+  const appliedSettlement = new Map<
+    string,
+    { payload: MediaProcessedPayload; offset: number; requestOffset: number | null; floor: number }
+  >();
   const latestSuccessful = new Map<string, MediaProcessedPayload>();
   const latestRequest = new Map<string, number>();
   for (const event of liveEvents) {
     // Events arrive offset-ascending, so later wins by insertion order.
     if (event.type === MEDIA_PROCESSED_EVENT_TYPE) {
       const payload = event.payload as MediaProcessedPayload;
-      latestProcessed.set(payload.stableKey, { payload, offset: event.offset });
+      // Explicit undefined check — `||` would swallow a legitimate 0.
+      const requestOffset = payload.requestOffset === undefined ? null : payload.requestOffset;
+      const prior = appliedSettlement.get(payload.stableKey);
+      // Settlements apply MONOTONICALLY by requestOffset (lockstep with the
+      // server fold's guard): one answering an older request than an
+      // already-applied settlement is ignored outright, so commit order can
+      // never un-settle a row or resurrect stale content. Legacy
+      // settlements carry no requestOffset — they always apply and never
+      // advance the floor.
+      if (requestOffset !== null && requestOffset < (prior?.floor || 0)) continue;
+      appliedSettlement.set(payload.stableKey, {
+        payload,
+        offset: event.offset,
+        requestOffset,
+        floor: requestOffset === null ? prior?.floor || 0 : requestOffset,
+      });
       if (!payload.error) latestSuccessful.set(payload.stableKey, payload);
     }
     if (event.type === MEDIA_REANALYZE_REQUESTED_EVENT_TYPE) {
@@ -309,7 +327,7 @@ export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
     const base: MediaCapturedPayload = isCaptured
       ? born
       : { ...born, title: "", markdown: "", transcript: "", tags: [], processedBy: "" };
-    const processed = latestProcessed.get(born.stableKey);
+    const processed = appliedSettlement.get(born.stableKey);
     // Content comes from the latest SUCCESSFUL processing — a terminal
     // failure contributes only its failed state below, never a blank
     // overlay wiping fields an earlier success produced (the server fold
@@ -338,7 +356,7 @@ export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
     // carry no requestOffset and settle whatever was asked.
     const settles =
       processed !== undefined &&
-      (!processed.payload.requestOffset || processed.payload.requestOffset >= requestOffset);
+      (processed.requestOffset === null || processed.requestOffset >= requestOffset);
     const settledOffset = settles ? processed.offset : 0;
     const analysis: MediaAnalysisState =
       requestOffset > settledOffset

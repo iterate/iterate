@@ -296,6 +296,52 @@ test("deriveMediaList: a late settlement for a superseded request does not settl
   ]);
 });
 
+test("deriveMediaList: a stale settlement committing AFTER the valid one cannot un-settle the row", () => {
+  // Same race, opposite commit order: the CURRENT request settles first,
+  // then the superseded pre-wipe attempt's settlement lands late. Applying
+  // settlements monotonically by requestOffset keeps the row settled.
+  const events: any[] = [
+    uploadedEvent("a", 4),
+    {
+      type: MEDIA_PROCESSED_EVENT_TYPE,
+      offset: 5,
+      createdAt: "t5",
+      payload: {
+        stableKey: "a",
+        title: "fresh analysis",
+        markdown: "d",
+        transcript: "",
+        tags: ["screenshot"],
+        processedBy: "m",
+        error: null,
+        requestOffset: 4,
+      },
+    },
+    {
+      type: MEDIA_PROCESSED_EVENT_TYPE,
+      offset: 6,
+      createdAt: "t6",
+      payload: {
+        stableKey: "a",
+        title: "",
+        markdown: "",
+        transcript: "",
+        tags: [],
+        processedBy: "",
+        error: "pre-wipe attempt died",
+        requestOffset: 1, // superseded — must be ignored outright
+      },
+    },
+  ];
+  expect(deriveMediaList(events)).toMatchObject([
+    {
+      offset: 4,
+      analysis: { status: "done", error: null },
+      payload: { title: "fresh analysis", tags: ["screenshot"] },
+    },
+  ]);
+});
+
 test("deriveMediaList: reanalyze flips a settled row back to pending until the next settlement", () => {
   const processed = (offset: number, title: string) => ({
     type: MEDIA_PROCESSED_EVENT_TYPE,
