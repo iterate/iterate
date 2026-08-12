@@ -277,12 +277,14 @@ export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
   const lastWipeIndex = events.findLastIndex((event) => event.type === MEDIA_WIPED_EVENT_TYPE);
   const liveEvents = lastWipeIndex === -1 ? events : events.slice(lastWipeIndex + 1);
   const latestProcessed = new Map<string, { payload: MediaProcessedPayload; offset: number }>();
+  const latestSuccessful = new Map<string, MediaProcessedPayload>();
   const latestRequest = new Map<string, number>();
   for (const event of liveEvents) {
     // Events arrive offset-ascending, so later wins by insertion order.
     if (event.type === MEDIA_PROCESSED_EVENT_TYPE) {
       const payload = event.payload as MediaProcessedPayload;
       latestProcessed.set(payload.stableKey, { payload, offset: event.offset });
+      if (!payload.error) latestSuccessful.set(payload.stableKey, payload);
     }
     if (event.type === MEDIA_REANALYZE_REQUESTED_EVENT_TYPE) {
       const payload = event.payload as { stableKey: string };
@@ -304,15 +306,19 @@ export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
       ? born
       : { ...born, title: "", markdown: "", transcript: "", tags: [], processedBy: "" };
     const processed = latestProcessed.get(born.stableKey);
-    const success = processed !== undefined && !processed.payload.error;
+    // Content comes from the latest SUCCESSFUL processing — a terminal
+    // failure contributes only its failed state below, never a blank
+    // overlay wiping fields an earlier success produced (the server fold
+    // keeps them the same way).
+    const success = latestSuccessful.get(born.stableKey);
     const payload: MediaCapturedPayload = success
       ? {
           ...base,
-          title: processed.payload.title,
-          markdown: processed.payload.markdown,
-          transcript: processed.payload.transcript,
-          tags: processed.payload.tags,
-          processedBy: processed.payload.processedBy,
+          title: success.title,
+          markdown: success.markdown,
+          transcript: success.transcript,
+          tags: success.tags,
+          processedBy: success.processedBy,
         }
       : base;
     // An uploaded birth IS an analysis request; reanalyze events are later
@@ -325,8 +331,8 @@ export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
     const analysis: MediaAnalysisState =
       requestOffset > settledOffset
         ? { status: "pending", error: null }
-        : processed !== undefined && !success
-          ? { status: "failed", error: processed.payload.error || null }
+        : processed !== undefined && processed.payload.error
+          ? { status: "failed", error: processed.payload.error }
           : { status: "done", error: null };
     items.push({ offset: event.offset, capturedAt: event.createdAt, payload, analysis });
   }

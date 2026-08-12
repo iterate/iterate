@@ -22,6 +22,7 @@ import {
   Modal,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -251,6 +252,28 @@ export default function MediaScreen() {
 
   const items = deriveMediaList(events.data || []);
   const visible = filterMedia(items, query, selectedTags);
+  // Stock pull-to-refresh: rereads the event log, drops settled
+  // (errored/skipped) pending cards — sticky error cards in prod often
+  // described items a later sync pass had captured fine — and, with
+  // auto-collect on, kicks a sync pass (this replaced the inline "Sync now"
+  // button; the dialog keeps one too). In-flight cards stay; their statuses
+  // are still live. The spinner tracks only the event reread — a sync pass
+  // can run for minutes and reports through the status line instead. Shared
+  // between the list and the empty/no-results states (RefreshControl only
+  // works inside a scrollable, and first-run IS the empty state).
+  const refreshControl = (
+    <RefreshControl
+      refreshing={events.isRefetching}
+      onRefresh={() => {
+        setPending((current) =>
+          current.filter((row) => row.status === "waiting" || row.status === "uploading"),
+        );
+        void events.refetch();
+        if (settings?.enabled === true && !syncPass.isFetching) void syncPass.refetch();
+      }}
+      tintColor={colors.textMuted}
+    />
+  );
   // Chips: taxonomy order first, then novel model-coined tags actually in use.
   const tagsInUse = new Set(items.flatMap((item) => item.payload.tags));
   const chipTags = [
@@ -334,44 +357,24 @@ export default function MediaScreen() {
           </Pressable>
         </View>
       ) : items.length === 0 && pending.length === 0 ? (
-        <View style={styles.center}>
+        <ScrollView contentContainerStyle={styles.centerScroll} refreshControl={refreshControl}>
           <Text style={styles.emptyTitle}>Nothing here yet</Text>
           <Text style={styles.emptyBody}>
             Add screenshots or photos — each gets described and transcribed by a vision model, then
             you can search them here by what they show.
           </Text>
-        </View>
+        </ScrollView>
       ) : visible.length === 0 && pending.length === 0 ? (
-        <View style={styles.center}>
+        <ScrollView contentContainerStyle={styles.centerScroll} refreshControl={refreshControl}>
           <Text style={styles.emptyTitle}>No results</Text>
           <Text style={styles.emptyBody}>Nothing matches this search — try fewer words.</Text>
-        </View>
+        </ScrollView>
       ) : (
         <FlatList
           data={visible}
           keyExtractor={(item) => String(item.offset)}
           contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
-          refreshControl={
-            // Stock pull-to-refresh: rereads the event log, drops settled
-            // (errored/skipped) pending cards — sticky error cards in prod
-            // often described items a later sync pass had captured fine —
-            // and, with auto-collect on, kicks a sync pass (this replaced the
-            // inline "Sync now" button; the dialog keeps one too). In-flight
-            // cards stay; their statuses are still live. The spinner tracks
-            // only the event reread — a sync pass can run for minutes and
-            // reports through the status line instead.
-            <RefreshControl
-              refreshing={events.isRefetching}
-              onRefresh={() => {
-                setPending((current) =>
-                  current.filter((row) => row.status === "waiting" || row.status === "uploading"),
-                );
-                void events.refetch();
-                if (settings?.enabled === true && !syncPass.isFetching) void syncPass.refetch();
-              }}
-              tintColor={colors.textMuted}
-            />
-          }
+          refreshControl={refreshControl}
           ListHeaderComponent={
             pending.length > 0 ? (
               <View style={{ gap: spacing.sm, marginBottom: spacing.sm }}>
@@ -623,9 +626,9 @@ function PendingRow({
           {row.filename}
         </Text>
         {row.status === "error" ? (
-          <Text numberOfLines={3} style={styles.pendingError}>
-            {row.error}
-          </Text>
+          // Unclamped on purpose: error text is the one place truncation
+          // defeats the purpose (the HEIC guidance ends in the fix steps).
+          <Text style={styles.pendingError}>{row.error}</Text>
         ) : row.status === "skipped" ? (
           <Text style={styles.pendingStatus}>Already captured — skipped</Text>
         ) : (
@@ -864,6 +867,15 @@ const styles = StyleSheet.create({
   chipText: { color: colors.textMuted, fontSize: 12 },
   chipTextSelected: { color: colors.background, fontWeight: "600" },
   center: { alignItems: "center", flex: 1, justifyContent: "center", padding: spacing.xl },
+  // The empty/no-results ScrollView wrappers: flexGrow (not flex) so the
+  // content box fills the viewport for centering while staying scrollable
+  // enough for the pull gesture.
+  centerScroll: {
+    alignItems: "center",
+    flexGrow: 1,
+    justifyContent: "center",
+    padding: spacing.xl,
+  },
   error: { color: colors.danger, fontSize: 13, padding: spacing.md },
   retry: {
     borderColor: colors.border,

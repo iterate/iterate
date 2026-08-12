@@ -156,6 +156,61 @@ test("deriveMediaList: a failed settlement keeps the row (and its fields) and sh
   ]);
 });
 
+test("deriveMediaList: a failed settlement AFTER a success keeps the successful fields", () => {
+  const events: any[] = [
+    uploadedEvent("a", 1),
+    {
+      type: MEDIA_PROCESSED_EVENT_TYPE,
+      offset: 2,
+      createdAt: "t2",
+      payload: {
+        stableKey: "a",
+        title: "Trenitalia ticket",
+        markdown: "A train ticket.",
+        transcript: "Trenitalia 09:45",
+        tags: ["logistics"],
+        processedBy: "m",
+        error: null,
+        requestOffset: 1,
+      },
+    },
+    {
+      type: MEDIA_REANALYZE_REQUESTED_EVENT_TYPE,
+      offset: 3,
+      createdAt: "t3",
+      payload: { stableKey: "a" },
+    },
+    {
+      type: MEDIA_PROCESSED_EVENT_TYPE,
+      offset: 4,
+      createdAt: "t4",
+      // The failed re-analysis carries blank content fields — they must NOT
+      // overlay the earlier success (the server fold keeps them the same way).
+      payload: {
+        stableKey: "a",
+        title: "",
+        markdown: "",
+        transcript: "",
+        tags: [],
+        processedBy: "",
+        error: "8005: Internal server error",
+        requestOffset: 3,
+      },
+    },
+  ];
+  expect(deriveMediaList(events)).toMatchObject([
+    {
+      analysis: { status: "failed", error: "8005: Internal server error" },
+      payload: {
+        title: "Trenitalia ticket",
+        markdown: "A train ticket.",
+        transcript: "Trenitalia 09:45",
+        tags: ["logistics"],
+      },
+    },
+  ]);
+});
+
 test("deriveMediaList: reanalyze flips a settled row back to pending until the next settlement", () => {
   const processed = (offset: number, title: string) => ({
     type: MEDIA_PROCESSED_EVENT_TYPE,

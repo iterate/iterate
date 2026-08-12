@@ -136,6 +136,40 @@ test("reanalyze-requested re-runs analysis and overlays the newer result", async
   });
 });
 
+test("a failed reanalyze keeps the earlier successful fields; only the error lands", async () => {
+  let calls = 0;
+  const h = makeHarness(async () => {
+    calls += 1;
+    if (calls === 1) return result({ title: "first success", tags: ["logistics"] });
+    throw new Error("8005: Internal server error");
+  });
+  await h.append(uploaded("k1"));
+  await h.append({
+    type: "events.iterate.com/media/reanalyze-requested",
+    idempotencyKey: "media-reanalyze-k1-n1",
+    payload: { stableKey: "k1" },
+  });
+  await h.advanceTime(2_000); // retry 2
+  await h.advanceTime(8_000); // retry 3 — terminal
+
+  expect(h.events(PROCESSED)).toMatchObject([
+    { payload: { title: "first success", error: null } },
+    { payload: { error: "8005: Internal server error" } },
+  ]);
+  // The failure only contributes analysisError — the successful content
+  // fields survive (the phone's deriveMediaList mirrors this).
+  expect(h.state()).toMatchObject({
+    items: {
+      k1: {
+        title: "first success",
+        tags: ["logistics"],
+        analysisError: "8005: Internal server error",
+      },
+    },
+    pendingAnalyses: {},
+  });
+});
+
 test("an uploaded event for a legacy-captured stableKey folds to a no-op (no re-analysis)", async () => {
   let calls = 0;
   const h = makeHarness(async () => {

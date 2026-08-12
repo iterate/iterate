@@ -59,7 +59,8 @@ export function sniffImageContentType(base64: string): string | null {
 export function unsupportedImageReason(contentType: string): string | null {
   if (!["image/heic", "image/heif", "image/avif"].includes(contentType)) return null;
   const label = (contentType.split("/")[1] || contentType).toUpperCase();
-  return `This is a ${label} image, which the analyzer can't read. iOS normally converts photos on pick; if this keeps happening, set Settings → Camera → Formats to "Most Compatible", or export the photo as a JPEG and pick that.`;
+  // Rendered unclamped on the pending card — the fix steps are the point.
+  return `${label} images can't be analyzed. Set Settings → Camera → Formats to "Most Compatible", or export the photo as a JPEG and pick that.`;
 }
 
 function ascii(bytes: Uint8Array, start: number, end: number): string {
