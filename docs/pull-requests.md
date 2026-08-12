@@ -1,5 +1,11 @@
 # Pull requests
 
+> **Enforcement:** a Claude Code hook ([scripts/hooks/pr-guidance-gate.sh](../scripts/hooks/pr-guidance-gate.sh))
+> blocks PR-mutating `gh` commands until this doc's current content hash appears in the command
+> as a `PR_GUIDANCE_HASH=<hash>` prefix. The deny message contains this whole doc plus the hash,
+> so just follow what it says. Editing this file changes the hash and re-arms the gate for
+> everyone — that's intended.
+
 ## Before open
 
 ```bash
