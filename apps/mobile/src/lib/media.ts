@@ -274,8 +274,8 @@ export type MediaListItem = {
  */
 export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
   // A wiped tombstone resets everything before it.
-  const lastWipeIndex = events.findLastIndex((event) => event.type === MEDIA_WIPED_EVENT_TYPE);
-  const liveEvents = lastWipeIndex === -1 ? events : events.slice(lastWipeIndex + 1);
+  const wipedThroughOffset = lastWipeOffset(events);
+  const liveEvents = events.filter((event) => event.offset > wipedThroughOffset);
   const latestProcessed = new Map<string, { payload: MediaProcessedPayload; offset: number }>();
   const latestSuccessful = new Map<string, MediaProcessedPayload>();
   const latestRequest = new Map<string, number>();
@@ -364,13 +364,26 @@ export type MediaPendingCard = {
   /** Content hash once computed; null while "waiting" (pre-hash). Ties the
    * card to the row it will become. */
   stableKey: string | null;
+  /** The uploaded event's offset once the append succeeded ("done"); null
+   * before. A wipe tombstone at or past it supersedes the card — its row is
+   * gone for good, so the card must not ghost back. */
+  uploadedOffset: number | null;
   /** The asset's own creation time when the source knows it (library sync);
    * null from the picker. The card sorts by it so it sits where its row
    * will land. */
   capturedAt: string | null;
-  status: "waiting" | "uploading" | "skipped" | "error";
+  /** waiting → uploading are in-flight (retryable work this device still
+   * owes); "done" means the append committed and the card only bridges the
+   * moment until its row arrives over the live stream. */
+  status: "waiting" | "uploading" | "done" | "skipped" | "error";
   error?: string;
 };
+
+/** The last wiped tombstone's offset in an already-read event list (0 when
+ * never wiped) — the client-side twin of readWipeGeneration's server read. */
+export function lastWipeOffset(events: StreamEvent[]): number {
+  return events.findLast((event) => event.type === MEDIA_WIPED_EVENT_TYPE)?.offset || 0;
+}
 
 export type MediaFeedEntry =
   | { kind: "row"; key: string; item: MediaListItem }
@@ -381,14 +394,16 @@ export type MediaFeedEntry =
  * sorted by the same original-image-date key — two separate zones made every
  * upload completion jump the item across the zone boundary and shift both.
  *
- * The no-gap rule: an in-flight card renders only while NO derived row
- * exists for its stableKey (checked against ALL rows, not the filtered
+ * The no-gap rule: an in-flight or done card renders only while NO derived
+ * row exists for its stableKey (checked against ALL rows, not the filtered
  * view) — the row takes over the card's list position AND its React key, so
- * resolution is an in-place morph, never a vanish-reappear. Terminal
- * skipped/error cards are exempt: a row for the same content can
- * legitimately coexist (skipped MEANS already captured), so they keep their
- * own key and stay visible until the next capture or pull-to-refresh clears
- * them.
+ * resolution is an in-place morph, never a vanish-reappear. A "done" card is
+ * additionally superseded by a wipe tombstone at/past its append offset:
+ * its row is gone for good and must not ghost back as an eternal spinner.
+ * Terminal skipped/error cards are exempt from suppression: a row for the
+ * same content can legitimately coexist (skipped MEANS already captured),
+ * so they keep their own key and stay visible until the next capture or
+ * pull-to-refresh clears them.
  */
 export function deriveMediaFeed(input: {
   /** Rows to display (post-search-filter). */
@@ -396,6 +411,8 @@ export function deriveMediaFeed(input: {
   /** EVERY derived row (unfiltered) — the card-suppression authority. */
   allRows: MediaListItem[];
   cards: MediaPendingCard[];
+  /** From {@link lastWipeOffset} over the same events the rows derive from. */
+  wipedThroughOffset: number;
 }): MediaFeedEntry[] {
   const resolvedKeys = new Set(input.allRows.map((row) => row.payload.stableKey));
   const decorated: { entry: MediaFeedEntry; instant: number; tiebreak: number }[] = [];
@@ -406,18 +423,32 @@ export function deriveMediaFeed(input: {
       tiebreak: item.offset,
     });
   }
+  const cardKeys = new Set<string>();
   for (const card of input.cards) {
-    const inFlight = card.status === "waiting" || card.status === "uploading";
-    if (inFlight && card.stableKey !== null && resolvedKeys.has(card.stableKey)) continue;
+    const awaitingRow =
+      card.status === "waiting" || card.status === "uploading" || card.status === "done";
+    if (awaitingRow && card.stableKey !== null && resolvedKeys.has(card.stableKey)) continue;
+    if (
+      card.status === "done" &&
+      card.uploadedOffset !== null &&
+      card.uploadedOffset <= input.wipedThroughOffset
+    ) {
+      // The wipe erased this card's committed event along with every row —
+      // nothing will ever arrive for it.
+      continue;
+    }
     const parsed = card.capturedAt === null ? NaN : Date.parse(card.capturedAt);
+    // The stableKey key is what carries the mounted component across the
+    // card→row morph; pre-hash and terminal cards key on their preview, as
+    // does a duplicate-hash straggler (two concurrent captures of identical
+    // bytes must not collide on one FlatList key).
+    const key =
+      awaitingRow && card.stableKey !== null && !cardKeys.has(card.stableKey)
+        ? card.stableKey
+        : `pending:${card.previewUri}`;
+    cardKeys.add(key);
     decorated.push({
-      entry: {
-        kind: "pending",
-        // The stableKey key is what carries the mounted component across the
-        // card→row morph; pre-hash and terminal cards key on their preview.
-        key: inFlight && card.stableKey !== null ? card.stableKey : `pending:${card.previewUri}`,
-        card,
-      },
+      entry: { kind: "pending", key, card },
       // A dateless (picker) card is "just captured now", i.e. newest.
       instant: Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed,
       // On exact date ties an in-flight card outranks committed rows.

@@ -63,8 +63,12 @@ export async function runSyncPass(input: {
   onProgress: (message: string) => void;
   /** A new (not-yet-captured) screenshot was found — show it immediately. */
   onCandidate: (candidate: SyncCandidate) => void;
-  /** Its upload settled; error is null on success. */
-  onCandidateDone: (candidate: SyncCandidate, error: string | null) => void;
+  /** Its upload settled: the committed uploaded event's offset, or the
+   * failure message. */
+  onCandidateDone: (
+    candidate: SyncCandidate,
+    outcome: { uploadedOffset: number } | { error: string },
+  ) => void;
 }): Promise<SyncPassResult> {
   const permission = await MediaLibrary.requestPermissionsAsync();
   if (!permission.granted) return { status: "denied" };
@@ -145,7 +149,7 @@ export async function runSyncPass(input: {
         data: candidate.base64,
         contentType: candidate.contentType,
       });
-      await stream.append(
+      const [uploaded] = await stream.append(
         buildUploadedEvent({
           stableKey: candidate.stableKey,
           wipeGeneration,
@@ -158,12 +162,16 @@ export async function runSyncPass(input: {
           isScreenshot: true,
         }),
       );
-      input.onCandidateDone(candidate, null);
+      // The assertion restates append's contract: one input, one committed
+      // (or deduped) event back.
+      input.onCandidateDone(candidate, { uploadedOffset: uploaded!.offset });
       synced += 1;
     } catch (error) {
       // One failed upload must not sink the whole pass; its card shows the
       // error and the next pass will retry it.
-      input.onCandidateDone(candidate, error instanceof Error ? error.message : String(error));
+      input.onCandidateDone(candidate, {
+        error: error instanceof Error ? error.message : String(error),
+      });
       failed += 1;
     }
   });

@@ -43,6 +43,7 @@ import {
   deriveMediaFeed,
   deriveMediaList,
   filterMedia,
+  lastWipeOffset,
   mapWithConcurrency,
   MEDIA_EVENT_TYPES,
   MEDIA_STREAM_PATH,
@@ -128,23 +129,25 @@ export default function MediaScreen() {
                 previewUri: candidate.previewUri,
                 filename: candidate.filename,
                 stableKey: candidate.stableKey,
+                uploadedOffset: null,
                 capturedAt: candidate.capturedAt,
                 status: "uploading",
               },
             ]);
           },
-          // Success needs no card removal: deriveMediaFeed hides an
-          // in-flight card the moment its derived row exists, so the card
-          // morphs into the row with no vanish-reappear gap in between.
-          onCandidateDone: (candidate, error) =>
+          // Success settles the card as "done" (bridging until its row
+          // arrives — deriveMediaFeed hides it the moment the row exists, and
+          // a later wipe at/past its offset supersedes it instead of letting
+          // it ghost back as an eternal spinner).
+          onCandidateDone: (candidate, outcome) =>
             setPending((current) =>
-              error === null
-                ? current
-                : current.map((row) =>
-                    row.previewUri === candidate.previewUri
-                      ? { ...row, status: "error", error }
-                      : row,
-                  ),
+              current.map((row) =>
+                row.previewUri === candidate.previewUri
+                  ? "error" in outcome
+                    ? { ...row, status: "error", error: outcome.error }
+                    : { ...row, status: "done", uploadedOffset: outcome.uploadedOffset }
+                  : row,
+              ),
             ),
         });
       } finally {
@@ -160,7 +163,10 @@ export default function MediaScreen() {
       const project = await getProjectItx(baseUrl!, projectId);
       await project.capabilityHost.runScript(buildWipeScript(Date.now().toString(36)));
       // The wiped tombstone arrives over the live stream; deriveMediaList
-      // resets on it — nothing to invalidate.
+      // resets on it. This device's own capture leftovers reset here too —
+      // cards and cached previews describe files the wipe just deleted.
+      setPending([]);
+      localPreviews.clear();
       setSyncDialogOpen(false);
     },
   });
@@ -193,6 +199,7 @@ export default function MediaScreen() {
           previewUri: image.previewUri,
           filename: image.filename,
           stableKey: null, // not hashed yet
+          uploadedOffset: null,
           // The picker strips asset metadata on recompression — no date.
           capturedAt: null,
           status: "waiting" as const,
@@ -205,6 +212,10 @@ export default function MediaScreen() {
       const project = await getProjectItx(baseUrl!, projectId);
       const stream = project.streams.get(MEDIA_STREAM_PATH);
       const wipeGeneration = await readWipeGeneration(stream);
+      // Identical bytes picked twice in one batch hash to one stableKey —
+      // the server would dedupe the second append anyway (idempotency key),
+      // so skip its upload here; this also keeps feed keys unique.
+      const batchKeys = new Set<string>();
       await mapWithConcurrency(picked, 3, async (image) => {
         try {
           // Genuinely HEIC/AVIF payloads (rare now that the picker asks for
@@ -220,6 +231,11 @@ export default function MediaScreen() {
             Crypto.CryptoDigestAlgorithm.SHA256,
             image.base64,
           );
+          if (batchKeys.has(stableKey)) {
+            patchCard(image, { status: "skipped", stableKey });
+            return;
+          }
+          batchKeys.add(stableKey);
           // The stableKey on the card is what lets the feed morph it into
           // the derived row in place once the uploaded event lands.
           localPreviews.set(stableKey, image.previewUri);
@@ -238,7 +254,7 @@ export default function MediaScreen() {
           });
           // The durable birth fact — analysis follows server-side and lands
           // as a media/processed event over the live stream.
-          await stream.append(
+          const [uploaded] = await stream.append(
             buildUploadedEvent({
               stableKey,
               wipeGeneration,
@@ -251,10 +267,13 @@ export default function MediaScreen() {
               isScreenshot: null,
             }),
           );
-          // No card removal here: the uploaded event arrives over the live
-          // connection and deriveMediaFeed swaps the card for the real row
-          // (same key, same position) — removing it now would open a
-          // vanish-reappear gap while the event is in flight.
+          // Settled, not removed: deriveMediaFeed swaps the card for the
+          // real row in place when the event arrives (removal now would open
+          // a vanish-reappear gap), and the recorded offset lets a later
+          // wipe supersede the card instead of ghosting it back. The
+          // assertion restates append's contract: one input, one committed
+          // (or deduped) event back.
+          patchCard(image, { status: "done", uploadedOffset: uploaded!.offset });
         } catch (error) {
           patchCard(image, {
             status: "error",
@@ -271,7 +290,12 @@ export default function MediaScreen() {
   // ONE list: pending cards interleaved with real rows on the shared
   // original-image-date key. Suppression is against ALL items (not the
   // filtered view) so a search can never resurrect an already-resolved card.
-  const feed = deriveMediaFeed({ rows: visible, allRows: items, cards: pending });
+  const feed = deriveMediaFeed({
+    rows: visible,
+    allRows: items,
+    cards: pending,
+    wipedThroughOffset: lastWipeOffset(events.data || []),
+  });
   // Stock pull-to-refresh: rereads the event log, drops settled
   // (errored/skipped) pending cards — sticky error cards in prod often
   // described items a later sync pass had captured fine — and, with
@@ -660,7 +684,13 @@ function PendingRow({
           <View style={styles.pendingSpinnerRow}>
             <ActivityIndicator color={colors.textMuted} size="small" />
             <Text style={styles.pendingStatus}>
-              {row.status === "waiting" ? "Waiting…" : "Uploading…"}
+              {/* "done" = uploaded, bridging until its row arrives — which
+                  will say Analyzing…, so the morph doesn't flicker text. */}
+              {row.status === "waiting"
+                ? "Waiting…"
+                : row.status === "done"
+                  ? "Analyzing…"
+                  : "Uploading…"}
             </Text>
           </View>
         )}

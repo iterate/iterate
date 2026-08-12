@@ -366,6 +366,7 @@ test("deriveMediaFeed: cards and rows interleave on the shared original-date key
       card({ stableKey: "card-mid", capturedAt: "2026-08-10T00:00:00.000Z" }),
       card({ stableKey: null, capturedAt: null, status: "waiting", previewUri: "p-pick" }),
     ],
+    wipedThroughOffset: 0,
   });
   expect(feed.map((entry) => entry.key)).toEqual([
     "pending:p-pick", // dateless picker card counts as newest (and keys on its preview pre-hash)
@@ -382,7 +383,12 @@ test("deriveMediaFeed: a card morphs into its row — exactly one entry, same ke
     card({ stableKey: "b", capturedAt: "2026-08-08T00:00:00.000Z" }),
   ];
   const existing = feedRow("older", "2026-08-09T00:00:00.000Z");
-  const before = deriveMediaFeed({ rows: [existing], allRows: [existing], cards });
+  const before = deriveMediaFeed({
+    rows: [existing],
+    allRows: [existing],
+    cards,
+    wipedThroughOffset: 0,
+  });
   expect(before.map((entry) => entry.key)).toEqual(["a", "older", "b"]);
 
   // a's uploaded event lands: the derived row replaces the card in place —
@@ -393,6 +399,7 @@ test("deriveMediaFeed: a card morphs into its row — exactly one entry, same ke
     rows: [resolved, existing],
     allRows: [resolved, existing],
     cards,
+    wipedThroughOffset: 0,
   });
   expect(after.map((entry) => entry.key)).toEqual(["a", "older", "b"]);
   expect(after.map((entry) => entry.kind)).toEqual(["row", "row", "pending"]);
@@ -404,6 +411,7 @@ test("deriveMediaFeed: suppression checks ALL rows, so a search filter cannot re
     rows: [], // search filtered the row out
     allRows: [resolved],
     cards: [card({ stableKey: "a", capturedAt: "2026-08-10T00:00:00.000Z" })],
+    wipedThroughOffset: 0,
   });
   expect(feed).toEqual([]);
 });
@@ -419,8 +427,40 @@ test("deriveMediaFeed: terminal skipped/error cards coexist with rows under thei
       card({ stableKey: "a", capturedAt: null, status: "skipped", previewUri: "p-skip" }),
       card({ stableKey: "b", capturedAt: null, status: "error", previewUri: "p-err" }),
     ],
+    wipedThroughOffset: 0,
   });
   expect(feed.map((entry) => entry.key)).toEqual(["pending:p-skip", "pending:p-err", "a"]);
+});
+
+test("deriveMediaFeed: a wipe supersedes done cards — no ghost spinners after Delete-all", () => {
+  const doneCard = card({
+    stableKey: "a",
+    status: "done",
+    uploadedOffset: 5,
+    capturedAt: "2026-08-10T00:00:00.000Z",
+  });
+  // Before its row arrives, the done card bridges the gap…
+  expect(
+    deriveMediaFeed({ rows: [], allRows: [], cards: [doneCard], wipedThroughOffset: 0 }),
+  ).toMatchObject([{ kind: "pending", key: "a" }]);
+  // …but once a wipe tombstone lands at/past its append, the rows are gone
+  // FOR GOOD and the card must not resurface as an eternal spinner.
+  expect(
+    deriveMediaFeed({ rows: [], allRows: [], cards: [doneCard], wipedThroughOffset: 7 }),
+  ).toEqual([]);
+});
+
+test("deriveMediaFeed: two concurrent cards with identical content hash keep unique keys", () => {
+  const feed = deriveMediaFeed({
+    rows: [],
+    allRows: [],
+    cards: [
+      card({ stableKey: "same", capturedAt: null, previewUri: "p-one" }),
+      card({ stableKey: "same", capturedAt: null, previewUri: "p-two" }),
+    ],
+    wipedThroughOffset: 0,
+  });
+  expect(feed.map((entry) => entry.key)).toEqual(["same", "pending:p-two"]);
 });
 
 test("filterMedia: terms AND together over markdown+transcript+filename+tags, chips must all match", () => {
@@ -574,6 +614,7 @@ function card(overrides: Partial<MediaPendingCard>): MediaPendingCard {
     previewUri: `p-${overrides.stableKey || "x"}`,
     filename: "f.png",
     stableKey: null,
+    uploadedOffset: null,
     capturedAt: null,
     status: "uploading",
     ...overrides,
