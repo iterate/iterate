@@ -39,6 +39,17 @@ export const MEDIA_ANALYSIS_EXPIRY_MS = 24 * 60 * 60 * 1000;
 const ANALYSIS_TRIES = 3;
 const ANALYSIS_RETRY_BACKOFF_MS = [2_000, 8_000];
 
+/**
+ * Attempts started per caught-up pass, matching the phone's old 3-wide
+ * pipeline. A 19-item Delete-all re-sync once fired 19 parallel vision
+ * pipelines from one pass and Workers AI answered with 8004s and 60s
+ * binding timeouts — the in-attempt retries all landed inside the same
+ * overloaded burst. The rest of the queue needs no timer: every settlement
+ * append comes back through this processor's own delivery and the next
+ * caught-up pass starts the next wave.
+ */
+const MAX_CONCURRENT_ANALYSES = 3;
+
 const processingFields = {
   title: z.string().default("").meta({
     description: "One-line description of what the image IS (pre-title events fold to empty).",
@@ -394,6 +405,9 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract, Medi
         expired.push(pending);
         continue;
       }
+      // Bounded wave: leave the rest pending — their turn comes when a
+      // settlement append wakes the next caught-up pass.
+      if (this.#liveAnalyses.size >= MAX_CONCURRENT_ANALYSES) continue;
       // Registered synchronously before any await so this same pass never
       // classifies its own attempt as undriven.
       this.#liveAnalyses.add(pending.stableKey);

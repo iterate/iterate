@@ -279,6 +279,36 @@ test("a wipe in the same batch cancels the obligation before any attempt starts"
   expect(h.state()).toMatchObject({ items: {}, pendingAnalyses: {} });
 });
 
+test("attempts are capped per pass; settlements pull the next wave through", async () => {
+  // 19 uploads at once must not fire 19 parallel vision pipelines (observed
+  // in prod: Workers AI 8004s + 60s binding timeouts under the burst). At
+  // most 3 run; each settlement re-wakes the processor, which starts more.
+  const gate: { resolve: () => void }[] = [];
+  let calls = 0;
+  const h = makeHarness(
+    (input) =>
+      new Promise((resolve) => {
+        calls += 1;
+        gate.push({ resolve: () => resolve(result({ title: `analysis of ${input.path}` })) });
+      }),
+  );
+  await h.append(...["k1", "k2", "k3", "k4", "k5"].map((key) => uploaded(key)));
+  expect(calls).toBe(3);
+  expect(h.events(PROCESSED)).toEqual([]);
+  expect(Object.keys(h.state().pendingAnalyses)).toHaveLength(5);
+
+  // Releasing the first wave settles it; the settlement deliveries trigger
+  // fresh caught-up passes that start the remaining two.
+  for (const entry of gate.splice(0)) entry.resolve();
+  await h.settle();
+  expect(calls).toBe(5);
+  for (const entry of gate.splice(0)) entry.resolve();
+  await h.settle();
+
+  expect(h.events(PROCESSED)).toHaveLength(5);
+  expect(h.state()).toMatchObject({ pendingAnalyses: {} });
+});
+
 test("full-stream replay re-executes nothing: no vendor calls, no new events, same items", async () => {
   let liveCalls = 0;
   const h = makeHarness(async () => {
