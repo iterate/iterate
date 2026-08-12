@@ -64,9 +64,25 @@ import { useLiveEvents } from "../../../lib/use-live-events.ts";
 type PendingItem = {
   previewUri: string;
   filename: string;
+  /** The asset's own creation time when the source knows it (library sync);
+   * null from the picker. Cards sort by it, matching the row ordering, so a
+   * card resolving into a real row keeps its place. */
+  capturedAt: string | null;
   status: "waiting" | "uploading" | "skipped" | "error";
   error?: string;
 };
+
+/** Pending cards, newest first by the original image's date — the same
+ * ordering deriveMediaList gives the real rows. A dateless (picker) card is
+ * "just captured now", i.e. newest; equal keys keep discovery order (sort is
+ * stable). */
+function orderPending(pending: PendingItem[]): PendingItem[] {
+  const instant = (row: PendingItem) => {
+    const parsed = row.capturedAt === null ? NaN : Date.parse(row.capturedAt);
+    return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
+  };
+  return [...pending].sort((a, b) => instant(b) - instant(a));
+}
 
 export default function MediaScreen() {
   const { projectId, slug, q } = useLocalSearchParams<{
@@ -124,6 +140,7 @@ export default function MediaScreen() {
               {
                 previewUri: candidate.previewUri,
                 filename: candidate.filename,
+                capturedAt: candidate.capturedAt,
                 status: "uploading",
               },
             ]),
@@ -183,6 +200,8 @@ export default function MediaScreen() {
         picked.map((image) => ({
           previewUri: image.previewUri,
           filename: image.filename,
+          // The picker strips asset metadata on recompression — no date.
+          capturedAt: null,
           status: "waiting" as const,
         })),
       );
@@ -386,7 +405,7 @@ export default function MediaScreen() {
           ListHeaderComponent={
             pending.length > 0 ? (
               <View style={{ gap: spacing.sm, marginBottom: spacing.sm }}>
-                {pending.map((row) => (
+                {orderPending(pending).map((row) => (
                   <PendingRow
                     key={row.previewUri}
                     onViewImage={(uri) => setViewer({ uri, title: "", tags: [], markdown: "" })}

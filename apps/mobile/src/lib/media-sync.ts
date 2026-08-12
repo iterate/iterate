@@ -44,7 +44,13 @@ export type SyncPassResult =
  * already has, upload the rest and append their birth events. Safe to run
  * repeatedly — the stop rule makes caught-up passes cheap.
  */
-export type SyncCandidate = { previewUri: string; filename: string };
+export type SyncCandidate = {
+  previewUri: string;
+  filename: string;
+  /** The asset's own creation time (ISO) — the pending card sorts by it so
+   * the card sits where its row will land. */
+  capturedAt: string | null;
+};
 
 export async function runSyncPass(input: {
   project: ProjectStub;

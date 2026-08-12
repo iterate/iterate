@@ -336,7 +336,21 @@ export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
           : { status: "done", error: null };
     items.push({ offset: event.offset, capturedAt: event.createdAt, payload, analysis });
   }
-  return items.sort((a, b) => b.offset - a.offset);
+  // Newest first by the ORIGINAL image's date, not append order: parallel
+  // uploads commit in arbitrary order, and offset-sorting made rows re-sort
+  // under the user's thumb as each landed. capturedAt is the asset's own
+  // creation time when the source knew it (library-sync always does); the
+  // picker strips it, so those fall back to the event's stream time — which
+  // is "just now" for a fresh pick. Offset breaks exact ties
+  // deterministically.
+  return items.sort((a, b) => captureInstant(b) - captureInstant(a) || b.offset - a.offset);
+}
+
+/** The row's sort instant (ms). Unparseable dates collapse to 0 so the
+ * offset tiebreak decides — never NaN into the comparator. */
+function captureInstant(item: MediaListItem): number {
+  const instant = new Date(item.payload.capturedAt || item.capturedAt).getTime();
+  return Number.isNaN(instant) ? 0 : instant;
 }
 
 /**

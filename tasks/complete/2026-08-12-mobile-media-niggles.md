@@ -106,3 +106,10 @@ The Off/On settings row, "+ Add", and "Sync now" sat too close together.
   slow analysis half moved server-side), the pull-to-refresh filter keeps
   waiting/uploading cards, and the HEIC gate's "doomed server-side" rationale
   still holds — the server analysis pipeline calls toMarkdown the same way.
+- Post-review nit (Misha): rows re-sorted as parallel uploads landed (list
+  was offset-ordered = upload-completion order). deriveMediaList now sorts
+  by the ORIGINAL image's date — payload.capturedAt, falling back to the
+  event's stream time for dateless picker items — with offset as the exact-
+  tie break; pending cards sort by the same key (capturedAt threaded through
+  SyncCandidate/PendingItem; dateless picks count as newest), so a card
+  resolving into a row keeps its place.

@@ -156,6 +156,60 @@ test("deriveMediaList: a failed settlement keeps the row (and its fields) and sh
   ]);
 });
 
+test("deriveMediaList: rows sort by the ORIGINAL image's date, not upload-completion order", () => {
+  // Three screenshots synced in parallel: their uploaded events commit in
+  // arbitrary order (offset order != date order). The list must not re-sort
+  // as uploads land — the asset's own creation time wins.
+  const withDate = (stableKey: string, offset: number, capturedAt: string | null) => {
+    const event = uploadedEvent(stableKey, offset);
+    return { ...event, payload: { ...event.payload, capturedAt } };
+  };
+  const events: any[] = [
+    withDate("middle", 1, "2026-08-10T12:00:00.000Z"),
+    withDate("oldest", 2, "2026-08-01T09:00:00.000Z"),
+    withDate("newest", 3, "2026-08-11T18:00:00.000Z"),
+  ];
+  expect(deriveMediaList(events).map((item) => item.payload.stableKey)).toEqual([
+    "newest",
+    "middle",
+    "oldest",
+  ]);
+});
+
+test("deriveMediaList: a dateless picker item sorts by its event time among dated rows", () => {
+  const withDate = (stableKey: string, offset: number, capturedAt: string | null) => {
+    const event = uploadedEvent(stableKey, offset);
+    return {
+      ...event,
+      createdAt: "2026-08-11T12:00:00.000Z", // stream time: "just picked"
+      payload: { ...event.payload, capturedAt },
+    };
+  };
+  const events: any[] = [
+    withDate("old-screenshot", 1, "2026-08-01T09:00:00.000Z"),
+    withDate("picked-now", 2, null), // picker strips asset metadata
+    withDate("newer-screenshot", 3, "2026-08-12T08:00:00.000Z"),
+  ];
+  expect(deriveMediaList(events).map((item) => item.payload.stableKey)).toEqual([
+    "newer-screenshot",
+    "picked-now",
+    "old-screenshot",
+  ]);
+});
+
+test("deriveMediaList: exact date ties break by offset, newest append first", () => {
+  const at = "2026-08-10T12:00:00.000Z";
+  const withDate = (stableKey: string, offset: number) => {
+    const event = uploadedEvent(stableKey, offset);
+    return { ...event, payload: { ...event.payload, capturedAt: at } };
+  };
+  const events: any[] = [withDate("first", 1), withDate("second", 2)];
+  expect(deriveMediaList(events).map((item) => item.payload.stableKey)).toEqual([
+    "second",
+    "first",
+  ]);
+});
+
 test("deriveMediaList: a failed settlement AFTER a success keeps the successful fields", () => {
   const events: any[] = [
     uploadedEvent("a", 1),
