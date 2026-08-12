@@ -354,6 +354,82 @@ function captureInstant(item: MediaListItem): number {
 }
 
 /**
+ * A not-yet-derived capture in flight on this device: the local preview the
+ * screen shows while bytes upload (or after a terminal skip/error). Lives in
+ * component state; deriveMediaFeed interleaves these with the real rows.
+ */
+export type MediaPendingCard = {
+  previewUri: string;
+  filename: string;
+  /** Content hash once computed; null while "waiting" (pre-hash). Ties the
+   * card to the row it will become. */
+  stableKey: string | null;
+  /** The asset's own creation time when the source knows it (library sync);
+   * null from the picker. The card sorts by it so it sits where its row
+   * will land. */
+  capturedAt: string | null;
+  status: "waiting" | "uploading" | "skipped" | "error";
+  error?: string;
+};
+
+export type MediaFeedEntry =
+  | { kind: "row"; key: string; item: MediaListItem }
+  | { kind: "pending"; key: string; card: MediaPendingCard };
+
+/**
+ * ONE list for the screen: pending cards interleaved with real rows, all
+ * sorted by the same original-image-date key — two separate zones made every
+ * upload completion jump the item across the zone boundary and shift both.
+ *
+ * The no-gap rule: an in-flight card renders only while NO derived row
+ * exists for its stableKey (checked against ALL rows, not the filtered
+ * view) — the row takes over the card's list position AND its React key, so
+ * resolution is an in-place morph, never a vanish-reappear. Terminal
+ * skipped/error cards are exempt: a row for the same content can
+ * legitimately coexist (skipped MEANS already captured), so they keep their
+ * own key and stay visible until the next capture or pull-to-refresh clears
+ * them.
+ */
+export function deriveMediaFeed(input: {
+  /** Rows to display (post-search-filter). */
+  rows: MediaListItem[];
+  /** EVERY derived row (unfiltered) — the card-suppression authority. */
+  allRows: MediaListItem[];
+  cards: MediaPendingCard[];
+}): MediaFeedEntry[] {
+  const resolvedKeys = new Set(input.allRows.map((row) => row.payload.stableKey));
+  const decorated: { entry: MediaFeedEntry; instant: number; tiebreak: number }[] = [];
+  for (const item of input.rows) {
+    decorated.push({
+      entry: { kind: "row", key: item.payload.stableKey, item },
+      instant: captureInstant(item),
+      tiebreak: item.offset,
+    });
+  }
+  for (const card of input.cards) {
+    const inFlight = card.status === "waiting" || card.status === "uploading";
+    if (inFlight && card.stableKey !== null && resolvedKeys.has(card.stableKey)) continue;
+    const parsed = card.capturedAt === null ? NaN : Date.parse(card.capturedAt);
+    decorated.push({
+      entry: {
+        kind: "pending",
+        // The stableKey key is what carries the mounted component across the
+        // card→row morph; pre-hash and terminal cards key on their preview.
+        key: inFlight && card.stableKey !== null ? card.stableKey : `pending:${card.previewUri}`,
+        card,
+      },
+      // A dateless (picker) card is "just captured now", i.e. newest.
+      instant: Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed,
+      // On exact date ties an in-flight card outranks committed rows.
+      tiebreak: Number.MAX_SAFE_INTEGER,
+    });
+  }
+  return decorated
+    .sort((a, b) => b.instant - a.instant || b.tiebreak - a.tiebreak)
+    .map(({ entry }) => entry);
+}
+
+/**
  * Every whitespace-separated query term must appear somewhere in the
  * description, transcript, filename, or tags; selected tag chips all must be
  * present.

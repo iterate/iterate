@@ -5,9 +5,10 @@
 // then ONE cheap durable media/uploaded append — analysis happens
 // server-side (the MediaApp processor reacts to the event and overlays a
 // media/processed settlement; lib/media.ts owns the client vocabulary).
-// Picked items appear immediately as pending cards (three at a time in
-// flight), resolve into real rows as their uploaded events land on the live
-// stream, and show "Analyzing…" until the settlement arrives — locking the
+// Picked items appear immediately as pending cards in ONE list shared with
+// the real rows (deriveMediaFeed — everything sorts by the original image's
+// date, and a card morphs into its row in place when the uploaded event
+// lands), then show "Analyzing…" until the settlement arrives — locking the
 // phone mid-pass loses nothing. Tap a thumbnail for full screen;
 // "Re-analyze" appends a reanalyze request the same server pipeline answers.
 
@@ -39,6 +40,7 @@ import {
   buildWipeScript,
   extendedSinceIso,
   readWipeGeneration,
+  deriveMediaFeed,
   deriveMediaList,
   filterMedia,
   mapWithConcurrency,
@@ -49,6 +51,7 @@ import {
   mediaIdempotencyKey,
   readAllMediaEvents,
   type MediaListItem,
+  type MediaPendingCard,
 } from "../../../lib/media.ts";
 import { runSyncPass, type SyncPassResult } from "../../../lib/media-sync.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
@@ -61,29 +64,6 @@ import {
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
 
-type PendingItem = {
-  previewUri: string;
-  filename: string;
-  /** The asset's own creation time when the source knows it (library sync);
-   * null from the picker. Cards sort by it, matching the row ordering, so a
-   * card resolving into a real row keeps its place. */
-  capturedAt: string | null;
-  status: "waiting" | "uploading" | "skipped" | "error";
-  error?: string;
-};
-
-/** Pending cards, newest first by the original image's date — the same
- * ordering deriveMediaList gives the real rows. A dateless (picker) card is
- * "just captured now", i.e. newest; equal keys keep discovery order (sort is
- * stable). */
-function orderPending(pending: PendingItem[]): PendingItem[] {
-  const instant = (row: PendingItem) => {
-    const parsed = row.capturedAt === null ? NaN : Date.parse(row.capturedAt);
-    return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
-  };
-  return [...pending].sort((a, b) => instant(b) - instant(a));
-}
-
 export default function MediaScreen() {
   const { projectId, slug, q } = useLocalSearchParams<{
     projectId: string;
@@ -94,7 +74,7 @@ export default function MediaScreen() {
   }>();
   const [query, setQuery] = useState(q || "");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [pending, setPending] = useState<PendingItem[]>([]);
+  const [pending, setPending] = useState<MediaPendingCard[]>([]);
   const [viewer, setViewer] = useState<{
     uri: string;
     title: string;
@@ -140,14 +120,18 @@ export default function MediaScreen() {
               {
                 previewUri: candidate.previewUri,
                 filename: candidate.filename,
+                stableKey: candidate.stableKey,
                 capturedAt: candidate.capturedAt,
                 status: "uploading",
               },
             ]),
+          // Success needs no card removal: deriveMediaFeed hides an
+          // in-flight card the moment its derived row exists, so the card
+          // morphs into the row with no vanish-reappear gap in between.
           onCandidateDone: (candidate, error) =>
             setPending((current) =>
               error === null
-                ? current.filter((row) => row.previewUri !== candidate.previewUri)
+                ? current
                 : current.map((row) =>
                     row.previewUri === candidate.previewUri
                       ? { ...row, status: "error", error }
@@ -200,16 +184,15 @@ export default function MediaScreen() {
         picked.map((image) => ({
           previewUri: image.previewUri,
           filename: image.filename,
+          stableKey: null, // not hashed yet
           // The picker strips asset metadata on recompression — no date.
           capturedAt: null,
           status: "waiting" as const,
         })),
       );
-      const setStatus = (image: PickedImage, status: PendingItem["status"], error?: string) =>
+      const patchCard = (image: PickedImage, patch: Partial<MediaPendingCard>) =>
         setPending((current) =>
-          current.map((row) =>
-            row.previewUri === image.previewUri ? { ...row, status, error } : row,
-          ),
+          current.map((row) => (row.previewUri === image.previewUri ? { ...row, ...patch } : row)),
         );
       const project = await getProjectItx(baseUrl!, projectId);
       const stream = project.streams.get(MEDIA_STREAM_PATH);
@@ -222,20 +205,22 @@ export default function MediaScreen() {
           // instead of uploading bytes doomed to fail.
           const unsupported = unsupportedImageReason(image.contentType);
           if (unsupported !== null) {
-            setStatus(image, "error", unsupported);
+            patchCard(image, { status: "error", error: unsupported });
             return;
           }
-          setStatus(image, "uploading");
           const stableKey = await Crypto.digestStringAsync(
             Crypto.CryptoDigestAlgorithm.SHA256,
             image.base64,
           );
+          // The stableKey on the card is what lets the feed morph it into
+          // the derived row in place once the uploaded event lands.
+          patchCard(image, { status: "uploading", stableKey });
           if (
             await stream.getEvent({
               idempotencyKey: mediaIdempotencyKey(stableKey, wipeGeneration),
             })
           ) {
-            setStatus(image, "skipped");
+            patchCard(image, { status: "skipped" });
             return;
           }
           await project.files.get(mediaFilePath(stableKey, image.filename)).put({
@@ -257,12 +242,15 @@ export default function MediaScreen() {
               isScreenshot: null,
             }),
           );
-          // The uploaded event arrives over the live connection and renders
-          // as a real row (with its own "Analyzing…" badge); drop the
-          // pending card.
-          setPending((current) => current.filter((row) => row.previewUri !== image.previewUri));
+          // No card removal here: the uploaded event arrives over the live
+          // connection and deriveMediaFeed swaps the card for the real row
+          // (same key, same position) — removing it now would open a
+          // vanish-reappear gap while the event is in flight.
         } catch (error) {
-          setStatus(image, "error", error instanceof Error ? error.message : String(error));
+          patchCard(image, {
+            status: "error",
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       });
       // Skipped/errored cards stay visible until the next capture starts.
@@ -271,6 +259,10 @@ export default function MediaScreen() {
 
   const items = deriveMediaList(events.data || []);
   const visible = filterMedia(items, query, selectedTags);
+  // ONE list: pending cards interleaved with real rows on the shared
+  // original-image-date key. Suppression is against ALL items (not the
+  // filtered view) so a search can never resurrect an already-resolved card.
+  const feed = deriveMediaFeed({ rows: visible, allRows: items, cards: pending });
   // Stock pull-to-refresh: rereads the event log, drops settled
   // (errored/skipped) pending cards — sticky error cards in prod often
   // described items a later sync pass had captured fine — and, with
@@ -375,7 +367,7 @@ export default function MediaScreen() {
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
         </View>
-      ) : items.length === 0 && pending.length === 0 ? (
+      ) : feed.length === 0 && items.length === 0 ? (
         <ScrollView
           contentContainerStyle={styles.centerScroll}
           refreshControl={refreshControl}
@@ -387,7 +379,7 @@ export default function MediaScreen() {
             you can search them here by what they show.
           </Text>
         </ScrollView>
-      ) : visible.length === 0 && pending.length === 0 ? (
+      ) : feed.length === 0 ? (
         <ScrollView
           contentContainerStyle={styles.centerScroll}
           refreshControl={refreshControl}
@@ -398,38 +390,34 @@ export default function MediaScreen() {
         </ScrollView>
       ) : (
         <FlatList
-          data={visible}
-          keyExtractor={(item) => String(item.offset)}
+          data={feed}
+          // The entry key survives the card→row morph (both spell the
+          // stableKey), so the mounted component carries over in place.
+          keyExtractor={(entry) => entry.key}
           contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
           refreshControl={refreshControl}
-          ListHeaderComponent={
-            pending.length > 0 ? (
-              <View style={{ gap: spacing.sm, marginBottom: spacing.sm }}>
-                {orderPending(pending).map((row) => (
-                  <PendingRow
-                    key={row.previewUri}
-                    onViewImage={(uri) => setViewer({ uri, title: "", tags: [], markdown: "" })}
-                    row={row}
-                  />
-                ))}
-              </View>
-            ) : null
+          renderItem={({ item: entry }) =>
+            entry.kind === "pending" ? (
+              <PendingRow
+                onViewImage={(uri) => setViewer({ uri, title: "", tags: [], markdown: "" })}
+                row={entry.card}
+              />
+            ) : (
+              <MediaRow
+                baseUrl={baseUrl!}
+                item={entry.item}
+                onViewImage={(uri) =>
+                  setViewer({
+                    uri,
+                    title: entry.item.payload.title,
+                    tags: entry.item.payload.tags,
+                    markdown: entry.item.payload.markdown,
+                  })
+                }
+                projectId={projectId}
+              />
+            )
           }
-          renderItem={({ item }) => (
-            <MediaRow
-              baseUrl={baseUrl!}
-              item={item}
-              onViewImage={(uri) =>
-                setViewer({
-                  uri,
-                  title: item.payload.title,
-                  tags: item.payload.tags,
-                  markdown: item.payload.markdown,
-                })
-              }
-              projectId={projectId}
-            />
-          )}
         />
       )}
       <Modal
@@ -641,7 +629,7 @@ function PendingRow({
   row,
 }: {
   onViewImage: (uri: string) => void;
-  row: PendingItem;
+  row: MediaPendingCard;
 }) {
   return (
     <View style={[styles.row, row.status === "error" && styles.rowError]}>

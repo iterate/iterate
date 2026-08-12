@@ -47,6 +47,9 @@ export type SyncPassResult =
 export type SyncCandidate = {
   previewUri: string;
   filename: string;
+  /** Content hash — ties the pending card to the row it will become, so the
+   * feed can morph one into the other with no gap. */
+  stableKey: string;
   /** The asset's own creation time (ISO) — the pending card sorts by it so
    * the card sits where its row will land. */
   capturedAt: string | null;

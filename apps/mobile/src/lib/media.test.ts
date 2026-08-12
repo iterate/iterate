@@ -6,6 +6,7 @@ import {
   extendedSinceIso,
   mediaIdempotencyKey,
   readWipeGeneration,
+  deriveMediaFeed,
   deriveMediaList,
   filterMedia,
   mapWithConcurrency,
@@ -17,6 +18,7 @@ import {
   mediaFilePath,
   normalizedImageFilename,
   type MediaListItem,
+  type MediaPendingCard,
 } from "./media.ts";
 
 // Analysis is server-side now (iterate/starter-apps/media — analysis.test.ts
@@ -350,6 +352,77 @@ test("deriveMediaList resets at the last wiped tombstone", () => {
   expect(deriveMediaList(events)).toMatchObject([{ payload: { stableKey: "new" } }]);
 });
 
+test("deriveMediaFeed: cards and rows interleave on the shared original-date key", () => {
+  const feed = deriveMediaFeed({
+    rows: [
+      feedRow("row-old", "2026-08-05T00:00:00.000Z"),
+      feedRow("row-new", "2026-08-12T00:00:00.000Z"),
+    ],
+    allRows: [
+      feedRow("row-old", "2026-08-05T00:00:00.000Z"),
+      feedRow("row-new", "2026-08-12T00:00:00.000Z"),
+    ],
+    cards: [
+      card({ stableKey: "card-mid", capturedAt: "2026-08-10T00:00:00.000Z" }),
+      card({ stableKey: null, capturedAt: null, status: "waiting", previewUri: "p-pick" }),
+    ],
+  });
+  expect(feed.map((entry) => entry.key)).toEqual([
+    "pending:p-pick", // dateless picker card counts as newest (and keys on its preview pre-hash)
+    "row-new",
+    "card-mid",
+    "row-old",
+  ]);
+  expect(feed.map((entry) => entry.kind)).toEqual(["pending", "row", "pending", "row"]);
+});
+
+test("deriveMediaFeed: a card morphs into its row — exactly one entry, same key, same position", () => {
+  const cards = [
+    card({ stableKey: "a", capturedAt: "2026-08-10T00:00:00.000Z" }),
+    card({ stableKey: "b", capturedAt: "2026-08-08T00:00:00.000Z" }),
+  ];
+  const existing = feedRow("older", "2026-08-09T00:00:00.000Z");
+  const before = deriveMediaFeed({ rows: [existing], allRows: [existing], cards });
+  expect(before.map((entry) => entry.key)).toEqual(["a", "older", "b"]);
+
+  // a's uploaded event lands: the derived row replaces the card in place —
+  // never two entries (no duplicate render) and never zero (no gap), even
+  // though the card is still sitting in component state.
+  const resolved = feedRow("a", "2026-08-10T00:00:00.000Z");
+  const after = deriveMediaFeed({
+    rows: [resolved, existing],
+    allRows: [resolved, existing],
+    cards,
+  });
+  expect(after.map((entry) => entry.key)).toEqual(["a", "older", "b"]);
+  expect(after.map((entry) => entry.kind)).toEqual(["row", "row", "pending"]);
+});
+
+test("deriveMediaFeed: suppression checks ALL rows, so a search filter cannot resurrect a resolved card", () => {
+  const resolved = feedRow("a", "2026-08-10T00:00:00.000Z");
+  const feed = deriveMediaFeed({
+    rows: [], // search filtered the row out
+    allRows: [resolved],
+    cards: [card({ stableKey: "a", capturedAt: "2026-08-10T00:00:00.000Z" })],
+  });
+  expect(feed).toEqual([]);
+});
+
+test("deriveMediaFeed: terminal skipped/error cards coexist with rows under their own keys", () => {
+  const row = feedRow("a", "2026-08-10T00:00:00.000Z");
+  const feed = deriveMediaFeed({
+    rows: [row],
+    allRows: [row],
+    cards: [
+      // "skipped" MEANS a row already exists — both must render, without a
+      // React key collision.
+      card({ stableKey: "a", capturedAt: null, status: "skipped", previewUri: "p-skip" }),
+      card({ stableKey: "b", capturedAt: null, status: "error", previewUri: "p-err" }),
+    ],
+  });
+  expect(feed.map((entry) => entry.key)).toEqual(["pending:p-skip", "pending:p-err", "a"]);
+});
+
 test("filterMedia: terms AND together over markdown+transcript+filename+tags, chips must all match", () => {
   const items: MediaListItem[] = [
     item(1, "A train ticket from Rome to Florence", "TRENITALIA 09:45", ["logistics"]),
@@ -469,6 +542,41 @@ function capturedEvent(stableKey: string, offset: number, processing: { markdown
       tags: [],
       processedBy: "m",
     },
+  };
+}
+
+function feedRow(stableKey: string, capturedAt: string | null): MediaListItem {
+  return {
+    offset: 1,
+    capturedAt: "2026-08-12T12:00:00.000Z", // event stream time — the fallback instant
+    analysis: { status: "done", error: null },
+    payload: {
+      stableKey,
+      path: `/media/${stableKey}-f.png`,
+      filename: "f.png",
+      contentType: "image/png",
+      width: 1,
+      height: 1,
+      title: "",
+      markdown: "",
+      transcript: "",
+      tags: [],
+      processedBy: "test",
+      source: "library-sync" as const,
+      capturedAt,
+      isScreenshot: true,
+    },
+  };
+}
+
+function card(overrides: Partial<MediaPendingCard>): MediaPendingCard {
+  return {
+    previewUri: `p-${overrides.stableKey || "x"}`,
+    filename: "f.png",
+    stableKey: null,
+    capturedAt: null,
+    status: "uploading",
+    ...overrides,
   };
 }
 

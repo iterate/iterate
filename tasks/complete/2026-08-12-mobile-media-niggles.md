@@ -113,3 +113,11 @@ The Off/On settings row, "+ Add", and "Sync now" sat too close together.
   tie break; pending cards sort by the same key (capturedAt threaded through
   SyncCandidate/PendingItem; dateless picks count as newest), so a card
   resolving into a row keeps its place.
+- Ordering round 2: date-sorting each zone wasn't enough — the pending
+  header block above the rows meant every upload completion jumped the item
+  across the zone boundary. deriveMediaFeed (lib/media.ts) now interleaves
+  cards and rows into ONE FlatList on the shared original-date key; cards
+  carry their stableKey so the derived row takes over the card's position
+  AND React key in place (no vanish-reappear gap — the removal-on-success
+  callbacks are gone, visibility is derived), while terminal skipped/error
+  cards keep their own preview-keyed entries alongside rows.
