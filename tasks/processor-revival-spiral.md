@@ -8,7 +8,7 @@ branch: processor-revival-spiral
 
 ## Status summary
 
-Just started. Spec written from prod evidence gathered 2026-08-11 (~20:45–21:20 UTC, project "restaurant"). No repro tests or fixes yet.
+Investigation done; mechanisms located in code (see findings below). Next: red tests, then fixes.
 
 ## The bug
 
@@ -43,6 +43,13 @@ Note PR #2408 recently made ephemeral stream events memory-only — yet connecti
 - [ ] Fix smallest credible subset; defer invasive pieces explicitly here + in PR body
 - [ ] Full check suite: typecheck, lint, knip, format, test
 
+## Findings (2026-08-12 investigation)
+
+- (a) **Why churn is durable post-#2408**: `stream/connection-opened`/`connection-closed` are defined in `CoreProcessorContract` (apps/os/src/domains/streams/core-processor-contract.ts:674) WITHOUT `ephemeral: true`, and `StreamCoreProcessor.validate` (core-processor.ts:187) hard-rejects `ephemeral` on ANY `events.iterate.com/stream/*` type. So every open/close appended by the sender (stream-event-sender.ts:2155, :2417) and the pager close (stream-durable-object.ts:3114) is a durable SQLite journal row. Yet the core reducer folds them into NOTHING (core-processor.ts:474-482 — parse and return state unchanged); the contract descriptions themselves say runtime connection state is authoritative and close facts are best-effort. Presence facts are pure churn in the durable log. Session (browser) reconnect storms against a wedged stream have no persisted backoff, so a crash-looping DO journals unbounded open/close pairs — the ~1500/cycle growth.
+- (b) **Replay cost**: stream DO boot folds journal pages past the debounced KV checkpoint (64 events / 1s lag bound — stream-durable-object.ts:2456), and hosted runners refold reduce-only from offset 0 only on contract-version change (`#rebuildReduction`, stream-processor-runner.ts:1112). Both are checkpoint-accelerated; the unbounded input is the journal growth from (a). Agent prompt building (`readConsumedEvents`, agent-llm-request.ts:338) pages the consumed subset from offset 0 every turn — O(history), by design, but filtered by `consumes` so (a)'s churn does not inflate it.
+- (c) **Backoff reset**: `ProcessorKeepalive` (packages/iterate/src/processors/stream-processor-keepalive.ts) resets its crash-loop budget ONLY on quiet-clean confirmation or worker-version change. At 3 strikes it appends the plateau error fact and next retry is 6h out. No seam exists to reset it without a deploy.
+- (d) **9s LLM deadline confirmed**: `deadlineMs: Math.max(1, open.expiresAt - now)` (agent-llm-request.ts:157). `expiresAt` anchors to the trigger (trigger + 10m default). A request adopted by a late revival with e.g. 9s of validity left runs a doomed attempt (and its retries) instead of settling expired — the adoption check (agent-turn-loop.ts:298) only rejects when validity is fully exhausted.
+
 ## Implementation log
 
-- 2026-08-12: task file created; investigation starting.
+- 2026-08-12: task file created; investigation complete, findings above. Writing red tests next.
