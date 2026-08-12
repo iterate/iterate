@@ -195,7 +195,12 @@ function NoteRow({
         setExpanded(true);
         setConfirmingDelete(true);
       }}
-      onPress={() => setExpanded(!expanded)}
+      onPress={() => {
+        // While editing, a row tap must not collapse the row — that would
+        // strand the editor with its Save/Cancel hidden. Save/Cancel end the
+        // edit session; only then does tapping collapse again.
+        if (editDraft === null) setExpanded(!expanded);
+      }}
       style={styles.row}
     >
       <View style={styles.rowBody}>

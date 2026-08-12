@@ -87,6 +87,31 @@ test("a failed analysis settles as failure and reanalyze-requested retries it", 
   });
 });
 
+test("reanalyze supersedes a still-open obligation — one open obligation per note", async () => {
+  // First analysis hangs; the re-run answers.
+  let hangFirst = true;
+  const h = makeNotesHarness({
+    analyze: async () => {
+      if (hangFirst) {
+        hangFirst = false;
+        return new Promise(() => {});
+      }
+      return { title: "From the re-run", tags: [], processedBy: "fake" };
+    },
+  });
+  await h.append(captured("n1", "hung analysis"));
+  expect(Object.keys(h.state().pendingAnalyses)).toEqual(["n1:1"]);
+
+  await h.append({
+    type: "events.iterate.com/notes/reanalyze-requested",
+    payload: { noteKey: "n1" },
+  });
+  expect(h.state()).toMatchObject({
+    notes: { n1: { title: "From the re-run" } },
+    pendingAnalyses: {},
+  });
+});
+
 test("updated overlays text, supersedes the stale attempt, and re-earns the title", async () => {
   // The FIRST analysis hangs (its attempt is in flight when the edit lands);
   // later analyses answer from the text they were given.

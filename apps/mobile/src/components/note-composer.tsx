@@ -10,7 +10,7 @@
 // Photo attachments upload to itx.files and double-append onto /media with
 // source "note" so the media pipeline analyzes them for free (D7).
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Crypto from "expo-crypto";
@@ -195,6 +195,10 @@ export function NoteCaptureOverlay() {
 
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<PickedImage[]>([]);
+  // Guards the delayed feedback reset: a send started within the previous
+  // send's 6s feedback window bumps the generation, so the stale timer
+  // no-ops instead of resetting the newer mutation's state mid-flight.
+  const feedbackGeneration = useRef(0);
 
   const capture = useMutation({
     mutationFn: async (input: {
@@ -228,13 +232,24 @@ export function NoteCaptureOverlay() {
       }
     },
     onMutate: () => {
+      feedbackGeneration.current += 1;
       setDraft("");
       setAttachments([]);
+    },
+    onError: (_error, input) => {
+      // mutationFn already falls back to the pending queue for append
+      // failures; this covers the queue write itself failing — the capture
+      // must land back in the composer, never vanish.
+      setDraft(input.text);
+      setAttachments(input.files);
     },
     onSuccess: () => {
       void cache.invalidateQueries({ queryKey: ["pending-notes"] });
       // Long enough to notice AND tap ("Note saved" links to /notes).
-      setTimeout(() => capture.reset(), 6_000);
+      const generation = feedbackGeneration.current;
+      setTimeout(() => {
+        if (feedbackGeneration.current === generation) capture.reset();
+      }, 6_000);
     },
   });
 

@@ -261,7 +261,15 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
         return {
           ...state,
           pendingAnalyses: {
-            ...state.pendingAnalyses,
+            // Same supersession as `updated`: one open obligation per note.
+            // A still-open older obligation (e.g. a hung attempt) is dropped
+            // so its late settlement folds to a no-op instead of racing the
+            // re-run's result for the overlay.
+            ...Object.fromEntries(
+              Object.entries(state.pendingAnalyses).filter(
+                ([, pending]) => pending.noteKey !== event.payload.noteKey,
+              ),
+            ),
             [`${event.payload.noteKey}:${event.offset}`]: {
               noteKey: event.payload.noteKey,
               requestOffset: event.offset,
