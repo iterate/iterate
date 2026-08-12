@@ -7,7 +7,8 @@ size: small
 
 Three small fixes for the Media screen, from dogfooding in prod (2026-08-12).
 
-**Status:** all three fixes implemented with tests; running repo checks.
+**Status:** done pending review — PR #2481 (draft). Typecheck, lint, knip,
+format, and the full apps/mobile vitest suite pass locally.
 Main pieces: byte-sniffing (`lib/image-format.ts`) + `compatible` picker
 representation + phone-side HEIC gate; stock RefreshControl on the list;
 filename in expanded row detail. Nothing known missing.
