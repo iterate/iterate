@@ -1,5 +1,5 @@
 ---
-status: in-review
+status: done
 size: small
 ---
 
@@ -7,7 +7,7 @@ size: small
 
 ## Status summary
 
-Implemented and tested; PR [#2484](https://github.com/iterate/iterate/pull/2484) awaiting review.
+Implemented and tested; PR [#2484](https://github.com/iterate/iterate/pull/2484) is CI-green and awaiting review.
 Hook + settings wiring + 6 vitest cases + doc note all done. Nothing known missing; possible
 follow-up (out of scope): CI/pullfrog body check to catch non-Claude agents.
 
