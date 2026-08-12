@@ -275,6 +275,8 @@ function makeJournal(homePath = HOME) {
     attempts,
     rows: (path = homePath) => rowsFor(path),
     head: () => rowsFor(homePath).at(-1)?.offset ?? 0,
+    /** Total getEventPage reads — the runner's journal-replay storage cost. */
+    eventPageReads: () => eventPageReads,
     /** Seed a raw journal fact directly (no attempt logged — it's the fixture). */
     seed(event: { type: string; payload?: Record<string, unknown> }): StreamEvent {
       const rows = rowsFor(homePath);
@@ -1067,6 +1069,42 @@ describe("StreamProcessorRunner reduce-only refold", () => {
 // =============================================================================
 
 describe("StreamProcessorRunner load-time reduction catch-up", () => {
+  it("a same-version revival wake replays only the checkpoint gap — zero journal reads on a long stream", async () => {
+    // The revival death spiral's storage amplifier was replay work growing
+    // with journal length. With a valid same-version fold at the acknowledged
+    // cursor, a post-eviction wake performs ZERO journal page reads no matter
+    // how long the history is — replay cost is bounded by the checkpoint gap,
+    // never the stream length.
+    const journal = makeJournal();
+    for (let i = 0; i < 500; i += 1) {
+      journal.seed({ type: REQUESTED, payload: { id: `t${i}` } });
+      journal.seed({ type: COMPLETED, payload: { id: `t${i}` } });
+    }
+    const store = makeProgressStore();
+    store.plant({
+      streamId: TEST_STREAM_ID,
+      reduction: {
+        reducerVersion: "0.0.1",
+        reducedThroughOffset: 1000,
+        state: { count: 1000, open: [] },
+      },
+      processing: { acknowledgedThroughOffset: 1000, cursorRevision: 0 },
+    });
+    const harness = makeHarness({ journal, store, readPageSize: 10 });
+
+    const fresh = journal.seed({ type: REQUESTED, payload: { id: "after-revival" } });
+    await harness.deliverBatches([[fresh]]);
+
+    // Exactly ONE read: the identity-only envelope read (limit 1, afterOffset
+    // MAX — no event bodies). Zero replay reads of the 1000-event history.
+    expect(journal.eventPageReads()).toBe(1);
+    expect(store.record?.processing.acknowledgedThroughOffset).toBe(1001);
+    await expect(harness.runner.snapshot()).resolves.toEqual({
+      offset: 1001,
+      state: { count: 1001, open: ["after-revival"] },
+    });
+  });
+
   it("rejects a recreation between refold pages without committing a mixed-lifetime fold", async () => {
     const journal = makeJournal();
     journal.seed({ type: REQUESTED, payload: { id: "a" } });
