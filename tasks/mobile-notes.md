@@ -8,10 +8,20 @@ branch: mobile-notes
 
 ## Status summary
 
-Implementation done and verified; awaiting review ([PR #2483](https://github.com/iterate/iterate/pull/2483)).
+Backend being rebuilt on workspace-documents (convergence grill session, 2026-08-12); UI stays as shipped.
 
-- Done: notes starter app (analysis obligations + itx.notes + harness spec), mobile composer/pending-queue/screen with unit tests, live e2e (real model-call settlement) and Playwright web spec both green against local dev, PR media uploaded.
-- Missing: nothing known; review feedback + preview e2e on the PR.
+- Done: v1 backend (stream-only) fully verified; convergence decisions settled via second plannotator grill (see below) — a note is now a markdown file with frontmatter in a dedicated `notes` repo.
+- In progress: backend rewrite per the convergence decisions.
+
+## Convergence decisions (grill session 2, supersede the backend half of the v1 decisions)
+
+1. **Files are truth**: notes live at `/repos/notes/<utc-stamp>-<entropy>.md`, written through the `/workspaces/notes` workspace (fast overlay writes; lazy idempotent provisioning by first capture).
+2. **Facts ride the workspace's own stream** (`/workspaces/notes`), not a bespoke `/notes` address: after `writeFile`, the writer appends `notes/captured {path}` etc. Facts are notification/index only — nothing lives only in the stream.
+3. **File shape**: frontmatter `capturedAt` + analysis-written `title`/`tags` (plain YAML anyone edits) + `attachments`; identity = file path (noteKey dies); title absent → first-line fallback.
+4. **Analysis settles into frontmatter** via workspace writeFile (re-read body guard → `superseded`), plus a `notes/analysis-settled` event; concurrency = frontmatter-only writes + last-writer-wins, flagged for a future git/collab upgrade.
+5. **Commits settlement-driven, ~10s debounce**, `git.commit({scope: '/repos/notes'})`, message from title/first line; recovery via `git.status()` at head.
+6. **No `itx.notes.*`** — agents use `glob`/`readFiles` like any documents; NotesApp keeps only obligations + the commit lane.
+- Mechanical: edit = recomposed writeFile + `notes/updated`; delete = deleteFile + `notes/deleted` (git deletion via commit lane); pending queue unchanged; "Open in docs" row action; old vocabulary deleted outright (nothing merged).
 
 ## Why
 
