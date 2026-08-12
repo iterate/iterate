@@ -37,6 +37,18 @@ else. 7 → 3 (or "2 that count": Continue + Allow access).
 
 ## Implementation log
 
+- Misha's phone test exposed two QR-flow gaps (the QR confirm screen has its
+  own sign-in path, separate from the sign-in screen): its `applyPlan`
+  landed on the boot path with no `autoOpen`, so the picker still demanded a
+  tap; and the post-switch re-entry waited for a second "Continue" even
+  though the Switch tap already said everything. Fixed: `applyPlan`
+  navigates to the picker with `autoOpen` for sign-in plans, and the Switch
+  tap persists a one-shot marker (AsyncStorage — the reload wipes JS state)
+  that the re-opened screen consumes to continue by itself once freshness
+  and phone-state settle. Bare rescans of the current channel set no marker
+  and keep the reassurance screen, so the untick affordance and existing
+  specs stay intact. QR flow is now: Switch → native dialog → Allow access.
+
 - expo-auth-session supports the wrap cleanly: `AuthRequest.makeAuthUrlAsync`
   builds the real authorize URL (PKCE intact), `promptAsync(discovery, {url})`
   opens the wrapper instead. `/test-login` already accepts same-origin
