@@ -978,9 +978,9 @@ function EventRowWindow({
   const lastIndex = virtualItems.at(-1)?.index ?? -1;
   const windowSize = Math.max(0, lastIndex - firstIndex + 1);
   // local_index is the dense, zero-based browser list position TanStack Virtual reads.
-  // Today it is offset - 1 and SQLite rejects gaps. If server-side TTL later ages out
-  // old offsets, this column can remain the local dense index while offset keeps its
-  // original stream identity.
+  // It is allocated locally at insert (offsets are NOT dense — ephemeral events
+  // consume offsets without ever landing in the durable table), so the virtual
+  // window and the row count always agree.
   //
   // With no filter, the virtual index and local_index are the same. With an event-type
   // filter, TanStack Virtual indexes the filtered list, so SQLite walks the
