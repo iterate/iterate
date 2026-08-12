@@ -5,6 +5,7 @@ import { StatusBar } from "expo-status-bar";
 import { Alert } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { initialWindowMetrics, SafeAreaProvider } from "react-native-safe-area-context";
+import { NoteCaptureOverlay } from "../components/note-composer.tsx";
 import { resetChannelOverrideForNewInstall } from "../lib/native-install-guard.ts";
 import { fetchLatestUpdateAndReload } from "../lib/preview-channel.ts";
 import { queryClient } from "../lib/query.ts";
@@ -19,6 +20,9 @@ export default function RootLayout() {
       <SafeAreaProvider initialMetrics={initialWindowMetrics}>
         <QueryClientProvider client={queryClient}>
           <RootStack />
+          {/* Global capture composer — floats above every screen (chat
+              excepted); see components/note-composer.tsx. */}
+          <NoteCaptureOverlay />
         </QueryClientProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

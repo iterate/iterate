@@ -70,8 +70,8 @@ export type MediaUploadedPayload = {
   contentType: string;
   width: number;
   height: number;
-  /** Where the item entered: hand-picked or the library sync engine. */
-  source: "picker" | "library-sync";
+  /** Where the item entered: hand-picked, the library sync engine, or a note attachment. */
+  source: "picker" | "library-sync" | "note";
   /** Asset creation time (ISO) when the source knows it; null from the
    * picker, which strips asset metadata on recompression. */
   capturedAt: string | null;
@@ -168,7 +168,7 @@ export function buildUploadedEvent(input: {
   contentType: string;
   width: number;
   height: number;
-  source: "picker" | "library-sync";
+  source: "picker" | "library-sync" | "note";
   capturedAt: string | null;
   isScreenshot: boolean | null;
 }): { type: string; idempotencyKey: string; payload: MediaUploadedPayload } {
