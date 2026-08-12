@@ -1573,6 +1573,50 @@ describe("StreamEventSender halted-subscription antidote resume", () => {
     expect(deliverToItx).not.toHaveBeenCalled();
   });
 
+  it("retries the resume on a later send check when the append throws (paused at boot)", async () => {
+    // sendDue runs on a paused stream (woken is allowed while paused), but a
+    // paused stream REJECTS the subscription-delivery-resumed append. That
+    // rejection must not poison this incarnation's antidote retry: after the
+    // operator unpauses, the next send check — same incarnation, no eviction
+    // — must still deliver the resume.
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let paused = true;
+    const appended: StreamEventInput[] = [];
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: itxConfig,
+      workerVersion: "v2",
+      deliveryHalted: {
+        reason: "delivery-failed",
+        afterOffset: 1,
+        attempts: 3,
+        workerVersion: "v1",
+      },
+      appendDeliveryEvent: (entry) => {
+        if (paused) throw new Error("stream paused: operator maintenance");
+        appended.push(entry);
+        return true;
+      },
+      wakeProcessor: rejectWake,
+    });
+
+    // The rejected resume is contained: the send check itself still succeeds
+    // (a paused stream must not turn every reconcile into a counted failure).
+    expect(h.eventSender.sendDue()).toBe(true);
+    await h.settle();
+    expect(appended).toEqual([]);
+
+    paused = false;
+    h.eventSender.sendDue();
+    await h.settle();
+    expect(appended).toMatchObject([
+      {
+        type: "events.iterate.com/stream/subscription-delivery-resumed",
+        payload: { name: PROCESSOR_KEY },
+      },
+    ]);
+  });
+
   it("grandfathers a legacy halt with no recorded version — operator doors only", async () => {
     // Without a recorded version, "same deploy that just gave up" and
     // "antidote deploy" are indistinguishable; guessing would loop a

@@ -1125,18 +1125,36 @@ export class StreamEventSender {
       version,
     );
     if (this.#antidoteResumesAttempted.has(idempotencyKey)) return;
-    this.#antidoteResumesAttempted.add(idempotencyKey);
-    const recorded = this.#hooks.appendDeliveryEvent({
-      type: "events.iterate.com/stream/subscription-delivery-resumed",
-      idempotencyKey,
-      payload: { name },
-    });
+    // Mark attempted only AFTER the append succeeds: the durable idempotency
+    // key already makes repeats converge, so the set exists purely to spare
+    // repeated no-op dials — an early mark on a FAILED append would poison
+    // this incarnation's retry (e.g. a stream paused at boot rejects the
+    // resume; the later unpause must still get one).
+    let recorded: boolean;
+    try {
+      recorded = this.#hooks.appendDeliveryEvent({
+        type: "events.iterate.com/stream/subscription-delivery-resumed",
+        idempotencyKey,
+        payload: { name },
+      });
+    } catch (error) {
+      // A paused stream rejects the resume append (only halt/pause control
+      // events commit while paused). Contained here so one halted
+      // subscription cannot abort the whole send check; the unpause event's
+      // own post-commit send check retries this branch.
+      console.warn("halt antidote resume append failed; a later send check retries", {
+        name,
+        error,
+      });
+      return;
+    }
     if (!recorded) {
       // Lifecycle teardown interrupted the append. A fresh incarnation owns
       // the retry (its attempted-set starts empty); arrange the wake it needs.
-      this.#antidoteResumesAttempted.delete(idempotencyKey);
       this.#hooks.armAlarm(this.#hooks.now() + LIFECYCLE_RETRY_DELAY_MS);
+      return;
     }
+    this.#antidoteResumesAttempted.add(idempotencyKey);
   }
 
   /**
