@@ -19,6 +19,18 @@ function reduceAll(events: any[]): MediaState {
   return state;
 }
 
+const uploadedPayload = (stableKey: string) => ({
+  stableKey,
+  path: `/media/${stableKey}-shot.png`,
+  filename: "shot.png",
+  contentType: "image/png",
+  width: 100,
+  height: 200,
+  source: "library-sync",
+  capturedAt: "2026-08-10T09:00:00.000Z",
+  isScreenshot: true,
+});
+
 const captured = (stableKey: string, overrides: any = {}) => ({
   type: "events.iterate.com/media/captured",
   path: "/media",
@@ -82,6 +94,55 @@ test("fold: captured inserts, processed overlays latest, unknown processed is sk
     // capture facts survive the overlay
     filename: "shot.png",
     capturedEventAt: "2026-08-10T10:00:00.000Z",
+  });
+});
+
+test("fold: a stale settlement for a superseded request neither clears nor poisons the fresh obligation", () => {
+  const state = reduceAll([
+    {
+      type: "events.iterate.com/media/uploaded",
+      path: "/media",
+      offset: 1,
+      createdAt: "2026-08-12T15:00:00.000Z",
+      payload: uploadedPayload("k1"),
+    },
+    {
+      type: "events.iterate.com/media/wiped",
+      path: "/media",
+      offset: 3,
+      createdAt: "2026-08-12T15:59:00.000Z",
+      payload: { deletedFiles: 1, items: 1 },
+    },
+    // Re-upload after the wipe: a FRESH obligation (requestOffset 4).
+    {
+      type: "events.iterate.com/media/uploaded",
+      path: "/media",
+      offset: 4,
+      createdAt: "2026-08-12T15:59:30.000Z",
+      payload: uploadedPayload("k1"),
+    },
+    // A pre-wipe attempt settles LATE, after the tombstone — it answers the
+    // OLD request (requestOffset 1) and must not touch the new generation.
+    {
+      type: "events.iterate.com/media/processed",
+      path: "/media",
+      offset: 5,
+      createdAt: "2026-08-12T15:59:35.000Z",
+      payload: {
+        stableKey: "k1",
+        title: "",
+        markdown: "",
+        transcript: "",
+        tags: [],
+        processedBy: "",
+        error: "pre-wipe attempt died",
+        requestOffset: 1,
+      },
+    },
+  ]);
+  expect(state).toMatchObject({
+    pendingAnalyses: { k1: { requestOffset: 4 } },
+    items: { k1: { analysisError: null } },
   });
 });
 
