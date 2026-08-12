@@ -1,10 +1,10 @@
 {
-  "commit": "57a6d6ddedaab9567c8a4886a18488db7fb5d030",
-  "message": "Allowlist seeded relying parties by referenceId, not userId IS NULL",
-  "branch": "preview-one-click-login",
-  "builtBy": "mmkal",
-  "machine": "Mishas-MacBook-Pro.local",
-  "builtAt": "2026-08-12T17:24:57.490Z",
-  "expectedBackendEnv": "preview_4",
-  "testLoginEmail": "pr2485+test@nustom.com"
+  "commit": "",
+  "message": "",
+  "branch": "",
+  "builtBy": "",
+  "machine": "",
+  "builtAt": "",
+  "expectedBackendEnv": "",
+  "testLoginEmail": ""
 }
