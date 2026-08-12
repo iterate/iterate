@@ -19,12 +19,14 @@ import {
   Image,
   Modal,
   Pressable,
+  RefreshControl,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
+import { unsupportedImageReason } from "../../../lib/image-format.ts";
 import { Markdown } from "../../../components/markdown.tsx";
 import { MediaViewer } from "../../../components/media-viewer.tsx";
 import { getProjectItx } from "../../../lib/itx.ts";
@@ -191,6 +193,15 @@ export default function MediaScreen() {
       const wipeGeneration = await readWipeGeneration(stream);
       await mapWithConcurrency(picked, 3, async (image) => {
         try {
+          // Genuinely HEIC/AVIF payloads (rare now that the picker asks for
+          // the compatible representation) would fail server-side in
+          // toMarkdown — fail the card here with something actionable
+          // instead of uploading bytes doomed to fail.
+          const unsupported = unsupportedImageReason(image.contentType);
+          if (unsupported !== null) {
+            setStatus(image, "error", unsupported);
+            return;
+          }
           setStatus(image, "analyzing");
           const stableKey = await Crypto.digestStringAsync(
             Crypto.CryptoDigestAlgorithm.SHA256,
@@ -346,6 +357,22 @@ export default function MediaScreen() {
           data={visible}
           keyExtractor={(item) => String(item.offset)}
           contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
+          refreshControl={
+            // Stock pull-to-refresh: rereads the event log and drops settled
+            // (errored/skipped) pending cards — sticky error cards in prod
+            // often described items a later sync pass had captured fine.
+            // In-flight cards stay; their statuses are still live.
+            <RefreshControl
+              refreshing={events.isRefetching}
+              onRefresh={() => {
+                setPending((current) =>
+                  current.filter((row) => row.status === "waiting" || row.status === "analyzing"),
+                );
+                void events.refetch();
+              }}
+              tintColor={colors.textMuted}
+            />
+          }
           ListHeaderComponent={
             pending.length > 0 ? (
               <View style={{ gap: spacing.sm, marginBottom: spacing.sm }}>
@@ -662,6 +689,14 @@ function MediaRow({
             {item.payload.transcript}
           </Text>
         ) : null}
+        {expanded ? (
+          // The original filename (IMG_1234.PNG), findable but faint — it's
+          // also what in-app deep links search by. Expanded detail only; the
+          // collapsed meta row is already full with tags + date.
+          <Text numberOfLines={1} selectable style={styles.rowFilename}>
+            {item.payload.filename}
+          </Text>
+        ) : null}
         <View style={styles.rowTags}>
           {item.payload.tags.map((tag) => (
             <Text key={tag} style={styles.rowTag}>
@@ -845,6 +880,7 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     paddingLeft: spacing.sm,
   },
+  rowFilename: { color: colors.textFaint, fontSize: 11 },
   rowTags: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   rowTag: {
     backgroundColor: colors.background,
