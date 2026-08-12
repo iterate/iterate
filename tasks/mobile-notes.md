@@ -57,12 +57,12 @@ Opening the mobile app usually means "I want to capture something." Today the ca
 
 - [x] processor node harness: captured → obligation → processed; deleted tombstone; reanalyze _done — 8 scenarios incl. eviction recovery, expiry-without-dial, full-stream replay_
 - [x] `lib/notes.test.ts`, `lib/pending-notes.test.ts` _done — 9 tests_
-- [ ] optional `e2e/notes.e2e.test.ts`
+- [x] optional `e2e/notes.e2e.test.ts` _done — live proof: capture → real model-call settlement → worker RPC + itx.notes doors → tombstone_
 
 ### Ship
 
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
-- [ ] draft PR with screenshots/video, session id in body, comment monitors
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test` _all green_
+- [x] draft PR with screenshots/video, session id in body, comment monitors _PR #2483; video-mode demo inline; CI + comment monitors armed_
 
 ## Implementation log
 
