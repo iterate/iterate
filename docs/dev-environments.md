@@ -122,6 +122,22 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   and sends no real email. This is controlled by
   `APP_CONFIG_FIXED_TEST_OTP_ENABLED`; production sets it false and always sends
   a real email OTP.
+- One-click login links: on fixed-test-OTP deployments, auth's `/test-login`
+  endpoint signs a test address in server-side (no typing at all), ensures the
+  user has an org + project, and redirects into the relying party's OAuth flow:
+
+  ```
+  https://auth.<env-host>/test-login?email=pr<N>%2Btest%40nustom.com&project=pr<N>&return_to=https://os.<env-host>/api/iterate-auth/login
+  ```
+
+  `project` (optional) names the org and first project; it defaults to the
+  email local part minus `+test`. `return_to` may be a same-origin path or a
+  registered relying party URL (the deployment's seeded OAuth clients).
+  Preview PR comments render this as the `Login ↗` link, and the preview
+  deploy visits it once so the `pr<N>` user + project already exist by the
+  time anyone clicks. It grants nothing the fixed OTP doesn't already grant;
+  production 404s the route (`apps/auth/src/server/test-login.ts`).
+
 - Template-carrying login links: a single URL can preselect the test user AND
   the project to create — maximally useful in PR bodies:
 
