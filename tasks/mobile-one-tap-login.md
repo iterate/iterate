@@ -51,3 +51,11 @@ else. 7 → 3 (or "2 that count": Continue + Allow access).
 - Auto-open single project is deliberately NOT test-gated: a one-item picker
   is a pointless tap for real users too. The picker remains reachable (Back,
   and multi-project accounts land on it as before).
+- First CI round: four older mobile specs still tapped "Continue" on
+  project-access and the project in the picker — removed both (that's the
+  feature). Auto-open initially lived in the sign-in mutation with a single
+  attempt; the first project list rides a cold itx WebSocket (~20-30s on
+  preview slots) so it sometimes fell back to the picker. Moved it into the
+  picker's own retrying query, keyed by an `autoOpen` param only the sign-in
+  navigation sets — deterministic, and Back-to-picker never auto-bounces.
+  Verified against preview-5 locally: 8 passed / 1 skipped, approvals green.

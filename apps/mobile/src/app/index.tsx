@@ -19,7 +19,6 @@ import {
   clearLastProject,
   getLastProject,
   getServerBaseUrl,
-  setLastProject,
   setServerBaseUrl,
 } from "../lib/storage.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
@@ -92,37 +91,17 @@ export default function SignInScreen() {
           ? { loginHint: hintedEmail }
           : {};
       await signIn(baseUrl, loginHint);
-      reconnectItxSession(baseUrl);
-      // An account with exactly one project (every CI-seeded test identity,
-      // and plenty of real ones) skips the picker: a single-item list is a
-      // pointless tap. The picker stays one Back away, and multi-project
-      // accounts land on it as before.
-      let onlyProject: { id: string; slug: string } | null = null;
-      try {
-        const itx = await getItxSession(baseUrl);
-        const entries = await itx.projects.list({ scope: "mine" });
-        if (entries.length === 1) {
-          await backfillProjectIfMissing(itx, entries[0]);
-          onlyProject = { id: entries[0].id, slug: entries[0].slug };
-          await setLastProject(baseUrl, onlyProject);
-        }
-      } catch {
-        // The picker owns list/backfill error states — fall through to it.
-        onlyProject = null;
-      }
-      return { baseUrl, onlyProject };
+      return baseUrl;
     },
-    onSuccess: ({ onlyProject }) => {
+    onSuccess: (baseUrl) => {
       setEditedServer(null);
+      reconnectItxSession(baseUrl);
       queryClient.clear();
-      if (onlyProject) {
-        router.replace({
-          pathname: "/project/[projectId]",
-          params: { projectId: onlyProject.id, slug: onlyProject.slug },
-        });
-      } else {
-        router.replace("/projects");
-      }
+      // autoOpen: fresh sign-ins skip the picker when the account has exactly
+      // one project (projects.tsx) — the first list can ride a cold itx
+      // WebSocket, so the decision lives in the picker's retrying query, not
+      // here. Plain /projects visits (Back from a project) never auto-open.
+      router.replace({ pathname: "/projects", params: { autoOpen: "1" } });
     },
   });
 
