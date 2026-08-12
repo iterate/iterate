@@ -18,6 +18,9 @@ test("captures a note from the global composer and manages it on /notes", async 
   const projectSlug = `mobile-notes-${Date.now().toString(36)}`;
 
   await signUpToProject(page, testInfo, osBaseUrl, projectSlug);
+  // Video-mode demos start at the interesting part: the project screen with
+  // the composer already docked, not the OAuth signup ceremony.
+  page.videoMode?.setStartTime();
 
   // The composer is already there on the chat-list screen — no navigation
   // between "I opened the app" and "I captured the thought".
