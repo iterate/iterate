@@ -357,7 +357,11 @@ export default function MediaScreen() {
           </Pressable>
         </View>
       ) : items.length === 0 && pending.length === 0 ? (
-        <ScrollView contentContainerStyle={styles.centerScroll} refreshControl={refreshControl}>
+        <ScrollView
+          contentContainerStyle={styles.centerScroll}
+          refreshControl={refreshControl}
+          style={styles.centerScrollView}
+        >
           <Text style={styles.emptyTitle}>Nothing here yet</Text>
           <Text style={styles.emptyBody}>
             Add screenshots or photos — each gets described and transcribed by a vision model, then
@@ -365,7 +369,11 @@ export default function MediaScreen() {
           </Text>
         </ScrollView>
       ) : visible.length === 0 && pending.length === 0 ? (
-        <ScrollView contentContainerStyle={styles.centerScroll} refreshControl={refreshControl}>
+        <ScrollView
+          contentContainerStyle={styles.centerScroll}
+          refreshControl={refreshControl}
+          style={styles.centerScrollView}
+        >
           <Text style={styles.emptyTitle}>No results</Text>
           <Text style={styles.emptyBody}>Nothing matches this search — try fewer words.</Text>
         </ScrollView>
@@ -867,9 +875,11 @@ const styles = StyleSheet.create({
   chipText: { color: colors.textMuted, fontSize: 12 },
   chipTextSelected: { color: colors.background, fontWeight: "600" },
   center: { alignItems: "center", flex: 1, justifyContent: "center", padding: spacing.xl },
-  // The empty/no-results ScrollView wrappers: flexGrow (not flex) so the
-  // content box fills the viewport for centering while staying scrollable
-  // enough for the pull gesture.
+  // The empty/no-results ScrollView wrappers: the ScrollView itself needs
+  // flex to claim the remaining viewport (it shrink-wraps to content
+  // otherwise), and the content box needs flexGrow to fill it for centering
+  // while the whole area stays pullable.
+  centerScrollView: { flex: 1 },
   centerScroll: {
     alignItems: "center",
     flexGrow: 1,
