@@ -8,7 +8,7 @@ branch: processor-revival-spiral
 
 ## Status summary
 
-Investigation done; mechanisms located in code (see findings below). Next: red tests, then fixes.
+Done, pending review. All four mechanisms pinned with tests (red→green in PR history) and fixed: presence facts are now ephemeral (journal growth killed), the keepalive backoff is resettable without a deploy, near-expiry LLM adoption settles expired, and same-version revival replay is pinned at zero journal reads. Deferred: an itx/admin door for `resetRecoveryBackoff` (the seam exists on the registry) and any dashboard surfacing of the plateau state.
 
 ## The bug
 
@@ -29,19 +29,25 @@ Note PR #2408 recently made ephemeral stream events memory-only — yet connecti
 
 ## Mechanisms to pin with tests (red → green)
 
-- [ ] (a) N revive/reconnect cycles must not grow the durable journal superlinearly — connection churn capped, coalesced, or ephemeral
-- [ ] (b) revival replay storage work bounded regardless of stream length (counting storage fake via dependency injection, not vi.mock)
-- [ ] (c) revival-failure backoff surfaces an actionable state and is resettable without a deploy
-- [ ] (d) LLM deadline has a sane floor if confirmed it can compute near-zero
+- [x] (a) N revive/reconnect cycles must not grow the durable journal superlinearly — _connection-opened/closed are now `ephemeral: true` contract events (core-processor-contract.ts); red tests in core-processor.test.ts + stream-event-sender.test.ts_
+- [x] (b) revival replay storage work bounded regardless of stream length — _already bounded (green pin): a same-version wake does one O(1) identity read and zero replay reads on a 1000-event journal (stream-processor-runner.test.ts); the unbounded input was (a)'s journal growth_
+- [x] (c) revival-failure backoff surfaces an actionable state and is resettable without a deploy — _`ProcessorKeepalive.resetBackoff()` → `durableObjectRecovery.resetBackoff` → `registry.resetRecoveryBackoff(name)`; the plateau error event already surfaces the state_
+- [x] (d) LLM deadline has a sane floor — _confirmed `deadlineMs = max(1, expiresAt - now)`; adoption with <30s validity now settles expired (agent-turn-loop.ts), pinned in agent-processor.test.ts_
 
 ## Plan
 
-- [ ] Investigate: where connection-opened/closed events are appended; why they're durable post-#2408
-- [ ] Investigate: revival path in `apps/os/src/domains/processor-facet-durable-object.ts` — replay storage access pattern, 3-strikes backoff, plateau 360m
-- [ ] Investigate: `agent-llm-request.ts` / `agent-turn-loop.ts` deadline computation
-- [ ] Write failing tests for each confirmed mechanism (node test harness per docs/writing-stream-processors.md)
-- [ ] Fix smallest credible subset; defer invasive pieces explicitly here + in PR body
-- [ ] Full check suite: typecheck, lint, knip, format, test
+- [x] Investigate: where connection-opened/closed events are appended; why they're durable post-#2408 — _they were never marked ephemeral; validate hard-rejected ephemeral on all `stream/*` types_
+- [x] Investigate: revival path — replay storage access pattern, 3-strikes backoff, plateau 360m — _keepalive in packages/iterate/src/processors/stream-processor-keepalive.ts; the revive pass only appends a fact, the replay burden was the churn-bloated journal_
+- [x] Investigate: `agent-llm-request.ts` / `agent-turn-loop.ts` deadline computation — _confirmed the 9s anomaly_
+- [x] Write failing tests for each confirmed mechanism
+- [x] Fix smallest credible subset; defer invasive pieces explicitly here + in PR body
+- [x] Full check suite: typecheck, lint, knip, format, test
+
+## Deferred
+
+- itx/admin door for `resetRecoveryBackoff` (registry seam exists; wiring through the facet's RPC surface + CLI is a follow-up)
+- UI surfacing of the plateau state beyond the existing `stream/error-occurred` fact
+- Investigating the secondary "Subrequest depth limit exceeded" on `processor.snapshot()` (likely a symptom of the storage-wedged DO, not a separate bug)
 
 ## Findings (2026-08-12 investigation)
 
@@ -52,4 +58,5 @@ Note PR #2408 recently made ephemeral stream events memory-only — yet connecti
 
 ## Implementation log
 
-- 2026-08-12: task file created; investigation complete, findings above. Writing red tests next.
+- 2026-08-12: task file created; investigation complete, findings above.
+- 2026-08-12: red tests committed (all but the (b) pin fail on main), then fixes. One migration subtlety: marking a definition `ephemeral: true` made `parseEvent` default the flag onto HISTORICAL durable rows (caught by the frozen v31 replay test — eventCount drifted). Fixed by making committed-event parsing keep the stored flag verbatim; only input parsing forces the definition's choice.
