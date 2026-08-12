@@ -87,6 +87,43 @@ test("a failed analysis settles as failure and reanalyze-requested retries it", 
   });
 });
 
+test("updated overlays text, supersedes the stale attempt, and re-earns the title", async () => {
+  // The FIRST analysis hangs (its attempt is in flight when the edit lands);
+  // later analyses answer from the text they were given.
+  let hangFirst = true;
+  const hung: { resolve: (analysis: NotesAnalysis) => void }[] = [];
+  const h = makeNotesHarness({
+    analyze: async (text) => {
+      if (hangFirst) {
+        hangFirst = false;
+        return new Promise<NotesAnalysis>((resolve) => hung.push({ resolve }));
+      }
+      return { title: `Title for: ${text}`, tags: [], processedBy: "fake" };
+    },
+  });
+  await h.append(captured("n1", "old text"));
+  expect(Object.keys(h.state().pendingAnalyses)).toEqual(["n1:1"]);
+
+  await h.append({
+    type: "events.iterate.com/notes/updated",
+    idempotencyKey: "notes-updated-n1-e1",
+    payload: { noteKey: "n1", text: "new text" },
+  });
+  // The edit reset the garnish and the fresh obligation retitled from the
+  // NEW text.
+  expect(h.state()).toMatchObject({
+    notes: { n1: { text: "new text", title: "Title for: new text" } },
+    pendingAnalyses: {},
+  });
+
+  // The stale attempt (opened by the original capture) finally answers with
+  // a title from the OLD text — its obligation was superseded, so the
+  // settlement folds to a no-op instead of overlaying.
+  hung[0]!.resolve({ title: "Title for: old text", tags: [], processedBy: "fake" });
+  await h.settle();
+  expect(h.state().notes.n1).toMatchObject({ title: "Title for: new text" });
+});
+
 test("deleted removes the note and drops its open obligation without settling it", async () => {
   // The analyze fake hangs forever — the obligation must stay open until the
   // delete drops it, proving deletion (not settlement) closed it.

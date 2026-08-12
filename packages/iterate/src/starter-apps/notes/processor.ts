@@ -107,6 +107,20 @@ export const NotesProcessorContract = defineProcessorContract({
         },
       ],
     },
+    "events.iterate.com/notes/updated": {
+      description:
+        "The note's text was edited. Supersedes prior analysis: derived title/tags reset to the " +
+        "first-line fallback and a fresh obligation opens (any still-open older obligation for " +
+        "the note is dropped, so a slow stale attempt cannot overlay a title computed from the " +
+        "old text).",
+      payloadSchema: z.object({ noteKey: z.string(), text: z.string() }),
+      examples: [
+        {
+          description: "A typo fixed after capture.",
+          payload: { noteKey: "m1abc-x7", text: "Standing desk height: 76cm (not 67!)" },
+        },
+      ],
+    },
     "events.iterate.com/notes/reanalyze-requested": {
       description: "Re-run title/tags analysis for one note (opens a fresh obligation).",
       payloadSchema: z.object({ noteKey: z.string() }),
@@ -149,6 +163,7 @@ export const NotesProcessorContract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/notes/captured",
+    "events.iterate.com/notes/updated",
     "events.iterate.com/notes/reanalyze-requested",
     "events.iterate.com/notes/analysis-settled",
     "events.iterate.com/notes/deleted",
@@ -201,6 +216,41 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
               requestOffset: event.offset,
               // Anchored to the event's own time, not the delivery clock —
               // a replayed frame must reduce to the same expiry.
+              expiresAtMs: Date.parse(event.createdAt) + NOTES_ANALYSIS_EXPIRY_MS,
+            },
+          },
+        };
+      }
+      case "events.iterate.com/notes/updated": {
+        const note = state.notes[event.payload.noteKey];
+        if (note === undefined) return state;
+        return {
+          notes: {
+            ...state.notes,
+            [event.payload.noteKey]: {
+              ...note,
+              text: event.payload.text,
+              // Derived garnish resets with the text it derived from; the
+              // fresh obligation below re-earns it.
+              title: "",
+              tags: [],
+              processedBy: "",
+              analysisError: "",
+            },
+          },
+          pendingAnalyses: {
+            // Older obligations for this note are superseded: dropping them
+            // makes a slow stale attempt's settlement fold to a no-op (the
+            // settled arm's unknown-obligation guard) instead of overlaying
+            // a title computed from the pre-edit text.
+            ...Object.fromEntries(
+              Object.entries(state.pendingAnalyses).filter(
+                ([, pending]) => pending.noteKey !== event.payload.noteKey,
+              ),
+            ),
+            [`${event.payload.noteKey}:${event.offset}`]: {
+              noteKey: event.payload.noteKey,
+              requestOffset: event.offset,
               expiresAtMs: Date.parse(event.createdAt) + NOTES_ANALYSIS_EXPIRY_MS,
             },
           },

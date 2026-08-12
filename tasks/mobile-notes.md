@@ -70,3 +70,10 @@ Opening the mobile app usually means "I want to capture something." Today the ca
 - Attachments reuse the media pipeline wholesale: same content-hash file paths (mediaFilePath), and the phone fires media's buildProcessScript with source "note" fire-and-forget after the note append (D7 double-append).
 - Composer state (open/pill, drain generation) lives in the query cache, flipped by a module-level AppState listener — no useEffect. Drain prompt is an Alert inside a queryFn keyed [projectId, foregroundGeneration]: re-prompts on project switch or foreground return, not on every pending change.
 - notes/reanalyze-requested is consumed by the processor but deliberately not in the phone's NOTE_EVENT_TYPES read set (it changes no list state).
+
+## Follow-ups (post-review feedback)
+
+- [ ] **"Chat" note action** — from an expanded note, jump to the chat view with the note referenced (path prefilled in the input, or pre-added as a feed item the agent sees on next message). Needs design: how a note is addressed in agent context (path? quoted text? keyed context item?), and whether it targets a new or existing thread.
+- [ ] **Agent tag-writeback door** — "when a note is created, classify it and tag it" almost works today (an agent can hook `notes/captured` in the config worker), but there's no clean write door for the tag: `notes/analysis-settled` is guarded by the open-obligation fold, so a foreign settlement no-ops. Options: a `notes/tagged` fact anyone may append (fold unions tags), or move the analysis prompt/taxonomy into config-repo data so the agent edits *that*.
+
+_Both intentionally left out of PR #2483 to keep it scoped; captured 2026-08-12 from review feedback._

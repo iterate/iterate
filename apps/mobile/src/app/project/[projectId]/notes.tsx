@@ -25,6 +25,7 @@ import { getProjectItx } from "../../../lib/itx.ts";
 import {
   buildDeletedEvent,
   buildReanalyzeEvent,
+  buildUpdatedEvent,
   deriveNotesList,
   filterNotes,
   NOTE_EVENT_TYPES,
@@ -159,6 +160,19 @@ function NoteRow({
   // react-native-web leaves Alert unimplemented, and the Playwright spec
   // lane drives the web build.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  // null = not editing; the string is the draft.
+  const [editDraft, setEditDraft] = useState<string | null>(null);
+  const update = useMutation({
+    mutationFn: async (text: string) => {
+      const project = await getProjectItx(baseUrl, projectId);
+      // The updated event arrives over the live stream and re-renders the
+      // row (text overlaid, derived title reset until fresh analysis lands).
+      await project.streams
+        .get(NOTES_STREAM_PATH)
+        .append(buildUpdatedEvent(item.payload.noteKey, text, Date.now().toString(36)));
+    },
+    onSuccess: () => setEditDraft(null),
+  });
   const remove = useMutation({
     mutationFn: async () => {
       const project = await getProjectItx(baseUrl, projectId);
@@ -188,8 +202,16 @@ function NoteRow({
         <Text numberOfLines={expanded ? undefined : 1} style={styles.rowTitle}>
           {item.displayTitle || "(empty note)"}
         </Text>
-        {item.payload.text !== "" &&
-        (expanded || item.payload.text.trim() !== item.displayTitle) ? (
+        {editDraft !== null ? (
+          <TextInput
+            value={editDraft}
+            onChangeText={setEditDraft}
+            multiline
+            accessibilityLabel="Edit note text"
+            style={styles.editInput}
+          />
+        ) : item.payload.text !== "" &&
+          (expanded || item.payload.text.trim() !== item.displayTitle) ? (
           <Text
             numberOfLines={expanded ? undefined : 2}
             selectable={expanded}
@@ -224,8 +246,35 @@ function NoteRow({
         {item.analysisError !== "" ? (
           <Text style={styles.rowError}>analysis failed: {item.analysisError}</Text>
         ) : null}
-        {expanded ? (
+        {expanded && editDraft !== null ? (
           <View style={styles.actions}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={update.isPending || editDraft.trim() === ""}
+              onPress={() => update.mutate(editDraft.trim())}
+              style={[styles.actionButton, { borderColor: colors.accent }]}
+            >
+              <Text style={[styles.actionText, { color: colors.accent }]}>
+                {update.isPending ? "Saving…" : "Save"}
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setEditDraft(null)}
+              style={styles.actionButton}
+            >
+              <Text style={styles.actionText}>Cancel</Text>
+            </Pressable>
+          </View>
+        ) : expanded ? (
+          <View style={styles.actions}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setEditDraft(item.payload.text)}
+              style={styles.actionButton}
+            >
+              <Text style={styles.actionText}>✏️ Edit</Text>
+            </Pressable>
             <Pressable
               accessibilityRole="button"
               disabled={reanalyze.isPending}
@@ -260,6 +309,9 @@ function NoteRow({
         ) : null}
         {remove.isError ? (
           <Text style={styles.rowError}>{String(remove.error.message)}</Text>
+        ) : null}
+        {update.isError ? (
+          <Text style={styles.rowError}>{String(update.error.message)}</Text>
         ) : null}
       </View>
     </Pressable>
@@ -348,6 +400,18 @@ const styles = StyleSheet.create({
   rowBody: { gap: spacing.xs },
   rowTitle: { color: colors.text, fontSize: 14, fontWeight: "600" },
   rowText: { color: colors.textMuted, fontSize: 13, lineHeight: 18 },
+  editInput: {
+    backgroundColor: colors.background,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    color: colors.text,
+    fontSize: 13,
+    lineHeight: 18,
+    minHeight: 60,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+  },
   thumbRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   thumb: { borderRadius: radius.sm, height: 72, width: 72 },
   thumbPlaceholder: { backgroundColor: colors.border },

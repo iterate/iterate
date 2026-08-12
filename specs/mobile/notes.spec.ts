@@ -27,7 +27,6 @@ test("captures a note from the global composer and manages it on /notes", async 
   await page.getByText(`→ /notes in ${projectSlug}`).waitFor();
   await page.getByPlaceholder("Capture a note").fill("Standing desk height: 76cm felt right");
   await page.getByLabel("Save note").click();
-  await page.getByText("Note saved").waitFor();
 
   // ✕ collapses to the floating pill; the pill brings it back.
   await page.getByLabel("Close note composer").click();
@@ -35,10 +34,12 @@ test("captures a note from the global composer and manages it on /notes", async 
   await page.getByLabel("Capture a note").click();
   await page.getByPlaceholder("Capture a note").waitFor();
 
-  // The /notes screen: the captured note renders (first-line title until the
-  // analysis settlement overlays it — either way the text is on screen).
-  await page.getByLabel("Open project menu").filter({ visible: true }).click();
-  await page.getByRole("button", { name: "/notes" }).click();
+  // The saved-confirmation is the shortcut to what you just made: tapping it
+  // lands on the /notes screen, where the captured note renders (first-line
+  // title until the analysis settlement overlays it — either way the text is
+  // on screen).
+  await page.getByText("view in /notes").click();
+  await page.getByPlaceholder("Search notes…").waitFor();
   await page
     .getByText(/76cm felt right/)
     .first()
@@ -54,12 +55,22 @@ test("captures a note from the global composer and manages it on /notes", async 
   await page.getByText("No results").waitFor();
   await page.getByPlaceholder("Search notes…").fill("");
 
-  // Tap to expand → inline two-step delete confirm → tombstone empties the
-  // list over the live stream.
+  // Tap to expand → edit the text inline; the updated event overlays it and
+  // resets the derived title to the new first line.
   await page
     .getByText(/76cm felt right/)
     .first()
     .click();
+  await page.getByRole("button", { name: "✏️ Edit" }).click();
+  await page.getByLabel("Edit note text").fill("Standing desk height: 76cm — confirmed at home");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page
+    .getByText(/confirmed at home/)
+    .first()
+    .waitFor();
+
+  // Inline two-step delete confirm → tombstone empties the list over the
+  // live stream.
   await page.getByRole("button", { name: "Delete…" }).click();
   await page.getByRole("button", { name: "Yes, delete this note" }).click();
   await page.getByText("Nothing here yet").waitFor();

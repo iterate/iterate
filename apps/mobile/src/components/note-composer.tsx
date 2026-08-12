@@ -14,7 +14,7 @@ import { useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Crypto from "expo-crypto";
-import { useGlobalSearchParams, useSegments } from "expo-router";
+import { router, useGlobalSearchParams, useSegments } from "expo-router";
 import {
   Alert,
   AppState,
@@ -233,7 +233,8 @@ export function NoteCaptureOverlay() {
     },
     onSuccess: () => {
       void cache.invalidateQueries({ queryKey: ["pending-notes"] });
-      setTimeout(() => capture.reset(), 2_400);
+      // Long enough to notice AND tap ("Note saved" links to /notes).
+      setTimeout(() => capture.reset(), 6_000);
     },
   });
 
@@ -319,13 +320,11 @@ export function NoteCaptureOverlay() {
 
   const canSend = draft.trim() !== "" || attachments.length > 0;
   const feedback =
-    capture.data === "sent"
-      ? "Note saved"
-      : capture.data === "pending"
-        ? "Saved on this phone — you'll be asked to store it when you open a project"
-        : capture.data === "saved-locally"
-          ? "Couldn't reach the project — saved on this phone instead"
-          : null;
+    capture.data === "pending"
+      ? "Saved on this phone — you'll be asked to store it when you open a project"
+      : capture.data === "saved-locally"
+        ? "Couldn't reach the project — saved on this phone instead"
+        : null;
 
   return (
     <KeyboardAvoidingView
@@ -397,7 +396,24 @@ export function NoteCaptureOverlay() {
             <Text style={styles.sendText}>↑</Text>
           </Pressable>
         </View>
-        {feedback !== null ? <Text style={styles.feedback}>{feedback}</Text> : null}
+        {capture.data === "sent" ? (
+          // The confirmation doubles as the shortcut to what you just made.
+          <Pressable
+            accessibilityRole="link"
+            onPress={() =>
+              router.push({
+                pathname: "/project/[projectId]/notes",
+                params: { projectId, ...(params.slug ? { slug: params.slug } : {}) },
+              })
+            }
+          >
+            <Text style={styles.feedback}>
+              Note saved — <Text style={styles.feedbackLink}>view in /notes</Text>
+            </Text>
+          </Pressable>
+        ) : feedback !== null ? (
+          <Text style={styles.feedback}>{feedback}</Text>
+        ) : null}
       </View>
     </KeyboardAvoidingView>
   );
@@ -527,4 +543,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     paddingHorizontal: spacing.md,
   },
+  feedbackLink: { color: colors.accent, fontWeight: "600" },
 });

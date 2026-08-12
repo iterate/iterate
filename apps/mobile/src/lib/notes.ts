@@ -12,11 +12,13 @@ import type { StreamEvent } from "iterate/sdk/itx/react";
 
 export const NOTES_STREAM_PATH = "/notes";
 export const NOTE_CAPTURED_EVENT_TYPE = "events.iterate.com/notes/captured";
+export const NOTE_UPDATED_EVENT_TYPE = "events.iterate.com/notes/updated";
 export const NOTE_ANALYSIS_SETTLED_EVENT_TYPE = "events.iterate.com/notes/analysis-settled";
 export const NOTE_REANALYZE_EVENT_TYPE = "events.iterate.com/notes/reanalyze-requested";
 export const NOTE_DELETED_EVENT_TYPE = "events.iterate.com/notes/deleted";
 export const NOTE_EVENT_TYPES = [
   NOTE_CAPTURED_EVENT_TYPE,
+  NOTE_UPDATED_EVENT_TYPE,
   NOTE_ANALYSIS_SETTLED_EVENT_TYPE,
   NOTE_DELETED_EVENT_TYPE,
 ];
@@ -62,6 +64,16 @@ export function buildCapturedEvent(payload: NoteCapturedPayload) {
   };
 }
 
+export function buildUpdatedEvent(noteKey: string, text: string, nonce: string) {
+  return {
+    type: NOTE_UPDATED_EVENT_TYPE,
+    // Each deliberate edit is its own fact (the same text saved twice in a
+    // row still dedupes on the nonce the caller reuses per edit session).
+    idempotencyKey: `notes-updated-${noteKey}-${nonce}`,
+    payload: { noteKey, text },
+  };
+}
+
 export function buildDeletedEvent(noteKey: string) {
   return {
     type: NOTE_DELETED_EVENT_TYPE,
@@ -104,11 +116,17 @@ export function noteFirstLine(text: string): string {
  */
 export function deriveNotesList(events: StreamEvent[]): NoteListItem[] {
   const notes = new Map<string, NoteListItem>();
+  // Per note, the offset of the event that produced its CURRENT text
+  // (captured or latest updated). A settlement whose requestOffset predates
+  // it was computed from superseded text — skip it, mirroring the server
+  // fold's dropped-obligation guard.
+  const textOffsets = new Map<string, number>();
   for (const event of events) {
     // Events arrive offset-ascending, so later facts win by iteration order.
     if (event.type === NOTE_CAPTURED_EVENT_TYPE) {
       const payload = event.payload as NoteCapturedPayload;
       if (notes.has(payload.noteKey)) continue;
+      textOffsets.set(payload.noteKey, event.offset);
       notes.set(payload.noteKey, {
         offset: event.offset,
         capturedEventAt: event.createdAt,
@@ -118,10 +136,26 @@ export function deriveNotesList(events: StreamEvent[]): NoteListItem[] {
         analysisError: "",
         displayTitle: noteFirstLine(payload.text),
       });
+    } else if (event.type === NOTE_UPDATED_EVENT_TYPE) {
+      const payload = event.payload as { noteKey: string; text: string };
+      const note = notes.get(payload.noteKey);
+      if (note === undefined) continue;
+      textOffsets.set(payload.noteKey, event.offset);
+      // Derived garnish resets with the text it derived from — the fresh
+      // analysis obligation the server opens will re-earn the title.
+      notes.set(payload.noteKey, {
+        ...note,
+        payload: { ...note.payload, text: payload.text },
+        title: "",
+        tags: [],
+        analysisError: "",
+        displayTitle: noteFirstLine(payload.text),
+      });
     } else if (event.type === NOTE_ANALYSIS_SETTLED_EVENT_TYPE) {
       const payload = event.payload as NoteAnalysisSettledPayload;
       const note = notes.get(payload.noteKey);
       if (note === undefined) continue;
+      if (payload.requestOffset < (textOffsets.get(payload.noteKey) || 0)) continue;
       if (payload.result.status === "succeeded") {
         notes.set(payload.noteKey, {
           ...note,
