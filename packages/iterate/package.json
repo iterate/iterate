@@ -38,6 +38,9 @@
     "./starter-apps/media": "./src/starter-apps/media/index.ts",
     "./starter-apps/media/configured-worker": "./src/starter-apps/media/configured-worker.ts",
     "./starter-apps/media/ref": "./src/starter-apps/media/ref.ts",
+    "./starter-apps/notes": "./src/starter-apps/notes/index.ts",
+    "./starter-apps/notes/configured-worker": "./src/starter-apps/notes/configured-worker.ts",
+    "./starter-apps/notes/ref": "./src/starter-apps/notes/ref.ts",
     "./starter-apps/todo": "./src/starter-apps/todo/index.ts",
     "./processors": "./src/processors/index.ts",
     "./processors/cloudflare": "./src/processors/cloudflare.ts",
@@ -115,6 +118,21 @@
         "types": "./dist/starter-apps/media/ref.d.ts",
         "import": "./dist/starter-apps/media/ref.mjs",
         "default": "./dist/starter-apps/media/ref.mjs"
+      },
+      "./starter-apps/notes": {
+        "types": "./dist/starter-apps/notes/index.d.ts",
+        "import": "./dist/starter-apps/notes/index.mjs",
+        "default": "./dist/starter-apps/notes/index.mjs"
+      },
+      "./starter-apps/notes/configured-worker": {
+        "types": "./dist/starter-apps/notes/worker.d.ts",
+        "import": "./dist/starter-apps/notes/configured-worker.mjs",
+        "default": "./dist/starter-apps/notes/configured-worker.mjs"
+      },
+      "./starter-apps/notes/ref": {
+        "types": "./dist/starter-apps/notes/ref.d.ts",
+        "import": "./dist/starter-apps/notes/ref.mjs",
+        "default": "./dist/starter-apps/notes/ref.mjs"
       },
       "./starter-apps/todo": {
         "types": "./dist/starter-apps/todo/index.d.ts",
