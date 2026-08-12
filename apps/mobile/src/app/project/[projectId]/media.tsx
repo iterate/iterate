@@ -274,38 +274,27 @@ export default function MediaScreen() {
         >
           <Text style={styles.captureText}>+ Add</Text>
         </Pressable>
+        <Pressable
+          accessibilityLabel="Media options"
+          accessibilityRole="button"
+          onPress={() => setSyncDialogOpen(true)}
+          style={styles.moreButton}
+        >
+          <Text style={styles.moreButtonText}>⋯</Text>
+        </Pressable>
       </View>
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => setSyncDialogOpen(true)}
-        style={styles.syncRow}
-      >
-        <Text style={styles.syncLabel}>Auto-collect screenshots</Text>
-        <View style={styles.syncRowValue}>
-          <Text style={styles.syncRowValueText}>
-            {settings?.enabled ? `On · back to ${shortDate(settings.sinceIso)}` : "Off"}
-          </Text>
-          <Text style={styles.syncChevron}>›</Text>
-        </View>
-      </Pressable>
       {settings?.enabled === true ? (
-        <View style={styles.syncStatusRow}>
-          <Text numberOfLines={1} style={styles.syncStatus}>
-            {syncProgress ||
-              (syncPass.isFetching
-                ? "Syncing…"
-                : syncPass.isError
-                  ? String(syncPass.error.message)
-                  : syncSummary(syncPass.data))}
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            disabled={syncPass.isFetching}
-            onPress={() => void syncPass.refetch()}
-          >
-            <Text style={styles.syncNow}>Sync now</Text>
-          </Pressable>
-        </View>
+        // One unobtrusive line: the sync pass result plus the auto-collect
+        // window ("back to <date>") — everything the old settings row said.
+        // Turning it on/off lives behind the ⋯ dialog.
+        <Text numberOfLines={1} style={styles.syncStatus}>
+          {syncProgress ||
+            (syncPass.isFetching
+              ? "Syncing…"
+              : syncPass.isError
+                ? String(syncPass.error.message)
+                : syncSummary(syncPass.data, settings.sinceIso))}
+        </Text>
       ) : null}
       {chipTags.length > 0 ? (
         <View style={styles.chips}>
@@ -358,10 +347,14 @@ export default function MediaScreen() {
           keyExtractor={(item) => String(item.offset)}
           contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
           refreshControl={
-            // Stock pull-to-refresh: rereads the event log and drops settled
+            // Stock pull-to-refresh: rereads the event log, drops settled
             // (errored/skipped) pending cards — sticky error cards in prod
-            // often described items a later sync pass had captured fine.
-            // In-flight cards stay; their statuses are still live.
+            // often described items a later sync pass had captured fine —
+            // and, with auto-collect on, kicks a sync pass (this replaced the
+            // inline "Sync now" button; the dialog keeps one too). In-flight
+            // cards stay; their statuses are still live. The spinner tracks
+            // only the event reread — a sync pass can run for minutes and
+            // reports through the status line instead.
             <RefreshControl
               refreshing={events.isRefetching}
               onRefresh={() => {
@@ -369,6 +362,7 @@ export default function MediaScreen() {
                   current.filter((row) => row.status === "waiting" || row.status === "analyzing"),
                 );
                 void events.refetch();
+                if (settings?.enabled === true && !syncPass.isFetching) void syncPass.refetch();
               }}
               tintColor={colors.textMuted}
             />
@@ -414,8 +408,13 @@ export default function MediaScreen() {
           itemCount={items.length}
           onApply={applySyncSettings}
           onCancel={() => setSyncDialogOpen(false)}
+          onSyncNow={() => {
+            setSyncDialogOpen(false);
+            void syncPass.refetch();
+          }}
           onWipe={() => wipe.mutate()}
           settings={settings || null}
+          syncFetching={syncPass.isFetching}
           wipePending={wipe.isPending}
         />
       </Modal>
@@ -452,22 +451,27 @@ function shortDate(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
-/** The confirm sheet behind the Auto-collect row: nothing syncs until "Turn
- * on" — the row itself never acts. Extending the window backwards later is
- * the same dialog with a longer choice. */
+/** The options sheet behind the toolbar's ⋯ button: auto-collect on/off with
+ * its backfill window, a manual Sync now, and Delete all. Nothing syncs
+ * until "Turn on" — opening the sheet never acts. Extending the window
+ * backwards later is the same dialog with a longer choice. */
 function SyncDialog({
   settings,
   itemCount,
   onApply,
   onCancel,
+  onSyncNow,
   onWipe,
+  syncFetching,
   wipePending,
 }: {
   settings: MediaSyncSettings | null;
   itemCount: number;
   onApply: (next: MediaSyncSettings) => void;
   onCancel: () => void;
+  onSyncNow: () => void;
   onWipe: () => void;
+  syncFetching: boolean;
   wipePending: boolean;
 }) {
   const enabled = settings?.enabled === true;
@@ -491,9 +495,9 @@ function SyncDialog({
       <View style={styles.dialog}>
         <Text style={styles.dialogTitle}>Auto-collect screenshots</Text>
         <Text style={styles.dialogBody}>
-          When on, opening this screen syncs screenshots from your photo library into this project —
-          screenshots only, at most 50 per visit, and never older than the date you pick. Nothing
-          happens until you confirm here.
+          When on, opening this screen or pulling to refresh syncs screenshots from your photo
+          library into this project — screenshots only, at most 50 per pass, and never older than
+          the date you pick. Nothing happens until you confirm here.
         </Text>
         <Text style={styles.dialogSectionLabel}>Collect back to</Text>
         <View style={styles.chips}>
@@ -520,11 +524,26 @@ function SyncDialog({
             style={styles.dialogHint}
           >{`Currently on, back to ${shortDate(settings.sinceIso)}.`}</Text>
         ) : null}
+        {enabled ? (
+          // Pull-to-refresh is the everyday trigger; this is the explicit one.
+          <Pressable
+            accessibilityRole="button"
+            disabled={syncFetching}
+            onPress={onSyncNow}
+            style={[
+              styles.dialogButton,
+              styles.syncNowButton,
+              syncFetching && styles.captureDisabled,
+            ]}
+          >
+            <Text style={styles.dialogButtonText}>{syncFetching ? "Syncing…" : "Sync now"}</Text>
+          </Pressable>
+        ) : null}
         {itemCount > 0 ? (
           confirmingWipe ? (
             <View style={styles.wipeConfirm}>
               <Text style={styles.wipeWarning}>
-                {`Deletes all ${itemCount} items and their image files from this project, for everyone. This cannot be undone.`}
+                {`Deletes all ${itemCount} items and their image files from this project, for everyone. Photos on your phone are untouched. This cannot be undone.`}
               </Text>
               <Pressable
                 accessibilityRole="button"
@@ -539,7 +558,7 @@ function SyncDialog({
             </View>
           ) : (
             <Pressable accessibilityRole="button" onPress={() => setConfirmingWipe(true)}>
-              <Text style={styles.wipeLink}>Delete all media…</Text>
+              <Text style={styles.wipeLink}>Delete all media from this project…</Text>
             </Pressable>
           )
         ) : null}
@@ -569,13 +588,17 @@ function SyncDialog({
   );
 }
 
-function syncSummary(result: SyncPassResult | undefined): string {
-  if (result === undefined) return "";
+/** The status line also carries the auto-collect window ("back to <date>") —
+ * the old settings row's information, folded in when the ⋯ dialog replaced
+ * the row. Last so a long summary truncates it first. */
+function syncSummary(result: SyncPassResult | undefined, sinceIso: string): string {
+  const backTo = `back to ${shortDate(sinceIso)}`;
+  if (result === undefined) return `Auto-collect on · ${backTo}`;
   if (result.status === "denied") return "Photo access denied — allow it in Settings";
   const limited = result.accessPrivileges === "limited" ? " · limited access" : "";
   const more = result.more ? " · more next pass" : "";
   const failed = result.failed > 0 ? ` · ${result.failed} failed (will retry)` : "";
-  return `Synced ${result.synced} new · ${result.known} already captured${failed}${more}${limited}`;
+  return `Synced ${result.synced} new · ${result.known} already captured${failed}${more}${limited} · ${backTo}`;
 }
 
 function PendingRow({
@@ -754,20 +777,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   captureDisabled: { opacity: 0.5 },
-  syncRow: {
+  // The ⋯ options button: quiet next to the accent +Add, but the same
+  // height and a comfortable tap target.
+  moreButton: {
     alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    justifyContent: "center",
     paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
   },
-  syncLabel: { color: colors.text, flex: 1, fontSize: 14 },
-  syncRowValue: { alignItems: "center", flexDirection: "row", gap: spacing.xs },
-  // NOT syncStatus: that style's flex:1 (needed for truncation in the
-  // status line) stretches the value into a wide box here, stranding the
-  // chevron at the screen edge.
-  syncRowValueText: { color: colors.textMuted, fontSize: 12 },
-  syncChevron: { color: colors.textFaint, fontSize: 18 },
+  moreButtonText: { color: colors.text, fontSize: 18, fontWeight: "600" },
   dialogBackdrop: {
     alignItems: "center",
     backgroundColor: "rgba(0, 0, 0, 0.6)",
@@ -809,16 +829,13 @@ const styles = StyleSheet.create({
   wipeButton: { alignSelf: "flex-start", borderColor: colors.danger },
   wipeButtonText: { color: colors.danger, fontSize: 14, fontWeight: "600" },
   dialogButtonPrimaryText: { color: colors.background, fontSize: 14, fontWeight: "600" },
-  syncStatusRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: spacing.sm,
-    justifyContent: "space-between",
+  syncStatus: {
+    color: colors.textMuted,
+    fontSize: 12,
     paddingHorizontal: spacing.md,
     paddingTop: 4,
   },
-  syncStatus: { color: colors.textMuted, flex: 1, fontSize: 12 },
-  syncNow: { color: colors.accent, fontSize: 12, fontWeight: "600" },
+  syncNowButton: { alignSelf: "flex-start" },
   captureText: { color: colors.background, fontSize: 14, fontWeight: "600" },
   chips: {
     flexDirection: "row",

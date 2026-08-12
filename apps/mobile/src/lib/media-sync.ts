@@ -3,7 +3,8 @@
 // through the same capture pipeline the picker uses (media.ts). The pure
 // pass-planning rules live in media-sync-core.ts. Sync is device-initiated
 // push per the original spec: the phone with the toggle on decides to run a
-// pass (Media screen open or "Sync now"); there is no background task.
+// pass (Media screen open, pull-to-refresh, or the ⋯ dialog's Sync now);
+// there is no background task.
 
 import * as Crypto from "expo-crypto";
 import * as MediaLibrary from "expo-media-library";

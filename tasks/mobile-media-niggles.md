@@ -7,8 +7,10 @@ size: small
 
 Three small fixes for the Media screen, from dogfooding in prod (2026-08-12).
 
-**Status:** done pending review — PR #2481 (draft). Typecheck, lint, knip,
-format, and the full apps/mobile vitest suite pass locally.
+**Status:** done pending review — PR #2481 (draft). Original three fixes plus
+Misha's follow-up (declutter the controls: ⋯ options button, no inline Sync
+now, clearer delete-all copy). Typecheck, lint, knip, format, and the full
+apps/mobile vitest suite pass locally.
 Main pieces: byte-sniffing (`lib/image-format.ts`) + `compatible` picker
 representation + phone-side HEIC gate; stock RefreshControl on the list;
 filename in expanded row detail. Nothing known missing.
@@ -65,6 +67,27 @@ been captured fine by later sync passes.
       crowding. _Expanded detail only (textFaint, 11pt, selectable) — the
       collapsed meta row already carries tags + right-aligned date; a
       filename there fights the date for the same edge._
+
+### 4. Follow-up: declutter the control area (Misha, after first review)
+
+The Off/On settings row, "+ Add", and "Sync now" sat too close together.
+
+- [x] Replace the full-width "Auto-collect screenshots … ›" row with a ⋯
+      "more options" button in the toolbar (same height as + Add, bordered,
+      quiet); it opens the existing dialog. _`moreButton` next to + Add;
+      accessibilityLabel "Media options"._
+- [x] Fold the row's information into the status line: sync summary now ends
+      with "· back to <date>", and shows "Auto-collect on · back to <date>"
+      before the first pass. No line at all when off. _`syncSummary(result,
+      sinceIso)`; window info last so truncation drops it first._
+- [x] Remove the inline "Sync now" button; pull-to-refresh now ALSO kicks a
+      sync pass when auto-collect is on (reverses the earlier
+      deliberate exclusion), and the dialog gains an explicit "Sync now"
+      button. _RefreshControl handler refetches syncPass; spinner still
+      tracks only the event reread since a pass can run minutes and reports
+      through the status line._
+- [x] Make delete-all clearly project-only. _Link: "Delete all media from
+      this project…"; warning adds "Photos on your phone are untouched."_
 
 ## Implementation log
 
