@@ -38,7 +38,7 @@ esac
 {
   echo "BLOCKED: this command mutates a pull request, and the current PR guidance hasn't been through your context yet (or it changed since you last read it)."
   echo
-  echo "Read the guidance below, apply it to your PR, then re-run with the ack prefix (it's string-matched by a hook, not a real env var):"
+  echo "Read the guidance below, and make any changes necessary. You can re-run the command with the ack prefix (it's string-matched by a hook, not a real env var). If changes are substantial or will take a long time, you can first re-run with a note that you are working on the changes based on the pull request guidance:"
   echo
   echo "  PR_GUIDANCE_HASH=$hash gh pr create ..."
   echo
