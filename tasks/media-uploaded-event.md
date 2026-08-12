@@ -1,17 +1,20 @@
 ---
-status: in-progress
+status: in-review
 size: large
 branch: media-uploaded-event
+pr: https://github.com/iterate/iterate/pull/2482
 ---
 
 # Media: durable `media/uploaded` event + server-side analysis
 
 ## Status summary
 
-Not started yet (spec commit). The design is settled: the phone appends a
-cheap durable `media/uploaded` event right after the bytes land, and analysis
-moves server-side into the userland MediaApp processor (obligation pattern,
-keepalive-recovered). Nothing implemented; checklist below.
+Implemented, all checks green (typecheck, lint, knip, format, vitest across
+os/iterate/mobile). Main pieces: phone appends a cheap durable
+`media/uploaded` event after `files.put`; analysis moved into the userland
+MediaApp processor as an obligation (recovery-enabled); mobile list shows
+Analyzing…/failed states; e2e rewritten for the new flow. Not yet run: the
+live e2e lane (needs a dev server) — CI's preview e2e covers it.
 
 ## Problem
 
@@ -52,7 +55,8 @@ after (phone does the cheap durable part only):
   Idempotency key = existing `mediaIdempotencyKey` scheme
   (`media-captured-<hash>[-g<gen>]`), so wipe-generation semantics are
   preserved AND a stableKey already recorded as legacy `media/captured`
-  dedups at the phone's existing getEvent check — no duplicate rows.
+  dedups at the phone's existing getEvent check (and, failing that, at the
+  stream's same-key rejection) — no duplicate rows.
 - `media/reanalyze-requested` (NEW, phone-appended): `{ stableKey }`, key
   `media-reanalyze-<stableKey>-<nonce>`. Replaces the phone-driven reprocess
   script; Re-analyze is now durable too.
@@ -114,38 +118,61 @@ hand-sync convention as search semantics).
 
 ## Checklist
 
-- [ ] Starter app: `analysis.ts` — pipeline ported from buildProcessScript
+- [x] Starter app: `analysis.ts` — pipeline ported from buildProcessScript
       (bytes → toMarkdown → >1MB downscale → vision JSON parse), owns model +
-      taxonomy + prompt; unit tests ported from the script tests.
-- [ ] Starter app: contract v0.2.0 — consume uploaded + reanalyze-requested,
+      taxonomy + prompt; unit tests ported from the script tests. _In
+      packages/iterate/src/starter-apps/media/analysis.ts + analysis.test.ts;
+      the script-injection tests died with the script._
+- [x] Starter app: contract v0.2.0 — consume uploaded + reanalyze-requested,
       emit processed (with error/requestOffset), state gains pendingAnalyses,
       MediaItem gains analysisError; reduce dedups uploaded-after-captured;
-      wiped clears obligations.
-- [ ] Starter app: MediaProcessor processEvent obligation branch + worker
-      `recovery = true` + analyze dep wired off env.ITX.
-- [ ] Starter app: harness tests — happy path, terminal failure keeps row,
+      wiped clears obligations. _processor.ts._
+- [x] Starter app: MediaProcessor processEvent obligation branch + worker
+      `recovery = true` + analyze dep wired off env.ITX. _worker.ts
+      createProcessor injects analyze/now/sleep; #startOrSettle logic lives
+      in processEvent's caughtUp branch._
+- [x] Starter app: harness tests — happy path, terminal failure keeps row,
       eviction mid-attempt revival, expiry without dialing AI, full-stream
       replay (throwing fake, zero calls, zero appends), reanalyze, dedup,
-      wipe clears obligations.
-- [ ] Mobile media.ts: uploaded/reanalyze event builders + types,
+      wipe clears obligations. _media-analysis.test.ts via
+      makeProcessorHarness; also in-attempt retry on virtual time._
+- [x] Mobile media.ts: uploaded/reanalyze event builders + types,
       buildProcessScript deleted, wipe script sweeps uploaded too,
       deriveMediaList births rows from uploaded + overlays processed
       (error-aware) + analysis status (pending/failed/done), dedup across
-      captured+uploaded.
-- [ ] Mobile media-sync.ts: pass = hash + put + append uploaded (no
-      runScript); progress copy updated.
-- [ ] Mobile media.tsx: capture mutation appends uploaded; rows show
+      captured+uploaded. _MediaListItem.analysis drives the UI badge._
+- [x] Mobile media-sync.ts: pass = hash + put + append uploaded (no
+      runScript); progress copy updated. _"Uploading n of m new…"; failed
+      now counts upload failures only._
+- [x] Mobile media.tsx: capture mutation appends uploaded; rows show
       "Analyzing…" until processed lands, error state on terminal failure;
       Re-analyze appends reanalyze-requested. Minimal diff (sibling PR
-      mobile-media-niggles touches the same screen).
-- [ ] Mobile tests: media.test.ts reworked (script tests move to starter
-      app), new derivation/back-compat/wipe coverage.
-- [ ] e2e: media.e2e.test.ts + media-agent-retrieval.e2e.test.ts drive the
+      mobile-media-niggles touches the same screen). _Pending cards say
+      "Uploading…"; MediaRow renders the analysis badge/error._
+- [x] Mobile tests: media.test.ts reworked (script tests move to starter
+      app), new derivation/back-compat/wipe coverage. _Pending/failed/
+      reanalyze status derivation, captured+uploaded dedup, both-birth-types
+      wipe sweep._
+- [x] e2e: media.e2e.test.ts + media-agent-retrieval.e2e.test.ts drive the
       new flow (put + append uploaded, wait for processed via
       stream.waitForEvent); media-app.e2e.test.ts (seeded captured) stays as
-      the back-compat lane.
-- [ ] Checks: typecheck, lint, knip, format, vitest.
+      the back-compat lane. _120s waits per settlement (same real-time AI
+      cost the awaited-runScript path had; e2e testTimeout is 180s)._
+- [x] Checks: typecheck, lint, knip, format, vitest. _All green; knip
+      required unexporting analysis-internal consts._
 
 ## Implementation log
 
-(running notes appended during implementation)
+- Chose per-stableKey obligation keying (`pendingAnalyses` keyed by
+  stableKey, storing requestOffset) so a reanalyze while an initial analysis
+  is pending collapses to one obligation — latest request wins; the
+  settlement clears the key's entry either way.
+- The harness's MemoryStream rejects same-key/different-body appends exactly
+  like production — the "uploaded after captured" dedup test had to use a
+  distinct key, which documented the real primary dedup (the stream door).
+- deriveMediaList's analysis state: latest request offset (uploaded birth or
+  reanalyze) vs latest settlement offset; request newer → pending; settled
+  with error → failed; else done. Legacy captured rows are born "done".
+- specs/mobile/media.spec.ts untouched: the deterministic lane seeds legacy
+  captured events (now the explicit back-compat surface) and the opt-in AI
+  lane's "Analyzing…" wait still matches the new row badge.

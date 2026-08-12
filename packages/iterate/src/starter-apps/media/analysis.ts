@@ -9,7 +9,7 @@
 // MEDIA_TAGS) kept in sync by hand, same convention as search semantics.
 
 /** Sees the pixels: transcribes text verbatim and picks tags. */
-export const MEDIA_VISION_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
+const MEDIA_VISION_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
 
 /**
  * Starter taxonomy — expect churn. Multi-tag with overlap allowed; the model
@@ -17,7 +17,7 @@ export const MEDIA_VISION_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
  * acceptable answer (deliberately conservative — early dogfood tagged
  * everything `bug-report` on wild guesses).
  */
-export const MEDIA_TAG_TAXONOMY: { tag: string; hint: string }[] = [
+const MEDIA_TAG_TAXONOMY: { tag: string; hint: string }[] = [
   { tag: "screenshot", hint: "a captured device screen: app UI, web page, status bar visible" },
   { tag: "photo", hint: "a camera photograph of the physical world" },
   { tag: "transient", hint: "one-off info with no lasting value: OTP codes, confirmations" },
@@ -44,7 +44,7 @@ export type MediaAnalysisResult = {
  * The itx slice the pipeline dials — structural on purpose so the real
  * `Project` session satisfies it and tests hand in a plain fake.
  */
-export type MediaAnalysisSession = {
+type MediaAnalysisSession = {
   files: { get(path: string): { bytes(): Promise<Uint8Array> } };
   ai: {
     toMarkdown(document: {

@@ -2,12 +2,14 @@
 // they show. "Add" picks from the photo library (PHPicker — no permission,
 // no native module, ships OTA). Per image: sha256 the payload, skip if the
 // /media stream already has that idempotency key, upload bytes to itx.files,
-// then one capabilityHost.runScript call does
-// toMarkdown → vision transcript+tags → append server-side (lib/media.ts
-// builds the script and owns the taxonomy). Picked items appear immediately
-// as pending cards (three at a time in flight) and resolve into real rows as
-// their events land on the live stream. Tap a thumbnail for full screen;
-// "Re-analyze" reruns the pipeline and overlays the newest result.
+// then ONE cheap durable media/uploaded append — analysis happens
+// server-side (the MediaApp processor reacts to the event and overlays a
+// media/processed settlement; lib/media.ts owns the client vocabulary).
+// Picked items appear immediately as pending cards (three at a time in
+// flight), resolve into real rows as their uploaded events land on the live
+// stream, and show "Analyzing…" until the settlement arrives — locking the
+// phone mid-pass loses nothing. Tap a thumbnail for full screen;
+// "Re-analyze" appends a reanalyze request the same server pipeline answers.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Crypto from "expo-crypto";
@@ -29,7 +31,8 @@ import { Markdown } from "../../../components/markdown.tsx";
 import { MediaViewer } from "../../../components/media-viewer.tsx";
 import { getProjectItx } from "../../../lib/itx.ts";
 import {
-  buildProcessScript,
+  buildReanalyzeEvent,
+  buildUploadedEvent,
   buildWipeScript,
   extendedSinceIso,
   readWipeGeneration,
@@ -58,7 +61,7 @@ import { useLiveEvents } from "../../../lib/use-live-events.ts";
 type PendingItem = {
   previewUri: string;
   filename: string;
-  status: "waiting" | "analyzing" | "skipped" | "error";
+  status: "waiting" | "uploading" | "skipped" | "error";
   error?: string;
 };
 
@@ -111,14 +114,14 @@ export default function MediaScreen() {
           onProgress: setSyncProgress,
           // Discovered screenshots appear immediately as pending cards with
           // local previews, exactly like picked ones, and resolve into real
-          // rows as their captured events land on the live stream.
+          // rows as their uploaded events land on the live stream.
           onCandidate: (candidate) =>
             setPending((current) => [
               ...current,
               {
                 previewUri: candidate.previewUri,
                 filename: candidate.filename,
-                status: "analyzing",
+                status: "uploading",
               },
             ]),
           onCandidateDone: (candidate, error) =>
@@ -191,7 +194,7 @@ export default function MediaScreen() {
       const wipeGeneration = await readWipeGeneration(stream);
       await mapWithConcurrency(picked, 3, async (image) => {
         try {
-          setStatus(image, "analyzing");
+          setStatus(image, "uploading");
           const stableKey = await Crypto.digestStringAsync(
             Crypto.CryptoDigestAlgorithm.SHA256,
             image.base64,
@@ -208,8 +211,10 @@ export default function MediaScreen() {
             data: base64ToUint8Array(image.base64),
             contentType: image.contentType,
           });
-          await project.capabilityHost.runScript(
-            buildProcessScript({
+          // The durable birth fact — analysis follows server-side and lands
+          // as a media/processed event over the live stream.
+          await stream.append(
+            buildUploadedEvent({
               stableKey,
               wipeGeneration,
               filename: image.filename,
@@ -219,11 +224,11 @@ export default function MediaScreen() {
               source: "picker",
               capturedAt: null,
               isScreenshot: null,
-              mode: "capture",
             }),
           );
-          // The captured event arrives over the live connection and renders
-          // as a real row; drop the pending card.
+          // The uploaded event arrives over the live connection and renders
+          // as a real row (with its own "Analyzing…" badge); drop the
+          // pending card.
           setPending((current) => current.filter((row) => row.previewUri !== image.previewUri));
         } catch (error) {
           setStatus(image, "error", error instanceof Error ? error.message : String(error));
@@ -238,8 +243,8 @@ export default function MediaScreen() {
   // Chips: taxonomy order first, then novel model-coined tags actually in use.
   const tagsInUse = new Set(items.flatMap((item) => item.payload.tags));
   const chipTags = [
-    ...MEDIA_TAGS.map(({ tag }) => tag).filter((tag) => tagsInUse.has(tag)),
-    ...[...tagsInUse].filter((tag) => !MEDIA_TAGS.some(({ tag: known }) => known === tag)).sort(),
+    ...MEDIA_TAGS.filter((tag) => tagsInUse.has(tag)),
+    ...[...tagsInUse].filter((tag) => !MEDIA_TAGS.includes(tag)).sort(),
   ];
 
   return (
@@ -577,7 +582,7 @@ function PendingRow({
           <View style={styles.pendingSpinnerRow}>
             <ActivityIndicator color={colors.textMuted} size="small" />
             <Text style={styles.pendingStatus}>
-              {row.status === "waiting" ? "Waiting…" : "Analyzing…"}
+              {row.status === "waiting" ? "Waiting…" : "Uploading…"}
             </Text>
           </View>
         )}
@@ -609,20 +614,11 @@ function MediaRow({
   const reanalyze = useMutation({
     mutationFn: async () => {
       const project = await getProjectItx(baseUrl, projectId);
-      await project.capabilityHost.runScript(
-        buildProcessScript({
-          stableKey: item.payload.stableKey,
-          wipeGeneration: 0, // reprocess keys on its nonce, not the capture identity
-          filename: item.payload.filename,
-          contentType: item.payload.contentType,
-          width: item.payload.width,
-          height: item.payload.height,
-          source: item.payload.source,
-          capturedAt: item.payload.capturedAt,
-          isScreenshot: item.payload.isScreenshot,
-          mode: { reprocessNonce: Date.now().toString(36) },
-        }),
-      );
+      // A durable request the server-side pipeline answers; the row shows
+      // "Analyzing…" (via deriveMediaList) until the settlement arrives.
+      await project.streams
+        .get(MEDIA_STREAM_PATH)
+        .append(buildReanalyzeEvent(item.payload.stableKey, Date.now().toString(36)));
       // The processed event arrives over the live stream and re-renders the
       // row through deriveMediaList — nothing to invalidate here.
     },
@@ -654,9 +650,22 @@ function MediaRow({
           <View style={expanded ? undefined : styles.markdownCollapsed}>
             <Markdown markdown={item.payload.markdown} preview />
           </View>
-        ) : (
+        ) : item.analysis.status === "pending" ? null : (
           <Text style={styles.markdown}>(no description)</Text>
         )}
+        {item.analysis.status === "pending" ? (
+          // Born from an uploaded event (or re-analyzing): the server-side
+          // settlement will overlay this row when it lands.
+          <View style={styles.pendingSpinnerRow}>
+            <ActivityIndicator color={colors.textMuted} size="small" />
+            <Text style={styles.pendingStatus}>Analyzing…</Text>
+          </View>
+        ) : null}
+        {item.analysis.status === "failed" ? (
+          <Text numberOfLines={expanded ? undefined : 2} style={styles.pendingError}>
+            {`Analysis failed: ${item.analysis.error || "unknown error"}`}
+          </Text>
+        ) : null}
         {expanded && item.payload.transcript ? (
           <Text selectable style={styles.transcript}>
             {item.payload.transcript}
