@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: in-review
 size: small
 ---
 
@@ -7,7 +7,9 @@ size: small
 
 ## Status summary
 
-Spec fleshed out, implementation starting. Nothing built yet.
+Implemented and tested; PR [#2484](https://github.com/iterate/iterate/pull/2484) awaiting review.
+Hook + settings wiring + 6 vitest cases + doc note all done. Nothing known missing; possible
+follow-up (out of scope): CI/pullfrog body check to catch non-Claude agents.
 
 ## Problem
 
@@ -42,16 +44,18 @@ Why a hook and not a `gh` PATH shim:
 
 ## Checklist
 
-- [ ] `scripts/hooks/pr-guidance-gate.sh` — pure bash (no jq/node so every Bash call stays fast):
+- [x] `scripts/hooks/pr-guidance-gate.sh` — pure bash (no jq/node so every Bash call stays fast):
       fast-path exit for non-PR commands, `shasum`-based doc hash, exit 2 + guidance on stderr
-      for gated commands missing the current hash
-- [ ] `.claude/settings.json` — add `hooks.PreToolUse` entry (matcher `Bash`)
-- [ ] `scripts/hooks/pr-guidance-gate.test.ts` — vitest in the scripts workspace, spawns the real
+      for gated commands missing the current hash _implemented as spec'd; matches on the raw
+      stdin JSON rather than parsing it, which keeps it dependency-free_
+- [x] `.claude/settings.json` — add `hooks.PreToolUse` entry (matcher `Bash`) _added under the
+      proper `"hooks"` key; pre-existing top-level `SessionStart` left untouched, see decisions_
+- [x] `scripts/hooks/pr-guidance-gate.test.ts` — vitest in the scripts workspace, spawns the real
       script: non-gh and read-only `gh pr view`/`gh api` GET pass; create/edit/merge/PATCH
       blocked without hash; blocked stderr contains the doc + hash; retry with that hash passes;
-      stale hash blocked
-- [ ] Note in `docs/pull-requests.md` mentioning the gate so humans editing the doc know blocking
-      behavior is tied to its hash
+      stale hash blocked _6 tests, all passing_
+- [x] Note in `docs/pull-requests.md` mentioning the gate so humans editing the doc know blocking
+      behavior is tied to its hash _blockquote at the top of the doc_
 
 ## Decisions & assumptions (made while Misha reviews async)
 
@@ -70,4 +74,16 @@ Why a hook and not a `gh` PATH shim:
 
 ## Implementation log
 
-- (empty)
+- Hook matches against the raw PreToolUse stdin JSON with bash `case` globs instead of parsing
+  out `.tool_input.command` — avoids a jq/node dependency and startup cost on every Bash call.
+  Accepted tradeoff: a command whose *description* mentions `gh pr create` would also be gated
+  (rare, and the fix is just adding the hash prefix).
+- `gh api` gating is PATCH+`pulls` only. POST to `pulls/.../comments` (review-comment replies)
+  and all GETs stay ungated because PR monitoring — which the guidance itself prescribes — runs
+  those constantly.
+- Hash is `shasum | cut -c1-8` (SHA-1, present on macOS and Linux); test recomputes it with
+  node:crypto and also round-trips the hash extracted from a real deny message.
+- Live-verified both paths: deny prints the full doc + hash and exits 2; hash-prefixed rerun
+  exits 0 silently.
+- `pnpm install && typecheck (scripts) && lint && knip && format && scripts tests` all green
+  locally; full suite left to CI.
