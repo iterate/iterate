@@ -8,10 +8,10 @@ branch: mobile-notes
 
 ## Status summary
 
-Spec approved via plannotator grill session (11 questions, all settled). Implementation not started.
+Implementation ~done, pending live verification + PR media.
 
-- Done: full decision record below; media collection (#2466) merged, so all patterns to crib exist on main.
-- Missing: everything — starter app, mobile lib + UI, tests, PR.
+- Done: notes starter app (processor with analysis obligations + itx.notes capability + harness spec), mobile lib (notes fold, pending-notes store) with unit tests, global composer overlay, notes screen, drawer entry. Root typecheck/lint/knip/tests green.
+- Missing: live verification against a dev environment, PR screenshots/video.
 
 ## Why
 
@@ -35,28 +35,28 @@ Opening the mobile app usually means "I want to capture something." Today the ca
 
 ### Server: `packages/iterate/src/starter-apps/notes/`
 
-- [ ] `ref.ts` — `notesStreamPath = "/notes"`, `notesWorkerRef` (className `NotesApp`, durableWorkerKey `app-notes-stream`)
-- [ ] `processor.ts` — contract slug `notes`; events `notes/captured`, `notes/deleted`, `notes/processed`, `notes/reanalyze-requested`; fold + analysis obligations (caughtUp-guarded, retries, settles exactly once)
-- [ ] `analysis.ts` — one small-model call → `{title, tags}`
-- [ ] `worker.ts` — `NotesApp extends StreamProcessorDurableObject`, `recovery = true`, RPC `list`/`search`/`get`
-- [ ] `configured-worker.ts`, `app-ref.ts`, `index.ts` (`NotesApp.create` fan-in + `provideCapability({path: ["notes"]})`)
-- [ ] package.json exports (src + dist) + tsdown entries
-- [ ] `configs/default/worker.ts` wiring (`#notesApp` + `processEvent`)
-- [ ] media `uploaded` event: optional `source` field
+- [x] `ref.ts` — `notesStreamPath = "/notes"`, `notesWorkerRef` (className `NotesApp`, durableWorkerKey `app-notes-stream`) _done — [ref.ts](../packages/iterate/src/starter-apps/notes/ref.ts), dependency-free literal like media's_
+- [x] `processor.ts` — contract slug `notes`; events `notes/captured`, `notes/deleted`, `notes/processed`, `notes/reanalyze-requested`; fold + analysis obligations (caughtUp-guarded, retries, settles exactly once) _done — settlement event named `notes/analysis-settled` per stream-processor doctrine (not `notes/processed` as first drafted)_
+- [x] `analysis.ts` — one small-model call → `{title, tags}` _done — llama-4-scout text call, defensive JSON parse_
+- [x] `worker.ts` — `NotesApp extends StreamProcessorDurableObject`, `recovery = true`, RPC `list`/`search`/`get` _done — recovery=true; search returns signed attachment URLs_
+- [x] `configured-worker.ts`, `app-ref.ts`, `index.ts` (`NotesApp.create` fan-in + `provideCapability({path: ["notes"]})`) _done — fan-in + provideCapability at path ["notes"], media shape_
+- [x] package.json exports (src + dist) + tsdown entries _done_
+- [x] `configs/default/worker.ts` wiring (`#notesApp` + `processEvent`) _done — plus regenerated config-repo-template.generated.ts via pnpm lint:fix_
+- [x] media `uploaded` event: optional `source` field _done differently — merged media uses `media/captured` with an existing `source` string; extended the phone union with "note" and the schema doc, no server schema change needed_
 
 ### Mobile: `apps/mobile/`
 
-- [ ] `lib/notes.ts` — event constants, `buildNoteEvent`/`buildDeleteEvent`, `deriveNotesList` (tombstones, processed titles, first-line fallback), `filterNotes`
-- [ ] `lib/pending-notes.ts` — pending store (text + attachment blobs), drain logic, prompt-state helpers; pure core with injected IO
-- [ ] `components/note-composer.tsx` — global overlay + pill (state in query cache), route-derived target via `useSegments()`, slug label, hidden on chat, `+` attach → `files.put` + `media/uploaded {source:"note"}`
-- [ ] `app/project/[projectId]/notes.tsx` — `useLiveEvents` on `/notes`, filter box, long-press delete, media-viewer
-- [ ] `components/project-drawer.tsx` — `/notes` entry + pathname union
-- [ ] drain prompts on app open / project selection (native Alert fine for POC)
+- [x] `lib/notes.ts` — event constants, `buildNoteEvent`/`buildDeleteEvent`, `deriveNotesList` (tombstones, processed titles, first-line fallback), `filterNotes` _done — pure fold mirrors server processor; displayTitle falls back to first line_
+- [x] `lib/pending-notes.ts` — pending store (text + attachment blobs), drain logic, prompt-state helpers; pure core with injected IO _done — AsyncStorage-shaped seam (AsyncStorage was already a dep; no expo-file-system needed), drain removes each note as it lands_
+- [x] `components/note-composer.tsx` — global overlay + pill (state in query cache), route-derived target via `useSegments()`, slug label, hidden on chat, `+` attach → `files.put` + `media/uploaded {source:"note"}` _done — module-level AppState listener + query-cache state (no useEffect/useState beyond drafts); drain prompt runs inside a queryFn keyed on projectId+foreground generation_
+- [x] `app/project/[projectId]/notes.tsx` — `useLiveEvents` on `/notes`, filter box, long-press delete, media-viewer _done — search box, long-press + expanded delete, Re-analyze, media-viewer for photos_
+- [x] `components/project-drawer.tsx` — `/notes` entry + pathname union _done_
+- [x] drain prompts on app open / project selection (native Alert fine for POC) _done — native Alert two-step (store? → delete/keep) per D4_
 
 ### Tests
 
-- [ ] processor node harness: captured → obligation → processed; deleted tombstone; reanalyze
-- [ ] `lib/notes.test.ts`, `lib/pending-notes.test.ts`
+- [x] processor node harness: captured → obligation → processed; deleted tombstone; reanalyze _done — 8 scenarios incl. eviction recovery, expiry-without-dial, full-stream replay_
+- [x] `lib/notes.test.ts`, `lib/pending-notes.test.ts` _done — 9 tests_
 - [ ] optional `e2e/notes.e2e.test.ts`
 
 ### Ship
@@ -66,4 +66,7 @@ Opening the mobile app usually means "I want to capture something." Today the ca
 
 ## Implementation log
 
-(nothing yet)
+- Server first commit: full obligation-pattern processor (docs/writing-stream-processors.md checklist), cribbed from github-ai-linter's publication obligation rather than media (merged media does analysis inline in a phone-issued runScript; notes wants instant dumb capture, so analysis is a server-side obligation instead).
+- Attachments reuse the media pipeline wholesale: same content-hash file paths (mediaFilePath), and the phone fires media's buildProcessScript with source "note" fire-and-forget after the note append (D7 double-append).
+- Composer state (open/pill, drain generation) lives in the query cache, flipped by a module-level AppState listener — no useEffect. Drain prompt is an Alert inside a queryFn keyed [projectId, foregroundGeneration]: re-prompts on project switch or foreground return, not on every pending change.
+- notes/reanalyze-requested is consumed by the processor but deliberately not in the phone's NOTE_EVENT_TYPES read set (it changes no list state).

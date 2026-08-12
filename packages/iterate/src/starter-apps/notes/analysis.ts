@@ -5,12 +5,8 @@
 // than throwing the obligation into a retry loop.
 import { NOTES_ANALYSIS_MODEL, type NotesAnalysis } from "./processor.ts";
 
-type AiRunner = {
-  run: (model: string, body: Record<string, unknown>) => Promise<unknown>;
-};
-
 export async function analyzeNoteText(
-  ai: AiRunner,
+  ai: { run: (model: string, body: Record<string, unknown>) => Promise<unknown> },
   input: { text: string },
 ): Promise<NotesAnalysis> {
   const answer: any = await ai.run(NOTES_ANALYSIS_MODEL, {

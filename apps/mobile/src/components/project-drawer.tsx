@@ -72,6 +72,7 @@ function DrawerButton({ project }: { project: { projectId: string; projectSlug: 
         | "/project/[projectId]/repos"
         | "/project/[projectId]/integrations"
         | "/project/[projectId]/media"
+        | "/project/[projectId]/notes"
         | "/project/[projectId]/notifications",
     ) =>
     () => {
@@ -160,6 +161,10 @@ function DrawerButton({ project }: { project: { projectId: string; projectSlug: 
                     <DrawerItem
                       label="/media"
                       onPress={() => close(projectRoute("/project/[projectId]/media"))}
+                    />
+                    <DrawerItem
+                      label="/notes"
+                      onPress={() => close(projectRoute("/project/[projectId]/notes"))}
                     />
                     <DrawerItem
                       label="/notifications"

@@ -24,7 +24,10 @@ const MediaItem = z.object({
   contentType: z.string(),
   width: z.number(),
   height: z.number(),
-  source: z.string().default("picker").meta({ description: '"picker" or "library-sync".' }),
+  source: z
+    .string()
+    .default("picker")
+    .meta({ description: '"picker", "library-sync", or "note" (a note attachment).' }),
   capturedAt: z
     .string()
     .nullable()
