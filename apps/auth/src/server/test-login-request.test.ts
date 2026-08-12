@@ -97,10 +97,23 @@ describe("resolveTestLoginRequest", () => {
       resolve({ email: "pr123+test@nustom.com", return_to: "/after" }),
       { ok: true, returnTo: "/after" },
     );
-    assert.partialDeepStrictEqual(
-      resolve({ email: "pr123+test@nustom.com", return_to: "//evil.example/phish" }),
-      { ok: false, status: 400 },
-    );
+    for (const returnTo of [
+      "//evil.example/phish",
+      // Browsers treat "\" as "/" in Location headers, so these are
+      // protocol-relative redirects wearing a single-slash disguise
+      // (bugbot catch on #2485).
+      "/\\evil.example/phish",
+      "/\\/evil.example/phish",
+      "\\/evil.example/phish",
+    ]) {
+      assert.partialDeepStrictEqual(
+        resolve({ email: "pr123+test@nustom.com", return_to: returnTo }),
+        {
+          ok: false,
+          status: 400,
+        },
+      );
+    }
   });
 
   it("rejects absolute return_to outside the registered relying parties", () => {

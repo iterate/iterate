@@ -52,8 +52,24 @@ export function resolveTestLoginRequest(input: {
   if (rawReturnTo === null || rawReturnTo === "") {
     return { ok: true, email, projectSlug, returnTo: "/" };
   }
-  if (rawReturnTo.startsWith("/") && !rawReturnTo.startsWith("//")) {
-    return { ok: true, email, projectSlug, returnTo: rawReturnTo };
+  // Same-origin paths: parse-and-verify like login.tsx's safeRedirectPath
+  // rather than prefix checks — "/\evil.example" starts with a single "/",
+  // but browsers treat "\" as "/" in Location headers, turning it into a
+  // protocol-relative redirect off-origin.
+  if (rawReturnTo.startsWith("/")) {
+    try {
+      const parsed = new URL(rawReturnTo, "https://iterate-auth.local");
+      if (parsed.origin === "https://iterate-auth.local") {
+        return {
+          ok: true,
+          email,
+          projectSlug,
+          returnTo: `${parsed.pathname}${parsed.search}${parsed.hash}`,
+        };
+      }
+    } catch {
+      // fall through to the rejection below
+    }
   }
   if (URL.canParse(rawReturnTo)) {
     const returnToUrl = new URL(rawReturnTo);
