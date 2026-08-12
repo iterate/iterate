@@ -269,6 +269,11 @@ export function NoteCaptureOverlay() {
     },
     onSuccess: () => {
       void cache.invalidateQueries({ queryKey: ["pending-notes"] });
+      // The captured fact normally reaches the notes screen over the live
+      // socket; invalidating here covers a socket that's down or still
+      // reconnecting, so a same-device capture always shows up.
+      void cache.invalidateQueries({ queryKey: ["note-events"] });
+      void cache.invalidateQueries({ queryKey: ["note-files"] });
       // Long enough to notice AND tap ("Note saved" links to /notes).
       const generation = feedbackGeneration.current;
       setTimeout(() => {
