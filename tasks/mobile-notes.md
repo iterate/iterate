@@ -8,10 +8,10 @@ branch: mobile-notes
 
 ## Status summary
 
-Implementation ~done, pending live verification + PR media.
+Implementation done and verified; awaiting review ([PR #2483](https://github.com/iterate/iterate/pull/2483)).
 
-- Done: notes starter app (processor with analysis obligations + itx.notes capability + harness spec), mobile lib (notes fold, pending-notes store) with unit tests, global composer overlay, notes screen, drawer entry. Root typecheck/lint/knip/tests green.
-- Missing: live verification against a dev environment, PR screenshots/video.
+- Done: notes starter app (analysis obligations + itx.notes + harness spec), mobile composer/pending-queue/screen with unit tests, live e2e (real model-call settlement) and Playwright web spec both green against local dev, PR media uploaded.
+- Missing: nothing known; review feedback + preview e2e on the PR.
 
 ## Why
 
