@@ -121,3 +121,11 @@ The Off/On settings row, "+ Add", and "Sync now" sat too close together.
   AND React key in place (no vanish-reappear gap — the removal-on-success
   callbacks are gone, visibility is derived), while terminal skipped/error
   cards keep their own preview-keyed entries alongside rows.
+- Ordering round 3 (on-device feedback): positions were stable but the
+  card→row morph degraded content — blank thumbnail (signed URL still
+  loading), no filename, "mostly empty" rows. A session-scoped
+  stableKey→previewUri map (ref in media.tsx) now outlives the card so the
+  row shows the local preview until the signed URL loads, and analyzing rows
+  show the filename line in the card's own style. Height audit: card and row
+  are both bound by the 96pt thumb — the "tall empty" read was those two
+  content holes, not reserved space.

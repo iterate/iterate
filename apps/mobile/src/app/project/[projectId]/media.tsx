@@ -15,7 +15,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Crypto from "expo-crypto";
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -75,6 +75,12 @@ export default function MediaScreen() {
   const [query, setQuery] = useState(q || "");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [pending, setPending] = useState<MediaPendingCard[]>([]);
+  // Session-scoped local previews by content hash: the pending card's
+  // previewUri OUTLIVES the card, so when the derived row takes over it can
+  // keep showing the local bytes until the signed-URL query loads — never a
+  // blank thumbnail for something this device just captured. A ref, not
+  // state: every write rides a setPending that re-renders anyway.
+  const localPreviews = useRef(new Map<string, string>()).current;
   const [viewer, setViewer] = useState<{
     uri: string;
     title: string;
@@ -114,7 +120,8 @@ export default function MediaScreen() {
           // Discovered screenshots appear immediately as pending cards with
           // local previews, exactly like picked ones, and resolve into real
           // rows as their uploaded events land on the live stream.
-          onCandidate: (candidate) =>
+          onCandidate: (candidate) => {
+            localPreviews.set(candidate.stableKey, candidate.previewUri);
             setPending((current) => [
               ...current,
               {
@@ -124,7 +131,8 @@ export default function MediaScreen() {
                 capturedAt: candidate.capturedAt,
                 status: "uploading",
               },
-            ]),
+            ]);
+          },
           // Success needs no card removal: deriveMediaFeed hides an
           // in-flight card the moment its derived row exists, so the card
           // morphs into the row with no vanish-reappear gap in between.
@@ -214,6 +222,7 @@ export default function MediaScreen() {
           );
           // The stableKey on the card is what lets the feed morph it into
           // the derived row in place once the uploaded event lands.
+          localPreviews.set(stableKey, image.previewUri);
           patchCard(image, { status: "uploading", stableKey });
           if (
             await stream.getEvent({
@@ -406,6 +415,7 @@ export default function MediaScreen() {
               <MediaRow
                 baseUrl={baseUrl!}
                 item={entry.item}
+                localPreviewUri={localPreviews.get(entry.item.payload.stableKey) || null}
                 onViewImage={(uri) =>
                   setViewer({
                     uri,
@@ -662,11 +672,15 @@ function PendingRow({
 function MediaRow({
   baseUrl,
   item,
+  localPreviewUri,
   onViewImage,
   projectId,
 }: {
   baseUrl: string;
   item: MediaListItem;
+  /** The pending card's local preview for this content hash, when this
+   * device captured it this session — shown until the signed URL loads. */
+  localPreviewUri: string | null;
   onViewImage: (uri: string) => void;
   projectId: string;
 }) {
@@ -679,6 +693,9 @@ function MediaRow({
     },
     staleTime: Infinity,
   });
+  // Never a blank thumbnail when we hold local bytes: the signed URL when
+  // loaded, else the session-local preview the pending card was showing.
+  const imageUri = imageUrl.data || localPreviewUri;
   const reanalyze = useMutation({
     mutationFn: async () => {
       const project = await getProjectItx(baseUrl, projectId);
@@ -696,11 +713,11 @@ function MediaRow({
     <Pressable onPress={() => setExpanded(!expanded)} style={styles.row}>
       <Pressable
         accessibilityLabel="View full screen"
-        disabled={imageUrl.data === undefined}
-        onPress={() => imageUrl.data && onViewImage(imageUrl.data)}
+        disabled={imageUri === null}
+        onPress={() => imageUri && onViewImage(imageUri)}
       >
-        {imageUrl.data ? (
-          <Image source={{ uri: imageUrl.data }} style={styles.thumb} />
+        {imageUri ? (
+          <Image source={{ uri: imageUri }} style={styles.thumb} />
         ) : (
           <View style={[styles.thumb, styles.thumbPlaceholder]} />
         )}
@@ -709,6 +726,13 @@ function MediaRow({
         {item.payload.title ? (
           <Text numberOfLines={expanded ? undefined : 1} style={styles.rowTitle}>
             {item.payload.title}
+          </Text>
+        ) : item.analysis.status === "pending" ? (
+          // Identity while analyzing: the filename line the pending card was
+          // showing carries straight over (same style), so the morph never
+          // drops to an anonymous spinner.
+          <Text numberOfLines={1} style={styles.pendingFilename}>
+            {item.payload.filename}
           </Text>
         ) : null}
         {item.payload.markdown ? (
