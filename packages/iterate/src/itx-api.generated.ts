@@ -4916,6 +4916,7 @@ export type CoreProcessorState = {
                 afterOffset: number;
                 attempts: number;
                 error?: string | undefined;
+                workerVersion?: string | undefined;
               }
             | undefined;
         }
