@@ -178,3 +178,14 @@ hand-sync convention as search semantics).
 - specs/mobile/media.spec.ts untouched: the deterministic lane seeds legacy
   captured events (now the explicit back-compat surface) and the opt-in AI
   lane's "Analyzing…" wait still matches the new row badge.
+- Post-wipe "Analyzing… forever" investigation (preview_8/nustom): live
+  probes proved the fold generation-correct — one driven catchUp advanced
+  the stuck checkpoint 252→498, folded the wipe, opened all 19 obligations,
+  and analyses settled immediately. Root cause of the stall was the
+  /media→project-worker fan-in not driving the processor after a preview
+  redeploy (platform issue, flagged separately), NOT obligation dedup.
+  Verification did surface one real settle-path gap, now fixed: a LATE
+  settlement answering a superseded requestOffset (pre-wipe attempt racing
+  Delete-all + re-upload) no longer clears/poisons the fresh obligation
+  (fold guard + matching phone-derivation guard), with harness pins for
+  wipe → re-upload re-analysis, post-wipe arrivals, and replay-with-wipe.

@@ -334,6 +334,21 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract, Medi
       case "events.iterate.com/media/wiped":
         return { ...state, items: {}, pendingAnalyses: {} };
       case "events.iterate.com/media/processed": {
+        const pendingEntry = state.pendingAnalyses[event.payload.stableKey];
+        // Stale-result guard: a late settlement answering a SUPERSEDED
+        // request — e.g. a pre-wipe attempt racing Delete-all + re-upload —
+        // must neither clear the newer generation's obligation nor poison
+        // its item with an old failure. Legacy appends carry no
+        // requestOffset (`|| null` folds them in) and settle whatever is
+        // pending, as before.
+        const requestOffset = event.payload.requestOffset || null;
+        if (
+          pendingEntry !== undefined &&
+          requestOffset !== null &&
+          requestOffset < pendingEntry.requestOffset
+        ) {
+          return state;
+        }
         const { [event.payload.stableKey]: _settled, ...pendingAnalyses } = state.pendingAnalyses;
         const existing = state.items[event.payload.stableKey];
         // A processed event for an unknown item (e.g. pre-rename history)

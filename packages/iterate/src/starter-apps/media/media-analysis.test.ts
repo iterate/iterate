@@ -209,6 +209,59 @@ test("an uploaded event for a legacy-captured stableKey folds to a no-op (no re-
   });
 });
 
+test("re-uploading an analyzed stableKey after a wipe opens a FRESH obligation and re-analyzes", async () => {
+  // The prod scenario behind the merge hold: Delete-all, then the sync pass
+  // re-uploads the same content hashes under the next wipe generation.
+  let calls = 0;
+  const h = makeHarness(async () => {
+    calls += 1;
+    return result({ title: `analysis ${calls}` });
+  });
+  await h.append(uploaded("k1"));
+  expect(h.events(PROCESSED)).toMatchObject([{ payload: { title: "analysis 1" } }]);
+
+  await h.append({
+    type: "events.iterate.com/media/wiped",
+    idempotencyKey: "media-wiped-n1",
+    payload: { deletedFiles: 1, items: 1 },
+  });
+  // Same content hash, next wipe generation's idempotency key.
+  await h.append({ ...uploaded("k1"), idempotencyKey: "media-captured-k1-g2" });
+
+  expect(calls).toBe(2);
+  expect(h.events(PROCESSED)).toMatchObject([
+    { payload: { title: "analysis 1" } },
+    { payload: { title: "analysis 2", error: null } },
+  ]);
+  expect(h.state()).toMatchObject({
+    items: { k1: { title: "analysis 2", analysisError: null } },
+    pendingAnalyses: {},
+  });
+});
+
+test("an upload ARRIVING after a wipe is analyzed — wipe cancellation is not over-broad", async () => {
+  // The plain post-wipe case: a never-analyzed key uploaded after the
+  // tombstone. The wipe arm clears obligations that existed BEFORE it; it
+  // must not swallow requests that come later.
+  let calls = 0;
+  const h = makeHarness(async () => {
+    calls += 1;
+    return result({ title: "fresh analysis" });
+  });
+  await h.append({
+    type: "events.iterate.com/media/wiped",
+    idempotencyKey: "media-wiped-n1",
+    payload: { deletedFiles: 0, items: 0 },
+  });
+  await h.append({ ...uploaded("k-new"), idempotencyKey: "media-captured-k-new-g1" });
+
+  expect(calls).toBe(1);
+  expect(h.events(PROCESSED)).toMatchObject([
+    { payload: { stableKey: "k-new", title: "fresh analysis", error: null } },
+  ]);
+  expect(h.state()).toMatchObject({ pendingAnalyses: {} });
+});
+
 test("a wipe in the same batch cancels the obligation before any attempt starts", async () => {
   let calls = 0;
   const h = makeHarness(async () => {
@@ -227,8 +280,21 @@ test("a wipe in the same batch cancels the obligation before any attempt starts"
 });
 
 test("full-stream replay re-executes nothing: no vendor calls, no new events, same items", async () => {
-  const h = makeHarness(async () => result({ title: "Trenitalia ticket" }));
+  let liveCalls = 0;
+  const h = makeHarness(async () => {
+    liveCalls += 1;
+    return result({ title: `analysis ${liveCalls}` });
+  });
+  // The history includes a WIPE and a second generation of the same
+  // stableKey — a replay must re-dial the vendor for NEITHER generation.
   await h.append(uploaded("k1"));
+  await h.append({
+    type: "events.iterate.com/media/wiped",
+    idempotencyKey: "media-wiped-n1",
+    payload: { deletedFiles: 1, items: 1 },
+  });
+  await h.append({ ...uploaded("k1"), idempotencyKey: "media-captured-k1-g2" });
+  expect(liveCalls).toBe(2);
   // Well past every freshness horizon before the replay wakes.
   await h.advanceTime(MEDIA_ANALYSIS_EXPIRY_MS * 2);
   const eventsBefore = h.events().length;

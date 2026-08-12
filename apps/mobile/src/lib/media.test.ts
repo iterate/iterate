@@ -267,6 +267,35 @@ test("deriveMediaList: a failed settlement AFTER a success keeps the successful 
   ]);
 });
 
+test("deriveMediaList: a late settlement for a superseded request does not settle the fresh row", () => {
+  // Delete-all then re-sync: the pre-wipe attempt settles LATE, after the
+  // tombstone, answering the OLD request. The fresh row must stay pending
+  // (the server fold keeps its obligation open the same way).
+  const events: any[] = [
+    uploadedEvent("a", 1),
+    { type: MEDIA_WIPED_EVENT_TYPE, offset: 3, createdAt: "t3", payload: {} },
+    uploadedEvent("a", 4),
+    {
+      type: MEDIA_PROCESSED_EVENT_TYPE,
+      offset: 5,
+      createdAt: "t5",
+      payload: {
+        stableKey: "a",
+        title: "",
+        markdown: "",
+        transcript: "",
+        tags: [],
+        processedBy: "",
+        error: "pre-wipe attempt died",
+        requestOffset: 1, // answers the WIPED generation
+      },
+    },
+  ];
+  expect(deriveMediaList(events)).toMatchObject([
+    { offset: 4, analysis: { status: "pending", error: null } },
+  ]);
+});
+
 test("deriveMediaList: reanalyze flips a settled row back to pending until the next settlement", () => {
   const processed = (offset: number, title: string) => ({
     type: MEDIA_PROCESSED_EVENT_TYPE,

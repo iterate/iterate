@@ -86,6 +86,10 @@ export type MediaProcessedPayload = MediaProcessingResult & {
   /** Terminal analysis failure, or null/absent on success (absent on legacy
    * phone-scripted re-analysis events). */
   error?: string | null;
+  /** The uploaded/reanalyze event this settles (absent on legacy appends).
+   * Lets the derivation ignore a LATE settlement answering a superseded
+   * request — e.g. a pre-wipe attempt racing Delete-all + re-upload. */
+  requestOffset?: number | null;
 };
 
 /**
@@ -327,7 +331,15 @@ export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
       isCaptured ? 0 : event.offset,
       latestRequest.get(born.stableKey) || 0,
     );
-    const settledOffset = processed?.offset || 0;
+    // A settlement only counts when it answers the CURRENT request: a late
+    // one for a superseded requestOffset (pre-wipe attempt racing a wipe +
+    // re-upload) must not mark the fresh generation settled or failed — the
+    // server fold applies the same stale-result guard. Legacy settlements
+    // carry no requestOffset and settle whatever was asked.
+    const settles =
+      processed !== undefined &&
+      (!processed.payload.requestOffset || processed.payload.requestOffset >= requestOffset);
+    const settledOffset = settles ? processed.offset : 0;
     const analysis: MediaAnalysisState =
       requestOffset > settledOffset
         ? { status: "pending", error: null }
