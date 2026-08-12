@@ -34,7 +34,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../lib/attachments.ts";
 import { getProjectItx } from "../lib/itx.ts";
 import {
-  buildProcessScript,
+  buildUploadedEvent,
   MEDIA_STREAM_PATH,
   mediaFilePath,
   readWipeGeneration,
@@ -130,13 +130,14 @@ async function appendNoteToProject(
       width: picked.width,
       height: picked.height,
     });
-    // D7 double-append: the same bytes enter /media so the vision pipeline
-    // describes them and they show in the gallery. Fire-and-forget — a note
-    // must not wait on a vision model, and a failure here only costs the
-    // gallery entry (the note keeps its direct file reference).
-    void project.capabilityHost
-      .runScript(
-        buildProcessScript({
+    // D7 double-append: the same bytes enter /media so its server-side
+    // analysis obligation describes them and they show in the gallery.
+    // Best-effort — a failure here only costs the gallery entry (the note
+    // keeps its direct file reference).
+    void project.streams
+      .get(MEDIA_STREAM_PATH)
+      .append(
+        buildUploadedEvent({
           stableKey,
           wipeGeneration,
           filename: picked.filename,
@@ -146,7 +147,6 @@ async function appendNoteToProject(
           source: "note",
           capturedAt: note.capturedOnDeviceAt,
           isScreenshot: null,
-          mode: "capture",
         }),
       )
       .catch(() => {});

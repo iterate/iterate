@@ -85,15 +85,15 @@ export default function NotesScreen() {
     placeholderData: (previous: any) => previous,
     queryFn: async (): Promise<Record<string, string | null>> => {
       const project = await getProjectItx(baseUrl!, projectId);
+      // Nothing is provisioned until the first capture — a deterministic
+      // "no notes repo yet" check, so real glob/read failures still surface
+      // as errors instead of masquerading as an empty list.
+      const repos = await project.repos.list();
+      if (!repos.some((repo: any) => repo.path === NOTES_REPO_PATH)) return {};
       const workspace = project.workspaces.get(NOTES_WORKSPACE_PATH);
-      try {
-        const paths = (await workspace.glob(`${NOTES_REPO_PATH}/*.md`)).filter(isNoteFilePath);
-        if (paths.length === 0) return {};
-        return await workspace.readFiles(paths);
-      } catch {
-        // The workspace doesn't exist until the first capture provisions it.
-        return {};
-      }
+      const paths = (await workspace.glob(`${NOTES_REPO_PATH}/*.md`)).filter(isNoteFilePath);
+      if (paths.length === 0) return {};
+      return await workspace.readFiles(paths);
     },
   });
 
