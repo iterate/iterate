@@ -447,35 +447,32 @@ function metaYaml(
 ): string {
   const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
   const doc = new Document({
-    ...(llm
-      ? {
-          llm: {
-            ...(llm.model ? { model: llm.model } : {}),
-            ...(llm.durationMs == null ? {} : { duration: seconds(llm.durationMs) }),
-            ...(llm.inputTokens == null ? {} : { inputTokens: llm.inputTokens }),
-            ...(llm.outputTokens == null ? {} : { outputTokens: llm.outputTokens }),
-            ...(llm.outcome && llm.outcome !== "completed" ? { outcome: llm.outcome } : {}),
-            ...(llm.cancelReason ? { cancelReason: llm.cancelReason } : {}),
-          },
-        }
-      : {}),
+    ...(llm && {
+      llm: {
+        ...(llm.model && { model: llm.model }),
+        ...(llm.durationMs == null ? {} : { duration: seconds(llm.durationMs) }),
+        ...(llm.inputTokens == null ? {} : { inputTokens: llm.inputTokens }),
+        ...(llm.outputTokens == null ? {} : { outputTokens: llm.outputTokens }),
+        ...(llm.outcome && llm.outcome !== "completed" && { outcome: llm.outcome }),
+        ...(llm.cancelReason && { cancelReason: llm.cancelReason }),
+      },
+    }),
     code: {
-      ...(code.status === "running" ? { status: "running" } : {}),
+      ...(code.status === "running" && { status: "running" }),
       ...(code.durationMs == null ? {} : { duration: seconds(code.durationMs) }),
-      ...(code.status === "done" && code.success === false ? { failed: true } : {}),
+      ...(code.status === "done" && code.success === false && { failed: true }),
     },
-    ...(promptMessages && promptMessages.length > 0
-      ? {
-          prompt: promptMessages.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
-        }
-      : {}),
+    ...(promptMessages &&
+      promptMessages.length > 0 && {
+        prompt: promptMessages.map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+      }),
     // The raw model response the round's consequences were derived from —
     // after the prompt, so the doc reads request → answer (parity with the
     // os feed's buildRoundMetaYaml).
-    ...(llm?.responseText ? { response: llm.responseText } : {}),
+    ...(llm?.responseText && { response: llm.responseText }),
   });
   visit(doc, {
     // Multiline strings as |- blocks: readable and highlightable, instead of

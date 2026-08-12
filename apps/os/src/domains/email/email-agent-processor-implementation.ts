@@ -150,9 +150,9 @@ export class EmailAgentProcessor extends StreamProcessor<
                 // Automated mail (Auto-Submitted, bulk precedence,
                 // mailer-daemon) is recorded but never triggers a reply —
                 // the classic mail-loop guard.
-                ...(event.payload.automated
-                  ? { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }
-                  : {}),
+                ...(event.payload.automated && {
+                  llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
+                }),
               },
             });
           } catch (error) {
@@ -289,9 +289,9 @@ function inboundEmailAgentInput(payload: InboundEmailPayload): string {
     subject: message.subject ?? "",
     ...(message.messageId == null ? {} : { messageId: message.messageId }),
     ...(message.text === undefined ? {} : { text: message.text }),
-    ...(message.text === undefined && message.html !== undefined ? { html: message.html } : {}),
+    ...(message.text === undefined && message.html !== undefined && { html: message.html }),
     ...(attachments.length === 0 ? {} : { attachments }),
-    ...(payload.automated ? { automated: true } : {}),
+    ...(payload.automated && { automated: true }),
   };
   return [
     "`events.iterate.com/email/received` event received",

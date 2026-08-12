@@ -106,9 +106,8 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
           ...init,
           headers: {
             authorization: `Bearer ${secrets.CLOUDFLARE_API_TOKEN}`,
-            ...(init?.body && typeof init.body === "string"
-              ? { "content-type": "application/json" }
-              : {}),
+            ...(init?.body &&
+              typeof init.body === "string" && { "content-type": "application/json" }),
             ...init?.headers,
           },
         }),

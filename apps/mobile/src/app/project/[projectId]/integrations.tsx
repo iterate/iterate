@@ -81,7 +81,7 @@ export default function IntegrationsScreen() {
       const project = await getProjectItx(baseUrl, projectId);
       return await project.integrations.connectTelegram({
         botToken: input.botToken,
-        ...(input.steal ? { steal: true } : {}),
+        ...(input.steal && { steal: true }),
       });
     },
     onSuccess: async (result, input) => {

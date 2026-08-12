@@ -621,7 +621,7 @@ async function recordConnection(input: {
     const secretInput = {
       egress: { urls: [...secret.egressUrls] },
       material: secret.material,
-      ...(secret.refresh ? { refresh: secret.refresh } : {}),
+      ...(secret.refresh && { refresh: secret.refresh }),
     };
     if ((await secretStub.describe()).created) await secretStub.update(secretInput);
     else await secretStub.create(secretInput);
@@ -1135,7 +1135,7 @@ async function recordGithubConnection(input: {
       },
     ],
     connectedEvent: githubConnectedEvent(input),
-    ...(input.directoryClaim ? { directoryClaim: input.directoryClaim } : {}),
+    ...(input.directoryClaim && { directoryClaim: input.directoryClaim }),
   });
 }
 
@@ -1359,7 +1359,7 @@ async function completeGoogleConnect(input: {
         egressUrls: GOOGLE_CONNECTION_EGRESS_URLS,
         material: {
           accessToken: tokenData.access_token,
-          ...(tokenData.refresh_token ? { refreshToken: tokenData.refresh_token } : {}),
+          ...(tokenData.refresh_token && { refreshToken: tokenData.refresh_token }),
         },
         path: googleConnectionSecretPath(connection),
         refresh: {

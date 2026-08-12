@@ -370,7 +370,7 @@ const setupMissingProjectForChat = async (session: RpcStub<Session>, project: Pr
   try {
     projectItx = (await session.projects.get(project.slug).create({
       projectId: project.id,
-      ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
+      ...(project.organizationSlug && { organizationSlug: project.organizationSlug }),
     })) as unknown as RpcStub<Project>;
   } catch (error) {
     throw new Error(

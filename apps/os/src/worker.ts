@@ -292,20 +292,16 @@ function ingressLogFields(request: Request, route: Awaited<ReturnType<typeof dec
   return {
     ingress: {
       lane: route.lane,
-      ...((route.lane === "api" && path === "/api") || route.lane === "project"
-        ? {
-            transport:
-              request.headers.get("upgrade")?.toLowerCase() === "websocket"
-                ? ("websocket" as const)
-                : ("http" as const),
-          }
-        : {}),
-      ...(route.lane === "project"
-        ? {
-            projectId: route.resolved.projectId,
-            appSlug: route.resolved.appSlug ?? undefined,
-          }
-        : {}),
+      ...(((route.lane === "api" && path === "/api") || route.lane === "project") && {
+        transport:
+          request.headers.get("upgrade")?.toLowerCase() === "websocket"
+            ? ("websocket" as const)
+            : ("http" as const),
+      }),
+      ...(route.lane === "project" && {
+        projectId: route.resolved.projectId,
+        appSlug: route.resolved.appSlug ?? undefined,
+      }),
     },
   };
 }

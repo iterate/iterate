@@ -25,7 +25,7 @@ const SPECIAL_PATHS: {
       const filename = last.replace(/^[0-9a-f]{32,}-/, "");
       return {
         pathname: "/project/[projectId]/media",
-        params: { projectId, ...(filename ? { q: filename } : {}) },
+        params: { projectId, ...(filename && { q: filename }) },
       };
     },
   },

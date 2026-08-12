@@ -42,8 +42,8 @@ export async function connectMobileOAuth(input: {
     const code = callback.searchParams.get("oauthCode");
     const installationId = callback.searchParams.get("oauthInstallationId");
     const completion = await input.project.integrations.completeConnect({
-      ...(code ? { code } : {}),
-      ...(installationId ? { installationId } : {}),
+      ...(code && { code }),
+      ...(installationId && { installationId }),
       provider: input.provider,
       state,
     });

@@ -96,9 +96,9 @@ export default async function* nodeTestTelemetryReporter(source: AsyncIterable<T
               {
                 name: event.data.details.error.name,
                 message: String(event.data.details.error.message),
-                ...(event.data.details.error.stack
-                  ? { stack: String(event.data.details.error.stack) }
-                  : {}),
+                ...(event.data.details.error.stack && {
+                  stack: String(event.data.details.error.stack),
+                }),
               },
             ]
           : [],
@@ -137,23 +137,21 @@ export default async function* nodeTestTelemetryReporter(source: AsyncIterable<T
             startedAt: new Date(startedAtMs).toISOString(),
             startedAtSource: "inferred",
             scheduleDelayMs: Math.max(0, startedAtMs - previousFinishedAtMs),
-            ...(event.type === "test:fail"
-              ? {
-                  error: {
-                    name: event.data.details.error.name,
-                    message: String(event.data.details.error.message),
-                    ...(event.data.details.error.stack
-                      ? { stack: String(event.data.details.error.stack) }
-                      : {}),
-                  },
-                }
-              : {}),
+            ...(event.type === "test:fail" && {
+              error: {
+                name: event.data.details.error.name,
+                message: String(event.data.details.error.message),
+                ...(event.data.details.error.stack && {
+                  stack: String(event.data.details.error.stack),
+                }),
+              },
+            }),
             phases: [],
           };
         }),
         phases: [],
         errors,
-        ...(errors[0] ? { firstFailure: errors[0].message.slice(0, 300) } : {}),
+        ...(errors[0] && { firstFailure: errors[0].message.slice(0, 300) }),
         ...(final.data.testNumber === undefined ? {} : { testNumber: final.data.testNumber }),
         ...(final.data.line === undefined ? {} : { testLine: final.data.line }),
         ...(final.data.column === undefined ? {} : { testColumn: final.data.column }),

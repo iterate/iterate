@@ -30,7 +30,7 @@ export const Route = createFileRoute("/")({
         search: decision.welcome
           ? {
               welcome: true,
-              ...(decision.ensureBirth ? { ensureBirth: true } : {}),
+              ...(decision.ensureBirth && { ensureBirth: true }),
             }
           : {},
         replace: true,

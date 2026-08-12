@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done-pending-review
 size: small
 ---
 
@@ -7,8 +7,8 @@ size: small
 
 ## Status
 
-Spec committed first; implementation follows in this branch. PR contains the
-rule + test, then a separate `--fix` commit applying it across the repo.
+Done, pending review. Rule + tests in commit 2; repo-wide `--fix` in commit 3.
+PR: https://github.com/iterate/iterate/pull/2487
 
 ## Summary
 
@@ -50,7 +50,18 @@ ternary's `: {}` arm is dead weight.
 
 ## Checklist
 
-- [ ] add `iterate/prefer-logical-and-spread` rule to `lint/oxlint-plugin-iterate.ts`
-- [ ] enable it as `error` in `.oxlintrc.json`
-- [ ] test file `lint/oxlint-plugin-logical-and-spread.test.ts` covering report, fix output (incl. precedence parens), and non-matches
-- [ ] run `pnpm lint:fix` across the repo, commit the mechanical fixes separately
+- [x] add `iterate/prefer-logical-and-spread` rule to `lint/oxlint-plugin-iterate.ts` _implemented with a `needsParensInsideLogicalAnd` precedence helper; reports fix-less when the rewrite would drop a comment_
+- [x] enable it as `error` in `.oxlintrc.json` _alongside the other `iterate/*` rules_
+- [x] test file `lint/oxlint-plugin-logical-and-spread.test.ts` covering report, fix output (incl. precedence parens), and non-matches _5 tests, runs the real oxlint binary with `--fix` and asserts the rewritten files_
+- [x] run `pnpm lint:fix` across the repo, commit the mechanical fixes separately _71 files; see notes_
+
+## Implementation notes
+
+- `oxlint --fix` needed two passes: fixes for conditional spreads *nested
+  inside* another conditional spread's consequent overlap the outer fix, so
+  oxlint defers them to the next run (7 such sites, e.g.
+  `apps/os/src/lib/agent-round-meta-yaml.ts`).
+- Three sites in `scripts/preview/{e2e-telemetry,preview}.ts` spread on an
+  `unknown`-typed test (caught errors), and `...(unknown && {…})` is TS2698.
+  Hand-tweaked to `...(!!input.error && {…})` — identical runtime semantics,
+  and `!!` makes the spread type `false | {…}`.

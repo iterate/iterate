@@ -306,7 +306,7 @@ async function withPreviewE2eTelemetry<T>(
   telemetry.runFinished({
     status: operationError ? "failed" : previewOperationWasSkipped(result) ? "skipped" : "passed",
     durationMs: Date.now() - startedAt,
-    ...(operationError ? { error: operationError } : {}),
+    ...(!!operationError && { error: operationError }),
   });
   let telemetryError: unknown;
   try {
@@ -546,9 +546,8 @@ async function deployPreviewApps({
             // are moving targets, while the sha pins the exact builds this
             // deploy shipped.
             PREVIEW_PULL_REQUEST_HEAD_SHA: context.pullRequestHeadSha,
-            ...(app.slug === "os" && osContainerRollout
-              ? { OS_CONTAINERS_ROLLOUT: osContainerRollout.mode }
-              : {}),
+            ...(app.slug === "os" &&
+              osContainerRollout && { OS_CONTAINERS_ROLLOUT: osContainerRollout.mode }),
           },
           dopplerConfig: environmentConfigLease.dopplerConfig,
           mainWorkerSize: workerSizeBaselines[app.slug] ?? null,
@@ -970,9 +969,9 @@ async function testPreviewApps({
           context,
           previewSlot: environmentConfigLease.slug,
         }),
-        ...(telemetryArtifactDirectory
-          ? { TEST_TELEMETRY_ARTIFACT_DIR: telemetryArtifactDirectory }
-          : {}),
+        ...(telemetryArtifactDirectory && {
+          TEST_TELEMETRY_ARTIFACT_DIR: telemetryArtifactDirectory,
+        }),
       },
       signal: runtime.signal,
       workingDirectory: resolve(runtime.repositoryRoot, app.appPath),
@@ -1827,7 +1826,7 @@ async function readCanonicalTestTelemetry(
         name: record.fullName,
         retryCount: record.retryCount,
         passedAfterRetry: record.passedAfterRetry,
-        ...(record.firstFailure ? { firstFailure: record.firstFailure } : {}),
+        ...(record.firstFailure && { firstFailure: record.firstFailure }),
       })),
     collectionErrors: [],
   };
@@ -1886,7 +1885,7 @@ async function readPlaywrightTestTelemetry(
               .join(" › "),
             retryCount,
             passedAfterRetry: test.status === "flaky" || finalResult?.status === "passed",
-            ...(firstFailureSummary ? { firstFailure: firstFailureSummary } : {}),
+            ...(firstFailureSummary && { firstFailure: firstFailureSummary }),
           });
         }
       }
@@ -2756,9 +2755,9 @@ function resolvePreviewTestTelemetryEnvironment(input: {
     TEST_TELEMETRY_KIND: "e2e",
     TEST_TELEMETRY_APP: input.app,
     TEST_TELEMETRY_HEAD_SHA: input.context.pullRequestHeadSha,
-    ...(input.context.pullRequestHeadRef
-      ? { TEST_TELEMETRY_BRANCH: input.context.pullRequestHeadRef }
-      : {}),
+    ...(input.context.pullRequestHeadRef && {
+      TEST_TELEMETRY_BRANCH: input.context.pullRequestHeadRef,
+    }),
     TEST_TELEMETRY_PULL_REQUEST_NUMBER: String(input.context.pullRequestNumber),
     TEST_TELEMETRY_PREVIEW_SLOT: input.previewSlot,
   };

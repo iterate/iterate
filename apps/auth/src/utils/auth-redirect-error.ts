@@ -24,6 +24,6 @@ export function getLoginRedirectSearch(href: string): LoginRedirectSearch {
   return {
     redirect,
     error,
-    ...(errorDescription ? { error_description: errorDescription } : {}),
+    ...(errorDescription && { error_description: errorDescription }),
   };
 }
