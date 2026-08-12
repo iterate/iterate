@@ -7,10 +7,12 @@ size: medium
 
 ## Status summary
 
-Implemented, awaiting preview CI proof. Done: auth `/test-login` endpoint +
-unit tests + live e2e, PR comment link upgrade, deploy-time seed, docs.
-Remaining: green preview CI run (the new e2e runs in the auth preview lane),
-then a manual click of the generated link.
+Done and proven end-to-end. Auth `/test-login` endpoint + unit tests + live
+e2e (5 tests green in the preview lane), PR comment `Login ↗` is the
+one-click link, deploy-time seed confirmed in CI logs ("test-login seeded:
+pr2485+test@nustom.com user, org, and project exist on preview-4"), docs
+updated. Misha clicked the web link successfully; mobile PR channel published
+with the preview_4 stamp for phone testing. Remaining: review + merge.
 
 ## Ask (as prompted)
 
