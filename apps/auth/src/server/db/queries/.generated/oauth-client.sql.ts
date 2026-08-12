@@ -363,3 +363,32 @@ export namespace getOAuthAccessTokenForInternalIntrospection {
     userRole?: string;
   };
 }
+
+const listSeededOAuthClientRedirectUrisSql = `
+SELECT redirectUris AS redirectUrisJson
+FROM oauthClient
+WHERE disabled = 0
+  AND referenceId IS NOT NULL;
+`.trim();
+const listSeededOAuthClientRedirectUrisQuery = {
+  name: "listSeededOAuthClientRedirectUris",
+  sql: listSeededOAuthClientRedirectUrisSql,
+  args: [],
+};
+
+export const listSeededOAuthClientRedirectUris = Object.assign(
+  async function listSeededOAuthClientRedirectUris(
+    client: Client,
+  ): Promise<listSeededOAuthClientRedirectUris.Result[]> {
+    return client.all<listSeededOAuthClientRedirectUris.Result>(
+      listSeededOAuthClientRedirectUrisQuery,
+    );
+  },
+  { sql: listSeededOAuthClientRedirectUrisSql, query: listSeededOAuthClientRedirectUrisQuery },
+);
+
+export namespace listSeededOAuthClientRedirectUris {
+  export type Result = {
+    redirectUrisJson: string;
+  };
+}

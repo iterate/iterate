@@ -115,7 +115,38 @@ test("rejects addresses the fixed OTP itself would reject", async () => {
   expect(response.status).toBe(400);
 });
 
-test("rejects a return_to outside the registered relying parties", async () => {
+test("allows an absolute return_to at a seeded relying party origin", async () => {
+  // Seed a relying party exactly the way each deploy does
+  // (apps/auth/scripts/seed-oauth-clients.ts → internal.oauth.setClient):
+  // referenceId is what marks the client as deployment-seeded, and only
+  // seeded clients' redirect-URI origins are valid return_to targets. This is
+  // the arm the PR-comment login link rides (return_to = the os login URL).
+  const rpOrigin = `https://rp-${runId}.example`;
+  const serviceClient = createAuthContractClient({
+    baseUrl,
+    fetch: authFetch,
+    serviceToken: requireServiceToken(),
+  });
+  await serviceClient.internal.oauth.setClient({
+    clientId: `test-login-rp-${runId}`,
+    clientSecret: crypto.randomUUID(),
+    clientName: `test-login e2e RP ${runId}`,
+    redirectURIs: [`${rpOrigin}/api/iterate-auth/callback`],
+    referenceId: `e2e:test-login:${runId}`,
+    skipConsent: true,
+  });
+
+  const returnTo = `${rpOrigin}/api/iterate-auth/login`;
+  const response = await authFetch(testLoginUrl({ email, return_to: returnTo }), {
+    redirect: "manual",
+  });
+  expect(response.status).toBe(302);
+  expect(response.headers.get("location")).toBe(returnTo);
+});
+
+test("rejects a return_to outside the seeded relying parties", async () => {
+  // Dynamically-registered clients (open registration) must never widen the
+  // allowlist — only Doppler-seeded clients (referenceId set) count.
   const response = await authFetch(
     testLoginUrl({ email, return_to: "https://evil.example/phish" }),
     { redirect: "manual" },

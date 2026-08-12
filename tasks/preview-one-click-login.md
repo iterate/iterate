@@ -129,3 +129,11 @@ for a zero-tap flow.
 - Local auth dev couldn't run here (auth `dev` Doppler config lacks
   AUTH_FORGE_ES256_PRIVATE_JWK on this machine); verification lane is the
   preview CI e2e, which deploys auth and runs the new suite.
+- First CI round: e2e passed against the live preview (endpoint works), but
+  the deploy-time seed got a 400 on `return_to` — `listSystemOAuthClients`
+  filters `userId IS NULL`, and Doppler-seeded clients carry the bootstrap
+  admin's userId. Fixed by keying the allowlist on `referenceId IS NOT NULL`
+  (only the seeding lane sets it; dynamic registration never does — which is
+  also why the allowlist must not include all enabled clients). Added the
+  missing positive e2e arm: seed an RP via internal.oauth.setClient, assert
+  its origin passes return_to.

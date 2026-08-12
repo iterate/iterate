@@ -14,7 +14,7 @@ import {
   insertOrganization,
   listOrganizationsForUser,
   listProjectsForUser,
-  listSystemOAuthClients,
+  listSeededOAuthClientRedirectUris,
 } from "./db/queries/index.ts";
 import { generateId } from "./id.ts";
 import { createProject } from "./project-directory.ts";
@@ -71,15 +71,18 @@ export async function handleTestLogin(
   return response;
 }
 
-/** return_to may leave this origin only toward a registered relying party —
- * the deployment's seeded OAuth clients (os, semaphore, ...) name their
- * origins via redirect URIs, so those rows are the allowlist. */
+/** return_to may leave this origin only toward a seeded relying party — the
+ * deployment's Doppler-seeded OAuth clients (os, semaphore, ...) name their
+ * origins via redirect URIs, so those rows are the allowlist. Seeded means
+ * `referenceId IS NOT NULL`: only the service-token seeding lane sets it, so
+ * dynamically-registered clients (open registration) can never allowlist an
+ * attacker origin. */
 async function allowedReturnToOrigins() {
   const origins = new Set<string>([config.authAppOrigin]);
   if (config.publicUrl) {
     origins.add(config.publicUrl);
   }
-  for (const client of await listSystemOAuthClients(db)) {
+  for (const client of await listSeededOAuthClientRedirectUris(db)) {
     for (const redirectUri of parseStringArray(client.redirectUrisJson)) {
       if (URL.canParse(redirectUri)) {
         origins.add(new URL(redirectUri).origin);
