@@ -608,6 +608,13 @@ async function deployPreviewApps({
       ),
     ].join("\n"),
   );
+  if (ok) {
+    await seedPreviewTestLogin({
+      lease: toSlotDisplay(environmentConfigLease),
+      pullRequestNumber: context.pullRequestNumber,
+    });
+  }
+
   const result = {
     ok,
     state: latestState,
@@ -620,6 +627,41 @@ async function deployPreviewApps({
   }
 
   return result;
+}
+
+/**
+ * Visit the PR's one-click login link once per deploy: auth's /test-login
+ * (apps/auth/src/server/test-login.ts) creates the pr<N> test user, org, and
+ * project before answering with its redirect — we stop there — so the Login
+ * link in the PR comment lands on a pre-warmed, already-existing project and
+ * the endpoint itself gets smoke-tested. Non-fatal by design: a slot serving
+ * an auth build without /test-login (fingerprint reuse of a pre-feature
+ * deploy) logs and moves on — the first human click seeds the same way.
+ */
+async function seedPreviewTestLogin(input: {
+  lease: CloudflarePreviewSlotDisplay;
+  pullRequestNumber: number;
+}) {
+  const url = previewLoginUrl(input.lease, input.pullRequestNumber);
+  if (!url) {
+    return;
+  }
+  try {
+    const response = await fetch(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (response.status >= 300 && response.status < 400) {
+      logPreview(
+        `test-login seeded: pr${input.pullRequestNumber}+test@nustom.com user, org, and project exist on ${input.lease.slug}`,
+      );
+    } else {
+      const detail = (await response.text().catch(() => "")).slice(0, 200);
+      logPreview(`test-login seed skipped: ${url} answered ${response.status} ${detail}`);
+    }
+  } catch (error) {
+    logPreview(`test-login seed skipped: ${formatPreviewErrorMessage(error)}`);
+  }
 }
 
 function resolvePreviewTestBaseUrlEnvironment({
@@ -2971,21 +3013,28 @@ function renderCloudflarePreviewPullRequestBody(
 }
 
 /**
- * One-click login into the leased slot's os deployment: `+test@nustom.com`
- * emails get a fixed OTP outside production, and a per-PR login_hint keeps
- * each PR's poking on its own throwaway user.
+ * One-click login into the leased slot's os deployment: auth's /test-login
+ * (apps/auth/src/server/test-login.ts, fixed-test-OTP deployments only)
+ * signs the per-PR `pr<N>+test@nustom.com` user in server-side, ensures
+ * their org+project exist, and hands the session to os' OAuth flow — the
+ * click on this link is the only interaction. The deploy also visits this
+ * URL once (seedPreviewTestLogin) so the user+project already exist.
  */
 function previewLoginUrl(lease: CloudflarePreviewSlotDisplay, pullRequestNumber: number) {
-  let baseUrl: string;
+  let authBaseUrl: string;
+  let osBaseUrl: string;
   try {
-    baseUrl = cloudflarePreviewApps.os.resolvePreviewAppConfig(lease.dopplerConfig).baseUrl;
+    authBaseUrl = cloudflarePreviewApps.auth.resolvePreviewAppConfig(lease.dopplerConfig).baseUrl;
+    osBaseUrl = cloudflarePreviewApps.os.resolvePreviewAppConfig(lease.dopplerConfig).baseUrl;
   } catch {
     // A body can carry a doppler config this checkout doesn't know (e.g. a
     // retired slot) — drop the link rather than failing the whole render.
     return null;
   }
-  const url = new URL("/api/iterate-auth/login", baseUrl);
-  url.searchParams.set("login_hint", `pr${pullRequestNumber}+test@nustom.com`);
+  const url = new URL("/test-login", authBaseUrl);
+  url.searchParams.set("email", `pr${pullRequestNumber}+test@nustom.com`);
+  url.searchParams.set("project", `pr${pullRequestNumber}`);
+  url.searchParams.set("return_to", new URL("/api/iterate-auth/login", osBaseUrl).toString());
   return url.toString();
 }
 

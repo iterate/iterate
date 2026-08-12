@@ -7,8 +7,10 @@ size: medium
 
 ## Status summary
 
-Spec fleshed out, implementation not started. Core pieces: auth `/test-login`
-endpoint, CI seed-by-visiting-the-link, PR comment link upgrade, docs.
+Implemented, awaiting preview CI proof. Done: auth `/test-login` endpoint +
+unit tests + live e2e, PR comment link upgrade, deploy-time seed, docs.
+Remaining: green preview CI run (the new e2e runs in the auth preview lane),
+then a manual click of the generated link.
 
 ## Ask (as prompted)
 
@@ -103,14 +105,27 @@ for a zero-tap flow.
 
 ## Checklist
 
-- [ ] `shouldAllowTestLogin` pure helper + unit tests (gating, email shape, return_to allowlist)
-- [ ] `GET /test-login` route on auth worker: OTP dance via `auth.api`, get-or-create org+project, redirect with cookies
-- [ ] preview.ts: `previewLoginUrl` → one-click test-login URL in the PR comment
-- [ ] preview.ts: post-deploy seed step (single GET to the endpoint, assert redirect)
-- [ ] e2e coverage: fresh email → endpoint → follow redirects → OS session established (existing auth e2e lane)
-- [ ] docs/dev-environments.md: document the one-click link; adjust "template login links" section
-- [ ] verify mobile hint flow benefits (project seeded ⇒ no project-access detour) — no bundle changes
+- [x] pure helper + unit tests (gating, email shape, return_to allowlist) — _`resolveTestLoginRequest` in apps/auth/src/server/test-login-request.ts, node:test suite alongside_
+- [x] `GET /test-login` route on auth worker: OTP dance via `auth.api`, get-or-create org+project, redirect with cookies — _apps/auth/src/server/test-login.ts, wired in worker.ts next to /logout_
+- [x] preview.ts: `previewLoginUrl` → one-click test-login URL in the PR comment — _now auth-hosted `/test-login?...&return_to=<os>/api/iterate-auth/login`_
+- [x] preview.ts: post-deploy seed step (single GET to the endpoint, assert redirect) — _`seedPreviewTestLogin`, non-fatal, runs after the deploy fleet when green_
+- [x] e2e coverage — _apps/auth/e2e/test-login.e2e.test.ts (runs in the auth preview lane); asserts session cookie, get-session identity, org+project+owner-membership via internal.project.seedSnapshot, idempotency, and both rejection arms_
+- [x] docs/dev-environments.md: document the one-click link — _new bullet above the template-links section_
+- [x] verify mobile hint flow benefits (project seeded ⇒ no project-access detour) — no bundle changes — _bundle stamp untouched; seeded org means postLogin.shouldRedirect stays false for the stamped email after CI seeds_
 
 ## Implementation log
 
-(append as work happens)
+- Confirmed zero-click viability up front: OS requests only
+  `openid profile email offline_access` (no project-selection scope), so
+  `/project-access` only interrupts zero-org users; the seeded OS preview
+  OAuth client has `skipConsent: true` (checked preview_1 Doppler).
+- `return_to` allowlist derives from `listSystemOAuthClients` redirect-URI
+  origins + the deployment's own origins — no new config.
+- Endpoint drives the REAL sign-up/sign-in path via `auth.api`
+  (`sendVerificationOTP` → `signInEmailOTP`), so signup allowlist, avatar
+  generation, and admin promotion all apply; no forged tokens anywhere.
+- Gated on `emailOtpEnabled` too (the plugin doesn't exist without it), not
+  just `fixedTestOtpEnabled`.
+- Local auth dev couldn't run here (auth `dev` Doppler config lacks
+  AUTH_FORGE_ES256_PRIVATE_JWK on this machine); verification lane is the
+  preview CI e2e, which deploys auth and runs the new suite.
