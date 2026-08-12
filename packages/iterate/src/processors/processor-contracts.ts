@@ -458,7 +458,14 @@ function getEventSchema<const Type extends string, const PayloadSchema extends z
         metadata: StreamEventSchema.shape.metadata,
         source: StreamEventSchema.shape.source,
         idempotencyKey: StreamEventSchema.shape.idempotencyKey,
-        ephemeral: ephemeralEnvelopeSchema(args.ephemeral, StreamEventSchema.shape.ephemeral),
+        // COMMITTED events keep their stored flag verbatim — never the
+        // definition's forced default. A definition that later became
+        // `ephemeral: true` (the connection presence facts) must not rewrite
+        // history: durable rows committed before the change parse without the
+        // flag and replay durably, exactly as they were folded at commit time.
+        // Only the INPUT schema (getEventInputSchema) forces the definition's
+        // choice, so no new durable instance can be appended.
+        ephemeral: StreamEventSchema.shape.ephemeral,
         offset: StreamEventSchema.shape.offset,
         createdAt: StreamEventSchema.shape.createdAt,
         path: StreamEventSchema.shape.path,

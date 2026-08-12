@@ -290,12 +290,16 @@ export class AgentTurnLoop implements AgentComponent {
     // that is the normal start (our own requested event arriving at head);
     // after an eviction it is the recovery (the revived fact arriving at
     // head). Runs even while paused: a committed request is drained, never
-    // stranded (see the paused branch above). Expired → settle it instead,
-    // with the error transcribed for the next turn: answering a stale trigger
-    // with a stale context snapshot is worse than admitting the miss.
+    // stranded (see the paused branch above). Expired — or so close to expiry
+    // that no attempt could finish (a late revival adopting a request with
+    // seconds left computes a near-zero transport deadline; prod 2026-08-11
+    // saw a 9-second attempt "time out" and burn its retries) → settle it
+    // instead, with the error transcribed for the next turn: answering a
+    // stale trigger with a stale context snapshot is worse than admitting
+    // the miss.
     const open = state.openRequest;
     if (open !== null && !this.#llm.isExecuting(open.requestedAtOffset)) {
-      if (this.#host.now() >= open.expiresAt) {
+      if (this.#host.now() + MIN_LLM_ATTEMPT_VALIDITY_MS >= open.expiresAt) {
         runInBackground(() =>
           appendUnlessLostIdempotencyRace(append, [
             {
@@ -321,6 +325,15 @@ export class AgentTurnLoop implements AgentComponent {
     }
   }
 }
+
+/**
+ * The floor under an attempt's transport deadline: adopting a request with
+ * less remaining validity than this settles it expired rather than running a
+ * doomed attempt (`deadlineMs = expiresAt - now` self-caps at the intent's
+ * validity — see agent-llm-request.ts). Small next to the default 10-minute
+ * horizon, so ordinary starts (debounce is seconds) never come near it.
+ */
+const MIN_LLM_ATTEMPT_VALIDITY_MS = 30_000;
 
 /** Exponential failure backoff reduced into the debounce window: doubling from
  * the policy's base, capped at its ceiling. */

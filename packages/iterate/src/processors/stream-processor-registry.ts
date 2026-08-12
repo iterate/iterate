@@ -89,7 +89,7 @@ import type {
 } from "./rpc-types.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
 import type { ProcessorReads, StreamProcessor } from "./stream-processor.ts";
-import { StreamProcessorRunner } from "./stream-processor-runner.ts";
+import { StreamProcessorRunner, type ProcessorRecovery } from "./stream-processor-runner.ts";
 import {
   durableObjectProgressStore,
   durableObjectRecovery,
@@ -170,6 +170,9 @@ export type RegisteredProcessorReads<State> = Omit<ProcessorReads<State>, "waitU
 type RegistryEntry = {
   processor: RegisterableProcessor;
   runner: StreamProcessorRunner<any>;
+  /** Present when registered with `{ recovery: true }` — the keepalive-backed
+   * recovery adapter, kept for the operator reset seam. */
+  recovery?: ProcessorRecovery;
 };
 
 /**
@@ -320,6 +323,13 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
    * availability failure throw. Stale state is never presented as success.
    */
   catchUp(name: string): Promise<void>;
+  /**
+   * Operator seam: clear one runner's revival crash-loop budget and pull its
+   * owed retry in to the confirmation lead — the no-deploy antidote for a
+   * 3-strikes plateau ("backing off (plateau 360m). A deploy resets the
+   * budget."). No-op for a recovery-less runner.
+   */
+  resetRecoveryBackoff(name: string): void;
   /**
    * Wire this to the host DO's `alarm()` handler — REQUIRED on every hosting
    * class. The fire routes to EVERY runner (each keepalive self-gates on its
@@ -581,7 +591,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         keepAlive: (work) => ctx.waitUntil(work()),
         now,
       });
-      entries.set(name, { processor, runner });
+      entries.set(name, { processor, runner, ...(recovery === undefined ? {} : { recovery }) });
       // Any runner's committed-state change reassembles the node's live state.
       runner.observeStateChanges(() => assembleLive());
       return processor;
@@ -639,6 +649,10 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     // state as success.
     async catchUp(name: string): Promise<void> {
       await requireEntry(name).runner.catchUp();
+    },
+
+    resetRecoveryBackoff(name: string): void {
+      requireEntry(name).recovery?.resetBackoff?.();
     },
 
     handleAlarm(alarmInfo) {
