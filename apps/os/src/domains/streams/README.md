@@ -312,6 +312,13 @@ Guarantees:
 - Retries are bounded and visible; the final failure halts the subscription.
   After any batch failure the next read uses batch size 1, so a poison event
   cannot strand its healthy prefix.
+- A halt is a breaker, not a grave: the halted event records the deploy
+  version that gave up, and the first send check under a DIFFERENT version
+  appends one automatic `subscription-delivery-resumed` (the antidote-deploy
+  retry, mirroring the keepalive breaker's version reset). A receiver fixed
+  by a deploy recovers unattended; a still-broken one re-halts under the new
+  version. Halts recorded before the version stamp are grandfathered to the
+  operator doors.
 - A Durable Object alarm starts due retries even when the source is quiet.
 - `waitUntilProcessed(name, { offset, timeoutMs? })` on the Stream DO is the
   uniform barrier for every kind. Processor-wake rows delegate to the hosted

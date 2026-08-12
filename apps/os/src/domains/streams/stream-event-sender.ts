@@ -305,6 +305,12 @@ type StreamEventSenderHooks = {
   recordEgress(count: number, bytes: number): void;
   /** An in-memory runtime-debug field changed; refresh the observed state. */
   runtimeChanged(): void;
+  /**
+   * This incarnation's deploy version. Stamped on halts and compared against
+   * the halt's recorded version: a mismatch is the antidote deploy and earns
+   * one automatic resume (see {@link StreamEventSender.sendDue}'s halt check).
+   */
+  workerVersion(): string;
   /** Injected absolute wall-clock time in milliseconds. */
   now(): number;
   /** Injected randomness (backoff jitter); [0, 1) like Math.random. */
@@ -367,6 +373,13 @@ export class StreamEventSender {
    * DELIVERY_BATCH_LIMIT on success.
    */
   readonly #limitNextReadToOne = new Set<string>();
+  /**
+   * Halt instances already offered their antidote resume by THIS incarnation,
+   * keyed exactly like the append's idempotency key. The stream's idempotency
+   * dedupe is the durable guard; this set only keeps one incarnation's
+   * level-triggered send checks from re-dialing the same no-op append.
+   */
+  readonly #antidoteResumesAttempted = new Set<string>();
   /**
    * Per-subscription delivery metrics for copy, ITX-call, and webhook
    * actions: the awaited call is the acknowledgement, so the stream is the only
@@ -538,7 +551,10 @@ export class StreamEventSender {
         row = this.#hooks.store.get(name);
       }
 
-      if (entry.deliveryHalted !== undefined) continue;
+      if (entry.deliveryHalted !== undefined) {
+        this.#resumeHaltFromAntidoteDeploy(name, entry.configuredAtOffset, entry.deliveryHalted);
+        continue;
+      }
 
       if (row === undefined) continue; // unreachable after ensure; defensive
       if (row.inFlightDeadlineAt !== null) {
@@ -1075,6 +1091,55 @@ export class StreamEventSender {
   }
 
   /**
+   * A halted subscription's only automatic way back: the antidote deploy.
+   * The halt records the deploy version that gave up; a send check under a
+   * DIFFERENT version appends one `subscription-delivery-resumed`, giving the
+   * receiver a fresh bounded ladder — a receiver fixed by the deploy recovers
+   * with no operator, and a still-broken one re-halts under the new version
+   * and stays quiet until the next deploy. Halts recorded before the version
+   * stamp existed are grandfathered: without a recorded version, "same deploy
+   * that just gave up" and "antidote deploy" are indistinguishable, and
+   * guessing would loop a same-version halt — those still need the operator
+   * doors. Mirrors the keepalive crash-loop breaker's version reset
+   * (docs/writing-stream-processors.md): a halt is a breaker, and a version
+   * change is the antidote that earns exactly one immediate retry.
+   *
+   * Without this, a halt was forever unless a human noticed the one red row:
+   * the 2026-08-12 preview_8 media incident halted a project-worker feed
+   * ~30 seconds after a redeploy and every later append stalled silently —
+   * runtime state even looks clean because the halt clears the backoff ladder.
+   */
+  #resumeHaltFromAntidoteDeploy(
+    name: string,
+    configuredAtOffset: number,
+    halt: { afterOffset: number; attempts: number; workerVersion?: string },
+  ): void {
+    const version = this.#hooks.workerVersion();
+    if (halt.workerVersion === undefined || halt.workerVersion === version) return;
+    const idempotencyKey = internalStreamId(
+      "halt-antidote-resume",
+      name,
+      configuredAtOffset,
+      halt.afterOffset,
+      halt.attempts,
+      version,
+    );
+    if (this.#antidoteResumesAttempted.has(idempotencyKey)) return;
+    this.#antidoteResumesAttempted.add(idempotencyKey);
+    const recorded = this.#hooks.appendDeliveryEvent({
+      type: "events.iterate.com/stream/subscription-delivery-resumed",
+      idempotencyKey,
+      payload: { name },
+    });
+    if (!recorded) {
+      // Lifecycle teardown interrupted the append. A fresh incarnation owns
+      // the retry (its attempted-set starts empty); arrange the wake it needs.
+      this.#antidoteResumesAttempted.delete(idempotencyKey);
+      this.#hooks.armAlarm(this.#hooks.now() + LIFECYCLE_RETRY_DELAY_MS);
+    }
+  }
+
+  /**
    * Whether this async call still belongs to the same configuration and cursor.
    * The configuration offset detects remove/recreate and same-key replacement;
    * the cursor-changing event offset detects a seek appended during the call.
@@ -1375,6 +1440,9 @@ export class StreamEventSender {
         afterOffset: row?.confirmedOffset ?? 0,
         attempts,
         ...(terminalError === undefined ? {} : { error: terminalError }),
+        // The antidote-retry comparison side: a send check under a LATER
+        // version resumes this halt once (#resumeHaltFromAntidoteDeploy).
+        workerVersion: this.#hooks.workerVersion(),
       },
     });
     if (!recorded) {
