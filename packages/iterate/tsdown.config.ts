@@ -49,7 +49,9 @@ export default defineConfig([
       },
     },
     deps: {
-      alwaysBundle: ["@iterate-com/capnweb", "sqlfu", "zod"],
+      // yaml rides along for the notes app's frontmatter (the config repo
+      // installs only what its own package.json declares).
+      alwaysBundle: ["@iterate-com/capnweb", "sqlfu", "yaml", "zod"],
       neverBundle: ["cloudflare:workers"],
     },
     dts: false,

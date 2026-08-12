@@ -8,10 +8,10 @@ branch: mobile-notes
 
 ## Status summary
 
-Backend being rebuilt on workspace-documents (convergence grill session, 2026-08-12); UI stays as shipped.
+Convergence backend implemented and verified; awaiting review ([PR #2483](https://github.com/iterate/iterate/pull/2483)).
 
-- Done: v1 backend (stream-only) fully verified; convergence decisions settled via second plannotator grill (see below) — a note is now a markdown file with frontmatter in a dedicated `notes` repo.
-- In progress: backend rewrite per the convergence decisions.
+- Done: notes are markdown files with frontmatter in the dedicated notes repo; analysis writes title/tags into the file; settlement-debounced git commits; file-derived phone list with events as the live signal; "Open in docs" row action. All lanes green: 9 harness scenarios, lib tests, live e2e (frontmatter + git commit + glob discovery), Playwright spec.
+- Known platform quirk found on the way: repos `create({type:"empty"})` seeds the full config template (separate task chip filed); notes filter by stamp-shaped filenames.
 
 ## Convergence decisions (grill session 2, supersede the backend half of the v1 decisions)
 

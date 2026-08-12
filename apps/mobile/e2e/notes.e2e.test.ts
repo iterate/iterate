@@ -1,28 +1,29 @@
-// Live proof of the userland NotesApp: the composer's exact append lands on
-// a fresh project's /notes stream, the app's analysis OBLIGATION settles
-// with a real model call (title/tags overlaid — this is the one lane that
-// exercises itx.ai.run from inside a processor attempt, not a script), and
-// both query doors answer — the worker RPC directly, and the itx.notes
-// capability the glue mounts on project/worker-updated. Delete tombstones
-// drop the note from search.
+// Live proof of the convergence NotesApp: the composer's exact sequence —
+// provision the notes repo + workspace, write the note FILE, append the
+// captured fact to the workspace's stream — then the server's obligation
+// writes title/tags INTO the file's frontmatter (one real model call), the
+// settlement-debounced commit lane lands it on the notes repo's main, an
+// agent-shaped glob/readFiles finds it, and delete drops it everywhere.
 //
 //   doppler run --config dev -- pnpm --dir apps/mobile test:e2e   # local dev (pnpm dev must be running)
 
 import { expect, test } from "vitest";
 import { connectItx } from "iterate/node";
-import { notesWorkerRef } from "iterate/starter-apps/notes/ref";
 import { mintForgedAccessToken } from "../../../scripts/auth/forge-token.ts";
 import {
   buildCapturedEvent,
   buildDeletedEvent,
-  NOTE_ANALYSIS_SETTLED_EVENT_TYPE,
-  NOTES_STREAM_PATH,
+  composeNoteFile,
+  noteFilePath,
+  NOTES_REPO_PATH,
+  NOTES_WORKSPACE_PATH,
+  parseNoteFile,
 } from "../src/lib/notes.ts";
 import { portlessOrigin, requireEnv, resolveBaseUrl } from "./e2e-helpers.ts";
 
 test(
-  "the seeded NotesApp analyzes a captured note and answers search, via worker RPC and itx.notes",
-  { timeout: 180_000 },
+  "a captured note file gets analyzed frontmatter, a git commit, and agent-shaped discovery",
+  { timeout: 240_000 },
   async () => {
     const baseUrl = resolveBaseUrl();
 
@@ -43,68 +44,69 @@ test(
     });
     using project = connectItx({ baseUrl, auth: { type: "bearer", token }, projectId });
 
-    // The composer's exact append (components/note-composer.tsx) — no AI in
-    // the capture path; the title arrives later as an obligation settlement.
-    const noteKey = `e2e-${Date.now().toString(36)}`;
-    const stream = project.streams.get(NOTES_STREAM_PATH);
-    await stream.append(
-      buildCapturedEvent({
-        noteKey,
-        text: "Standing desk height: 76cm was exactly right at the office",
-        attachments: [],
-        capturedOnDeviceAt: new Date().toISOString(),
+    // The composer's exact sequence (components/note-composer.tsx): lazy
+    // provisioning, file write, captured fact. No AI in the capture path.
+    await project.repos.get(NOTES_REPO_PATH).create({ type: "empty" });
+    const workspace = project.workspaces.get(NOTES_WORKSPACE_PATH);
+    await workspace.create({});
+    const capturedAt = new Date().toISOString();
+    const path = noteFilePath(capturedAt, "e2e1");
+    await workspace.writeFile(
+      path,
+      composeNoteFile({ capturedAt }, "Standing desk height: 76cm was exactly right at the office"),
+    );
+    await project.streams.get(NOTES_WORKSPACE_PATH).append(buildCapturedEvent(path));
+
+    // The obligation settles by writing title/tags INTO the file.
+    const analyzed = await pollUntil(async () => {
+      const content = await workspace.readFile(path);
+      if (content === null) return null;
+      const note = parseNoteFile(content);
+      return typeof note.frontmatter.title === "string" && note.frontmatter.title !== ""
+        ? note
+        : null;
+    });
+    expect(analyzed.frontmatter).toMatchObject({ capturedAt, title: expect.any(String) });
+    expect(analyzed.body).toContain("76cm");
+
+    // The settlement event is the durable proof of the same fact.
+    const settled = await project.streams.get(NOTES_WORKSPACE_PATH).getEvents({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/notes/analysis-settled"],
+    });
+    expect(settled).toContainEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          path,
+          result: expect.objectContaining({
+            status: "succeeded",
+            processedBy: expect.stringContaining("@cf/"),
+          }),
+        }),
       }),
     );
 
-    // Door 1: the worker RPC. search() catches the processor up on the stream
-    // itself, so the note is visible immediately — title pending or settled.
-    using worker = project.workers.get(notesWorkerRef) as any;
-    const immediate = await worker.search({ q: "standing desk" });
-    expect(immediate).toMatchObject([{ noteKey }]);
-
-    // The catch-up above started the analysis obligation; its settlement is a
-    // durable stream fact. Poll for it (one real small-model call).
-    const settled = await pollUntil(async () => {
-      const events = await stream.getEvents({
-        afterOffset: 0,
-        eventTypes: [NOTE_ANALYSIS_SETTLED_EVENT_TYPE],
-      });
-      return events.find((event: any) => event.payload.noteKey === noteKey) || null;
+    // The commit lane lands the note on the repo's main (~10s debounce).
+    const commit = await pollUntil(async () => {
+      const log = await workspace.git.log({ scope: NOTES_REPO_PATH, limit: 5 });
+      return log.find((entry: any) => entry.message.startsWith("notes:")) || null;
     });
-    expect(settled).toMatchObject({
-      payload: {
-        noteKey,
-        result: { status: "succeeded", processedBy: expect.stringContaining("@cf/") },
-      },
-    });
-    const analyzed = await worker.get(noteKey);
-    expect(analyzed.title).not.toBe("");
+    expect(commit.message).toMatch(/^notes: /);
 
-    // Door 2: the itx.notes mount contract — same provide the glue makes on
-    // project/worker-updated (which can lag a fresh project in local dev),
-    // then the mounted dotted surface answers like an agent would call it.
-    const viaItx = await project.capabilityHost.runScript(
-      `async (itx) => {
-      await itx.capabilityHosts.get("/").provideCapability({
-        type: "itx-call",
-        path: ["notes"],
-        expression: ["workers", ["get", ${JSON.stringify(notesWorkerRef)}]],
-        flattenNestedPaths: true,
-        instructions: "e2e mount",
-      });
-      return await itx.notes.search({ q: "standing desk" });
-    }`,
-    );
-    expect(viaItx.result).toMatchObject([{ noteKey, title: analyzed.title }]);
+    // Agent-shaped discovery: plain glob + readFiles, no special capability.
+    const found = await workspace.glob(`${NOTES_REPO_PATH}/*.md`);
+    expect(found).toContain(path);
 
-    // Long-press delete on the phone = this tombstone; the fold drops the note.
-    await stream.append(buildDeletedEvent(noteKey));
-    expect(await worker.search({ q: "standing desk" })).toEqual([]);
+    // Delete: file gone, fact appended, list-shaped glob no longer sees it.
+    await workspace.deleteFile(path);
+    await project.streams.get(NOTES_WORKSPACE_PATH).append(buildDeletedEvent(path));
+    expect(await workspace.readFile(path)).toBeNull();
+    expect(await workspace.glob(`${NOTES_REPO_PATH}/*.md`)).not.toContain(path);
   },
 );
 
 async function pollUntil<T>(read: () => Promise<T | null>): Promise<T> {
-  const deadline = Date.now() + 120_000;
+  const deadline = Date.now() + 180_000;
   while (true) {
     const value = await read();
     if (value !== null) return value;

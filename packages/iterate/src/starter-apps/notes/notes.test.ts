@@ -1,237 +1,286 @@
-// The notes processor's executable spec: step scenarios on the generic
-// harness (makeProcessorHarness from iterate/processors/testing) — the REAL
-// StreamProcessorRunner over a MemoryStream with production idempotency
-// semantics. The analyze dep is faked per scenario; the stream is the
-// assertion surface (every consequential outcome is an event).
+// The notes processor's executable spec, convergence edition: step scenarios
+// on the generic harness (makeProcessorHarness — the REAL runner over a
+// MemoryStream) with a fake workspace (in-memory file map + recorded
+// commits) standing in for the itx workspace slice. Files are truth: the
+// interesting assertions are what lands IN the file and in git, with the
+// stream carrying obligations and settlements.
 import { expect, test } from "vitest";
 import {
   makeMemoryProgressStore,
   makeProcessorHarness,
   type HarnessSubstrate,
 } from "../../processors/testing.ts";
+import { composeNoteFile, noteDisplayTitle, parseNoteFile } from "./frontmatter.ts";
 import {
   NOTES_ANALYSIS_EXPIRY_MS,
+  NOTES_COMMIT_DEBOUNCE_MS,
   NotesProcessor,
   NotesProcessorContract,
-  searchNotes,
   type NotesAnalysis,
   type NotesProcessorContract as Contract,
+  type NotesWorkspace,
 } from "./processor.ts";
-import { analyzeNoteText } from "./analysis.ts";
+
+const NOTE_PATH = "/repos/notes/2026-08-12T15-01-20-841Z-x7ab.md";
+
+function fakeWorkspace() {
+  const files = new Map<string, string>();
+  const commits: { message: string; scope: string }[] = [];
+  let committed = new Map<string, string>();
+  const workspace: NotesWorkspace = {
+    readFile: async (path) => (files.has(path) ? files.get(path)! : null),
+    writeFile: async (path, content) => void files.set(path, content),
+    dirtyNotePaths: async () => {
+      const dirty = new Set<string>();
+      for (const [path, content] of files) {
+        if (committed.get(path) !== content) dirty.add(path);
+      }
+      for (const path of committed.keys()) if (!files.has(path)) dirty.add(path);
+      return [...dirty];
+    },
+    commit: async (input) => {
+      commits.push(input);
+      committed = new Map(files);
+    },
+  };
+  return { files, commits, workspace };
+}
 
 function makeNotesHarness(input: {
   analyze: (text: string) => Promise<NotesAnalysis>;
+  workspace: NotesWorkspace;
   substrate?: HarnessSubstrate;
 }) {
   return makeProcessorHarness<Contract, NotesProcessor>({
     createProcessor: (deps) =>
-      new NotesProcessor({ ...deps, analyze: ({ text }) => input.analyze(text) }),
-    path: "/notes",
+      new NotesProcessor({
+        ...deps,
+        workspace: input.workspace,
+        analyze: ({ text }) => input.analyze(text),
+      }),
+    path: "/workspaces/notes",
     substrate: input.substrate,
   });
 }
 
-const captured = (noteKey: string, text: string) => ({
+const captured = (path: string) => ({
   type: "events.iterate.com/notes/captured" as const,
-  idempotencyKey: `notes-captured-${noteKey}`,
-  payload: { noteKey, text, attachments: [], capturedOnDeviceAt: null },
+  idempotencyKey: `notes-captured-${path}`,
+  payload: { path },
 });
 
-test("captured opens an analysis obligation and settles it with title/tags", async () => {
+test("capture: analysis lands title/tags IN the file's frontmatter and settles", async () => {
+  const { files, workspace } = fakeWorkspace();
+  files.set(
+    NOTE_PATH,
+    composeNoteFile({ capturedAt: "2026-08-12T15:01:20.841Z" }, "desk at 76cm felt right"),
+  );
   const h = makeNotesHarness({
-    analyze: async (text) => ({ title: `Title for: ${text}`, tags: ["idea"], processedBy: "fake" }),
+    workspace,
+    analyze: async (text) => ({
+      title: `Title for: ${text}`,
+      tags: ["reference"],
+      processedBy: "fake",
+    }),
   });
-  await h.append(captured("n1", "prototype the notes composer"));
+  await h.append(captured(NOTE_PATH));
 
+  const note = parseNoteFile(files.get(NOTE_PATH)!);
+  expect(note.frontmatter).toMatchObject({
+    capturedAt: "2026-08-12T15:01:20.841Z", // preserved
+    title: "Title for: desk at 76cm felt right",
+    tags: ["reference"],
+  });
+  expect(note.body).toBe("desk at 76cm felt right");
   expect(h.events("events.iterate.com/notes/analysis-settled")).toMatchObject([
-    {
-      payload: {
-        noteKey: "n1",
-        requestOffset: 1,
-        result: {
-          status: "succeeded",
-          title: "Title for: prototype the notes composer",
-          tags: ["idea"],
-        },
-      },
-    },
+    { payload: { path: NOTE_PATH, result: { status: "succeeded", processedBy: "fake" } } },
   ]);
-  expect(h.state()).toMatchObject({
-    notes: { n1: { title: "Title for: prototype the notes composer", analysisError: "" } },
-    pendingAnalyses: {},
-  });
+  expect(h.state().pendingAnalyses).toEqual({});
 });
 
-test("a failed analysis settles as failure and reanalyze-requested retries it", async () => {
-  let attempts = 0;
+test("re-read guard: a body edited mid-analysis settles superseded, file untouched", async () => {
+  const { files, workspace } = fakeWorkspace();
+  files.set(NOTE_PATH, composeNoteFile({}, "old text"));
+  let releaseAnalysis!: (analysis: NotesAnalysis) => void;
   const h = makeNotesHarness({
-    analyze: async () => {
-      attempts += 1;
-      if (attempts === 1) throw new Error("model unavailable");
-      return { title: "Second time lucky", tags: [], processedBy: "fake" };
-    },
+    workspace,
+    analyze: () => new Promise<NotesAnalysis>((resolve) => (releaseAnalysis = resolve)),
   });
-  await h.append(captured("n1", "flaky analysis"));
-  expect(h.state()).toMatchObject({
-    notes: { n1: { title: "", analysisError: "model unavailable" } },
-    pendingAnalyses: {},
-  });
+  await h.append(captured(NOTE_PATH));
 
-  await h.append({
-    type: "events.iterate.com/notes/reanalyze-requested",
-    payload: { noteKey: "n1" },
+  // The user edits the FILE while the model call is in flight (no updated
+  // event yet — the pure race the re-read guard exists for).
+  files.set(NOTE_PATH, composeNoteFile({}, "new text"));
+  releaseAnalysis({ title: "Title for old text", tags: [], processedBy: "fake" });
+  await h.settle();
+
+  expect(parseNoteFile(files.get(NOTE_PATH)!)).toMatchObject({
+    frontmatter: {},
+    body: "new text",
   });
-  expect(h.state()).toMatchObject({
-    notes: { n1: { title: "Second time lucky", analysisError: "" } },
-    pendingAnalyses: {},
-  });
+  expect(h.events("events.iterate.com/notes/analysis-settled")).toMatchObject([
+    { payload: { result: { status: "superseded", reason: "note body changed during analysis" } } },
+  ]);
 });
 
-test("reanalyze supersedes a still-open obligation — one open obligation per note", async () => {
-  // First analysis hangs; the re-run answers.
+test("updated supersedes a hung obligation; the fresh one retitles from the new body", async () => {
+  const { files, workspace } = fakeWorkspace();
+  files.set(NOTE_PATH, composeNoteFile({}, "old text"));
   let hangFirst = true;
   const h = makeNotesHarness({
-    analyze: async () => {
+    workspace,
+    analyze: async (text) => {
       if (hangFirst) {
         hangFirst = false;
         return new Promise(() => {});
       }
-      return { title: "From the re-run", tags: [], processedBy: "fake" };
-    },
-  });
-  await h.append(captured("n1", "hung analysis"));
-  expect(Object.keys(h.state().pendingAnalyses)).toEqual(["n1:1"]);
-
-  await h.append({
-    type: "events.iterate.com/notes/reanalyze-requested",
-    payload: { noteKey: "n1" },
-  });
-  expect(h.state()).toMatchObject({
-    notes: { n1: { title: "From the re-run" } },
-    pendingAnalyses: {},
-  });
-});
-
-test("updated overlays text, supersedes the stale attempt, and re-earns the title", async () => {
-  // The FIRST analysis hangs (its attempt is in flight when the edit lands);
-  // later analyses answer from the text they were given.
-  let hangFirst = true;
-  const hung: { resolve: (analysis: NotesAnalysis) => void }[] = [];
-  const h = makeNotesHarness({
-    analyze: async (text) => {
-      if (hangFirst) {
-        hangFirst = false;
-        return new Promise<NotesAnalysis>((resolve) => hung.push({ resolve }));
-      }
       return { title: `Title for: ${text}`, tags: [], processedBy: "fake" };
     },
   });
-  await h.append(captured("n1", "old text"));
-  expect(Object.keys(h.state().pendingAnalyses)).toEqual(["n1:1"]);
+  await h.append(captured(NOTE_PATH));
+  expect(Object.keys(h.state().pendingAnalyses)).toEqual([`${NOTE_PATH}:1`]);
 
-  await h.append({
-    type: "events.iterate.com/notes/updated",
-    idempotencyKey: "notes-updated-n1-e1",
-    payload: { noteKey: "n1", text: "new text" },
-  });
-  // The edit reset the garnish and the fresh obligation retitled from the
-  // NEW text.
-  expect(h.state()).toMatchObject({
-    notes: { n1: { text: "new text", title: "Title for: new text" } },
-    pendingAnalyses: {},
-  });
+  // The writer rewrote the file, then appended the fact — composer order.
+  files.set(NOTE_PATH, composeNoteFile({}, "new text"));
+  await h.append({ type: "events.iterate.com/notes/updated", payload: { path: NOTE_PATH } });
 
-  // The stale attempt (opened by the original capture) finally answers with
-  // a title from the OLD text — its obligation was superseded, so the
-  // settlement folds to a no-op instead of overlaying.
-  hung[0]!.resolve({ title: "Title for: old text", tags: [], processedBy: "fake" });
-  await h.settle();
-  expect(h.state().notes.n1).toMatchObject({ title: "Title for: new text" });
+  expect(parseNoteFile(files.get(NOTE_PATH)!).frontmatter).toMatchObject({
+    title: "Title for: new text",
+  });
+  expect(h.state().pendingAnalyses).toEqual({});
 });
 
-test("deleted removes the note and drops its open obligation without settling it", async () => {
-  // The analyze fake hangs forever — the obligation must stay open until the
-  // delete drops it, proving deletion (not settlement) closed it.
-  const h = makeNotesHarness({ analyze: () => new Promise(() => {}) });
-  await h.append(captured("n1", "delete me"));
-  expect(Object.keys(h.state().pendingAnalyses)).toEqual(["n1:1"]);
+test("deleted drops the note's open obligation without settling it", async () => {
+  const { files, workspace } = fakeWorkspace();
+  files.set(NOTE_PATH, composeNoteFile({}, "delete me"));
+  const h = makeNotesHarness({ workspace, analyze: () => new Promise(() => {}) });
+  await h.append(captured(NOTE_PATH));
+  expect(Object.keys(h.state().pendingAnalyses)).toEqual([`${NOTE_PATH}:1`]);
 
-  await h.append({ type: "events.iterate.com/notes/deleted", payload: { noteKey: "n1" } });
-  expect(h.state()).toMatchObject({ notes: {}, pendingAnalyses: {} });
+  files.delete(NOTE_PATH);
+  await h.append({ type: "events.iterate.com/notes/deleted", payload: { path: NOTE_PATH } });
+  expect(h.state().pendingAnalyses).toEqual({});
   expect(h.events("events.iterate.com/notes/analysis-settled")).toEqual([]);
 });
 
+test("commit lane: a burst of settled notes lands as ONE debounced commit, titled", async () => {
+  const { files, workspace, commits } = fakeWorkspace();
+  const second = "/repos/notes/2026-08-12T15-02-00-000Z-zz99.md";
+  files.set(NOTE_PATH, composeNoteFile({}, "desk at 76cm"));
+  files.set(second, composeNoteFile({}, "milk and eggs"));
+  const h = makeNotesHarness({
+    workspace,
+    analyze: async (text) => ({ title: `Title for: ${text}`, tags: [], processedBy: "fake" }),
+  });
+  await h.append(captured(NOTE_PATH));
+  await h.append(captured(second));
+  expect(commits).toEqual([]); // debounce window still open
+
+  await h.advanceTime(NOTES_COMMIT_DEBOUNCE_MS + 1_000);
+  expect(commits).toHaveLength(1);
+  expect(commits[0]).toMatchObject({ scope: "/repos/notes" });
+  expect(commits[0]!.message).toMatch(/^notes: Title for: .+ \(\+1 more\)$/);
+
+  // Everything committed → the next at-head pass finds a clean tree and
+  // commits nothing more.
+  await h.append(captured(NOTE_PATH)); // idempotency-deduped, but drives delivery
+  await h.advanceTime(NOTES_COMMIT_DEBOUNCE_MS + 1_000);
+  expect(commits).toHaveLength(1);
+});
+
 test("eviction mid-attempt: the revived incarnation restarts from the open obligation", async () => {
+  const { files, workspace } = fakeWorkspace();
+  files.set(NOTE_PATH, composeNoteFile({}, "survive eviction"));
   const calls: string[] = [];
   let hang = true;
+  const substrateWorkspace = workspace;
   const h = makeNotesHarness({
+    workspace: substrateWorkspace,
     analyze: async (text) => {
       calls.push(text);
       if (hang) return new Promise(() => {});
       return { title: "Recovered", tags: [], processedBy: "fake" };
     },
   });
-  await h.append(captured("n1", "survive eviction"));
+  await h.append(captured(NOTE_PATH));
   expect(calls).toEqual(["survive eviction"]);
-  expect(Object.keys(h.state().pendingAnalyses)).toEqual(["n1:1"]);
 
   h.crash();
   hang = false;
   // A new append is the production-real wake; the caught-up pass finds the
   // still-open obligation with an empty live-set and restarts it.
-  await h.append(captured("n2", "the wake"));
-  expect(calls).toContain("survive eviction");
-  expect(h.state()).toMatchObject({
-    notes: { n1: { title: "Recovered" }, n2: {} },
+  await h.append({
+    type: "events.iterate.com/notes/reanalyze-requested",
+    payload: { path: NOTE_PATH },
   });
   await h.settle();
+  expect(parseNoteFile(files.get(NOTE_PATH)!).frontmatter).toMatchObject({ title: "Recovered" });
   expect(h.state().pendingAnalyses).toEqual({});
 });
 
-test("expired obligation settles as failure without dialing the model", async () => {
+test("expired obligation settles as failure without dialing the model or touching the file", async () => {
+  const { files, workspace } = fakeWorkspace();
+  files.set(NOTE_PATH, composeNoteFile({}, "goes stale"));
   const calls: string[] = [];
   const h = makeNotesHarness({
+    workspace,
     analyze: async (text) => {
       calls.push(text);
       return new Promise(() => {});
     },
   });
-  await h.append(captured("n1", "goes stale"));
+  await h.append(captured(NOTE_PATH));
   expect(calls).toEqual(["goes stale"]);
 
   h.crash();
-  // Jump the clock WITHOUT advanceTime: advancing would fire the keepalive
-  // alarm at +10s virtual time, a timely revival that legitimately
-  // re-attempts. Mutating the clock models "the isolate was gone and the
-  // next wake arrived long past the horizon" — the append below is that wake.
+  // Jump the clock WITHOUT advanceTime (advancing fires a timely keepalive
+  // revival that legitimately re-attempts): models "isolate gone, next wake
+  // long past the horizon".
   h.clock.now += NOTES_ANALYSIS_EXPIRY_MS + 60_000;
-  await h.append(captured("n2", "fresh note"));
+  await h.append({
+    type: "events.iterate.com/notes/captured",
+    idempotencyKey: "notes-captured-second",
+    payload: { path: "/repos/notes/2026-08-13T00-00-00-000Z-late.md" },
+  });
   expect(calls.filter((text) => text === "goes stale")).toHaveLength(1);
   expect(h.events("events.iterate.com/notes/analysis-settled")).toContainEqual(
     expect.objectContaining({
       payload: expect.objectContaining({
-        noteKey: "n1",
+        path: NOTE_PATH,
         result: expect.objectContaining({ status: "failed" }),
       }),
     }),
   );
+  expect(parseNoteFile(files.get(NOTE_PATH)!).frontmatter).toEqual({});
 });
 
-test("replay: a fresh instance fed the full stream re-executes nothing and converges", async () => {
+test("replay: a fresh instance re-executes no analysis, no writes, no commits", async () => {
+  const { files, workspace } = fakeWorkspace();
+  files.set(NOTE_PATH, composeNoteFile({}, "replay me"));
   const h = makeNotesHarness({
-    analyze: async () => ({ title: "Once", tags: ["idea"], processedBy: "fake" }),
+    workspace,
+    analyze: async () => ({ title: "Once", tags: [], processedBy: "fake" }),
   });
-  await h.append(captured("n1", "replay me"));
-  await h.append({ type: "events.iterate.com/notes/deleted", payload: { noteKey: "n1" } });
-  await h.append(captured("n2", "still here"));
+  await h.append(captured(NOTE_PATH));
   const liveState = h.state();
   const liveEventCount = h.events().length;
 
-  // Fresh progress over the SAME stream = full replay from offset 0. A
-  // dangerous analyze THROWS so reaching it fails loudly.
+  // Fresh progress over the SAME stream = full replay from offset 0. Every
+  // dangerous dep THROWS so reaching one fails loudly; a clean tree makes
+  // the commit lane a no-op.
   const replay = makeNotesHarness({
     analyze: async () => {
       throw new Error("replay must not re-dial the model");
+    },
+    workspace: {
+      readFile: workspace.readFile,
+      writeFile: async () => {
+        throw new Error("replay must not write files");
+      },
+      dirtyNotePaths: async () => [],
+      commit: async () => {
+        throw new Error("replay must not commit");
+      },
     },
     substrate: {
       clock: h.clock,
@@ -244,41 +293,27 @@ test("replay: a fresh instance fed the full stream re-executes nothing and conve
   expect(replay.state()).toEqual(liveState);
 });
 
-test("searchNotes: every term must match title/text/filenames/tags, newest first", async () => {
-  const h = makeNotesHarness({
-    analyze: async (text) => ({
-      title: text.includes("desk") ? "Standing desk height" : "Grocery list",
-      tags: text.includes("desk") ? ["reference"] : ["shopping"],
-      processedBy: "fake",
-    }),
+test("frontmatter round-trips, preserves foreign keys, and falls back on garbage", () => {
+  const composed = composeNoteFile(
+    { capturedAt: "2026-08-12T15:01:20.841Z", mood: "curious", tags: ["a"] },
+    "the body\nwith two lines",
+  );
+  const parsed = parseNoteFile(composed);
+  expect(parsed).toEqual({
+    frontmatter: { capturedAt: "2026-08-12T15:01:20.841Z", mood: "curious", tags: ["a"] },
+    body: "the body\nwith two lines",
   });
-  await h.append(captured("n1", "desk at 76cm"));
-  await h.append(captured("n2", "milk, eggs, flour"));
-
-  const state = h.state();
-  expect(searchNotes(state, { q: "desk 76" }).map((note) => note.noteKey)).toEqual(["n1"]);
-  expect(searchNotes(state, { q: "shopping" }).map((note) => note.noteKey)).toEqual(["n2"]);
-  expect(searchNotes(state, {}).map((note) => note.noteKey)).toEqual(["n2", "n1"]);
-  expect(searchNotes(state, { q: "desk shopping" })).toEqual([]);
-});
-
-test("analyzeNoteText parses a sloppy model answer defensively", async () => {
-  const good = await analyzeNoteText(
-    {
-      run: async () => ({
-        response:
-          'Sure! Here you go: {"title": "  Desk height  ", "tags": ["Reference", "REF!!", 42]}',
-      }),
-    },
-    { text: "desk at 76cm" },
+  // The analysis write-back shape: foreign keys survive.
+  const rewritten = parseNoteFile(
+    composeNoteFile({ ...parsed.frontmatter, title: "T" }, parsed.body),
   );
-  expect(good).toMatchObject({ title: "Desk height", tags: ["reference", "ref"] });
+  expect(rewritten.frontmatter).toMatchObject({ mood: "curious", title: "T" });
 
-  const garbage = await analyzeNoteText(
-    { run: async () => ({ response: "no json here" }) },
-    {
-      text: "x",
-    },
-  );
-  expect(garbage).toMatchObject({ title: "", tags: ["untagged"] });
+  expect(parseNoteFile("no frontmatter here")).toEqual({
+    frontmatter: {},
+    body: "no frontmatter here",
+  });
+  expect(parseNoteFile("---\n: not yaml [\n---\nbody")).toMatchObject({ frontmatter: {} });
+  expect(noteDisplayTitle(parseNoteFile("---\ntitle: Hi\n---\nbody"))).toBe("Hi");
+  expect(noteDisplayTitle(parseNoteFile("\n\nfirst real line\nmore"))).toBe("first real line");
 });

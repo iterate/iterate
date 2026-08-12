@@ -1,13 +1,17 @@
-// Browse captured notes (grill decision D10): newest first, client-side text
-// filter, long-press to delete (a notes/deleted tombstone), tap to expand.
-// Rows show the model-derived title once notes/analysis-settled lands (the
-// NotesApp processor's obligation), with the text's first line as the
-// fallback; photo attachments render as thumbnails and open in the shared
-// media viewer. Capture happens in the global composer
-// (components/note-composer.tsx), not here.
+// Browse captured notes, convergence edition: notes are markdown files with
+// frontmatter in the notes repo, so the LIST IS FILE-DERIVED — glob +
+// readFiles through the notes workspace, parsed client-side. The workspace
+// stream's notes/* facts are the live signal: the file query keys on the
+// newest fact offset, so every capture/settlement/delete refetches. Rows
+// show the analysis-written frontmatter title (first line until it lands);
+// tap to expand for edit (recomposed writeFile + updated fact), re-analyze,
+// "Open in docs" (the same file in the web editor), and inline-confirm
+// delete (deleteFile + deleted fact; the server's commit lane emits the git
+// deletion). Capture happens in the global composer, not here.
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Stack, useLocalSearchParams } from "expo-router";
+import * as WebBrowser from "expo-web-browser";
 import { useState } from "react";
 import {
   ActivityIndicator,
@@ -26,11 +30,14 @@ import {
   buildDeletedEvent,
   buildReanalyzeEvent,
   buildUpdatedEvent,
+  composeNoteFile,
   deriveNotesList,
   filterNotes,
+  isNoteFilePath,
+  latestNoteFactOffset,
   NOTE_EVENT_TYPES,
-  NOTES_STREAM_PATH,
-  readAllNoteEvents,
+  NOTES_REPO_PATH,
+  NOTES_WORKSPACE_PATH,
   type NoteAttachment,
   type NoteListItem,
 } from "../../../lib/notes.ts";
@@ -53,19 +60,44 @@ export default function NotesScreen() {
   });
   const baseUrl = server.data;
 
+  // The live signal: notes/* facts on the workspace's stream. The list query
+  // below keys on the newest fact offset, so a pushed fact = a refetch.
   const events = useLiveEvents({
     queryKey: ["note-events", baseUrl || "pending", projectId],
     read: async () => {
       const project = await getProjectItx(baseUrl!, projectId);
-      return await readAllNoteEvents(project.streams.get(NOTES_STREAM_PATH));
+      return await project.streams
+        .get(NOTES_WORKSPACE_PATH)
+        .getEvents({ eventTypes: NOTE_EVENT_TYPES });
     },
     enabled: baseUrl !== undefined,
     eventTypes: NOTE_EVENT_TYPES,
     projectId,
-    streamPath: NOTES_STREAM_PATH,
+    streamPath: NOTES_WORKSPACE_PATH,
+  });
+  const factOffset = latestNoteFactOffset(events.data || []);
+
+  // The data: the note files themselves (files are truth — an agent's edit
+  // shows up here even though it appends no fact, on the next refetch).
+  const files = useQuery({
+    queryKey: ["note-files", baseUrl || "pending", projectId, factOffset],
+    enabled: baseUrl !== undefined,
+    placeholderData: (previous: any) => previous,
+    queryFn: async (): Promise<Record<string, string | null>> => {
+      const project = await getProjectItx(baseUrl!, projectId);
+      const workspace = project.workspaces.get(NOTES_WORKSPACE_PATH);
+      try {
+        const paths = (await workspace.glob(`${NOTES_REPO_PATH}/*.md`)).filter(isNoteFilePath);
+        if (paths.length === 0) return {};
+        return await workspace.readFiles(paths);
+      } catch {
+        // The workspace doesn't exist until the first capture provisions it.
+        return {};
+      }
+    },
   });
 
-  const items = deriveNotesList(events.data || []);
+  const items = deriveNotesList(files.data || {});
   const visible = filterNotes(items, query);
 
   return (
@@ -81,15 +113,18 @@ export default function NotesScreen() {
           autoCapitalize="none"
           autoCorrect={false}
         />
+        {files.isFetching && !files.isPending ? (
+          <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} size="small" />
+        ) : null}
       </View>
-      {events.isPending ? (
+      {files.isPending ? (
         <View style={styles.center}>
           <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
         </View>
-      ) : events.isError ? (
+      ) : files.isError ? (
         <View style={styles.center}>
-          <Text style={styles.error}>{String(events.error.message)}</Text>
-          <Pressable onPress={() => void events.refetch()} style={styles.retry}>
+          <Text style={styles.error}>{String(files.error.message)}</Text>
+          <Pressable onPress={() => void files.refetch()} style={styles.retry}>
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
         </View>
@@ -97,8 +132,9 @@ export default function NotesScreen() {
         <View style={styles.center}>
           <Text style={styles.emptyTitle}>Nothing here yet</Text>
           <Text style={styles.emptyBody}>
-            Capture a thought in the note bar — it lands here instantly, gets a title from a small
-            model, and becomes searchable for you and this project&apos;s agents.
+            Capture a thought in the note bar — it becomes a markdown file in this project&apos;s
+            notes repo, gets a title from a small model, and is editable by you and this
+            project&apos;s agents alike.
           </Text>
         </View>
       ) : visible.length === 0 ? (
@@ -109,14 +145,14 @@ export default function NotesScreen() {
       ) : (
         <FlatList
           data={visible}
-          keyExtractor={(item) => item.payload.noteKey}
+          keyExtractor={(item) => item.path}
           contentContainerStyle={{ padding: spacing.md, gap: spacing.sm, paddingBottom: 140 }}
           renderItem={({ item }) => (
             <NoteRow
               baseUrl={baseUrl!}
               item={item}
               onViewImage={(uri) =>
-                setViewer({ uri, title: item.displayTitle, markdown: item.payload.text })
+                setViewer({ uri, title: item.displayTitle, markdown: item.text })
               }
               projectId={projectId}
             />
@@ -165,30 +201,53 @@ function NoteRow({
   const update = useMutation({
     mutationFn: async (text: string) => {
       const project = await getProjectItx(baseUrl, projectId);
-      // The updated event arrives over the live stream and re-renders the
-      // row (text overlaid, derived title reset until fresh analysis lands).
+      // Recompose: body replaced, title/tags dropped (the fresh analysis the
+      // updated fact opens will re-earn them), foreign frontmatter preserved.
+      const { title: _title, tags: _tags, ...rest } = item.frontmatter;
+      await project.workspaces
+        .get(NOTES_WORKSPACE_PATH)
+        .writeFile(item.path, composeNoteFile(rest, text));
       await project.streams
-        .get(NOTES_STREAM_PATH)
-        .append(buildUpdatedEvent(item.payload.noteKey, text, Date.now().toString(36)));
+        .get(NOTES_WORKSPACE_PATH)
+        .append(buildUpdatedEvent(item.path, Date.now().toString(36)));
     },
     onSuccess: () => setEditDraft(null),
   });
+  const cache = useQueryClient();
   const remove = useMutation({
     mutationFn: async () => {
       const project = await getProjectItx(baseUrl, projectId);
-      // The tombstone arrives over the live stream; deriveNotesList drops the
-      // row — nothing to invalidate.
-      await project.streams.get(NOTES_STREAM_PATH).append(buildDeletedEvent(item.payload.noteKey));
+      await project.workspaces.get(NOTES_WORKSPACE_PATH).deleteFile(item.path);
+      // The server's commit lane lands the git deletion.
+      await project.streams.get(NOTES_WORKSPACE_PATH).append(buildDeletedEvent(item.path));
+    },
+    onSuccess: () => {
+      // The row vanishes NOW — the fact-driven refetch merely confirms.
+      cache.setQueriesData(
+        { queryKey: ["note-files"] },
+        (files: Record<string, string | null> | undefined) =>
+          files === undefined ? files : { ...files, [item.path]: null },
+      );
     },
   });
   const reanalyze = useMutation({
     mutationFn: async () => {
       const project = await getProjectItx(baseUrl, projectId);
       await project.streams
-        .get(NOTES_STREAM_PATH)
-        .append(buildReanalyzeEvent(item.payload.noteKey, Date.now().toString(36)));
+        .get(NOTES_WORKSPACE_PATH)
+        .append(buildReanalyzeEvent(item.path, Date.now().toString(36)));
     },
   });
+  const openInDocs = useMutation({
+    mutationFn: async () => {
+      const project = await getProjectItx(baseUrl, projectId);
+      const docsUrl = new URL(await project.appUrl("docs"));
+      docsUrl.searchParams.set("workspace", NOTES_WORKSPACE_PATH);
+      docsUrl.searchParams.set("path", item.path);
+      await WebBrowser.openBrowserAsync(docsUrl.toString());
+    },
+  });
+
   return (
     <Pressable
       onLongPress={() => {
@@ -197,8 +256,7 @@ function NoteRow({
       }}
       onPress={() => {
         // While editing, a row tap must not collapse the row — that would
-        // strand the editor with its Save/Cancel hidden. Save/Cancel end the
-        // edit session; only then does tapping collapse again.
+        // strand the editor with its Save/Cancel hidden.
         if (editDraft === null) setExpanded(!expanded);
       }}
       style={styles.row}
@@ -215,19 +273,18 @@ function NoteRow({
             accessibilityLabel="Edit note text"
             style={styles.editInput}
           />
-        ) : item.payload.text !== "" &&
-          (expanded || item.payload.text.trim() !== item.displayTitle) ? (
+        ) : item.text !== "" && (expanded || item.text.trim() !== item.displayTitle) ? (
           <Text
             numberOfLines={expanded ? undefined : 2}
             selectable={expanded}
             style={styles.rowText}
           >
-            {item.payload.text}
+            {item.text}
           </Text>
         ) : null}
-        {item.payload.attachments.length > 0 ? (
+        {item.attachments.length > 0 ? (
           <View style={styles.thumbRow}>
-            {item.payload.attachments.map((attachment) => (
+            {item.attachments.map((attachment) => (
               <NoteThumb
                 attachment={attachment}
                 baseUrl={baseUrl}
@@ -245,12 +302,9 @@ function NoteRow({
             </Text>
           ))}
           <Text style={styles.rowDate}>
-            {new Date(item.payload.capturedOnDeviceAt || item.capturedEventAt).toLocaleString()}
+            {item.capturedAt ? new Date(item.capturedAt).toLocaleString() : ""}
           </Text>
         </View>
-        {item.analysisError !== "" ? (
-          <Text style={styles.rowError}>analysis failed: {item.analysisError}</Text>
-        ) : null}
         {expanded && editDraft !== null ? (
           <View style={styles.actions}>
             <Pressable
@@ -275,10 +329,18 @@ function NoteRow({
           <View style={styles.actions}>
             <Pressable
               accessibilityRole="button"
-              onPress={() => setEditDraft(item.payload.text)}
+              onPress={() => setEditDraft(item.text)}
               style={styles.actionButton}
             >
               <Text style={styles.actionText}>✏️ Edit</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={openInDocs.isPending}
+              onPress={() => openInDocs.mutate()}
+              style={styles.actionButton}
+            >
+              <Text style={styles.actionText}>Open in docs</Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"
@@ -432,7 +494,7 @@ const styles = StyleSheet.create({
   },
   rowDate: { color: colors.textFaint, fontSize: 11, marginLeft: "auto" },
   rowError: { color: colors.danger, fontSize: 12 },
-  actions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.xs },
+  actions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.xs },
   actionButton: {
     borderColor: colors.border,
     borderRadius: radius.sm,

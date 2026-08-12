@@ -3,12 +3,14 @@
 // (except chat, which has its own), auto-appearing on cold start and on
 // foreground after a while away; ✕ collapses it to a floating 📝 pill.
 //
-// Where a note goes (D4/D5): inside project/[projectId]/* it appends straight
-// to that project's /notes stream; anywhere else — or when the append fails —
-// it lands in the local pending-notes store (lib/pending-notes.ts), and a
-// drain prompt offers to store pending notes whenever a project is opened.
-// Photo attachments upload to itx.files and double-append onto /media with
-// source "note" so the media pipeline analyzes them for free (D7).
+// Where a note goes (convergence model): inside project/[projectId]/* it
+// becomes a markdown file in the project's notes repo — written through the
+// notes workspace, with a notes/captured fact appended to the workspace's
+// stream. Anywhere else — or when the write fails — it lands in the local
+// pending-notes store (lib/pending-notes.ts), and a drain prompt offers to
+// store pending notes whenever a project is opened. Photo attachments upload
+// to itx.files and double-append onto /media with source "note" so the media
+// pipeline analyzes them for free.
 
 import { useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -16,6 +18,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Crypto from "expo-crypto";
 import { router, useGlobalSearchParams, useSegments } from "expo-router";
 import {
+  ActivityIndicator,
   Alert,
   AppState,
   Image,
@@ -38,8 +41,10 @@ import {
 } from "../lib/media.ts";
 import {
   buildCapturedEvent,
-  newNoteKey,
-  NOTES_STREAM_PATH,
+  composeNoteFile,
+  noteFilePath,
+  NOTES_REPO_PATH,
+  NOTES_WORKSPACE_PATH,
   type NoteAttachment,
 } from "../lib/notes.ts";
 import {
@@ -80,16 +85,29 @@ AppState.addEventListener("change", (state) => {
   }
 });
 
-/** Upload attachments, double-append them onto /media with note provenance,
- * then append the notes/captured fact. Used by direct capture and the
- * pending-notes drain — a drained note keeps its original noteKey and
- * capturedOnDeviceAt, so retries and re-drains fold to one note. */
+/** One-time-per-project (cached per app session): the notes repo + the
+ * workspace that writes into it. Both creates are idempotent sagas, so a
+ * repeat call after cache loss is a cheap no-op. */
+async function ensureNotesProvisioned(project: any, projectId: string): Promise<void> {
+  const flagKey = ["notes-provisioned", projectId];
+  if (queryClient.getQueryData(flagKey)) return;
+  await project.repos.get(NOTES_REPO_PATH).create({ type: "empty" });
+  await project.workspaces.get(NOTES_WORKSPACE_PATH).create({});
+  queryClient.setQueryData(flagKey, true);
+}
+
+/** Write the note FILE through the notes workspace (files are truth), then
+ * append the notes/captured fact to the workspace's stream (the live/index
+ * signal), double-appending photos onto /media. Used by direct capture and
+ * the pending-notes drain — a drained note keeps its capturedOnDeviceAt and
+ * noteKey, so retries and re-drains hit the same file path. */
 async function appendNoteToProject(
   baseUrl: string,
   projectId: string,
   note: PendingNote,
 ): Promise<void> {
   const project = await getProjectItx(baseUrl, projectId);
+  await ensureNotesProvisioned(project, projectId);
   const attachments: NoteAttachment[] = [];
   const wipeGeneration =
     note.attachments.length > 0
@@ -133,14 +151,18 @@ async function appendNoteToProject(
       )
       .catch(() => {});
   }
-  await project.streams.get(NOTES_STREAM_PATH).append(
-    buildCapturedEvent({
-      noteKey: note.noteKey,
-      text: note.text,
-      attachments,
-      capturedOnDeviceAt: note.capturedOnDeviceAt,
-    }),
+  const path = noteFilePath(note.capturedOnDeviceAt, note.noteKey);
+  await project.workspaces.get(NOTES_WORKSPACE_PATH).writeFile(
+    path,
+    composeNoteFile(
+      {
+        capturedAt: note.capturedOnDeviceAt,
+        ...(attachments.length > 0 ? { attachments } : {}),
+      },
+      note.text,
+    ),
   );
+  await project.streams.get(NOTES_WORKSPACE_PATH).append(buildCapturedEvent(path));
 }
 
 export function NoteCaptureOverlay() {
@@ -206,7 +228,9 @@ export function NoteCaptureOverlay() {
       files: PickedImage[];
     }): Promise<"sent" | "pending" | "saved-locally"> => {
       const note: PendingNote = {
-        noteKey: newNoteKey(Date.now(), Math.random().toString(36).slice(2, 8)),
+        // Pure entropy: the file path (capturedOnDeviceAt stamp + this)
+        // is the note's identity now.
+        noteKey: Math.random().toString(36).slice(2, 8),
         text: input.text,
         capturedOnDeviceAt: new Date().toISOString(),
         attachments: input.files.map((file) => ({
@@ -408,7 +432,17 @@ export function NoteCaptureOverlay() {
             }}
             style={[styles.send, (!canSend || capture.isPending) && { opacity: 0.4 }]}
           >
-            <Text style={styles.sendText}>↑</Text>
+            {capture.isPending ? (
+              // The first capture provisions the notes repo + workspace and
+              // can take seconds — show it working, don't look dead.
+              <ActivityIndicator
+                accessibilityLabel="Loading"
+                color={colors.background}
+                size="small"
+              />
+            ) : (
+              <Text style={styles.sendText}>↑</Text>
+            )}
           </Pressable>
         </View>
         {capture.data === "sent" ? (

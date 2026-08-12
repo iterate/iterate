@@ -1,11 +1,12 @@
-// The notes stream processor: folds the mobile app's note-capture events
-// (events.iterate.com/notes/* on /notes — the phone's vocabulary lives in
-// apps/mobile/src/lib/notes.ts) into a per-note map, and owns the ONE side
-// effect of the domain: title/tags analysis of a note's text, run as an
-// obligation (docs/writing-stream-processors.md). Capture stays instant and
-// dumb — the phone appends notes/captured with no AI in the path; this
-// processor notices the open obligation at head and settles it with exactly
-// one notes/analysis-settled event.
+// The notes stream processor, convergence edition (tasks/mobile-notes.md
+// grill session 2): a note IS a markdown file with frontmatter in the notes
+// repo, and this processor owns the two side effects that make it more than
+// a file — title/tags ANALYSIS written back into the file's frontmatter, and
+// the git COMMIT lane that lands settled notes on the repo's main. It hosts
+// on the notes workspace's own stream (/workspaces/notes), where writers
+// append notes/* facts after their file writes (writeFile itself emits
+// nothing durable). Invariant: nothing lives only in the stream — the fold
+// holds obligations, never note content; files are truth.
 import { z } from "zod";
 import {
   defineProcessorContract,
@@ -13,6 +14,8 @@ import {
   StreamProcessor,
 } from "../../processors/index.ts";
 import type { ProcessEventArgs, ProcessorState, ReduceArgs } from "../../processors/index.ts";
+import { composeNoteFile, noteDisplayTitle, parseNoteFile } from "./frontmatter.ts";
+import { notesRepoPath } from "./ref.ts";
 
 /** Analyzes note text into a title + tags; the model id lands in `processedBy`. */
 export const NOTES_ANALYSIS_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
@@ -22,57 +25,39 @@ export const NOTES_ANALYSIS_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
  * it as expired instead of titling a stale note. */
 export const NOTES_ANALYSIS_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
-const NoteAttachment = z.object({
-  path: z.string().meta({ description: "itx.files path holding the bytes (mediaFilePath shape)." }),
-  filename: z.string(),
-  contentType: z.string(),
-  width: z.number(),
-  height: z.number(),
-});
-
-const analysisFields = {
-  title: z.string().default("").meta({
-    description: "One-line derived title; the phone falls back to the text's first line.",
-  }),
-  tags: z.array(z.string()).default([]),
-  processedBy: z.string().default("").meta({ description: "Model id that produced the analysis." }),
-};
-
-const NoteItem = z.object({
-  noteKey: z.string().meta({ description: "Client-minted unique id — the note's identity." }),
-  text: z.string(),
-  attachments: z.array(NoteAttachment).default([]),
-  capturedOnDeviceAt: z.string().nullable().default(null).meta({
-    description: "When the note was typed (ISO) — predates append for drained pending notes.",
-  }),
-  capturedEventAt: z.string().meta({ description: "Stream time the capture committed." }),
-  offset: z.number().meta({ description: "The captured event's offset — list ordering identity." }),
-  analysisError: z.string().default("").meta({ description: "Latest failed analysis, if any." }),
-  ...analysisFields,
-});
-
-export type NoteItem = z.infer<typeof NoteItem>;
+/** Quiet window between a settled fact and the git commit that sweeps every
+ * dirty note in the mount — a burst of captures lands as one commit. */
+export const NOTES_COMMIT_DEBOUNCE_MS = 10_000;
 
 const AnalysisResult = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("succeeded"), ...analysisFields }),
+  z.object({
+    status: z.literal("succeeded"),
+    title: z.string(),
+    tags: z.array(z.string()),
+    processedBy: z.string(),
+  }),
+  z.object({
+    status: z.literal("superseded"),
+    reason: z
+      .string()
+      .meta({ description: "Why nothing was written (file changed/gone/expired)." }),
+  }),
   z.object({ status: z.literal("failed"), error: z.string() }),
 ]);
 
 export const NotesProcessorContract = defineProcessorContract({
   slug: "notes",
-  version: "0.1.0",
+  version: "0.2.0",
   description:
-    "Reduces captured notes on /notes into a searchable index and settles title/tags analysis obligations.",
+    "Hosts on the notes workspace stream; settles title/tags analysis into note-file frontmatter " +
+    "and drives the settlement-debounced git commit lane. Files are truth; this fold holds only " +
+    "open obligations.",
   stateSchema: z.object({
-    notes: z
-      .record(z.string(), NoteItem)
-      .default({})
-      .meta({ description: "Live notes by noteKey; deleted notes are removed." }),
     pendingAnalyses: z
       .record(
         z.string(),
         z.object({
-          noteKey: z.string(),
+          path: z.string(),
           requestOffset: z.number(),
           expiresAtMs: z.number(),
         }),
@@ -80,69 +65,64 @@ export const NotesProcessorContract = defineProcessorContract({
       .default({})
       .meta({
         description:
-          "Open analysis obligations keyed `<noteKey>:<requestOffset>` — opened by captured/reanalyze-requested, closed by analysis-settled.",
+          "Open analysis obligations keyed `<path>:<requestOffset>` — opened by captured/updated/" +
+          "reanalyze-requested (each supersedes the note's older obligations), closed by analysis-settled.",
       }),
   }),
   events: {
     "events.iterate.com/notes/captured": {
       description:
-        "A note entered the project: text (plus optional photo attachment refs) captured on the " +
-        "phone. Appended by the mobile composer, idempotency-keyed by the client-minted noteKey. " +
-        "Opens a title/tags analysis obligation.",
-      payloadSchema: z.object({
-        noteKey: z.string(),
-        text: z.string(),
-        attachments: z.array(NoteAttachment).default([]),
-        capturedOnDeviceAt: z.string().nullable().default(null),
-      }),
+        "A note file entered the notes repo: the writer (phone composer, or any client) wrote " +
+        "`<path>` through the notes workspace and appends this fact so the list updates live and " +
+        "an analysis obligation opens. The file is the truth; this event carries only the address.",
+      payloadSchema: z.object({ path: z.string() }),
       examples: [
         {
-          description: "A plain text note.",
-          payload: {
-            noteKey: "m1abc-x7",
-            text: "Standing desk height: 76cm was right at the office",
-            attachments: [],
-            capturedOnDeviceAt: "2026-08-12T09:00:00.000Z",
-          },
+          description: "A capture from the phone composer.",
+          payload: { path: "/repos/notes/2026-08-12T15-01-20-841Z-x7ab.md" },
         },
       ],
     },
     "events.iterate.com/notes/updated": {
       description:
-        "The note's text was edited. Supersedes prior analysis: derived title/tags reset to the " +
-        "first-line fallback and a fresh obligation opens (any still-open older obligation for " +
-        "the note is dropped, so a slow stale attempt cannot overlay a title computed from the " +
-        "old text).",
-      payloadSchema: z.object({ noteKey: z.string(), text: z.string() }),
+        "The note file's body was edited (writer already rewrote the file). Supersedes the note's " +
+        "open obligations and opens a fresh one, so a slow stale attempt can neither settle nor " +
+        "write a title computed from the old text.",
+      payloadSchema: z.object({ path: z.string() }),
       examples: [
         {
           description: "A typo fixed after capture.",
-          payload: { noteKey: "m1abc-x7", text: "Standing desk height: 76cm (not 67!)" },
+          payload: { path: "/repos/notes/2026-08-12T15-01-20-841Z-x7ab.md" },
         },
       ],
     },
     "events.iterate.com/notes/reanalyze-requested": {
-      description: "Re-run title/tags analysis for one note (opens a fresh obligation).",
-      payloadSchema: z.object({ noteKey: z.string() }),
+      description: "Re-run title/tags analysis for one note (supersedes + reopens, like updated).",
+      payloadSchema: z.object({ path: z.string() }),
       examples: [
-        { description: "Re-analyze after a prompt improvement.", payload: { noteKey: "m1abc-x7" } },
+        {
+          description: "Re-analyze after a prompt improvement.",
+          payload: { path: "/repos/notes/2026-08-12T15-01-20-841Z-x7ab.md" },
+        },
       ],
     },
     "events.iterate.com/notes/analysis-settled": {
       description:
-        "Terminal settlement of one analysis obligation — success carries the title/tags, " +
-        "failure the error. Exactly one per obligation, keyed on noteKey + requestOffset.",
+        "Terminal settlement of one analysis obligation. `succeeded` means the title/tags were " +
+        "ALSO written into the file's frontmatter (the durable artifact); `superseded` means the " +
+        "body changed or the file vanished before write-back; `failed` carries the error. Exactly " +
+        "one per obligation, keyed on path + requestOffset.",
       payloadSchema: z.object({
-        noteKey: z.string(),
+        path: z.string(),
         requestOffset: z.number(),
         result: AnalysisResult,
       }),
       examples: [
         {
-          description: "A successful analysis.",
+          description: "A successful analysis, frontmatter written.",
           payload: {
-            noteKey: "m1abc-x7",
-            requestOffset: 1,
+            path: "/repos/notes/2026-08-12T15-01-20-841Z-x7ab.md",
+            requestOffset: 4,
             result: {
               status: "succeeded",
               title: "Standing desk height",
@@ -155,10 +135,15 @@ export const NotesProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/notes/deleted": {
       description:
-        "Tombstone: the note is gone from every derivation (phone list, this fold) and its open " +
-        "obligations are dropped. Attachment files are not deleted (they may be shared with /media).",
-      payloadSchema: z.object({ noteKey: z.string() }),
-      examples: [{ description: "A mistyped capture removed.", payload: { noteKey: "m1abc-x7" } }],
+        "The note file was deleted through the workspace (writer already called deleteFile). " +
+        "Open obligations drop; the commit lane lands the git deletion.",
+      payloadSchema: z.object({ path: z.string() }),
+      examples: [
+        {
+          description: "A mistyped capture removed.",
+          payload: { path: "/repos/notes/2026-08-12T15-01-20-841Z-x7ab.md" },
+        },
+      ],
     },
   },
   consumes: [
@@ -176,11 +161,21 @@ export type NotesState = ProcessorState<NotesProcessorContract>;
 
 export type NotesAnalysis = { title: string; tags: string[]; processedBy: string };
 
+/** The workspace slice the processor needs — injected so the harness fakes it
+ * with an in-memory file map and the worker wires it over itx per call. */
+export type NotesWorkspace = {
+  readFile(path: string): Promise<string | null>;
+  writeFile(path: string, content: string): Promise<void>;
+  /** Paths dirty in the notes mount (relative to git truth). */
+  dirtyNotePaths(): Promise<string[]>;
+  commit(input: { message: string; scope: string }): Promise<void>;
+};
+
 type NotesProcessorDeps = {
-  /** Text → title/tags. Injected so the harness can fake it; the worker wires
-   * it to one itx ai.run call (analysis.ts). */
   analyze: (input: { text: string }) => Promise<NotesAnalysis>;
+  workspace: NotesWorkspace;
   now: () => number;
+  sleep: (ms: number) => Promise<void>;
 };
 
 export class NotesProcessor extends StreamProcessor<NotesProcessorContract, NotesProcessorDeps> {
@@ -191,130 +186,55 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
    * caught-up pass safely restarts any still-open obligation. */
   readonly #liveAnalyses = new Set<string>();
 
+  /** Runtime-only commit-lane latch — at most one debounce+commit attempt per
+   * incarnation window. Recovery needs no evidence: every at-head pass
+   * re-derives dirtiness from the workspace itself (git status), so a
+   * dropped attempt is retried by the next batch or keepalive revival. */
+  #commitInFlight = false;
+
+  /** Opens (superseding) an analysis obligation for `path` at this event. */
+  #reopen(state: NotesState, path: string, offset: number, createdAt: string): NotesState {
+    return {
+      pendingAnalyses: {
+        // One open obligation per note: older ones are superseded so a slow
+        // stale attempt's settlement folds to a no-op (unknown-obligation
+        // guard) instead of racing this one for the frontmatter.
+        ...Object.fromEntries(
+          Object.entries(state.pendingAnalyses).filter(([, pending]) => pending.path !== path),
+        ),
+        [`${path}:${offset}`]: {
+          path,
+          requestOffset: offset,
+          // Anchored to the event's own time, not the delivery clock — a
+          // replayed frame must reduce to the same expiry.
+          expiresAtMs: Date.parse(createdAt) + NOTES_ANALYSIS_EXPIRY_MS,
+        },
+      },
+    };
+  }
+
   protected override reduce({ event, state }: ReduceArgs<NotesProcessorContract>): NotesState {
     switch (event.type) {
-      case "events.iterate.com/notes/captured": {
-        // Idempotency-keyed at the source; a duplicate folds to a no-op.
-        if (state.notes[event.payload.noteKey] !== undefined) return state;
-        return {
-          notes: {
-            ...state.notes,
-            [event.payload.noteKey]: {
-              ...event.payload,
-              capturedEventAt: event.createdAt,
-              offset: event.offset,
-              title: "",
-              tags: [],
-              processedBy: "",
-              analysisError: "",
-            },
-          },
-          pendingAnalyses: {
-            ...state.pendingAnalyses,
-            [`${event.payload.noteKey}:${event.offset}`]: {
-              noteKey: event.payload.noteKey,
-              requestOffset: event.offset,
-              // Anchored to the event's own time, not the delivery clock —
-              // a replayed frame must reduce to the same expiry.
-              expiresAtMs: Date.parse(event.createdAt) + NOTES_ANALYSIS_EXPIRY_MS,
-            },
-          },
-        };
-      }
-      case "events.iterate.com/notes/updated": {
-        const note = state.notes[event.payload.noteKey];
-        if (note === undefined) return state;
-        return {
-          notes: {
-            ...state.notes,
-            [event.payload.noteKey]: {
-              ...note,
-              text: event.payload.text,
-              // Derived garnish resets with the text it derived from; the
-              // fresh obligation below re-earns it.
-              title: "",
-              tags: [],
-              processedBy: "",
-              analysisError: "",
-            },
-          },
-          pendingAnalyses: {
-            // Older obligations for this note are superseded: dropping them
-            // makes a slow stale attempt's settlement fold to a no-op (the
-            // settled arm's unknown-obligation guard) instead of overlaying
-            // a title computed from the pre-edit text.
-            ...Object.fromEntries(
-              Object.entries(state.pendingAnalyses).filter(
-                ([, pending]) => pending.noteKey !== event.payload.noteKey,
-              ),
-            ),
-            [`${event.payload.noteKey}:${event.offset}`]: {
-              noteKey: event.payload.noteKey,
-              requestOffset: event.offset,
-              expiresAtMs: Date.parse(event.createdAt) + NOTES_ANALYSIS_EXPIRY_MS,
-            },
-          },
-        };
-      }
-      case "events.iterate.com/notes/reanalyze-requested": {
-        if (state.notes[event.payload.noteKey] === undefined) return state;
-        return {
-          ...state,
-          pendingAnalyses: {
-            // Same supersession as `updated`: one open obligation per note.
-            // A still-open older obligation (e.g. a hung attempt) is dropped
-            // so its late settlement folds to a no-op instead of racing the
-            // re-run's result for the overlay.
-            ...Object.fromEntries(
-              Object.entries(state.pendingAnalyses).filter(
-                ([, pending]) => pending.noteKey !== event.payload.noteKey,
-              ),
-            ),
-            [`${event.payload.noteKey}:${event.offset}`]: {
-              noteKey: event.payload.noteKey,
-              requestOffset: event.offset,
-              expiresAtMs: Date.parse(event.createdAt) + NOTES_ANALYSIS_EXPIRY_MS,
-            },
-          },
-        };
-      }
+      case "events.iterate.com/notes/captured":
+      case "events.iterate.com/notes/updated":
+      case "events.iterate.com/notes/reanalyze-requested":
+        return this.#reopen(state, event.payload.path, event.offset, event.createdAt);
       case "events.iterate.com/notes/analysis-settled": {
-        const obligationKey = `${event.payload.noteKey}:${event.payload.requestOffset}`;
-        // A settlement for an unknown obligation (already settled, or dropped
-        // by a delete) overlays nothing — skip rather than resurrect.
+        const obligationKey = `${event.payload.path}:${event.payload.requestOffset}`;
+        // A settlement for an unknown obligation (already settled, or
+        // superseded by a later capture/edit/delete) folds to a no-op.
         if (state.pendingAnalyses[obligationKey] === undefined) return state;
         const { [obligationKey]: _settled, ...pendingAnalyses } = state.pendingAnalyses;
-        const note = state.notes[event.payload.noteKey];
-        if (note === undefined) return { ...state, pendingAnalyses };
-        const result = event.payload.result;
-        return {
-          notes: {
-            ...state.notes,
-            [event.payload.noteKey]:
-              result.status === "succeeded"
-                ? {
-                    ...note,
-                    title: result.title,
-                    tags: result.tags,
-                    processedBy: result.processedBy,
-                    analysisError: "",
-                  }
-                : { ...note, analysisError: result.error },
-          },
-          pendingAnalyses,
-        };
+        return { pendingAnalyses };
       }
-      case "events.iterate.com/notes/deleted": {
-        const { [event.payload.noteKey]: _deleted, ...notes } = state.notes;
+      case "events.iterate.com/notes/deleted":
         return {
-          notes,
           pendingAnalyses: Object.fromEntries(
             Object.entries(state.pendingAnalyses).filter(
-              ([, pending]) => pending.noteKey !== event.payload.noteKey,
+              ([, pending]) => pending.path !== event.payload.path,
             ),
           ),
         };
-      }
       default:
         return state;
     }
@@ -339,7 +259,7 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
             type: "events.iterate.com/notes/analysis-settled",
             idempotencyKey: settlementKey,
             payload: {
-              noteKey: pending.noteKey,
+              path: pending.path,
               requestOffset: pending.requestOffset,
               result: { status: "failed", error: "Analysis obligation expired before completion." },
             },
@@ -347,9 +267,6 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
         );
         continue;
       }
-
-      const note = state.notes[pending.noteKey];
-      if (note === undefined) continue;
 
       // Registered synchronously before any await so this same pass never
       // classifies its own attempt as undriven. A dropped attempt is
@@ -359,7 +276,7 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
       runInBackground(async () => {
         let result: z.infer<typeof AnalysisResult>;
         try {
-          result = { status: "succeeded", ...(await this.deps.analyze({ text: note.text })) };
+          result = await this.#attemptAnalysis(pending.path);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           result = {
@@ -371,13 +288,78 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
           await this.#appendUnlessLostSettlementRace(append, {
             type: "events.iterate.com/notes/analysis-settled",
             idempotencyKey: settlementKey,
-            payload: { noteKey: pending.noteKey, requestOffset: pending.requestOffset, result },
+            payload: { path: pending.path, requestOffset: pending.requestOffset, result },
           });
         } finally {
           this.#liveAnalyses.delete(obligationKey);
         }
       });
     }
+
+    // The commit lane: after the debounce quiet window, sweep every dirty
+    // note in the mount into one commit. A droppable attempt — recovery is
+    // this very block on the next at-head pass (or keepalive revival):
+    // dirtiness is re-derived from the workspace itself each time, and a
+    // clean tree makes the attempt a no-op, so replays never re-commit.
+    if (!this.#commitInFlight) {
+      this.#commitInFlight = true;
+      runInBackground(async () => {
+        try {
+          await this.deps.sleep(NOTES_COMMIT_DEBOUNCE_MS);
+          const dirty = await this.deps.workspace.dirtyNotePaths();
+          if (dirty.length === 0) return;
+          await this.deps.workspace.commit({
+            message: await this.#commitMessage(dirty),
+            scope: notesRepoPath,
+          });
+        } finally {
+          this.#commitInFlight = false;
+        }
+      });
+    }
+  }
+
+  /** Read → analyze → re-read guard → frontmatter write-back. The write
+   * composes from the RE-READ file, so foreign frontmatter keys and any
+   * concurrent body edit are respected (body changed ⇒ superseded, nothing
+   * written). Idempotent-by-overwrite on redelivery. */
+  async #attemptAnalysis(path: string): Promise<z.infer<typeof AnalysisResult>> {
+    const content = await this.deps.workspace.readFile(path);
+    if (content === null) {
+      return { status: "superseded", reason: "note file no longer exists" };
+    }
+    const note = parseNoteFile(content);
+    const analysis = await this.deps.analyze({ text: note.body });
+
+    const current = await this.deps.workspace.readFile(path);
+    if (current === null) {
+      return { status: "superseded", reason: "note file deleted during analysis" };
+    }
+    const currentNote = parseNoteFile(current);
+    if (currentNote.body !== note.body) {
+      return { status: "superseded", reason: "note body changed during analysis" };
+    }
+    await this.deps.workspace.writeFile(
+      path,
+      composeNoteFile(
+        { ...currentNote.frontmatter, title: analysis.title, tags: analysis.tags },
+        currentNote.body,
+      ),
+    );
+    return { status: "succeeded", ...analysis };
+  }
+
+  /** "Standing desk height (+2 more)" — the first dirty note's display title
+   * (or its filename stem when the file is a deletion), sized to a git
+   * subject line. */
+  async #commitMessage(dirtyPaths: string[]): Promise<string> {
+    const [first] = dirtyPaths;
+    const content = first === undefined ? null : await this.deps.workspace.readFile(first);
+    const stem = (first || "").split("/").at(-1)?.replace(/\.md$/, "") || "notes";
+    const label =
+      content === null ? `remove ${stem}` : noteDisplayTitle(parseNoteFile(content)) || stem;
+    const rest = dirtyPaths.length - 1;
+    return `notes: ${label}${rest > 0 ? ` (+${rest} more)` : ""}`.slice(0, 100);
   }
 
   /** Overlapping attempts (a zombie incarnation, an expiry racing a late
@@ -394,22 +376,4 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
       if (!isIdempotencyConflict(error)) throw error;
     }
   }
-}
-
-/**
- * Search semantics shared with the phone's client-side filter
- * (apps/mobile/src/lib/notes.ts filterNotes — kept in sync by hand, the two
- * runtimes can't share a module yet): every whitespace-separated term must
- * appear in title, text, attachment filenames, or tags. Newest first.
- */
-export function searchNotes(state: NotesState, query: { q?: string; limit?: number }): NoteItem[] {
-  const terms = (query.q || "").toLowerCase().split(/\s+/).filter(Boolean);
-  return Object.values(state.notes)
-    .filter((note) => {
-      const haystack =
-        `${note.title} ${note.text} ${note.attachments.map((a) => a.filename).join(" ")} ${note.tags.join(" ")}`.toLowerCase();
-      return terms.every((term) => haystack.includes(term));
-    })
-    .sort((a, b) => b.offset - a.offset)
-    .slice(0, query.limit || 20);
 }

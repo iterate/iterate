@@ -5,6 +5,6 @@
 import type { StatefulDynamicWorkerRef } from "../../sdk.ts";
 import { notesWorkerRef as notesWorkerRefLiteral } from "./ref.ts";
 
-export { notesStreamPath } from "./ref.ts";
+export { notesRepoPath, notesWorkspacePath } from "./ref.ts";
 
 export const notesWorkerRef = notesWorkerRefLiteral satisfies StatefulDynamicWorkerRef;

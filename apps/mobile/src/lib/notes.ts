@@ -1,21 +1,28 @@
-// Notes capture: pure logic only (no Expo imports), so vitest covers it in
-// root CI. The global composer (components/note-composer.tsx) and the notes
-// screen (app/project/[projectId]/notes.tsx) wire this to the picker and itx.
-// Flow: the composer appends a notes/captured event directly (capture is
-// instant and dumb — no AI in the path); the userland NotesApp processor
-// (packages/iterate/src/starter-apps/notes) settles a title/tags analysis
-// obligation with notes/analysis-settled, which the list derivation overlays.
-// Photo attachments double-append onto /media with source "note" so the
-// media pipeline analyzes them for free (grill decision D7).
+// Notes, convergence edition: a note IS a markdown file with YAML
+// frontmatter in the project's dedicated notes repo, written through the
+// notes workspace (fast overlay writes; the server's NotesApp analyzes into
+// frontmatter and commits to git). Pure logic only (no Expo imports) so
+// vitest covers it in root CI; the composer and notes screen wire it to itx.
+//
+// The list is FILE-derived (glob + readFiles + parse — files are truth);
+// events on the workspace's stream are the live invalidation signal, not a
+// data source. Frontmatter helpers mirror the server's
+// packages/iterate/src/starter-apps/notes/frontmatter.ts by hand (the two
+// runtimes can't share a module yet — same arrangement as media's filter).
 
 import type { StreamEvent } from "iterate/sdk/itx/react";
+import * as YAML from "yaml";
 
-export const NOTES_STREAM_PATH = "/notes";
+export const NOTES_WORKSPACE_PATH = "/workspaces/notes";
+export const NOTES_REPO_PATH = "/repos/notes";
+
 export const NOTE_CAPTURED_EVENT_TYPE = "events.iterate.com/notes/captured";
 export const NOTE_UPDATED_EVENT_TYPE = "events.iterate.com/notes/updated";
 export const NOTE_ANALYSIS_SETTLED_EVENT_TYPE = "events.iterate.com/notes/analysis-settled";
 export const NOTE_REANALYZE_EVENT_TYPE = "events.iterate.com/notes/reanalyze-requested";
 export const NOTE_DELETED_EVENT_TYPE = "events.iterate.com/notes/deleted";
+/** The facts that change what the list shows — each one invalidates the
+ * file-derived list query. */
 export const NOTE_EVENT_TYPES = [
   NOTE_CAPTURED_EVENT_TYPE,
   NOTE_UPDATED_EVENT_TYPE,
@@ -32,173 +39,172 @@ export type NoteAttachment = {
   height: number;
 };
 
-export type NoteCapturedPayload = {
-  noteKey: string;
-  text: string;
-  attachments: NoteAttachment[];
-  /** When the note was typed (ISO) — predates the append for drained pending notes. */
-  capturedOnDeviceAt: string | null;
+/** `/repos/notes/2026-08-12T15-01-20-841Z-x7ab.md` — sortable by name
+ * (newest last lexicographically), collision-proofed by entropy, and
+ * deterministic per capture so a retried write hits the same path. */
+export function noteFilePath(capturedAtIso: string, entropy: string): string {
+  return `${NOTES_REPO_PATH}/${capturedAtIso.replace(/[:.]/g, "-")}-${entropy}.md`;
+}
+
+/** Only stamp-named files are notes. The notes repo is born with the project
+ * config template in it (`create({type:"empty"})` seeds it — platform quirk,
+ * flagged separately), and agents may add arbitrary files later; the list
+ * must never render ONBOARDING.md as a note. */
+export function isNoteFilePath(path: string): boolean {
+  return /^\/repos\/notes\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[^/]+\.md$/.test(path);
+}
+
+// --- frontmatter (hand-mirrored from the server module) ---
+
+export type NoteFile = {
+  frontmatter: Record<string, unknown>;
+  body: string;
 };
 
-export type NoteAnalysisSettledPayload = {
-  noteKey: string;
-  requestOffset: number;
-  result:
-    | { status: "succeeded"; title: string; tags: string[]; processedBy: string }
-    | { status: "failed"; error: string };
-};
+const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
-/** Client-minted note identity; the caller supplies time + entropy so this
- * stays a pure function. */
-export function newNoteKey(nowMs: number, entropy: string): string {
-  return `${nowMs.toString(36)}-${entropy}`;
+export function parseNoteFile(content: string): NoteFile {
+  const match = content.match(FRONTMATTER_PATTERN);
+  if (!match) return { frontmatter: {}, body: content };
+  try {
+    const parsed = YAML.parse(match[1]!);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { frontmatter: {}, body: content };
+    }
+    return { frontmatter: parsed as Record<string, unknown>, body: content.slice(match[0].length) };
+  } catch {
+    return { frontmatter: {}, body: content };
+  }
 }
 
-export function buildCapturedEvent(payload: NoteCapturedPayload) {
-  return {
-    type: NOTE_CAPTURED_EVENT_TYPE,
-    // Keyed by the note's identity so a retried append (flaky network,
-    // double-tapped send, a re-drained pending note) folds to one note.
-    idempotencyKey: `notes-captured-${payload.noteKey}`,
-    payload,
-  };
+export function composeNoteFile(frontmatter: Record<string, unknown>, body: string): string {
+  if (Object.keys(frontmatter).length === 0) return body;
+  return `---\n${YAML.stringify(frontmatter).trimEnd()}\n---\n${body}`;
 }
 
-export function buildUpdatedEvent(noteKey: string, text: string, nonce: string) {
-  return {
-    type: NOTE_UPDATED_EVENT_TYPE,
-    // Each deliberate edit is its own fact (the same text saved twice in a
-    // row still dedupes on the nonce the caller reuses per edit session).
-    idempotencyKey: `notes-updated-${noteKey}-${nonce}`,
-    payload: { noteKey, text },
-  };
-}
-
-export function buildDeletedEvent(noteKey: string) {
-  return {
-    type: NOTE_DELETED_EVENT_TYPE,
-    // Per-note, not per-invocation: deleting twice is one tombstone.
-    idempotencyKey: `notes-deleted-${noteKey}`,
-    payload: { noteKey },
-  };
-}
-
-export function buildReanalyzeEvent(noteKey: string, nonce: string) {
-  return {
-    type: NOTE_REANALYZE_EVENT_TYPE,
-    // Each deliberate re-run is its own fact.
-    idempotencyKey: `notes-reanalyze-${noteKey}-${nonce}`,
-    payload: { noteKey },
-  };
-}
+// --- the list ---
 
 export type NoteListItem = {
-  /** The captured event's offset — the row's identity in the list. */
-  offset: number;
-  capturedEventAt: string;
-  payload: NoteCapturedPayload;
-  /** Model-derived title ("" until analysis settles). */
+  /** The note's identity: its file path in the notes repo. */
+  path: string;
+  /** Frontmatter capturedAt, else nothing better than the filename stamp. */
+  capturedAt: string;
+  /** Analysis-written title ("" until it lands or when hand-removed). */
   title: string;
   tags: string[];
-  analysisError: string;
-  /** Derived title, or the text's first line while analysis is pending/failed. */
+  attachments: NoteAttachment[];
+  /** The note text (frontmatter stripped). */
+  text: string;
+  /** Title, else the text's first line — what the row shows. */
   displayTitle: string;
+  /** Every other frontmatter key (agents may add their own) — kept so edits
+   * recompose losslessly. */
+  frontmatter: Record<string, unknown>;
 };
+
+export function parseNoteListItem(path: string, content: string): NoteListItem {
+  const { frontmatter, body } = parseNoteFile(content);
+  const title = typeof frontmatter.title === "string" ? frontmatter.title.trim() : "";
+  const tags = Array.isArray(frontmatter.tags)
+    ? frontmatter.tags.filter((tag): tag is string => typeof tag === "string")
+    : [];
+  const attachments = Array.isArray(frontmatter.attachments)
+    ? frontmatter.attachments.filter(
+        (attachment: any): attachment is NoteAttachment =>
+          typeof attachment?.path === "string" && typeof attachment?.contentType === "string",
+      )
+    : [];
+  return {
+    path,
+    capturedAt:
+      typeof frontmatter.capturedAt === "string"
+        ? frontmatter.capturedAt
+        : stampFromPath(path) || "",
+    title,
+    tags,
+    attachments,
+    text: body,
+    displayTitle: title || noteFirstLine(body),
+    frontmatter,
+  };
+}
+
+/** Files → list items, newest first (the stamp-prefixed filename sorts).
+ * Non-note files (the seeded template, agent-authored extras) are skipped. */
+export function deriveNotesList(files: Record<string, string | null>): NoteListItem[] {
+  return Object.entries(files)
+    .filter((entry): entry is [string, string] => entry[1] !== null && isNoteFilePath(entry[0]))
+    .map(([path, content]) => parseNoteListItem(path, content))
+    .sort((a, b) => b.path.localeCompare(a.path));
+}
 
 export function noteFirstLine(text: string): string {
   return (text.split("\n").find((line) => line.trim() !== "") || "").trim().slice(0, 80);
 }
 
-/**
- * Captured events → list items, newest first, with the latest
- * analysis-settled success overlaid per noteKey and deleted tombstones
- * removed — the same fold the server's NotesProcessor runs.
- */
-export function deriveNotesList(events: StreamEvent[]): NoteListItem[] {
-  const notes = new Map<string, NoteListItem>();
-  // Per note, the offset of the event that produced its CURRENT text
-  // (captured or latest updated). A settlement whose requestOffset predates
-  // it was computed from superseded text — skip it, mirroring the server
-  // fold's dropped-obligation guard.
-  const textOffsets = new Map<string, number>();
-  for (const event of events) {
-    // Events arrive offset-ascending, so later facts win by iteration order.
-    if (event.type === NOTE_CAPTURED_EVENT_TYPE) {
-      const payload = event.payload as NoteCapturedPayload;
-      if (notes.has(payload.noteKey)) continue;
-      textOffsets.set(payload.noteKey, event.offset);
-      notes.set(payload.noteKey, {
-        offset: event.offset,
-        capturedEventAt: event.createdAt,
-        payload: { ...payload, attachments: payload.attachments || [] },
-        title: "",
-        tags: [],
-        analysisError: "",
-        displayTitle: noteFirstLine(payload.text),
-      });
-    } else if (event.type === NOTE_UPDATED_EVENT_TYPE) {
-      const payload = event.payload as { noteKey: string; text: string };
-      const note = notes.get(payload.noteKey);
-      if (note === undefined) continue;
-      textOffsets.set(payload.noteKey, event.offset);
-      // Derived garnish resets with the text it derived from — the fresh
-      // analysis obligation the server opens will re-earn the title.
-      notes.set(payload.noteKey, {
-        ...note,
-        payload: { ...note.payload, text: payload.text },
-        title: "",
-        tags: [],
-        analysisError: "",
-        displayTitle: noteFirstLine(payload.text),
-      });
-    } else if (event.type === NOTE_ANALYSIS_SETTLED_EVENT_TYPE) {
-      const payload = event.payload as NoteAnalysisSettledPayload;
-      const note = notes.get(payload.noteKey);
-      if (note === undefined) continue;
-      if (payload.requestOffset < (textOffsets.get(payload.noteKey) || 0)) continue;
-      if (payload.result.status === "succeeded") {
-        notes.set(payload.noteKey, {
-          ...note,
-          title: payload.result.title,
-          tags: payload.result.tags,
-          analysisError: "",
-          displayTitle: payload.result.title || noteFirstLine(note.payload.text),
-        });
-      } else {
-        notes.set(payload.noteKey, { ...note, analysisError: payload.result.error });
-      }
-    } else if (event.type === NOTE_DELETED_EVENT_TYPE) {
-      notes.delete((event.payload as { noteKey: string }).noteKey);
-    }
-  }
-  return [...notes.values()].sort((a, b) => b.offset - a.offset);
+function stampFromPath(path: string): string | null {
+  // 2026-08-12T15-01-20-841Z from the filename → best-effort ISO.
+  const stem = path.split("/").at(-1) || "";
+  const match = stem.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z/);
+  if (!match) return null;
+  return `${match[1]}T${match[2]}:${match[3]}:${match[4]}.${match[5]}Z`;
 }
 
 /**
  * Every whitespace-separated query term must appear in the title, text,
- * attachment filenames, or tags. Kept in sync by hand with the server's
- * searchNotes (starter-apps/notes/processor.ts) — the two runtimes can't
- * share a module yet.
+ * attachment filenames, or tags.
  */
 export function filterNotes(items: NoteListItem[], query: string): NoteListItem[] {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   return items.filter((item) => {
     const haystack =
-      `${item.title} ${item.payload.text} ${item.payload.attachments.map((a) => a.filename).join(" ")} ${item.tags.join(" ")}`.toLowerCase();
+      `${item.title} ${item.text} ${item.attachments.map((a) => a.filename).join(" ")} ${item.tags.join(" ")}`.toLowerCase();
     return terms.every((term) => haystack.includes(term));
   });
 }
 
-/** Read every note event, paging like lib/media.ts readAllMediaEvents. */
-export async function readAllNoteEvents(stream: {
-  getEvents: (args: { afterOffset: number; eventTypes: string[] }) => Promise<StreamEvent[]>;
-}): Promise<StreamEvent[]> {
-  const events: StreamEvent[] = [];
-  let cursor = 0;
-  while (true) {
-    const page = await stream.getEvents({ afterOffset: cursor, eventTypes: NOTE_EVENT_TYPES });
-    if (page.length === 0) return events;
-    events.push(...page);
-    cursor = page.at(-1)!.offset;
-  }
+// --- event builders (facts appended AFTER the file write) ---
+
+export function buildCapturedEvent(path: string) {
+  return {
+    type: NOTE_CAPTURED_EVENT_TYPE,
+    // Keyed by the note's identity so a retried append (flaky network,
+    // double-tapped send, a re-drained pending note) folds to one fact.
+    idempotencyKey: `notes-captured-${path}`,
+    payload: { path },
+  };
+}
+
+export function buildUpdatedEvent(path: string, nonce: string) {
+  return {
+    type: NOTE_UPDATED_EVENT_TYPE,
+    // Each deliberate edit is its own fact.
+    idempotencyKey: `notes-updated-${path}-${nonce}`,
+    payload: { path },
+  };
+}
+
+export function buildDeletedEvent(path: string) {
+  return {
+    type: NOTE_DELETED_EVENT_TYPE,
+    // Per-note, not per-invocation: deleting twice is one tombstone.
+    idempotencyKey: `notes-deleted-${path}`,
+    payload: { path },
+  };
+}
+
+export function buildReanalyzeEvent(path: string, nonce: string) {
+  return {
+    type: NOTE_REANALYZE_EVENT_TYPE,
+    // Each deliberate re-run is its own fact.
+    idempotencyKey: `notes-reanalyze-${path}-${nonce}`,
+    payload: { path },
+  };
+}
+
+/** The newest offset among note facts — the file-list query keys on this so
+ * every new fact triggers a refetch (events are the live signal; files are
+ * the data). */
+export function latestNoteFactOffset(events: StreamEvent[]): number {
+  return events.reduce((max, event) => Math.max(max, event.offset), 0);
 }
