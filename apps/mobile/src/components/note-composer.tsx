@@ -155,21 +155,25 @@ export function NoteCaptureOverlay() {
   const inProject = segmentList[0] === "project" && projectId !== "";
   // Chat has its own composer — never stack two inputs.
   const onChatScreen = segmentList.includes("chat");
-  // The sign-in screen's CTA sits where the sheet docks — the expanded
-  // composer would cover it (the notes Playwright spec caught exactly that).
-  // Capture stays reachable there via the pill; notes land in the pending
-  // queue like anywhere else outside a project.
-  const pillOnly = segmentList.length === 0 || segmentList[0] === "index";
+  // The sheet auto-expands only on LANDING surfaces — the projects list, a
+  // project's home (chat list), and the /notes screen itself — the screens
+  // you're on when "I opened the app to capture something" applies. On every
+  // other screen a docked sheet covers real content (the sign-in CTA and the
+  // notifications rows, per two Playwright-caught regressions), so those get
+  // the pill; tapping it expands the composer anywhere.
+  const autoExpands =
+    segmentList[0] === "projects" ||
+    (inProject && (segmentList.length === 2 || segmentList.at(-1) === "notes"));
 
-  // "auto" = expanded everywhere except pill-only screens; "open" = the user
-  // tapped the pill (expanded even there); "closed" = the user tapped ✕.
+  // "auto" = expanded on landing surfaces, pill elsewhere; "open" = the user
+  // tapped the pill (expanded everywhere); "closed" = the user tapped ✕.
   const open = useQuery<"auto" | "open" | "closed">({
     queryKey: composerOpenKey,
     queryFn: async () => "auto" as const,
     initialData: "auto",
     staleTime: Infinity,
   });
-  const expanded = open.data === "open" || (open.data === "auto" && !pillOnly);
+  const expanded = open.data === "open" || (open.data === "auto" && autoExpands);
   const drainGeneration = useQuery({
     queryKey: drainGenerationKey,
     queryFn: async () => 0,
