@@ -4,6 +4,7 @@
   // contract's getter signatures, so sdk declarations are emitted with plain
   // tsc instead (see the sdk entry in tsdown.config.ts + the build script).
   "files": [
+    "src/number-guards.d.ts",
     "src/annotated-markdown/index.ts",
     "src/annotated-markdown/react/index.ts",
     "src/sdk.ts",
