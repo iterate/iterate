@@ -40,11 +40,10 @@ test("toggle an svg file between Code and its sandboxed Preview", async ({
   await page.getByRole("tab", { name: "Preview" }).click();
   const preview = page.locator('iframe[title="HTML preview"]');
   // The tab changes URL-owned view state through a React transition while the
-  // usable Code pane remains on screen. There is intentionally no loading
-  // spinner, so assert the bounded eventual render rather than treating the
-  // transition as a missing product loading state.
-  // oxlint-disable-next-line middlewright/prefer-locator-waits -- React retains the usable Code pane during this search-state transition, so there is intentionally no spinner for locator.waitFor to follow.
-  await expect(preview).toBeVisible();
+  // usable Code pane remains on screen — no spinner, but the render lands
+  // well inside the spinner-waiter's 1s readiness check, so a plain
+  // locator wait covers it.
+  await preview.waitFor();
   // oxlint-disable-next-line iterate/spec-restricted-syntax -- same bounded search-state transition; this assertion also proves the rendered iframe contains the SVG source.
   await expect(preview).toHaveAttribute("srcdoc", /<circle/);
 });

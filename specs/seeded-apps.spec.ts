@@ -27,7 +27,12 @@ test("the seeded guestbook app works after creating a project", async ({
   // module. Seeing the signed note proves that the SDK's LiveState target and
   // the app's RPC root share one Cap'n Web class identity end to end.
   await page.goto(appUrl("guestbook", fixture.project.slug, baseURL!));
-  await page.getByRole("heading", { name: "Guestbook" }).waitFor({ timeout: 120_000 }); // timeout: cold worker-bundler build — far past the spinner-waiter's 30s ceiling
+  // The platform's building page is real spinner UI (data-spinner on the
+  // status widget), so raise the spinner-waiter's ceiling to the cold-build
+  // budget instead of hand-rolling a timeout.
+  await spinnerWaiter.settings.run({ spinnerTimeout: 130_000 }, async () => {
+    await page.getByRole("heading", { name: "Guestbook" }).waitFor();
+  });
 
   const note = `note-${crypto.randomUUID().slice(0, 8)}`;
   await page.getByLabel("Name").fill("Ada");
@@ -82,9 +87,11 @@ test("the seeded todo app authenticates a real project member", async ({
   );
   await page.goto(todoUrl);
   // The app's first use may still need its own cold worker start. The
-  // platform's building page is visible progress; 120s mirrors the ingress
-  // e2e's cold-build budget.
-  await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor({ timeout: 120_000 }); // timeout: cold-build budget (see note above) — far past the spinner-waiter's 30s ceiling
+  // platform's building page is visible progress — real spinner UI — so the
+  // spinner-waiter rides it with its ceiling raised to the cold-build budget.
+  await spinnerWaiter.settings.run({ spinnerTimeout: 130_000 }, async () => {
+    await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor();
+  });
   await page.getByText("This app is available to project members.").waitFor();
   const signInResponse = await signInResponsePromise;
   const overlay = page.locator("iterate-worker-status[data-iterate-worker-overlay]");
@@ -183,7 +190,11 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   docsUrl.searchParams.set("workspace", workspacePath);
   docsUrl.searchParams.set("path", documentPath);
   await page.goto(docsUrl.toString());
-  await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor({ timeout: 120_000 }); // timeout: cold-build budget — far past the spinner-waiter's 30s ceiling
+  // Same cold-build lane as the todo app above: the building page's spinner
+  // carries the wait, ceiling raised to match.
+  await spinnerWaiter.settings.run({ spinnerTimeout: 130_000 }, async () => {
+    await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor();
+  });
   await page.getByText("This app is available to project members.").waitFor();
   await page.getByRole("link", { name: "Continue with iterate" }).click({ timeout: 30_000 }); // timeout: cross-origin auth callback + cold build — spinner-waiter would fast-fail it
 
