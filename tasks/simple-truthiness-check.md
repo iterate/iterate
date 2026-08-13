@@ -136,3 +136,13 @@ Don't compare directly to `null`, `undefined`, or `NaN`.
       (agent-presence, repo-working-tree, template-reference), line
       disables elsewhere. Regenerated `examples.generated.ts` and
       `config-repo-template.generated.ts` after their sources were swept.
+  - The preview e2e caught the best class: **validation doors**.
+    `x !== undefined && (!isSafeInteger(x) || x < 0)` throws on any
+    DEFINED garbage; the sweep's `Number.isFinite(x) && ...` gate skips
+    NaN entirely — NaN bound as SQL NULL and a stream DO burned CPU
+    instead of throwing. Audited every isFinite-gated throw; restored
+    stream offset/limit doors, optimistic-concurrency expectedOffset
+    checks, and github history depth with reasoned disables. Also:
+    `tsconfig.sdk.json` (files-list config) needed `number-guards.d.ts`
+    added explicitly — it was the one program still un-narrowed, which
+    broke the publish job.
