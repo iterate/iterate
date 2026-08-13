@@ -606,7 +606,8 @@ export class StreamEventSender {
     expectedDelivery: ExpectedHostedDeliveryState,
   ): void {
     const state = this.#hooks.coreState();
-    if (!state.projectId || !state.path || !state.streamId) {
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- projectId tri-state: undefined = uninitialized stream, null = the GLOBAL namespace (a real, initialized identity)
+    if (state.projectId === undefined || !state.path || !state.streamId) {
       throw new Error("Cannot wake a hosted processor before stream identity is initialized.");
     }
     const request: StreamProcessorWakeRequest = {
@@ -890,7 +891,8 @@ export class StreamEventSender {
             ? filterFailure.event.offset - 1
             : lastOffset;
 
-          if (!state.projectId || !state.path || !state.streamId || !state.createdAt) {
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- projectId tri-state: undefined = uninitialized stream, null = the GLOBAL namespace (a real, initialized identity)
+          if (state.projectId === undefined || !state.path || !state.streamId || !state.createdAt) {
             throw new Error(`subscription "${name}" exists on an uninitialized stream`);
           }
           const streamId = state.streamId;
@@ -2238,7 +2240,12 @@ export class StreamConnections {
           connection.lastDeliveredAt = new Date(this.#hooks.now()).toISOString();
           this.#hooks.recordEgress(events.length, deliveredBytes);
           const currentState = this.#hooks.coreState();
-          if (!currentState.projectId || !currentState.path || !currentState.streamId) {
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- projectId tri-state: undefined = uninitialized stream, null = the GLOBAL namespace (a real, initialized identity)
+          if (
+            currentState.projectId === undefined ||
+            !currentState.path ||
+            !currentState.streamId
+          ) {
             throw new Error("Cannot deliver stream batch before stream identity is initialized.");
           }
           const newestCreatedAtMs =

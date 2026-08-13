@@ -95,7 +95,7 @@ export function scopeFromItxEntrypointProps(
   if (!props) {
     throw new Error("env.ITX.get() requires itx binding props with projectId, path, and purpose");
   }
-  if (props.projectId && props.projectId.trim() === "") {
+  if (typeof props.projectId === "string" && props.projectId.trim() === "") {
     throw new Error("env.ITX.get() requires a non-empty projectId (or null for the global scope)");
   }
   if (props.purpose !== "stream-delivery" && props.purpose !== "userspace") {
