@@ -1,13 +1,17 @@
 ---
-status: in-progress
+status: done-pending-review
 size: small
 branch: middlewright-0.1.5
+pr: https://github.com/iterate/iterate/pull/2492
 ---
 
 # middlewright 0.1.5 + lint rules
 
-Status: in progress. Bump the middlewright dependency from a pkg.pr.new pin to
-the just-released 0.1.5, and turn on the lint plugin's full rule set for specs.
+Status: implementation complete, awaiting review. Bumped from the pkg.pr.new
+pin to released 0.1.5 (patch retained — not upstreamed), all three lint rules
+on for specs with a 20-file require-timeout-comment legacy exclusion
+(burn-down: tasks/require-timeout-comment-ratchet.md). Lint/typecheck/knip/
+format/tests green; signup spec passed live against the bump.
 
 ## Context
 
@@ -41,10 +45,13 @@ the just-released 0.1.5, and turn on the lint plugin's full rule set for specs.
       files; annotating all with invented reasons would be noise and removing
       timeouts unvalidated is risky, so those files are excluded via a config
       override; burn-down: tasks/require-timeout-comment-ratchet.md_
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format` green —
-      _lint green (including 2 pre-existing prefer-logical-and-spread errors
-      on main in note-composer.tsx, autofixed here); rest pending_
-- [ ] run a specs smoke subset to confirm the bumped package + patch behave
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format` green — _all
+      pass, plus full `pnpm test` (2780 tests); lint fix includes 2
+      pre-existing prefer-logical-and-spread errors on main in
+      note-composer.tsx_
+- [x] run a specs smoke subset to confirm the bumped package + patch behave —
+      _signup.spec.ts passed against local dev (spinner waiter + OTP flow in
+      play)_
 
 ## Assumptions (made while Misha is AFK)
 
