@@ -80,16 +80,9 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // separate Page outside the plugged middleware (no spinner-waiter to
     // extend), and these clicks land after auth-worker navigations that run
     // cold on fresh preview deploys — CI-proven >1s.
-    // A fresh signup re-enters the authorize flow after onboarding, and
-    // re-entries can skip the /project-access "Continue" step (postLogin's
-    // shouldRedirect only fires on the initial authorize) — click it when it
-    // renders, then land on consent's "Allow access" either way.
-    const continueButton = popup.getByRole("button", { name: "Continue" });
-    const allowAccessButton = popup.getByRole("button", { name: "Allow access" });
-    await continueButton.or(allowAccessButton).first().waitFor({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
-    if (await continueButton.isVisible()) await continueButton.click();
-    await allowAccessButton.click({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
-    await page.getByText(projectSlug).click();
+    // Project selection auto-continues for test identities (project-access.tsx).
+    await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
+    // The app auto-opens the account's only project — no picker tap.
     await page.getByText("New chat").waitFor();
     const projectId = new URL(page.url()).pathname.split("/")[2]!;
 

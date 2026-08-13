@@ -75,22 +75,15 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // separate Page outside the plugged middleware (no spinner-waiter to
     // extend), and these clicks land after auth-worker navigations that run
     // cold on fresh preview deploys — CI-proven >1s.
-    // A fresh signup re-enters the authorize flow after onboarding, and
-    // re-entries can skip the /project-access "Continue" step (postLogin's
-    // shouldRedirect only fires on the initial authorize) — click it when it
-    // renders, then land on consent's "Allow access" either way.
-    const continueButton = popup.getByRole("button", { name: "Continue" });
-    const allowAccessButton = popup.getByRole("button", { name: "Allow access" });
-    await continueButton.or(allowAccessButton).first().waitFor({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
-    if (await continueButton.isVisible()) await continueButton.click();
-    await allowAccessButton.click({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
+    // Project selection auto-continues for test identities (project-access.tsx).
+    await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
 
     // Opening the project auto-enrolls this browser's approval key — no
     // manual enroll step anywhere below. The first project list rides a COLD
     // itx WebSocket to the deployment (~20-30s against preview slots) — a
     // product-latency problem worth fixing at the source, not something more
     // spinner UI can paper over.
-    await page.getByText(projectSlug).click();
+    // The app auto-opens the account's only project — no picker tap.
     await page.getByText("New chat").waitFor();
     const projectId = new URL(page.url()).pathname.split("/")[2]!;
 
