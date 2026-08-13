@@ -114,7 +114,8 @@ function webhook(input?: {
       body: {
         action,
         comment: {
-          body: !input?.commentBody ? "@iterate please review" : input.commentBody,
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- tri-state fixture: undefined = default mention text, null = native body absent
+          body: input?.commentBody === undefined ? "@iterate please review" : input.commentBody,
           html_url: "https://github.com/acme/widgets/pull/7#issuecomment-991",
           id: 991,
         },
@@ -126,7 +127,8 @@ function webhook(input?: {
           state: "open",
         },
         review: {
-          body: !input?.reviewBody ? "@iterate please review" : input.reviewBody,
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- tri-state fixture: undefined = default mention text, null = native body absent
+          body: input?.reviewBody === undefined ? "@iterate please review" : input.reviewBody,
           html_url: "https://github.com/acme/widgets/pull/7#pullrequestreview-992",
           id: 992,
         },

@@ -7,10 +7,14 @@ size: medium
 
 Follow-up to `iterate/prefer-logical-and-spread` (#2487).
 
-**Status summary:** rule + tests done (suggestion-only, `--fix-suggestions`
-applies the truthiness form). Repo-wide it flags ~3.9k sites in 589 files, so
-the fix experiment is type-aware (numbers get `Number.isFinite`, not
-truthiness) rather than a blind sweep. Fix commits in progress.
+**Status summary:** done, pending review. Rule (null/undefined/NaN + the
+`.length > 0` scope increase) + 11 tests; ~4.6k sites fixed across two sweep
+commits (type-aware codemod for the nullish half, `--fix-suggestions` for the
+length half); ~30 sites keep precise comparisons with reasoned
+oxlint-disable lines; `number-guards.d.ts` (ts-reset-style
+`Number.isFinite`/`isInteger` type guards) added per package so the isFinite
+escape hatch narrows. Typecheck/lint/knip green; test suite run pending at
+last update.
 
 ## Ask (verbatim-ish)
 
@@ -81,3 +85,49 @@ Don't compare directly to `null`, `undefined`, or `NaN`.
 - Found 2 pre-existing `prefer-logical-and-spread` errors in
   `apps/mobile/src/components/note-composer.tsx` — merge race between #2483
   and the #2487 sweep. Auto-fixed in the fixes commit.
+- **Scope increase (mid-flight ask):** `.length > 0` → `.length` and
+  `x && x.length > 0` → `x?.length` (guard collapse only when the member
+  chain is call/side-effect-free). 755 more sites, applied via
+  `--fix-suggestions` with a config arming only this rule.
+- **Findings from the sweep experiment** (the interesting part):
+  - The codemod broke its own rule: `node.value === null` (ESTree Literal)
+    became `!node.value`, making the rule flag `x === 0`/`x === false`.
+    Poster child for "null is a real value" domains → `lint/**` turns the
+    rule off in `.oxlintrc.json`.
+  - ~30 more sites keep precise comparisons + reasoned disable lines:
+    script results (documented "null is a value a script can return"),
+    kv.set validation, OpenAPI 0/false params, stableJson hashing, evlog
+    field dropping, live-state diff (undefined = removed), JSON byte
+    counting/type inference, frontmatter formatters.
+  - `Number.isFinite` doesn't narrow (lib types it `(value: unknown) =>
+    boolean`), so the escape hatch un-narrowed ~60 nullable numbers →
+    per-package `number-guards.d.ts` types it as a ts-reset-style guard.
+    SDK files compiled by scaffolded config templates (packages/iterate
+    processors) use native `typeof x === "number"` instead — foreign
+    programs don't include our ambient types.
+  - Codemod classification bug caught by audit: `string | number`
+    unions bucketed as number → `Number.isFinite(part)` silently dropped
+    string members (ci-telemetry artifact ids, sandbox `sleepAfter`
+    duration strings). Fixed with `x || x === 0` forms.
+  - Tests caught the one real behavioral regression: mobile
+    repo-working-tree, where `head`/`current` use null as "absent" while
+    `""` is real empty-file content — truthiness turned empty files into
+    deletes. Reverted with a file-level disable stating the domain rule.
+  - TS 5.5 inferred type predicates: `.filter((kid) => kid !== undefined)`
+    narrowed, `.filter((kid) => !!kid)` does not → `typeof` filter forms.
+  - Full test suite caught six more regressions, all the same shape —
+    domains where the null/undefined/'' distinction is a protocol:
+    - agent summary updates (null CLEARS a field, omission preserves —
+      `applyAgentSummaryUpdate` ended up with a dead clear branch);
+      chat-reply-notify + secret `refresh` fold had the same null-clears
+      wire semantics on single lines.
+    - `config-repo-template-reference` parser: empty ref/path is
+      present-and-invalid (must reject), not absent —
+      `github:o/r#main&path:` started parsing successfully.
+    - test fixtures with tri-state params (telegram `secretToken`, github
+      webhook `commentBody`): undefined = valid default, null = omit the
+      field — truthiness turned "missing header → 401" tests into 200s.
+    - Resolution: file-level disables for protocol files
+      (agent-presence, repo-working-tree, template-reference), line
+      disables elsewhere. Regenerated `examples.generated.ts` and
+      `config-repo-template.generated.ts` after their sources were swept.

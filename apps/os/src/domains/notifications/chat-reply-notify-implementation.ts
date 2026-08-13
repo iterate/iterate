@@ -96,7 +96,8 @@ export class ChatReplyNotifyProcessor extends StreamProcessor<ChatReplyNotifyPro
       case "events.iterate.com/agent/summary-updated": {
         // Title patches only (omission preserves, null clears) — the
         // conditional waiting-clear variant carries no title.
-        if (!("title" in event.payload) || !event.payload.title) return state;
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- null CLEARS the title (falls back downstream); only undefined/omission preserves it
+        if (!("title" in event.payload) || event.payload.title === undefined) return state;
         return { ...state, title: event.payload.title };
       }
       default:

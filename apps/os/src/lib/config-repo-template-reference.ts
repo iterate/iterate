@@ -1,3 +1,6 @@
+/* oxlint-disable iterate/simple-truthiness-check -- reference parser: an empty
+ * ref/path is PRESENT-and-invalid (must reject), not absent; truthiness would
+ * silently accept `github:owner/repo#main&path:`. */
 export type ConfigRepoTemplateReference = {
   owner: string;
   path?: string;
@@ -13,7 +16,7 @@ const GITHUB_REPO_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
 export function isSafeConfigRepoTemplatePath(path: string): boolean {
   const segments = path.split("/");
   return (
-    !!path.length &&
+    path.length > 0 &&
     !path.startsWith("/") &&
     !path.endsWith("/") &&
     !path.includes("\\") &&
@@ -35,7 +38,7 @@ export function isSafeConfigRepoTemplatePath(path: string): boolean {
  */
 export function parseConfigRepoTemplateReference(input: string): ConfigRepoTemplateReference {
   const value = input.trim();
-  if (!value.length) throw new Error("Config template reference cannot be empty.");
+  if (value.length === 0) throw new Error("Config template reference cannot be empty.");
 
   const fragmentStart = value.indexOf("#");
   if (fragmentStart !== -1 && value.indexOf("#", fragmentStart + 1) !== -1) {
@@ -95,7 +98,7 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
   let path: string | undefined;
   if (fragment?.startsWith("path:") === true) {
     path = fragment.slice("path:".length);
-  } else if (fragment) {
+  } else if (fragment !== undefined) {
     const pathSeparator = fragment.indexOf("&path:");
     if (pathSeparator === -1) ref = fragment;
     else {
@@ -104,9 +107,9 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
     }
   }
 
-  if (ref) {
+  if (ref !== undefined) {
     if (
-      !ref.length ||
+      ref.length === 0 ||
       ref.startsWith("/") ||
       ref.endsWith("/") ||
       ref.endsWith(".") ||
@@ -122,7 +125,7 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
     }
   }
 
-  if (path) {
+  if (path !== undefined) {
     if (!isSafeConfigRepoTemplatePath(path)) {
       throw new Error(`Invalid path in config template reference: ${JSON.stringify(path)}.`);
     }
@@ -130,19 +133,19 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
 
   return {
     owner,
-    ...(!path ? {} : { path }),
-    ...(!ref ? {} : { ref }),
+    ...(path === undefined ? {} : { path }),
+    ...(ref === undefined ? {} : { ref }),
     repo,
   };
 }
 
 export function formatConfigRepoTemplateReference(reference: ConfigRepoTemplateReference): string {
   const repository = `github:${reference.owner}/${reference.repo}`;
-  if (reference.ref && reference.path) {
+  if (reference.ref !== undefined && reference.path !== undefined) {
     return `${repository}#${reference.ref}&path:${reference.path}`;
   }
-  if (reference.ref) return `${repository}#${reference.ref}`;
-  if (reference.path) return `${repository}#path:${reference.path}`;
+  if (reference.ref !== undefined) return `${repository}#${reference.ref}`;
+  if (reference.path !== undefined) return `${repository}#path:${reference.path}`;
   return repository;
 }
 

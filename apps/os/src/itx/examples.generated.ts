@@ -406,7 +406,7 @@ const name = vars.sandboxName ?? "example";
 const path = "/sandboxes/" + name;
 const sandbox = itx.sandboxes.get(path);
 await sandbox.create({
-  ...(vars.instanceType === undefined ? {} : { instanceType: vars.instanceType }),
+  ...(!vars.instanceType ? {} : { instanceType: vars.instanceType }),
 });
 
 // exec runs a shell command; the first one boots the container.
@@ -459,7 +459,7 @@ const committed = await workspace.git.commit({
 });
 
 return {
-  readmePresent: readme !== null,
+  readmePresent: !!readme,
   edited,
   status,
   commitOid: committed.commitOid,
@@ -546,7 +546,7 @@ const path = vars.path ?? "README.md";
 const repo = itx.repos.get(vars.repoPath ?? "/repos/config");
 const file = await repo.readFile({ path });
 
-if (file === null) {
+if (!file) {
   return { exists: false, path };
 }
 
@@ -582,7 +582,7 @@ await repo.commitFiles({
 
 // create waits for repos/created, and commitFiles is a read-your-write boundary.
 const before = await repo.readFile({ path });
-if (before === null) throw new Error("Expected seeded file to exist.");
+if (!before) throw new Error("Expected seeded file to exist.");
 
 const edit = await repo.edit({
   path,
@@ -593,7 +593,7 @@ const edit = await repo.edit({
 
 // edit has the same read-your-write guarantee.
 const after = await repo.readFile({ path });
-if (after === null) throw new Error("Expected edited file to exist.");
+if (!after) throw new Error("Expected edited file to exist.");
 
 return {
   before: before.content,
@@ -868,7 +868,7 @@ return { record }; // ["capability-provided", "capability-revoked"]
     code: `
 const agent = itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
 const snapshot = await agent.processor.snapshot();
-if (snapshot.state.birthCertificate === null) await agent.create();
+if (!snapshot.state.birthCertificate) await agent.create();
 // The returned value is the committed stream event — the durable record
 // the agent loop reduces into its context projection.
 const sent = await agent.message(vars.message ?? "Hello from the examples catalogue");
@@ -1295,7 +1295,7 @@ const readme = await workspace.readFile(path + "/README.md");
 
 return {
   fileCount: files.paths.length,
-  readmePreview: readme === null ? null : readme.slice(0, 120),
+  readmePreview: !readme ? null : readme.slice(0, 120),
 };
 `.trim(),
   },
@@ -1640,7 +1640,7 @@ while (true) {
     afterOffset: cursor,
     eventTypes: ["events.iterate.com/media/captured", "events.iterate.com/media/processed"],
   });
-  if (page.length === 0) break;
+  if (!page.length) break;
   events.push(...page);
   cursor = page[page.length - 1].offset;
 }

@@ -97,7 +97,8 @@ export class SecretProcessor extends StreamProcessor<SecretProcessorContract> {
             : { ...event.payload.encryptedMaterial, offset: event.offset },
           updatedOffset: event.offset,
           // `refresh` present (incl. null-to-clear) replaces; omitted leaves it.
-          ...(!event.payload.refresh ? {} : { refresh: event.payload.refresh }),
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- null must REPLACE (clear) the strategy; only omission preserves it
+          ...(event.payload.refresh === undefined ? {} : { refresh: event.payload.refresh }),
         };
       case "events.iterate.com/secret/used":
         // The audit mirrors the NEWEST used fact exactly — an event without
