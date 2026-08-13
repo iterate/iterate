@@ -72,3 +72,8 @@ appends. A hang in any of those escapes every deadline and wedges the slot.
 - Reproduced the incident end-to-end from the prod stream journal (replayed
   the fold over dumped events; confirmed `openRequest` stood open with
   deliveries flowing and no settlement until a fresh incarnation booted).
+- Spec went red exactly like prod (no settlement, hung slot); fix turned it
+  green with the rest of the agents suite (169 tests) untouched.
+- Kept the `!isExecuting` guard on the RUN branch — only the EXPIRY branch
+  became unconditional; a legitimately executing attempt is still never
+  double-dialed.

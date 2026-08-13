@@ -292,10 +292,16 @@ export class AgentTurnLoop implements AgentComponent {
     // head). Runs even while paused: a committed request is drained, never
     // stranded (see the paused branch above). Expired → settle it instead,
     // with the error transcribed for the next turn: answering a stale trigger
-    // with a stale context snapshot is worse than admitting the miss.
+    // with a stale context snapshot is worse than admitting the miss. The
+    // expiry settle is UNCONDITIONAL past the horizon — even against this
+    // incarnation's own in-flight slot: a wedged attempt (a hung await the
+    // transport deadline doesn't cover) would otherwise hold isExecuting
+    // forever, and with steady unrelated deliveries keeping the DO alive no
+    // eviction ever breaks the tie (the 2026-08-13 prd incident).
     const open = state.openRequest;
-    if (open !== null && !this.#llm.isExecuting(open.requestedAtOffset)) {
+    if (open !== null) {
       if (this.#host.now() >= open.expiresAt) {
+        this.#llm.abandonExpired(open.requestedAtOffset);
         runInBackground(() =>
           appendUnlessLostIdempotencyRace(append, [
             {
@@ -315,7 +321,7 @@ export class AgentTurnLoop implements AgentComponent {
             },
           ]),
         );
-      } else {
+      } else if (!this.#llm.isExecuting(open.requestedAtOffset)) {
         this.#llm.run(args, open);
       }
     }

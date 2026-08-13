@@ -109,6 +109,23 @@ export class AgentLlmRequest implements AgentComponent {
   }
 
   /**
+   * The expiry path's teardown: a request past its horizon must settle
+   * expired even when THIS incarnation believes it is still executing it.
+   * The transport attempt self-caps at the horizon, but the run closure has
+   * awaits outside that deadline (history reads, file-URL resolution, the
+   * settlement appends) — a hang in any of them would otherwise occupy the
+   * in-flight slot forever and block the at-head expiry settle (the
+   * 2026-08-13 prd wedge). Abort and free the slot; the zombie closure's
+   * late settlement loses the shared `settle/<offset>` idempotency race and
+   * its own `signal.aborted` guards keep it from journaling anything new.
+   */
+  abandonExpired(requestOffset: number): void {
+    if (this.#inFlightLlmCall?.requestOffset !== requestOffset) return;
+    this.#inFlightLlmCall.controller.abort();
+    this.#inFlightLlmCall = null;
+  }
+
+  /**
    * The interrupt path's teardown: abort whatever this incarnation is
    * running, and hand back the streamed partial text when it belongs to the
    * given request (an in-flight call for another offset is still aborted, but
