@@ -776,7 +776,7 @@ export type CoreProcessorContract = typeof CoreProcessorContract;
 /** Durable state reduced from the events in one stream. */
 export type CoreProcessorState = z.infer<typeof CoreProcessorContract.stateSchema>;
 
-export type StreamIdentity = NonNullable<CoreProcessorState["identity"]>;
+type StreamIdentity = NonNullable<CoreProcessorState["identity"]>;
 
 /**
  * The stream's born identity, for code paths that only run after
