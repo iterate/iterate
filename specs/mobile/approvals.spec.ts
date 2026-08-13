@@ -386,13 +386,24 @@ async function decideBatch(
   answerDialog: (dialog: import("@playwright/test").Dialog) => Promise<void> | void,
 ) {
   const button = page.getByRole("button", { name: buttonName });
+  // Pin THIS batch's activity card before the press, via the ◷ it wears
+  // while its batch awaits a human (the decide dialog is the card's SIBLING,
+  // so the button itself can't anchor the lookup). Waiting for ◷ to flip to
+  // ✓/✗ on the SAME card is the product story — and it keeps a leftover
+  // glyph from an earlier lane's decision from vouching for this one.
+  const cardId = await page
+    .getByTestId(/^activity-card-/)
+    .filter({ has: page.getByLabel("approval pending", { exact: true }) })
+    // timeout: plain attribute read of already-rendered state — no spinner-waiter middleware on getAttribute; 10s guards CI jitter
+    .getAttribute("data-testid", { timeout: 10_000 });
+  const glyph = page.getByTestId(cardId!).getByLabel(outcome, { exact: true });
   for (let attempt = 0; attempt < 3; attempt++) {
     const handler = (dialog: import("@playwright/test").Dialog) =>
       void Promise.resolve(answerDialog(dialog)).catch(() => {});
     page.once("dialog", handler);
     try {
       await button.click().catch(() => {});
-      await page.getByLabel(outcome, { exact: true }).waitFor();
+      await glyph.waitFor();
       return;
     } catch {
       // Press lost or decision not landed — re-arm and press again. The
