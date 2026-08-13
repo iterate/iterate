@@ -7,6 +7,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
+import { useLiveState } from "iterate/sdk/itx/react";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { ProjectDrawerButton } from "../../../components/project-drawer.tsx";
 import { newMobileAgentPath } from "../../../lib/chat.ts";
@@ -30,6 +31,28 @@ export default function ChatListScreen() {
       return [...list].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     },
   });
+  // The catalog, LIVE: once the query above has painted the first frame (and,
+  // via getProjectItx, configured the shared session this connection reuses),
+  // the collection processor's reduced state takes over the list. Rows then
+  // track pushes — a title lands the moment an agent's first turn sets one,
+  // and chats started elsewhere (web, Slack) appear without any refetch on
+  // navigation, matching the dashboard sidebar.
+  const liveCatalog = useLiveState(
+    (itx) => itx.agents.liveState,
+    (state) => state.agents,
+    [],
+    { slug: projectId, enabled: agents.isSuccess },
+  );
+  const rows =
+    liveCatalog.value === undefined
+      ? agents.data
+      : Object.values(liveCatalog.value)
+          .map((agent) => ({
+            path: agent.path,
+            createdAt: agent.timestamps.createdAt,
+            ...(agent.summary.title === undefined ? {} : { title: agent.summary.title }),
+          }))
+          .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   const pushDevice = useQuery({
     queryKey: ["push-device", projectId],
     queryFn: async () => {
@@ -103,7 +126,7 @@ export default function ChatListScreen() {
         </View>
       ) : (
         <FlatList
-          data={agents.data}
+          data={rows}
           keyExtractor={(agent) => agent.path}
           contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
           ListEmptyComponent={

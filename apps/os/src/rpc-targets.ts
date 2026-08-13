@@ -2011,9 +2011,8 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   }
 
   get liveState(): LiveStateRpc<AgentCollectionProcessorState> {
-    return facetProcessorLiveStateRelay<AgentCollectionProcessorState>({
-      name: AgentCollectionProcessorContract.slug,
-      path: AGENT_COLLECTION_PATH,
+    return new AgentCollectionLiveStateRpcTarget({
+      auth: this.props.auth,
       projectId: this.props.projectId,
     });
   }
@@ -2073,6 +2072,61 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
       createdAt: agent.timestamps.createdAt,
       ...(agent.summary.title === undefined ? {} : { title: agent.summary.title }),
     }));
+  }
+}
+
+/**
+ * The agent catalog's live state, tolerant of the unborn collection. The
+ * `/agents` stream is born on the FIRST agent create(); before that, the
+ * facet relay's subscription lookup refuses with
+ * stream-subscription-unconfigured — which used to error every live watcher
+ * mounted on a fresh project (the dashboard sidebar, the mobile chat list)
+ * and leave it dead even after chats appeared. On exactly that refusal,
+ * append the same idempotency-keyed birth batch agent create() ensures
+ * (repeats are free) and retry once; every other error propagates untouched.
+ * Already-born projects never pay the extra append.
+ */
+class AgentCollectionLiveStateRpcTarget
+  extends IterateRpcRelay<"LiveStateRpc">
+  implements LiveStateRpc<AgentCollectionProcessorState>
+{
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+  }
+
+  #relay(): LiveStateRpc<AgentCollectionProcessorState> {
+    return facetProcessorLiveStateRelay<AgentCollectionProcessorState>({
+      name: AgentCollectionProcessorContract.slug,
+      path: AGENT_COLLECTION_PATH,
+      projectId: this.props.projectId,
+    });
+  }
+
+  async #bornThenRetry<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isUnconfiguredSubscriptionError(error)) throw error;
+      const collectionStream = new StreamRpcTarget({
+        auth: this.props.auth,
+        projectId: this.props.projectId,
+        path: AGENT_COLLECTION_PATH,
+      });
+      await collectionStream.append(
+        ...agentCollectionCreationEvents({ projectId: this.props.projectId }),
+      );
+      return await operation();
+    }
+  }
+
+  async get(): Promise<AgentCollectionProcessorState> {
+    return await this.#bornThenRetry(() => this.#relay().get());
+  }
+
+  async subscribe(
+    onUpdate: (update: LiveUpdate<AgentCollectionProcessorState>) => unknown,
+  ): Promise<LiveStateSubscriptionHandle> {
+    return await this.#bornThenRetry(() => this.#relay().subscribe(onUpdate));
   }
 }
 
