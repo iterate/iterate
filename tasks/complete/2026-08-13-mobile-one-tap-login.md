@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: small
 base: preview-one-click-login (#2485)
 ---
