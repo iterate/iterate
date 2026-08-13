@@ -1,3 +1,5 @@
+import { shouldSendPosthogEvents } from "@iterate-com/shared/posthog";
+
 // posthog-js only ever runs in the browser; the SSR branch keeps it out of the
 // server bundle.
 const loadPosthog = import.meta.env.SSR ? null : () => import("posthog-js");
@@ -52,8 +54,14 @@ function resolveBrowserUrl(url?: string) {
 }
 
 function buildPosthogInitOptions(options: SetupPosthogOptions) {
-  const sessionRecording = options.sessionRecording !== false;
+  // Non-production deployments still initialize the SDK (feature flags,
+  // toolbar) but never send events: `before_send` drops everything at egress,
+  // and session recording is off since its $snapshot events would be dropped
+  // anyway. appStage is the deployed worker name; local dev has none.
+  const sendEvents = shouldSendPosthogEvents(options.appStage);
+  const sessionRecording = options.sessionRecording !== false && sendEvents;
   return {
+    ...(!sendEvents && { before_send: () => null }),
     api_host: resolveBrowserUrl(options.proxyUrl ?? "/e"),
     ui_host: resolveBrowserUrl(options.uiHost ?? "https://eu.posthog.com"),
     defaults: "2026-06-25" as const,

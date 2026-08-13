@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: implemented
 size: small
 branch: posthog-skip-nonprod
 ---
@@ -8,9 +8,11 @@ branch: posthog-skip-nonprod
 
 ## Status summary
 
-Spec fleshed out, implementation not started. Goal: cut the PostHog bill by
-making every PostHog client in the repo a no-op outside production, with one
-shared gate so application code stays unaware.
+Implemented, all checks green, PR open (draft):
+https://github.com/iterate/iterate/pull/2494. Every PostHog client (browser,
+server exceptions, durable stream events) now gates on one shared
+`shouldSendPosthogEvents(environment)` predicate — non-prod deployments no-op
+at egress. Remaining: review.
 
 ## Motivation
 
@@ -54,19 +56,27 @@ for the browser SDK), so no feature code changes:
 
 ## Checklist
 
-- [ ] `shouldSendPosthogEvents(environment)` in `packages/shared/src/posthog/posthog.ts` + unit test
-- [ ] Browser SDK (`packages/ui/src/components/posthog.tsx`): `before_send` hook in
+- [x] `shouldSendPosthogEvents(environment)` in `packages/shared/src/posthog/posthog.ts` + unit test
+      _`prd` or `*-prd` only; tested in posthog.test.ts alongside the proxy tests_
+- [x] Browser SDK (`packages/ui/src/components/posthog.tsx`): `before_send` hook in
       `buildPosthogInitOptions` that drops every event when
       `!shouldSendPosthogEvents(appStage)`; disable session recording in that case too
-- [ ] Semaphore passes an environment identifier (`appStage`) to `AppProviders`
+      _both in `buildPosthogInitOptions`; SDK still initializes so flags/toolbar work_
+- [x] Semaphore passes an environment identifier (`appStage`) to `AppProviders`
       so its browser client goes through the same gate
-- [ ] Server exception capture (`apps/os/src/observability/posthog.ts`):
+      _new `workerName` publicValue in semaphore config, emitted as
+      `APP_CONFIG_WORKER_NAME` by generate-wrangler-config, passed in `__root.tsx`_
+- [x] Server exception capture (`apps/os/src/observability/posthog.ts`):
       early-return in `schedulePosthogException` when the gate says no
-- [ ] Durable stream events (`apps/os/src/rpc-targets.ts`
-      `PostHogIntegrationRpcTarget`): same gate next to the existing
-      `sendStreamEvents` check
-- [ ] Tests: gate behavior covered in existing posthog test files
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
+- [x] ~~Durable stream events (`apps/os/src/rpc-targets.ts`)~~ gate placed inside
+      `capturePosthogStreamEventBatch` (`apps/os/src/domains/integrations/posthog.ts`)
+      instead — it already receives `workerName` and is directly testable;
+      rpc-targets untouched
+- [x] Tests: gate behavior covered in existing posthog test files
+      _shared predicate, os observability (preview + undefined worker), stream
+      batch no-egress, browser init options in posthog-url-bootstrap.test.ts_
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
+      _all green locally 2026-08-13_
 
 ## Alternatives considered
 
@@ -78,4 +88,10 @@ for the browser SDK), so no feature code changes:
 
 ## Implementation log
 
-(added as work happens)
+- 2026-08-13: one shared predicate + four egress gates, ~40 lines of product
+  code. Notable deviation from the spec: the stream-event gate lives in
+  `capturePosthogStreamEventBatch` rather than the rpc-target, because the
+  function already takes `workerName` and its test file could cover the gate
+  directly. The os "defaults" browser test
+  (`apps/os/src/lib/posthog-url-bootstrap.test.ts`) now inits with
+  `appStage: "os-prd"` since the no-stage default is deliberately fail-closed.

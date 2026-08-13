@@ -92,6 +92,22 @@ describe("backend PostHog exception capture", () => {
     expect(sdk.shutdown).toHaveBeenCalledWith(2_000);
   });
 
+  it.each(["os-preview-3", undefined])(
+    "is disabled on non-production workers (%s) even with capture on",
+    (workerName) => {
+      const { input, pending } = captureContext();
+
+      schedulePosthogException({
+        ...input,
+        config: { ...config, cloudflare: { workerName } as AppConfig["cloudflare"] },
+        error: new Error("not sent"),
+      });
+
+      expect(pending).toEqual([]);
+      expect(sdk.construct).not.toHaveBeenCalled();
+    },
+  );
+
   it("is disabled when the public PostHog key is absent", () => {
     const { input, pending } = captureContext();
 

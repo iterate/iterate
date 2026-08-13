@@ -1,3 +1,4 @@
+import { shouldSendPosthogEvents } from "@iterate-com/shared/posthog";
 import { PostHog } from "posthog-node";
 import type { AppConfig } from "~/config.ts";
 
@@ -38,6 +39,7 @@ export async function withPosthogExceptionCapture<T>(
 export function schedulePosthogException(input: PosthogExceptionContext & { error: unknown }) {
   try {
     if (input.config.posthog?.capture !== true) return;
+    if (!shouldSendPosthogEvents(input.config.cloudflare.workerName)) return;
     const apiKey = input.config.posthog?.apiKey;
     if (!apiKey || scheduledOperations.has(input.operation)) return;
     scheduledOperations.add(input.operation);
