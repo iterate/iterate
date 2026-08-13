@@ -340,6 +340,25 @@ function getNullishComparandKind(node: any): "null" | "undefined" | "NaN" | unde
   return undefined;
 }
 
+function getLengthMember(node: any) {
+  if (node.type !== "MemberExpression" || node.computed || node.optional) return undefined;
+  if (node.property.type !== "Identifier" || node.property.name !== "length") return undefined;
+  return node;
+}
+
+/** True for a call-free, side-effect-free member chain — the only objects
+ * safe to fold into an optional chain (rewriting `f() && f().length > 0` to
+ * `f()?.length` would change how many times f runs). */
+function isSideEffectFreeChain(node: any): boolean {
+  if (node.type === "Identifier" || node.type === "ThisExpression") return true;
+  if (node.type !== "MemberExpression" || node.optional) return false;
+  if (node.computed && node.property.type !== "Identifier" && node.property.type !== "Literal") {
+    return false;
+  }
+  if (!node.computed && node.property.type !== "Identifier") return false;
+  return isSideEffectFreeChain(node.object);
+}
+
 /** True when the expression's value only ever feeds a boolean decision (an
  * if/while/ternary test or a `!`), directly or through `&&`/`||` operands.
  * There a bare truthiness operand reads best; elsewhere the boolean VALUE is
@@ -875,9 +894,9 @@ const plugin: StrictPlugin = {
         hasSuggestions: true,
         docs: {
           description:
-            "Don't compare directly to null, undefined, or NaN. Trust the types and use a " +
-            "simple truthiness check; when 0 is a meaningful value, use a positive number " +
-            "guard like Number.isFinite.",
+            "Don't compare directly to null, undefined, or NaN, and don't compare .length " +
+            "to 0. Trust the types and use a simple truthiness check; when 0 is a " +
+            "meaningful value, use a positive number guard like Number.isFinite.",
         },
       },
       create(context) {
@@ -951,8 +970,98 @@ const plugin: StrictPlugin = {
             ],
           });
         };
+        // `x.length > 0` (and `=== 0` mirrors): .length is a non-negative
+        // number, so the comparison is the truthiness check in disguise.
+        type LengthComparison = { member: any; nonEmpty: boolean };
+        const getLengthComparison = (node: any): LengthComparison | undefined => {
+          if (node?.type !== "BinaryExpression") return undefined;
+          const zeroSide =
+            node.left.type === "Literal" && node.left.value === 0
+              ? "left"
+              : node.right.type === "Literal" && node.right.value === 0
+                ? "right"
+                : undefined;
+          if (!zeroSide) return undefined;
+          const member = getLengthMember(zeroSide === "left" ? node.right : node.left);
+          if (!member) return undefined;
+          // Normalize yoda: express as `length <op> 0`.
+          const operator =
+            zeroSide === "right"
+              ? node.operator
+              : { "<": ">", ">": "<" }[node.operator as string] || node.operator;
+          if (operator === ">" || operator === "!==" || operator === "!=") {
+            return { member, nonEmpty: true };
+          }
+          if (operator === "===" || operator === "==") return { member, nonEmpty: false };
+          return undefined;
+        };
+        const reportLengthComparison = (node: any, comparison: LengthComparison) => {
+          const memberText = context.sourceCode.getText(comparison.member);
+          // `x && x.length > 0` collapses further, to `x?.length`.
+          const parent = node.parent;
+          if (
+            parent?.type === "LogicalExpression" &&
+            parent.right === node &&
+            comparison.nonEmpty === (parent.operator === "&&")
+          ) {
+            const guard =
+              parent.operator === "&&"
+                ? parent.left
+                : parent.left.type === "UnaryExpression" && parent.left.operator === "!"
+                  ? parent.left.argument
+                  : undefined;
+            if (
+              guard &&
+              isSideEffectFreeChain(comparison.member.object) &&
+              context.sourceCode.getText(guard) ===
+                context.sourceCode.getText(comparison.member.object)
+            ) {
+              const optionalChain = `${context.sourceCode.getText(comparison.member.object)}?.length`;
+              const replacement = comparison.nonEmpty
+                ? isBooleanContext(parent)
+                  ? optionalChain
+                  : `!!${optionalChain}`
+                : `!${optionalChain}`;
+              context.report({
+                node: parent,
+                message:
+                  `\`.length\` is only 0 when falsy, so this guarded comparison is an ` +
+                  `optional-chained truthiness check in disguise: \`${replacement}\`.`,
+                suggest: [
+                  {
+                    desc: `Use truthiness: ${replacement}`,
+                    fix: (fixer: Rule.RuleFixer) => fixer.replaceText(parent, replacement),
+                  },
+                ],
+              });
+              return;
+            }
+          }
+          const replacement = comparison.nonEmpty
+            ? isBooleanContext(node)
+              ? memberText
+              : `!!${memberText}`
+            : `!${memberText}`;
+          context.report({
+            node,
+            message:
+              `\`.length\` is a non-negative number, so comparing it to 0 is a truthiness ` +
+              `check in disguise: \`${replacement}\`.`,
+            suggest: [
+              {
+                desc: `Use truthiness: ${replacement}`,
+                fix: (fixer: Rule.RuleFixer) => fixer.replaceText(node, replacement),
+              },
+            ],
+          });
+        };
         return {
           BinaryExpression(node: any) {
+            const lengthComparison = getLengthComparison(node);
+            if (lengthComparison) {
+              reportLengthComparison(node, lengthComparison);
+              return;
+            }
             const comparison = getComparison(node);
             if (!comparison) return;
 

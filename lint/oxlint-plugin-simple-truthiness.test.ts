@@ -167,6 +167,92 @@ test("handles yoda comparisons", () => {
   assert.match(fixture.read("yoda.ts"), /if \(a\) console\.log\(a\);/);
 });
 
+test("collapses .length comparisons to truthiness checks", () => {
+  using fixture = createOxlintFixture();
+  fixture.write(
+    "length.ts",
+    [
+      "declare const items: string[], name: string;",
+      "if (items.length > 0) console.log(items[0]);",
+      "if (items.length === 0) console.log('empty');",
+      "if (items.length !== 0) console.log('has items');",
+      "if (0 < name.length) console.log(name);",
+      "export const hasItems = items.length > 0;",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["--fix-suggestions", "length.ts"]);
+  assert.equal(
+    fixture.read("length.ts"),
+    [
+      "declare const items: string[], name: string;",
+      "if (items.length) console.log(items[0]);",
+      "if (!items.length) console.log('empty');",
+      "if (items.length) console.log('has items');",
+      "if (name.length) console.log(name);",
+      "export const hasItems = !!items.length;",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("collapses guarded .length comparisons to optional chains", () => {
+  using fixture = createOxlintFixture();
+  fixture.write(
+    "guarded-length.ts",
+    [
+      "declare const items: string[] | undefined;",
+      "declare const box: { parts?: number[] };",
+      "if (items && items.length > 0) console.log(items[0]);",
+      "if (box.parts && box.parts.length > 0) console.log(box.parts[0]);",
+      "if (!items || items.length === 0) console.log('nothing');",
+      "export const hasItems = items && items.length > 0;",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["--fix-suggestions", "guarded-length.ts"]);
+  assert.equal(
+    fixture.read("guarded-length.ts"),
+    [
+      "declare const items: string[] | undefined;",
+      "declare const box: { parts?: number[] };",
+      "if (items?.length) console.log(items[0]);",
+      "if (box.parts?.length) console.log(box.parts[0]);",
+      "if (!items?.length) console.log('nothing');",
+      "export const hasItems = !!items?.length;",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("leaves risky or meaningful length comparisons alone", () => {
+  using fixture = createOxlintFixture();
+  fixture.write(
+    "length-ok.ts",
+    [
+      "declare const items: string[];",
+      "declare function fetchAll(): string[];",
+      "declare const i: number;",
+      "declare const grid: string[][];",
+      "export const checks = [",
+      "  items.length > 1,", // 1 is a real threshold, not a truthiness check
+      "  items.length === 2,",
+      "  fetchAll() && fetchAll().length > 0,", // call: collapsing would change evaluation count
+      "  grid[i++] && grid[i++].length > 0,", // computed member with side effects
+      "];",
+      "",
+    ].join("\n"),
+  );
+
+  const result = fixture.runOxlint(["length-ok.ts"], { expectFailure: true });
+  // The two call/side-effect guards still flag the bare comparison (fixable on
+  // its own) but must NOT collapse into an optional chain.
+  assert.doesNotMatch(result.stdout + result.stderr, /fetchAll\(\)\?\./);
+  assert.doesNotMatch(result.stdout + result.stderr, /grid\[i\+\+\]\?\./);
+});
+
 test("leaves non-nullish comparisons alone", () => {
   using fixture = createOxlintFixture();
   fixture.write(
