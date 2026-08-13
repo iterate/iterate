@@ -227,6 +227,70 @@ test("collapses guarded .length comparisons to optional chains", () => {
   );
 });
 
+test("flips negated ternary conditions", () => {
+  using fixture = createOxlintFixture();
+  fixture.write(
+    "negated-ternary.ts",
+    [
+      "declare const frontmatter: RegExpExecArray | null;",
+      "declare const flag: boolean;",
+      "export const bodyOffset = !frontmatter ? 0 : frontmatter[0].length;",
+      "export const doubled = !!flag ? 'on' : 'off';",
+      "export const fine = flag ? 'on' : 'off';",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["--fix-suggestions", "negated-ternary.ts"]);
+  assert.equal(
+    fixture.read("negated-ternary.ts"),
+    [
+      "declare const frontmatter: RegExpExecArray | null;",
+      "declare const flag: boolean;",
+      "export const bodyOffset = frontmatter ? frontmatter[0].length : 0;",
+      "export const doubled = flag ? 'on' : 'off';",
+      "export const fine = flag ? 'on' : 'off';",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("collapses && member guards to optional chains in boolean contexts", () => {
+  using fixture = createOxlintFixture();
+  fixture.write(
+    "and-member.ts",
+    [
+      "declare const entry: { revokedAt?: string } | undefined;",
+      "declare const box: { inner?: { deep?: string } };",
+      "declare const other: boolean;",
+      "declare function load(): { ok?: boolean } | undefined;",
+      "if (entry && entry.revokedAt) console.log('revoked');",
+      "if (other && entry && entry.revokedAt) console.log('both');",
+      "if (box.inner && box.inner.deep) console.log(box.inner.deep);",
+      "if (load() && load().ok) console.log('never collapse calls');",
+      "export const value = entry && entry.revokedAt;", // value position: left as-is
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["--fix-suggestions", "and-member.ts"]);
+  assert.equal(
+    fixture.read("and-member.ts"),
+    [
+      "declare const entry: { revokedAt?: string } | undefined;",
+      "declare const box: { inner?: { deep?: string } };",
+      "declare const other: boolean;",
+      "declare function load(): { ok?: boolean } | undefined;",
+      "if (entry?.revokedAt) console.log('revoked');",
+      "if (other && entry?.revokedAt) console.log('both');",
+      "if (box.inner?.deep) console.log(box.inner.deep);",
+      "if (load() && load().ok) console.log('never collapse calls');",
+      "export const value = entry && entry.revokedAt;",
+      "",
+    ].join("\n"),
+  );
+});
+
 test("leaves explicit emptiness ternaries alone", () => {
   using fixture = createOxlintFixture();
   fixture.write(

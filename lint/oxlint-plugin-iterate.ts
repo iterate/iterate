@@ -894,8 +894,9 @@ const plugin: StrictPlugin = {
         hasSuggestions: true,
         docs: {
           description:
-            "Don't compare directly to null, undefined, or NaN, and don't compare .length " +
-            "to 0. Trust the types and use a simple truthiness check; when 0 is a " +
+            "Don't compare directly to null, undefined, or NaN, don't compare .length to 0, " +
+            "don't negate a ternary condition, and don't write `x && x.y` guards where `x?.y` " +
+            "does the job. Trust the types and use a simple truthiness check; when 0 is a " +
             "meaningful value, use a positive number guard like Number.isFinite.",
         },
       },
@@ -1099,6 +1100,94 @@ const plugin: StrictPlugin = {
             }
 
             report(node, comparison);
+          },
+          // `!x ? y : z` reads as "if not x then y else z" — flip it. The
+          // doubled form `!!x ? y : z` just sheds its bangs.
+          ConditionalExpression(node: any) {
+            const test = node.test;
+            if (test.type !== "UnaryExpression" || test.operator !== "!") return;
+            const doubled =
+              test.argument.type === "UnaryExpression" && test.argument.operator === "!";
+            const operand = doubled ? test.argument.argument : test.argument;
+            // A ternary test binds looser than everything but these; unwrapped
+            // they'd reassociate (`x = f() ? z : y`) or fail to parse.
+            const operandNeedsParens =
+              operand.type === "ConditionalExpression" ||
+              operand.type === "AssignmentExpression" ||
+              operand.type === "SequenceExpression" ||
+              operand.type === "ArrowFunctionExpression" ||
+              operand.type === "YieldExpression";
+            const operandText = operandNeedsParens
+              ? `(${context.sourceCode.getText(operand)})`
+              : context.sourceCode.getText(operand);
+            const consequentText = context.sourceCode.getText(node.consequent);
+            const alternateText = context.sourceCode.getText(node.alternate);
+            const replacement = doubled
+              ? `${operandText} ? ${consequentText} : ${alternateText}`
+              : `${operandText} ? ${alternateText} : ${consequentText}`;
+            // Comments between the kept spans (e.g. beside the `?`) would be
+            // dropped by the rewrite — report without a suggestion then.
+            const wouldDropComment = context.sourceCode.getAllComments().some((comment: any) => {
+              if (!comment.range || !node.range) return false;
+              const inside = (range: [number, number]) =>
+                comment.range[0] >= range[0] && comment.range[1] <= range[1];
+              return (
+                inside(node.range) &&
+                !inside(operand.range) &&
+                !inside(node.consequent.range) &&
+                !inside(node.alternate.range)
+              );
+            });
+            context.report({
+              node: test,
+              message:
+                `Don't negate a ternary condition — "if not x then y else z" makes the reader ` +
+                `swap the arms in their head. Flip it: \`${replacement.length > 80 ? `${operandText} ? … : …` : replacement}\`.`,
+              ...(!wouldDropComment && {
+                suggest: [
+                  {
+                    desc: doubled ? "Drop the double negation" : "Flip the ternary",
+                    fix: (fixer: Rule.RuleFixer) => fixer.replaceText(node, replacement),
+                  },
+                ],
+              }),
+            });
+          },
+          // `x && x.y` in a boolean context is an optional chain in disguise:
+          // `x?.y`. Only side-effect-free chains collapse (a call on either
+          // side would change how many times it runs).
+          LogicalExpression(node: any) {
+            if (node.operator !== "&&") return;
+            if (!isBooleanContext(node)) return;
+            const member = node.right;
+            if (member.type !== "MemberExpression" || member.optional) return;
+            if (!isSideEffectFreeChain(member.object)) return;
+            // In `a && b && b.c` the guard is the nearest && operand, not the
+            // whole left subtree.
+            const guard =
+              node.left.type === "LogicalExpression" && node.left.operator === "&&"
+                ? node.left.right
+                : node.left;
+            const normalize = (text: string) => text.replaceAll("?.", ".");
+            const guardText = context.sourceCode.getText(guard);
+            if (normalize(guardText) !== normalize(context.sourceCode.getText(member.object))) {
+              return;
+            }
+            const propertyText = member.computed
+              ? `?.[${context.sourceCode.getText(member.property)}]`
+              : `?.${member.property.name}`;
+            const replacement = `${guardText}${propertyText}`;
+            context.report({
+              node,
+              message: `\`${guardText} && ${normalize(guardText)}${propertyText.slice(1)}\` is an optional chain in disguise: \`${replacement}\`.`,
+              suggest: [
+                {
+                  desc: `Use optional chaining: ${replacement}`,
+                  fix: (fixer: Rule.RuleFixer) =>
+                    fixer.replaceTextRange([guard.range[0], member.range[1]], replacement),
+                },
+              ],
+            });
           },
         };
       },
