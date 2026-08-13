@@ -70,16 +70,14 @@ function buildPosthogInitOptions(options: SetupPosthogOptions) {
     mask_all_element_attributes: true,
     mask_all_text: true,
     strict_script_versioning: true,
-    ...(sessionRecording
-      ? {
-          session_recording: {
-            maskAllInputs: true,
-            maskTextSelector: "*",
-            recordBody: false,
-            recordHeaders: false,
-          },
-        }
-      : {}),
+    ...(sessionRecording && {
+      session_recording: {
+        maskAllInputs: true,
+        maskTextSelector: "*",
+        recordBody: false,
+        recordHeaders: false,
+      },
+    }),
     loaded: options.appStage
       ? (client: import("posthog-js").PostHogInterface) => {
           client.register({

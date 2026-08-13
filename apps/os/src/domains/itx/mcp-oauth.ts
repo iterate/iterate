@@ -153,9 +153,9 @@ export async function beginMcpOAuth(input: BeginMcpOAuthInput): Promise<BeginMcp
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
-      ...(input.scope ? { scope: input.scope } : {}),
+      ...(input.scope && { scope: input.scope }),
     },
-    ...(input.scope ? { scope: input.scope } : {}),
+    ...(input.scope && { scope: input.scope }),
     fetchFn,
   }).catch((cause: unknown) => {
     throw new McpOAuthError(
@@ -170,17 +170,17 @@ export async function beginMcpOAuth(input: BeginMcpOAuthInput): Promise<BeginMcp
     metadata: authMetadata,
     clientInformation: clientInfo,
     redirectUrl: input.redirectUri,
-    ...(input.scope ? { scope: input.scope } : {}),
-    ...(resource ? { resource } : {}),
+    ...(input.scope && { scope: input.scope }),
+    ...(resource && { resource }),
   });
 
   const state: MCPOAuthState = {
     v: "mcp-oauth-1",
     projectId: input.projectId,
     path: input.path,
-    ...(input.notify ? { notify: input.notify } : {}),
+    ...(input.notify && { notify: input.notify }),
     mcpUrl: input.mcpUrl,
-    ...(resource ? { resource: resource.toString() } : {}),
+    ...(resource && { resource: resource.toString() }),
     redirectUri: input.redirectUri,
     authServerUrl,
     clientId: clientInfo.client_id,
@@ -225,8 +225,8 @@ export async function completeMcpOAuth(
     authorizationCode: input.code,
     codeVerifier: state.codeVerifier,
     redirectUri: state.redirectUri,
-    ...(state.resource ? { resource: new URL(state.resource) } : {}),
-    ...(input.iss ? { iss: input.iss } : {}),
+    ...(state.resource && { resource: new URL(state.resource) }),
+    ...(input.iss && { iss: input.iss }),
     fetchFn: input.fetchFn,
   }).catch((cause: unknown) => {
     throw new McpOAuthError(`token exchange failed: ${errorText(cause)}`);
@@ -238,12 +238,12 @@ export async function completeMcpOAuth(
 
   return {
     path: state.path,
-    ...(state.notify ? { notify: state.notify } : {}),
+    ...(state.notify && { notify: state.notify }),
     mcpUrl: state.mcpUrl,
     secret: {
       material: {
         accessToken: tokens.access_token,
-        ...(tokens.refresh_token ? { refreshToken: tokens.refresh_token } : {}),
+        ...(tokens.refresh_token && { refreshToken: tokens.refresh_token }),
         // client_id is required to refresh a public client (RFC 6749 §6).
         clientId: state.clientId,
       },

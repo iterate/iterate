@@ -1203,7 +1203,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         ...(args.idempotencyKey === undefined ? {} : { idempotencyKey: args.idempotencyKey }),
         configuration: {
           ...(args.name === undefined ? {} : { name: args.name }),
-          ...(args.description?.trim() ? { description: args.description.trim() } : {}),
+          ...(args.description?.trim() && { description: args.description.trim() }),
           ...(args.filter === undefined ? {} : { filter: args.filter }),
           receiver: {
             action: "copy-to-stream",
@@ -2942,7 +2942,7 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
         path,
         egress: egressOrigins,
         ...(input.description === undefined ? {} : { description: input.description }),
-        ...(scopePath.startsWith("/agents/") ? { notify: scopePath } : {}),
+        ...(scopePath.startsWith("/agents/") && { notify: scopePath }),
       },
     });
     return { path, url };
@@ -4447,7 +4447,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       request: {
         ...input,
         attachments,
-        ...(thread !== null && input.replyTo === undefined ? { replyTo: thread.replyTo } : {}),
+        ...(thread !== null && input.replyTo === undefined && { replyTo: thread.replyTo }),
       },
     });
     const { from, messageId } = await this.#deliver({
@@ -6795,12 +6795,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       }).sourceText,
       children: {
         ...PROJECT_BUILTIN_BLIPS,
-        ...(scopePath.startsWith("/agents/")
-          ? {
-              agent: "THIS agent's control surface (present because this is an agent scope).",
-              chat: "THIS agent's web-chat door.",
-            }
-          : {}),
+        ...(scopePath.startsWith("/agents/") && {
+          agent: "THIS agent's control surface (present because this is an agent scope).",
+          chat: "THIS agent's web-chat door.",
+        }),
       },
       parent: scopePath === "/" ? "session.projects" : `the project-root itx (scope "/")`,
       // Dynamic mounts only: the builtins are already the `children` map, and
@@ -8909,9 +8907,9 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
       mcpUrl: input.url,
       path,
       redirectUri: `${baseUrl.replace(/\/$/, "")}/api/mcp-oauth/callback`,
-      ...(input.scope ? { scope: input.scope } : {}),
+      ...(input.scope && { scope: input.scope }),
       // An agent scope gets messaged when the user finishes signing in.
-      ...(this.props.scopePath.startsWith("/agents/") ? { notify: this.props.scopePath } : {}),
+      ...(this.props.scopePath.startsWith("/agents/") && { notify: this.props.scopePath }),
       projectId: this.props.projectId,
       encryptionKey: env.SECRET_ENCRYPTION_KEY,
       fetchFn: fetchLikeFromFetcher(this.props.egress),
@@ -8928,7 +8926,7 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
   get exa(): McpClientRpc {
     const hasPlatformKey = parseConfig(env).integrations.exa !== undefined;
     return McpClientRpcTarget.createLazyClient(
-      { url: EXA_MCP_URL, ...(hasPlatformKey ? { headers: EXA_PLATFORM_KEY_HEADER } : {}) },
+      { url: EXA_MCP_URL, ...(hasPlatformKey && { headers: EXA_PLATFORM_KEY_HEADER }) },
       {
         description: {
           instructions:

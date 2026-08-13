@@ -190,8 +190,8 @@ export async function decide(input: {
     approvalRequestEventOffset: input.offset,
     verdicts: [...input.verdicts],
     decidedBy: "human" as const,
-    ...(reason ? { reason } : {}),
-    ...(signs ? { keyId: input.key!.keyId, signature } : {}),
+    ...(reason && { reason }),
+    ...(signs && { keyId: input.key!.keyId, signature }),
   };
   // The exact submission is replay-safe, while a corrected verdict, key, or
   // signature remains a new attempt after the door ignores an invalid one.

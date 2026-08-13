@@ -67,15 +67,15 @@ export async function create(options: CreateOptions = {}) {
     ? {
         kind: "admin" as const,
         operatorId,
-        ...(options.returnTo ? { returnTo: options.returnTo } : {}),
-        ...(options.ttlSeconds ? { ttlSeconds: options.ttlSeconds } : {}),
+        ...(options.returnTo && { returnTo: options.returnTo }),
+        ...(options.ttlSeconds && { ttlSeconds: options.ttlSeconds }),
       }
     : {
         kind: "project" as const,
         operatorId,
         project: project!,
-        ...(options.returnTo ? { returnTo: options.returnTo } : {}),
-        ...(options.ttlSeconds ? { ttlSeconds: options.ttlSeconds } : {}),
+        ...(options.returnTo && { returnTo: options.returnTo }),
+        ...(options.ttlSeconds && { ttlSeconds: options.ttlSeconds }),
       };
 
   const response = await fetch(new URL("/api/operator-sessions", baseUrl), {

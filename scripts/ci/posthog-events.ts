@@ -87,7 +87,7 @@ export function systemEvent(
 ): PostHogEvent {
   return {
     event,
-    ...(timestamp ? { timestamp } : {}),
+    ...(timestamp && { timestamp }),
     uuid: deterministicEventUuid(insertId),
     properties: {
       distinct_id: distinctId,

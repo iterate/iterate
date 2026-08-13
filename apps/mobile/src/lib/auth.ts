@@ -125,7 +125,7 @@ export async function signIn(baseUrl: string, options: { loginHint?: string } = 
       // which prefills it — and, for `*+test@nustom.com` on deployments with
       // the test OTP enabled, signs in with it automatically (preview QR
       // deep links carry a per-PR test identity).
-      ...(options.loginHint ? { login_hint: options.loginHint } : {}),
+      ...(options.loginHint && { login_hint: options.loginHint }),
     },
   });
   console.log(`[auth] prompting: redirectUri=${REDIRECT_URI} clientId=${clientId}`);

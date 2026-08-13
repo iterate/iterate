@@ -35,9 +35,9 @@ async function setup({
         slackTeamId: "T1",
         body: {
           type: "event_callback",
-          ...(mentionBot
-            ? { authorizations: [{ is_bot: true, user_id: "UBOT", bot_id: "BBOT" }] }
-            : {}),
+          ...(mentionBot && {
+            authorizations: [{ is_bot: true, user_id: "UBOT", bot_id: "BBOT" }],
+          }),
           event: {
             type: "message",
             channel,

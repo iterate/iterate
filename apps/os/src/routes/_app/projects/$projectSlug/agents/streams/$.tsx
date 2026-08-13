@@ -125,7 +125,7 @@ function ProjectAgentDetailContent() {
     // feed shows a single message and the agent gets one turn trigger.
     const { event } = await itx.agents.get(streamPath).addFiles({
       files: await filesToAgentPayload(files),
-      ...(message ? { message } : {}),
+      ...(message && { message }),
     });
     return event;
   }

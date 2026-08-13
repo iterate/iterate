@@ -506,17 +506,17 @@ export function buildProjectEmailMessage(input: {
   });
   const references = (request.references ?? []).map(angleBracketed).join(" ");
   const headers: Record<string, string> = {
-    ...(request.inReplyTo ? { "In-Reply-To": angleBracketed(request.inReplyTo) } : {}),
-    ...(references ? { References: references } : {}),
+    ...(request.inReplyTo && { "In-Reply-To": angleBracketed(request.inReplyTo) }),
+    ...(references && { References: references }),
   };
   return {
     from: { email: from, name: projectName },
     to: request.to,
     subject: request.subject,
-    ...(request.text ? { text: request.text } : {}),
-    ...(request.html ? { html: request.html } : {}),
-    ...(replyTo ? { replyTo } : {}),
-    ...(Object.keys(headers).length > 0 ? { headers } : {}),
-    ...(attachments.length > 0 ? { attachments } : {}),
+    ...(request.text && { text: request.text }),
+    ...(request.html && { html: request.html }),
+    ...(replyTo && { replyTo }),
+    ...(Object.keys(headers).length > 0 && { headers }),
+    ...(attachments.length > 0 && { attachments }),
   };
 }

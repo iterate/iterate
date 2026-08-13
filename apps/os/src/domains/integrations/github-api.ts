@@ -36,7 +36,7 @@ export function connectionOctokit(input: {
   const placeholder = `Bearer ${githubAccessTokenPlaceholder(input.connection)}`;
   const egress = projectStub(itxEnv.PROJECT, input.projectId);
   return new Octokit({
-    ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+    ...(input.baseUrl && { baseUrl: input.baseUrl }),
     // Disable Octokit's own retry paths: replaying an opaque write after a
     // 5xx/429/408 can duplicate a comment or review. The connection Secret DO
     // may still refresh credentials and repeat once after a 401; that narrow

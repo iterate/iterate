@@ -179,7 +179,7 @@ async function handleMcpOAuthCallback(input: {
     });
     const result = await completeMcpOAuth(state, {
       code,
-      ...(iss ? { iss } : {}),
+      ...(iss && { iss }),
       fetchFn: fetchLikeFromFetcher(egress),
     });
     const secret = itxEnv.SECRET.getByName(

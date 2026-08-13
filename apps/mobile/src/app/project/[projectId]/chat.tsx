@@ -170,7 +170,7 @@ export default function ChatScreen() {
           data: base64ToUint8Array(file.base64),
           filename: file.filename,
         })),
-        ...(input.message ? { message: input.message } : {}),
+        ...(input.message && { message: input.message }),
       });
       return added.event.offset;
     },

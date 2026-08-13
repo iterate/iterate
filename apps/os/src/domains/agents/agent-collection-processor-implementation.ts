@@ -99,9 +99,10 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
               timestamps: {
                 ...previous.timestamps,
                 summaryUpdatedAt: source.createdAt,
-                ...(activityChanged
-                  ? { activityUpdatedAt: source.createdAt, lastWorkAt: source.createdAt }
-                  : {}),
+                ...(activityChanged && {
+                  activityUpdatedAt: source.createdAt,
+                  lastWorkAt: source.createdAt,
+                }),
               },
             },
           },
