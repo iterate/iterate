@@ -32,13 +32,13 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
 
   await test.step("tab one connects as a client", async () => {
     await page.goto(`/projects/${slug}/repl`);
-    await expect.poll(connectedOsAppClients, { timeout: 60_000, intervals: [500] }).toHaveLength(1);
+    await expect.poll(connectedOsAppClients, { timeout: 60_000, intervals: [500] }).toHaveLength(1); // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
   });
 
   const pageTwo = await context.newPage();
   await test.step("tab two is a SECOND client", async () => {
     await pageTwo.goto(`/projects/${slug}/integrations`);
-    await expect.poll(connectedOsAppClients, { timeout: 60_000, intervals: [500] }).toHaveLength(2);
+    await expect.poll(connectedOsAppClients, { timeout: 60_000, intervals: [500] }).toHaveLength(2); // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
   });
   const bothPaths = await connectedOsAppClients();
 
@@ -68,7 +68,7 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
             throw error;
           }
         },
-        { timeout: 15_000 },
+        { timeout: 15_000 }, // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
       )
       .toBe("ready");
     if (url === undefined) throw new Error(`client ${clientPath} reported ready without a URL`);
@@ -89,7 +89,7 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
     using host = project.clients.get(ofPageTwo);
     // @ts-expect-error - dynamic capability member
     await host.capabilities.browser.navigate(`/projects/${slug}/repl`);
-    await expect.poll(() => pageTwo.url(), { timeout: 15_000 }).toMatch(replUrl);
+    await expect.poll(() => pageTwo.url(), { timeout: 15_000 }).toMatch(replUrl); // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
     // Tab one stays on its own tag, unchanged.
     await expect.poll(() => page.url()).toMatch(replUrl);
   });
@@ -99,7 +99,7 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
     // @ts-expect-error - dynamic capability member
     await host.capabilities.browser.navigate(`/projects/${slug}/settings`);
     await expect
-      .poll(() => page.url(), { timeout: 15_000 })
+      .poll(() => page.url(), { timeout: 15_000 }) // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
       .toMatch(new RegExp(`/projects/${slug}/settings`));
     await expect.poll(() => pageTwo.url()).toMatch(replUrl);
   });
@@ -116,14 +116,14 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
       window.sessionStorage.setItem("iterate-os-app-tab-key", key);
     }, copiedKey);
     await pageThree.goto(`/projects/${slug}/reactivity`);
-    await expect.poll(connectedOsAppClients, { timeout: 60_000, intervals: [500] }).toHaveLength(3);
+    await expect.poll(connectedOsAppClients, { timeout: 60_000, intervals: [500] }).toHaveLength(3); // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
     await pageThree.close();
   });
 
   await test.step("closing tab two flips exactly its client to disconnected", async () => {
     await pageTwo.close();
     await expect
-      .poll(connectedOsAppClients, { timeout: 60_000, intervals: [1_000] })
+      .poll(connectedOsAppClients, { timeout: 60_000, intervals: [1_000] }) // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
       .toEqual([ofPage]);
   });
 });

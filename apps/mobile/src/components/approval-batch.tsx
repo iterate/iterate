@@ -257,12 +257,22 @@ export function ApprovalBatchActions({
   baseUrl,
   offset,
   onDecided,
+  onDecideStarted,
   payload,
   projectId,
 }: {
   baseUrl: string;
   offset: number;
   onDecided: () => void;
+  /** Fires when the human COMMITS a decision — after any reject-reason
+   * prompt, immediately before the decision event is appended — so the
+   * mounting surface can pin state that must not race the live stream echo
+   * of the decision. One soft edge: the approve lane's Face ID prompt lives
+   * inside the signing step, so a cancelled sign still fires this; a
+   * recorded offset only matters if the batch later closes as a HUMAN
+   * decision (this human's other device), where showing the outcome is
+   * fine — expiry closes never act on it. */
+  onDecideStarted: () => void;
   payload: RequestedPayload;
   projectId: string;
 }) {
@@ -280,7 +290,12 @@ export function ApprovalBatchActions({
       );
       if (decision === "reject") {
         const reason = await promptForRejectReason(payload.requests.length);
-        if (reason === null) return "cancelled"; // leave the batch held
+        if (reason === null) return "cancelled"; // leave the batch held — nothing recorded
+        // After the human committed, before the append: once the decided
+        // event is on the stream, the live subscription's echo can re-render
+        // the surface ahead of any of this mutation's observer callbacks
+        // (which die silently if that re-render unmounts us).
+        onDecideStarted();
         await decide({
           stream,
           projectId,
@@ -293,6 +308,11 @@ export function ApprovalBatchActions({
         return "decided";
       }
       if (!enrolledKey) throw new Error("Enroll this device before approving.");
+      // Same pre-append pinning as the reject lane. The Face ID prompt lives
+      // inside decide()'s sign step, so a cancelled sign leaves the offset
+      // recorded — inert unless another of this human's devices later closes
+      // the batch (see the onDecideStarted prop docs).
+      onDecideStarted();
       await decide({
         stream,
         projectId,
@@ -333,9 +353,18 @@ export function ApprovalBatchActions({
         >
           <Text style={styles.approveText}>
             {respond.isPending
-              ? "Signing…"
+              ? // "Deciding…" while a reject is in flight: rejections never
+                // sign, so "Signing…" would misdescribe them. Both forms match
+                // the anythinging… loading convention.
+                respond.variables === "approve"
+                ? "Signing…"
+                : "Deciding…"
               : decided
-                ? "Decided"
+                ? // Still in-progress copy on purpose: the decision landed but
+                  // the authoritative record hasn't ridden the stream back yet
+                  // (that's when the outcome badge takes this button's place).
+                  // The anythinging… form marks the wait as live progress.
+                  "Recording decision…"
                 : enrolledKey === null
                   ? "Enroll to approve"
                   : single

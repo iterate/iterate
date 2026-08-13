@@ -65,7 +65,11 @@ export async function openRepoTreeFile(page: Page, path: string) {
         await row.click();
         return (await row.getAttribute("aria-selected")) === "true" ? "selected" : "not selected";
       },
-      { message: `open repo tree file: ${path}`, timeout: 30_000 },
+      {
+        message: `open repo tree file: ${path}`,
+        // timeout: expect.poll's own budget — polling sits outside locator actions, so no spinner-waiter applies
+        timeout: 30_000,
+      },
     )
     .toBe("selected");
 }

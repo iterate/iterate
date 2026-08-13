@@ -30,16 +30,16 @@ test("empty agent feeds distinguish waiting from filtered zero matches", async (
       )
       .toBe("receiving-events");
 
-    await page.getByText("Waiting for events…", { exact: true }).waitFor({ timeout: 5_000 });
+    await page.getByText("Waiting for events…", { exact: true }).waitFor({ timeout: 5_000 }); // timeout: manual — spinner-waiter sits this spec out (the asserted "Waiting for events…" text is itself spinner-shaped)
     await page.getByText("Nothing here yet").waitFor({ state: "hidden" });
     await page.getByText("No events on this agent stream yet.").waitFor({ state: "hidden" });
 
     await agent.create();
     await agent.chat.sendMessage("The agent is ready.");
-    await page.getByText("The agent is ready.", { exact: true }).waitFor({ timeout: 30_000 });
+    await page.getByText("The agent is ready.", { exact: true }).waitFor({ timeout: 30_000 }); // timeout: manual — spinner-waiter sits this spec out (the asserted "Waiting for events…" text is itself spinner-shaped)
     await page
       .getByText("Waiting for events…", { exact: true })
-      .waitFor({ state: "hidden", timeout: 30_000 });
+      .waitFor({ state: "hidden", timeout: 30_000 }); // timeout: manual — spinner-waiter sits this spec out (the asserted "Waiting for events…" text is itself spinner-shaped)
 
     await page.goto(
       `/projects/${fixture.project.slug}/agents/streams${agentPath}?q=definitely-no-match`,
@@ -47,7 +47,7 @@ test("empty agent feeds distinguish waiting from filtered zero matches", async (
     const filteredEmpty = page.locator('[data-slot="empty"]').filter({
       hasText: "Nothing matches the current filters",
     });
-    await filteredEmpty.waitFor({ timeout: 30_000 });
+    await filteredEmpty.waitFor({ timeout: 30_000 }); // timeout: manual — spinner-waiter sits this spec out (the asserted "Waiting for events…" text is itself spinner-shaped)
     await filteredEmpty.getByRole("status", { name: "Loading" }).waitFor({ state: "hidden" });
     await page.getByText("Waiting for events…", { exact: true }).waitFor({ state: "hidden" });
   });
@@ -77,13 +77,13 @@ test("a cold stream stays pending until its server history catches up", async ({
   await page.goto(`/projects/${fixture.project.slug}/streams${streamPath}`);
   await page
     .getByRole("button", { name: "Append events (⌘↵)", disabled: false })
-    .waitFor({ timeout: 30_000 });
+    .waitFor({ timeout: 30_000 }); // timeout: the spec throttles every WS frame by 1s on purpose — a real delay the spinner-waiter should not paper over
   await page.getByText("Connecting to the stream", { exact: true }).waitFor();
   await page.getByText("Nothing here yet").waitFor({ state: "hidden" });
   await page
     .getByTestId("stream-feed-inspect")
     .filter({ hasText: "spec/cold-history" })
-    .waitFor({ timeout: 30_000 });
+    .waitFor({ timeout: 30_000 }); // timeout: same deliberate 1s-per-frame WS throttle, outside the spinner-waiter's remit
 });
 
 test("a cached stream opens before its live connection", async ({ baseURL, helpers, page }) => {
@@ -105,14 +105,14 @@ test("a cached stream opens before its live connection", async ({ baseURL, helpe
   // Warm the real OPFS mirror, then make only the next /api WebSocket look
   // like a very slow network: it opens but never returns an ITX frame.
   await page.goto(route);
-  await cachedRow.waitFor({ timeout: 30_000 });
+  await cachedRow.waitFor({ timeout: 30_000 }); // timeout: cold first load warming the OPFS mirror — no loading UI marks it for the spinner-waiter
 
   // The first tab holds the mirror lock; the follower's own ITX transport can still write.
   const follower = await page.context().newPage();
   await follower.goto(route);
   await follower
     .getByRole("button", { name: "Append events (⌘↵)", disabled: false })
-    .waitFor({ timeout: 30_000 });
+    .waitFor({ timeout: 30_000 }); // timeout: fresh tab's full connect — no loading UI marks it for the spinner-waiter
   await follower.close();
 
   let restoreConnections = false;
@@ -127,7 +127,7 @@ test("a cached stream opens before its live connection", async ({ baseURL, helpe
 
   await page.reload();
 
-  await cachedRow.waitFor({ timeout: 5_000 });
+  await cachedRow.waitFor({ timeout: 5_000 }); // timeout: deliberately TIGHT — cache-first render must beat the stalled live socket, so the spinner-waiter must not stretch this
   await page.getByTestId("stream-cache-status").waitFor();
   await page.getByRole("button", { name: "Append events (⌘↵)", disabled: true }).waitFor();
   await expect.poll(() => stalledSockets.length).toBeGreaterThan(0);
@@ -138,7 +138,7 @@ test("a cached stream opens before its live connection", async ({ baseURL, helpe
       socket.close({ code: 1012, reason: "restore the test connection" }),
     ),
   );
-  await page.getByTestId("stream-cache-status").waitFor({ state: "hidden", timeout: 30_000 });
+  await page.getByTestId("stream-cache-status").waitFor({ state: "hidden", timeout: 30_000 }); // timeout: reconnect after forced socket close — the cache badge is the loading UI, so the spinner-waiter can't also wait on it
   await page.getByRole("button", { name: "Append events (⌘↵)", disabled: false }).waitFor();
   await expect.poll(() => cachedRow.count()).toBe(1);
 });

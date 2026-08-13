@@ -161,10 +161,14 @@ test("rows carry the approval batch identity: top-level field, legacy destinatio
 
 test("an open batch with no device row becomes a needs-approval row above the device rows", () => {
   const deviceRows = deriveDeviceNotifications([intentRequested(2, {})]); // points at batch 17
-  const list = deriveNotificationListRows(deviceRows, [
-    approvalRequested(17),
-    approvalRequested(40), // nothing on this device points at batch 40
-  ]);
+  const list = deriveNotificationListRows(
+    deviceRows,
+    [
+      approvalRequested(17),
+      approvalRequested(40), // nothing on this device points at batch 40
+    ],
+    new Set(),
+  );
   expect(list).toMatchObject([
     {
       kind: "needs-approval",
@@ -183,16 +187,16 @@ test("an open batch with no device row becomes a needs-approval row above the de
 
 test("a batch any device row points at is the device row's business — no synthetic duplicate", () => {
   const deviceRows = deriveDeviceNotifications([intentRequested(2, {})]); // batch 17
-  const list = deriveNotificationListRows(deviceRows, [approvalRequested(17)]);
+  const list = deriveNotificationListRows(deviceRows, [approvalRequested(17)], new Set());
   expect(list).toMatchObject([{ kind: "device", approvalRequestEventOffset: 17 }]);
 });
 
 test("a decided orphan batch mirrors the retired screen: rejected disappears, approved lingers until settled", () => {
   const events = [approvalRequested(40), approvalDecided(41, 40, ["reject"])];
-  expect(deriveNotificationListRows([], events)).toEqual([]);
+  expect(deriveNotificationListRows([], events, new Set())).toEqual([]);
 
   const approvedEvents = [approvalRequested(40), approvalDecided(41, 40, ["approve"])];
-  expect(deriveNotificationListRows([], approvedEvents)).toMatchObject([
+  expect(deriveNotificationListRows([], approvedEvents, new Set())).toMatchObject([
     {
       kind: "needs-approval",
       approvalRequestEventOffset: 40,
@@ -200,7 +204,57 @@ test("a decided orphan batch mirrors the retired screen: rejected disappears, ap
     },
   ]);
   expect(
-    deriveNotificationListRows([], [...approvedEvents, approvalSettled(42, 40, 0, 200)]),
+    deriveNotificationListRows([], [...approvedEvents, approvalSettled(42, 40, 0, 200)], new Set()),
+  ).toEqual([]);
+});
+
+test("a batch decided from this screen lingers with its outcome instead of vanishing", () => {
+  // All-reject normally closes the batch instantly — but the human who just
+  // pressed Reject must see the outcome, not a disappearing row.
+  const rejectedEvents = [approvalRequested(40), approvalDecided(41, 40, ["reject"])];
+  expect(deriveNotificationListRows([], rejectedEvents, new Set([40]))).toMatchObject([
+    {
+      kind: "needs-approval",
+      approvalRequestEventOffset: 40,
+      title: "Approval needed",
+      status: { kind: "decided", label: "Rejected" },
+    },
+  ]);
+
+  // Same for a fully settled approval: "awaiting release" flips to the
+  // outcome rather than leaving the list.
+  const approvedEvents = [
+    approvalRequested(40),
+    approvalDecided(41, 40, ["approve"]),
+    approvalSettled(42, 40, 0, 200),
+  ];
+  expect(deriveNotificationListRows([], approvedEvents, new Set([40]))).toMatchObject([
+    {
+      kind: "needs-approval",
+      approvalRequestEventOffset: 40,
+      status: { kind: "decided", label: "Approved" },
+    },
+  ]);
+
+  // Still-open batches are untouched by the set: an approved-but-unsettled
+  // batch keeps its awaiting-release treatment.
+  expect(
+    deriveNotificationListRows(
+      [],
+      [approvalRequested(40), approvalDecided(41, 40, ["approve"])],
+      new Set([40]),
+    ),
+  ).toMatchObject([{ status: { kind: "needs-approval", label: "Decided — awaiting release" } }]);
+
+  // The set records commit ATTEMPTS (pinned before the decision event
+  // lands), and an abandoned attempt's batch can still close by expiry —
+  // nobody decided that, so it must not wear a decided row.
+  expect(
+    deriveNotificationListRows(
+      [],
+      [approvalRequested(40), approvalDecided(41, 40, ["reject"], "expiry")],
+      new Set([40]),
+    ),
   ).toEqual([]);
 });
 
@@ -208,6 +262,7 @@ test("an expired undecided batch never surfaces as a needs-approval row", () => 
   const list = deriveNotificationListRows(
     [],
     [approvalRequested(40, { expiresAt: "2020-01-01T00:00:00Z" })],
+    new Set(),
   );
   expect(list).toEqual([]);
 });
@@ -227,6 +282,7 @@ test("orphan batches sort newest first and a burst reads like the server's push 
         })),
       }),
     ],
+    new Set(),
   );
   expect(list).toMatchObject([
     {
@@ -271,13 +327,14 @@ function approvalDecided(
   offset: number,
   approvalRequestEventOffset: number,
   verdicts: ("approve" | "reject")[],
+  decidedBy: "human" | "expiry" = "human",
 ): StreamEvent {
   return {
     type: APPROVAL_EVENT.decided,
     offset,
     createdAt: "2026-07-18T09:01:00.000Z",
     path: "/",
-    payload: { approvalRequestEventOffset, verdicts, decidedBy: "human" },
+    payload: { approvalRequestEventOffset, verdicts, decidedBy },
   } as StreamEvent;
 }
 

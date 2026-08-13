@@ -34,16 +34,17 @@ test("the REPL creates no session stream until the first Run", async ({
     // Deliberate settle window: an accidental wake (a read connection, a
     // preamble fetch) would journal stream/created within this.
     await page.waitForTimeout(1_500);
-    await expect.poll(replStreams, { timeout: 5_000 }).toEqual([]);
+    await expect.poll(replStreams, { timeout: 5_000 }).toEqual([]); // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
   });
 
   await test.step("the first Run births exactly one stream, at the URL's path", async () => {
     await page.getByTestId("itx-repl-editor").locator(".cm-content").fill("1 + 1");
     await page.getByRole("button", { name: "Run", exact: true }).click();
+    // timeout: the first Run does cold-project scope birth + typecheck + worker spin-up — far past the spinner-waiter's 30s ceiling
     await page
       .locator('[data-entry-index="0"][data-status="success"]')
       .waitFor({ timeout: 90_000 });
     const sessionSuffix = new URL(page.url()).pathname.split("/repl/")[1]!;
-    await expect.poll(replStreams, { timeout: 30_000 }).toEqual([`/repl/${sessionSuffix}`]);
+    await expect.poll(replStreams, { timeout: 30_000 }).toEqual([`/repl/${sessionSuffix}`]); // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
   });
 });

@@ -262,6 +262,9 @@
         "iterate/no-vi-mock": "error",
         "iterate/prefer-object-property-match": "error",
         "iterate/prefer-test-over-it": "error",
+        "middlewright/prefer-locator-waits": "error",
+        "middlewright/prefer-positive-waits": "error",
+        "middlewright/require-timeout-comment": "error",
         "no-restricted-imports": [
           "error",
           {
@@ -282,17 +285,6 @@
       "files": ["apps/os/src/rpc-targets.ts"],
       "rules": {
         "iterate/mechanical-class-impl": "error"
-      }
-    },
-    {
-      "files": [
-        "specs/mobile/media.spec.ts",
-        "specs/mobile/integrations.spec.ts",
-        "specs/mobile/expected-backend-mismatch.spec.ts",
-        "specs/mobile/expected-backend-signin.spec.ts"
-      ],
-      "rules": {
-        "middlewright/require-timeout-comment": "error"
       }
     }
   ]

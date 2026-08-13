@@ -381,6 +381,7 @@ function CodeStepTabs({
                         ? styles.approvedBadge
                         : styles.rejectedBadge,
                     ]}
+                    testID="approval-decision-badge"
                   >
                     {batch.resolved.decisionSummary}
                   </Text>
