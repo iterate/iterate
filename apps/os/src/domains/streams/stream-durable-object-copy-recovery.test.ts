@@ -754,9 +754,7 @@ describe("StreamDurableObject reconciliation recovery", () => {
       await context.settle();
 
       expect(recovered.runtimeState().coreProcessorState).toMatchObject({
-        projectId: beforeRebuild.projectId,
-        path: beforeRebuild.path,
-        streamId: beforeRebuild.streamId,
+        identity: beforeRebuild.identity,
         eventCount: beforeRebuild.eventCount + 1,
         maxOffset: beforeRebuild.maxOffset + 1,
       });
@@ -816,7 +814,10 @@ describe("StreamDurableObject reconciliation recovery", () => {
         stateVersion: CORE_STATE_VERSION,
         state: {
           ...authoritative,
-          streamId: "22222222-2222-4222-8222-222222222222",
+          identity: {
+            ...authoritative.identity!,
+            streamId: "22222222-2222-4222-8222-222222222222",
+          },
         },
       });
 
@@ -824,7 +825,9 @@ describe("StreamDurableObject reconciliation recovery", () => {
       await context.waitForInitialization();
       await context.settle();
 
-      expect(recovered.runtimeState().coreProcessorState.streamId).toBe(authoritative.streamId);
+      expect(recovered.runtimeState().coreProcessorState).toMatchObject({
+        identity: { streamId: authoritative.identity?.streamId },
+      });
       expect(context.getKv("coreStateRebuild")).toBeUndefined();
       expect(loggedError).toHaveBeenCalledWith(
         "stream core-state checkpoint was invalid; rebuilt from the event log",

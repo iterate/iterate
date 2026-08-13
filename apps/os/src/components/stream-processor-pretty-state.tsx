@@ -39,6 +39,7 @@ export function CorePrettyState({
   }
 
   const childPaths = Array.isArray(core.childPaths) ? core.childPaths : [];
+  const identity = readRuntimeRecord(core.identity);
   const subscriptions = readRuntimeRecord(core.subscriptions);
   const outbound = readRuntimeRecord(subscriptions?.outbound);
   const outboundByName = readRuntimeRecord(outbound?.byName) ?? {};
@@ -85,17 +86,17 @@ export function CorePrettyState({
         />
       </div>
 
-      {!core.path && !core.projectId ? null : (
+      {identity ? (
         <div className="rounded-xl bg-muted/40 px-3 py-2">
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">Stream</div>
           <div className="mt-1 break-all font-mono text-xs">
-            {String(core.projectId ?? "global")} {String(core.path ?? "")}
+            {String(identity.projectId ?? "global")} {String(identity.path ?? "")}
           </div>
-          {typeof core.createdAt !== "string" ? null : (
-            <div className="mt-1 text-xs text-muted-foreground">{core.createdAt}</div>
-          )}
+          {typeof identity.createdAt === "string" ? (
+            <div className="mt-1 text-xs text-muted-foreground">{identity.createdAt}</div>
+          ) : null}
         </div>
-      )}
+      ) : null}
 
       {paused || Number.isFinite(trippedAtOffset) ? (
         <div className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">

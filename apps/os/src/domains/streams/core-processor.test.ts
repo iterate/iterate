@@ -43,7 +43,14 @@ function streamSubscription(
 }
 
 function coreState(path = RECEIVER_PATH): CoreProcessorState {
-  return CoreProcessorContract.stateSchema.parse({ projectId: PROJECT_ID, path });
+  return CoreProcessorContract.stateSchema.parse({
+    identity: {
+      projectId: PROJECT_ID,
+      path,
+      streamId: "33333333-3333-4333-8333-333333333333",
+      createdAt: "2026-07-21T10:00:00.000Z",
+    },
+  });
 }
 
 test("ephemeral events advance the stream head without changing durable core aggregates", () => {
@@ -610,8 +617,12 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       ]),
     );
     const full = CoreProcessorContract.stateSchema.parse({
-      projectId: PROJECT_ID,
-      path: SOURCE_PATH,
+      identity: {
+        projectId: PROJECT_ID,
+        path: SOURCE_PATH,
+        streamId: "33333333-3333-4333-8333-333333333333",
+        createdAt: "2026-07-21T10:00:00.000Z",
+      },
       subscriptions: {
         inbound: { bySourcePath: {} },
         outbound: { byName: sending },
@@ -1018,7 +1029,14 @@ describe("StreamCoreProcessor validation and dispatch", () => {
 
   test("rejects a webhook subscription on a stream without a project", () => {
     const processor = new StreamCoreProcessor({ projectId: null });
-    const state = CoreProcessorContract.stateSchema.parse({ projectId: null, path: "/global" });
+    const state = CoreProcessorContract.stateSchema.parse({
+      identity: {
+        projectId: null,
+        path: "/global",
+        streamId: "33333333-3333-4333-8333-333333333333",
+        createdAt: "2026-07-21T10:00:00.000Z",
+      },
+    });
     expect(() =>
       processor.validate({
         event: {

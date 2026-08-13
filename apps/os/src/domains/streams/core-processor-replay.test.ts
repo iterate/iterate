@@ -159,7 +159,7 @@ const VERSION_31_COMMITTED_EVENTS: StreamEvent[] = [
 
 describe("core processor version 31 committed-event replay", () => {
   test("version 31 parses and reduces one frozen event of every owned type", () => {
-    expect(CORE_STATE_VERSION).toBe(31);
+    expect(CORE_STATE_VERSION).toBe(32);
     expect(new Set(VERSION_31_COMMITTED_EVENTS.map((event) => event.type))).toEqual(
       new Set(Object.keys(CoreProcessorContract.events)),
     );
@@ -197,10 +197,12 @@ describe("core processor version 31 committed-event replay", () => {
     expect(states.get(15)?.subscriptions.outbound.byName[SUBSCRIPTION_NAME]).toBeUndefined();
 
     expect(state).toMatchObject({
-      projectId: PROJECT_ID,
-      path: STREAM_PATH,
-      streamId: STREAM_ID,
-      createdAt: "2026-07-21T12:00:01.000Z",
+      identity: {
+        projectId: PROJECT_ID,
+        path: STREAM_PATH,
+        streamId: STREAM_ID,
+        createdAt: "2026-07-21T12:00:01.000Z",
+      },
       incarnationId: "incarnation-1",
       maxOffset: VERSION_31_COMMITTED_EVENTS.at(-1)?.offset,
       eventCount: VERSION_31_COMMITTED_EVENTS.length,

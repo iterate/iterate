@@ -387,8 +387,7 @@ describe("stream capnweb protocol", () => {
     await waitFor(() => callback.batches.length === 2, 1_000);
     const runtime = await stream.stream.runtimeState();
     const coreProcessorState = runtime.coreProcessorState as {
-      projectId: string | null;
-      path: string;
+      identity: { projectId: string | null; path: string };
     };
 
     expect(callback.batches).toEqual([
@@ -397,7 +396,7 @@ describe("stream capnweb protocol", () => {
           type: "events.iterate.com/stream/created",
           offset: 1,
           payload: {
-            projectId: coreProcessorState.projectId,
+            projectId: coreProcessorState.identity.projectId,
             path,
             streamId: expect.any(String),
           },

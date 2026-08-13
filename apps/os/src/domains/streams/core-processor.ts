@@ -226,7 +226,7 @@ export class StreamCoreProcessor {
       }
       if (
         event.payload.receiver.action === "copy-to-stream" &&
-        event.payload.receiver.receivingStreamPath === args.state.path
+        event.payload.receiver.receivingStreamPath === args.state.identity?.path
       ) {
         throw new Error("a stream cannot receive events from itself");
       }
@@ -424,10 +424,12 @@ export class StreamCoreProcessor {
         }
         return {
           ...next,
-          projectId: event.payload.projectId,
-          path: event.payload.path,
-          streamId: event.payload.streamId,
-          createdAt: event.createdAt,
+          identity: {
+            projectId: event.payload.projectId,
+            path: event.payload.path,
+            streamId: event.payload.streamId,
+            createdAt: event.createdAt,
+          },
         };
       }
       case "events.iterate.com/stream/woken": {
@@ -600,10 +602,10 @@ export class StreamCoreProcessor {
       }
       case "events.iterate.com/stream/child-stream-created": {
         const event = parseCoreEvent(args.event, "events.iterate.com/stream/child-stream-created");
-        if (!next.path) {
+        if (!next.identity) {
           return next;
         }
-        const childPath = immediateChildPath(next.path, event.payload.childPath);
+        const childPath = immediateChildPath(next.identity.path, event.payload.childPath);
         if (!childPath || next.childPaths.includes(childPath)) {
           return next;
         }

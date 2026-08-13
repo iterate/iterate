@@ -77,7 +77,13 @@ import { EventFilter } from "./event-filter.ts";
 // `expression`, own-DO or userspace-worker placement). Facet vs remote is now
 // the action, not a `placement` field; the wake lane survives only for
 // `wake-processor`.
-export const CORE_STATE_VERSION = 31;
+// Version 32 groups the stream's identity into ONE optional `identity` object
+// (projectId/path/streamId/createdAt, set together by stream/created at
+// offset 1). Four independently-optional fields made "uninitialized" a
+// per-field undefined check that was too easy to conflate with the projectId
+// null (= global namespace) sentinel; now `!state.identity` is the single
+// truthiness gate and projectId inside is plainly `string | null`.
+export const CORE_STATE_VERSION = 32;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -412,10 +418,16 @@ export const CoreProcessorContract = defineProcessorContract({
   version: "0.1.0",
   description: "Maintains the stream's own reduced state.",
   stateSchema: z.object({
-    projectId: z.string().trim().min(1).nullable().optional(),
-    path: z.string().trim().min(1).optional(),
-    streamId: z.uuid().optional(),
-    createdAt: z.string().optional(),
+    /** Set as one unit by stream/created (offset 1); absent only before birth.
+     * `projectId: null` is the GLOBAL namespace — a real, initialized identity. */
+    identity: z
+      .object({
+        projectId: z.string().trim().min(1).nullable(),
+        path: z.string().trim().min(1),
+        streamId: z.uuid(),
+        createdAt: z.string(),
+      })
+      .optional(),
     incarnationId: z.string().trim().min(1).optional(),
     /** Durable events folded so far. `maxOffset` also includes ephemeral offset gaps. */
     eventCount: z.number().int().min(0).default(0),

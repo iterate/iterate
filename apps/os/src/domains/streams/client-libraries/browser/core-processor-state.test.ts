@@ -12,10 +12,12 @@ import { parseBrowserCoreProcessorState } from "./core-processor-state.ts";
 describe("parseBrowserCoreProcessorState", () => {
   it("extracts the stream ID and maxOffset from a full core state", () => {
     const coreProcessorState = CoreProcessorContract.stateSchema.parse({
-      projectId: "prj_1",
-      path: "/agents/bla",
-      streamId: "11111111-1111-4111-8111-111111111111",
-      createdAt: "2026-07-01T00:00:00.000Z",
+      identity: {
+        projectId: "prj_1",
+        path: "/agents/bla",
+        streamId: "11111111-1111-4111-8111-111111111111",
+        createdAt: "2026-07-01T00:00:00.000Z",
+      },
       incarnationId: "b3aa1c8e-0000-0000-0000-000000000000",
       maxOffset: 42,
       eventCount: 42,
@@ -39,7 +41,7 @@ describe("parseBrowserCoreProcessorState", () => {
     expect(() => parseBrowserCoreProcessorState(null)).toThrow();
     expect(() => parseBrowserCoreProcessorState({ maxOffset: "42" })).toThrow();
     expect(() =>
-      parseBrowserCoreProcessorState({ streamId: "not-a-uuid", maxOffset: 1 }),
+      parseBrowserCoreProcessorState({ identity: { streamId: "not-a-uuid" }, maxOffset: 1 }),
     ).toThrow();
     expect(() => parseBrowserCoreProcessorState({ maxOffset: -1 })).toThrow();
   });

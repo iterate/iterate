@@ -4730,10 +4730,9 @@ export type EditWorkspaceFileResult = {
 
 /** Durable state reduced from the events in one stream. */
 export type CoreProcessorState = {
-  projectId?: string | null | undefined;
-  path?: string | undefined;
-  streamId?: string | undefined;
-  createdAt?: string | undefined;
+  identity?:
+    | { projectId: string | null; path: string; streamId: string; createdAt: string }
+    | undefined;
   incarnationId?: string | undefined;
   eventCount: number;
   maxOffset: number;

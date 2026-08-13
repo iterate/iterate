@@ -817,8 +817,8 @@ test("configuring a subscription commits on the source alone; the receiver learn
       subscriptionName
     ],
   ).toMatchObject({
-    streamId: sourceState.streamId,
-    streamCreatedAt: sourceState.createdAt,
+    streamId: sourceState.identity?.streamId,
+    streamCreatedAt: sourceState.identity?.createdAt,
     cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
     numEventsReceived: 1,
   });
@@ -968,8 +968,8 @@ test.skipIf(!deployedBaseUrl())(
       timeoutMs: 15_000,
     });
     const firstSourceState = coreState(await source.runtimeState());
-    const firstSourceId = firstSourceState.streamId;
-    const firstSourceCreation = firstSourceState.createdAt;
+    const firstSourceId = firstSourceState.identity?.streamId;
+    const firstSourceCreation = firstSourceState.identity?.createdAt;
     expect(firstSourceId).toBeDefined();
     expect(firstSourceCreation).toBeDefined();
     expect(firstCopy.source?.copiedFrom?.at(-1)).toMatchObject({
@@ -981,9 +981,9 @@ test.skipIf(!deployedBaseUrl())(
 
     await forceStreamReset(source).catch(() => undefined);
     const secondSourceState = coreState(await source.runtimeState());
-    expect(secondSourceState.streamId).toBeDefined();
-    expect(secondSourceState).not.toMatchObject({ streamId: firstSourceId });
-    expect(secondSourceState.createdAt).toBeDefined();
+    expect(secondSourceState.identity?.streamId).toBeDefined();
+    expect(secondSourceState).not.toMatchObject({ identity: { streamId: firstSourceId } });
+    expect(secondSourceState.identity?.createdAt).toBeDefined();
 
     await receiver.subscribeToEventsFrom(desired);
     const [secondSourceEvent] = await source.append({
@@ -1000,8 +1000,8 @@ test.skipIf(!deployedBaseUrl())(
     });
     expect(secondCopy.source?.copiedFrom?.at(-1)).toMatchObject({
       path: sourcePath,
-      streamId: secondSourceState.streamId,
-      streamCreatedAt: secondSourceState.createdAt,
+      streamId: secondSourceState.identity?.streamId,
+      streamCreatedAt: secondSourceState.identity?.createdAt,
       offset: secondSourceEvent!.offset,
     });
 
@@ -1010,8 +1010,8 @@ test.skipIf(!deployedBaseUrl())(
         subscriptionName
       ],
     ).toMatchObject({
-      streamId: secondSourceState.streamId,
-      streamCreatedAt: secondSourceState.createdAt,
+      streamId: secondSourceState.identity?.streamId,
+      streamCreatedAt: secondSourceState.identity?.createdAt,
       numEventsReceived: 1,
     });
   },
@@ -1074,8 +1074,8 @@ test("a receiver rejects a delayed batch after the same source key is reconfigur
   const staleBatch: StreamDeliveryBatch = {
     projectId,
     path: sourcePath,
-    streamId: sourceState.streamId!,
-    streamCreatedAt: sourceState.createdAt!,
+    streamId: sourceState.identity!.streamId,
+    streamCreatedAt: sourceState.identity!.createdAt,
     events: [sourceEvent!],
     streamMaxOffset: sourceState.maxOffset,
     // Wire-envelope field: the subscription's name.
@@ -1388,14 +1388,14 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
   const receipt = await deliverTrustedStreamBatch(receiver, {
     projectId,
     path: sourcePath,
-    streamId: sourceState.streamId!,
-    streamCreatedAt: sourceState.createdAt!,
+    streamId: sourceState.identity!.streamId,
+    streamCreatedAt: sourceState.identity!.createdAt,
     events: [eventAtLimit],
     streamMaxOffset: sourceState.maxOffset,
     name: subscriptionName,
     cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
     deliveryId: streamDeliveryId(
-      sourceState.streamId!,
+      sourceState.identity!.streamId,
       subscriptionName,
       configured.subscriptionConfiguredEvent.offset,
       historical!.offset,
@@ -1523,14 +1523,14 @@ test("a copy filters, records its source, and deduplicates a retried delivery", 
   const duplicateReceipt = await deliverTrustedStreamBatch(receiver, {
     projectId,
     path: sourcePath,
-    streamId: sourceStateAfterCopy.streamId!,
-    streamCreatedAt: sourceStateAfterCopy.createdAt!,
+    streamId: sourceStateAfterCopy.identity!.streamId,
+    streamCreatedAt: sourceStateAfterCopy.identity!.createdAt,
     events: [selected!],
     streamMaxOffset: sourceStateAfterCopy.maxOffset,
     name: subscriptionName,
     cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
     deliveryId: streamDeliveryId(
-      sourceStateAfterCopy.streamId!,
+      sourceStateAfterCopy.identity!.streamId,
       subscriptionName,
       configured.subscriptionConfiguredEvent.offset,
       selected!.offset,
@@ -1611,14 +1611,14 @@ test("a copy transform shapes the committed copy, keeps provenance, and dedupes 
   const duplicateReceipt = await deliverTrustedStreamBatch(receiver, {
     projectId,
     path: sourcePath,
-    streamId: sourceStateAfterCopy.streamId!,
-    streamCreatedAt: sourceStateAfterCopy.createdAt!,
+    streamId: sourceStateAfterCopy.identity!.streamId,
+    streamCreatedAt: sourceStateAfterCopy.identity!.createdAt,
     events: [selected!],
     streamMaxOffset: sourceStateAfterCopy.maxOffset,
     name: subscriptionName,
     cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
     deliveryId: streamDeliveryId(
-      sourceStateAfterCopy.streamId!,
+      sourceStateAfterCopy.identity!.streamId,
       subscriptionName,
       configured.subscriptionConfiguredEvent.offset,
       selected!.offset,
@@ -2434,13 +2434,13 @@ test.skipIf(!deployedBaseUrl())(
         timeoutMs: 30_000,
       },
     );
-    const oldSourceId = coreState(await stream.runtimeState()).streamId;
+    const oldSourceId = coreState(await stream.runtimeState()).identity?.streamId;
     expect(oldSourceId).toBeDefined();
 
     await forceStreamReset(stream).catch(() => undefined);
     const recreatedSource = coreState(await stream.runtimeState());
-    expect(recreatedSource.streamId).toBeDefined();
-    expect(recreatedSource).not.toMatchObject({ streamId: oldSourceId });
+    expect(recreatedSource.identity?.streamId).toBeDefined();
+    expect(recreatedSource).not.toMatchObject({ identity: { streamId: oldSourceId } });
 
     const [newConfiguration] = await stream.append(configuredEvent());
     await waitForCondition(

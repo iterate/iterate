@@ -606,15 +606,14 @@ export class StreamEventSender {
     expectedDelivery: ExpectedHostedDeliveryState,
   ): void {
     const state = this.#hooks.coreState();
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- projectId tri-state: undefined = uninitialized stream, null = the GLOBAL namespace (a real, initialized identity)
-    if (state.projectId === undefined || !state.path || !state.streamId) {
+    if (!state.identity) {
       throw new Error("Cannot wake a hosted processor before stream identity is initialized.");
     }
     const request: StreamProcessorWakeRequest = {
       stream: {
-        projectId: state.projectId,
-        path: state.path,
-        streamId: state.streamId,
+        projectId: state.identity.projectId,
+        path: state.identity.path,
+        streamId: state.identity.streamId,
         streamMaxOffset: state.maxOffset,
       },
       // Name IS the contract slug for processor-wake subscriptions (enforced
@@ -891,17 +890,17 @@ export class StreamEventSender {
             ? filterFailure.event.offset - 1
             : lastOffset;
 
-          // oxlint-disable-next-line iterate/simple-truthiness-check -- projectId tri-state: undefined = uninitialized stream, null = the GLOBAL namespace (a real, initialized identity)
-          if (state.projectId === undefined || !state.path || !state.streamId || !state.createdAt) {
+          const identity = state.identity;
+          if (!identity) {
             throw new Error(`subscription "${name}" exists on an uninitialized stream`);
           }
-          const streamId = state.streamId;
-          const streamCreatedAt = state.createdAt;
+          const streamId = identity.streamId;
+          const streamCreatedAt = identity.createdAt;
           const configuredEvent = subscriptionConfigurationForDelivery({
             type: "events.iterate.com/stream/subscription-configured",
             offset: entry.configuredAtOffset,
             createdAt: entry.configuredAt,
-            path: state.path,
+            path: identity.path,
             payload: subscriptionConfiguredPayloadFromReducedState({
               configuration: entry.configuration,
               configuredAtOffset: entry.configuredAtOffset,
@@ -921,11 +920,11 @@ export class StreamEventSender {
           this.#armInFlightWatchdog();
           try {
             if (receiver.action === "webhook-post") {
-              if (!state.projectId) return; // unreachable: rejected at append (egress attribution)
+              if (!identity.projectId) return; // unreachable: rejected at append (egress attribution)
               await withDeliveryTimeout(
                 this.#hooks.receiverCalls.deliverToWebhook(receiver.url, {
-                  projectId: state.projectId,
-                  path: state.path,
+                  projectId: identity.projectId,
+                  path: identity.path,
                   streamId,
                   streamCreatedAt,
                   // Exactly one: webhook delivery pins the read limit to one.
@@ -952,8 +951,8 @@ export class StreamEventSender {
               );
             } else {
               const batch: StreamDeliveryBatch = {
-                projectId: state.projectId,
-                path: state.path,
+                projectId: identity.projectId,
+                path: identity.path,
                 streamId,
                 streamCreatedAt,
                 // An ITX transform is applied here, per delivered event; a
@@ -1864,9 +1863,9 @@ export class StreamConnections {
       connectionKey,
       source,
       ...deliveryErrorDiagnostics(error),
-      projectId: state.projectId,
-      streamPath: state.path,
-      streamId: state.streamId,
+      projectId: state.identity?.projectId,
+      streamPath: state.identity?.path,
+      streamId: state.identity?.streamId,
       configuredAtOffset: expectedDelivery.configuredAtOffset,
       cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
       connectionGeneration: expectedDelivery.connectionGeneration,
@@ -2092,10 +2091,10 @@ export class StreamConnections {
       processEventBatch[Symbol.dispose]();
       throw new Error("expectedStreamId must be null or a non-empty string");
     }
-    if (args.expectedStreamId && (coreState.streamId ?? null) !== args.expectedStreamId) {
+    if (args.expectedStreamId && (coreState.identity?.streamId ?? null) !== args.expectedStreamId) {
       processEventBatch[Symbol.dispose]();
       throw new Error(
-        `stream ID changed (${String(args.expectedStreamId)} -> ${String(coreState.streamId ?? null)})`,
+        `stream ID changed (${String(args.expectedStreamId)} -> ${String(coreState.identity?.streamId ?? null)})`,
       );
     }
     if (
@@ -2232,20 +2231,15 @@ export class StreamConnections {
           connection.lastDeliveredAt = new Date(this.#hooks.now()).toISOString();
           this.#hooks.recordEgress(events.length, deliveredBytes);
           const currentState = this.#hooks.coreState();
-          if (
-            // oxlint-disable-next-line iterate/simple-truthiness-check -- projectId tri-state: undefined = uninitialized stream, null = the GLOBAL namespace (a real, initialized identity)
-            currentState.projectId === undefined ||
-            !currentState.path ||
-            !currentState.streamId
-          ) {
+          if (!currentState.identity) {
             throw new Error("Cannot deliver stream batch before stream identity is initialized.");
           }
           const newestCreatedAtMs =
             events.length === 0 ? undefined : Date.parse(events.at(-1)!.createdAt);
           const batch = {
-            projectId: currentState.projectId,
-            path: currentState.path,
-            streamId: currentState.streamId,
+            projectId: currentState.identity.projectId,
+            path: currentState.identity.path,
+            streamId: currentState.identity.streamId,
             events,
             scannedAfterOffset,
             scannedThroughOffset: deliveredThroughOffset,

@@ -104,10 +104,12 @@ function harness(args: {
   let now = 10_000;
   const configuration = args.configuration ?? hostedConfig(args.filter);
   const state = CoreProcessorContract.stateSchema.parse({
-    projectId: "project",
-    path: "/source",
-    streamId: SOURCE_STREAM_ID,
-    createdAt: "2026-07-21T10:00:00.000Z",
+    identity: {
+      projectId: "project",
+      path: "/source",
+      streamId: SOURCE_STREAM_ID,
+      createdAt: "2026-07-21T10:00:00.000Z",
+    },
     maxOffset: Math.max(1, ...args.events.map((entry) => entry.offset)),
     subscriptions: {
       outbound: {
@@ -1960,10 +1962,12 @@ function connectionsHarness(
     connectionGeneration: 7,
   };
   const state = CoreProcessorContract.stateSchema.parse({
-    projectId: "project",
-    path: "/source",
-    streamId: "11111111-1111-4111-8111-111111111111",
-    createdAt: "2026-07-22T12:00:00.000Z",
+    identity: {
+      projectId: "project",
+      path: "/source",
+      streamId: "11111111-1111-4111-8111-111111111111",
+      createdAt: "2026-07-22T12:00:00.000Z",
+    },
     maxOffset: events.length,
   }) satisfies CoreProcessorState;
   const alarmTimes: number[] = [];

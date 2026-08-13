@@ -1852,7 +1852,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (!args.streamId.trim().length) {
       throw new Error("streamId must be a non-empty string");
     }
-    const currentStreamId = this.#coreProcessorState.streamId;
+    const currentStreamId = this.#coreProcessorState.identity?.streamId;
     if (currentStreamId !== args.streamId) {
       throw new StreamIdMismatchError(streamIdMismatchMessage(args.streamId, currentStreamId));
     }
@@ -1867,7 +1867,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (!args.streamId.trim().length) {
       throw new Error("streamId must be a non-empty string");
     }
-    const currentStreamId = this.#coreProcessorState.streamId;
+    const currentStreamId = this.#coreProcessorState.identity?.streamId;
     if (currentStreamId !== args.streamId) {
       throw new StreamIdMismatchError(streamIdMismatchMessage(args.streamId, currentStreamId));
     }
@@ -2241,7 +2241,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       includeEphemeral?: boolean;
     } = {},
   ): { streamId: string; streamMaxOffset: number; events: StreamEvent[] } {
-    const streamId = this.#coreProcessorState.streamId;
+    const streamId = this.#coreProcessorState.identity?.streamId;
     if (!streamId) {
       throw new Error("stream identity is unavailable after stream creation");
     }
@@ -2338,7 +2338,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** Tell every ancestor stream (up to the root) that this stream exists. */
   #announceToAncestors(): void {
     if (this.#ancestorsAnnouncedThisIncarnation || this.#ancestorAnnouncementInFlight) return;
-    const path = this.#coreProcessorState.path;
+    const path = this.#coreProcessorState.identity?.path;
     if (!path || path === "/") {
       this.#ancestorsAnnouncedThisIncarnation = true;
       return;
@@ -2622,8 +2622,8 @@ export class StreamDurableObject extends DurableObject<Env> {
           creationMatches =
             created.payload.projectId === this.name.projectId &&
             created.payload.path === this.name.path &&
-            created.payload.streamId === state.streamId &&
-            created.createdAt === state.createdAt;
+            created.payload.streamId === state.identity?.streamId &&
+            created.createdAt === state.identity.createdAt;
         }
       } catch (error) {
         this.#invalidCheckpointError ??= error;
@@ -2631,8 +2631,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       const belongsToThisLog =
         creationMatches &&
         state.eventCount > 0 &&
-        state.projectId === this.name.projectId &&
-        state.path === this.name.path &&
+        state.identity?.projectId === this.name.projectId &&
+        state.identity.path === this.name.path &&
         state.maxOffset > 0 &&
         state.maxOffset <= this.#log.highestAssignedOffset();
       if (belongsToThisLog) return state;

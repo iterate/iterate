@@ -6,18 +6,20 @@
 // through unvalidated; a missing/mis-typed field fails loudly instead of
 // silently reconciling against garbage.
 //
-// `streamId` identifies one lifetime of the stream's event log. It stays the
-// same across Durable Object restarts and changes when the stream is deleted
-// and recreated, exactly when offsets restart from 1. It is optional only for
-// the empty fold before the `stream/created` event has committed. A browser
-// cache cannot trust offset comparisons until that ID exists.
+// `identity.streamId` identifies one lifetime of the stream's event log. It
+// stays the same across Durable Object restarts and changes when the stream is
+// deleted and recreated, exactly when offsets restart from 1. `identity` is
+// absent only for the empty fold before the `stream/created` event has
+// committed. A browser cache cannot trust offset comparisons until it exists.
 
 import { z } from "zod";
 
-const BrowserCoreProcessorState = z.object({
-  streamId: z.uuid().optional(),
-  maxOffset: z.number().int().min(0).default(0),
-});
+const BrowserCoreProcessorState = z
+  .object({
+    identity: z.object({ streamId: z.uuid() }).optional(),
+    maxOffset: z.number().int().min(0).default(0),
+  })
+  .transform(({ identity, maxOffset }) => ({ streamId: identity?.streamId, maxOffset }));
 
 type BrowserCoreProcessorState = z.infer<typeof BrowserCoreProcessorState>;
 

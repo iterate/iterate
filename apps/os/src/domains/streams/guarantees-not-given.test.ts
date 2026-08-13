@@ -383,10 +383,12 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
     let now = 10_000;
     const deliveredBatches: number[][] = [];
     const state = CoreProcessorContract.stateSchema.parse({
-      projectId: "project",
-      path: "/source",
-      streamId: "11111111-1111-4111-8111-111111111111",
-      createdAt: "2026-07-21T10:00:00.000Z",
+      identity: {
+        projectId: "project",
+        path: "/source",
+        streamId: "11111111-1111-4111-8111-111111111111",
+        createdAt: "2026-07-21T10:00:00.000Z",
+      },
       maxOffset: 2,
       subscriptions: {
         outbound: {
