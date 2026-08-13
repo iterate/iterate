@@ -245,6 +245,17 @@ test("a batch decided from this screen lingers with its outcome instead of vanis
       new Set([40]),
     ),
   ).toMatchObject([{ status: { kind: "needs-approval", label: "Decided — awaiting release" } }]);
+
+  // The set records commit ATTEMPTS (pinned before the decision event
+  // lands), and an abandoned attempt's batch can still close by expiry —
+  // nobody decided that, so it must not wear a decided row.
+  expect(
+    deriveNotificationListRows(
+      [],
+      [approvalRequested(40), approvalDecided(41, 40, ["reject"], "expiry")],
+      new Set([40]),
+    ),
+  ).toEqual([]);
 });
 
 test("an expired undecided batch never surfaces as a needs-approval row", () => {
@@ -316,13 +327,14 @@ function approvalDecided(
   offset: number,
   approvalRequestEventOffset: number,
   verdicts: ("approve" | "reject")[],
+  decidedBy: "human" | "expiry" = "human",
 ): StreamEvent {
   return {
     type: APPROVAL_EVENT.decided,
     offset,
     createdAt: "2026-07-18T09:01:00.000Z",
     path: "/",
-    payload: { approvalRequestEventOffset, verdicts, decidedBy: "human" },
+    payload: { approvalRequestEventOffset, verdicts, decidedBy },
   } as StreamEvent;
 }
 

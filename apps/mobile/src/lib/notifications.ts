@@ -226,6 +226,10 @@ export function deriveNotificationListRows(
     .filter(
       (batch) =>
         sessionDecidedOffsets.has(batch.offset) &&
+        // Only HUMAN decisions linger. The session set records commit
+        // attempts, and an abandoned attempt's batch can still close by
+        // expiry — nobody decided that; it must not wear a decided row.
+        batch.decidedBy === "human" &&
         !openOffsets.has(batch.offset) &&
         !journaled.has(batch.offset),
     )
