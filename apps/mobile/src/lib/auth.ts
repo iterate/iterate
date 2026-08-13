@@ -137,14 +137,24 @@ export async function signIn(baseUrl: string, options: { loginHint?: string } = 
   // fixed-OTP sign-in server-side and bounces straight into this same
   // authorize URL with the session cookie set. The user's first page is the
   // consent screen — deliberately kept, since the app is a userland client.
+  // Probed first: a param-less GET answers 400 ("email must be…") exactly
+  // where the endpoint exists and is enabled, without signing anything in —
+  // anywhere else (stale deployment, prod, network trouble) the wrap is
+  // skipped and the plain authorize URL still carries the login_hint, so the
+  // fallback is the prefilled login page rather than a 404.
   const testLoginHint =
     options.loginHint && /\+test@nustom\.com$/i.test(options.loginHint) ? options.loginHint : null;
   const promptUrl = testLoginHint
     ? await (async () => {
-        const url = new URL("/test-login", issuer);
-        url.searchParams.set("email", testLoginHint);
-        url.searchParams.set("return_to", await request.makeAuthUrlAsync(discovery));
-        return url.toString();
+        const testLoginUrl = new URL("/test-login", issuer);
+        const probe = await fetch(testLoginUrl).catch(() => null);
+        if (probe?.status !== 400) {
+          console.log(`[auth] /test-login unavailable (${probe?.status}); using the login page`);
+          return undefined;
+        }
+        testLoginUrl.searchParams.set("email", testLoginHint);
+        testLoginUrl.searchParams.set("return_to", await request.makeAuthUrlAsync(discovery));
+        return testLoginUrl.toString();
       })()
     : undefined;
   console.log(`[auth] prompting: redirectUri=${REDIRECT_URI} clientId=${clientId}`);

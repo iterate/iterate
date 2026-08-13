@@ -65,9 +65,17 @@ export default function PreviewChannelScreen() {
     mutationFn: async () => {
       // The Switch tap IS the consent for the whole plan (channel + backend +
       // test identity): mark it before the reload wipes this process, so the
-      // re-opened screen continues without a second tap.
+      // re-opened screen continues without a second tap. A real reload never
+      // returns from switchChannelAndReload — reaching the line below means
+      // the OLD bundle is still running ("no-update": nothing published, or
+      // the PR has native changes), where auto-continuing would both hide
+      // that message and apply the old bundle's plan. Take the consent back.
       await setAutoContinueChannel(channel);
-      return switchChannelAndReload(channel);
+      const result = await switchChannelAndReload(channel);
+      if (result === "no-update") {
+        await clearAutoContinueChannel();
+      }
+      return result;
     },
     // Only reaches onSuccess without a reload ("no-update"); the invalidate
     // flips `current` and the button below becomes "Continue". After a real
