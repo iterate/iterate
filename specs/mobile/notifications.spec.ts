@@ -343,6 +343,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
     await page.getByText("Awaiting decision").waitFor();
     await page.getByText("egress-echo?orphan=1").waitFor();
     await rejectFromExpansion(page, "orphans get decided here too");
+    // detached is the payoff: all-reject removes the synthetic row and no positive UI replaces it
     await orphanRow.waitFor({ state: "detached" });
 
     // The chat deep-link lives INSIDE the expansion now — its "Open thread"
@@ -403,6 +404,7 @@ async function rejectFromExpansion(page: Page, reason: string) {
     page.once("dialog", handler);
     try {
       await button.click().catch(() => {});
+      // detached Reject button is the only landed-decision signal — the decided row vanishes with no replacement UI
       await button.waitFor({ state: "detached" });
       return;
     } catch {

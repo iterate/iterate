@@ -262,6 +262,9 @@
         "iterate/no-vi-mock": "error",
         "iterate/prefer-object-property-match": "error",
         "iterate/prefer-test-over-it": "error",
+        "middlewright/prefer-locator-waits": "error",
+        "middlewright/prefer-positive-waits": "error",
+        "middlewright/require-timeout-comment": "error",
         "no-restricted-imports": [
           "error",
           {
@@ -279,20 +282,36 @@
       }
     },
     {
-      "files": ["apps/os/src/rpc-targets.ts"],
+      "files": [
+        "specs/agent-chat.spec.ts",
+        "specs/clients-os-app.spec.ts",
+        "specs/create-project.spec.ts",
+        "specs/forged-session-repl.spec.ts",
+        "specs/mobile/approvals.spec.ts",
+        "specs/mobile/notifications.spec.ts",
+        "specs/repl-examples.spec.ts",
+        "specs/repl-lazy.spec.ts",
+        "specs/repo-ide-html-preview.spec.ts",
+        "specs/repo-ide-json-schema.spec.ts",
+        "specs/repo-ide-jsonc.spec.ts",
+        "specs/repo-ide-markdown-preview.spec.ts",
+        "specs/repo-ide-svg-index-preview.spec.ts",
+        "specs/seeded-apps.spec.ts",
+        "specs/signup.spec.ts",
+        "specs/stream-cache-before-live.spec.ts",
+        "specs/stream-resume-after-suspend.spec.ts",
+        "specs/test-support/email-otp-signup.ts",
+        "specs/test-support/repo-tree.ts",
+        "specs/workspace-lens-board.spec.ts"
+      ],
       "rules": {
-        "iterate/mechanical-class-impl": "error"
+        "middlewright/require-timeout-comment": "off"
       }
     },
     {
-      "files": [
-        "specs/mobile/media.spec.ts",
-        "specs/mobile/integrations.spec.ts",
-        "specs/mobile/expected-backend-mismatch.spec.ts",
-        "specs/mobile/expected-backend-signin.spec.ts"
-      ],
+      "files": ["apps/os/src/rpc-targets.ts"],
       "rules": {
-        "middlewright/require-timeout-comment": "error"
+        "iterate/mechanical-class-impl": "error"
       }
     }
   ]

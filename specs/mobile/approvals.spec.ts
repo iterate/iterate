@@ -390,6 +390,7 @@ async function decideBatch(
     page.once("dialog", handler);
     try {
       await button.click().catch(() => {});
+      // detached decide button is the only landed-decision signal — the decided batch vanishes with no replacement UI
       await button.waitFor({ state: "detached" });
       return;
     } catch {
