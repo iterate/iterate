@@ -12,7 +12,10 @@
 // - Backend/identity differences from the running bundle's expectation are
 //   SHOWN, and the fix rides Continue as a default-checked checkbox — wanting
 //   the PR's JS almost always means wanting its backend + test identity too,
-//   but unticking keeps the plain channel switch. Never applied silently.
+//   but unticking keeps the plain channel switch. Never applied from a bare
+//   scan — but a Switch TAP consents to the whole plan, so the post-switch
+//   re-entry continues by itself (the one-shot marker in
+//   lib/preview-channel.ts) instead of asking for a second tap.
 //   The stamp resolves against the preset list only (lib/expected-backend.ts),
 //   so a poisoned bundle stamp can't name an arbitrary server.
 import { useState } from "react";
@@ -30,8 +33,11 @@ import {
 } from "../../lib/expected-backend.ts";
 import { reconnectItxSession } from "../../lib/itx.ts";
 import {
+  clearAutoContinueChannel,
   fetchLatestUpdateAndReload,
+  getAutoContinueChannel,
   getPreviewChannelOverride,
+  setAutoContinueChannel,
   switchChannelAndReload,
 } from "../../lib/preview-channel.ts";
 import { DEFAULT_SERVER } from "../../lib/servers.ts";
@@ -56,7 +62,21 @@ export default function PreviewChannelScreen() {
   const recommendedServer = expectation.server;
 
   const switchChannel = useMutation({
-    mutationFn: () => switchChannelAndReload(channel),
+    mutationFn: async () => {
+      // The Switch tap IS the consent for the whole plan (channel + backend +
+      // test identity): mark it before the reload wipes this process, so the
+      // re-opened screen continues without a second tap. A real reload never
+      // returns from switchChannelAndReload — reaching the line below means
+      // the OLD bundle is still running ("no-update": nothing published, or
+      // the PR has native changes), where auto-continuing would both hide
+      // that message and apply the old bundle's plan. Take the consent back.
+      await setAutoContinueChannel(channel);
+      const result = await switchChannelAndReload(channel);
+      if (result === "no-update") {
+        await clearAutoContinueChannel();
+      }
+      return result;
+    },
     // Only reaches onSuccess without a reload ("no-update"); the invalidate
     // flips `current` and the button below becomes "Continue". After a real
     // reload the deep link re-opens this screen in the NEW bundle.
@@ -125,12 +145,49 @@ export default function PreviewChannelScreen() {
       return input.baseUrl;
     },
     // Mirrors the sign-in screen's login mutation: reconnect on the new
-    // deployment, drop every cached read, land on the boot path (which
-    // fast-forwards to the remembered project or the picker).
-    onSuccess: (baseUrl) => {
+    // deployment, drop every cached read, and land where it does — fresh
+    // sign-ins go to the picker with autoOpen so a single-project account
+    // (every per-PR test identity) skips it; a plain server switch takes the
+    // boot path (remembered project or picker).
+    onSuccess: (baseUrl, input) => {
       reconnectItxSession(baseUrl);
       queryClient.clear();
-      router.replace("/");
+      if (input.type === "sign-in") {
+        router.replace({ pathname: "/projects", params: { autoOpen: "1" } });
+      } else {
+        router.replace("/");
+      }
+    },
+  });
+
+  // The post-switch auto-continue: once the switch-reload has re-opened this
+  // screen and everything has settled (freshness verdict in, phone state
+  // read), do exactly what the Continue button would — but only when the
+  // one-shot marker from the Switch tap is present. Fresh scans of a channel
+  // the app is already on have no marker and keep the reassurance screen.
+  // A query rather than an effect, like the freshness check above.
+  useQuery({
+    queryKey: ["qr-channel-auto-continue", channel],
+    enabled:
+      alreadyOnTarget &&
+      !reloadImminent &&
+      (!canOta || freshness.isSuccess || freshness.isError) &&
+      (recommendedServer === null || phoneState.isSuccess || phoneState.isError),
+    staleTime: Infinity,
+    refetchOnMount: "always",
+    retry: false,
+    queryFn: async () => {
+      const pending = await getAutoContinueChannel();
+      if (pending !== channel) {
+        return "none" as const;
+      }
+      await clearAutoContinueChannel();
+      if (plan !== null) {
+        await applyPlan.mutateAsync(plan);
+      } else {
+        router.replace("/");
+      }
+      return "continued" as const;
     },
   });
 

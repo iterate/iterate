@@ -41,6 +41,7 @@ import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { z } from "zod/v4";
 import { authClient, useSession } from "../../utils/auth-client.ts";
+import { shouldUseTestOtp } from "../../server/email.ts";
 import {
   oauthClientQueryOptions,
   organizationsQueryOptions,
@@ -53,9 +54,15 @@ import { parseConfig } from "../../config.ts";
 // Runs on the server for both SSR and client navigations. The hostname base
 // is this environment's deployed project domain (e.g. "iterate.app",
 // "iterate-preview-3.app") — onboarding previews "<slug>.<base>" under it.
-const getProjectAccessConfig = createServerFn({ method: "GET" }).handler(({ context }) => ({
-  projectHostnameBase: parseConfig(context.cloudflare.env).projectHostnameBase,
-}));
+// fixedTestOtpEnabled is not a secret (see login.tsx): it gates the test-user
+// auto-continue below.
+const getProjectAccessConfig = createServerFn({ method: "GET" }).handler(({ context }) => {
+  const config = parseConfig(context.cloudflare.env);
+  return {
+    projectHostnameBase: config.projectHostnameBase,
+    fixedTestOtpEnabled: config.fixedTestOtpEnabled,
+  };
+});
 
 export const Route = createFileRoute("/_auth/project-access")({
   component: RouteComponent,
@@ -96,7 +103,7 @@ const CreateProjectInput = z.object({
 
 function RouteComponent() {
   const { client_id, scope, redirect, project_hint } = Route.useSearch();
-  const { projectHostnameBase } = Route.useLoaderData();
+  const { projectHostnameBase, fixedTestOtpEnabled } = Route.useLoaderData();
   // Only a well-formed slug counts; anything else falls back to the derived
   // suggestion as if no hint arrived.
   const hintedProjectSlug = ProjectSlugInput.safeParse(project_hint).success
@@ -224,6 +231,43 @@ function RouteComponent() {
     },
   });
 
+  // Test users sail through project selection: on fixed-test-OTP deployments
+  // (never production — build-time flag) a signed-in `*+test@nustom.com`
+  // user's selection page would only ever be ceremony, so select every
+  // project and continue without a tap. This keeps the protocol shape
+  // identical to real users' (selection row → continue → consent — the
+  // consent screen still shows for untrusted clients); only the tap is gone.
+  // One-tap mobile test sign-in rides this (apps/mobile/src/lib/auth.ts).
+  const autoContinueProjectIds =
+    projectSelectionQuery.data?.flatMap((selection) =>
+      selection.projects.map((project) => project.id),
+    ) ?? [];
+  const testUserAutoContinue = Boolean(
+    hasOAuthClientId &&
+    needsProjectSelection &&
+    fixedTestOtpEnabled &&
+    shouldUseTestOtp({ email: session.user.email, fixedTestOtpEnabled }) &&
+    autoContinueProjectIds.length > 0,
+  );
+  const autoContinue = useQuery({
+    queryKey: ["test-user-auto-continue", client_id],
+    enabled: testUserAutoContinue,
+    retry: false,
+    staleTime: Infinity,
+    gcTime: Infinity,
+    queryFn: async () => {
+      await orpcClient.user.storeOAuthProjectSelection({
+        clientId: client_id!,
+        projectIds: autoContinueProjectIds,
+      });
+      const result = await authClient.oauth2.continue({ postLogin: true });
+      if (!result.url) {
+        throw new Error("Could not continue the OAuth redirect");
+      }
+      return redirectAndStayPending(preserveOAuthResourceSearchParam(result.url));
+    },
+  });
+
   const denyMutation = useMutation({
     mutationFn: async () => {
       const result = await authClient.oauth2.consent({ accept: false });
@@ -246,7 +290,15 @@ function RouteComponent() {
   const isLoadingOAuthClient = hasOAuthClientId && oauthClientQuery.isPending;
   const isLoadingProjectSelection = wantsProjects && projectSelectionQuery.isPending;
 
-  if (isLoadingOAuthClient || organizationsQuery.isPending || isLoadingProjectSelection) {
+  // While the test-user auto-continue is in flight, hold the loading skeleton
+  // so the selection card never flashes (and can't be double-submitted). If
+  // it errors, fall through to the normal interactive page.
+  if (
+    isLoadingOAuthClient ||
+    organizationsQuery.isPending ||
+    isLoadingProjectSelection ||
+    (testUserAutoContinue && !autoContinue.isError)
+  ) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-muted/20 p-4">
         <Card className="w-full max-w-xl">

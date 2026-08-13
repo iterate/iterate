@@ -97,7 +97,11 @@ export default function SignInScreen() {
       setEditedServer(null);
       reconnectItxSession(baseUrl);
       queryClient.clear();
-      router.replace("/projects");
+      // autoOpen: fresh sign-ins skip the picker when the account has exactly
+      // one project (projects.tsx) — the first list can ride a cold itx
+      // WebSocket, so the decision lives in the picker's retrying query, not
+      // here. Plain /projects visits (Back from a project) never auto-open.
+      router.replace({ pathname: "/projects", params: { autoOpen: "1" } });
     },
   });
 

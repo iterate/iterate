@@ -79,9 +79,9 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // separate Page outside the plugged middleware (no spinner-waiter to
     // extend), and these clicks land after auth-worker navigations that run
     // cold on fresh preview deploys — CI-proven >1s.
-    await popup.getByRole("button", { name: "Continue" }).click({ timeout: 15_000 });
+    // Project selection auto-continues for test identities (project-access.tsx).
     await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
-    await page.getByText(projectSlug).click();
+    // The app auto-opens the account's only project — no picker tap.
     await page.getByText("New chat").waitFor();
     const projectId = new URL(page.url()).pathname.split("/")[2]!;
 
