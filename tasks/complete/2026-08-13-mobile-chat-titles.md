@@ -1,16 +1,17 @@
 ---
-status: in-progress
+status: done
 size: medium
 ---
 
 # Mobile: show chat titles instead of raw stream paths
 
-**Status summary:** implementation complete; PR open (#2490). Server exposes
-agent titles through `itx.agents.list()`, the mobile chat list renders them
-and stays LIVE off the agent catalog's push channel, the thread header folds
-the title from the event stream. Along the way this exposed and fixed a
-pre-existing platform flaw: subscribing to `agents.liveState` on a fresh
-project (zero chats) errored and stayed dead. Remaining: review.
+**Status summary:** done — PR #2490, CI fully green (preview e2e included),
+zero review threads. Server exposes agent titles through
+`itx.agents.list()`, the mobile chat list renders them and stays LIVE off
+the agent catalog's push channel, the thread header folds the title from
+the event stream. Along the way this exposed and fixed a pre-existing
+platform flaw: subscribing to `agents.liveState` on a fresh project (zero
+chats) errored and stayed dead.
 
 Prompted by a screenshot of the mobile chat list showing rows like
 `mobile/2026-08-12t23-27-59-114z` — the raw agent stream path — where a
