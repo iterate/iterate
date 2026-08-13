@@ -4,7 +4,7 @@ import { applyPatch, diff } from "./diff.ts";
 /** applyPatch(prev, diff(prev, next)) must reconstruct `next` exactly. */
 function roundTrip(prev: unknown, next: unknown) {
   const patch = diff(prev, next);
-  return !patch ? prev : applyPatch(prev, patch);
+  return patch ? applyPatch(prev, patch) : prev;
 }
 
 describe("diff", () => {

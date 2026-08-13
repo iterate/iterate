@@ -287,7 +287,7 @@ function LoginActions({
         />
       ) : null}
 
-      {!emailMode ? (
+      {emailMode ? null : (
         <>
           {emailOtpEnabled && methodDivider === "between" ? <LoginMethodDivider /> : null}
           <Button
@@ -302,7 +302,7 @@ function LoginActions({
             {googleSignInPending ? "Redirecting..." : "Continue with Google"}
           </Button>
         </>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -390,34 +390,7 @@ function EmailOtpSignIn({
         >
           Loading...
         </Button>
-      ) : !showExpandedForm ? (
-        <>
-          {hintedEmail ? (
-            // The deep link's suggested identity, one press: sends the code
-            // and opens the normal OTP screen (prefilled when the code is
-            // knowable — fixed-test-OTP deployments). Sits above the generic
-            // methods; those stay for signing in as anyone else.
-            <Button
-              className="w-full bg-foreground text-background hover:bg-foreground/90"
-              size="lg"
-              data-testid="continue-as-hinted-email-button"
-              disabled={sendOtp.isPending}
-              onClick={() => sendOtp.mutate({ address: hintedEmail, prefillOtp: otpGuess })}
-            >
-              {sendOtp.isPending ? "Sending code..." : `Continue as ${hintedEmail}`}
-            </Button>
-          ) : null}
-          <Button
-            className="w-full border-border bg-background text-foreground shadow-sm transition-colors hover:bg-muted"
-            variant="outline"
-            size="lg"
-            data-testid="email-login-button"
-            onClick={() => onExpandedChange(true)}
-          >
-            Continue with email
-          </Button>
-        </>
-      ) : (
+      ) : showExpandedForm ? (
         <div className="space-y-4">
           <p className="text-xs text-muted-foreground">
             We&apos;ll send a one-time code to your email.
@@ -491,7 +464,7 @@ function EmailOtpSignIn({
                   : "Send verification code"}
             </Button>
 
-            {!submittedEmail ? (
+            {submittedEmail ? null : (
               <Button
                 className="w-full"
                 variant="ghost"
@@ -500,9 +473,36 @@ function EmailOtpSignIn({
               >
                 Back
               </Button>
-            ) : null}
+            )}
           </div>
         </div>
+      ) : (
+        <>
+          {hintedEmail ? (
+            // The deep link's suggested identity, one press: sends the code
+            // and opens the normal OTP screen (prefilled when the code is
+            // knowable — fixed-test-OTP deployments). Sits above the generic
+            // methods; those stay for signing in as anyone else.
+            <Button
+              className="w-full bg-foreground text-background hover:bg-foreground/90"
+              size="lg"
+              data-testid="continue-as-hinted-email-button"
+              disabled={sendOtp.isPending}
+              onClick={() => sendOtp.mutate({ address: hintedEmail, prefillOtp: otpGuess })}
+            >
+              {sendOtp.isPending ? "Sending code..." : `Continue as ${hintedEmail}`}
+            </Button>
+          ) : null}
+          <Button
+            className="w-full border-border bg-background text-foreground shadow-sm transition-colors hover:bg-muted"
+            variant="outline"
+            size="lg"
+            data-testid="email-login-button"
+            onClick={() => onExpandedChange(true)}
+          >
+            Continue with email
+          </Button>
+        </>
       )}
     </div>
   );

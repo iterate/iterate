@@ -406,7 +406,7 @@ const name = vars.sandboxName ?? "example";
 const path = "/sandboxes/" + name;
 const sandbox = itx.sandboxes.get(path);
 await sandbox.create({
-  ...(!vars.instanceType ? {} : { instanceType: vars.instanceType }),
+  ...(vars.instanceType && { instanceType: vars.instanceType }),
 });
 
 // exec runs a shell command; the first one boots the container.
@@ -1295,7 +1295,7 @@ const readme = await workspace.readFile(path + "/README.md");
 
 return {
   fileCount: files.paths.length,
-  readmePreview: !readme ? null : readme.slice(0, 120),
+  readmePreview: readme ? readme.slice(0, 120) : null,
 };
 `.trim(),
   },

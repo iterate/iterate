@@ -350,12 +350,12 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
       author: author.value,
       createdAt: created.value,
       modifiedAt: modified?.value ?? null,
-      modifiedValueRange: !modified
-        ? null
-        : {
+      modifiedValueRange: modified
+        ? {
             start: lineStart + modified.valueStart,
             end: lineStart + modified.valueStart + modified.value.length,
-          },
+          }
+        : null,
       inReplyTo: inReplyTo?.value ?? null,
       deleted: !!deleted,
       attrsEnd,

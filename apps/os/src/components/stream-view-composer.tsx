@@ -146,15 +146,14 @@ export function StreamViewComposer({
 
   return (
     <>
-      {!messageComposer?.onSubmitFiles ? null : <AttachmentFileInput attachments={attachments} />}
+      {messageComposer?.onSubmitFiles ? <AttachmentFileInput attachments={attachments} /> : null}
       <AgentPillComposer
         mode={mode}
         onModeChange={setMode}
         autoFocusMessage={autoFocusMessage}
         examples={<ExampleEventsPanel presence={presence} onLoadExample={loadRawExample} />}
-        {...(!messageComposer
-          ? {}
-          : {
+        {...(messageComposer
+          ? {
               message: {
                 value: messageText,
                 onValueChange: setMessageText,
@@ -162,21 +161,19 @@ export function StreamViewComposer({
                 canSubmit:
                   messageText.trim() !== "" ||
                   (!!attachments.files.length && !!messageComposer.onSubmitFiles),
-                ...(!attachmentChips ? {} : { attachments: attachmentChips }),
-                ...(!messageComposer.onSubmitFiles
-                  ? {}
-                  : {
-                      onAttach: attachments.openFilePicker,
-                      onAddFiles: attachments.addFiles,
-                    }),
-                ...(!messageComposer.placeholder
-                  ? {}
-                  : { placeholder: messageComposer.placeholder }),
+                ...(attachmentChips && { attachments: attachmentChips }),
+                ...(messageComposer.onSubmitFiles && {
+                  onAttach: attachments.openFilePicker,
+                  onAddFiles: attachments.addFiles,
+                }),
+                ...(messageComposer.placeholder && { placeholder: messageComposer.placeholder }),
               },
-              ...(!interrupt
-                ? {}
-                : { onInterrupt: interrupt.run, isInterrupting: interrupt.isInterrupting }),
-            })}
+              ...(interrupt && {
+                onInterrupt: interrupt.run,
+                isInterrupting: interrupt.isInterrupting,
+              }),
+            }
+          : {})}
         raw={{
           value: rawText,
           onValueChange: setRawText,
@@ -184,7 +181,7 @@ export function StreamViewComposer({
         }}
         isSubmitting={isSubmitting}
         disabled={disabled}
-        {...(!error ? {} : { error })}
+        {...(error ? { error } : {})}
       />
     </>
   );

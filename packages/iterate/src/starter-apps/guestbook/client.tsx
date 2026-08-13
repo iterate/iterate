@@ -43,7 +43,7 @@ export function GuestbookClient() {
   const entries = state?.entries || [];
   // Only claim the configured title once reduced state has arrived — the
   // seeded-apps heading wait must not pass on the HTML shell alone.
-  const title = !state ? "Loading…" : state.birthCertificate?.config.title || "Guestbook";
+  const title = state ? state.birthCertificate?.config.title || "Guestbook" : "Loading…";
 
   return (
     <>
@@ -70,20 +70,23 @@ export function GuestbookClient() {
         </button>
       </form>
       {!!error && <p role="alert">{error}</p>}
-      {!state ? (
-        <p>Loading…</p>
-      ) : entries.length === 0 ? (
-        <p>No entries yet.</p>
+      {state ? (
+        entries.length === 0 ? (
+          <p>No entries yet.</p>
+        ) : (
+          <section aria-label="Guestbook entries">
+            {/* Newest first; key on payload identity (not reversed index). */}
+            {[...entries].reverse().map((entry) => (
+              <article key={`${entry.signedAt}\0${entry.name}\0${entry.message}`}>
+                <strong>{entry.name}</strong>{" "}
+                <time dateTime={entry.signedAt}>{entry.signedAt}</time>
+                <p>{entry.message}</p>
+              </article>
+            ))}
+          </section>
+        )
       ) : (
-        <section aria-label="Guestbook entries">
-          {/* Newest first; key on payload identity (not reversed index). */}
-          {[...entries].reverse().map((entry) => (
-            <article key={`${entry.signedAt}\0${entry.name}\0${entry.message}`}>
-              <strong>{entry.name}</strong> <time dateTime={entry.signedAt}>{entry.signedAt}</time>
-              <p>{entry.message}</p>
-            </article>
-          ))}
-        </section>
+        <p>Loading…</p>
       )}
     </>
   );

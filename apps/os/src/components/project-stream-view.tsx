@@ -239,9 +239,9 @@ function BrowserDatabaseProjectStreamView({
       enabled: !suppliedAgentRuntimeTransition && !!projectId && streamPath.startsWith("/agents/"),
     },
   ).value;
-  const agentRuntimeTransition = !suppliedAgentRuntimeTransition
-    ? liveAgentRuntimeTransition
-    : (suppliedAgentRuntimeTransition ?? undefined);
+  const agentRuntimeTransition = suppliedAgentRuntimeTransition
+    ? (suppliedAgentRuntimeTransition ?? undefined)
+    : liveAgentRuntimeTransition;
   const agentPresentation = useMemo(() => {
     if (!agentUiState || !agentRuntimeTransition) {
       return { state: agentUiState, transientItems: [] };
@@ -385,13 +385,13 @@ function BrowserDatabaseProjectStreamView({
               />
               <StreamViewComposer
                 autoFocusMessage={autoFocusMessageComposer}
-                {...(!defaultComposerMode
-                  ? caps.agentFeed
+                {...(defaultComposerMode
+                  ? { defaultMode: defaultComposerMode }
+                  : caps.agentFeed
                     ? { defaultMode: "message" as const }
-                    : { defaultMode: "raw" as const }
-                  : { defaultMode: defaultComposerMode })}
+                    : { defaultMode: "raw" as const })}
                 interrupt={interrupt}
-                {...(!messageComposer ? {} : { messageComposer })}
+                {...(messageComposer ? { messageComposer } : {})}
                 onNudgeDeliveries={nudgeDeliveries}
                 presence={presence}
                 store={store}
@@ -454,11 +454,11 @@ function BrowserDatabaseProjectStreamView({
       {showHeader ? filterRow : null}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
-        {!panel ? null : (
+        {panel ? (
           <aside className="max-h-[45svh] min-h-0 shrink-0 overflow-y-auto border-b lg:max-h-none lg:w-[26rem] lg:border-b-0 lg:border-r">
             <div className="flex flex-col gap-4 p-4">{panel}</div>
           </aside>
-        )}
+        ) : null}
         {feedColumn}
       </div>
       {streamStateSheet}
@@ -492,9 +492,9 @@ function useProjectStreamDatabase({
     () =>
       streamSource ??
       (async (path) =>
-        !projectId
-          ? (await connectIterateSession()).streams.get(path)
-          : (await connectItx(projectId)).streams.get(path)),
+        projectId
+          ? (await connectItx(projectId)).streams.get(path)
+          : (await connectIterateSession()).streams.get(path)),
     [projectId, streamSource],
   );
   const streamClientFactory = useMemo(() => {
@@ -505,9 +505,9 @@ function useProjectStreamDatabase({
       };
     }
     return async (input: { streamPath: string }) => {
-      const stub = !projectId
-        ? (await connectIterateSession()).streams.get(input.streamPath)
-        : (await connectItx(projectId)).streams.get(input.streamPath);
+      const stub = projectId
+        ? (await connectItx(projectId)).streams.get(input.streamPath)
+        : (await connectIterateSession()).streams.get(input.streamPath);
       return asBrowserStreamClient(
         stub,
         () => (stub as Partial<Disposable>)[Symbol.dispose]?.(),
@@ -518,15 +518,15 @@ function useProjectStreamDatabase({
     };
   }, [projectId, streamSource]);
   const resetTransport = useMemo(
-    () => resetStreamSourceTransport ?? (!streamSource ? reportTransportSuspicion : undefined),
+    () => resetStreamSourceTransport ?? (streamSource ? undefined : reportTransportSuspicion),
     [resetStreamSourceTransport, streamSource],
   );
   // One downloaded batch is passed to both the raw-event writer and browser-feed projector.
   const browserStore = useBrowserStreamStore({
     createStreamClient: streamClientFactory,
-    ...(!resetTransport ? {} : { resetTransport }),
+    ...(resetTransport && { resetTransport }),
     projectId: streamRuntimeProjectKey,
-    ...(!subscriberUser ? {} : { subscriberUser }),
+    ...(subscriberUser && { subscriberUser }),
     streamPath,
   });
   return { resolvedStreamSource, ...browserStore };
@@ -576,22 +576,22 @@ function StreamInspectorSheet({
   ]);
   const activeInspectorContext = useMemo(
     () =>
-      !activeInspector
-        ? null
-        : {
+      activeInspector
+        ? {
             inspector: activeInspector,
             database,
             agentUiState,
-          },
+          }
+        : null,
     [activeInspector, agentUiState, database],
   );
   const [retainedInspectorContext, setRetainedInspectorContext] = useState(activeInspectorContext);
   const activeInspectorKey =
     activeInspector?.kind === "script"
       ? `script:${activeInspector.executionId}`
-      : !activeInspector
-        ? null
-        : `${activeInspector.kind}:${activeInspector.offset}`;
+      : activeInspector
+        ? `${activeInspector.kind}:${activeInspector.offset}`
+        : null;
   // Base UI reports dismissal before TanStack Router commits the URL search
   // update. Suppress that exact inspector immediately so retained exit content
   // cannot navigate and write its deep link back during the closing frame.
@@ -641,7 +641,7 @@ function StreamInspectorSheet({
       content = (
         <LlmRequestInspectorContent
           database={inspectorContext.database}
-          {...(!liveStep ? {} : { liveStep })}
+          {...(liveStep ? { liveStep } : {})}
           llmRequestOffset={inspector.offset}
         />
       );
@@ -878,7 +878,7 @@ function useAgentInterrupt(args: {
 
   return {
     isInterrupting,
-    ...(!error ? {} : { error }),
+    ...(error && { error }),
     run: async () => {
       if (isInterrupting) return;
       setIsInterrupting(true);

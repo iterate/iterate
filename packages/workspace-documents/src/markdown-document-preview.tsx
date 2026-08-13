@@ -264,9 +264,9 @@ function AnnotatedPreview({
       first !== -1 && body.indexOf(exact, first + 1) === -1
         ? { start: first, end: first + exact.length }
         : null;
-    const rect = !range
-      ? undefined
-      : projection?.sourceRangeToDomRanges(range)[0]?.getBoundingClientRect();
+    const rect = range
+      ? projection?.sourceRangeToDomRanges(range)[0]?.getBoundingClientRect()
+      : undefined;
     const wrapperRect = wrapper?.getBoundingClientRect();
     if (!range || !rect || !wrapperRect) {
       if (!composerOpen) setPending(null);

@@ -78,23 +78,23 @@ export class SecretProcessor extends StreamProcessor<SecretProcessorContract> {
           ...state,
           birthCertificate: event.payload,
           egress: event.payload.config.egress,
-          encryptedMaterial: !event.payload.config.encryptedMaterial
-            ? null
-            : { ...event.payload.config.encryptedMaterial, offset: event.offset },
+          encryptedMaterial: event.payload.config.encryptedMaterial
+            ? { ...event.payload.config.encryptedMaterial, offset: event.offset }
+            : null,
           refresh: event.payload.config.refresh,
           updatedOffset: event.offset,
         };
       case "events.iterate.com/secret/updated":
         return {
           ...state,
-          ...(!event.payload.egress ? {} : { egress: event.payload.egress }),
+          ...(event.payload.egress && { egress: event.payload.egress }),
           // An update is a complete material decision: omission destroys the
           // retained value. The committed offset is reducer-owned context for
           // AES-GCM authentication, so replaying this blob at another offset
           // cannot make it decrypt.
-          encryptedMaterial: !event.payload.encryptedMaterial
-            ? null
-            : { ...event.payload.encryptedMaterial, offset: event.offset },
+          encryptedMaterial: event.payload.encryptedMaterial
+            ? { ...event.payload.encryptedMaterial, offset: event.offset }
+            : null,
           updatedOffset: event.offset,
           // `refresh` present (incl. null-to-clear) replaces; omitted leaves it.
           // oxlint-disable-next-line iterate/simple-truthiness-check -- null must REPLACE (clear) the strategy; only omission preserves it
@@ -109,8 +109,8 @@ export class SecretProcessor extends StreamProcessor<SecretProcessorContract> {
           audit: {
             usedCount: state.audit.usedCount + 1,
             lastUsedAt: event.payload.usedAt,
-            ...(!event.payload.usedBy ? {} : { lastUsedBy: event.payload.usedBy }),
-            ...(!event.payload.url ? {} : { lastUsedUrl: event.payload.url }),
+            ...(event.payload.usedBy && { lastUsedBy: event.payload.usedBy }),
+            ...(event.payload.url && { lastUsedUrl: event.payload.url }),
           },
         };
       default:

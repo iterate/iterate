@@ -384,8 +384,8 @@ function renderOversizedJsonResult(input: {
     previewText = `${input.text.slice(0, Math.min(OVERSIZED_JSON_PREVIEW_MAX_BYTES, input.historyLimit))}\n… (cut mid-document)`;
   }
   return [
-    `Your script returned ${input.text.length.toLocaleString("en-US")} chars of JSON — over the ~${input.historyLimit.toLocaleString("en-US")}-char inline limit.${!typeText ? "" : " Inferred type:"}`,
-    ...(!typeText ? [] : ["```ts", `type Result = ${typeText}`, "```"]),
+    `Your script returned ${input.text.length.toLocaleString("en-US")} chars of JSON — over the ~${input.historyLimit.toLocaleString("en-US")}-char inline limit.${typeText ? " Inferred type:" : ""}`,
+    ...(typeText ? ["```ts", `type Result = ${typeText}`, "```"] : []),
     "Preview (long arrays/strings elided):",
     "```json",
     previewText,

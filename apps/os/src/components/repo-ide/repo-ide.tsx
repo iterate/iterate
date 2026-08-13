@@ -381,11 +381,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
         </ResizablePanel>
         <ResizableHandle />
         <ResizablePanel className="flex min-w-0 flex-col">
-          {!selectedPath ? (
-            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-              Select a file to view or edit it.
-            </div>
-          ) : (
+          {selectedPath ? (
             <Suspense
               fallback={
                 <div
@@ -439,6 +435,10 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                 />
               )}
             </Suspense>
+          ) : (
+            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+              Select a file to view or edit it.
+            </div>
           )}
         </ResizablePanel>
       </ResizablePanelGroup>

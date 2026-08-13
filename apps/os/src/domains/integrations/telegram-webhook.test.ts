@@ -114,12 +114,12 @@ describe("fetchTelegramWebhook", () => {
         ? new Request(`https://os.example.test${path}`, { body: "{}", method: "POST" })
         : await webhookRequest({
             rawBody,
-            secretToken: !secretTokenForBotId
-              ? secretToken
-              : await telegramWebhookSecretToken({
+            secretToken: secretTokenForBotId
+              ? await telegramWebhookSecretToken({
                   botId: secretTokenForBotId,
                   keyMaterial: SECRET_ENCRYPTION_KEY,
-                }),
+                })
+              : secretToken,
             update: updateBody,
           });
 
@@ -197,7 +197,7 @@ async function webhookRequest(input: {
     body: input.rawBody ?? JSON.stringify(input.update),
     headers: {
       "content-type": "application/json",
-      ...(!secretToken ? {} : { "x-telegram-bot-api-secret-token": secretToken }),
+      ...(secretToken && { "x-telegram-bot-api-secret-token": secretToken }),
     },
     method: "POST",
   });

@@ -32,7 +32,7 @@ export function AppDrawerButton() {
 
 function DrawerButton({ project }: { project: { projectId: string; projectSlug: string } | null }) {
   const queryClient = useQueryClient();
-  const drawerKey = ["project-drawer", !project ? "app" : project.projectId];
+  const drawerKey = ["project-drawer", project ? project.projectId : "app"];
   const drawer = useQuery({
     queryKey: drawerKey,
     queryFn: async () => false,

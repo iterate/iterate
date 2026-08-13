@@ -280,12 +280,12 @@ export function parseScheduleSetPayload(input: unknown): ScheduleSetPayload {
     SchedulerProcessorContract.events[
       "events.iterate.com/scheduler/schedule-set"
     ].payloadSchema.parse(input);
-  return !parsed.metadata
-    ? parsed
-    : {
+  return parsed.metadata
+    ? {
         ...parsed,
         metadata: canonicalJson(parsed.metadata) as ScheduleSetPayload["metadata"],
-      };
+      }
+    : parsed;
 }
 
 function canonicalJson(value: unknown): unknown {

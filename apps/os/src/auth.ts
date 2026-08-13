@@ -243,7 +243,7 @@ export function streamDeliveryAuthContext(projectId: string | null): ItxAuthCont
     isAdmin: !projectId,
     origin: "internal",
     principal: "trusted-internal",
-    ...(!projectId ? {} : { projectIds: [projectId] }),
+    ...(projectId && { projectIds: [projectId] }),
   });
   streamDeliveryAuthContexts.add(auth);
   return auth;

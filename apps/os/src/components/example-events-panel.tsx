@@ -66,11 +66,11 @@ export function ExampleEventsPanel({
                     <div className="truncate font-mono text-sm">
                       {event.type.replace("events.iterate.com/", "")}
                     </div>
-                    {!event.description ? null : (
+                    {event.description ? (
                       <div className="mt-0.5 truncate text-sm text-muted-foreground">
                         {event.description}
                       </div>
-                    )}
+                    ) : null}
                   </button>
                 ))}
               </div>

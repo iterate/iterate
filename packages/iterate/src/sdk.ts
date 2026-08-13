@@ -121,7 +121,7 @@ function wrapProject(itx: Project & Disposable): Project & Disposable {
       }
       if (property === Symbol.dispose) {
         const dispose = Reflect.get(target, property, target) as (() => void) | undefined;
-        return !dispose ? undefined : () => Reflect.apply(dispose, target, []);
+        return dispose ? () => Reflect.apply(dispose, target, []) : undefined;
       }
       // Cap'n Web uses the same callable proxy shape for methods, nested
       // capabilities, and property promises. Preserve that proxy verbatim;
@@ -632,7 +632,7 @@ export function createProcessorHost<State extends object = Record<string, unknow
       });
       const processor = registry.register(
         args.createProcessor({ path, projectId, stream }),
-        !args.recovery ? undefined : { recovery: args.recovery },
+        args.recovery ? { recovery: args.recovery } : undefined,
       );
       built = {
         // `RegisterableProcessor` erases the contract, so `reads` comes back

@@ -47,11 +47,11 @@ export default function BuildInfoScreen() {
     },
   });
 
-  const bundleSource = !Updates.isEnabled
-    ? "Metro dev server"
-    : Updates.isEmbeddedLaunch
+  const bundleSource = Updates.isEnabled
+    ? Updates.isEmbeddedLaunch
       ? "embedded in the binary"
-      : "OTA update";
+      : "OTA update"
+    : "Metro dev server";
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -118,7 +118,7 @@ export default function BuildInfoScreen() {
         <Row label="Native build" value={Application.nativeBuildVersion} />
         <Row label="Installed" value={formatTime(installedAt.data?.toISOString())} />
       </Section>
-      {!router.canGoBack() ? (
+      {router.canGoBack() ? null : (
         // Deep-link flows (preview-channel switch) replace into this screen
         // with no back stack, so the header has no back button.
         <Pressable
@@ -128,7 +128,7 @@ export default function BuildInfoScreen() {
         >
           <Text style={styles.linkLabel}>Go home</Text>
         </Pressable>
-      ) : null}
+      )}
     </ScrollView>
   );
 }

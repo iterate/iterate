@@ -277,9 +277,9 @@ export function writeTestTelemetryFailureSentinel(
       createdAt: input.startedAt,
       ci: input.ci,
       context: input.context,
-      ...(!input.expectedArtifactSources
-        ? {}
-        : { expectedArtifactSources: [...input.expectedArtifactSources] }),
+      ...(input.expectedArtifactSources && {
+        expectedArtifactSources: [...input.expectedArtifactSources],
+      }),
       run: {
         status: "failed",
         startedAt: input.startedAt,

@@ -164,9 +164,9 @@ export function replayLlmRequest(input: {
       event.offset === input.llmRequestOffset &&
       event.type === "events.iterate.com/agent/llm-request-requested",
   );
-  const requested = !requestedEvent
-    ? undefined
-    : RequestedPayloadSlice.safeParse(requestedEvent.payload);
+  const requested = requestedEvent
+    ? RequestedPayloadSlice.safeParse(requestedEvent.payload)
+    : undefined;
   if (!requestedEvent || !requested || !requested.success) return null;
 
   const body = buildAgentLlmRequestBody({ events, llmRequestOffset: input.llmRequestOffset });
@@ -286,7 +286,7 @@ function replayStats(input: {
     return parsed.success && parsed.data.requestOffset === input.llmRequestOffset;
   });
   const settledAt = timestampOf(settledEvent);
-  const settled = !settledEvent ? undefined : SettledPayloadSlice.safeParse(settledEvent.payload);
+  const settled = settledEvent ? SettledPayloadSlice.safeParse(settledEvent.payload) : undefined;
 
   const chunks = input.chunkEvents.filter((event) => {
     if (event.type !== LLM_RESPONSE_CHUNK_EVENT_TYPE) return false;

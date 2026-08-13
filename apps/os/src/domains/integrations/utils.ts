@@ -211,8 +211,8 @@ export function telegramChatStreamPath(input: {
   session?: string;
 }): string {
   const base = `/agents/telegram/${input.connection}/chat-${input.chatId}`;
-  const topical = !input.messageThreadId ? base : `${base}/topic-${input.messageThreadId}`;
-  return !input.session ? topical : `${topical}/session-${input.session}`;
+  const topical = input.messageThreadId ? `${base}/topic-${input.messageThreadId}` : base;
+  return input.session ? `${topical}/session-${input.session}` : topical;
 }
 
 /** Authenticated OS page for editing one Telegram connection's user access.

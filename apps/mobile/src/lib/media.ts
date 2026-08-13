@@ -152,7 +152,7 @@ export function extendedSinceIso(
   nowMs: number,
 ): string {
   const chosen = nowMs - windowDays * 86_400_000;
-  const existing = !existingSinceIso ? Infinity : new Date(existingSinceIso).getTime();
+  const existing = existingSinceIso ? new Date(existingSinceIso).getTime() : Infinity;
   return new Date(Math.min(chosen, existing)).toISOString();
 }
 
@@ -291,7 +291,7 @@ export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
     if (event.type === MEDIA_PROCESSED_EVENT_TYPE) {
       const payload = event.payload as MediaProcessedPayload;
       // Explicit undefined check — `||` would swallow a legitimate 0.
-      const requestOffset = !Number.isFinite(payload.requestOffset) ? null : payload.requestOffset;
+      const requestOffset = Number.isFinite(payload.requestOffset) ? payload.requestOffset : null;
       const prior = appliedSettlement.get(payload.stableKey);
       // Settlements apply MONOTONICALLY by requestOffset (lockstep with the
       // server fold's guard): one answering an older request than an
@@ -304,7 +304,7 @@ export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
         payload,
         offset: event.offset,
         requestOffset,
-        floor: !Number.isFinite(requestOffset) ? prior?.floor || 0 : requestOffset,
+        floor: Number.isFinite(requestOffset) ? requestOffset : prior?.floor || 0,
       });
       if (!payload.error) latestSuccessful.set(payload.stableKey, payload);
     }
@@ -467,7 +467,7 @@ export function deriveMediaFeed(input: {
       // nothing will ever arrive for it.
       continue;
     }
-    const parsed = !card.capturedAt ? NaN : Date.parse(card.capturedAt);
+    const parsed = card.capturedAt ? Date.parse(card.capturedAt) : NaN;
     // The stableKey key is what carries the mounted component across the
     // card→row morph; pre-hash and terminal cards key on their preview, as
     // does a duplicate-hash straggler (two concurrent captures of identical

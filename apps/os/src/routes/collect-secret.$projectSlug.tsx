@@ -172,12 +172,12 @@ function CollectSecretCard() {
       </CardHeader>
       <Separator />
       <CardContent className="space-y-4 pt-6">
-        {!search.description ? null : (
+        {search.description ? (
           <div className="space-y-1 text-sm">
             <div className="text-muted-foreground">The requester says</div>
             <div>{search.description}</div>
           </div>
-        )}
+        ) : null}
         <div className="space-y-1 text-sm">
           <div className="text-muted-foreground">Stored at</div>
           <code className="text-xs">{search.path}</code>

@@ -90,18 +90,18 @@ export function LlmRequestInspectorContent({
       <SheetHeader className="shrink-0 pr-12">
         <SheetTitle className="truncate">
           LLM trace #{llmRequestOffset}
-          {!displayedReplay ? "" : ` · ${displayedReplay.model}`}
+          {displayedReplay ? ` · ${displayedReplay.model}` : ""}
         </SheetTitle>
         <SheetDescription>
-          {!displayedReplay ? (
-            "The exact request sent to the model, and its response"
-          ) : (
+          {displayedReplay ? (
             <>
               {formatDateTime(Date.parse(displayedReplay.requestedAt))} ·{" "}
               {displayedReplay.messages.length.toLocaleString()} messages ·{" "}
               {(totalChars ?? 0).toLocaleString()} chars
               <OutcomeBadge outcome={displayedReplay.outcome} />
             </>
+          ) : (
+            "The exact request sent to the model, and its response"
           )}
         </SheetDescription>
       </SheetHeader>
@@ -159,13 +159,13 @@ export function LlmRequestInspectorContent({
           <p className="px-5 py-3 text-sm text-destructive">
             Reading the local event mirror failed: {eventsResult.error?.message ?? "unknown error"}
           </p>
-        ) : !loaded ? (
-          <p className="px-5 py-3 text-sm text-muted-foreground">Opening local SQLite mirror…</p>
-        ) : (
+        ) : loaded ? (
           <p className="px-5 py-3 text-sm text-muted-foreground">
             No LLM request at offset #{llmRequestOffset} in the local mirror (yet). If this stream
             is still syncing, the request will appear once its events arrive.
           </p>
+        ) : (
+          <p className="px-5 py-3 text-sm text-muted-foreground">Opening local SQLite mirror…</p>
         )}
       </div>
     </>
@@ -200,9 +200,9 @@ function withLiveResponse(
 
 function OutcomeBadge({ outcome }: { outcome: LlmRequestReplay["outcome"] }) {
   if (!outcome) return <> · in flight</>;
-  const duration = !Number.isFinite(outcome.durationMs)
-    ? ""
-    : ` in ${formatSeconds(outcome.durationMs)}`;
+  const duration = Number.isFinite(outcome.durationMs)
+    ? ` in ${formatSeconds(outcome.durationMs)}`
+    : "";
   return (
     <>
       {" · "}
@@ -298,7 +298,7 @@ const ReplayResponseSection = memo(
           <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
             response
           </span>
-          {!response ? null : (
+          {response ? (
             <span className="font-mono text-[10px] text-muted-foreground/60">
               {response.text.length.toLocaleString()} chars
               {response.source === "chunks" && outcome
@@ -307,7 +307,7 @@ const ReplayResponseSection = memo(
                   ? " · streaming"
                   : ""}
             </span>
-          )}
+          ) : null}
         </div>
         {!response || response.thinkingText === "" ? null : (
           <div className="mb-2 max-w-full whitespace-pre-wrap rounded-xl bg-muted/50 px-4 py-3 text-sm italic leading-relaxed text-muted-foreground">
@@ -336,19 +336,19 @@ const ReplayResponseSection = memo(
             {response.text}
           </pre>
         )}
-        {!outcome?.errorMessage ? null : (
+        {outcome?.errorMessage ? (
           <pre className="mt-2 overflow-x-auto rounded-xl bg-destructive/5 px-4 py-2.5 font-mono text-xs leading-relaxed text-destructive">
             {outcome.errorMessage}
           </pre>
-        )}
+        ) : null}
         {/* A committed output CAN be the empty string — an empty-text response
             with no thinking must still say so instead of a bare header. */}
         {(!response || (response.text === "" && response.thinkingText === "")) &&
         !outcome?.errorMessage ? (
           <p className="text-sm text-muted-foreground">
-            {!outcome
-              ? "Nothing has streamed back yet."
-              : "The model returned no text for this request."}
+            {outcome
+              ? "The model returned no text for this request."
+              : "Nothing has streamed back yet."}
           </p>
         ) : null}
       </section>
@@ -374,25 +374,24 @@ const ReplayResponseSection = memo(
 function ReplayMetricsSection({ stats }: { stats: LlmRequestReplayStats }) {
   const { tokens } = stats;
   const rawResponseText = useMemo(
-    () => (!stats.rawResponse ? null : stringifyRawResponse(stats.rawResponse)),
+    () => (stats.rawResponse ? stringifyRawResponse(stats.rawResponse) : null),
     [stats.rawResponse],
   );
   const hasAnything =
     !!tokens || stats.chunkCount > 0 || Number.isFinite(stats.generationMs) || !!stats.rawResponse;
   if (!hasAnything) return null;
-  const contextPercent = !tokens
-    ? null
-    : Math.round(((tokens.inputTokens + tokens.outputTokens) / tokens.maxContextTokens) * 1000) /
-      10;
+  const contextPercent = tokens
+    ? Math.round(((tokens.inputTokens + tokens.outputTokens) / tokens.maxContextTokens) * 1000) / 10
+    : null;
   const streamingParts = [
-    !Number.isFinite(stats.timeToFirstChunkMs)
-      ? null
-      : `first chunk after ${formatSeconds(stats.timeToFirstChunkMs)}`,
-    !Number.isFinite(stats.generationMs)
-      ? null
-      : `generated in ${formatSeconds(stats.generationMs)}`,
+    Number.isFinite(stats.timeToFirstChunkMs)
+      ? `first chunk after ${formatSeconds(stats.timeToFirstChunkMs)}`
+      : null,
+    Number.isFinite(stats.generationMs)
+      ? `generated in ${formatSeconds(stats.generationMs)}`
+      : null,
     stats.chunkCount === 0 ? null : `${stats.chunkCount.toLocaleString()} chunks`,
-    !Number.isFinite(stats.outputTokensPerSecond) ? null : `${stats.outputTokensPerSecond} tok/s`,
+    Number.isFinite(stats.outputTokensPerSecond) ? `${stats.outputTokensPerSecond} tok/s` : null,
   ].filter((part) => !!part);
   return (
     <section className="px-5 py-3">
@@ -400,7 +399,7 @@ function ReplayMetricsSection({ stats }: { stats: LlmRequestReplayStats }) {
         metrics
       </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 font-mono text-xs text-foreground/80">
-        {!tokens ? null : (
+        {tokens ? (
           <>
             <dt className="text-muted-foreground/70">input</dt>
             <dd>
@@ -423,14 +422,14 @@ function ReplayMetricsSection({ stats }: { stats: LlmRequestReplayStats }) {
               {contextPercent}% of {Math.round(tokens.maxContextTokens / 1000)}k window
             </dd>
           </>
-        )}
+        ) : null}
         {streamingParts.length === 0 ? null : (
           <>
             <dt className="text-muted-foreground/70">streaming</dt>
             <dd>{streamingParts.join(" · ")}</dd>
           </>
         )}
-        {!stats.gatewayCacheStatus ? null : (
+        {stats.gatewayCacheStatus ? (
           <>
             <dt className="text-muted-foreground/70">gateway</dt>
             <dd>
@@ -447,9 +446,9 @@ function ReplayMetricsSection({ stats }: { stats: LlmRequestReplayStats }) {
                 : ""}
             </dd>
           </>
-        )}
+        ) : null}
       </dl>
-      {!rawResponseText ? null : (
+      {rawResponseText ? (
         <details className="mt-2">
           <summary className="cursor-pointer font-mono text-xs text-muted-foreground/70 hover:text-foreground">
             raw completion payload
@@ -458,7 +457,7 @@ function ReplayMetricsSection({ stats }: { stats: LlmRequestReplayStats }) {
             {rawResponseText}
           </pre>
         </details>
-      )}
+      ) : null}
     </section>
   );
 }

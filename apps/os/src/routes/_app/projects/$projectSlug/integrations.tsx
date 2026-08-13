@@ -478,7 +478,7 @@ function ProjectIntegrationsContent() {
           />
           <AccountConnectionsItem />
         </ItemGroup>
-        {!telegramAccessConnection ? null : (
+        {telegramAccessConnection ? (
           <Suspense
             fallback={<TelegramAccessSheetLoading onOpenChange={setTelegramAccessSheetOpen} />}
           >
@@ -488,7 +488,7 @@ function ProjectIntegrationsContent() {
               projectSlug={project.slug}
             />
           </Suspense>
-        )}
+        ) : null}
       </section>
 
       {providedConnections.length ? (
@@ -633,7 +633,7 @@ function ConnectableIntegrationCard({
                 disconnecting={disconnecting}
                 entry={entry}
                 onConfigureAccess={
-                  !onConfigureAccess ? null : () => onConfigureAccess(entry.connection)
+                  onConfigureAccess ? () => onConfigureAccess(entry.connection) : null
                 }
                 onDisconnect={() => onDisconnect(entry.connection)}
                 onOpenFeed={() => onOpenFeed(entry.path)}
@@ -663,9 +663,9 @@ function ProvidedIntegrationCard({
         <div className="min-w-0 space-y-1">
           <ItemTitle>{entry.integration}</ItemTitle>
           <ItemDescription className="line-clamp-3">
-            {!entry.connection
-              ? "Integration-level mount provided by project code."
-              : `Connection ${entry.connection} provided by project code.`}
+            {entry.connection
+              ? `Connection ${entry.connection} provided by project code.`
+              : "Integration-level mount provided by project code."}
           </ItemDescription>
         </div>
         <div className="grid gap-1.5 text-xs text-muted-foreground">
@@ -765,12 +765,12 @@ function IntegrationMetadata({
       {connection.displayName ? (
         <IntegrationMetadataRow label="Account" value={connection.displayName} />
       ) : null}
-      {!Number.isFinite(scopeCount) ? null : (
+      {Number.isFinite(scopeCount) ? (
         <IntegrationMetadataRow
           label="Scopes"
           value={scopeCount === 1 ? "1 scope" : `${scopeCount} scopes`}
         />
-      )}
+      ) : null}
     </div>
   );
 }
@@ -839,9 +839,7 @@ function TelegramAccessSheet({
             </SheetDescription>
           </SheetHeader>
           <FieldGroup className="flex flex-1 flex-col gap-4 p-4">
-            {!access ? (
-              <Skeleton className="h-40 w-full" />
-            ) : (
+            {access ? (
               <Field data-invalid={saveAccess.isError}>
                 <FieldLabel htmlFor="telegram-allowed-user-ids">
                   Allowed Telegram user IDs
@@ -862,6 +860,8 @@ function TelegramAccessSheet({
                 </FieldDescription>
                 {saveAccess.error ? <FieldError>{saveAccess.error.message}</FieldError> : null}
               </Field>
+            ) : (
+              <Skeleton className="h-40 w-full" />
             )}
           </FieldGroup>
           <SheetFooter>

@@ -120,12 +120,12 @@ export function summarizeActivity(activity: AgentUiActivity): string {
     .flatMap((step) => (step.kind === "code" && step.activitySummary ? [step.activitySummary] : []))
     .at(0);
   if (!label || summary.outcome !== "clean") {
-    return `${!label ? "" : `${label} · `}${formatAgentUiActivitySummary(activity)}`;
+    return `${label ? `${label} · ` : ""}${formatAgentUiActivitySummary(activity)}`;
   }
   return [
     label,
-    ...(!Number.isFinite(activity.endedAtMs)
-      ? []
-      : [formatAgentUiDuration(Math.max(0, activity.endedAtMs - activity.startedAtMs))]),
+    ...(Number.isFinite(activity.endedAtMs)
+      ? [formatAgentUiDuration(Math.max(0, activity.endedAtMs - activity.startedAtMs))]
+      : []),
   ].join(" · ");
 }

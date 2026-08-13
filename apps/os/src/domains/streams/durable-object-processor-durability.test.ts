@@ -244,7 +244,7 @@ function makeRunner(args: {
         storage: args.storage,
         name: SLUG,
       }),
-      ...(!args.recovery ? {} : { recovery: args.recovery }),
+      ...(args.recovery && { recovery: args.recovery }),
     },
     now: () => 0,
   });

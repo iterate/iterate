@@ -69,7 +69,7 @@ export async function executeCoordinatedWorkerBuild(
     });
   }
   const artifact: WorkerBuildArtifact = {
-    ...(!built.assetConfig ? {} : { assetConfig: built.assetConfig }),
+    ...(built.assetConfig && { assetConfig: built.assetConfig }),
     assetManifest: built.assetManifest,
     assets: built.assets,
     buildKey: request.buildKey,
@@ -77,7 +77,7 @@ export async function executeCoordinatedWorkerBuild(
     mainModule: built.mainModule,
     modules: built.modules,
     ...(built.warnings.length === 0 ? {} : { warnings: built.warnings }),
-    ...(!built.wranglerConfig ? {} : { wranglerConfig: built.wranglerConfig }),
+    ...(built.wranglerConfig && { wranglerConfig: built.wranglerConfig }),
   };
   await store.put(artifact);
   return { artifact, ok: true };

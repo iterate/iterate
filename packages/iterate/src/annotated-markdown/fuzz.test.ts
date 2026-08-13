@@ -271,7 +271,7 @@ describe("edit-sequence fuzz", () => {
             body,
             author: pick(rand, ["lee", "sam", "jonas@nustom.com"]),
             createdAt: isoAt(counter),
-            ...(!anchor ? {} : { anchor }),
+            ...(anchor && { anchor }),
           });
           doc = result.doc;
           expectedBodies.set(result.commentId, normalize(body));
@@ -285,7 +285,7 @@ describe("edit-sequence fuzz", () => {
             body,
             author: "lee",
             createdAt: isoAt(counter),
-            ...(!replyTo ? {} : { inReplyTo: replyTo }),
+            ...(replyTo && { inReplyTo: replyTo }),
           });
           doc = result.doc;
           expectedBodies.set(result.commentId, normalize(body));

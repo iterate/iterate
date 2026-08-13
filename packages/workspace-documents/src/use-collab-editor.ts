@@ -111,14 +111,14 @@ export function useCollabEditor(input: {
     const redlines = (on: boolean): Extension => (on ? redlineExtension(connection) : []);
 
     let reflectTimer: ReturnType<typeof setTimeout> | null = null;
-    const liveReflector = !onLiveContent
-      ? []
-      : EditorView.updateListener.of((update) => {
+    const liveReflector = onLiveContent
+      ? EditorView.updateListener.of((update) => {
           if (!update.docChanged) return;
           // Debounced: reflecting every keystroke reparses the whole board.
           if (reflectTimer) clearTimeout(reflectTimer);
           reflectTimer = setTimeout(() => onLiveContent(path, update.state.doc.toString()), 200);
-        });
+        })
+      : [];
 
     const buildState = (content: string, version: number, redlines: Extension) =>
       EditorState.create({

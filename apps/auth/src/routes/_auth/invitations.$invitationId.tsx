@@ -155,11 +155,11 @@ function InvitationPage() {
             <span className="text-muted-foreground">Organization</span>
             <span className="truncate font-medium">{invitation.organizationSlug}</span>
           </div>
-          {!signedInAsInvitedEmail ? (
+          {signedInAsInvitedEmail ? null : (
             <p className="text-sm text-destructive">
               Sign in as {invitation.email} to accept or decline this invitation.
             </p>
-          ) : null}
+          )}
         </CardContent>
         <CardFooter className="justify-end gap-2">
           <Button

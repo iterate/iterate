@@ -43,7 +43,7 @@ export function createUserPrincipal(input: {
     type: "user",
     userId: input.userId,
     sessionId: input.sessionId,
-    ...(!input.email ? {} : { email: input.email }),
+    ...(input.email && { email: input.email }),
     isAdmin: input.isAdmin ?? false,
     organizations: input.organizations,
     projects: input.projects,

@@ -95,7 +95,7 @@ function finalizePathNode(node: AgentPathTreeNode): void {
   const waiting = emptyWaitingAggregate();
   addWaiting(waiting, node.agent?.summary.waitingFor);
   let lastWorkAt = node.agent?.timestamps.lastWorkAt ?? "";
-  let agentCount = !node.agent ? 0 : 1;
+  let agentCount = node.agent ? 1 : 0;
   let activeCount = !node.agent || deriveAgentDisplayState(node.agent.runtime) === "idle" ? 0 : 1;
 
   for (const child of node.children) {

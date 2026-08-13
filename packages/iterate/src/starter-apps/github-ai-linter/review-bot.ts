@@ -223,7 +223,7 @@ export async function handleGithubPullRequestWebhook(
         payload: {
           actor: { type: "github", login: author.login, senderType: author.type },
           content: [
-            `@${author.login} wrote on ${repository.owner}/${repository.repo}#${number}${!requestUrl ? "" : ` at ${requestUrl}`}:`,
+            `@${author.login} wrote on ${repository.owner}/${repository.repo}#${number}${requestUrl ? ` at ${requestUrl}` : ""}:`,
             requestBody,
           ].join("\n\n"),
           llmRequestPolicy: { behaviour: "after-current-request" },

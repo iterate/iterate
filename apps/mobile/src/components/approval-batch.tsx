@@ -336,11 +336,11 @@ export function ApprovalBatchActions({
               ? "Signing…"
               : decided
                 ? "Decided"
-                : !enrolledKey
-                  ? "Enroll to approve"
-                  : single
+                : enrolledKey
+                  ? single
                     ? "Approve (Face ID)"
-                    : `Approve all ${payload.requests.length} (Face ID)`}
+                    : `Approve all ${payload.requests.length} (Face ID)`
+                  : "Enroll to approve"}
           </Text>
         </Pressable>
       </View>
@@ -456,11 +456,11 @@ function RequestDetails({
             ? outcome.decidedBy === "expiry"
               ? "Expired"
               : "Rejected"
-            : !outcome.settle
-              ? "Approved — awaiting the egress door…"
-              : outcome.settle.error
+            : outcome.settle
+              ? outcome.settle.error
                 ? `Delivery failed · ${outcome.settle.error}`
-                : `Upstream ${outcome.settle.status || "status unavailable"}`}
+                : `Upstream ${outcome.settle.status || "status unavailable"}`
+              : "Approved — awaiting the egress door…"}
         </Text>
       ) : null}
       <Text style={styles.url} selectable>

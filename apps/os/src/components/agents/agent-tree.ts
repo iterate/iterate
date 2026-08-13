@@ -74,7 +74,7 @@ const AGENT_TREE_SHAPE = {
 
 /** Normalized text projected into TanStack Table's hidden search column. */
 export function agentSearchText(agent: AgentRecord): string {
-  const binding = !agent.binding ? [] : Object.values(agent.binding);
+  const binding = agent.binding ? Object.values(agent.binding) : [];
   return [
     agentTitle(agent),
     agent.summary.activity,
@@ -122,13 +122,13 @@ function agentBindingTitle(binding: AgentRecord["binding"]): string | undefined 
   if (!binding) return undefined;
   switch (binding.type) {
     case "slack_thread":
-      return !binding.channelName ? `Slack ${binding.channelId}` : `#${binding.channelName}`;
+      return binding.channelName ? `#${binding.channelName}` : `Slack ${binding.channelId}`;
     case "telegram_thread":
       return `Telegram chat ${binding.chatId}`;
     case "email_thread":
       return (
         binding.subject ??
-        (!binding.counterpart ? "Email thread" : `Email with ${binding.counterpart}`)
+        (binding.counterpart ? `Email with ${binding.counterpart}` : "Email thread")
       );
     case "github_pull_request":
       return `${binding.owner}/${binding.repo} #${binding.number}`;

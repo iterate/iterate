@@ -332,7 +332,7 @@ function SheetBody({
                 {assigning ? "Assigning…" : "Assign agent"}
               </Button>
             )}
-            {!changeStatus ? null : (
+            {changeStatus ? (
               <Button
                 variant="ghost"
                 size="sm"
@@ -343,7 +343,7 @@ function SheetBody({
                 <RotateCcwIcon aria-hidden className="size-3.5" />
                 Revert
               </Button>
-            )}
+            ) : null}
             <AlertDialog>
               <AlertDialogTrigger
                 render={

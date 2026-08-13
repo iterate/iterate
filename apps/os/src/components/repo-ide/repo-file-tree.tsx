@@ -66,7 +66,7 @@ export function RepoFileTree({
   const { model } = useFileTree({
     paths: mergedPaths,
     initialExpansion: "open",
-    ...(!selectedPath ? {} : { initialSelectedPaths: [selectedPath] }),
+    ...(selectedPath && { initialSelectedPaths: [selectedPath] }),
     onSelectionChange: (paths) => {
       const path = paths[0];
       if (path && model.getItem(path)?.isDirectory() === false) {

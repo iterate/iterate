@@ -245,7 +245,7 @@ function initialConnectionRetryLog(retry: ItxInitialConnectionRetry) {
     attemptDurationMs: Math.round(retry.attemptDurationMs),
     delayMs: retry.delayMs,
     error: retry.error.message,
-    ...(!code ? {} : { errorCode: code }),
+    ...(code && { errorCode: code }),
     failedAttempt: retry.failedAttempt,
     nextAttempt: retry.nextAttempt,
     startedAt: retry.startedAt,

@@ -185,7 +185,7 @@ export function browserProcessorProgressRewindStatements(
     {
       sql: `
         UPDATE processor_progress
-        SET ${!streamId ? "" : "stream_id = ?,"}
+        SET ${streamId ? "stream_id = ?," : ""}
             reducer_version = '${STALE_REDUCER_VERSION}',
             reduced_through_offset = 0,
             reduced_state = '{}',
@@ -194,7 +194,7 @@ export function browserProcessorProgressRewindStatements(
             updated_at = datetime('now')
         WHERE processor_slug = ?
       `,
-      params: !streamId ? [processorSlug] : [streamId, processorSlug],
+      params: streamId ? [streamId, processorSlug] : [processorSlug],
     },
   ];
 }
@@ -416,11 +416,11 @@ export async function deleteBrowserProcessorState(args: {
   progressKey?: string;
 }): Promise<void> {
   await ensureBrowserProcessorProgressSchema(args.sql);
-  const scope = !args.progressKey
-    ? { where: `processor_slug = ?`, params: [args.processorSlug] }
-    : {
+  const scope = args.progressKey
+    ? {
         where: `processor_slug = ? AND progress_key = ?`,
         params: [args.processorSlug, args.progressKey],
-      };
+      }
+    : { where: `processor_slug = ?`, params: [args.processorSlug] };
   await args.sql.exec(`DELETE FROM processor_progress WHERE ${scope.where}`, scope.params);
 }

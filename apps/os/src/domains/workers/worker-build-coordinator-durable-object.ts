@@ -40,16 +40,16 @@ export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
     const operation = this.#coordinator.build(request);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const result = !Number.isFinite(buildBudgetMs)
-        ? await operation
-        : await Promise.race([
+      const result = Number.isFinite(buildBudgetMs)
+        ? await Promise.race([
             operation,
             new Promise<never>((_, reject) => {
               timer = setTimeout(() => {
                 this.enqueue(request).then(() => reject(workerBuildInProgressError()), reject);
               }, buildBudgetMs);
             }),
-          ]);
+          ])
+        : await operation;
       // The foreground caller received this exact terminal result, so there is
       // no later caller to inform. Receipts remain only when timeout/alarm
       // ownership outlives the caller that started the operation.

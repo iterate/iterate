@@ -103,6 +103,6 @@ export function agentComponentHost(processor: object): AgentHost {
     append: (...events) => p.append(...events),
     now: () => p.deps.now?.() ?? Date.now(),
     sleep: (ms) =>
-      !p.deps.sleep ? new Promise((resolve) => setTimeout(resolve, ms)) : p.deps.sleep(ms),
+      p.deps.sleep ? p.deps.sleep(ms) : new Promise((resolve) => setTimeout(resolve, ms)),
   };
 }

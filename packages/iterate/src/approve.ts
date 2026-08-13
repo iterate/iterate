@@ -91,9 +91,9 @@ export async function runApprovalCli(input: {
     );
   }
   prompts.log.info(
-    !key
-      ? "No local approval key: decisions will be plain events. Run with --enroll to sign approvals."
-      : `Approvals are signed with ${key.kind} key ${key.keyId} (${key.label}).`,
+    key
+      ? `Approvals are signed with ${key.kind} key ${key.keyId} (${key.label}).`
+      : "No local approval key: decisions will be plain events. Run with --enroll to sign approvals.",
   );
   // Offer one held batch until a terminal outcome, or return "stop" if the
   // human cancels (Ctrl-C) so the caller can exit. Shared by the backlog pass
@@ -287,7 +287,7 @@ async function listKeys(input: {
   for (const key of keys) {
     const marks = [
       key.keyId === input.localKey?.keyId ? "this machine" : null,
-      !key.revokedAt ? null : `revoked ${key.revokedAt}`,
+      key.revokedAt ? `revoked ${key.revokedAt}` : null,
     ].filter((mark) => !!mark);
     prompts.log.info(
       `${key.keyId}  ${key.label}  added ${key.addedAt}${marks.length ? `  (${marks.join(", ")})` : ""}`,

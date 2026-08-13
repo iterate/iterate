@@ -41,11 +41,11 @@ export function buildRoundMetaYaml(
     ...(llm && {
       llm: {
         ...(llm.model && { model: llm.model }),
-        ...(!Number.isFinite(llm.durationMs)
-          ? {}
-          : { duration: `${(llm.durationMs / 1000).toFixed(1)}s` }),
-        ...(!Number.isFinite(llm.inputTokens) ? {} : { inputTokens: llm.inputTokens }),
-        ...(!Number.isFinite(llm.outputTokens) ? {} : { outputTokens: llm.outputTokens }),
+        ...(Number.isFinite(llm.durationMs) && {
+          duration: `${(llm.durationMs / 1000).toFixed(1)}s`,
+        }),
+        ...(Number.isFinite(llm.inputTokens) && { inputTokens: llm.inputTokens }),
+        ...(Number.isFinite(llm.outputTokens) && { outputTokens: llm.outputTokens }),
         ...(llm.outcome && llm.outcome !== "completed" && { outcome: llm.outcome }),
         ...(llm.cancelReason && { cancelReason: llm.cancelReason }),
       },
@@ -53,9 +53,9 @@ export function buildRoundMetaYaml(
     code: {
       ...(code.status === "running" && { status: "running" }),
       started: formatClockTime(code.startedAtMs),
-      ...(!Number.isFinite(code.durationMs)
-        ? {}
-        : { duration: `${(code.durationMs / 1000).toFixed(1)}s` }),
+      ...(Number.isFinite(code.durationMs) && {
+        duration: `${(code.durationMs / 1000).toFixed(1)}s`,
+      }),
       ...(code.status === "done" && code.success === false && { failed: true }),
     },
     ...(!!promptMessages?.length && {

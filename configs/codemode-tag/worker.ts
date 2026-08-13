@@ -290,9 +290,9 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     if (!agentPaths.length) return;
     const itx = await this.itx;
     const file = await itx.repo.readFile({ path: "AGENTS.md" });
-    const content = !file
-      ? "(AGENTS.md was deleted from /repos/config — no standing project notes.)"
-      : `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\n\n${file.content}`;
+    const content = file
+      ? `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\n\n${file.content}`
+      : "(AGENTS.md was deleted from /repos/config — no standing project notes.)";
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
     const hash = [...new Uint8Array(digest).slice(0, 8)]
       .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -388,15 +388,15 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     // mid-script sendMessage.
     await this.#appendUnlessAlreadyRecorded(() =>
       agent.append(
-        ...(!status
-          ? []
-          : [
+        ...(status
+          ? [
               {
                 type: "events.iterate.com/agent/summary-updated" as const,
                 idempotencyKey: `agent/codemode-status@${event.offset}`,
                 payload: { activity: status },
               },
-            ]),
+            ]
+          : []),
         {
           type: "events.iterate.com/capability-host/script-run-requested" as const,
           idempotencyKey: `agent/script-run-requested@${event.offset}`,
@@ -408,15 +408,15 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
             expiresAt: Date.parse(event.createdAt) + SCRIPT_EXPIRY_MS,
           },
         },
-        ...(!prose
-          ? []
-          : [
+        ...(prose
+          ? [
               {
                 type: "events.iterate.com/agents/web-message-sent" as const,
                 idempotencyKey: `agent/codemode-prose@${event.offset}`,
                 payload: { message: prose, llmRequestOffset },
               },
-            ]),
+            ]
+          : []),
       ),
     );
   }

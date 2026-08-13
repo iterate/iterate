@@ -357,13 +357,11 @@ export class CapabilityHostProcessor extends StreamProcessor<
         return {
           ...state,
           scriptExecutions,
-          ...(!retained
-            ? {}
-            : {
-                settledScriptResults: [...state.settledScriptResults, retained].slice(
-                  -RETAINED_SCRIPT_RESULTS_LIMIT,
-                ),
-              }),
+          ...(retained && {
+            settledScriptResults: [...state.settledScriptResults, retained].slice(
+              -RETAINED_SCRIPT_RESULTS_LIMIT,
+            ),
+          }),
         };
       }
       case "events.iterate.com/capability-host/preamble-set": {
@@ -483,7 +481,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       type: "events.iterate.com/capability-host/capability-revoked",
       payload: {
         path,
-        ...(!Number.isFinite(providedAtOffset) ? {} : { providedAtOffset }),
+        ...(Number.isFinite(providedAtOffset) && { providedAtOffset }),
       },
     });
     await this.deps.reads.waitUntilEvent({
@@ -535,9 +533,9 @@ export class CapabilityHostProcessor extends StreamProcessor<
           // MULTISET, not a set: a candidate adding a second occurrence of an
           // already-stale message is still introducing a problem.
           const preexisting = new Map<string, number>();
-          for (const problem of !without
-            ? []
-            : await checkPreamble({ capabilities, preamble: without.ts }).catch(() => [])) {
+          for (const problem of without
+            ? await checkPreamble({ capabilities, preamble: without.ts }).catch(() => [])
+            : []) {
             const key = positionlessProblem(problem);
             preexisting.set(key, (preexisting.get(key) || 0) + 1);
           }

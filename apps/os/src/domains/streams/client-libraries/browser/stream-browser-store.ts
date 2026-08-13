@@ -951,7 +951,7 @@ function createStreamRuntime(
     await discardBrowserProcessorProjection({
       sql,
       processorSlug: processorConfig.slug,
-      ...(!streamId ? {} : { streamId }),
+      ...(streamId && { streamId }),
       tables: processorConfig.tables,
       ensureProjectionSchema: (client) => processorConfig.ensureProjectionSchema(client),
     });
@@ -1008,16 +1008,16 @@ function createStreamRuntime(
     if (stream || disposed) return;
     if (connectPendingEpoch === connectionEpoch) return;
     connectStartedAt = Date.now();
-    const streamUrl = !args.streamUrl
-      ? undefined
-      : new URL(
+    const streamUrl = args.streamUrl
+      ? new URL(
           resolveStreamUrl({
             projectId: args.projectId,
             streamPath: args.streamPath,
             streamUrl: args.streamUrl,
           }),
           window.location.href,
-        );
+        )
+      : undefined;
     // Identity for THIS connect attempt. A late callback from a superseded
     // connection compares against this and bails if it no longer matches (B1).
     connectionEpoch += 1;
@@ -1381,7 +1381,7 @@ function createStreamRuntime(
           snapshot: () => processor.snapshot(),
           oneWayEstimateMs: () => {
             const rtt = transportRtt.stats();
-            return !rtt ? undefined : rtt.p50 / 2;
+            return rtt ? rtt.p50 / 2 : undefined;
           },
         });
         return {
@@ -1393,7 +1393,7 @@ function createStreamRuntime(
             processor: {
               announcement: announceContract(processor.contract),
             },
-            ...(!subscriberUser ? {} : { user: subscriberUser }),
+            ...(subscriberUser && { user: subscriberUser }),
           },
           getRuntimeState: capabilities.getRuntimeState,
           ping: capabilities.ping,
@@ -1888,9 +1888,9 @@ function createStreamRuntime(
       }
       throw new Error(
         `server is at offset ${coreProcessorState.maxOffset} but ${
-          !Number.isFinite(lastDeliveryArrivalAt)
-            ? `no event batch has arrived since the callback opened ${Date.now() - arrivalBaselineAt}ms ago`
-            : `no delivery arrived in the ${LIVENESS_PROBE_INTERVAL_MS}ms before this check began (last arrival ${Date.now() - lastDeliveryArrivalAt}ms ago)`
+          Number.isFinite(lastDeliveryArrivalAt)
+            ? `no delivery arrived in the ${LIVENESS_PROBE_INTERVAL_MS}ms before this check began (last arrival ${Date.now() - lastDeliveryArrivalAt}ms ago)`
+            : `no event batch has arrived since the callback opened ${Date.now() - arrivalBaselineAt}ms ago`
         } (applied through ${lastDeliveredOffset}); event callback is no longer sending`,
       );
     } catch (error) {
@@ -1959,7 +1959,7 @@ function createStreamRuntime(
       if (!nudgeSkipWarned) {
         nudgeSkipWarned = true;
         console.warn(
-          `[stream ${args.streamPath} ${slug}] nudge skipped: ${!stream ? "no stream connection" : `no event callback (cache role ${snapshot.databaseRole})`}`,
+          `[stream ${args.streamPath} ${slug}] nudge skipped: ${stream ? `no event callback (cache role ${snapshot.databaseRole})` : "no stream connection"}`,
         );
       }
       return;
@@ -2082,7 +2082,7 @@ function createStreamRuntime(
       // Combined with callWhenReady's reconnect-wait, an appendBatch caller
       // survives a stream DO eviction mid-blast with zero loss and zero dupes.
       const events = appendArgs.events.map((event) =>
-        !event.idempotencyKey ? { ...event, idempotencyKey: crypto.randomUUID() } : event,
+        event.idempotencyKey ? event : { ...event, idempotencyKey: crypto.randomUUID() },
       );
       const promise = (async () => {
         // Real consume-own-append measurement: t0 is when the CALLER asked

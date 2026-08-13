@@ -136,7 +136,7 @@ function withShortLibNames(options: ts.CompilerOptions): ts.CompilerOptions {
   const lib = options.lib?.map((name) =>
     name.replace(/^lib\./, "").replace(/\.d\.ts$/, ""),
   ) as ts.CompilerOptions["lib"];
-  return !lib ? options : { ...options, lib };
+  return lib ? { ...options, lib } : options;
 }
 
 /**

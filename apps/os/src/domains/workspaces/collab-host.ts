@@ -402,7 +402,7 @@ export class CollabHost {
 
   async readFileBytes(path: string): Promise<Uint8Array | null> {
     const content = await this.readFile(path);
-    return !content ? null : new TextEncoder().encode(content);
+    return content ? new TextEncoder().encode(content) : null;
   }
 
   /** Apply a whole-content write as a head-relative splice. False = not live. */

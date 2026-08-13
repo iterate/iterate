@@ -687,9 +687,9 @@ function resolvePreviewTestBaseUrlEnvironment({
       (requiredDeploymentHeadSha && entry.headSha !== requiredDeploymentHeadSha)
     ) {
       throw new Error(
-        !requiredDeploymentHeadSha
-          ? `Cannot test ${app.slug}: ${environmentVariable} requires a recorded ${appSlug} deployment. Re-run preview deploy.`
-          : `Cannot test ${app.slug}: ${environmentVariable} requires ${appSlug} deployed at head ${requiredDeploymentHeadSha.slice(0, 7)}. Re-run preview deploy.`,
+        requiredDeploymentHeadSha
+          ? `Cannot test ${app.slug}: ${environmentVariable} requires ${appSlug} deployed at head ${requiredDeploymentHeadSha.slice(0, 7)}. Re-run preview deploy.`
+          : `Cannot test ${app.slug}: ${environmentVariable} requires a recorded ${appSlug} deployment. Re-run preview deploy.`,
       );
     }
     return `${environmentVariable}=${entry.publicUrl}`;
@@ -766,9 +766,9 @@ function resolvePreviewTestWorkerVersionOverrides(input: {
         !entry.deployedWorkerVersion
       ) {
         throw new Error(
-          !input.requiredDeploymentHeadSha
-            ? `Cannot test ${appSlug}: its exact ${expectedWorkerName} deployment identity is missing. Re-run preview deploy.`
-            : `Cannot test ${appSlug}: its exact ${expectedWorkerName} deployment identity is missing or stale for head ${input.requiredDeploymentHeadSha.slice(0, 7)}. Re-run preview deploy.`,
+          input.requiredDeploymentHeadSha
+            ? `Cannot test ${appSlug}: its exact ${expectedWorkerName} deployment identity is missing or stale for head ${input.requiredDeploymentHeadSha.slice(0, 7)}. Re-run preview deploy.`
+            : `Cannot test ${appSlug}: its exact ${expectedWorkerName} deployment identity is missing. Re-run preview deploy.`,
         );
       }
       return {
@@ -3481,9 +3481,9 @@ async function reconcileEnvironmentConfigLeaseResources(input: {
       domains,
       issues,
       leaseState: resource.leaseState,
-      leasedUntil: !Number.isFinite(resource.leasedUntil)
-        ? null
-        : new Date(resource.leasedUntil).toISOString(),
+      leasedUntil: Number.isFinite(resource.leasedUntil)
+        ? new Date(resource.leasedUntil).toISOString()
+        : null,
       slug: resource.slug,
     });
   }
@@ -4858,15 +4858,15 @@ async function classifyEnvironmentConfigLeases(input: {
         holder,
         pullRequestUrl: holderPullRequestUrl(holder),
         pullRequestState: holderPullRequestState,
-        leasedUntil: !Number.isFinite(resource.leasedUntil)
-          ? null
-          : new Date(resource.leasedUntil).toISOString(),
-        lastUsedAt: !Number.isFinite(resource.lastAcquiredAt)
-          ? null
-          : new Date(resource.lastAcquiredAt).toISOString(),
-        lastUsedAgo: !Number.isFinite(resource.lastAcquiredAt)
-          ? null
-          : `${formatDurationMs(now - resource.lastAcquiredAt)} ago`,
+        leasedUntil: Number.isFinite(resource.leasedUntil)
+          ? new Date(resource.leasedUntil).toISOString()
+          : null,
+        lastUsedAt: Number.isFinite(resource.lastAcquiredAt)
+          ? new Date(resource.lastAcquiredAt).toISOString()
+          : null,
+        lastUsedAgo: Number.isFinite(resource.lastAcquiredAt)
+          ? `${formatDurationMs(now - resource.lastAcquiredAt)} ago`
+          : null,
       };
     }),
   );

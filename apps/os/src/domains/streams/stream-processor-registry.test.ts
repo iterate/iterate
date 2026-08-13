@@ -138,7 +138,7 @@ function makeHarness(
       projectId: null,
       version: "v-test",
       now: () => clock.now,
-      ...(!opts.onLiveAssembled ? {} : { onLiveAssembled: opts.onLiveAssembled }),
+      ...(opts.onLiveAssembled && { onLiveAssembled: opts.onLiveAssembled }),
     });
     registry.register(
       new RecorderProcessor({

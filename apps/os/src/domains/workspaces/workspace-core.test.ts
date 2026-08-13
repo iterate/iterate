@@ -10,7 +10,7 @@ function fakeLocalLayer() {
   const workspace = {
     readFile: async (path: string) => {
       const bytes = files.get(path);
-      return !bytes ? null : new TextDecoder().decode(bytes);
+      return bytes ? new TextDecoder().decode(bytes) : null;
     },
     readFileBytes: async (path: string) => files.get(path) ?? null,
     writeFile: async (path: string, content: string) =>

@@ -86,13 +86,13 @@ export function AgentCatalog({
               aria-label="Search agents"
             />
           </div>
-          {!agents ? null : (
+          {agents ? (
             <span className="hidden shrink-0 text-xs tabular-nums text-muted-foreground sm:block">
               {searching
                 ? `${matchCount} ${matchCount === 1 ? "match" : "matches"}`
                 : `${agentCount} ${agentCount === 1 ? "agent" : "agents"}`}
             </span>
-          )}
+          ) : null}
           <Tabs
             value={view}
             onValueChange={(value) => {
@@ -120,35 +120,37 @@ export function AgentCatalog({
         </div>
       </div>
 
-      {!agents ? (
-        <p className="py-8 text-center text-sm text-muted-foreground">Loading agents…</p>
-      ) : matchCount === 0 ? (
-        <AgentCatalogEmpty agentCount={agentCount} />
-      ) : view === "table" ? (
-        <div className="min-h-0 flex-1">
-          <AgentTable
+      {agents ? (
+        matchCount === 0 ? (
+          <AgentCatalogEmpty agentCount={agentCount} />
+        ) : view === "table" ? (
+          <div className="min-h-0 flex-1">
+            <AgentTable
+              agents={catalogAgents}
+              collapsedPaths={collapsedTablePaths}
+              nowMs={nowMs}
+              projectId={projectId}
+              query={query}
+              onOpen={onOpen}
+              onToggleExpanded={toggleTableCollapsed}
+              onTogglePinned={onTogglePinned}
+            />
+          </div>
+        ) : (
+          <AgentCatalogList
             agents={catalogAgents}
-            collapsedPaths={collapsedTablePaths}
+            expandedPaths={expandedPaths}
             nowMs={nowMs}
             projectId={projectId}
             query={query}
+            searching={searching}
             onOpen={onOpen}
-            onToggleExpanded={toggleTableCollapsed}
+            onToggleExpanded={toggleExpanded}
             onTogglePinned={onTogglePinned}
           />
-        </div>
+        )
       ) : (
-        <AgentCatalogList
-          agents={catalogAgents}
-          expandedPaths={expandedPaths}
-          nowMs={nowMs}
-          projectId={projectId}
-          query={query}
-          searching={searching}
-          onOpen={onOpen}
-          onToggleExpanded={toggleExpanded}
-          onTogglePinned={onTogglePinned}
-        />
+        <p className="py-8 text-center text-sm text-muted-foreground">Loading agents…</p>
       )}
     </section>
   );

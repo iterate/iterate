@@ -74,16 +74,16 @@ async function resolveThroughBuild(input: {
     source: input.source,
   });
   const memoized = resolvedArtifactMemo.get(buildKey);
-  const built = !memoized
-    ? await resolveArtifact(buildKey, {
+  const built = memoized
+    ? { ok: true as const, source: memoized }
+    : await resolveArtifact(buildKey, {
         buildBudgetMs: input.buildBudgetMs,
         projectId: input.projectId,
         resolved,
         iterateRepoPkgRef,
         iterateRepoPkgSpecOverrides,
         source: input.source,
-      })
-    : { ok: true as const, source: memoized };
+      });
   if (!built.ok) return built;
   return {
     ok: true,
@@ -173,7 +173,7 @@ async function resolveFileSource({
     DurableObjectNameCodec.stringify({ path: files.repoPath, projectId }),
   );
   try {
-    const head = await repo.getHead(!files.ref ? {} : { branch: files.ref.branch });
+    const head = await repo.getHead(files.ref ? { branch: files.ref.branch } : {});
     try {
       return {
         branch: head.branch,

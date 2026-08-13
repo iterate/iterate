@@ -159,7 +159,7 @@ function cliProcessFailure(error: unknown): unknown {
   const stdout = compactProcessOutput(processError.stdout);
   const output = stderr ?? stdout;
   if (!output) return error;
-  return new Error(`cli process failed — ${!stderr ? "stdout" : "stderr"}: ${output}`, {
+  return new Error(`cli process failed — ${stderr ? "stderr" : "stdout"}: ${output}`, {
     cause: error,
   });
 }

@@ -146,7 +146,7 @@ function nextCronMs(
     const next = new Cron(recurrence.cron, { timezone: recurrence.timezone }).nextRun(
       new Date(afterMs),
     );
-    return !next ? null : next.getTime();
+    return next ? next.getTime() : null;
   } catch {
     return null;
   }

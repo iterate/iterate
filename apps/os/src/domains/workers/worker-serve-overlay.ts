@@ -394,7 +394,7 @@ export function applyProjectWorkerOverlay(request: Request, response: Response):
   if (!workerHtmlDocumentCommit(request, response)) return response;
   const commitOid = workerOverlayDecision(request, response);
   const urlPrefix = request.headers.get("x-iterate-url-prefix") ?? "";
-  const styleNonce = !commitOid ? null : randomCspNonce();
+  const styleNonce = commitOid ? randomCspNonce() : null;
   let hasFavicon = false;
   let hasOverlay = false;
   const rewriter = new HTMLRewriter()

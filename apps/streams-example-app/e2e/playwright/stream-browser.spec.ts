@@ -1381,7 +1381,7 @@ async function sampleUpwardScroll(page: Page, options: { stepCount: number; scro
       const virtualRows = [...element.querySelectorAll('[data-testid="virtual-row"]')];
       const indexFor = (row: Element | undefined) => {
         const value = row?.getAttribute("data-index");
-        return !value ? null : Number(value);
+        return value ? Number(value) : null;
       };
 
       return {

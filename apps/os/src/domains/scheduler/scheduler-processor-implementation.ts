@@ -119,7 +119,7 @@ export class SchedulerProcessor extends StreamProcessor<
             [payload.key]: {
               action: payload.action,
               definedAtOffset: event.offset,
-              ...(!payload.metadata ? {} : { metadata: payload.metadata }),
+              ...(payload.metadata && { metadata: payload.metadata }),
               path: event.path,
               nextTriggerAt: initialTriggerAtMs(payload.recurrence, Date.parse(event.createdAt)),
               recurrence: payload.recurrence,
@@ -389,7 +389,7 @@ export class SchedulerProcessor extends StreamProcessor<
               args: [
                 {
                   key: pending.key,
-                  ...(!entry.metadata ? {} : { metadata: entry.metadata }),
+                  ...(entry.metadata && { metadata: entry.metadata }),
                   path: entry.path,
                   recurrence: entry.recurrence,
                   setAt: entry.setAt,
@@ -499,10 +499,10 @@ function scheduleViewFromState(
     action: entry.action,
     definedAtOffset: entry.definedAtOffset,
     key,
-    ...(!entry.metadata ? {} : { metadata: entry.metadata }),
-    nextTriggerAt: !Number.isFinite(entry.nextTriggerAt)
-      ? null
-      : new Date(entry.nextTriggerAt).toISOString(),
+    ...(entry.metadata && { metadata: entry.metadata }),
+    nextTriggerAt: Number.isFinite(entry.nextTriggerAt)
+      ? new Date(entry.nextTriggerAt).toISOString()
+      : null,
     recurrence: entry.recurrence,
     runCount: entry.runCount,
     setAt: entry.setAt,

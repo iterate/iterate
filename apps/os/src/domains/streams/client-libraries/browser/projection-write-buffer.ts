@@ -100,9 +100,9 @@ export class BrowserProjectionWriteBuffer {
       this.#entries.push(entry);
       if (entry.coalesceKey) this.#byCoalesceKey.set(entry.coalesceKey, entry);
     }
-    this.#coveredOffset = !Number.isFinite(this.#coveredOffset)
-      ? offset
-      : Math.max(this.#coveredOffset, offset);
+    this.#coveredOffset = Number.isFinite(this.#coveredOffset)
+      ? Math.max(this.#coveredOffset, offset)
+      : offset;
   }
 
   /**

@@ -789,9 +789,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    if (!agentPaths.length) return;\n" +
       "    const itx = await this.itx;\n" +
       "    const file = await itx.repo.readFile({ path: \"AGENTS.md\" });\n" +
-      "    const content = !file\n" +
-      "      ? \"(AGENTS.md was deleted from /repos/config — no standing project notes.)\"\n" +
-      "      : `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\\n\\n${file.content}`;\n" +
+      "    const content = file\n" +
+      "      ? `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\\n\\n${file.content}`\n" +
+      "      : \"(AGENTS.md was deleted from /repos/config — no standing project notes.)\";\n" +
       "    const digest = await crypto.subtle.digest(\"SHA-256\", new TextEncoder().encode(content));\n" +
       "    const hash = [...new Uint8Array(digest).slice(0, 8)]\n" +
       "      .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
@@ -842,9 +842,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  async #publishAgentBirthDefaults(): Promise<void> {\n" +
       "    const itx = await this.itx;\n" +
       "    const file = await itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
-      "    const birthEvents = !file\n" +
-      "      ? []\n" +
-      "      : [\n" +
+      "    const birthEvents = file\n" +
+      "      ? [\n" +
       "          {\n" +
       "            type: \"events.iterate.com/agents/context-added\",\n" +
       "            payload: {\n" +
@@ -856,7 +855,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              role: \"system\",\n" +
       "            },\n" +
       "          },\n" +
-      "        ];\n" +
+      "        ]\n" +
+      "      : [];\n" +
       "    // Best-effort size guard (~4 chars/token): the platform's own default\n" +
       "    // prompt is budget-tested at ~4.3k tokens; warn well before a fork's\n" +
       "    // edits silently double every request's cost.\n" +

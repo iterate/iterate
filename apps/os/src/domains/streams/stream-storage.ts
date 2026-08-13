@@ -171,7 +171,7 @@ export class StreamEventLog {
     const row = this.sql
       .exec<{ offset: number }>("select offset from events where offset = ? limit 1", offset)
       .toArray()[0];
-    return !row ? undefined : this.#readEventFromChunks(row.offset);
+    return row ? this.#readEventFromChunks(row.offset) : undefined;
   }
 
   getByIdempotencyKey(idempotencyKey: string): StreamEvent | undefined {
@@ -181,7 +181,7 @@ export class StreamEventLog {
         idempotencyKey,
       )
       .toArray()[0];
-    return !row ? undefined : this.#readEventFromChunks(row.offset);
+    return row ? this.#readEventFromChunks(row.offset) : undefined;
   }
 
   getRange(args: {
@@ -207,9 +207,9 @@ export class StreamEventLog {
     if (args.eventTypes?.length === 0) return [];
     const eventTypes =
       !args.eventTypes || args.eventTypes.includes("*") ? undefined : args.eventTypes;
-    const eventTypeClause = !eventTypes
-      ? ""
-      : `and type in (${eventTypes.map(() => "?").join(", ")})`;
+    const eventTypeClause = eventTypes
+      ? `and type in (${eventTypes.map(() => "?").join(", ")})`
+      : "";
     // One indexed metadata subquery picks the replay window; the join then streams each
     // event's chunks in primary-key order (offset, chunk_index).
     const chunks = this.sql

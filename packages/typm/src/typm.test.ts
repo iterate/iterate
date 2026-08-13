@@ -527,7 +527,7 @@ function fakeRegistry(config: {
     if (fileMatch) {
       const fake = config.packages[fileMatch[1]!];
       const content = fake ? allFiles(fake)[fileMatch[2]!] : undefined;
-      return !content ? new Response("file not found", { status: 404 }) : new Response(content);
+      return content ? new Response(content) : new Response("file not found", { status: 404 });
     }
     throw new Error(`fakeRegistry: unexpected URL ${url}`);
   };

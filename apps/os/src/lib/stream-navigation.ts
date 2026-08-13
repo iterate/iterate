@@ -37,9 +37,9 @@ export function useAdminStreamSource(projectId: string) {
   // project via session.projects.get(id).
   const source = useMemo(
     () => async (streamPath: string) =>
-      !streamProjectId
-        ? (await connectIterateSession()).streams.get(streamPath)
-        : (await connectItx(streamProjectId)).streams.get(streamPath),
+      streamProjectId
+        ? (await connectItx(streamProjectId)).streams.get(streamPath)
+        : (await connectIterateSession()).streams.get(streamPath),
     [streamProjectId],
   );
   return { source, streamProjectId, resetTransport: reportTransportSuspicion };

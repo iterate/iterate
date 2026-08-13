@@ -196,9 +196,9 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     this.#repoPathsRefresh ??= (async () => {
       try {
         const projectId = this.#name.projectId;
-        const paths = !projectId
-          ? []
-          : (await projectProcessorState(projectId)).repos.map((repo) => repo.path);
+        const paths = projectId
+          ? (await projectProcessorState(projectId)).repos.map((repo) => repo.path)
+          : [];
         this.#repoPathsCache = paths;
         return paths;
       } finally {
@@ -353,9 +353,9 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
    */
   async configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceEffectiveConfig> {
     await this.#assertCreated();
-    const config: WorkspaceConfigPatch = !input.config.mounts
-      ? input.config
-      : { ...input.config, mounts: normalizeWorkspaceMountKeys(input.config.mounts) };
+    const config: WorkspaceConfigPatch = input.config.mounts
+      ? { ...input.config, mounts: normalizeWorkspaceMountKeys(input.config.mounts) }
+      : input.config;
     // Under the collab BARRIER (settle + run as ONE coordinated job): live
     // sessions settle so their dirtiness is visible to the transition-safety
     // check, and no debounce flush can interleave between that settle and the
@@ -726,7 +726,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   async gitCommit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
     await this.#assertCreated();
     await this.#effectiveMounts({ refresh: true });
-    const resolved = !input.scope ? input : { ...input, scope: this.#resolvePath(input.scope) };
+    const resolved = input.scope ? { ...input, scope: this.#resolvePath(input.scope) } : input;
     // Settle → commit → stamp as ONE fence: no flush timer, open, or
     // configure can interleave, and baselines advance mount-scoped to
     // exactly what the commit contained (a commit never spans mounts;
@@ -748,7 +748,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   async gitLog(input: WorkspaceGitLogInput = {}): Promise<WorkspaceGitLogEntry[]> {
     await this.#assertCreated();
     await this.#effectiveMounts({ refresh: true });
-    const resolved = !input.scope ? input : { ...input, scope: this.#resolvePath(input.scope) };
+    const resolved = input.scope ? { ...input, scope: this.#resolvePath(input.scope) } : input;
     return this.#core.gitLog(resolved);
   }
 }

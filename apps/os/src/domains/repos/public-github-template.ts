@@ -58,7 +58,7 @@ export async function downloadPublicGithubTemplate(
     throw new Error("The GitHub repository tree is too large to copy as a config template.");
   }
 
-  const prefix = !reference.path ? "" : `${reference.path}/`;
+  const prefix = reference.path ? `${reference.path}/` : "";
   if (
     reference.path &&
     !tree.tree.some((entry) => entry.type === "tree" && entry.path === reference.path)

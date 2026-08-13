@@ -199,7 +199,7 @@ export function telegramAgentSystemPrompt(input: {
   return interpolatePromptTemplate(embeddedTemplateFile("prompts/telegram.md"), {
     agentPathJson: JSON.stringify(input.agentPath),
     agentSummaryInstruction: AGENT_SUMMARY_INSTRUCTION,
-    chatIdNote: !input.chatId ? "" : ` (this chat's id is ${input.chatId})`,
+    chatIdNote: input.chatId ? ` (this chat's id is ${input.chatId})` : "",
     telegramConnection: `itx.integrations.telegram.get(${JSON.stringify(input.connection)})`,
   });
 }
@@ -381,7 +381,7 @@ export function validateAgentBirthEvents(
       // exists purely to hand the parser something to accept or reject.
       AgentProcessorContract.parseConsumedInput({
         type: event.type,
-        ...(!event.payload ? {} : { payload: event.payload }),
+        ...(event.payload && { payload: event.payload }),
       } as never);
     } catch (error) {
       return {
@@ -532,16 +532,16 @@ export function agentCreationForPath<
     // the stream's same-key-different-body rejection. Fact-less births keep
     // the bare key, so router replays dedupe exactly as before.
     idempotencyKey: `agent/boot-system-context:v${AGENT_BOOT_CONTEXT_REVISION}:${projectId}:${agentPath}${
-      !project ? "" : `:${JSON.stringify([project.name, project.slug, project.workerUrl ?? null])}`
+      project ? `:${JSON.stringify([project.name, project.slug, project.workerUrl ?? null])}` : ""
     }`,
     payload: {
       role: "system",
       key: "agent/boot-context",
       content: [
         "Context for this agent:",
-        !project
-          ? `- Project id: ${projectId}`
-          : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${!project.workerUrl ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
+        project
+          ? `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.workerUrl ? ` — the project worker/website serves ${project.workerUrl}` : ""}`
+          : `- Project id: ${projectId}`,
         `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
         `- Your workspace directory: ${agentWorkspacePath(agentPath)} — private scratch; relative workspace paths resolve there. Every project repo is mounted in your workspace at its own path.`,
         // One seed list, marked non-exhaustive, and ONE rule for choosing
@@ -580,17 +580,17 @@ export function agentCreationForPath<
       },
     },
   });
-  const siblingBirthCertificates: SiblingBirthCertificate[] = !input.sibling
-    ? []
-    : [input.sibling.birthCertificate];
-  const siblingSubscriptions = !input.sibling
-    ? []
-    : [
+  const siblingBirthCertificates: SiblingBirthCertificate[] = input.sibling
+    ? [input.sibling.birthCertificate]
+    : [];
+  const siblingSubscriptions = input.sibling
+    ? [
         buildFacetProcessorSubscriptionConfiguredEvent({
           idempotencyKey: `stream/subscription-configured:${input.sibling.name}`,
           name: input.sibling.name,
         }),
-      ];
+      ]
+    : [];
 
   return {
     birthCertificate,

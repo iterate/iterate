@@ -227,9 +227,9 @@ function fuzzyResolve(body: string, selector: AnchorSelector): AnchorResolution 
     const context =
       contextScore(body, match.start, match.end - match.start, selector) /
       Math.max(1, selector.quote.prefix.length + selector.quote.suffix.length);
-    const positionCloseness = !selector.position
-      ? 0
-      : 1 - Math.min(1, Math.abs(match.start - selector.position.start) / Math.max(1, body.length));
+    const positionCloseness = selector.position
+      ? 1 - Math.min(1, Math.abs(match.start - selector.position.start) / Math.max(1, body.length))
+      : 0;
     const rank = similarity + 0.25 * context + 0.1 * positionCloseness;
     const candidate: Candidate = {
       range: { start: match.start, end: match.end },

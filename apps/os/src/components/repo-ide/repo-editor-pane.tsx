@@ -263,7 +263,7 @@ export function RepoEditorPane({
     </>
   );
 
-  const entry = !change ? undefined : effectiveEntry(change);
+  const entry = change ? effectiveEntry(change) : undefined;
   if (entry?.type === "delete") {
     return (
       <FileChrome path={path} status="deleted">
@@ -280,7 +280,7 @@ export function RepoEditorPane({
     );
   }
 
-  const status = !entry ? undefined : headHasPath ? ("modified" as const) : ("added" as const);
+  const status = entry ? (headHasPath ? ("modified" as const) : ("added" as const)) : undefined;
 
   if (stagedView && stagedText && kind.kind === "text") {
     // Same Code/Preview toggle as the working view, over the staged snapshot
@@ -499,17 +499,17 @@ export function FileChrome({
         {leading}
         <span className="min-w-0 truncate font-mono text-xs">
           {path}
-          {!suffix ? null : <span className="text-muted-foreground"> {suffix}</span>}
+          {suffix ? <span className="text-muted-foreground"> {suffix}</span> : null}
         </span>
         {readonly ? <LockIcon className="size-3 shrink-0 text-muted-foreground" /> : null}
-        {!status ? null : (
+        {status ? (
           <Badge
             variant={status === "deleted" ? "destructive" : "secondary"}
             className="text-[10px]"
           >
             {status}
           </Badge>
-        )}
+        ) : null}
         <div className="ml-auto flex items-center gap-1">{actions}</div>
       </div>
       {children}

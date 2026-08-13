@@ -53,7 +53,7 @@ export function boardAddressFor(
   const boardId = boardIdOf(path);
   if (!boardId) return null;
   const repoPath = repoPaths.find((candidate) => boardWorkspacePath(boardId, candidate) === path);
-  return !repoPath ? null : { boardId, repoPath };
+  return repoPath ? { boardId, repoPath } : null;
 }
 
 /** The board id a /workspaces/tasks/ path carries, if it is shaped like one. */

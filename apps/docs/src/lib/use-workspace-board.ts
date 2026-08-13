@@ -143,7 +143,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
           }
           if (generation.current !== mine) return;
           const changes = changesRef.current;
-          const next = !status ? changes : changeMap(status, repoPath);
+          const next = status ? changeMap(status, repoPath) : changes;
           const versions = Object.fromEntries(
             Object.entries(rawVersions).map(([path, version]) => [boardKey(path), version]),
           );
@@ -324,7 +324,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
           priorChange = changes.get(path);
           return new Map(changes).set(path, changeAfterWrite(changes.get(path), !!current?.[path]));
         });
-        return !current ? current : { ...current, [path]: content };
+        return current ? { ...current, [path]: content } : current;
       });
       return tracked(lane((ws) => ws.write(`/${path}`, content))).then(
         () => {
@@ -463,7 +463,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
             if (carried !== content) {
               await lane((ws) => ws.write(`/${toPath}`, carried));
               mutationEpoch.current++;
-              setFiles((current) => (!current ? current : { ...current, [toPath]: carried }));
+              setFiles((current) => (current ? { ...current, [toPath]: carried } : current));
             }
           }
         } catch {

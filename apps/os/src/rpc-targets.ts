@@ -894,7 +894,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     throw new Error(
       `${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}Timed out waiting for stream event after ${args.timeoutMs}ms ` +
         "(the public deadline expired while recovery re-armed one-shot waits).",
-      !lastSliceTimeout ? undefined : { cause: lastSliceTimeout },
+      lastSliceTimeout ? { cause: lastSliceTimeout } : undefined,
     );
   }
 
@@ -903,7 +903,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     const result = await this.#read("getProcessorRuntimeState", () =>
       Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].getProcessorRuntimeState(args)),
     ).catch(rethrowStreamUnavailable);
-    return !result ? null : detachPlainRpcResult(result);
+    return result ? detachPlainRpcResult(result) : null;
   }
 
   /**
@@ -1200,15 +1200,15 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     });
     const result = await source[STREAM_DURABLE_OBJECT_STUB]
       .setCopySubscription({
-        ...(!args.idempotencyKey ? {} : { idempotencyKey: args.idempotencyKey }),
+        ...(args.idempotencyKey && { idempotencyKey: args.idempotencyKey }),
         configuration: {
-          ...(!args.name ? {} : { name: args.name }),
+          ...(args.name && { name: args.name }),
           ...(args.description?.trim() && { description: args.description.trim() }),
-          ...(!args.filter ? {} : { filter: args.filter }),
+          ...(args.filter && { filter: args.filter }),
           receiver: {
             action: "copy-to-stream",
             receivingStreamPath,
-            ...(!args.jsonataTransform ? {} : { jsonataTransform: args.jsonataTransform }),
+            ...(args.jsonataTransform && { jsonataTransform: args.jsonataTransform }),
             delivery: {
               start,
               onFailingEvent: "halt",
@@ -1364,7 +1364,7 @@ class StreamSubscriptionRpcTarget extends IterateRpcTarget<"StreamSubscription">
     // StreamSubscriptionDescription (or null); detachPlainRpcResult copies
     // the plain data off the disposable-augmented RPC result, and the cast
     // restores the method's declared type.
-    return !result ? null : (detachPlainRpcResult(result) as StreamSubscriptionDescription);
+    return result ? (detachPlainRpcResult(result) as StreamSubscriptionDescription) : null;
   }
 
   /**
@@ -1526,7 +1526,7 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
       parseScheduleSetPayload({
         action: { kind: "itx-script", script: input.script },
         key: input.key,
-        ...(!input.metadata ? {} : { metadata: input.metadata }),
+        ...(input.metadata && { metadata: input.metadata }),
         recurrence: canonicalRecurrence(input.recurrence, Date.now()),
       }),
     );
@@ -2056,7 +2056,7 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
       }),
       ctx: this.props.ctx,
       projectId: this.props.projectId,
-      ...(!this.props.sourceScopePath ? {} : { sourceScopePath: this.props.sourceScopePath }),
+      ...(this.props.sourceScopePath && { sourceScopePath: this.props.sourceScopePath }),
     });
   }
 
@@ -2173,13 +2173,13 @@ async function agentBootProjectFacts(
   const workerUrl = buildProjectWorkerUrl({
     projectSlug: record.slug,
     projectHostnameBases: config.projectHostnameBases,
-    ...(!config.baseUrl ? {} : { appBaseUrl: config.baseUrl }),
+    ...(config.baseUrl && { appBaseUrl: config.baseUrl }),
   });
   return {
     project: {
       name: record.name,
       slug: record.slug,
-      ...(!workerUrl ? {} : { workerUrl }),
+      ...(workerUrl && { workerUrl }),
     },
   };
 }
@@ -2279,11 +2279,11 @@ class SandboxRpcTarget extends IterateRpcTarget<"Sandbox"> {
         `sandbox "${this.props.path}" was already requested as instance type "${parsedClaim.payload.instanceType}" — names are unique per project; pick a new path`,
       );
     }
-    const claimedEnv = !parsedClaim.payload.env
-      ? undefined
-      : Object.fromEntries(
+    const claimedEnv = parsedClaim.payload.env
+      ? Object.fromEntries(
           Object.entries(parsedClaim.payload.env).map(([key, value]) => [key, value ?? undefined]),
-        );
+        )
+      : undefined;
     await this.#stub(instanceType).create({
       env: claimedEnv,
       instanceType,
@@ -2350,7 +2350,7 @@ class SandboxRpcTarget extends IterateRpcTarget<"Sandbox"> {
     sessionId?: string;
   }> {
     return this.invokeCapability({
-      args: !options ? [command] : [command, options],
+      args: options ? [command, options] : [command],
       path: ["exec"],
     }) as Promise<{
       success: boolean;
@@ -2550,7 +2550,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     // subscription, which a public append may not configure.
     const committed = await this.#stream.append(
       ...workspaceCreationEvents({
-        ...(!input.mounts ? {} : { mounts: input.mounts }),
+        ...(input.mounts && { mounts: input.mounts }),
         path: this.props.path,
         projectId: this.props.projectId,
       }),
@@ -2933,7 +2933,7 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
       search: {
         path,
         egress: egressOrigins,
-        ...(!input.description ? {} : { description: input.description }),
+        ...(input.description && { description: input.description }),
         ...(scopePath.startsWith("/agents/") && { notify: scopePath }),
       },
     });
@@ -3326,7 +3326,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T> {
     const gateway = options?.gateway ?? this.props.gateway;
-    const merged = !gateway ? options : { ...options, gateway };
+    const merged = gateway ? { ...options, gateway } : options;
     return env.AI.run(
       model,
       body as Record<string, unknown>,
@@ -3507,11 +3507,11 @@ class CfVideosCapabilityRpcTarget extends IterateRpcTarget<"CfVideosCapability">
   /** Transform a video stream and return a Response (video, frame, spritesheet, or audio). */
   async transform(input: CfVideoTransformInput): Promise<Response> {
     const media = env.MEDIA.input(input.video);
-    const result = !input.transform
-      ? media.output(input.output as MediaTransformationOutputOptions)
-      : media
+    const result = input.transform
+      ? media
           .transform(input.transform as MediaTransformationInputOptions)
-          .output(input.output as MediaTransformationOutputOptions);
+          .output(input.output as MediaTransformationOutputOptions)
+      : media.output(input.output as MediaTransformationOutputOptions);
     return await result.response();
   }
 }
@@ -3575,7 +3575,7 @@ function describeConnectionSdk(input: {
       input.grammar,
     ].join("\n"),
     parent: `the integrations collection (itx.integrations.${input.slug})`,
-    ...(!input.types ? {} : { types: input.types }),
+    ...(input.types && { types: input.types }),
   });
 }
 
@@ -4024,7 +4024,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     }
     return await this.#capabilityHost.invokeCapability({
       args,
-      path: ["integrations", slug, ...(!connection ? [] : [connection]), ...method],
+      path: ["integrations", slug, ...(connection ? [connection] : []), ...method],
     });
   }
 
@@ -4043,16 +4043,16 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     // same collection so list() and no-argument get() retain one meaning.
     const waitroseConnections = projectState.secrets.flatMap((secret) => {
       const match = /^\/secrets\/integrations\/waitrose\/([^/]+)\/session$/.exec(secret.path);
-      return !match?.[1]
-        ? []
-        : [
+      return match?.[1]
+        ? [
             {
               connection: match[1],
               integration: "waitrose" as const,
               path: `/integrations/waitrose/${match[1]}`,
               source: "builtin" as const,
             },
-          ];
+          ]
+        : [];
     });
     const entries: IntegrationConnectionListEntry[] = [
       ...journalConnections.map((entry): IntegrationConnectionListEntry => {
@@ -4446,8 +4446,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       audit: {
         subject: input.subject,
         to: input.to,
-        ...(!input.inReplyTo ? {} : { inReplyTo: input.inReplyTo }),
-        ...(!thread ? {} : { threadId: thread.threadId }),
+        ...(input.inReplyTo && { inReplyTo: input.inReplyTo }),
+        ...(thread && { threadId: thread.threadId }),
         attachments,
       },
     });
@@ -4496,8 +4496,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       request: {
         to,
         subject: input.subject ?? replySubject(inbound.message.subject),
-        ...(!input.text ? {} : { text: input.text }),
-        ...(!input.html ? {} : { html: input.html }),
+        ...(input.text && { text: input.text }),
+        ...(input.html && { html: input.html }),
         attachments,
         // The thread's own reply address: replies to this mail route straight
         // back to the thread stream, without depending on client headers.
@@ -4506,8 +4506,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
           domain: identity.domain,
           threadId,
         }),
-        ...(!inReplyTo ? {} : { inReplyTo }),
-        references: [...inbound.message.references, ...(!inReplyTo ? [] : [inReplyTo])],
+        ...(inReplyTo && { inReplyTo }),
+        references: [...inbound.message.references, ...(inReplyTo ? [inReplyTo] : [])],
       },
     });
     const { from, messageId } = await this.#deliver({
@@ -4516,7 +4516,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
         subject: message.subject,
         to,
         threadId,
-        ...(!inReplyTo ? {} : { inReplyTo }),
+        ...(inReplyTo && { inReplyTo }),
         attachments,
       },
     });
@@ -4552,7 +4552,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       payload: {
         threadId,
         streamPath: scopePath,
-        ...(!firstRecipient ? {} : { counterpart: firstRecipient }),
+        ...(firstRecipient && { counterpart: firstRecipient }),
         subject: input.request.subject,
       },
     };
@@ -4698,8 +4698,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
           projectId: this.props.projectId,
           subject: input.audit.subject,
           to: input.audit.to,
-          ...(!input.audit.threadId ? {} : { threadId: input.audit.threadId }),
-          ...(!input.audit.inReplyTo ? {} : { inReplyTo: input.audit.inReplyTo }),
+          ...(input.audit.threadId && { threadId: input.audit.threadId }),
+          ...(input.audit.inReplyTo && { inReplyTo: input.audit.inReplyTo }),
           ...(attachments.length === 0 ? {} : { attachments }),
         },
       });
@@ -4840,7 +4840,7 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
           });
     const [event] = await this.stream.append({
       type: "events.iterate.com/agents/web-message-sent",
-      payload: { message: trimmed, ...(!files ? {} : { files }) },
+      payload: { message: trimmed, ...(files && { files }) },
     });
     return event;
   }
@@ -4995,7 +4995,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const creation = agentCreationForPath({
       agentPath: this.#path,
       projectId: this.#props.projectId,
-      ...(!payload ? {} : { payload }),
+      ...(payload && { payload }),
       ...(await agentBootProjectFacts(this.#props.projectId)),
       // Project-level birth defaults (driver, prompt, extra processor
       // subscriptions) apply to every agent born through this generic door;
@@ -5105,7 +5105,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         role: actor.type === "agent" ? "developer" : "user",
         content: message,
         actor,
-        ...(!files ? {} : { files }),
+        ...(files && { files }),
       },
     });
     return event;
@@ -5199,7 +5199,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         content:
           input.message ?? `[Files attached: ${files.map((file) => file.filename).join(", ")}]`,
         files,
-        ...(!input.llmRequestPolicy ? {} : { llmRequestPolicy: input.llmRequestPolicy }),
+        ...(input.llmRequestPolicy && { llmRequestPolicy: input.llmRequestPolicy }),
       },
     });
     return { event, files };
@@ -5847,7 +5847,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       ...capabilityHostCreationEvents({
         path: this.#props.path,
         projectId: this.#props.projectId,
-        ...(!payload ? {} : { payload }),
+        ...(payload && { payload }),
       }),
     );
     // append() preserves INPUT order, including idempotency hits at their old
@@ -6288,9 +6288,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     options?: { waitUntilCreated?: boolean },
   ): Promise<ProjectRpcTarget> {
     const projectCreateDeadline = Date.now() + PROJECT_CREATE_TIMEOUT_MS;
-    const explicitConfigRepoTemplate = !args.configRepoTemplate
-      ? undefined
-      : normalizeConfigRepoTemplateReference(args.configRepoTemplate);
+    const explicitConfigRepoTemplate = args.configRepoTemplate
+      ? normalizeConfigRepoTemplateReference(args.configRepoTemplate)
+      : undefined;
     if ("projectId" in this.#props && this.#capabilityHost.path !== "/") {
       throw new Error("project create() is only available on the project-root handle");
     }
@@ -6304,8 +6304,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         "auth-register",
         () =>
           this.#registerProject({
-            ...(!args.organizationSlug ? {} : { organizationSlug: args.organizationSlug }),
-            ...(!args.projectId ? {} : { projectId: args.projectId }),
+            ...(args.organizationSlug && { organizationSlug: args.organizationSlug }),
+            ...(args.projectId && { projectId: args.projectId }),
             slug: prospective.prospectiveSlug,
           }),
       );
@@ -6370,8 +6370,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
             config: {
               onboardingActive: true,
               slug: registered.slug,
-              ...(!creatorEmail ? {} : { creatorEmail }),
-              ...(!configRepoTemplate ? {} : { configRepoTemplate }),
+              ...(creatorEmail && { creatorEmail }),
+              ...(configRepoTemplate && { configRepoTemplate }),
             },
           },
         }),
@@ -6469,7 +6469,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         organizationSlug,
         name: args.slug,
         slug: args.slug,
-        ...(!args.projectId ? {} : { id: args.projectId }),
+        ...(args.projectId && { id: args.projectId }),
       });
       if (!result.ok) throw new Error(result.message);
       return {
@@ -6486,7 +6486,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         organizationSlug: args.organizationSlug,
         name: args.slug,
         slug: args.slug,
-        ...(!args.projectId ? {} : { id: args.projectId }),
+        ...(args.projectId && { id: args.projectId }),
       });
       if (!result.ok) throw new Error(result.message);
       return {
@@ -6537,7 +6537,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     const projectUrl = buildProjectWorkerUrl({
       projectSlug: identity.slug,
       projectHostnameBases: config.projectHostnameBases,
-      ...(!config.baseUrl ? {} : { appBaseUrl: config.baseUrl }),
+      ...(config.baseUrl && { appBaseUrl: config.baseUrl }),
     });
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(appSlug) || !projectUrl) {
       throw new Error(
@@ -6799,13 +6799,13 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       Promise.resolve(parseConfig(env)),
     ]);
     const streamPath = this.#capabilityHost.path;
-    const streamUrl = !project?.slug
-      ? (config.baseUrl ?? "https://os.iterate.com")
-      : buildProjectStreamViewerUrl({
+    const streamUrl = project?.slug
+      ? buildProjectStreamViewerUrl({
           baseUrl: config.baseUrl,
           projectSlug: project.slug,
           streamPath,
-        });
+        })
+      : (config.baseUrl ?? "https://os.iterate.com");
 
     return [
       `*Debug:* <${streamUrl}|open stream>`,
@@ -7229,7 +7229,7 @@ export function itxForScope(props: {
     ctx: props.ctx,
     streamContext: props.streamContext,
     projectId: props.projectId,
-    ...(!props.ownedDisposables ? {} : { ownedDisposables: props.ownedDisposables }),
+    ...(props.ownedDisposables && { ownedDisposables: props.ownedDisposables }),
   });
 }
 
@@ -7421,7 +7421,7 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
         const secret = this.props.config.projectAppSessionSecret;
         if (!secret) return null;
         const claims = await verifyProjectAppSessionToken(token, secret.exposeSecret());
-        return !claims ? null : { projectId: claims.projectId, userId: claims.userId };
+        return claims ? { projectId: claims.projectId, userId: claims.userId } : null;
       },
     });
     return new SessionRpcTarget({ auth, config: this.props.config, ctx: this.props.ctx });
@@ -7769,7 +7769,7 @@ export class StreamProcessorRpcTarget<State, PublicState = State>
     // PublicState = State (projection-less call sites pin the two type
     // parameters together); the double assertion exists only because the
     // class body cannot see that per-call-site equality.
-    return !this.#publicState ? (state as unknown as PublicState) : this.#publicState(state);
+    return this.#publicState ? this.#publicState(state) : (state as unknown as PublicState);
   }
 
   async snapshot(): Promise<ProcessorSnapshot<PublicState>> {
@@ -8170,7 +8170,7 @@ export class ProcessorRelayRpcTarget<
     // PublicState = State (projection-less call sites pin the two type
     // parameters together); the double assertion exists only because the
     // class body cannot see that per-call-site equality.
-    return !this.#publicState ? (state as unknown as PublicState) : this.#publicState(state);
+    return this.#publicState ? this.#publicState(state) : (state as unknown as PublicState);
   }
 
   async #processor(): Promise<StreamProcessorRpc<State>> {
@@ -8199,12 +8199,12 @@ export class ProcessorRelayRpcTarget<
     expiresAt?: number,
   ): Promise<DeadlineOutcome<Result>> {
     const settle = <Value>(promise: Promise<Value>): Promise<DeadlineOutcome<Value>> =>
-      !Number.isFinite(expiresAt)
-        ? promise.then<DeadlineOutcome<Value>, DeadlineOutcome<Value>>(
+      Number.isFinite(expiresAt)
+        ? settleByDeadline(promise, expiresAt, Date.now)
+        : promise.then<DeadlineOutcome<Value>, DeadlineOutcome<Value>>(
             (value) => ({ status: "fulfilled", value }),
             (error: unknown) => ({ status: "rejected", error }),
-          )
-        : settleByDeadline(promise, expiresAt, Date.now);
+          );
 
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       let processor: StreamProcessorRpc<State> | undefined;
@@ -8441,14 +8441,14 @@ class LiveStateRelayRpcTarget<State extends object>
     super();
     this.#stub = stub;
     this.#label = pagerLane?.label;
-    this.#relay = !pagerLane
-      ? undefined
-      : openRelayedLiveState<State>({
+    this.#relay = pagerLane
+      ? openRelayedLiveState<State>({
           dialPager: pagerLane.dialPager ?? (async () => dialLiveStatePager(await this.#stub())),
           readSnapshot: () => this.#transientGet(),
           pagerFailureDegrade: "reject",
           label: pagerLane.label,
-        });
+        })
+      : undefined;
   }
 
   /**
@@ -8587,7 +8587,7 @@ function facetProcessorRelay<State = unknown, PublicState = State>(
   input: FacetProcessorRelayInput<State, PublicState>,
 ): ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState> {
   const contract = input.contract;
-  const name = !contract ? input.name : contract.slug;
+  const name = contract ? contract.slug : input.name;
   return new ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState>({
     auth: input.auth,
     host: () =>
@@ -8597,8 +8597,8 @@ function facetProcessorRelay<State = unknown, PublicState = State>(
         projectId: input.projectId,
       }),
     processorFacade: (host) => Promise.resolve(host),
-    ...(!contract ? {} : { initialStateWhenUnconfigured: () => contract.stateSchema.parse({}) }),
-    ...(!input.publicState ? {} : { publicState: input.publicState }),
+    ...(contract && { initialStateWhenUnconfigured: () => contract.stateSchema.parse({}) }),
+    ...(input.publicState && { publicState: input.publicState }),
   });
 }
 

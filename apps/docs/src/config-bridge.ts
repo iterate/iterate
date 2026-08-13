@@ -106,9 +106,9 @@ export const DocsApp = {
           const denied = await itx.auth.get(options.auth).fetch(request);
           if (denied) return denied;
           const override = await itx.kv.get(options.proxy.originOverrideKvKey);
-          const origin = !override
-            ? configuredOrigin
-            : parseOverride(override, options.proxy.originOverrideKvKey);
+          const origin = override
+            ? parseOverride(override, options.proxy.originOverrideKvKey)
+            : configuredOrigin;
           const target = new URL(request.url);
           target.protocol = origin.protocol;
           target.host = origin.host;

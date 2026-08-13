@@ -93,7 +93,7 @@ export function ItxRepl({
   });
   const runButtonLabel = typeScriptExtensions.loading ? "Loading..." : "Run";
   const bottomRef = useRef<HTMLDivElement>(null);
-  const entryCount = entries.length + (!pendingCode ? 0 : 1);
+  const entryCount = entries.length + (pendingCode ? 1 : 0);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
@@ -109,12 +109,12 @@ export function ItxRepl({
                 <p>
                   <span className="text-foreground">Run TypeScript as real project scripts.</span>{" "}
                   Scripts execute server-side in this session&apos;s stream (
-                  {!scopePath ? (
-                    "created on your first Run"
-                  ) : (
+                  {scopePath ? (
                     <>
                       <code className="font-mono text-xs">{scopePath}</code> — the URL
                     </>
+                  ) : (
+                    "created on your first Run"
                   )}
                   ), typechecked and journaled — reload and the session is still here, and anyone on
                   this URL shares the console. A trailing expression echoes its value back (or{" "}
@@ -151,7 +151,7 @@ export function ItxRepl({
             {entries.map((entry, index) => (
               <ReplEntryRow key={entry.executionId} entry={entry} index={index} />
             ))}
-            {!pendingCode ? null : (
+            {pendingCode ? (
               <ReplEntryRow
                 entry={{
                   code: pendingCode,
@@ -162,7 +162,7 @@ export function ItxRepl({
                 }}
                 index={entries.length}
               />
-            )}
+            ) : null}
             <div className="flex flex-col gap-2 border-l-2 border-primary/50 py-2 pr-3 pl-3">
               <ReplPromptRow status={typeScriptExtensions.loading ? null : status}>
                 <Button
@@ -189,14 +189,14 @@ export function ItxRepl({
                   showLineNumbers={false}
                 />
               </div>
-              {!runError ? null : (
+              {runError ? (
                 <p
                   className="font-mono text-xs whitespace-pre-wrap text-destructive"
                   data-testid="itx-repl-run-error"
                 >
                   {runError}
                 </p>
-              )}
+              ) : null}
               <div ref={bottomRef} />
             </div>
           </div>
@@ -236,12 +236,12 @@ export function ItxRepl({
                       showCopyButton
                     />
                     <div className="flex items-center justify-end gap-3">
-                      {!runnableHere ? (
+                      {runnableHere ? null : (
                         <span className="text-xs text-muted-foreground">
                           Not runnable here — needs {example.runtimes.join("/")}
                           {example.context === "project" ? "" : ` (${example.context} context)`}.
                         </span>
-                      ) : null}
+                      )}
                       <Button
                         disabled={!runnableHere}
                         onClick={() => onSelectExample(example.code)}

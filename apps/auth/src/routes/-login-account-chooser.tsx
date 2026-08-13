@@ -86,9 +86,9 @@ export function AccountChooser({
                   !!token && setActiveSession.isPending && setActiveSession.variables === token
                 }
                 isRevoking={
-                  !token
-                    ? signOutCurrentSession.isPending
-                    : revokeSession.isPending && revokeSession.variables === token
+                  token
+                    ? revokeSession.isPending && revokeSession.variables === token
+                    : signOutCurrentSession.isPending
                 }
                 onContinue={() => {
                   if (isCurrent || !token) {

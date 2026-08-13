@@ -75,7 +75,7 @@ export function AgentSidebarRow({ node, onOpen }: { node: AgentTreeNode; onOpen:
             <span className="min-w-0 flex-1 truncate text-sm">{agentTitle(agent)}</span>
             <StateDot state={state} className="size-1.5" />
           </span>
-          {!agent.summary.activity ? null : (
+          {agent.summary.activity ? (
             <span
               className={cn(
                 "block truncate text-[11px] text-muted-foreground",
@@ -84,7 +84,7 @@ export function AgentSidebarRow({ node, onOpen }: { node: AgentTreeNode; onOpen:
             >
               {agent.summary.activity}
             </span>
-          )}
+          ) : null}
         </span>
       </TooltipTrigger>
       <TooltipContent side="right">{agent.path}</TooltipContent>
@@ -177,12 +177,12 @@ export function AgentListRow({
           </time>
         </div>
         <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          {!agent.summary.activity ? null : (
+          {agent.summary.activity ? (
             <>
               <span className="min-w-0 truncate">{agent.summary.activity}</span>
               <span aria-hidden>·</span>
             </>
-          )}
+          ) : null}
           <AgentRuntimeStatus
             runtimeState={runtimeState}
             since={runtimeTransition?.since ?? agent.timestamps.runtimeUpdatedAt}
@@ -220,7 +220,7 @@ function AgentRuntimeStatus({
   since?: string;
 }) {
   const active = runtimeState !== "idle";
-  const sinceMs = !since ? null : Date.parse(since);
+  const sinceMs = since ? Date.parse(since) : null;
   const nowMs = useTickingNowMs(LIVE_RUNTIME_TICK_MS, active && Number.isFinite(sinceMs));
   const label =
     runtimeState === "running_code"
@@ -233,7 +233,7 @@ function AgentRuntimeStatus({
   return (
     <span className="shrink-0 tabular-nums" data-testid="agent-runtime-status" title={since}>
       {label}
-      {!elapsed ? null : ` ${elapsed}`}
+      {elapsed ? ` ${elapsed}` : null}
     </span>
   );
 }
@@ -364,12 +364,12 @@ export function AgentDetailCard({
           <PinButton pinned={agent.summary.pinned} onToggle={onTogglePinned} size="icon-sm" />
         </div>
       </div>
-      {!agent.summary.activity ? null : (
+      {agent.summary.activity ? (
         <p className="max-w-3xl text-sm">{agent.summary.activity}</p>
-      )}
-      {!agent.summary.description ? null : (
+      ) : null}
+      {agent.summary.description ? (
         <p className="max-w-3xl text-sm text-muted-foreground">{agent.summary.description}</p>
-      )}
+      ) : null}
       <div className="flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground">
         <div className="flex min-w-0 items-center gap-1">
           <code className="min-w-0 truncate font-mono text-[11px]" title={agent.path}>
@@ -519,20 +519,20 @@ export function AgentCommandPresentation({
       <span className="min-w-0 text-xs">
         <span className="block truncate">{state.label}</span>
         <span className="block truncate text-muted-foreground">
-          {!agent.binding
-            ? descendantCount > 0
+          {agent.binding
+            ? bindingLabel(agent.binding)
+            : descendantCount > 0
               ? `${descendantCount} subagent${descendantCount === 1 ? "" : "s"}`
-              : "—"
-            : bindingLabel(agent.binding)}
+              : "—"}
         </span>
       </span>
       <span className="hidden min-w-0 sm:block">
         <span className="block truncate text-xs">{activity ?? "—"}</span>
-        {!agent.summary.description ? null : (
+        {agent.summary.description ? (
           <span className="block truncate text-[11px] text-muted-foreground">
             {agent.summary.description}
           </span>
-        )}
+        ) : null}
       </span>
       <time
         dateTime={node.aggregateLastWorkAt}

@@ -39,7 +39,7 @@ function makeWorkspaceHarness(substrate?: HarnessSubstrate) {
   return makeProcessorHarness<WorkspaceProcessorContract>({
     createProcessor: (deps) => new WorkspaceProcessor(deps),
     path: WORKSPACE_PATH,
-    ...(!substrate ? {} : { substrate }),
+    ...(substrate && { substrate }),
   });
 }
 

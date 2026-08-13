@@ -254,9 +254,9 @@ export class StreamBrowserDatabase implements Disposable {
     const entry: RegisteredQuery = {
       sql,
       params,
-      snapshot: !previousSnapshot
-        ? PENDING
-        : { ...previousSnapshot, status: "pending", error: undefined },
+      snapshot: previousSnapshot
+        ? { ...previousSnapshot, status: "pending", error: undefined }
+        : PENDING,
       started: false,
       gcTimer: undefined,
       listeners: new Set(),

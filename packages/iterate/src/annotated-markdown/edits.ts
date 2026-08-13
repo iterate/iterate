@@ -233,7 +233,7 @@ function commentBlockLines(input: {
 function nextThreadLabel(doc: StructuredDocument): string {
   let max = 0;
   for (const thread of doc.discussion?.threads ?? []) {
-    const match = !thread.label ? null : /^T(\d+)$/.exec(thread.label);
+    const match = thread.label ? /^T(\d+)$/.exec(thread.label) : null;
     if (match?.[1]) max = Math.max(max, Number(match[1]));
   }
   return `T${max + 1}`;
@@ -302,7 +302,7 @@ export function addThread(doc: StructuredDocument, options: AddThreadOptions): A
     }
   }
   const insertAt = doc.raw.length;
-  const storePreamble = !doc.discussion ? [formatStoreSentinel(), "", "## Discussion", ""] : [];
+  const storePreamble = doc.discussion ? [] : [formatStoreSentinel(), "", "## Discussion", ""];
   splices.push({
     range: { start: insertAt, end: insertAt },
     insert:

@@ -289,51 +289,53 @@ function ProjectSecretsIndexContent() {
         </Sheet>
       </div>
 
-      {!secretsList ? (
-        <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
-          Loading secrets…
-        </div>
-      ) : secretsList.length === 0 ? (
-        <Empty className="rounded-lg border">
-          <EmptyHeader>
-            <EmptyTitle>No Secrets</EmptyTitle>
-            <EmptyDescription>
-              Project Secrets will appear here after they are created.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      ) : (
-        <div className="space-y-3">
-          {visibleSecrets.length === 0 ? (
-            <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-              No Secrets match.
-            </div>
-          ) : (
-            visibleSecrets.map((secret) => (
-              <div
-                key={secret.path}
-                className="flex items-start justify-between gap-4 rounded-lg border bg-card p-4"
-              >
-                <div className="min-w-0 flex-1 space-y-1">
-                  <Link
-                    className="flex min-w-0 items-center gap-2 text-sm font-medium hover:underline"
-                    to="/projects/$projectSlug/secrets/$secretId"
-                    params={{
-                      projectSlug: params.projectSlug,
-                      secretId: secretNameFromPath(secret.path),
-                    }}
-                    search={{}}
-                  >
-                    <KeyRound className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{secretNameFromPath(secret.path)}</span>
-                  </Link>
-                  <div className="truncate text-xs text-muted-foreground">
-                    {secret.path} · Created {formatTimeAgo(secret.createdAt)}
+      {secretsList ? (
+        secretsList.length === 0 ? (
+          <Empty className="rounded-lg border">
+            <EmptyHeader>
+              <EmptyTitle>No Secrets</EmptyTitle>
+              <EmptyDescription>
+                Project Secrets will appear here after they are created.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          <div className="space-y-3">
+            {visibleSecrets.length === 0 ? (
+              <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                No Secrets match.
+              </div>
+            ) : (
+              visibleSecrets.map((secret) => (
+                <div
+                  key={secret.path}
+                  className="flex items-start justify-between gap-4 rounded-lg border bg-card p-4"
+                >
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <Link
+                      className="flex min-w-0 items-center gap-2 text-sm font-medium hover:underline"
+                      to="/projects/$projectSlug/secrets/$secretId"
+                      params={{
+                        projectSlug: params.projectSlug,
+                        secretId: secretNameFromPath(secret.path),
+                      }}
+                      search={{}}
+                    >
+                      <KeyRound className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{secretNameFromPath(secret.path)}</span>
+                    </Link>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {secret.path} · Created {formatTimeAgo(secret.createdAt)}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))
-          )}
+              ))
+            )}
+          </div>
+        )
+      ) : (
+        <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
+          Loading secrets…
         </div>
       )}
     </>

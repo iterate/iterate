@@ -496,7 +496,7 @@ return await itx.projects.get(pid).__describe();
       const path = "/sandboxes/" + name;
       const sandbox = itx.sandboxes.get(path);
       await sandbox.create({
-        ...(!vars.instanceType ? {} : { instanceType: vars.instanceType }),
+        ...(vars.instanceType && { instanceType: vars.instanceType }),
       });
 
       // exec runs a shell command; the first one boots the container.
@@ -1386,7 +1386,7 @@ return {
 
       return {
         fileCount: files.paths.length,
-        readmePreview: !readme ? null : readme.slice(0, 120),
+        readmePreview: readme ? readme.slice(0, 120) : null,
       };
     },
   }),

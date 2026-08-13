@@ -372,11 +372,11 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract, Medi
         // would swallow a legitimate offset of 0), always apply, and never
         // advance the floor — kept in lockstep with the phone's
         // deriveMediaList.
-        const requestOffset = !Number.isFinite(event.payload.requestOffset)
-          ? null
-          : event.payload.requestOffset;
+        const requestOffset = Number.isFinite(event.payload.requestOffset)
+          ? event.payload.requestOffset
+          : null;
         const settledFloor = Math.max(
-          !pendingEntry ? 0 : pendingEntry.requestOffset,
+          pendingEntry ? pendingEntry.requestOffset : 0,
           existing?.settledRequestOffset || 0,
         );
         if (Number.isFinite(requestOffset) && requestOffset < settledFloor) return state;
@@ -387,11 +387,14 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract, Medi
         // `||` folds legacy payloads (no error field, reduced without the
         // contract parse in old states) into the success arm.
         const error = event.payload.error || null;
-        const settledRequestOffset = !Number.isFinite(requestOffset)
-          ? existing.settledRequestOffset
-          : requestOffset;
-        const item = !error
-          ? {
+        const settledRequestOffset = Number.isFinite(requestOffset)
+          ? requestOffset
+          : existing.settledRequestOffset;
+        const item = error
+          ? // A failed analysis keeps whatever the item already shows; the
+            // failure itself becomes visible on the row.
+            { ...existing, analysisError: error, settledRequestOffset }
+          : {
               ...existing,
               title: event.payload.title,
               markdown: event.payload.markdown,
@@ -400,10 +403,7 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract, Medi
               processedBy: event.payload.processedBy,
               analysisError: null,
               settledRequestOffset,
-            }
-          : // A failed analysis keeps whatever the item already shows; the
-            // failure itself becomes visible on the row.
-            { ...existing, analysisError: error, settledRequestOffset };
+            };
         return {
           ...state,
           items: { ...state.items, [event.payload.stableKey]: item },

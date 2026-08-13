@@ -152,9 +152,9 @@ export default async function* nodeTestTelemetryReporter(source: AsyncIterable<T
         phases: [],
         errors,
         ...(errors[0] && { firstFailure: errors[0].message.slice(0, 300) }),
-        ...(!Number.isFinite(final.data.testNumber) ? {} : { testNumber: final.data.testNumber }),
-        ...(!Number.isFinite(final.data.line) ? {} : { testLine: final.data.line }),
-        ...(!Number.isFinite(final.data.column) ? {} : { testColumn: final.data.column }),
+        ...(Number.isFinite(final.data.testNumber) && { testNumber: final.data.testNumber }),
+        ...(Number.isFinite(final.data.line) && { testLine: final.data.line }),
+        ...(Number.isFinite(final.data.column) && { testColumn: final.data.column }),
       });
     }
   }

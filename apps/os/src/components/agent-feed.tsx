@@ -118,7 +118,7 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
         data-kind="assistant"
       >
         <MessageContent>
-          {!item.via ? null : <MessageViaLabel via={item.via} className="text-muted-foreground" />}
+          {item.via ? <MessageViaLabel via={item.via} className="text-muted-foreground" /> : null}
           {/* Settled messages never stream, so skip streamdown's unpaired-
               marker balancing — it appends a phantom `*` to text like "17 * 23".
               mode="static" is load-bearing for the virtualized feed: streaming
@@ -165,7 +165,7 @@ function ChildStreamCreatedRow({
 }) {
   const dateTime = formatDateTimeAttribute(item.timestampMs);
   const streamLabel = compactStreamPath(item.childPath);
-  const linkOptions = !projectSlug ? null : linkOptionsForStreamPath(projectSlug, item.childPath);
+  const linkOptions = projectSlug ? linkOptionsForStreamPath(projectSlug, item.childPath) : null;
 
   return (
     <div
@@ -176,15 +176,15 @@ function ChildStreamCreatedRow({
       <div className="h-px min-w-8 flex-1 bg-border/70" />
       <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden="true" />
       <span className="shrink-0">Created child stream</span>
-      {!linkOptions ? (
-        <span className="min-w-0 truncate font-mono text-foreground/70">{streamLabel}</span>
-      ) : (
+      {linkOptions ? (
         <Link
           {...linkOptions}
           className="min-w-0 truncate font-mono text-foreground/80 underline-offset-4 hover:text-foreground hover:underline"
         >
           {streamLabel}
         </Link>
+      ) : (
+        <span className="min-w-0 truncate font-mono text-foreground/70">{streamLabel}</span>
       )}
       <time className="sr-only" dateTime={dateTime}>
         {formatDateTime(item.timestampMs)}
@@ -245,9 +245,9 @@ function ProcessorRevivedRow({
   item: Extract<AgentUiItem, { kind: "processor-revived" }>;
 }) {
   const dateTime = formatDateTimeAttribute(item.timestampMs);
-  const label = !item.processorSlug
-    ? "Processor revived"
-    : `${item.processorSlug} processor revived`;
+  const label = item.processorSlug
+    ? `${item.processorSlug} processor revived`
+    : "Processor revived";
 
   return (
     <div
@@ -313,7 +313,7 @@ function StreamPauseRow({
           dateTime={dateTime}
           title={formatDateTime(item.timestampMs)}
         >
-          {!item.reason ? item.text : `${item.text}: ${item.reason}`}
+          {item.reason ? `${item.text}: ${item.reason}` : item.text}
         </time>
       </div>
       <div className="h-px flex-1 bg-border" />
@@ -374,17 +374,17 @@ function AgentActivityRow({
         {!activityLabel || summary.outcome !== "clean"
           ? // No agent-authored label (or something went wrong — failures and
             // interruptions keep the full stats line): the quiet counts row.
-            `${!activityLabel ? "" : `${activityLabel} · `}${formatAgentUiActivitySummary(
-              activity,
-              { summary, interruptedPartialHint: "click to see partial response" },
-            )}`
+            `${activityLabel ? `${activityLabel} · ` : ""}${formatAgentUiActivitySummary(activity, {
+              summary,
+              interruptedPartialHint: "click to see partial response",
+            })}`
           : // The agent said WHAT it did — that plus the duration is the
             // headline; counts are one expand away.
             [
               activityLabel,
-              !Number.isFinite(activity.endedAtMs)
-                ? null
-                : formatAgentUiDuration(Math.max(0, activity.endedAtMs - activity.startedAtMs)),
+              Number.isFinite(activity.endedAtMs)
+                ? formatAgentUiDuration(Math.max(0, activity.endedAtMs - activity.startedAtMs))
+                : null,
             ]
               .filter((part) => !!part)
               .join(" · ")}
@@ -448,7 +448,7 @@ export function QueuedMessagesPanel({
             {expanded ? "collapse" : `+${hiddenCount} more`}
           </button>
         ) : null}
-        {!onInterrupt ? null : (
+        {onInterrupt ? (
           <Button
             variant="ghost"
             size="sm"
@@ -463,7 +463,7 @@ export function QueuedMessagesPanel({
             )}
             Interrupt & send now
           </Button>
-        )}
+        ) : null}
       </div>
       <div className="flex max-h-40 flex-col gap-1 overflow-y-auto">
         {messages.map((message, index) => (
@@ -487,10 +487,8 @@ export function QueuedMessagesPanel({
 function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
   return (
     <>
-      {!item.via ? null : <MessageViaLabel via={item.via} className="opacity-70" />}
-      {item.text === "" ? null : !item.via ? (
-        <div className="whitespace-pre-wrap leading-6">{item.text}</div>
-      ) : (
+      {item.via ? <MessageViaLabel via={item.via} className="opacity-70" /> : null}
+      {item.text === "" ? null : item.via ? (
         // Slack text is converted to markdown-ish (mentions, [label](url)
         // links) by the reducer — render it through the markdown path so
         // links come out clickable instead of as raw syntax. Settled text
@@ -504,6 +502,8 @@ function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
         >
           {item.text}
         </MessageResponse>
+      ) : (
+        <div className="whitespace-pre-wrap leading-6">{item.text}</div>
       )}
       <MessageAttachments files={item.files} hasText={item.text !== ""} />
     </>
@@ -515,7 +515,7 @@ function MessageViaLabel({ via, className }: { via: AgentUiMessageVia; className
   return (
     <div className={cn("font-mono text-[11px] leading-none", className)}>
       {via.service}
-      {!via.sender ? "" : ` · ${via.sender}`}
+      {via.sender ? ` · ${via.sender}` : ""}
     </div>
   );
 }
@@ -629,17 +629,17 @@ export function AgentLiveActivity({
           : "Waiting for a response"
         : currentWorkKind === "queued"
           ? "Queued"
-          : liveActivityLabel(!currentStep ? [] : [currentStep]);
+          : liveActivityLabel(currentStep ? [currentStep] : []);
   const currentStartedAtMs = currentStep?.startedAtMs ?? live.startedAtMs;
   const inspectCurrentWork =
     currentStep?.kind === "llm"
-      ? !onInspectLlmRequest
-        ? undefined
-        : () => onInspectLlmRequest(currentStep.llmRequestOffset)
+      ? onInspectLlmRequest
+        ? () => onInspectLlmRequest(currentStep.llmRequestOffset)
+        : undefined
       : currentStep?.kind === "code"
-        ? !onInspectScriptExecution
-          ? undefined
-          : () => onInspectScriptExecution(currentStep.executionId)
+        ? onInspectScriptExecution
+          ? () => onInspectScriptExecution(currentStep.executionId)
+          : undefined
         : undefined;
 
   if (!working) {
@@ -734,7 +734,7 @@ function AgentLiveStatus({
 }) {
   const phaseClock = useLivePhaseClock(startedAtMs, deadlineMs, true);
   const phaseLabel = phaseClock.deadlineExceeded ? "Code deadline exceeded" : label;
-  const statusWithElapsed = `${phaseLabel}${!phaseClock.elapsedLabel ? "" : ` ${phaseClock.elapsedLabel}`}`;
+  const statusWithElapsed = `${phaseLabel}${phaseClock.elapsedLabel ? ` ${phaseClock.elapsedLabel}` : ""}`;
 
   return (
     <Button
@@ -745,9 +745,9 @@ function AgentLiveStatus({
       title={
         phaseClock.deadlineExceeded
           ? "The script has no durable settlement after its absolute deadline"
-          : !onInspect
-            ? undefined
-            : "Open the current operation's trace"
+          : onInspect
+            ? "Open the current operation's trace"
+            : undefined
       }
       className={cn(
         "-ml-2.5 h-7 self-start px-2.5 text-primary disabled:opacity-100",
@@ -768,7 +768,7 @@ function AgentLiveStatus({
       >
         {statusWithElapsed}
       </span>
-      {!onInspect ? null : (
+      {onInspect ? (
         <ChevronRightIcon
           className={cn(
             "size-2.5 text-primary/60",
@@ -776,7 +776,7 @@ function AgentLiveStatus({
           )}
           aria-hidden="true"
         />
-      )}
+      ) : null}
     </Button>
   );
 }

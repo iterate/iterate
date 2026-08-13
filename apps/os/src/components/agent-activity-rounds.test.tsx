@@ -123,16 +123,16 @@ function databaseWithRenderEvent(
   executionId: string | null,
   content: string,
 ): StreamBrowserDatabase {
-  const rows = !executionId
-    ? []
-    : [
+  const rows = executionId
+    ? [
         {
           raw_json: JSON.stringify({
             type: "events.iterate.com/agents/context-added",
             payload: { role: "developer", content, actor: { type: "script", executionId } },
           }),
         },
-      ];
+      ]
+    : [];
   const snapshot = { data: rows, status: "ok", error: undefined };
   const handle = { getSnapshot: () => snapshot, subscribe: () => () => {} };
   return { query: () => handle } as any;

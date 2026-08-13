@@ -354,9 +354,9 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
    * subject line. */
   async #commitMessage(dirtyPaths: string[]): Promise<string> {
     const [first] = dirtyPaths;
-    const content = !first ? null : await this.deps.workspace.readFile(first);
+    const content = first ? await this.deps.workspace.readFile(first) : null;
     const stem = (first || "").split("/").at(-1)?.replace(/\.md$/, "") || "notes";
-    const label = !content ? `remove ${stem}` : noteDisplayTitle(parseNoteFile(content)) || stem;
+    const label = content ? noteDisplayTitle(parseNoteFile(content)) || stem : `remove ${stem}`;
     const rest = dirtyPaths.length - 1;
     return `notes: ${label}${rest > 0 ? ` (+${rest} more)` : ""}`.slice(0, 100);
   }

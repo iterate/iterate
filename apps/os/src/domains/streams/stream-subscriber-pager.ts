@@ -174,9 +174,9 @@ export class StreamSubscriberPagerRegistry {
       if (this.#hooks.hasConnection(attachment.connectionKey)) continue;
       dormant[attachment.connectionKey] = {
         idleDeliveredThrough: attachment.idleDeliveredThrough,
-        ...(!Number.isFinite(attachment.pageSentAtOffset)
-          ? {}
-          : { pageSentAtOffset: attachment.pageSentAtOffset }),
+        ...(Number.isFinite(attachment.pageSentAtOffset) && {
+          pageSentAtOffset: attachment.pageSentAtOffset,
+        }),
       };
     }
     return dormant;
@@ -289,7 +289,7 @@ export class StreamSubscriberPagerRegistry {
       const explicitTypes = attachment.filter?.eventTypes;
       let matcher: ReturnType<typeof compileEventFilter> | undefined;
       try {
-        matcher = !attachment.filter ? undefined : compileEventFilter(attachment.filter);
+        matcher = attachment.filter ? compileEventFilter(attachment.filter) : undefined;
       } catch (error) {
         // A stored spec that compiled at bind time can stop compiling under a
         // later deploy; throwing out of the post-commit send check would put

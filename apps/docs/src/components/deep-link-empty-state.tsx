@@ -152,17 +152,7 @@ export function DeepLinkEmptyState({ workspacePath }: { workspacePath?: string }
             <TelescopeIcon aria-hidden className="size-5 text-muted-foreground" />
             <h2 className="truncate text-sm font-semibold">All workspaces</h2>
           </div>
-          {!workspaces ? (
-            <p className="flex items-center gap-2 px-5 py-4 text-sm text-muted-foreground">
-              {!listError ? (
-                <>
-                  <Loader2Icon aria-hidden className="size-4 animate-spin" /> Loading…
-                </>
-              ) : (
-                listError
-              )}
-            </p>
-          ) : (
+          {workspaces ? (
             <ul className="divide-y">
               {workspaces.map((entry) => (
                 <li key={entry.path}>
@@ -176,6 +166,16 @@ export function DeepLinkEmptyState({ workspacePath }: { workspacePath?: string }
                 </li>
               ))}
             </ul>
+          ) : (
+            <p className="flex items-center gap-2 px-5 py-4 text-sm text-muted-foreground">
+              {listError ? (
+                listError
+              ) : (
+                <>
+                  <Loader2Icon aria-hidden className="size-4 animate-spin" /> Loading…
+                </>
+              )}
+            </p>
           )}
         </section>
       </div>

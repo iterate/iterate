@@ -225,12 +225,12 @@ function roundHeaderMeta(round: { llm: AgentUiLlmStep | null; code: AgentUiCodeS
             : llm.outcome === "failed"
               ? ["failed"]
               : []),
-      ...(!Number.isFinite(llm.durationMs) ? [] : [`${(llm.durationMs / 1000).toFixed(1)}s`]),
+      ...(Number.isFinite(llm.durationMs) ? [`${(llm.durationMs / 1000).toFixed(1)}s`] : []),
     ].join(" · ");
   }
   return [
     ...(code.activitySummary ? [code.activitySummary] : []),
-    ...(!Number.isFinite(code.durationMs) ? [] : [`${(code.durationMs / 1000).toFixed(1)}s`]),
+    ...(Number.isFinite(code.durationMs) ? [`${(code.durationMs / 1000).toFixed(1)}s`] : []),
   ].join(" · ");
 }
 
@@ -249,17 +249,17 @@ function LlmStepView({ code, step }: { code: AgentUiCodeStep | null; step: Agent
   // bubbles, and the verbatim text in Meta → response. It renders only for
   // code-less moments — the live stream before a script lands, or a round
   // whose code half never arrived.
-  const responseText = !code ? step.responseText : "";
+  const responseText = code ? "" : step.responseText;
   return (
     <View style={styles.stepBody}>
       {/* Once the round has a code step, this stat line lives in its Meta
           tab instead; with no code step there is no tab bar, so it renders
           here (streaming llm, or a round whose code half never arrived). */}
-      {!code ? (
+      {code ? null : (
         <Text style={styles.stepLabel}>
           {`llm${step.model ? ` · ${step.model}` : ""}${footerStats(step)}`}
         </Text>
-      ) : null}
+      )}
       {step.thinkingText !== "" ? (
         <Text style={styles.thinking}>{tail(step.thinkingText, 600)}</Text>
       ) : null}
@@ -327,7 +327,7 @@ function CodeStepTabs({
   // response/stats, which this tab doesn't show — not fetched.)
   const requestCovered =
     !!llm && !!threadEvents.length && threadEvents.at(-1)!.offset >= llm.llmRequestOffset;
-  const llmRequestOffset = !llm ? null : llm.llmRequestOffset;
+  const llmRequestOffset = llm ? llm.llmRequestOffset : null;
   const promptReplay = useMemo(() => {
     if (active !== "meta" || !Number.isFinite(llmRequestOffset) || !requestCovered) return null;
     const relevant = threadEvents.filter(
@@ -449,16 +449,16 @@ function metaYaml(
     ...(llm && {
       llm: {
         ...(llm.model && { model: llm.model }),
-        ...(!Number.isFinite(llm.durationMs) ? {} : { duration: seconds(llm.durationMs) }),
-        ...(!Number.isFinite(llm.inputTokens) ? {} : { inputTokens: llm.inputTokens }),
-        ...(!Number.isFinite(llm.outputTokens) ? {} : { outputTokens: llm.outputTokens }),
+        ...(Number.isFinite(llm.durationMs) && { duration: seconds(llm.durationMs) }),
+        ...(Number.isFinite(llm.inputTokens) && { inputTokens: llm.inputTokens }),
+        ...(Number.isFinite(llm.outputTokens) && { outputTokens: llm.outputTokens }),
         ...(llm.outcome && llm.outcome !== "completed" && { outcome: llm.outcome }),
         ...(llm.cancelReason && { cancelReason: llm.cancelReason }),
       },
     }),
     code: {
       ...(code.status === "running" && { status: "running" }),
-      ...(!Number.isFinite(code.durationMs) ? {} : { duration: seconds(code.durationMs) }),
+      ...(Number.isFinite(code.durationMs) && { duration: seconds(code.durationMs) }),
       ...(code.status === "done" && code.success === false && { failed: true }),
     },
     ...(!!promptMessages?.length && {

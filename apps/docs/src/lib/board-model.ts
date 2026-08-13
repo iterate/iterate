@@ -71,7 +71,7 @@ export function taskPathInFolder(path: string, folder: string): string {
 
 function taskSummary(source: string): { text: string; from: number } {
   const frontmatter = /^---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(source);
-  const bodyOffset = !frontmatter ? 0 : frontmatter[0].length;
+  const bodyOffset = frontmatter?.[0].length ?? 0;
   const body = source.slice(bodyOffset);
   let lineOffset = 0;
   for (const line of body.split("\n")) {

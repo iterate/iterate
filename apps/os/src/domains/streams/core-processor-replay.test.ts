@@ -171,9 +171,9 @@ describe("core processor version 31 committed-event replay", () => {
       // First-hand control events must still parse under this reducer version.
       // Received copies deliberately bypass that parse, exactly as the replay
       // reducer does, because their payload belongs to the source lifetime.
-      const event = !fixture.source?.copiedFrom
-        ? (CoreProcessorContract.parseEvent(fixture as never) as StreamEvent)
-        : fixture;
+      const event = fixture.source?.copiedFrom
+        ? fixture
+        : (CoreProcessorContract.parseEvent(fixture as never) as StreamEvent);
       state = processor.reduce({ event, state });
       expect(() => CoreProcessorContract.stateSchema.parse(state)).not.toThrow();
       states.set(fixture.offset, state);

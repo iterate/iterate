@@ -1016,9 +1016,8 @@ export async function confirmGithubSteal(input: {
       continue;
     }
     await appendConnectionDirectoryEvents([
-      ...(!claim
-        ? []
-        : [
+      ...(claim
+        ? [
             {
               claimed: false,
               connection: claim.connection,
@@ -1026,7 +1025,8 @@ export async function confirmGithubSteal(input: {
               projectId: claim.projectId,
               slug: "github",
             },
-          ]),
+          ]
+        : []),
       {
         claimed: true,
         connection,
@@ -1231,7 +1231,7 @@ async function exchangeGithubUserCode(input: {
       client_id: github.oauthClientId,
       client_secret: github.oauthClientSecret.exposeSecret(),
       code: input.code,
-      ...(!input.codeVerifier ? {} : { code_verifier: input.codeVerifier }),
+      ...(input.codeVerifier && { code_verifier: input.codeVerifier }),
       redirect_uri: oauthRedirectUri({
         baseUrl: requestBaseUrl({ config: input.config }),
         provider: "github",
@@ -1431,7 +1431,7 @@ export async function connectTelegram(input: {
   // derive it from the bot username (or the bot id when the username
   // sanitizes away).
   const connection =
-    (!foreignClaim ? existingClaim?.connection : undefined) ??
+    (foreignClaim ? undefined : existingClaim?.connection) ??
     (sanitizeConnectionName(bot.username ?? "") || `bot-${sanitizeConnectionName(bot.id)}`);
 
   // Record BEFORE setWebhook — claim-first, so no update can arrive at the
@@ -1478,14 +1478,12 @@ export async function connectTelegram(input: {
     },
     directoryClaim: {
       externalId: bot.id,
-      ...(!foreignClaim
-        ? {}
-        : {
-            unclaimFirst: {
-              connection: foreignClaim.connection,
-              projectId: foreignClaim.projectId,
-            },
-          }),
+      ...(foreignClaim && {
+        unclaimFirst: {
+          connection: foreignClaim.connection,
+          projectId: foreignClaim.projectId,
+        },
+      }),
     },
   });
 
@@ -1609,9 +1607,9 @@ async function telegramGetMe(input: {
   const username = readString(result?.username);
   const firstName = readString(result?.first_name);
   return {
-    ...(!firstName ? {} : { firstName }),
+    ...(firstName && { firstName }),
     id: String(id),
-    ...(!username ? {} : { username }),
+    ...(username && { username }),
   };
 }
 
@@ -1664,12 +1662,12 @@ async function latestLifecycleFact(input: {
     input.connectedType,
     input.disconnectedType,
   ]);
-  return !event
-    ? null
-    : {
+  return event
+    ? {
         connected: event.type === input.connectedType,
         payload: readRecord(event.payload) ?? {},
-      };
+      }
+    : null;
 }
 
 /** The "never connected" status — also google's disconnected shape (its
@@ -1731,7 +1729,7 @@ export async function getConnectionStatus(input: {
       const botUsername = readString(fact.payload.botUsername);
       return {
         connected: fact.connected,
-        displayName: !botUsername ? null : `@${botUsername}`,
+        displayName: botUsername ? `@${botUsername}` : null,
         externalId: readString(fact.payload.externalId) ?? null,
         metadata: {
           botFirstName: readString(fact.payload.botFirstName),

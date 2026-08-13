@@ -262,7 +262,7 @@ export class WorkspaceCore {
     const file = await this.#repo(resolved.mount.repoPath).readFile({
       path: resolved.repoRelativePath,
     });
-    return !file ? null : file.content;
+    return file ? file.content : null;
   }
 
   /**
@@ -349,7 +349,7 @@ export class WorkspaceCore {
     const file = await this.#repo(resolved.mount.repoPath).readFile({
       path: resolved.repoRelativePath,
     });
-    return !file ? null : file.content;
+    return file ? file.content : null;
   }
 
   async readFileBytes(path: string): Promise<Uint8Array | null> {
@@ -361,7 +361,7 @@ export class WorkspaceCore {
       encoding: "base64",
       path: resolved.repoRelativePath,
     });
-    return !file ? null : Uint8Array.from(atob(file.content), (c) => c.charCodeAt(0));
+    return file ? Uint8Array.from(atob(file.content), (c) => c.charCodeAt(0)) : null;
   }
 
   async exists(path: string): Promise<boolean> {

@@ -79,7 +79,7 @@ function hostedConfig(
   return {
     name: PROCESSOR_KEY,
     description: "Focused hosted processor test",
-    ...(!filter ? {} : { filter }),
+    ...(filter && { filter }),
     receiver: {
       action: "wake-processor",
       expression: ["agents", ["get", "/source"], "processor", "wakeStreamProcessor"],
@@ -2053,7 +2053,7 @@ describe("ephemeral delivery to hosted processors", () => {
     streamId: SOURCE_STREAM_ID,
     checkpointOffset: 0,
     processEventBatch: recordingProcessEventBatch(calls, () => undefined),
-    ...(!consumes ? {} : { openedBy: announcing(consumes) }),
+    ...(consumes && { openedBy: announcing(consumes) }),
   });
 
   const ephemeralFirst = (): StreamEvent[] => [

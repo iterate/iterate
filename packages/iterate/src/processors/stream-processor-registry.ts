@@ -571,7 +571,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
             storage: ctx.storage,
             name,
           }),
-          ...(!recovery ? {} : { recovery }),
+          ...(recovery && { recovery }),
         },
         // Recovery-less runners still keep the incarnation alive while their
         // registered work runs; they just get no post-eviction alarm (see the

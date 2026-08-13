@@ -117,7 +117,7 @@ export function threadContextForScriptRun(
       // harmless: it simply never matches, leaving the fold unbounded.
       (event.payload as { executionId?: string } | undefined)?.executionId === run.executionId,
   );
-  const statusBound = !settle ? Infinity : settle.offset;
+  const statusBound = settle ? settle.offset : Infinity;
   let title: string | null = null;
   let activity: string | null = null;
   for (const event of ordered) {

@@ -1060,15 +1060,15 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   #createEventDeliveryAuthorityRoot(): unknown {
     const auth = streamDeliveryAuthContext(this.name.projectId);
-    return !this.name.projectId
-      ? deploymentItxForInternal({ auth, ctx: this.ctx })
-      : itxForScope({
+    return this.name.projectId
+      ? itxForScope({
           auth,
           ctx: this.ctx,
           streamContext: { kind: "scope", scopePath: "/" },
           path: "/",
           projectId: this.name.projectId,
-        });
+        })
+      : deploymentItxForInternal({ auth, ctx: this.ctx });
   }
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -1362,7 +1362,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** Merge a desire into the shared slot at the EARLIEST time and arm the real alarm. */
   #mergeFacetAlarmDesire(atMs: number): void {
     const existing = this.#readFacetAlarmAtMs();
-    const merged = !Number.isFinite(existing) ? atMs : Math.min(existing, atMs);
+    const merged = Number.isFinite(existing) ? Math.min(existing, atMs) : atMs;
     this.ctx.storage.kv.put(FACET_ALARM_KV_KEY, merged);
     this.#alarmArmer.armNoLaterThan(merged);
   }
@@ -1417,13 +1417,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
     // Plain copy: the platform's AlarmInvocationInfo host object does not
     // serialize across the facet hop.
-    const info: AlarmInvocationInfo | undefined = !alarmInfo
-      ? undefined
-      : {
+    const info: AlarmInvocationInfo | undefined = alarmInfo
+      ? {
           isRetry: alarmInfo.isRetry,
           retryCount: alarmInfo.retryCount,
           scheduledTime: alarmInfo.scheduledTime,
-        };
+        }
+      : undefined;
     for (const facet of facetNames) {
       this.#runInBackground(async () => {
         try {
@@ -1908,9 +1908,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     const explicitName = canonical.name;
-    const existing = !explicitName
-      ? undefined
-      : this.#coreProcessorState.subscriptions.outbound.byName[explicitName];
+    const existing = explicitName
+      ? this.#coreProcessorState.subscriptions.outbound.byName[explicitName]
+      : undefined;
 
     let configuredEvent: StreamEvent;
     if (existing && jsonValuesEqual(existing.configuration, canonical)) {
@@ -1929,7 +1929,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       configuredEvent = this.#append({ authority: "public" }, [
         {
           type: "events.iterate.com/stream/subscription-configured",
-          ...(!args.idempotencyKey ? {} : { idempotencyKey: args.idempotencyKey }),
+          ...(args.idempotencyKey && { idempotencyKey: args.idempotencyKey }),
           payload: canonical,
         },
       ])[0]!;
@@ -2040,9 +2040,9 @@ export class StreamDurableObject extends DurableObject<Env> {
             // source hop. The receiver's own drop-audit records have no hop;
             // their deterministic body and internal key are the complete
             // identity.
-            const isSameCopyAppend = !body.source?.copiedFrom?.at(-1)
-              ? sameIdempotentEvent(existing, body)
-              : sameCopiedEventIdentity(existing, body);
+            const isSameCopyAppend = body.source?.copiedFrom?.at(-1)
+              ? sameCopiedEventIdentity(existing, body)
+              : sameIdempotentEvent(existing, body);
             if (isSameCopyAppend) {
               events.push(existing);
               continue;
@@ -2742,15 +2742,15 @@ export class StreamDurableObject extends DurableObject<Env> {
     // of a deep core-contract failure.
     // The live `getRuntimeState` capability rides as a SIBLING argument (the
     // same position the processor wake response gives it), never inside the descriptor.
-    const openedBy = !args.openedBy
-      ? undefined
-      : ConnectionOpenerDescriptorSchema.parse(args.openedBy);
+    const openedBy = args.openedBy
+      ? ConnectionOpenerDescriptorSchema.parse(args.openedBy)
+      : undefined;
 
     // One filter shape everywhere: `eventTypes` is sugar for the filter's
     // type list (compileEventFilter also validates any condition upfront).
     const filterSpec: EventFilter = {
       ...args.filter,
-      ...(!args.eventTypes ? {} : { eventTypes: [...args.eventTypes] }),
+      ...(args.eventTypes && { eventTypes: [...args.eventTypes] }),
     };
     const filter = compileEventFilter(filterSpec);
 
@@ -2956,7 +2956,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         new Error(
           `${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}subscription "${trimmedName}" confirmed ` +
             `${row?.confirmedOffset ?? 0} < ${args.offset} after ${timeoutMs}ms` +
-            `${!row ? "" : ` (status: ${row.status})`}`,
+            `${row ? ` (status: ${row.status})` : ""}`,
         ),
       );
     }, timeoutMs);

@@ -183,7 +183,7 @@ async function resolveRequestAuth(input: {
     logAuthSessionVerificationFailure({ context: input.context, error: authError });
 
   return {
-    principal: !authentication.credential ? null : principalFromIdentity(authentication.identity),
+    principal: authentication.credential ? principalFromIdentity(authentication.identity) : null,
     session: authentication.credential === "session" ? authentication.session : null,
     error,
     operatorSession: null,

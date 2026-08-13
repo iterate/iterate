@@ -196,9 +196,8 @@ export function deriveReplEntries(events: readonly StreamEvent[]): ReplRunEntry[
       // it is what the preamble's results rows carry as `offset`, so the UI
       // label and `results.byOffset(n)` name the same row.
       const settledAtOffset = event.offset;
-      const settled: ReplRunEntry = !settlement.success
-        ? { ...requested, status: "error", error: "Malformed settlement event.", settledAtOffset }
-        : settlement.data.status === "failed"
+      const settled: ReplRunEntry = settlement.success
+        ? settlement.data.status === "failed"
           ? { ...requested, status: "error", error: settlement.data.error, settledAtOffset }
           : {
               ...requested,
@@ -208,7 +207,8 @@ export function deriveReplEntries(events: readonly StreamEvent[]): ReplRunEntry[
               // renders them differently.
               result: settlement.data.result,
               settledAtOffset,
-            };
+            }
+        : { ...requested, status: "error", error: "Malformed settlement event.", settledAtOffset };
       entries.set(executionId, settled);
     }
   }

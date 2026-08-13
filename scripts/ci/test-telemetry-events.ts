@@ -520,9 +520,9 @@ function phaseEvent(input: {
       phase_category: input.phase.category,
       duration_ms: input.phase.durationMs,
       attachment_count: input.phase.attachmentCount,
-      source_file: !input.phase.sourceFile
-        ? undefined
-        : normalizeModuleId(input.phase.sourceFile, input.artifact),
+      source_file: input.phase.sourceFile
+        ? normalizeModuleId(input.phase.sourceFile, input.artifact)
+        : undefined,
       source_line: input.phase.sourceLine,
       source_column: input.phase.sourceColumn,
       error_name: input.phase.error?.name,

@@ -243,11 +243,11 @@ function FeedItemRows({
               />
             )}
             <span>
-              {!snapshot.connectionError
-                ? snapshot.connectionStatus === "receiving-events"
+              {snapshot.connectionError
+                ? `Stream connection is ${snapshot.connectionStatus}: ${snapshot.connectionError}`
+                : snapshot.connectionStatus === "receiving-events"
                   ? "No feed items yet"
-                  : `Stream connection is ${snapshot.connectionStatus}`
-                : `Stream connection is ${snapshot.connectionStatus}: ${snapshot.connectionError}`}
+                  : `Stream connection is ${snapshot.connectionStatus}`}
             </span>
           </div>
         ) : (
@@ -427,18 +427,18 @@ function FeedItemWindow({
         // measurement cache, so unmeasured pending rows would never be placed.
         ref={measureElement}
       >
-        {!row ? (
-          <article
-            className="box-border h-9 rounded-md border border-[#e1e5eb]"
-            data-testid="feed-item-pending"
-          />
-        ) : (
+        {row ? (
           <FeedItem
             expanded={isExpanded}
             isLast={isLastFeedRow}
             row={row}
             streamView={streamView}
             onToggle={() => onToggleLocalIndex(row.local_index)}
+          />
+        ) : (
+          <article
+            className="box-border h-9 rounded-md border border-[#e1e5eb]"
+            data-testid="feed-item-pending"
           />
         )}
       </div>
@@ -600,13 +600,13 @@ function ChildStreamCreatedFeedItem({
   onToggle(): void;
 }) {
   const childPath = childStreamPathFromRow(row);
-  const childSearch = !childPath
-    ? undefined
-    : streamViewSearch({
+  const childSearch = childPath
+    ? streamViewSearch({
         path: childPath,
         projectId: streamView.projectId,
         view: "browser-feed",
-      });
+      })
+    : undefined;
 
   return (
     <article
@@ -625,16 +625,16 @@ function ChildStreamCreatedFeedItem({
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-xs font-medium text-violet-950">Child stream created</p>
-            {!childPath ? (
-              <p className="mt-1 font-mono text-[11px] text-violet-700/80">
-                missing childPath in payload
-              </p>
-            ) : (
+            {childPath ? (
               <p className="mt-1 text-[11px] text-violet-800/90">
                 Under <span className="font-mono text-violet-900">{streamView.path}</span>
               </p>
+            ) : (
+              <p className="mt-1 font-mono text-[11px] text-violet-700/80">
+                missing childPath in payload
+              </p>
             )}
-            {!childSearch ? null : (
+            {childSearch ? (
               <Link
                 className="mt-2 inline-flex items-center gap-1 font-mono text-xs text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
                 data-testid="feed-child-stream-link"
@@ -644,7 +644,7 @@ function ChildStreamCreatedFeedItem({
                 Open {childPath}
                 <span aria-hidden>→</span>
               </Link>
-            )}
+            ) : null}
           </div>
           <button
             aria-expanded={expanded}

@@ -211,7 +211,7 @@ function ProjectState({ projectSlug }: { projectSlug: string }) {
       <textarea
         aria-label="Project processor state"
         readOnly
-        value={!state.value ? "Waiting for live state…" : JSON.stringify(state.value, null, 2)}
+        value={state.value ? JSON.stringify(state.value, null, 2) : "Waiting for live state…"}
       />
       {state.error ? <p className="error">{state.error}</p> : null}
     </section>

@@ -71,7 +71,7 @@ export default function NotificationsScreen() {
     queryFn: () => getMobileDeviceId(),
     staleTime: Infinity,
   });
-  const deviceStreamPath = !device.data ? undefined : `/devices/${device.data}`;
+  const deviceStreamPath = device.data ? `/devices/${device.data}` : undefined;
 
   const events = useLiveEvents({
     queryKey: ["device-notification-events", baseUrl || "pending", projectId, deviceStreamPath],
@@ -111,7 +111,7 @@ export default function NotificationsScreen() {
   return (
     <View style={styles.screen}>
       <Stack.Screen options={{ title: slug ? `${slug} notifications` : "Notifications" }} />
-      {!baseUrl ? null : <ApproverKeyBanner baseUrl={baseUrl} projectId={projectId} />}
+      {baseUrl ? <ApproverKeyBanner baseUrl={baseUrl} projectId={projectId} /> : null}
       {events.isPending || device.isPending || approvalEvents.isPending ? (
         <View style={styles.center}>
           <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />

@@ -299,13 +299,13 @@ export function SourceCodeBlock({
       // highlights), showLineNumbers alone decides the gutter —
       // showFoldGutter keeps just the fold arrows when line numbers are off
       // (collapsible YAML/JSON sections without the number column).
-      !showLineNumbers
-        ? EditorView.theme(
+      showLineNumbers
+        ? []
+        : EditorView.theme(
             showFoldGutter
               ? { ".cm-gutter.cm-lineNumbers": { display: "none" } }
               : { ".cm-gutters": { display: "none" } },
-          )
-        : [],
+          ),
       plainChrome
         ? EditorView.theme({
             ".cm-activeLine, .cm-activeLineGutter, .cm-selectionMatch": {

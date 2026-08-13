@@ -24,7 +24,7 @@ export async function callGmailApi(input: {
       new Request(url, {
         method,
         headers: {
-          ...(!input.request.body ? {} : { "content-type": "application/json" }),
+          ...(!!input.request.body && { "content-type": "application/json" }),
           ...(input.request.headers ?? {}),
           authorization: input.authorization,
         },

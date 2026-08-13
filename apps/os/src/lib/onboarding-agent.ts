@@ -83,7 +83,7 @@ export async function waitForOnboardingGreeting<Event extends OnboardingGreeting
   const deadline = now() + input.timeoutMs;
   const wait = (timeoutMs: number, afterOffset?: number) =>
     input.stream.waitForEvent({
-      ...(!Number.isFinite(afterOffset) ? {} : { afterOffset }),
+      ...(Number.isFinite(afterOffset) && { afterOffset }),
       eventTypes: [ONBOARDING_GREETING_EVENT_TYPE],
       timeoutMs,
     });

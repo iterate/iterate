@@ -79,7 +79,7 @@ export function CreateProjectForm({
       const project = session.projects.get(input.slug).create(
         {
           ...(input.organizationSlug && { organizationSlug: input.organizationSlug }),
-          ...(!input.configRepoTemplate ? {} : { configRepoTemplate: input.configRepoTemplate }),
+          ...(input.configRepoTemplate && { configRepoTemplate: input.configRepoTemplate }),
         },
         { waitUntilCreated: false },
       );

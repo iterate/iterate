@@ -77,9 +77,9 @@ export function approvalBodyForDisplay(request: HeldRequest): {
   truncated: boolean;
 } | null {
   if (!request.body) return null;
-  const originalByteLength = !Number.isFinite(request.body.originalByteLength)
-    ? null
-    : request.body.originalByteLength;
+  const originalByteLength = Number.isFinite(request.body.originalByteLength)
+    ? request.body.originalByteLength
+    : null;
   if (request.body.encoding === "base64") {
     return {
       language: "text",
@@ -263,7 +263,7 @@ export function deriveRecentResolvedBatches(
     const outcomes = decision.verdicts.map((verdict, index) => {
       if (verdict !== "approve") return null;
       const settle = settles.get(offset)?.get(index);
-      return !settle ? null : settle;
+      return settle ? settle : null;
     });
     const approved = decision.verdicts.filter((verdict) => verdict === "approve").length;
     const rejected = decision.verdicts.length - approved;

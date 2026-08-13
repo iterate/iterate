@@ -124,9 +124,7 @@ function definedEnvEntries(
   env: Record<string, string | undefined> | undefined,
 ): Record<string, string | null> | undefined {
   if (!env) return undefined;
-  return Object.fromEntries(
-    Object.entries(env).map(([key, value]) => [key, !value ? null : value]),
-  );
+  return Object.fromEntries(Object.entries(env).map(([key, value]) => [key, value ? value : null]));
 }
 
 /**
@@ -1080,7 +1078,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     try {
       const connections = await listIntegrationConnections(this.#identity().projectId);
       const placeholder = githubTokenEnvForConnections(connections);
-      return !placeholder ? {} : { GH_TOKEN: placeholder };
+      return placeholder ? { GH_TOKEN: placeholder } : {};
     } catch (error) {
       console.warn("sandbox GH_TOKEN discovery failed; starting without it", error);
       return {};

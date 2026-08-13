@@ -53,15 +53,15 @@ export function CommitDiffPane({
 
   const diffExtensions = useMemo(
     () =>
-      !sides
-        ? []
-        : [
+      sides
+        ? [
             unifiedMergeView({
               original: sides.before,
               allowInlineDiffs: true,
               mergeControls: false,
             }),
-          ],
+          ]
+        : [],
     [sides],
   );
 

@@ -491,7 +491,7 @@ export abstract class StreamProcessor<
     state: ProcessorState<Contract>;
   }): ReducedEvent<Contract> | ConsumedEventParseFailure | undefined {
     const parsed = this.#parseConsumedEvent(args.event);
-    if (!parsed.ok) return !parsed.error ? undefined : { parseError: parsed.error };
+    if (!parsed.ok) return parsed.error ? { parseError: parsed.error } : undefined;
     const event = parsed.event;
 
     const state = this.reduce({ event, state: args.state }) ?? args.state;
@@ -568,9 +568,9 @@ export abstract class StreamProcessor<
       slug: this.contract.slug,
       version: this.contract.version,
       stream: { path: this.path, projectId: this.projectId, streamId },
-      ...(!whileProcessing
-        ? {}
-        : { whileProcessing: { offset: whileProcessing.offset, type: whileProcessing.type } }),
+      ...(whileProcessing && {
+        whileProcessing: { offset: whileProcessing.offset, type: whileProcessing.type },
+      }),
     };
   }
 
@@ -625,12 +625,12 @@ export abstract class StreamProcessor<
     // meaning from event types or reduced processor state, never key spelling.
     if (args.targetPath !== this.path) {
       events = events.map((event) =>
-        !event.idempotencyKey
-          ? event
-          : {
+        event.idempotencyKey
+          ? {
               ...event,
               idempotencyKey: `${event.idempotencyKey}@source-stream:${sourceStreamId}`,
-            },
+            }
+          : event,
       );
       return args.target.append(...events);
     }

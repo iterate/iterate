@@ -260,9 +260,8 @@ export default function ChatScreen() {
       ) : viewMode === "chat" ? (
         <FeedList
           approvals={
-            !baseUrl
-              ? null
-              : threadBatches.map((batch) => (
+            baseUrl
+              ? threadBatches.map((batch) => (
                   <InThreadApprovalCard
                     baseUrl={baseUrl}
                     batch={batch}
@@ -271,6 +270,7 @@ export default function ChatScreen() {
                     projectId={projectId}
                   />
                 ))
+              : null
           }
           feed={feed}
           // The card's Approvals tab and status glyphs derive from the same
@@ -438,7 +438,7 @@ function FeedItem({
     case "processor-revived":
       return (
         <Text style={styles.wakeMarker}>
-          — {!item.processorSlug ? "processor" : `${item.processorSlug} processor`} revived —
+          — {item.processorSlug ? `${item.processorSlug} processor` : "processor"} revived —
         </Text>
       );
     case "child-stream-created":
@@ -447,7 +447,7 @@ function FeedItem({
     case "stream-resumed":
       return (
         <Text style={styles.wakeMarker}>
-          — {!item.reason ? item.text : `${item.text}: ${item.reason}`} —
+          — {item.reason ? `${item.text}: ${item.reason}` : item.text} —
         </Text>
       );
     case "user":

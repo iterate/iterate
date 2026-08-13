@@ -117,7 +117,7 @@ export function normalizeWorkspaceMountKeys<
     if (path in normalized) {
       throw new Error(`duplicate mount path "${path}" — mount paths must be unique`);
     }
-    if (value && value.repoPath) {
+    if (value?.repoPath) {
       const repoPath = normalizePath(value.repoPath);
       if (!repoPath.startsWith("/repos/")) {
         throw new Error(`mount repoPath must name a /repos/** stream, got "${value.repoPath}"`);
@@ -144,26 +144,26 @@ export function workspaceCreationEvents(input: {
   path: string;
   projectId: string;
 }) {
-  const desiredMounts = !input.mounts
-    ? undefined
-    : WorkspaceProcessorContract.stateSchema.shape.config.parse({
+  const desiredMounts = input.mounts
+    ? WorkspaceProcessorContract.stateSchema.shape.config.parse({
         mounts: normalizeWorkspaceMountKeys(input.mounts),
-      }).mounts;
+      }).mounts
+    : undefined;
   return [
     WorkspaceProcessorContract.buildEvent({
       type: "events.iterate.com/workspace/created",
       idempotencyKey: `workspace-created:${input.projectId}:${input.path}`,
       payload: {},
     }),
-    ...(!desiredMounts
-      ? []
-      : [
+    ...(desiredMounts
+      ? [
           WorkspaceProcessorContract.buildEvent({
             type: "events.iterate.com/workspace/configured",
             idempotencyKey: `workspace-configured-at-creation:${input.projectId}:${input.path}`,
             payload: { config: { mounts: desiredMounts } },
           }),
-        ]),
+        ]
+      : []),
     buildFacetProcessorSubscriptionConfiguredEvent({
       idempotencyKey: `stream/subscription-configured:${WorkspaceProcessorContract.slug}`,
       name: WorkspaceProcessorContract.slug,

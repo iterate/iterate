@@ -199,8 +199,8 @@ export class AgentLlmRequest implements AgentComponent {
               result: {
                 status: "succeeded",
                 text: completion.text,
-                ...(!usage ? {} : { usage }),
-                ...(!completion.rawResponse ? {} : { rawResponse: completion.rawResponse }),
+                ...(usage && { usage }),
+                ...(!!completion.rawResponse && { rawResponse: completion.rawResponse }),
               },
             },
             idempotencyKey: this.#host.idempotencyKey(`settle/${requestOffset}`),
@@ -208,9 +208,8 @@ export class AgentLlmRequest implements AgentComponent {
           // The normalized token report rides the same atomic append: same
           // information, one commit. Skipped (not failed) when the vendor
           // reported no parseable usage.
-          ...(!usage
-            ? []
-            : ([
+          ...(usage
+            ? ([
                 {
                   type: "events.iterate.com/agent/token-usage-reported",
                   payload: {
@@ -221,7 +220,8 @@ export class AgentLlmRequest implements AgentComponent {
                   },
                   idempotencyKey: this.#host.idempotencyKey(`token-usage@${requestOffset}`),
                 },
-              ] satisfies EmittedInput<AgentProcessorContract>[])),
+              ] satisfies EmittedInput<AgentProcessorContract>[])
+            : []),
         ]);
       } catch (error) {
         // An aborted call is the interrupt path's story — it already settled
@@ -321,7 +321,7 @@ export class AgentLlmRequest implements AgentComponent {
     const usage = normalizeLlmUsage(completion.usage);
     return {
       text: completion.text,
-      ...(!usage ? {} : { usage }),
+      ...(usage && { usage }),
       rawResponse: completion.rawResponse,
     };
   }
@@ -407,7 +407,7 @@ export class AgentLlmRequest implements AgentComponent {
             `(~${contextTokens} tokens > ${thresholdTokens}). Summary:]\n\n${summary.text}`,
           compaction: {
             replacesHistoryThrough: llmRequestOffset,
-            ...(!summary.usage ? {} : { usage: summary.usage }),
+            ...(summary.usage && { usage: summary.usage }),
           },
           llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
@@ -527,11 +527,11 @@ export async function prepareAgentLlmMessages(
     messages.map(async (message) => {
       const files = message.files ?? [];
       if (!files.length) return { role: message.role, content: message.content };
-      const resolvedFiles = !resolveModelFileUrl
-        ? files
-        : await Promise.all(
+      const resolvedFiles = resolveModelFileUrl
+        ? await Promise.all(
             files.map(async (file) => ({ ...file, url: await resolveModelFileUrl(file) })),
-          );
+          )
+        : files;
       return {
         role: message.role,
         content: flattenMessageToText({ ...message, files: resolvedFiles }),

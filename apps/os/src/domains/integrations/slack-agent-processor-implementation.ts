@@ -161,7 +161,7 @@ export class SlackAgentProcessor extends StreamProcessor<
               connection,
               channelId: channel,
               threadTs: event.payload.threadTs,
-              ...(!name ? {} : { channelName: name }),
+              ...(name && { channelName: name }),
             },
           });
         });
@@ -188,12 +188,12 @@ export class SlackAgentProcessor extends StreamProcessor<
             idempotencyKey: this.idempotencyKey("webhook-to-agent-context", event),
             payload: {
               role: "developer",
-              content: !input.contentNote
-                ? slackWebhookAgentInput(event.payload)
-                : `${slackWebhookAgentInput(event.payload)}\n\n${input.contentNote}`,
+              content: input.contentNote
+                ? `${slackWebhookAgentInput(event.payload)}\n\n${input.contentNote}`
+                : slackWebhookAgentInput(event.payload),
               actor: {
                 type: "slack",
-                ...(!senderUserId ? {} : { userId: senderUserId }),
+                ...(senderUserId && { userId: senderUserId }),
               },
               refs: [
                 {
@@ -204,7 +204,7 @@ export class SlackAgentProcessor extends StreamProcessor<
                 },
               ],
               ...(!input.files || input.files.length === 0 ? {} : { files: input.files }),
-              ...(!input.llmRequestPolicy ? {} : { llmRequestPolicy: input.llmRequestPolicy }),
+              ...(input.llmRequestPolicy && { llmRequestPolicy: input.llmRequestPolicy }),
             },
           });
         };
@@ -323,8 +323,8 @@ export class SlackAgentProcessor extends StreamProcessor<
             }
           }
           await appendAgentMessage({
-            ...(!attachmentFailureNote ? {} : { contentNote: attachmentFailureNote }),
-            ...(!files ? {} : { files }),
+            ...(attachmentFailureNote && { contentNote: attachmentFailureNote }),
+            ...(files && { files }),
             ...(shouldTriggerLlm
               ? {}
               : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
@@ -406,10 +406,10 @@ export class SlackAgentProcessor extends StreamProcessor<
             ));
         return {
           ...state,
-          ...(!botBotId ? {} : { botBotId }),
-          ...(!botUserId ? {} : { botUserId }),
+          ...(botBotId && { botBotId }),
+          ...(botUserId && { botUserId }),
           channel: target.channel,
-          ...(!channelType ? {} : { channelType }),
+          ...(channelType && { channelType }),
           conversationActive: state.conversationActive || mentioned,
           ...(getsEyesReaction && { eyesReactionMessageTs: target.messageTs }),
           threadTs: target.threadTs,
@@ -513,7 +513,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     await this.#clearStatus({
       channel,
       connection,
-      ...(!eyesReactionMessageTs ? {} : { eyesReactionMessageTs }),
+      ...(eyesReactionMessageTs && { eyesReactionMessageTs }),
       hasAssistantThreadUi,
       threadTs,
     });
@@ -607,7 +607,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     await this.#clearStatus({
       channel,
       connection,
-      ...(!eyesReactionMessageTs ? {} : { eyesReactionMessageTs }),
+      ...(eyesReactionMessageTs && { eyesReactionMessageTs }),
       hasAssistantThreadUi,
       threadTs,
     });
@@ -920,8 +920,8 @@ function readSlackMessageFiles(slackEvent: Record<string, unknown>): SlackShared
     const mimetype = readString(record.mimetype);
     const name = readString(record.name);
     shared.push({
-      ...(!mimetype ? {} : { mimetype }),
-      ...(!name ? {} : { name }),
+      ...(mimetype && { mimetype }),
+      ...(name && { name }),
       urlPrivate,
     });
   }
@@ -985,7 +985,7 @@ function botUserIdFromPayload(payload: unknown): string | undefined {
   const botAuth = authorizations.find(
     (auth) => readRecord(auth)?.is_bot === true && typeof readRecord(auth)?.user_id === "string",
   );
-  return !botAuth ? undefined : readString(readRecord(botAuth)?.user_id);
+  return botAuth ? readString(readRecord(botAuth)?.user_id) : undefined;
 }
 
 /** True when message text encodes a Slack user mention of our bot (`<@U…>`). */
@@ -1032,7 +1032,7 @@ function botBotIdFromPayload(payload: unknown): string | undefined {
   const botAuth = authorizations.find(
     (auth) => readRecord(auth)?.is_bot === true && typeof readRecord(auth)?.bot_id === "string",
   );
-  return !botAuth ? undefined : readString(readRecord(botAuth)?.bot_id);
+  return botAuth ? readString(readRecord(botAuth)?.bot_id) : undefined;
 }
 
 function slackAgentTargetFromWebhookPayload(payload: unknown): SlackAgentTarget | null {
@@ -1061,7 +1061,7 @@ function slackAgentTargetFromWebhookPayload(payload: unknown): SlackAgentTarget 
       !!readString(slackEvent.bot_id) ||
       !!readRecord(slackEvent.bot_profile),
     isReactionEvent: type === "reaction_added" || type === "reaction_removed",
-    ...(!messageTs ? {} : { messageTs }),
+    ...(messageTs && { messageTs }),
     threadTs,
   };
 }

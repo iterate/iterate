@@ -60,9 +60,9 @@ export function GlobalCommandPalette() {
     shouldThrow: false,
     select: (match) => match.context.project,
   });
-  const adminStream = !adminProjectId
-    ? null
-    : { projectId: adminProjectId, streamPath: streamPathFromSplatOrRoot(adminSplat) };
+  const adminStream = adminProjectId
+    ? { projectId: adminProjectId, streamPath: streamPathFromSplatOrRoot(adminSplat) }
+    : null;
   // Under /admin but before a project is chosen (the /admin/streams picker
   // page), ⌘K must stay in the admin world: picking a project opens that
   // project's admin explorer instead of dialing the org-scoped app flow.
@@ -70,7 +70,7 @@ export function GlobalCommandPalette() {
   const streamBreadcrumb = activeStreamBreadcrumb(matches);
   const routeStream =
     streamBreadcrumb ??
-    (!project ? null : { projectId: project.id, projectSlug: project.slug, streamPath: "/" });
+    (project ? { projectId: project.id, projectSlug: project.slug, streamPath: "/" } : null);
   const activeStream =
     routeStream ??
     (pickedProject
@@ -81,9 +81,9 @@ export function GlobalCommandPalette() {
   // open dialog (back button, links outside the dialog): the tree being shown
   // belongs to the page it was opened on. The palette's own navigations
   // already close it before routing.
-  const routeStreamKey = !adminStream
-    ? routeStream && `${routeStream.projectId}:${routeStream.streamPath}`
-    : `admin:${adminStream.projectId}:${adminStream.streamPath}`;
+  const routeStreamKey = adminStream
+    ? `admin:${adminStream.projectId}:${adminStream.streamPath}`
+    : routeStream && `${routeStream.projectId}:${routeStream.streamPath}`;
   useEffect(() => {
     setOpen(false);
     setPickedProject(null);
@@ -187,24 +187,26 @@ function ProjectPickerDialog({
           <DialogDescription>Pick a project to browse its agents and streams.</DialogDescription>
         </DialogHeader>
         <div className="max-h-80 overflow-y-auto">
-          {!projects ? (
-            <p className="px-2 py-1.5 text-sm text-muted-foreground">Loading projects…</p>
-          ) : projects.length === 0 ? (
-            <p className="px-2 py-1.5 text-sm text-muted-foreground">No projects yet.</p>
+          {projects ? (
+            projects.length === 0 ? (
+              <p className="px-2 py-1.5 text-sm text-muted-foreground">No projects yet.</p>
+            ) : (
+              projects.map((project) => (
+                <button
+                  key={project.id}
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                  onClick={() => onPick({ id: project.id, slug: project.slug })}
+                >
+                  <span className="min-w-0 truncate">{project.slug}</span>
+                  <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
+                    {project.id}
+                  </span>
+                </button>
+              ))
+            )
           ) : (
-            projects.map((project) => (
-              <button
-                key={project.id}
-                type="button"
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
-                onClick={() => onPick({ id: project.id, slug: project.slug })}
-              >
-                <span className="min-w-0 truncate">{project.slug}</span>
-                <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
-                  {project.id}
-                </span>
-              </button>
-            ))
+            <p className="px-2 py-1.5 text-sm text-muted-foreground">Loading projects…</p>
           )}
         </div>
       </DialogContent>

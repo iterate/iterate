@@ -68,7 +68,7 @@ function humanMessageWebhookPayload(input: {
         chat: { id: input.chatId ?? CHAT_ID, type: "private" },
         date: input.date ?? 1_760_000_000,
         text: input.text ?? "hello agent",
-        ...(!input.replyToMessage ? {} : { reply_to_message: input.replyToMessage }),
+        ...(input.replyToMessage && { reply_to_message: input.replyToMessage }),
       },
     },
   };

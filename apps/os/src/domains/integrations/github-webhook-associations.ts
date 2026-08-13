@@ -107,9 +107,9 @@ export function githubWebhookAssociations(input: {
   }
 
   return {
-    ...(!author ? {} : { author }),
+    ...(author && { author }),
     mentionedUsers: [...mentionedUsers],
-    ...(!Number.isFinite(pullRequestNumber) ? {} : { pullRequest: { number: pullRequestNumber } }),
+    ...(Number.isFinite(pullRequestNumber) && { pullRequest: { number: pullRequestNumber } }),
     repository,
   };
 }

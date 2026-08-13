@@ -47,8 +47,8 @@ export function takeStreamContext(request: Request): {
   headers.delete(STREAM_CONTEXT_HEADER);
   return {
     request: new Request(request, { headers }),
-    streamContext: !encoded
-      ? { kind: "scope", scopePath: "/" }
-      : StreamContext.parse(JSON.parse(encoded)),
+    streamContext: encoded
+      ? StreamContext.parse(JSON.parse(encoded))
+      : { kind: "scope", scopePath: "/" },
   };
 }

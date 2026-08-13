@@ -70,7 +70,7 @@ const AGENT_COLUMNS: ColumnDef<AgentPathTreeNode>[] = [
   {
     id: AGENT_COLUMN_ID.agent,
     header: "Agent",
-    accessorFn: (node) => (!node.agent ? node.path.toLowerCase() : agentSearchText(node.agent)),
+    accessorFn: (node) => (node.agent ? agentSearchText(node.agent) : node.path.toLowerCase()),
     cell: AgentCell,
   },
   { id: AGENT_COLUMN_ID.status, header: "Status", cell: StatusCell },
@@ -181,10 +181,10 @@ export function AgentTable({
             onTogglePinned,
           };
           const agent = row.original.agent;
-          return !agent ? (
-            <AgentTableRow key={row.id} {...rowProps} />
-          ) : (
+          return agent ? (
             <LiveAgentTableRow key={row.id} {...rowProps} agent={agent} projectId={projectId} />
+          ) : (
+            <AgentTableRow key={row.id} {...rowProps} />
           );
         })}
       </TableBody>
@@ -262,11 +262,11 @@ function AgentTableRow({
       onTogglePinned,
       state: AGENT_DISPLAY_STATE_PRESENTATION[displayState],
       runtimeCounts: runtimeCountFragments(runtime),
-      descendantCount: node.aggregateAgentCount - (!agent ? 0 : 1),
+      descendantCount: node.aggregateAgentCount - (agent ? 1 : 0),
       activeCount:
         node.aggregateActiveCount -
         (!agent || deriveAgentRuntimeDisplayState(agent.runtime) === "idle" ? 0 : 1),
-      updated: !agent ? undefined : latestAgentUpdate(agent.timestamps),
+      updated: agent ? latestAgentUpdate(agent.timestamps) : undefined,
     }),
     [
       agent,
@@ -290,7 +290,7 @@ function AgentTableRow({
         data-index={dataIndex}
         data-agent-table-row
         data-agent-path={node.path}
-        data-agent-row-kind={!agent ? "container" : "agent"}
+        data-agent-row-kind={agent ? "agent" : "container"}
         data-agent-state={displayState}
         className={cn("absolute left-0 top-0 grid w-full items-center", TABLE_GRID)}
         style={style}
@@ -331,7 +331,27 @@ function AgentCell() {
           </Button>
         ) : null}
       </span>
-      {!agent ? (
+      {agent ? (
+        <>
+          <StateDot state={state} className="mt-1.5" />
+          <span className="min-w-0">
+            <button
+              type="button"
+              className="block max-w-full truncate text-left font-medium hover:underline"
+              title={agent.path}
+              onClick={() => onOpen(agent.path)}
+            >
+              {agentTitle(agent)}
+            </button>
+            <code
+              className="block truncate font-mono text-[11px] text-muted-foreground"
+              title={agent.path}
+            >
+              {agent.path}
+            </code>
+          </span>
+        </>
+      ) : (
         <>
           {row.getIsExpanded() ? (
             <FolderOpen className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
@@ -352,26 +372,6 @@ function AgentCell() {
               {node.path}
             </button>
           )}
-        </>
-      ) : (
-        <>
-          <StateDot state={state} className="mt-1.5" />
-          <span className="min-w-0">
-            <button
-              type="button"
-              className="block max-w-full truncate text-left font-medium hover:underline"
-              title={agent.path}
-              onClick={() => onOpen(agent.path)}
-            >
-              {agentTitle(agent)}
-            </button>
-            <code
-              className="block truncate font-mono text-[11px] text-muted-foreground"
-              title={agent.path}
-            >
-              {agent.path}
-            </code>
-          </span>
         </>
       )}
     </div>
@@ -397,25 +397,25 @@ function ActivityCell() {
   return (
     <>
       <span className="block truncate">
-        {!agent
-          ? `${node.aggregateAgentCount} descendant ${node.aggregateAgentCount === 1 ? "agent" : "agents"}`
-          : (agent.summary.activity ?? "—")}
+        {agent
+          ? (agent.summary.activity ?? "—")
+          : `${node.aggregateAgentCount} descendant ${node.aggregateAgentCount === 1 ? "agent" : "agents"}`}
       </span>
-      {!agent?.summary.description ? null : (
+      {agent?.summary.description ? (
         <span className="block truncate text-xs text-muted-foreground">
           {agent.summary.description}
         </span>
-      )}
+      ) : null}
     </>
   );
 }
 
 function SourceCell() {
   const { agent } = useAgentTableRow();
-  return !agent?.binding ? (
-    "—"
-  ) : (
+  return agent?.binding ? (
     <BindingLink binding={agent.binding} className="block max-w-full" />
+  ) : (
+    "—"
   );
 }
 
@@ -448,22 +448,22 @@ function CreatedCell() {
 
 function PinCell() {
   const { agent, onTogglePinned } = useAgentTableRow();
-  return !agent ? null : (
+  return agent ? (
     <PinButton
       pinned={agent.summary.pinned}
       onToggle={() => onTogglePinned(agent)}
       size="icon-sm"
     />
-  );
+  ) : null;
 }
 
 function TimeValue({ value, nowMs }: { value?: string; nowMs: number }) {
-  return !value ? (
-    "—"
-  ) : (
+  return value ? (
     <time dateTime={value} title={value}>
       {formatTimeAgo(value, nowMs)}
     </time>
+  ) : (
+    "—"
   );
 }
 

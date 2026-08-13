@@ -230,11 +230,11 @@ function ItxScopeReplConnected({
   const pendingRun = run.isPending ? run.variables : undefined;
   const pendingCode =
     pendingRun && !pendingRunVisibleInEntries(entries, pendingRun) ? pendingRun.body : null;
-  const runErrorMessage = !run.error
-    ? null
-    : run.error instanceof Error
+  const runErrorMessage = run.error
+    ? run.error instanceof Error
       ? run.error.message
-      : String(run.error);
+      : String(run.error)
+    : null;
   const runError =
     runErrorMessage && !run.isPending && !runErrorAlreadyJournaled(entries, runErrorMessage)
       ? runErrorMessage

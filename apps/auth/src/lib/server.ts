@@ -639,8 +639,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     let refreshed = false;
     let staleRefreshReason: string | null = null;
     if (
-      tokenSet &&
-      tokenSet.refreshToken &&
+      tokenSet?.refreshToken &&
       (forceRefresh || tokenSet.accessTokenExpiresAt <= Date.now() + REFRESH_SKEW_MS)
     ) {
       const accessTokenExpired = tokenSet.accessTokenExpiresAt <= Date.now();

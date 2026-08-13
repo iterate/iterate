@@ -184,9 +184,9 @@ export class RetryTelemetryReporter {
               ([moduleId, duration]) => ({
                 moduleId,
                 selfDurationMs: Math.round(duration.selfTime),
-                ...(!Number.isFinite(duration.totalTime)
-                  ? {}
-                  : { totalDurationMs: Math.round(duration.totalTime) }),
+                ...(Number.isFinite(duration.totalTime) && {
+                  totalDurationMs: Math.round(duration.totalTime),
+                }),
               }),
             ),
             ...optionalIsoTime("queuedAt", moduleTimes?.queuedAtMs),
@@ -234,30 +234,28 @@ export class RetryTelemetryReporter {
                     ? "failed"
                     : "passed",
             }),
-            ...(!Number.isFinite(test.options?.timeout)
-              ? {}
-              : { configuredTimeoutMs: test.options.timeout }),
+            ...(Number.isFinite(test.options?.timeout) && {
+              configuredTimeoutMs: test.options.timeout,
+            }),
             tags: [...(test.tags ?? [])],
             annotations: annotations.map(({ type, message }) => ({
               type,
               ...(message && { description: message }),
             })),
-            ...(!Number.isFinite(diagnostic?.repeatCount)
-              ? {}
-              : { repeatCount: diagnostic.repeatCount }),
+            ...(Number.isFinite(diagnostic?.repeatCount) && {
+              repeatCount: diagnostic.repeatCount,
+            }),
             ...(typeof diagnostic?.slow !== "boolean" ? {} : { slow: diagnostic.slow }),
-            ...(!Number.isFinite(diagnostic?.heap) ? {} : { heapBytes: diagnostic.heap }),
+            ...(Number.isFinite(diagnostic?.heap) && { heapBytes: diagnostic.heap }),
             retryCount: diagnostic?.retryCount ?? 0,
             passedAfterRetry: diagnostic?.flaky ?? false,
             state: result.state,
             durationMs,
             attemptDetail: "aggregate-only",
-            ...(!Number.isFinite(diagnostic?.startTime)
-              ? {}
-              : {
-                  startedAt: new Date(diagnostic.startTime).toISOString(),
-                  startedAtSource: "runner",
-                }),
+            ...(Number.isFinite(diagnostic?.startTime) && {
+              startedAt: new Date(diagnostic.startTime).toISOString(),
+              startedAtSource: "runner",
+            }),
             ...(!Number.isFinite(diagnostic?.startTime) ||
             !Number.isFinite(moduleTimes?.startedAtMs)
               ? {}
@@ -354,9 +352,9 @@ export class RetryTelemetryReporter {
 export default RetryTelemetryReporter;
 
 function optionalIsoTime<Key extends string>(key: Key, value: number | undefined) {
-  return !Number.isFinite(value)
-    ? {}
-    : ({ [key]: new Date(value).toISOString() } as Record<Key, string>);
+  return Number.isFinite(value)
+    ? ({ [key]: new Date(value).toISOString() } as Record<Key, string>)
+    : {};
 }
 
 function parseTelemetryPhases(

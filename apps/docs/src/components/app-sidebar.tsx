@@ -96,7 +96,7 @@ export function AppSidebar() {
                       <Link
                         to="/"
                         search={
-                          !workspacePath ? {} : { repo: search.repo, workspace: workspacePath }
+                          workspacePath ? { repo: search.repo, workspace: workspacePath } : {}
                         }
                       />
                     }
@@ -236,45 +236,47 @@ function WorkspaceSwitcher({
               <DropdownMenuLabel className="text-xs text-muted-foreground">
                 Workspaces
               </DropdownMenuLabel>
-              {!workspaces ? (
+              {workspaces ? (
+                workspaces.length === 0 ? (
+                  <DropdownMenuItem disabled className="p-2">
+                    <span className="truncate">No workspaces yet</span>
+                  </DropdownMenuItem>
+                ) : (
+                  workspaces.map((entry) => (
+                    <DropdownMenuItem
+                      key={entry.path}
+                      className="gap-2 p-2"
+                      render={
+                        boardView ? (
+                          <Link
+                            to="/w"
+                            search={{
+                              group: "folder",
+                              q: "",
+                              repo: "",
+                              task: "",
+                              workspace: entry.path,
+                            }}
+                          />
+                        ) : (
+                          <Link to="/" search={{ workspace: entry.path }} />
+                        )
+                      }
+                    >
+                      <span className="flex size-6 shrink-0 items-center justify-center rounded-md border text-xs font-medium text-muted-foreground">
+                        {(entry.path.split("/").filter(Boolean).at(-1) ?? "?").slice(0, 1)}
+                      </span>
+                      <span className="truncate font-mono text-xs">{entry.path}</span>
+                      {entry.path === workspacePath ? <Check className="ml-auto" /> : null}
+                    </DropdownMenuItem>
+                  ))
+                )
+              ) : (
                 <DropdownMenuItem disabled className="p-2">
-                  <span className={!listError ? "truncate" : "truncate text-red-700"}>
+                  <span className={listError ? "truncate text-red-700" : "truncate"}>
                     {listError ?? "Loading…"}
                   </span>
                 </DropdownMenuItem>
-              ) : workspaces.length === 0 ? (
-                <DropdownMenuItem disabled className="p-2">
-                  <span className="truncate">No workspaces yet</span>
-                </DropdownMenuItem>
-              ) : (
-                workspaces.map((entry) => (
-                  <DropdownMenuItem
-                    key={entry.path}
-                    className="gap-2 p-2"
-                    render={
-                      boardView ? (
-                        <Link
-                          to="/w"
-                          search={{
-                            group: "folder",
-                            q: "",
-                            repo: "",
-                            task: "",
-                            workspace: entry.path,
-                          }}
-                        />
-                      ) : (
-                        <Link to="/" search={{ workspace: entry.path }} />
-                      )
-                    }
-                  >
-                    <span className="flex size-6 shrink-0 items-center justify-center rounded-md border text-xs font-medium text-muted-foreground">
-                      {(entry.path.split("/").filter(Boolean).at(-1) ?? "?").slice(0, 1)}
-                    </span>
-                    <span className="truncate font-mono text-xs">{entry.path}</span>
-                    {entry.path === workspacePath ? <Check className="ml-auto" /> : null}
-                  </DropdownMenuItem>
-                ))
               )}
             </DropdownMenuGroup>
             <DropdownMenuSeparator />

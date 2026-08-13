@@ -527,8 +527,9 @@ export async function publishGithubAiLinterReview(
   const existingCheck = existingChecks.data.check_runs.find(
     (checkRun) => checkRun.external_id === publicationId,
   );
-  const checkResponse = !existingCheck
-    ? await octokit.rest.checks.create({
+  const checkResponse = existingCheck
+    ? { data: existingCheck }
+    : await octokit.rest.checks.create({
         conclusion: publishesReview ? "neutral" : "success",
         external_id: publicationId,
         head_sha: request.headSha,
@@ -542,8 +543,7 @@ export async function publishGithubAiLinterReview(
         owner: params.owner,
         repo: params.repo,
         status: "completed",
-      })
-    : { data: existingCheck };
+      });
   if (!checkResponse.data.html_url) {
     throw new Error(`GitHub Check Run ${checkResponse.data.id} did not provide an HTML URL.`);
   }
@@ -648,12 +648,12 @@ function githubAiLinterReviewComments(analysis: GithubAiLinterPublicationAnalysi
     .map(({ classification, diagnostic }) => {
       const span = diagnostic.fix?.span ?? diagnostic.labels[0]!.span;
       const body = [
-        `**[${diagnostic.ruleName}]**${!classification ? "" : ` _${classification}_`}`,
+        `**[${diagnostic.ruleName}]**${classification ? ` _${classification}_` : ""}`,
         diagnostic.message,
         diagnostic.help,
-        !diagnostic.fix
-          ? undefined
-          : `${suggestionFence(diagnostic.fix.content)}suggestion\n${diagnostic.fix.content}\n${suggestionFence(diagnostic.fix.content)}`,
+        diagnostic.fix
+          ? `${suggestionFence(diagnostic.fix.content)}suggestion\n${diagnostic.fix.content}\n${suggestionFence(diagnostic.fix.content)}`
+          : undefined,
       ]
         .filter((part) => !!part)
         .join("\n\n");

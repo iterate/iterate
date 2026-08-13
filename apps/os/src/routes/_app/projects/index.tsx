@@ -88,7 +88,7 @@ function ProjectsIndexPage() {
       const session = await connectIterateSession();
       await session.projects.get(project.slug).create({
         projectId: project.id,
-        ...(!organizationSlug ? {} : { organizationSlug }),
+        ...(organizationSlug && { organizationSlug }),
       });
     },
     onSuccess: async () => {
@@ -155,7 +155,14 @@ function ProjectsIndexPage() {
         <div className="text-sm text-muted-foreground" data-spinner="true">
           Loading projects...
         </div>
-      ) : !hasProjects ? (
+      ) : hasProjects ? (
+        <ProjectsTable
+          projects={projects}
+          organizations={organizations}
+          projectHostnameBases={routeConfig.projectHostnameBases}
+          recoverProject={recoverProject}
+        />
+      ) : (
         <div className="rounded-xl border border-dashed bg-card/60 px-6 py-14 text-center">
           <div className="mx-auto flex max-w-md flex-col items-center gap-4">
             <div className="flex size-12 items-center justify-center rounded-full bg-muted">
@@ -177,13 +184,6 @@ function ProjectsIndexPage() {
             </Button>
           </div>
         </div>
-      ) : (
-        <ProjectsTable
-          projects={projects}
-          organizations={organizations}
-          projectHostnameBases={routeConfig.projectHostnameBases}
-          recoverProject={recoverProject}
-        />
       )}
     </section>
   );

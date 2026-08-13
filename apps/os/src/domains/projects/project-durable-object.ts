@@ -298,14 +298,14 @@ export class ProjectDurableObject extends DurableObject<Env> {
     const { request, rule } = input;
     // Buffer the body up front: hashing consumes the stream, and the released
     // request is re-built from these bytes after the human answers.
-    const bodyBytes = !request.body ? null : new Uint8Array(await request.arrayBuffer());
+    const bodyBytes = request.body ? new Uint8Array(await request.arrayBuffer()) : null;
     const entry: PendingHoldEntry = {
       bodyBytes,
       held: {
         method: request.method,
         url: request.url,
         headers: Object.fromEntries(request.headers),
-        body: !bodyBytes ? null : approvalRequestBody(bodyBytes, await sha256Hex(bodyBytes)),
+        body: bodyBytes ? approvalRequestBody(bodyBytes, await sha256Hex(bodyBytes)) : null,
         secretPaths: input.secretPaths,
       },
       redirect: request.redirect,
@@ -446,7 +446,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
                 reason: decision.reason,
                 detail:
                   `A human rejected this request (rule "${rule.ruleKey}")` +
-                  (!decision.reason ? "." : `: ${decision.reason}`),
+                  (decision.reason ? `: ${decision.reason}` : "."),
                 ruleKey: rule.ruleKey,
               }),
             );

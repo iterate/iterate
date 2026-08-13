@@ -601,11 +601,11 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       // frozen classic fold on opted-in agents.
       const classic = agentReads.currentState.runtimeChange;
       const headless = headlessReads.currentState.runtimeChange;
-      const newer = !classic
-        ? headless
-        : !headless || classic.sinceOffset >= headless.sinceOffset
+      const newer = classic
+        ? !headless || classic.sinceOffset >= headless.sinceOffset
           ? classic
-          : headless;
+          : headless
+        : headless;
       return { runtimeChange: newer };
     };
 

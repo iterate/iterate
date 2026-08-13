@@ -358,12 +358,12 @@ function AppSidebarUser() {
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                {!isOperatorSession ? (
+                {isOperatorSession ? null : (
                   <DropdownMenuItem onClick={switchOrAddAccount}>
                     <Users />
                     <span>Switch or add account</span>
                   </DropdownMenuItem>
-                ) : null}
+                )}
                 <DropdownMenuItem onClick={() => void endCurrentSession()}>
                   <LogOut />
                   <span>{isOperatorSession ? "End operator session" : "Sign out"}</span>
@@ -632,11 +632,11 @@ function ProjectSidebarGroup({
         </SidebarGroupContent>
       </SidebarGroup>
       {/* The capped live agent hierarchy shares one project projection. */}
-      {!projectId ? null : (
+      {projectId ? (
         <DeferredSurface active={showAgentRows}>
           <SidebarAgents agents={agents} projectSlug={projectSlug} />
         </DeferredSurface>
-      )}
+      ) : null}
     </>
   );
 }

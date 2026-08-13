@@ -132,7 +132,7 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
     if (executionId && !alreadyCorrected) {
       args.blockProcessorWhile(async () => {
         const correction = await this.#findPrunedActivityCorrection(event, executionId);
-        this.#appendOps(event.offset, !correction ? ops : [...ops, correction], args.state.open);
+        this.#appendOps(event.offset, correction ? [...ops, correction] : ops, args.state.open);
       });
       return;
     }

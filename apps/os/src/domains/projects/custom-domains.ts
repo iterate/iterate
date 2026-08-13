@@ -194,7 +194,7 @@ async function assertHostnameAvailable(input: {
   if (covered && covered.record.id !== input.projectId) {
     throw new Error(
       `"${input.hostname}" is already covered by ${
-        !covered.appSlug ? "a custom domain" : "a custom-domain app route"
+        covered.appSlug ? "a custom-domain app route" : "a custom domain"
       }.`,
     );
   }

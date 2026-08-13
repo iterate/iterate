@@ -130,13 +130,13 @@ export async function openRelayedStreamConnection(input: {
         // Fresh plain arrows, NOT the retained objects: the retained wrappers
         // carry Symbol.dispose, and the DO releasing one leg's stub must not
         // cascade into disposing the session-lifetime Cap'n Web callbacks.
-        getRuntimeState: !getRuntimeState ? undefined : () => getRuntimeState(),
-        ping: !ping ? undefined : (pingInput: StreamPingInput) => ping(pingInput),
+        getRuntimeState: getRuntimeState ? () => getRuntimeState() : undefined,
+        ping: ping ? (pingInput: StreamPingInput) => ping(pingInput) : undefined,
       },
       // Internal plumbing rides a separate parameter, never the public arg
       // bag: with the spread above, anything merged into `args`'s shape would
       // be client-spoofable by default.
-      !subscriberPager ? undefined : { subscriberPagerId },
+      subscriberPager ? { subscriberPagerId } : undefined,
     );
 
   const probeLeg = (handle: StreamConnectionHandle) =>
@@ -152,7 +152,7 @@ export async function openRelayedStreamConnection(input: {
       console.warn("stream connection relay closed", {
         connectionKey,
         reason: args2.reason,
-        ...(!args2.warn ? {} : { error: args2.warn }),
+        ...(!!args2.warn && { error: args2.warn }),
       });
     }
     try {
@@ -250,7 +250,7 @@ export async function openRelayedStreamConnection(input: {
       // dead Pager while dormant means Pages can no longer arrive —
       // break, and the owner's watchdog re-subscribes.
       const handle = currentHandle;
-      const live = !handle ? false : await probeLeg(handle);
+      const live = handle ? await probeLeg(handle) : false;
       if (live !== true) {
         teardown({ reason: "Subscriber Pager closed while dormant", socketCode: 1000 });
       }

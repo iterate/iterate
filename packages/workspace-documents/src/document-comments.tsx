@@ -143,104 +143,107 @@ export function DocumentComments({
         Comments
         {commentTotal > 0 ? <span className="font-normal">({commentTotal})</span> : null}
       </button>
-      {!open ? null : parsed.kind === "plain" ? (
-        <p className="px-4 pb-3 text-xs text-muted-foreground">
-          Comments are unavailable — {parsed.diagnostics[0]?.message ?? "the file failed to parse"}.
-          Fix the file in the editor.
-        </p>
-      ) : (
-        <>
-          <div className="min-h-0 flex-1 overflow-y-auto px-4">
-            {threads.length === 0 ? (
-              <p className="pb-2 text-xs text-muted-foreground">No comments yet.</p>
-            ) : null}
-            {openDocumentThreads.length ? (
-              <CommentGroupLabel>Whole document</CommentGroupLabel>
-            ) : null}
-            {openDocumentThreads.map((thread) => (
-              <ThreadBlock
-                key={thread.id}
-                thread={thread}
-                identity={identity}
-                apply={apply}
-                resolution={null}
-                selected={thread.id === selectedThreadId}
-                onSelect={onSelectThread}
-              />
-            ))}
-            {openSelectionThreads.length ? (
-              <CommentGroupLabel>Selected text</CommentGroupLabel>
-            ) : null}
-            {openSelectionThreads.map((thread) => (
-              <ThreadBlock
-                key={thread.id}
-                thread={thread}
-                identity={identity}
-                apply={apply}
-                resolution={resolutions.get(thread.id) ?? null}
-                selected={thread.id === selectedThreadId}
-                onSelect={onSelectThread}
-              />
-            ))}
-            {resolvedThreads.length ? (
-              <button
-                type="button"
-                onClick={() => setShowResolved((value) => !value)}
-                className="pb-2 text-xs text-muted-foreground underline-offset-2 hover:underline"
-              >
-                {showResolved ? "Hide" : "Show"} {resolvedThreads.length} resolved
-              </button>
-            ) : null}
-            {showResolved
-              ? resolvedThreads.map((thread) => (
-                  <ThreadBlock
-                    key={thread.id}
-                    thread={thread}
-                    identity={identity}
-                    apply={apply}
-                    resolution={resolutions.get(thread.id) ?? null}
-                    selected={thread.id === selectedThreadId}
-                    onSelect={onSelectThread}
-                  />
-                ))
-              : null}
-          </div>
-          <div
-            id="document-comment-composer"
-            className="shrink-0 border-t bg-muted/20 px-4 py-3 focus-within:ring-2 focus-within:ring-inset focus-within:ring-primary/25"
-          >
-            {!!opError && <p className="pb-1 text-xs text-red-700">{opError}</p>}
-            {!identity ? (
-              <p className="text-xs text-muted-foreground">
-                Sign-in identity unavailable — comments are read-only.
-              </p>
-            ) : (
-              <>
-                <div className="mb-2 flex gap-2">
-                  <MessageSquarePlusIcon
-                    aria-hidden
-                    className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
-                  />
-                  <div>
-                    <p className="text-xs font-medium">Document comment</p>
-                    <p className="text-[11px] text-muted-foreground">
-                      Applies to the whole file. Select text in Preview for a passage comment.
-                    </p>
-                  </div>
-                </div>
-                <CommentComposer
-                  textareaRef={wholeDocumentComposerRef}
-                  placeholder="Comment on the entire document…"
-                  submitLabel="Add document comment"
-                  onSubmit={(body) =>
-                    apply((doc) => addThread(doc, { body, createdAt: nowIso(), ...identity }))
-                  }
+      {open ? (
+        parsed.kind === "plain" ? (
+          <p className="px-4 pb-3 text-xs text-muted-foreground">
+            Comments are unavailable —{" "}
+            {parsed.diagnostics[0]?.message ?? "the file failed to parse"}. Fix the file in the
+            editor.
+          </p>
+        ) : (
+          <>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4">
+              {threads.length === 0 ? (
+                <p className="pb-2 text-xs text-muted-foreground">No comments yet.</p>
+              ) : null}
+              {openDocumentThreads.length ? (
+                <CommentGroupLabel>Whole document</CommentGroupLabel>
+              ) : null}
+              {openDocumentThreads.map((thread) => (
+                <ThreadBlock
+                  key={thread.id}
+                  thread={thread}
+                  identity={identity}
+                  apply={apply}
+                  resolution={null}
+                  selected={thread.id === selectedThreadId}
+                  onSelect={onSelectThread}
                 />
-              </>
-            )}
-          </div>
-        </>
-      )}
+              ))}
+              {openSelectionThreads.length ? (
+                <CommentGroupLabel>Selected text</CommentGroupLabel>
+              ) : null}
+              {openSelectionThreads.map((thread) => (
+                <ThreadBlock
+                  key={thread.id}
+                  thread={thread}
+                  identity={identity}
+                  apply={apply}
+                  resolution={resolutions.get(thread.id) ?? null}
+                  selected={thread.id === selectedThreadId}
+                  onSelect={onSelectThread}
+                />
+              ))}
+              {resolvedThreads.length ? (
+                <button
+                  type="button"
+                  onClick={() => setShowResolved((value) => !value)}
+                  className="pb-2 text-xs text-muted-foreground underline-offset-2 hover:underline"
+                >
+                  {showResolved ? "Hide" : "Show"} {resolvedThreads.length} resolved
+                </button>
+              ) : null}
+              {showResolved
+                ? resolvedThreads.map((thread) => (
+                    <ThreadBlock
+                      key={thread.id}
+                      thread={thread}
+                      identity={identity}
+                      apply={apply}
+                      resolution={resolutions.get(thread.id) ?? null}
+                      selected={thread.id === selectedThreadId}
+                      onSelect={onSelectThread}
+                    />
+                  ))
+                : null}
+            </div>
+            <div
+              id="document-comment-composer"
+              className="shrink-0 border-t bg-muted/20 px-4 py-3 focus-within:ring-2 focus-within:ring-inset focus-within:ring-primary/25"
+            >
+              {!!opError && <p className="pb-1 text-xs text-red-700">{opError}</p>}
+              {identity ? (
+                <>
+                  <div className="mb-2 flex gap-2">
+                    <MessageSquarePlusIcon
+                      aria-hidden
+                      className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+                    />
+                    <div>
+                      <p className="text-xs font-medium">Document comment</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        Applies to the whole file. Select text in Preview for a passage comment.
+                      </p>
+                    </div>
+                  </div>
+                  <CommentComposer
+                    textareaRef={wholeDocumentComposerRef}
+                    placeholder="Comment on the entire document…"
+                    submitLabel="Add document comment"
+                    onSubmit={(body) =>
+                      apply((doc) => addThread(doc, { body, createdAt: nowIso(), ...identity }))
+                    }
+                  />
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Sign-in identity unavailable — comments are read-only.
+                </p>
+              )}
+            </div>
+          </>
+        )
+      ) : null}
     </div>
   );
 }
@@ -294,7 +297,7 @@ function ThreadBlock({
       {!!quote && (
         <button
           type="button"
-          onClick={!onSelect ? undefined : () => onSelect(thread.id)}
+          onClick={onSelect ? () => onSelect(thread.id) : undefined}
           className="mb-1.5 block w-full truncate border-l-2 pl-2 text-left text-xs text-muted-foreground italic hover:text-foreground"
           style={{ borderColor: authorColor(thread.comments[0]?.author ?? "someone", 0.8) }}
           title={quote}

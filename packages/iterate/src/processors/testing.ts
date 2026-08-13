@@ -93,18 +93,18 @@ export class MemoryStream implements ProcessorStream {
       // yields one — `JSON.parse` just types as `any` and cannot say so.
       const detachedInput: StreamEventInput = {
         ...input,
-        ...(!input.payload
-          ? {}
-          : { payload: JSON.parse(JSON.stringify(input.payload)) as Record<string, unknown> }),
-        ...(!input.metadata
-          ? {}
-          : { metadata: JSON.parse(JSON.stringify(input.metadata)) as Record<string, unknown> }),
+        ...(input.payload && {
+          payload: JSON.parse(JSON.stringify(input.payload)) as Record<string, unknown>,
+        }),
+        ...(input.metadata && {
+          metadata: JSON.parse(JSON.stringify(input.metadata)) as Record<string, unknown>,
+        }),
       };
-      const existing = !detachedInput.idempotencyKey
-        ? undefined
-        : [...this.events, ...staged].find(
+      const existing = detachedInput.idempotencyKey
+        ? [...this.events, ...staged].find(
             (event) => event.idempotencyKey === detachedInput.idempotencyKey,
-          );
+          )
+        : undefined;
       if (existing && detachedInput.idempotencyKey) {
         // The Stream DO's predicate, SHARED: a same-key append with a
         // DIFFERENT body is REJECTED, not deduplicated. Key-only dedup here
@@ -406,9 +406,9 @@ export function makeProcessorHarness<
   const clock = args.substrate?.clock ?? { now: 1_000_000 };
   const stream = args.substrate?.stream ?? new MemoryStream(path);
   stream.now = () => clock.now;
-  const inheritedDurability = !args.substrate
-    ? undefined
-    : (durabilitySubstrates.get(args.substrate) ?? progressSubstrates.get(args.substrate.progress));
+  const inheritedDurability = args.substrate
+    ? (durabilitySubstrates.get(args.substrate) ?? progressSubstrates.get(args.substrate.progress))
+    : undefined;
   const durability = inheritedDurability ?? makeDurabilitySubstrate();
 
   // The substrate stores progress as `<unknown>` so one substrate type serves
@@ -596,12 +596,9 @@ export function makeProcessorHarness<
     // type's contract payload — committed rows are trusted, not re-parsed,
     // exactly like production reads.
     events: ((type?: string) =>
-      !type
-        ? [...stream.events]
-        : stream.events.filter((row) => row.type === type)) as ProcessorHarness<
-      Contract,
-      Processor
-    >["events"],
+      type
+        ? stream.events.filter((row) => row.type === type)
+        : [...stream.events]) as ProcessorHarness<Contract, Processor>["events"],
     async play(...steps: HarnessStep<Contract>[]) {
       for (const [index, step] of steps.entries()) {
         const kind = typeof step === "function" ? "function" : step[0];

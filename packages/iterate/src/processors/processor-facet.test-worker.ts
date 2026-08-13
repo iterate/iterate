@@ -237,7 +237,7 @@ class KvStream implements ProcessorStream {
   ): Promise<StreamEvent | undefined> {
     if (Number.isFinite(args.offset)) return Promise.resolve(this.#get(args.offset));
     const offset = this.#kv.get<number>(`fs:k:${args.idempotencyKey}`);
-    return Promise.resolve(!Number.isFinite(offset) ? undefined : this.#get(offset));
+    return Promise.resolve(Number.isFinite(offset) ? this.#get(offset) : undefined);
   }
 
   readEvents(args?: StreamEventReadInput): ProcessorStreamPager {
@@ -523,7 +523,7 @@ export class FacetTestParent extends DurableObject<Env> {
     let runtimeState: unknown = null;
     try {
       const result = response.getRuntimeState?.();
-      runtimeState = !result ? null : await result;
+      runtimeState = result ? await result : null;
       disposeIgnoredRpcResult(runtimeState);
       runtimeState = JSON.parse(JSON.stringify(runtimeState ?? null));
     } catch (error) {

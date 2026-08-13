@@ -54,9 +54,9 @@ export async function fetchGithubWebhook(input: {
     event: {
       idempotencyKey: `github-webhook:${delivery}`,
       payload: {
-        ...(!input.config.integrations.github?.appSlug
-          ? {}
-          : { appSlug: input.config.integrations.github.appSlug }),
+        ...(input.config.integrations.github?.appSlug && {
+          appSlug: input.config.integrations.github.appSlug,
+        }),
         associations: githubWebhookAssociations({ id: delivery, name: eventName, payload }),
         body: payload,
         delivery: {

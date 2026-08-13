@@ -15,7 +15,7 @@ export function commentIdentityFor(user: {
       ? user.email
       : slug(user.name ?? user.userId ?? "") || "someone";
   const authorDisplay = user.name ?? user.email ?? undefined;
-  return !authorDisplay ? { author } : { author, authorDisplay };
+  return authorDisplay ? { author, authorDisplay } : { author };
 }
 
 function slug(value: string): string {

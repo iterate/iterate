@@ -230,7 +230,7 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
       return Object.fromEntries(
         Object.entries(versions).flatMap(([path, version]) => {
           const key = this.#repoRelative(path);
-          return !key ? [] : [[key, version]];
+          return key ? [[key, version]] : [];
         }),
       );
     });

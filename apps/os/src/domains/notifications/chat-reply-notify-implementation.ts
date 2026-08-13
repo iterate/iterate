@@ -55,8 +55,8 @@ export class ChatReplyNotifyProcessor extends StreamProcessor<ChatReplyNotifyPro
         idempotencyKey: this.idempotencyKey("chat-reply", event),
         payload: {
           agentReplyEventOffset: event.offset,
-          audience: !reply.userId ? { kind: "project" } : { kind: "user", userId: reply.userId },
-          title: !state.title ? "Agent replied" : state.title,
+          audience: reply.userId ? { kind: "user", userId: reply.userId } : { kind: "project" },
+          title: state.title ? state.title : "Agent replied",
           body: pushBody(event.payload.message),
           destination: { kind: "agent-chat", path: this.path },
           expiresAt: Date.parse(event.createdAt) + REPLY_PUSH_TTL_MS,

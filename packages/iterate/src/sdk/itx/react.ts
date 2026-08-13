@@ -522,12 +522,12 @@ export function useStreamConnection(
     deps,
     {
       key: slug,
-      ...(!slug
-        ? {
+      ...(slug
+        ? { connect: () => connectItx(slug) }
+        : {
             missingMessage:
               "useStreamConnection needs a project: pass { slug } or render under <ProjectScope slug>.",
-          }
-        : { connect: () => connectItx(slug) }),
+          }),
     },
     opts?.enabled,
   );

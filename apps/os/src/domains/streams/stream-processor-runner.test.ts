@@ -327,7 +327,7 @@ function makeProgressStore() {
   const commits: ProcessorProgress<TaskState>[] = [];
   let failNextCommit: Error | undefined;
   const store: ProcessorProgressStore<TaskState> = {
-    read: () => (!record ? undefined : structuredClone(record)),
+    read: () => (record ? structuredClone(record) : undefined),
     commit: (progress, opts) => {
       if (failNextCommit) {
         const error = failNextCommit;
@@ -414,9 +414,9 @@ type HarnessArgs = {
 };
 
 function eventBatch(events: StreamEvent[], streamMaxOffset: number, streamId = TEST_STREAM_ID) {
-  const scannedAfterOffset = !Number.isFinite(events[0]?.offset)
-    ? streamMaxOffset
-    : events[0].offset - 1;
+  const scannedAfterOffset = Number.isFinite(events[0]?.offset)
+    ? events[0].offset - 1
+    : streamMaxOffset;
   return {
     streamId,
     events,
@@ -458,10 +458,10 @@ function makeHarness(args: HarnessArgs = {}) {
     stream: journal.stream,
     durability: {
       progress: store.store,
-      ...(!args.recovery ? {} : { recovery: args.recovery }),
+      ...(args.recovery && { recovery: args.recovery }),
     },
     now: args.now ?? (() => 0),
-    ...(!Number.isFinite(args.readPageSize) ? {} : { readPageSize: args.readPageSize }),
+    ...(Number.isFinite(args.readPageSize) && { readPageSize: args.readPageSize }),
   });
 
   return {

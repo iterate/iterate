@@ -45,7 +45,7 @@ function ProjectHomePage() {
     { slug: project.id },
   );
   const created = !!lifecycle.value?.birthCertificate;
-  const inOnboarding = !lifecycle.value ? false : isOnboardingActive(lifecycle.value);
+  const inOnboarding = lifecycle.value ? isOnboardingActive(lifecycle.value) : false;
   // Create lands here with `welcome` as soon as the project exists. Stay on
   // the checklist until bootstrap commits `project/created`, then hand off to the
   // onboarding agent so the user watches the saga rather than waiting on the
@@ -56,7 +56,7 @@ function ProjectHomePage() {
   // a live dashboard. Before the first push we only know we're mid-create when
   // the create flow's `?welcome` says so; the handoff case keeps the checklist
   // up while its navigation is in flight.
-  const showChecklist = !lifecycle.value ? welcome === true : !created || handOffToOnboarding;
+  const showChecklist = lifecycle.value ? !created || handOffToOnboarding : welcome === true;
 
   useEffect(() => {
     if (ensureBirth !== true || birthRecoveryStarted.current) return;

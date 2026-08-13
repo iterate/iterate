@@ -44,7 +44,7 @@ export function StreamTreeRowContent({
       <span
         className={cn("ml-auto text-[11px] tabular-nums text-foreground/70", EVENTS_COLUMN_CLASS)}
       >
-        {!node.indexRow ? null : formatEventCount(node.indexRow.eventCount)}
+        {node.indexRow ? formatEventCount(node.indexRow.eventCount) : null}
       </span>
     </>
   );
@@ -81,9 +81,7 @@ export function StreamTreeRowContent({
           </span>
         ) : null}
       </span>
-      {!onOpen ? (
-        <span className="flex min-w-0 flex-1 items-center gap-2">{label}</span>
-      ) : (
+      {onOpen ? (
         <button
           type="button"
           aria-current={selected ? "page" : undefined}
@@ -92,6 +90,8 @@ export function StreamTreeRowContent({
         >
           {label}
         </button>
+      ) : (
+        <span className="flex min-w-0 flex-1 items-center gap-2">{label}</span>
       )}
     </>
   );

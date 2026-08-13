@@ -177,7 +177,7 @@ function useStreamProcessor(args: { streamPath: string; streamProjectId?: string
     () =>
       acquireStreamRuntime({
         streamPath,
-        ...(!streamProjectId ? {} : { projectId: streamProjectId }),
+        ...(streamProjectId && { projectId: streamProjectId }),
         createStreamClient: createCapnwebStreamClient,
         processors: BROWSER_STREAM_PROCESSORS,
       }),
@@ -771,11 +771,11 @@ function EventRows({
             <span>
               {eventTypeFilter !== ""
                 ? "SQLite is ready; no events match the selected event type"
-                : !snapshot.connectionError
-                  ? snapshot.connectionStatus === "receiving-events"
+                : snapshot.connectionError
+                  ? `SQLite is ready; stream connection is ${snapshot.connectionStatus}: ${snapshot.connectionError}`
+                  : snapshot.connectionStatus === "receiving-events"
                     ? "SQLite is ready; no events are stored locally yet"
-                    : `SQLite is ready; stream connection is ${snapshot.connectionStatus}`
-                  : `SQLite is ready; stream connection is ${snapshot.connectionStatus}: ${snapshot.connectionError}`}
+                    : `SQLite is ready; stream connection is ${snapshot.connectionStatus}`}
             </span>
           </div>
         ) : (
@@ -1049,12 +1049,7 @@ function EventRowWindow({
         // measurement cache, so unmeasured pending rows would never be placed.
         ref={measureElement}
       >
-        {!event ? (
-          <article
-            className="box-border h-8 rounded-md border border-[#e1e5eb]"
-            data-testid="event-row-pending"
-          />
-        ) : (
+        {event ? (
           <article
             data-testid="event-row"
             className={
@@ -1086,6 +1081,11 @@ function EventRowWindow({
               </pre>
             ) : null}
           </article>
+        ) : (
+          <article
+            className="box-border h-8 rounded-md border border-[#e1e5eb]"
+            data-testid="event-row-pending"
+          />
         )}
       </div>
     );
@@ -1135,9 +1135,9 @@ function StreamSidebar({
   return (
     <aside
       className={
-        !className
-          ? "w-[252px] flex-[0_0_252px] shrink-0 overflow-y-auto border-r border-[#e8ebf0] bg-white p-4 max-[760px]:order-first max-[760px]:max-h-[50dvh] max-[760px]:w-auto max-[760px]:flex-none max-[760px]:border-b max-[760px]:border-r-0"
-          : `w-[252px] flex-[0_0_252px] shrink-0 overflow-y-auto border-r border-[#e8ebf0] bg-white p-4 max-[760px]:order-first max-[760px]:max-h-[50dvh] max-[760px]:w-auto max-[760px]:flex-none max-[760px]:border-b max-[760px]:border-r-0 ${className}`
+        className
+          ? `w-[252px] flex-[0_0_252px] shrink-0 overflow-y-auto border-r border-[#e8ebf0] bg-white p-4 max-[760px]:order-first max-[760px]:max-h-[50dvh] max-[760px]:w-auto max-[760px]:flex-none max-[760px]:border-b max-[760px]:border-r-0 ${className}`
+          : "w-[252px] flex-[0_0_252px] shrink-0 overflow-y-auto border-r border-[#e8ebf0] bg-white p-4 max-[760px]:order-first max-[760px]:max-h-[50dvh] max-[760px]:w-auto max-[760px]:flex-none max-[760px]:border-b max-[760px]:border-r-0"
       }
       id="stream-sidebar"
     >
@@ -1228,7 +1228,7 @@ function BrowserEventCopyTool({
             </output>
           </dd>
         </div>
-        {!snapshot.connectionError ? null : (
+        {snapshot.connectionError ? (
           <div title="The most recent WebSocket or event-callback error, if any.">
             <dt>Error</dt>
             <dd>
@@ -1237,7 +1237,7 @@ function BrowserEventCopyTool({
               </output>
             </dd>
           </div>
-        )}
+        ) : null}
         <div title="Number of events stored in this tab's local SQLite database (one row per stream offset).">
           <dt>Events</dt>
           <dd>
@@ -1473,8 +1473,12 @@ function StreamControlTool({
     }
   }
 
-  const gateLabel = !runtimeState ? "…" : paused ? "Paused" : "Active";
-  const gateClass = !runtimeState ? "text-[#667085]" : paused ? "text-[#b42318]" : "text-[#067647]";
+  const gateLabel = runtimeState ? (paused ? "Paused" : "Active") : "…";
+  const gateClass = runtimeState
+    ? paused
+      ? "text-[#b42318]"
+      : "text-[#067647]"
+    : "text-[#667085]";
 
   return (
     <section className="grid gap-2 border-t border-[#eef1f5] py-4">
@@ -1493,7 +1497,7 @@ function StreamControlTool({
             </output>
           </dd>
         </div>
-        {!pauseReason ? null : (
+        {pauseReason ? (
           <div title="Why the stream was paused, from the latest stream/paused event.">
             <dt>Pause reason</dt>
             <dd>
@@ -1505,7 +1509,7 @@ function StreamControlTool({
               </output>
             </dd>
           </div>
-        )}
+        ) : null}
       </dl>
       {paused ? (
         <button
@@ -1535,7 +1539,7 @@ function StreamControlTool({
           Pause stream
         </button>
       )}
-      {!pollError ? null : (
+      {pollError ? (
         <output
           className="font-mono text-[11px] text-[#b42318]"
           data-testid="stream-control-error"
@@ -1543,7 +1547,7 @@ function StreamControlTool({
         >
           {pollError}
         </output>
-      )}
+      ) : null}
       {controlAction === "idle" ? null : (
         <output
           className={
@@ -1780,11 +1784,11 @@ function InsertEventsTool({
       >
         {insertState.insertState}
       </output>
-      {!insertError ? null : (
+      {insertError ? (
         <p className="m-0 break-words font-mono text-xs text-[#b42318]" data-testid="insert-error">
           {insertError}
         </p>
-      )}
+      ) : null}
     </section>
   );
 }

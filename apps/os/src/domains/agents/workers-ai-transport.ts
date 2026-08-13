@@ -169,9 +169,7 @@ async function runByokAttempt(input: {
     messages: adaptMessagesForModel(input.messages, { supportsDeveloperRole: true }),
     stream: true,
     ...openAiReasoningExtras(input.model),
-    ...(!transport.openaiPromptCacheKey
-      ? {}
-      : { prompt_cache_key: transport.openaiPromptCacheKey }),
+    ...(transport.openaiPromptCacheKey && { prompt_cache_key: transport.openaiPromptCacheKey }),
   };
   const headers: Record<string, string> = {
     authorization: `Bearer ${transport.openaiApiKey}`,
@@ -338,10 +336,10 @@ async function drainSseResponse(input: {
       streamed: true,
       chunkCount,
       response: text,
-      ...(!usage ? {} : { usage }),
+      ...(!!usage && { usage }),
     },
     text,
-    ...(!usage ? {} : { usage }),
+    ...(!!usage && { usage }),
   };
 }
 
@@ -469,8 +467,8 @@ export function normalizeLlmUsage(usage: unknown):
   return {
     inputTokens,
     outputTokens,
-    ...(!Number.isFinite(cachedInputTokens) ? {} : { cachedInputTokens }),
-    ...(!Number.isFinite(reasoningOutputTokens) ? {} : { reasoningOutputTokens }),
+    ...(Number.isFinite(cachedInputTokens) && { cachedInputTokens }),
+    ...(Number.isFinite(reasoningOutputTokens) && { reasoningOutputTokens }),
   };
 }
 

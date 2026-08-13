@@ -261,17 +261,19 @@ function LinkedPanel({
         <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           Last mirror push
         </span>
-        {!lastPush ? (
-          <span className="text-xs text-muted-foreground">None yet.</span>
-        ) : lastPush.ok ? (
-          <span className="text-xs text-muted-foreground">
-            ok — <span className="font-mono">{lastPush.commitOid?.slice(0, 7)}</span> at{" "}
-            {lastPush.at}
-          </span>
+        {lastPush ? (
+          lastPush.ok ? (
+            <span className="text-xs text-muted-foreground">
+              ok — <span className="font-mono">{lastPush.commitOid?.slice(0, 7)}</span> at{" "}
+              {lastPush.at}
+            </span>
+          ) : (
+            <span className="break-all text-xs text-red-600">
+              failed at {lastPush.at}: {lastPush.error}
+            </span>
+          )
         ) : (
-          <span className="break-all text-xs text-red-600">
-            failed at {lastPush.at}: {lastPush.error}
-          </span>
+          <span className="text-xs text-muted-foreground">None yet.</span>
         )}
       </div>
       <div className="flex flex-col gap-1.5">

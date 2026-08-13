@@ -48,9 +48,9 @@ export async function mintProjectAppSession(
     token: await signJWT(
       {
         audience: input.audience,
-        ...(!input.email ? {} : { email: input.email }),
-        ...(!input.image ? {} : { image: input.image }),
-        ...(!input.name ? {} : { name: input.name }),
+        ...(input.email && { email: input.email }),
+        ...(input.image && { image: input.image }),
+        ...(input.name && { name: input.name }),
         projectId: input.projectId,
         type: "project-app-session",
         userId: input.userId,

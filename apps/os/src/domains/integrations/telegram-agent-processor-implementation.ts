@@ -229,7 +229,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
           ...((typeof senderId === "number" || typeof senderId === "string") && {
             userId: String(senderId),
           }),
-          ...(!senderUsername ? {} : { username: senderUsername }),
+          ...(senderUsername && { username: senderUsername }),
         },
         refs: [
           {
@@ -359,12 +359,12 @@ export class TelegramAgentProcessor extends StreamProcessor<
     } = input.event.payload;
     const { messageId } = await this.deps.sendTelegramMessage({
       body: {
-        ...(!Number.isFinite(replyTo) ? {} : { reply_to_message_id: replyTo }),
+        ...(Number.isFinite(replyTo) && { reply_to_message_id: replyTo }),
         ...payloadRest,
         chat_id: coerceTelegramId(input.chatId),
-        ...(!input.messageThreadId
-          ? {}
-          : { message_thread_id: coerceTelegramId(input.messageThreadId) }),
+        ...(input.messageThreadId && {
+          message_thread_id: coerceTelegramId(input.messageThreadId),
+        }),
       },
       connection: input.connection,
     });
@@ -399,9 +399,9 @@ export class TelegramAgentProcessor extends StreamProcessor<
       body: {
         action: "typing",
         chat_id: coerceTelegramId(target.chatId),
-        ...(!target.messageThreadId
-          ? {}
-          : { message_thread_id: coerceTelegramId(target.messageThreadId) }),
+        ...(target.messageThreadId && {
+          message_thread_id: coerceTelegramId(target.messageThreadId),
+        }),
       },
       connection,
       method: "sendChatAction",
@@ -438,9 +438,9 @@ export class TelegramAgentProcessor extends StreamProcessor<
           ...state,
           birthCertificate: event.payload,
           chatId: event.payload.config.chatId,
-          ...(!event.payload.config.messageThreadId
-            ? {}
-            : { messageThreadId: event.payload.config.messageThreadId }),
+          ...(event.payload.config.messageThreadId && {
+            messageThreadId: event.payload.config.messageThreadId,
+          }),
         };
       case "events.iterate.com/telegram/webhook-received": {
         const target = telegramUpdateTarget(event.payload.body);
@@ -449,7 +449,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
           ...state,
           botId: readString(event.payload.botId) ?? state.botId,
           chatId: target.chatId,
-          ...(!target.messageThreadId ? {} : { messageThreadId: target.messageThreadId }),
+          ...(target.messageThreadId && { messageThreadId: target.messageThreadId }),
           // Half of the deterministic reply_to_message_id rule: the newest
           // human message on this session.
           ...(target.kind === "message" &&
@@ -459,9 +459,9 @@ export class TelegramAgentProcessor extends StreamProcessor<
       }
       case "events.iterate.com/agent/llm-request-requested":
         // The other half: snapshot which message this LLM turn is answering.
-        return !Number.isFinite(state.latestInboundMessageId)
-          ? state
-          : { ...state, answeringMessageId: state.latestInboundMessageId };
+        return Number.isFinite(state.latestInboundMessageId)
+          ? { ...state, answeringMessageId: state.latestInboundMessageId }
+          : state;
       default:
         return state;
     }
@@ -548,9 +548,9 @@ function telegramWebhookAgentInput(
   if (options.newCommand) {
     lines.push(
       "",
-      !options.newCommand.trailingText
-        ? "The user started a fresh thread with /new. This session's transcript starts here; earlier conversation lives in the previous session streams."
-        : `The user started a fresh thread with /new — treat the text after /new as their first message in this new conversation: ${JSON.stringify(options.newCommand.trailingText)}`,
+      options.newCommand.trailingText
+        ? `The user started a fresh thread with /new — treat the text after /new as their first message in this new conversation: ${JSON.stringify(options.newCommand.trailingText)}`
+        : "The user started a fresh thread with /new. This session's transcript starts here; earlier conversation lives in the previous session streams.",
     );
   }
   const placeholders = telegramMediaPlaceholders(payload);
@@ -630,7 +630,7 @@ function telegramUpdateTarget(body: unknown): TelegramUpdateTarget | null {
       fromIsBot: from?.is_bot === true,
       kind,
       ...(typeof messageId === "number" && { messageId }),
-      ...(!messageThreadId ? {} : { messageThreadId }),
+      ...(messageThreadId && { messageThreadId }),
     };
   }
   return null;

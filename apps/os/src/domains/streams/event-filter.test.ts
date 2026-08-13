@@ -12,7 +12,7 @@ function evt(type: string, payload?: Record<string, unknown>): StreamEvent {
     offset: 1,
     createdAt: "2026-07-08T00:00:00.000Z",
     path: "/t",
-    ...(!payload ? {} : { payload }),
+    ...(payload && { payload }),
   };
 }
 

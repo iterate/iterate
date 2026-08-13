@@ -338,7 +338,7 @@ export function createLazyRepoReader(input: {
     readPaths: async (paths: string[]): Promise<(string | null)[]> =>
       serialized(async () =>
         (await readPathBytesLocked(paths)).map((payload) =>
-          !payload ? null : textDecoder.decode(payload),
+          payload ? textDecoder.decode(payload) : null,
         ),
       ),
 

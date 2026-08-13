@@ -116,26 +116,30 @@ function CustomDomainsEditor({
         </Button>
       </form>
 
-      {!cnameTarget ? (
+      {cnameTarget ? (
+        domains ? (
+          domains.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No custom domains configured.</p>
+          ) : (
+            <div className="divide-y rounded-md border">
+              {domains.map((domain) => (
+                <CustomDomainRow
+                  cnameTarget={cnameTarget}
+                  domain={domain}
+                  key={domain.hostname}
+                  mutationPending={mutation.isPending}
+                  onRemove={() => mutation.mutate({ action: "remove", hostname: domain.hostname })}
+                />
+              ))}
+            </div>
+          )
+        ) : (
+          <p className="text-xs text-muted-foreground">Loading custom domains...</p>
+        )
+      ) : (
         <p className="text-xs text-muted-foreground">
           Custom domains require a deployed DNS project hostname base.
         </p>
-      ) : !domains ? (
-        <p className="text-xs text-muted-foreground">Loading custom domains...</p>
-      ) : domains.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No custom domains configured.</p>
-      ) : (
-        <div className="divide-y rounded-md border">
-          {domains.map((domain) => (
-            <CustomDomainRow
-              cnameTarget={cnameTarget}
-              domain={domain}
-              key={domain.hostname}
-              mutationPending={mutation.isPending}
-              onRemove={() => mutation.mutate({ action: "remove", hostname: domain.hostname })}
-            />
-          ))}
-        </div>
       )}
     </div>
   );

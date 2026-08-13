@@ -98,10 +98,10 @@ export function ItxActivityTail({ path = PROJECT_CONTEXT_PATH }: { path?: string
           <ol className="space-y-1">
             {rows.slice(-100).map(({ event, text }) => (
               <li key={event.offset} className="font-mono text-xs">
-                {!text ? (
-                  <RawEventRow event={event} />
-                ) : (
+                {text ? (
                   <FriendlyEventRow event={event} text={text} />
+                ) : (
+                  <RawEventRow event={event} />
                 )}
               </li>
             ))}

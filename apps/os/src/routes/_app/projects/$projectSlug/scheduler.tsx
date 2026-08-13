@@ -110,7 +110,7 @@ function ProjectSchedulerContent() {
                     {recurrenceLabel(schedule.recurrence)}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">
-                    {!schedule.nextTriggerAt ? "—" : formatRelativeTime(schedule.nextTriggerAt)}
+                    {schedule.nextTriggerAt ? formatRelativeTime(schedule.nextTriggerAt) : "—"}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{schedule.runCount}</TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">

@@ -39,7 +39,7 @@ export const GithubAiLinter = {
               async ({ path }) => (await itx.repos.get(path).processor.snapshot()).state.github,
             ),
           );
-          connections = links.flatMap((link) => (!link ? [] : [link.connection]));
+          connections = links.flatMap((link) => (link ? [link.connection] : []));
         }
         await Promise.all(
           [...new Set(connections)].map(async (connection) => {

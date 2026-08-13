@@ -24,15 +24,15 @@ export function emailRouterCreationEvents(input: {
       idempotencyKey: `email-created:${projectId}`,
       payload: input.payload ?? { config: {} },
     }),
-    ...(!initialSender
-      ? []
-      : [
+    ...(initialSender
+      ? [
           EmailProcessorContract.buildEvent({
             type: "events.iterate.com/email/sender-allowed",
             idempotencyKey: `email-sender-allowed:${projectId}:${initialSender.toLowerCase()}`,
             payload: { pattern: initialSender, reason: "project-owner" },
           }),
-        ]),
+        ]
+      : []),
     buildFacetProcessorSubscriptionConfiguredEvent({
       idempotencyKey: `stream/subscription-configured:${EmailProcessorContract.slug}`,
       name: EmailProcessorContract.slug,

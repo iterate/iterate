@@ -243,8 +243,8 @@ function pushMapArray<Key, Value>(map: Map<Key, Value[]>, key: Key, value: Value
 function processorReferenceDoc(contract: ProcessorContractForDocs): ProcessorReferenceDoc {
   const docsPath = processorDocsPath(contract);
   return {
-    ...(!contract.description ? {} : { description: contract.description }),
-    ...(!contract.version ? {} : { version: contract.version }),
+    ...(contract.description && { description: contract.description }),
+    ...(contract.version && { version: contract.version }),
     contractSlug: contract.slug,
     docsPath,
     href: processorDocsPathForSlug(docsPath),
@@ -266,7 +266,7 @@ function buildEventDoc(args: {
     processorSlug: args.processor.slug,
   });
   return {
-    ...(!args.definition.description ? {} : { description: args.definition.description }),
+    ...(args.definition.description && { description: args.definition.description }),
     consumedBy: args.consumedBy,
     emittedBy: args.emittedBy,
     eventPath,
@@ -286,7 +286,7 @@ function buildEventDoc(args: {
 
 function eventReferenceDoc(event: EventDoc): EventReferenceDoc {
   return {
-    ...(!event.description ? {} : { description: event.description }),
+    ...(event.description && { description: event.description }),
     href: event.href,
     ownerContractSlug: event.processor.contractSlug,
     routeParams: event.routeParams,

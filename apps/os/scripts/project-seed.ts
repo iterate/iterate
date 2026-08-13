@@ -452,14 +452,14 @@ export async function apply(options: SeedOptions) {
     hostnames: [...seed.directHostnames, ...seed.cloudflareHostnames],
     slug: seed.slug,
   });
-  const configRepo = !seed.configRepo
-    ? null
-    : await restoreConfigRepository({
+  const configRepo = seed.configRepo
+    ? await restoreConfigRepository({
         project,
         seed: seed.configRepo,
         integrations: restoredIntegrations,
         workerUrls,
-      });
+      })
+    : null;
   return {
     targetEnvironment: archive.targetEnvironment,
     project: identity,
@@ -592,7 +592,7 @@ async function restoreConfigRepository(input: {
     if (!sameStrings(after.paths, [...wanted])) {
       throw new Error(`${path} file-tree proof failed.`);
     }
-    const served = !input.workerUrls ? null : await proveWorkers(input.workerUrls, after.commitOid);
+    const served = input.workerUrls ? await proveWorkers(input.workerUrls, after.commitOid) : null;
     return {
       path,
       source: "local" as const,
@@ -633,9 +633,7 @@ async function restoreConfigRepository(input: {
   ) {
     throw new Error(`${path} changed while it was restored from GitHub.`);
   }
-  const served = !input.workerUrls
-    ? null
-    : await proveWorkers(input.workerUrls, restored.commitOid);
+  const served = input.workerUrls ? await proveWorkers(input.workerUrls, restored.commitOid) : null;
   return {
     path,
     source: "github" as const,

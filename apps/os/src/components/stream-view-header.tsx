@@ -107,7 +107,7 @@ export function StreamViewHeader({
   const showFilterToggle = !eventsToggle && caps.filters;
   const filtersActive = feedFiltersActive(search, streamPath);
   const showOverflowMenu = !!agentPause || isMobile;
-  const latencyLabel = !metrics.transportRttMs ? "—" : `${metrics.transportRttMs.last}ms`;
+  const latencyLabel = metrics.transportRttMs ? `${metrics.transportRttMs.last}ms` : "—";
 
   return (
     <header className="flex min-w-0 shrink-0 items-center gap-2 overflow-x-hidden px-3 pb-1 pt-2.5 sm:gap-3 sm:px-4">
@@ -163,11 +163,11 @@ export function StreamViewHeader({
           >
             <HistoryIcon className="size-3.5" />
             <span className="hidden sm:inline">Events</span>
-            {!Number.isFinite(eventsToggle.eventCount) ? null : (
+            {Number.isFinite(eventsToggle.eventCount) ? (
               <span className="font-mono text-[10px] text-muted-foreground">
                 {eventsToggle.eventCount.toLocaleString()}
               </span>
-            )}
+            ) : null}
           </Button>
         ) : (
           <>
@@ -202,7 +202,7 @@ export function StreamViewHeader({
             latencyLabel={latencyLabel}
             metrics={metrics}
             onFocusPresence={focusProcessor}
-            onOpenAgentDetails={!agentPause ? undefined : openAgentDetails}
+            onOpenAgentDetails={agentPause ? openAgentDetails : undefined}
             onOpenStreamState={openProcessorsOverview}
             pause={agentPause}
           />
@@ -218,7 +218,7 @@ export function StreamViewHeader({
  */
 export function StreamStateButton({ metrics }: { metrics: BrowserStreamMetricsView }) {
   const { openProcessorsOverview } = useStreamViewPanels();
-  const latencyLabel = !metrics.transportRttMs ? "—" : `${metrics.transportRttMs.last}ms`;
+  const latencyLabel = metrics.transportRttMs ? `${metrics.transportRttMs.last}ms` : "—";
   return (
     <Button
       variant="ghost"
@@ -402,12 +402,12 @@ function StreamOverflowMenu({
             {isMobile ? <DropdownMenuSeparator /> : null}
             <DropdownMenuGroup>
               <DropdownMenuLabel>Agent actions</DropdownMenuLabel>
-              {!onOpenAgentDetails ? null : (
+              {onOpenAgentDetails ? (
                 <DropdownMenuItem closeOnClick onClick={onOpenAgentDetails}>
                   <BotIcon />
                   Agent details
                 </DropdownMenuItem>
-              )}
+              ) : null}
               <DropdownMenuItem
                 closeOnClick
                 disabled={pause.pending}

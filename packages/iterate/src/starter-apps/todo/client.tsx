@@ -72,39 +72,41 @@ export function TodoClient() {
         </p>
       )}
       {!!error && <p role="alert">{error}</p>}
-      {!state ? (
-        <p>Loading…</p>
-      ) : todos.length === 0 ? (
-        <p>No todos yet.</p>
+      {state ? (
+        todos.length === 0 ? (
+          <p>No todos yet.</p>
+        ) : (
+          <ul>
+            {todos.map((todo) => (
+              <li key={todo.id}>
+                <input
+                  aria-label={`Mark ${todo.title} ${todo.done ? "not done" : "done"}`}
+                  checked={todo.done}
+                  disabled={mutating}
+                  onChange={(event) => {
+                    const done = event.currentTarget.checked;
+                    if (!api) return;
+                    void run(() => api.setDone(todo.id, done));
+                  }}
+                  type="checkbox"
+                />
+                <span className={todo.done ? "done" : ""}>{todo.title}</span>
+                <button
+                  disabled={mutating}
+                  onClick={() => {
+                    if (!api) return;
+                    void run(() => api.remove(todo.id));
+                  }}
+                  type="button"
+                >
+                  Delete
+                </button>
+              </li>
+            ))}
+          </ul>
+        )
       ) : (
-        <ul>
-          {todos.map((todo) => (
-            <li key={todo.id}>
-              <input
-                aria-label={`Mark ${todo.title} ${todo.done ? "not done" : "done"}`}
-                checked={todo.done}
-                disabled={mutating}
-                onChange={(event) => {
-                  const done = event.currentTarget.checked;
-                  if (!api) return;
-                  void run(() => api.setDone(todo.id, done));
-                }}
-                type="checkbox"
-              />
-              <span className={todo.done ? "done" : ""}>{todo.title}</span>
-              <button
-                disabled={mutating}
-                onClick={() => {
-                  if (!api) return;
-                  void run(() => api.remove(todo.id));
-                }}
-                type="button"
-              >
-                Delete
-              </button>
-            </li>
-          ))}
-        </ul>
+        <p>Loading…</p>
       )}
     </>
   );

@@ -210,12 +210,12 @@ export async function checkCapabilityTypes(input: {
   // used to poison the whole scope's typecheck). This rule is LOCAL — it needs
   // no compiler — so it holds even when the sidecar is unreachable below; a
   // permissive checker failure must not let an export-less mount slip in.
-  const exportLess = !firstExportedTypeName(input.types)
-    ? [
+  const exportLess = firstExportedTypeName(input.types)
+    ? []
+    : [
         "types — exports no top-level type/interface/class/enum; " +
           "the FIRST exported declaration names the mount's type.",
-      ]
-    : [];
+      ];
   const fileName = mountFileName("provided");
   const moduleText = mountModuleText(input.types);
   let checked: TypecheckResult;
@@ -659,18 +659,18 @@ function formatProblems(
         ) {
           return `preamble:${diagnostic.line - range.start + 1} — ${diagnostic.message} (TS${diagnostic.code})`;
         }
-        const line = !Number.isFinite(diagnostic.line)
-          ? undefined
-          : diagnostic.line + options.lineOffset;
+        const line = Number.isFinite(diagnostic.line)
+          ? diagnostic.line + options.lineOffset
+          : undefined;
         // Lines the assembly prepended (the prelude, an injected import) map
         // below 1 — report without a position rather than lying about one.
         // tswasm columns are 0-based; +1 to match the 1-based line and every
         // editor's gutter (a `line:col` that disagrees on the col base misleads).
-        const column = !Number.isFinite(diagnostic.column) ? "" : `:${diagnostic.column + 1}`;
+        const column = Number.isFinite(diagnostic.column) ? `:${diagnostic.column + 1}` : "";
         const position = !Number.isFinite(line) || line < 1 ? "" : `:${line}${column}`;
         return `${options.label}${position} — ${diagnostic.message} (TS${diagnostic.code})`;
       }
       const where = fileName.replace(/^mounts\//, "mount ").replace(/\.ts$/, "");
-      return `${where}${!Number.isFinite(diagnostic.line) ? "" : `:${diagnostic.line}`} — ${diagnostic.message} (TS${diagnostic.code})`;
+      return `${where}${Number.isFinite(diagnostic.line) ? `:${diagnostic.line}` : ""} — ${diagnostic.message} (TS${diagnostic.code})`;
     });
 }

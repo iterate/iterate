@@ -43,11 +43,7 @@ export function BoardBreadcrumbs({
       <BreadcrumbList className="flex-nowrap text-xs">
         {/* No project crumb: the whole app is one project (its host says
             which), so the hierarchy starts at the workspace. */}
-        {!workspace ? (
-          <BreadcrumbItem>
-            <BreadcrumbLink render={<Link to="/" />}>workspaces</BreadcrumbLink>
-          </BreadcrumbItem>
-        ) : (
+        {workspace ? (
           <>
             <BreadcrumbItem>
               <BreadcrumbLink render={<Link to="/" />} className="truncate font-mono">
@@ -57,15 +53,19 @@ export function BoardBreadcrumbs({
             <BreadcrumbSeparator />
             <BreadcrumbItem>tasks</BreadcrumbItem>
           </>
+        ) : (
+          <BreadcrumbItem>
+            <BreadcrumbLink render={<Link to="/" />}>workspaces</BreadcrumbLink>
+          </BreadcrumbItem>
         )}
-        {!rootPath ? null : (
+        {rootPath ? (
           <>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
               <BreadcrumbPage className="truncate font-mono">{rootPath}</BreadcrumbPage>
             </BreadcrumbItem>
           </>
-        )}
+        ) : null}
       </BreadcrumbList>
     </Breadcrumb>
   );

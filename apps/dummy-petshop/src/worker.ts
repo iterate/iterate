@@ -702,7 +702,7 @@ async function deliverWebhook(input: {
     status: response?.status ?? 0,
     signature,
     payload: body,
-    ...(!error ? {} : { error }),
+    ...(error && { error }),
   };
 }
 
@@ -983,7 +983,7 @@ async function gatewaySubprotocolUpgrade(request: Request, deps: PetshopDeps): P
   return new Response(null, {
     status: 101,
     webSocket: client,
-    ...(!selected ? {} : { headers: { "sec-websocket-protocol": selected } }),
+    ...(selected && { headers: { "sec-websocket-protocol": selected } }),
   });
 }
 

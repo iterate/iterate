@@ -98,8 +98,8 @@ export function parseRestrictedFrontmatterYaml(text: string): FrontmatterYamlPar
     },
   });
   if (failure) return { ok: false, ...(failure as { code: DiagnosticCode; message: string }) };
-  const data: Record<string, unknown> = !document.contents
-    ? {}
-    : ((document.toJS() ?? {}) as Record<string, unknown>);
+  const data: Record<string, unknown> = document.contents
+    ? ((document.toJS() ?? {}) as Record<string, unknown>)
+    : {};
   return { ok: true, data, document };
 }

@@ -39,6 +39,6 @@ export function browserStreamSubscriberDescriptor<Announcement>(args: {
   return {
     description: "browser",
     processor: { announcement: args.announcement },
-    ...(!args.user ? {} : { user: args.user }),
+    ...(args.user && { user: args.user }),
   };
 }

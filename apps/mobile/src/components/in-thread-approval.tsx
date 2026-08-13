@@ -118,11 +118,11 @@ export function InThreadApprovalCard({
             <Text style={styles.approveText}>
               {respond.isPending
                 ? "Signing…"
-                : !canApprove
-                  ? "Enroll to approve"
-                  : count === 1
+                : canApprove
+                  ? count === 1
                     ? "Approve (Face ID)"
-                    : `Approve all ${count} (Face ID)`}
+                    : `Approve all ${count} (Face ID)`
+                  : "Enroll to approve"}
             </Text>
           </Pressable>
         </View>

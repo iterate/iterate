@@ -295,9 +295,8 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
           ...state,
           // The birth certificate tracks the CURRENT enrollment: every field
           // replaced except the immutable platform.
-          birthCertificate: !state.birthCertificate
-            ? null
-            : {
+          birthCertificate: state.birthCertificate
+            ? {
                 config: {
                   appVersion: event.payload.appVersion,
                   label: event.payload.label,
@@ -307,7 +306,8 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
                   pushTokenSecretPath: event.payload.pushTokenSecretPath,
                   pushTokenSecretUpdatedOffset: event.payload.pushTokenSecretUpdatedOffset,
                 },
-              },
+              }
+            : null,
           pushTokenSecret: {
             path: event.payload.pushTokenSecretPath,
             updatedOffset: event.payload.pushTokenSecretUpdatedOffset,
@@ -339,9 +339,9 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         // presented, so the send pass settles it suppressed.
         const approvalRequestEventOffset = event.payload.approvalRequestEventOffset;
         const pendingApprovalPresentations = { ...state.pendingApprovalPresentations };
-        const approvalPresentedAt = !Number.isFinite(approvalRequestEventOffset)
-          ? undefined
-          : pendingApprovalPresentations[String(approvalRequestEventOffset)];
+        const approvalPresentedAt = Number.isFinite(approvalRequestEventOffset)
+          ? pendingApprovalPresentations[String(approvalRequestEventOffset)]
+          : undefined;
         if (Number.isFinite(approvalRequestEventOffset)) {
           delete pendingApprovalPresentations[String(approvalRequestEventOffset)];
         }
@@ -356,19 +356,17 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
             : undefined;
         return {
           ...state,
-          latestApprovalRequestEventOffset: !Number.isFinite(approvalRequestEventOffset)
-            ? state.latestApprovalRequestEventOffset
-            : Math.max(state.latestApprovalRequestEventOffset, approvalRequestEventOffset),
+          latestApprovalRequestEventOffset: Number.isFinite(approvalRequestEventOffset)
+            ? Math.max(state.latestApprovalRequestEventOffset, approvalRequestEventOffset)
+            : state.latestApprovalRequestEventOffset,
           pendingApprovalPresentations,
           notifications: {
             ...state.notifications,
             [event.offset]: {
-              ...(!Number.isFinite(event.payload.agentReplyEventOffset)
-                ? {}
-                : { agentReplyEventOffset: event.payload.agentReplyEventOffset }),
-              ...(!Number.isFinite(approvalRequestEventOffset)
-                ? {}
-                : { approvalRequestEventOffset }),
+              ...(Number.isFinite(event.payload.agentReplyEventOffset) && {
+                agentReplyEventOffset: event.payload.agentReplyEventOffset,
+              }),
+              ...(Number.isFinite(approvalRequestEventOffset) && { approvalRequestEventOffset }),
               ...((approvalPresentedAt || claimed?.claimedAt) && {
                 presentedAt: approvalPresentedAt || claimed?.claimedAt,
               }),
@@ -513,9 +511,9 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       }
       const firstCheckAt = notification.ticketObservedAt + state.config.receiptCheckDelayMs;
       if (now < firstCheckAt) {
-        nextCheckAt = !Number.isFinite(nextCheckAt)
-          ? firstCheckAt
-          : Math.min(nextCheckAt, firstCheckAt);
+        nextCheckAt = Number.isFinite(nextCheckAt)
+          ? Math.min(nextCheckAt, firstCheckAt)
+          : firstCheckAt;
         continue;
       }
       const receipt = await this.deps.getReceipt(notification.ticketId);
@@ -547,7 +545,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         });
       } else {
         const retryAt = now + state.config.receiptCheckDelayMs;
-        nextCheckAt = !Number.isFinite(nextCheckAt) ? retryAt : Math.min(nextCheckAt, retryAt);
+        nextCheckAt = Number.isFinite(nextCheckAt) ? Math.min(nextCheckAt, retryAt) : retryAt;
       }
     }
     // The clear is fenced on the credential revision the attempts were made

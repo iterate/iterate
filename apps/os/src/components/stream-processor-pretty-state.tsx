@@ -102,9 +102,9 @@ export function CorePrettyState({
           {paused ? (
             <div>Paused{typeof core.pauseReason === "string" ? `: ${core.pauseReason}` : ""}</div>
           ) : null}
-          {!Number.isFinite(trippedAtOffset) ? null : (
+          {Number.isFinite(trippedAtOffset) ? (
             <div>Circuit breaker tripped at #{trippedAtOffset}</div>
-          )}
+          ) : null}
         </div>
       ) : null}
 
@@ -154,8 +154,8 @@ export function CorePrettyState({
                       }
                     >
                       {kind}
-                      {!status ? "" : ` · ${status}`}
-                      {!Number.isFinite(lag) ? "" : ` · lag ${lag}`}
+                      {status ? ` · ${status}` : ""}
+                      {Number.isFinite(lag) ? ` · lag ${lag}` : ""}
                     </div>
                   </div>
                   {typeof payload?.description !== "string" ||
@@ -164,11 +164,11 @@ export function CorePrettyState({
                       {payload.description.trim()}
                     </div>
                   )}
-                  {!deliveryHint ? null : (
+                  {deliveryHint ? (
                     <div className="mt-1 break-all font-mono text-[11px] text-foreground/70">
                       {deliveryHint}
                     </div>
-                  )}
+                  ) : null}
                   {!eventTypes.length && !condition ? null : (
                     <div className="mt-1 text-[11px] text-muted-foreground">
                       {/* `*` anywhere means "all types" — same convention as EventFilter. */}
@@ -177,9 +177,9 @@ export function CorePrettyState({
                         : eventTypes
                             .map((type) => type.replace("events.iterate.com/", ""))
                             .join(", ")}
-                      {!condition
-                        ? ""
-                        : ` when ${condition.length > 48 ? `${condition.slice(0, 45)}…` : condition}`}
+                      {condition
+                        ? ` when ${condition.length > 48 ? `${condition.slice(0, 45)}…` : condition}`
+                        : ""}
                     </div>
                   )}
                 </div>
@@ -265,7 +265,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
     agent.paused && typeof agent.paused === "object"
       ? (agent.paused as Record<string, unknown>)
       : null;
-  const phase = paused ? "paused" : !openRequest ? "idle" : "requested";
+  const phase = paused ? "paused" : openRequest ? "requested" : "idle";
   const config = readRuntimeRecord(agent.config);
   const llm = readRuntimeRecord(config?.llm);
   const contextItems = Array.isArray(agent.contextItems) ? agent.contextItems : [];
@@ -273,7 +273,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
   const system = contextItems.filter(isSystem);
   const history = contextItems.filter((item) => !isSystem(item));
   const lastMessage = history.length ? history[history.length - 1] : null;
-  const lastPreview = !lastMessage ? null : previewProjectedItem(lastMessage);
+  const lastPreview = lastMessage ? previewProjectedItem(lastMessage) : null;
   const scripts = Array.isArray(agent.activeScriptExecutionIds)
     ? agent.activeScriptExecutionIds
     : [];
@@ -287,16 +287,16 @@ export function AgentPrettyState({ state }: { state: unknown }) {
         <RuntimeStateStat label="failures" value={String(agent.consecutiveLlmFailures ?? 0)} />
       </div>
 
-      {!openRequest ? null : (
+      {openRequest ? (
         <div className="rounded-xl bg-muted/40 px-3 py-2">
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
             Open request
           </div>
           <div className="mt-1 font-mono text-xs break-all">{JSON.stringify(openRequest)}</div>
         </div>
-      )}
+      ) : null}
 
-      {!paused ? null : (
+      {paused ? (
         <div className="rounded-xl bg-amber-500/10 px-3 py-2">
           <div className="text-[10px] uppercase tracking-wide text-amber-700/80 dark:text-amber-300/80">
             Paused
@@ -305,7 +305,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
             {typeof paused.reason === "string" ? paused.reason : "Scheduling paused."}
           </div>
         </div>
-      )}
+      ) : null}
 
       {scripts.length === 0 ? null : (
         <div>
@@ -330,13 +330,13 @@ export function AgentPrettyState({ state }: { state: unknown }) {
           </div>
           <div className="font-mono text-xs text-muted-foreground">{history.length} items</div>
         </div>
-        {!lastPreview ? (
-          <div className="mt-1 text-xs text-muted-foreground">No messages yet.</div>
-        ) : (
+        {lastPreview ? (
           <div className="mt-1 text-xs text-foreground/80">
             <span className="font-medium text-muted-foreground">{lastPreview.role}: </span>
             {lastPreview.text}
           </div>
+        ) : (
+          <div className="mt-1 text-xs text-muted-foreground">No messages yet.</div>
         )}
         <div className="mt-1 text-[10px] text-muted-foreground/70">
           Full projected history is in Raw view (and in the Pretty feed).
@@ -396,7 +396,7 @@ function renderProjectedContextItem(item: unknown): string {
 
 function previewProjectedItem(item: unknown): { role: string; text: string } | null {
   const payload = readItemPayload(item);
-  return !payload ? null : previewChatMessage(payload);
+  return payload ? previewChatMessage(payload) : null;
 }
 
 function previewChatMessage(message: Record<string, unknown>): { role: string; text: string } {

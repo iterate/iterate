@@ -73,7 +73,7 @@ function committed(
     offset,
     createdAt: `2026-07-21T12:00:${String(offset).padStart(2, "0")}.000Z`,
     path: options.path,
-    ...(!options.source ? {} : { source: options.source }),
+    ...(options.source && { source: options.source }),
   };
 }
 

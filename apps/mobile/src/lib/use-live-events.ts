@@ -34,7 +34,7 @@ export function useLiveEvents(input: {
       const existing = queryClient.getQueryData<StreamEvent[]>(input.queryKey) || [];
       return await itx.streams.get(input.streamPath).openConnection({
         replayAfterOffset: existing.reduce((max, event) => Math.max(max, event.offset), 0),
-        ...(!input.eventTypes ? {} : { eventTypes: input.eventTypes }),
+        ...(input.eventTypes && { eventTypes: input.eventTypes }),
         processEventBatch: (batch: StreamEventBatch) => {
           queryClient.setQueryData<StreamEvent[]>(input.queryKey, (current) =>
             mergeEventsByOffset(current || [], batch.events),

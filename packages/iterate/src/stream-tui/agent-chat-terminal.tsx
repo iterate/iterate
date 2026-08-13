@@ -219,7 +219,7 @@ function AgentChatApp() {
         {feed.items.map((item) => (
           <FeedItem key={item.id} item={item} />
         ))}
-        {!feed.live ? null : <LiveActivity activity={feed.live} />}
+        {feed.live ? <LiveActivity activity={feed.live} /> : null}
       </scrollbox>
       <box
         width="100%"

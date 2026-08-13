@@ -86,7 +86,7 @@ export function parseLiveStatePagerLaneTag(tag: string): string | undefined {
  */
 export function liveStatePagerLaneKey(request: Request): string | undefined {
   const match = /^\/lane\/(.+)$/.exec(new URL(request.url).pathname);
-  return !match ? undefined : decodeURIComponent(match[1]!);
+  return match ? decodeURIComponent(match[1]!) : undefined;
 }
 
 /**
@@ -332,9 +332,9 @@ export async function dialLiveStatePager(
   },
   options?: { lane?: string },
 ): Promise<LiveStatePagerUpgrade> {
-  const url = !options?.lane
-    ? LIVE_STATE_PAGER_URL
-    : `${LIVE_STATE_PAGER_URL}lane/${encodeURIComponent(options.lane)}`;
+  const url = options?.lane
+    ? `${LIVE_STATE_PAGER_URL}lane/${encodeURIComponent(options.lane)}`
+    : LIVE_STATE_PAGER_URL;
   return await stub.fetch(url, {
     headers: { Upgrade: "websocket", [LIVE_STATE_PAGER_HEADER]: "watch" },
   });

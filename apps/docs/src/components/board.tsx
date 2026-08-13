@@ -72,9 +72,9 @@ export function Board({
         // Dropping into another tag row re-tags the task (no-tag row clears).
         const labels =
           rowField === "label" && source.rowKey !== target.rowKey
-            ? !row.value
-              ? []
-              : [row.value]
+            ? row.value
+              ? [row.value]
+              : []
             : undefined;
         if (taskColumnState(task.state) !== target.state || task.folder !== folder || labels) {
           onMove(task, target.state, folder, labels);
@@ -113,7 +113,7 @@ export function Board({
           </div>
           {rows.map((row) => (
             <section key={row.key} className="min-w-full">
-              {!hasGroupBars ? null : (
+              {hasGroupBars ? (
                 // Full-bleed group bar. Each bar is sticky just below the
                 // column headers WITHIN its own section, so scrolling past a
                 // group hands the slot to the next bar — pure CSS.
@@ -137,7 +137,7 @@ export function Board({
                     </div>
                   </div>
                 </header>
-              )}
+              ) : null}
               <div className="mx-auto flex w-max gap-2 px-2 py-2">
                 {row.cells.map((cell) => (
                   <BoardCell

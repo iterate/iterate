@@ -109,8 +109,8 @@ function normalizeResolvedSource(
   if (source.type === "inline") return source;
   return {
     content: source.contentHash ?? `commit:${source.commitOid}`,
-    exclude: !source.exclude ? undefined : [...source.exclude].sort(),
-    include: !source.include ? undefined : [...source.include].sort(),
+    exclude: source.exclude ? [...source.exclude].sort() : undefined,
+    include: source.include ? [...source.include].sort() : undefined,
     type: "repo",
   };
 }

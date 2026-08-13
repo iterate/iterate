@@ -152,16 +152,7 @@ function SecretDetail({
         <div className="space-y-2 rounded-lg border bg-card p-4">
           <div className="flex items-center justify-between">
             <div className="text-sm font-medium">Value</div>
-            {!revealSecret.data ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => revealSecret.mutate()}
-                disabled={revealSecret.isPending || !secret.hasMaterial}
-              >
-                {revealSecret.isPending ? "Revealing..." : "Reveal"}
-              </Button>
-            ) : (
+            {revealSecret.data ? (
               <div className="flex gap-2">
                 <Button
                   size="sm"
@@ -177,17 +168,26 @@ function SecretDetail({
                   Hide
                 </Button>
               </div>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => revealSecret.mutate()}
+                disabled={revealSecret.isPending || !secret.hasMaterial}
+              >
+                {revealSecret.isPending ? "Revealing..." : "Reveal"}
+              </Button>
             )}
           </div>
           <p className="text-xs text-muted-foreground">
             This secret was born readable — reveal it as often as you need. Update below to rotate
             it.
           </p>
-          {!revealSecret.data ? null : (
+          {revealSecret.data ? (
             <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
               {revealedText}
             </pre>
-          )}
+          ) : null}
         </div>
       ) : null}
 

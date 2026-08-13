@@ -36,13 +36,13 @@ export default defineConfig({
     ["json", { outputFile: "test-results/playwright-results.json" }],
     ["../../scripts/ci/playwright-telemetry-reporter.ts"],
   ],
-  webServer: !workerUrl
-    ? {
+  webServer: workerUrl
+    ? undefined
+    : {
         command: "pnpm exec vite dev --host 127.0.0.1",
         url: localUrl,
         reuseExistingServer: !process.env.CI,
-      }
-    : undefined,
+      },
   use: {
     baseURL: workerUrl ?? localUrl,
     extraHTTPHeaders: cloudflareWorkerVersionOverrideHeaders(process.env),

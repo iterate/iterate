@@ -142,8 +142,8 @@ export function buildCopyAppends({
     // source-row eviction leaves no dangling reads.
     inputs.push({
       type: shaped.type,
-      ...(!shaped.payload ? {} : { payload: shaped.payload }),
-      ...(!shaped.metadata ? {} : { metadata: shaped.metadata }),
+      ...(shaped.payload && { payload: shaped.payload }),
+      ...(shaped.metadata && { metadata: shaped.metadata }),
       // Provenance is stamped AFTER the transform, from the platform's own
       // hop record — a transform can never forge or drop the chain.
       source: { ...event.source, copiedFrom },

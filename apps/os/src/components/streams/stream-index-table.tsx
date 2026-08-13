@@ -91,12 +91,12 @@ export function StreamIndexTable({
               data-stream-path={row.original.path}
               className={cn(
                 "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 font-mono text-xs",
-                selected ? "bg-accent" : !row.original.indexRow ? undefined : "hover:bg-accent/70",
+                selected ? "bg-accent" : row.original.indexRow ? "hover:bg-accent/70" : undefined,
               )}
             >
               <StreamTreeRowContent
                 row={row}
-                onOpen={!row.original.indexRow ? undefined : onOpenPath}
+                onOpen={row.original.indexRow ? onOpenPath : undefined}
                 selected={selected}
                 onToggleExpanded={(path) => {
                   setCollapseState((current) => ({

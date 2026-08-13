@@ -138,9 +138,9 @@ export class TelegramProcessor extends StreamProcessor<
                 connection,
                 body: {
                   chat_id: coerceTelegramId(target.chatId),
-                  ...(!target.messageThreadId
-                    ? {}
-                    : { message_thread_id: coerceTelegramId(target.messageThreadId) }),
+                  ...(target.messageThreadId && {
+                    message_thread_id: coerceTelegramId(target.messageThreadId),
+                  }),
                   text: telegramAccessDeniedMessage({ settingsUrl, userId: senderId }),
                 },
               });
@@ -190,7 +190,7 @@ export class TelegramProcessor extends StreamProcessor<
             {
               type: "events.iterate.com/telegram/webhook-received",
               idempotencyKey: `telegram:forward-webhook:${event.offset}`,
-              payload: { ...event.payload, ...(!replyHint ? {} : { replyHint }) },
+              payload: { ...event.payload, ...(replyHint && { replyHint }) },
             },
           );
         });
@@ -338,7 +338,7 @@ function telegramAgentCreationEvents(input: {
           type: "telegram_thread",
           connection: input.connection,
           chatId: input.chatId,
-          ...(!input.messageThreadId ? {} : { messageThreadId: input.messageThreadId }),
+          ...(input.messageThreadId && { messageThreadId: input.messageThreadId }),
         },
       },
     ],
@@ -359,7 +359,7 @@ function telegramAgentCreationEvents(input: {
           config: {
             chatId: input.chatId,
             connection: input.connection,
-            ...(!input.messageThreadId ? {} : { messageThreadId: input.messageThreadId }),
+            ...(input.messageThreadId && { messageThreadId: input.messageThreadId }),
           },
         },
       }),
@@ -372,9 +372,9 @@ function telegramAgentCreationEvents(input: {
 /** The chat-scoped part of a routed stream path (`chat-{id}` or
  * `chat-{id}/topic-{tid}`) — the sessionsByChat key. */
 function telegramChatKey(target: { chatId: string; messageThreadId?: string }): string {
-  return !target.messageThreadId
-    ? `chat-${target.chatId}`
-    : `chat-${target.chatId}/topic-${target.messageThreadId}`;
+  return target.messageThreadId
+    ? `chat-${target.chatId}/topic-${target.messageThreadId}`
+    : `chat-${target.chatId}`;
 }
 
 /**
@@ -524,7 +524,7 @@ function telegramChatFromUpdate(
   if (!chatId) return null;
   const messageThreadId =
     container?.is_topic_message === true ? readTelegramId(container.message_thread_id) : undefined;
-  return { chatId, ...(!messageThreadId ? {} : { messageThreadId }) };
+  return { chatId, ...(messageThreadId && { messageThreadId }) };
 }
 
 /** Telegram ids arrive as JSON integers (possibly negative, up to 52 bits);

@@ -165,7 +165,7 @@ export function scriptWorkerRef(input: {
     : !preambleJs || preambleJs === ""
       ? input.code
       : `await (async () => {\n${preambleJs}\nreturn (${input.code});\n})()`;
-  const importLine = !scriptModule ? "" : `import scriptModule from "./script.js";`;
+  const importLine = scriptModule ? `import scriptModule from "./script.js";` : "";
   const sandboxExecTimeoutSource = sandboxExecTimeout.toString();
   const source = `
     import { WorkerEntrypoint } from "cloudflare:workers";
@@ -283,9 +283,9 @@ export function scriptWorkerRef(input: {
         bundle: false,
         entryPoint: "main.js",
         files: {
-          files: !scriptModule
-            ? { "main.js": source }
-            : { "main.js": source, "script.js": scriptModule },
+          files: scriptModule
+            ? { "main.js": source, "script.js": scriptModule }
+            : { "main.js": source },
           type: "inline",
         },
       },

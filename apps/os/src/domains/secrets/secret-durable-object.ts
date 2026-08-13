@@ -165,9 +165,8 @@ export class SecretDurableObject extends DurableObject<Env> {
         throw new Error(`secret already created: ${this.#name.path}`);
       }
       const offset = snapshot.offset + 1;
-      const encryptedMaterial = !input.material
-        ? undefined
-        : await encryptSecretCellMaterial(
+      const encryptedMaterial = input.material
+        ? await encryptSecretCellMaterial(
             JSON.stringify(input.material),
             this.env.SECRET_ENCRYPTION_KEY,
             {
@@ -176,7 +175,8 @@ export class SecretDurableObject extends DurableObject<Env> {
               path: this.#name.path,
               projectId: this.#name.projectId,
             },
-          );
+          )
+        : undefined;
       try {
         const [created, configured] = await this.#stream.append(
           ...secretCreationEvents({
@@ -185,7 +185,7 @@ export class SecretDurableObject extends DurableObject<Env> {
             payload: {
               config: {
                 egress,
-                ...(!encryptedMaterial ? {} : { encryptedMaterial }),
+                ...(encryptedMaterial && { encryptedMaterial }),
                 refresh: input.refresh ?? null,
                 visibility,
               },
@@ -286,7 +286,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     const initialSnapshot = await this.#snapshotWithOffset();
     assertSecretCreated(initialSnapshot.state, this.#name.path);
 
-    const egress = !input.egress ? undefined : normalizeEgress(input.egress);
+    const egress = input.egress ? normalizeEgress(input.egress) : undefined;
     // The create()-side exclusivity as an invariant: a readable secret's
     // "never substituted outbound" property must survive every later update.
     if (
@@ -306,8 +306,8 @@ export class SecretDurableObject extends DurableObject<Env> {
       const [event] = await this.#appendSecretEvent({
         type: "events.iterate.com/secret/updated",
         payload: {
-          ...(!egress ? {} : { egress }),
-          ...(!input.refresh ? {} : { refresh: input.refresh }),
+          ...(egress && { egress }),
+          ...(input.refresh && { refresh: input.refresh }),
         },
       });
       await this.#waitUntilProcessed(event!.offset);
@@ -324,7 +324,7 @@ export class SecretDurableObject extends DurableObject<Env> {
           egress: egress!,
           material: input.material,
           offset: snapshot.offset + 1,
-          ...(!input.refresh ? {} : { refresh: input.refresh }),
+          ...(input.refresh && { refresh: input.refresh }),
         });
         await this.#waitUntilProcessed(event.offset);
         return event;
@@ -410,13 +410,13 @@ export class SecretDurableObject extends DurableObject<Env> {
 
       // A refresh-and-retry needs the body twice; clone while it is still
       // undisturbed. (The cast is workers-types Request<Cf> vs bare Request.)
-      let retry = !state.refresh
-        ? null
-        : {
+      let retry = state.refresh
+        ? {
             source: request.clone() as unknown as Request,
             strategy: state.refresh,
             updatedOffset: state.updatedOffset,
-          };
+          }
+        : null;
 
       let substituted: Request;
       try {
@@ -510,9 +510,9 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   /** Substitute this secret's placeholders (headers, URL path, opted-in JSON) from material. */
   async #substitute(request: Request, state: SecretState): Promise<Request> {
-    const material = !state.encryptedMaterial
-      ? null
-      : await this.#decrypt(state.encryptedMaterial, state.egress);
+    const material = state.encryptedMaterial
+      ? await this.#decrypt(state.encryptedMaterial, state.egress)
+      : null;
     return substituteSecretRequest(request, (reference) => {
       if (!material) throw new SecretSubstitutionError("secret_not_found");
       return selectSecretField(material, reference.field);
@@ -552,9 +552,9 @@ export class SecretDurableObject extends DurableObject<Env> {
       // fences changes that land after this snapshot.
       throw new SecretSubstitutionError("secret_not_found");
     }
-    const material = !state.encryptedMaterial
-      ? {}
-      : await this.#decrypt(state.encryptedMaterial, state.egress);
+    const material = state.encryptedMaterial
+      ? await this.#decrypt(state.encryptedMaterial, state.egress)
+      : {};
     const record = asMaterialRecord(material);
     const refresh = expected.strategy;
     if (refresh.kind === "oauth-refresh-token") {
@@ -605,9 +605,9 @@ export class SecretDurableObject extends DurableObject<Env> {
       new Request(refresh.tokenEndpoint, {
         method: "POST",
         headers: {
-          ...(!creds.clientSecret
-            ? {}
-            : { authorization: `Basic ${btoa(`${creds.clientId}:${creds.clientSecret}`)}` }),
+          ...(creds.clientSecret && {
+            authorization: `Basic ${btoa(`${creds.clientId}:${creds.clientSecret}`)}`,
+          }),
           "content-type": "application/x-www-form-urlencoded",
         },
         body,
@@ -818,7 +818,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       payload: {
         egress: input.egress,
         encryptedMaterial,
-        ...(!input.refresh ? {} : { refresh: input.refresh }),
+        ...(input.refresh && { refresh: input.refresh }),
       },
     });
     return event!;

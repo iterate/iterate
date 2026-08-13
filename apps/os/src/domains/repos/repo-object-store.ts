@@ -158,9 +158,9 @@ export function sqliteGitObjectStore(storage: {
       const row = sql
         .exec(`SELECT commit_oid, root_tree_oid FROM git_heads WHERE branch = ?`, branch)
         .toArray()[0];
-      return !row
-        ? null
-        : { commitOid: row.commit_oid as string, rootTreeOid: row.root_tree_oid as string };
+      return row
+        ? { commitOid: row.commit_oid as string, rootTreeOid: row.root_tree_oid as string }
+        : null;
     },
 
     installSnapshot: (branch, delta) => {

@@ -627,7 +627,7 @@ function parseResolvedEventInput(
     eventType: event.type,
   });
   if (!eventDefinition) {
-    const owner = !contract.slug ? "contract" : `processor "${contract.slug}"`;
+    const owner = contract.slug ? `processor "${contract.slug}"` : "contract";
     throw new Error(`${owner} cannot build unresolved event "${event.type}".`);
   }
   return getEventInputSchema({

@@ -140,7 +140,7 @@ function durableObjectContext(name: string) {
       ).run(offset, bytes);
     },
     failKvPutsWith(error: Error | undefined, key?: string): void {
-      kvPutFailure = !error ? undefined : { error, key };
+      kvPutFailure = error ? { error, key } : undefined;
     },
     getKv<T>(key: string): T | undefined {
       return values.has(key) ? structuredClone(values.get(key) as T) : undefined;

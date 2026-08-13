@@ -86,7 +86,7 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
   let frontmatter: Frontmatter | null = null;
   let bodyStart = bomOffset;
   let firstBodyLineIndex = 0;
-  const openContent = !lines[0] ? null : raw.slice(lines[0].start + bomOffset, lines[0].contentEnd);
+  const openContent = lines[0] ? raw.slice(lines[0].start + bomOffset, lines[0].contentEnd) : null;
   if (lines[0] && openContent && openContent.replace(/[ \t]+$/, "") === "---") {
     let closeIndex = -1;
     for (let i = 1; i < lines.length; i++) {

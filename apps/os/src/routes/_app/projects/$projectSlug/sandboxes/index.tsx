@@ -83,16 +83,16 @@ function ProjectSandboxesIndexContent() {
               size="sm"
               nativeButton={!dashboardUrl}
               disabled={!dashboardUrl}
-              title={!dashboardUrl ? "Cloudflare account ID is not configured." : undefined}
+              title={dashboardUrl ? undefined : "Cloudflare account ID is not configured."}
               render={
-                !dashboardUrl ? undefined : (
+                dashboardUrl ? (
                   <a
                     href={dashboardUrl}
                     target="_blank"
                     rel="noreferrer"
                     aria-label="Open the Cloudflare Containers dashboard"
                   />
-                )
+                ) : undefined
               }
             >
               <ExternalLinkIcon data-icon="inline-start" />
@@ -101,47 +101,49 @@ function ProjectSandboxesIndexContent() {
           </div>
         </div>
 
-        {!sandboxes ? (
+        {sandboxes ? (
+          sandboxes.length === 0 ? (
+            <Empty className="rounded-lg border">
+              <EmptyHeader>
+                <EmptyTitle>No sandboxes</EmptyTitle>
+                <EmptyDescription>
+                  Create an isolated Linux container for this project.
+                </EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent>
+                <Button size="sm" onClick={() => setCreateOpen(true)}>
+                  <PlusIcon data-icon="inline-start" />
+                  Create sandbox
+                </Button>
+              </EmptyContent>
+            </Empty>
+          ) : (
+            <div className="rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Sandbox</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Instance type</TableHead>
+                    <TableHead>Created</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {sandboxes.map((sandbox) => (
+                    <SandboxRow
+                      key={sandbox.path}
+                      createdAt={sandbox.createdAt}
+                      path={sandbox.path}
+                      projectSlug={params.projectSlug}
+                    />
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )
+        ) : (
           <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
             Loading sandboxes…
-          </div>
-        ) : sandboxes.length === 0 ? (
-          <Empty className="rounded-lg border">
-            <EmptyHeader>
-              <EmptyTitle>No sandboxes</EmptyTitle>
-              <EmptyDescription>
-                Create an isolated Linux container for this project.
-              </EmptyDescription>
-            </EmptyHeader>
-            <EmptyContent>
-              <Button size="sm" onClick={() => setCreateOpen(true)}>
-                <PlusIcon data-icon="inline-start" />
-                Create sandbox
-              </Button>
-            </EmptyContent>
-          </Empty>
-        ) : (
-          <div className="rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Sandbox</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Instance type</TableHead>
-                  <TableHead>Created</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sandboxes.map((sandbox) => (
-                  <SandboxRow
-                    key={sandbox.path}
-                    createdAt={sandbox.createdAt}
-                    path={sandbox.path}
-                    projectSlug={params.projectSlug}
-                  />
-                ))}
-              </TableBody>
-            </Table>
           </div>
         )}
 

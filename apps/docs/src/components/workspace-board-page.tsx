@@ -416,7 +416,7 @@ export function WorkspaceBoardPage({
       }
       claimedRef.current.set(target, Date.now());
       // Adding from a tag row: the task wears that tag from birth.
-      const content = !label ? file.content : setTaskCardLabels(file.content, [label]);
+      const content = label ? setTaskCardLabels(file.content, [label]) : file.content;
       draftFocusRef.current = "select";
       setDraftPath(target);
       // The card shows instantly (optimistic), but the SHEET opens only once
@@ -556,7 +556,7 @@ export function WorkspaceBoardPage({
               grouping={rowField}
               onChangeGrouping={(next) =>
                 patchSearch({
-                  group: !next ? "none" : next === "label" ? "label" : "folder",
+                  group: next ? (next === "label" ? "label" : "folder") : "none",
                 })
               }
               trackChanges={trackChanges}
@@ -570,7 +570,7 @@ export function WorkspaceBoardPage({
               group={rowField}
               onChangeGroup={(next) =>
                 patchSearch({
-                  group: !next ? "none" : next === "label" ? "label" : "folder",
+                  group: next ? (next === "label" ? "label" : "folder") : "none",
                 })
               }
             />
@@ -606,9 +606,7 @@ export function WorkspaceBoardPage({
         <p className="border-b bg-destructive/10 px-3 py-1 text-xs text-red-700">{actionError}</p>
       )}
       <DeletedTasksStrip deletedChanges={deletedChanges} onRestore={board.revertTask} />
-      {!board.ready ? (
-        <p className="p-6 text-sm text-muted-foreground">Loading workspace…</p>
-      ) : (
+      {board.ready ? (
         <Board
           projection={projection}
           taskChangeByPath={board.changes}
@@ -617,6 +615,8 @@ export function WorkspaceBoardPage({
           onAdd={addTask}
           onOpen={(path) => patchSearch({ task: path })}
         />
+      ) : (
+        <p className="p-6 text-sm text-muted-foreground">Loading workspace…</p>
       )}
       <StreamEventsSheet
         open={eventsOpen}
@@ -630,7 +630,7 @@ export function WorkspaceBoardPage({
         guest={guest}
         columns={columns}
         allTags={allTags}
-        changeStatus={!openTask ? undefined : board.changes.get(openTask.path)}
+        changeStatus={openTask ? board.changes.get(openTask.path) : undefined}
         onLiveContent={board.reflectLiveContent}
         onChangeState={(state) => {
           if (openTask) void mutateTask(openTask, (current) => setTaskCardState(current, state));
@@ -638,15 +638,13 @@ export function WorkspaceBoardPage({
         onChangeLabels={(labels) => {
           if (openTask) void mutateTask(openTask, (current) => setTaskCardLabels(current, labels));
         }}
-        onRename={(nextPath) =>
-          !openTask ? Promise.resolve(null) : renameTask(openTask, nextPath)
-        }
+        onRename={(nextPath) => (openTask ? renameTask(openTask, nextPath) : Promise.resolve(null))}
         editorEpoch={editorEpoch}
         redline={trackChanges}
         editorApiRef={editorApiRef}
         commentIdentity={commentIdentity}
         onApplyTransform={(transform) =>
-          !openTask ? Promise.resolve(false) : mutateTask(openTask, transform)
+          openTask ? mutateTask(openTask, transform) : Promise.resolve(false)
         }
         onAssignAgent={
           guest
@@ -673,7 +671,7 @@ export function WorkspaceBoardPage({
         liveSource={() => {
           // Read the ref AT CALL TIME — it fills after mount without a
           // re-render, so a render-time conditional would miss it.
-          return !openTask ? null : (liveApi(openTask.path)?.source() ?? null);
+          return openTask ? (liveApi(openTask.path)?.source() ?? null) : null;
         }}
         onRevert={() => {
           if (!openTask) return;
@@ -698,9 +696,9 @@ export function WorkspaceBoardPage({
           // title — the rename runs now, with nothing mounted to flash, never
           // under the open editor. Reopening is an ordinary open.
           const path = draftPathRef.current;
-          const api = !path ? null : liveApi(path);
+          const api = path ? liveApi(path) : null;
           const liveSource = api?.source() ?? null;
-          const flushed = !api ? Promise.resolve() : api.flushPending().catch(() => {});
+          const flushed = api ? api.flushPending().catch(() => {}) : Promise.resolve();
           setDraftPath(null);
           draftFocusRef.current = undefined;
           patchSearch({ task: "" });

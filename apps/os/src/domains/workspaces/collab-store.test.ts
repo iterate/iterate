@@ -203,7 +203,7 @@ describe.each(implementations)("putSnapshot lifecycle (%s)", (_name, makeStore) 
   });
 });
 
-(!sqlite ? describe.skip : describe)("sqlite schema migration", () => {
+(sqlite ? describe : describe.skip)("sqlite schema migration", () => {
   test("append works on a database born with the pre-created_at schema", async () => {
     const storage = nodeSqliteStorage();
     storage.sql.exec(

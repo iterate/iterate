@@ -264,7 +264,7 @@ test.for([
       config,
       // The row-union's phantom `key?: undefined` members (absent at runtime)
       // are not assignable to HeadersInit, hence the double cast.
-      ...(!headers ? {} : { headers: headers as unknown as Record<string, string> }),
+      ...(headers && { headers: headers as unknown as Record<string, string> }),
       method: method ?? "GET",
       resolvers,
       url,

@@ -207,7 +207,7 @@ function harness(input?: {
   });
   const getEvents = vi.fn(async (path: string) => {
     const birth = births.get(path);
-    return !birth ? [] : [birth];
+    return birth ? [birth] : [];
   });
   const subscribeToEventsFrom = vi.fn(async (_path: string, _args: unknown) => ({
     inbound: {},
@@ -223,7 +223,7 @@ function harness(input?: {
     },
   }));
   const routes = input?.routes ?? {
-    "/repos/config": !input?.route ? route : input.route,
+    "/repos/config": input?.route ? input.route : route,
   };
   const availableRuleFiles = input?.ruleFiles || ruleFiles;
   const repoList = vi.fn(async () => Object.keys(routes).map((path) => ({ path })));
@@ -231,7 +231,7 @@ function harness(input?: {
     listFiles: async () => ({ commitOid: "rules-abc", paths: Object.keys(availableRuleFiles) }),
     readFile: async ({ path: filePath }: { path: string }) => {
       const content = availableRuleFiles[filePath];
-      return !content ? null : { commitOid: "rules-abc", content, path: filePath };
+      return content ? { commitOid: "rules-abc", content, path: filePath } : null;
     },
     processor: {
       snapshot: async () => ({ offset: 1, state: { github: routes[path] ?? null } }),

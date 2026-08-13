@@ -157,7 +157,7 @@ export function plainAlarmInvocationInfo(
   // but present at runtime (and in apps/os's patched types) — carry it through.
   const { scheduledTime } = info as { scheduledTime?: number };
   return {
-    ...(!Number.isFinite(scheduledTime) ? {} : { scheduledTime }),
+    ...(Number.isFinite(scheduledTime) && { scheduledTime }),
     isRetry: info.isRetry,
     retryCount: info.retryCount,
   } as AlarmInvocationInfo;
@@ -389,8 +389,8 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
           path: identity.path,
           projectId: identity.projectId,
           version: host.version,
-          ...(!host.now ? {} : { now: host.now }),
-          ...(!host.getLiveState ? {} : { getLiveState: host.getLiveState }),
+          ...(host.now && { now: host.now }),
+          ...(host.getLiveState && { getLiveState: host.getLiveState }),
         },
       );
       host.registerProcessors(registry);

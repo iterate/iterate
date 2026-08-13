@@ -81,7 +81,7 @@ export function FeedItem(props: { item: AgentUiItem }) {
   if (item.kind === "processor-revived") {
     return (
       <text fg={COLORS.textMuted}>
-        ✦ {!item.processorSlug ? "processor" : `${item.processorSlug} processor`} revived
+        ✦ {item.processorSlug ? `${item.processorSlug} processor` : "processor"} revived
       </text>
     );
   }

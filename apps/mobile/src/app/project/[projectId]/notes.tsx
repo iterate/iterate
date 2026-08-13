@@ -226,7 +226,7 @@ function NoteRow({
       cache.setQueriesData(
         { queryKey: ["note-files"] },
         (files: Record<string, string | null> | undefined) =>
-          !files ? files : { ...files, [item.path]: null },
+          files ? { ...files, [item.path]: null } : files,
       );
     },
   });

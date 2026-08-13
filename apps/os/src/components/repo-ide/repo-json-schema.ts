@@ -219,7 +219,7 @@ export function useRepoFileJsonSchema(input: {
 }): RepoFileJsonSchema {
   const { path, language, content } = input;
   const url = useMemo(
-    () => (!language ? null : repoFileSchemaUrl({ path, language, content })),
+    () => (language ? repoFileSchemaUrl({ path, language, content }) : null),
     [path, language, content],
   );
 
@@ -241,7 +241,7 @@ export function useRepoFileJsonSchema(input: {
       return { url };
     },
   });
-  const settledUrl = !settledUrlQuery.data ? null : settledUrlQuery.data.url;
+  const settledUrl = settledUrlQuery.data ? settledUrlQuery.data.url : null;
 
   // Errored entries don't poison the infinite-staleTime cache: staleTime
   // governs *data* freshness, and an errored query has none — react-query

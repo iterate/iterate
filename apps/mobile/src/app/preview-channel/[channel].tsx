@@ -237,12 +237,7 @@ export default function PreviewChannelScreen() {
             OTA updates don't run in dev bundles — can't pull the channel's latest here.
           </Text>
         )
-      ) : !Updates.isEnabled ? (
-        <Text style={styles.note}>
-          OTA updates are off in this bundle (Metro dev server) — channel switching only works in
-          installed builds.
-        </Text>
-      ) : (
+      ) : Updates.isEnabled ? (
         <>
           <Pressable
             accessibilityRole="button"
@@ -261,6 +256,11 @@ export default function PreviewChannelScreen() {
             and test sign-in, if it names them.
           </Text>
         </>
+      ) : (
+        <Text style={styles.note}>
+          OTA updates are off in this bundle (Metro dev server) — channel switching only works in
+          installed builds.
+        </Text>
       )}
       {switchChannel.data === "no-update" ? (
         <Text style={styles.note}>

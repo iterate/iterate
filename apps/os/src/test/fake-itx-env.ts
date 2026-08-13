@@ -100,9 +100,9 @@ export function createFakeItxEnv(options?: {
     appendBatches.push({ name, types: inputs.map((input) => input.type) });
     return inputs.map((input) => {
       options?.onAppend?.({ event: input, name });
-      const existing = !input.idempotencyKey
-        ? undefined
-        : stored.find((event) => event.idempotencyKey === input.idempotencyKey);
+      const existing = input.idempotencyKey
+        ? stored.find((event) => event.idempotencyKey === input.idempotencyKey)
+        : undefined;
       if (existing) return existing;
       const event: FakeStreamEvent = {
         ...input,
@@ -200,7 +200,7 @@ export function createFakeItxEnv(options?: {
                 : appendStored(name, [
                     {
                       type: "events.iterate.com/stream/subscription-configured",
-                      ...(!input.idempotencyKey ? {} : { idempotencyKey: input.idempotencyKey }),
+                      ...(input.idempotencyKey && { idempotencyKey: input.idempotencyKey }),
                       payload: configuration,
                     },
                   ])[0]!;

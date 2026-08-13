@@ -32,9 +32,7 @@ function TodoList({ slug }: { slug: string }) {
         <Link to="/">← lists</Link>
       </p>
       <h1>{slug}</h1>
-      {!todos ? (
-        <p>connecting…</p>
-      ) : (
+      {todos ? (
         <ul style={{ listStyle: "none", padding: 0 }}>
           {todos.map((todo) => (
             <li key={todo.id} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
@@ -64,6 +62,8 @@ function TodoList({ slug }: { slug: string }) {
             </li>
           ))}
         </ul>
+      ) : (
+        <p>connecting…</p>
       )}
       <form
         onSubmit={(event) => {

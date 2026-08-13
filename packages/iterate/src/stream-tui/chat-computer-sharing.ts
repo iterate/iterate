@@ -110,7 +110,7 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
         if (exitIsExplained) return;
         publish({
           status: "error",
-          notice: `itx.${input.name} stopped unexpectedly (exit ${!Number.isFinite(exitCode) ? "unknown" : exitCode})`,
+          notice: `itx.${input.name} stopped unexpectedly (exit ${Number.isFinite(exitCode) ? exitCode : "unknown"})`,
         });
       };
       launched.on("error", (error) => {

@@ -43,23 +43,25 @@ function ProjectSettingsPage() {
   const panel = (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 p-4 md:p-8">
-        {!lifecycle.value ? (
+        {lifecycle.value ? (
+          lifecycle.value.birthCertificate ? (
+            <>
+              <ProjectSettingsPanel project={project} routeConfig={routeConfig} />
+              <ProjectCustomDomainsSettings
+                projectId={project.id}
+                projectState={lifecycle.value}
+                routeConfig={routeConfig}
+              />
+            </>
+          ) : (
+            // Same gate as project home: a not-yet-created project shows the
+            // bootstrap checklist, never live settings forms.
+            <ProjectCreationProgress state={lifecycle.value} />
+          )
+        ) : (
           <p className="text-sm text-muted-foreground" data-spinner="true">
             Loading project…
           </p>
-        ) : !lifecycle.value.birthCertificate ? (
-          // Same gate as project home: a not-yet-created project shows the
-          // bootstrap checklist, never live settings forms.
-          <ProjectCreationProgress state={lifecycle.value} />
-        ) : (
-          <>
-            <ProjectSettingsPanel project={project} routeConfig={routeConfig} />
-            <ProjectCustomDomainsSettings
-              projectId={project.id}
-              projectState={lifecycle.value}
-              routeConfig={routeConfig}
-            />
-          </>
         )}
       </div>
     </div>

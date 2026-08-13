@@ -235,9 +235,8 @@ function projectEnv(
                   maxOffset: fixture?.maxOffset ?? 0,
                   subscriptions: {
                     outbound: {
-                      byName: !Number.isFinite(existingReviewBotCutoff)
-                        ? {}
-                        : {
+                      byName: Number.isFinite(existingReviewBotCutoff)
+                        ? {
                             "review-bot": {
                               configuration: {
                                 filter: {
@@ -245,7 +244,8 @@ function projectEnv(
                                 },
                               },
                             },
-                          },
+                          }
+                        : {},
                     },
                   },
                 },

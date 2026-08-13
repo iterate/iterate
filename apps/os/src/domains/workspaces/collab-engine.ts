@@ -358,7 +358,7 @@ export class CollabEngine {
     if (epoch !== file.epoch || afterVersion < floor) {
       return {
         snapshot: {
-          ackedSeq: !clientId ? -1 : (file.clientSeqs.get(clientId) ?? -1),
+          ackedSeq: clientId ? (file.clientSeqs.get(clientId) ?? -1) : -1,
           content: file.doc.toString(),
           epoch: file.epoch,
           version: file.version,

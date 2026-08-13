@@ -107,10 +107,10 @@ function makeHostHarness(
         itx: {} as Project,
         reads: deps.reads,
         scriptExecutionEntrypoint: { run: (code, options) => worker.run(code, options) },
-        ...(!args.typecheckScript ? {} : { typecheckScript: args.typecheckScript }),
+        ...(args.typecheckScript && { typecheckScript: args.typecheckScript }),
       }),
     path: "/capability-host-test",
-    ...(!args.substrate ? {} : { substrate: args.substrate }),
+    ...(args.substrate && { substrate: args.substrate }),
   });
   return { ...harness, worker };
 }

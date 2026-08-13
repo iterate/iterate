@@ -80,5 +80,5 @@ export function serializeScriptResult(result: unknown): JsonValue | undefined {
    * `JSON.stringify(undefined)` is itself undefined — reachable when a script
    * returns something that serializes away, such as a bare function.
    */
-  return !json ? undefined : (JSON.parse(json) as JsonValue);
+  return json ? (JSON.parse(json) as JsonValue) : undefined;
 }

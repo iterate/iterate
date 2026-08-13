@@ -79,7 +79,7 @@ function ProjectSandboxDetailContent() {
     return (
       <div
         className="rounded-lg border p-4 text-sm text-muted-foreground"
-        data-spinner={!sandboxState.error ? "true" : undefined}
+        data-spinner={sandboxState.error ? undefined : "true"}
       >
         {sandboxState.error ?? "Loading sandbox…"}
       </div>
@@ -317,20 +317,20 @@ function SandboxSshInstructions({
   state: SandboxProcessorState;
 }) {
   const instanceType = state.birthCertificate?.config.instanceType;
-  const containerClass = !instanceType
-    ? "Sandbox<Type>DurableObject"
-    : SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className;
+  const containerClass = instanceType
+    ? SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className
+    : "Sandbox<Type>DurableObject";
   const durableObjectName = DurableObjectNameCodec.stringify({ path: sandboxPath, projectId });
   const workerName = routeConfig.cloudflareWorkerName ?? "os";
   const dopplerConfig = inferOsDopplerConfigForWorkerName(workerName);
   const dashboardTargetQuery = useQuery({
     queryKey: ["cloudflare-container-dashboard-target", projectId, sandboxPath, instanceType],
     queryFn: () =>
-      !instanceType
-        ? null
-        : getCloudflareContainerDashboardTarget({
+      instanceType
+        ? getCloudflareContainerDashboardTarget({
             data: { instanceType, projectId, sandboxPath },
-          }),
+          })
+        : null,
     enabled: !!instanceType,
     retry: 1,
     staleTime: Infinity,
@@ -391,18 +391,18 @@ function SandboxSshInstructions({
           disabled={!dashboardUrl}
           title={dashboardTitle}
           render={
-            !dashboardUrl ? undefined : (
+            dashboardUrl ? (
               <a
                 href={dashboardUrl}
                 target="_blank"
                 rel="noreferrer"
                 aria-label="Open this sandbox's Cloudflare container page"
               />
-            )
+            ) : undefined
           }
         >
           <ExternalLinkIcon data-icon="inline-start" />
-          {!dashboardTarget ? "Containers" : "Container page"}
+          {dashboardTarget ? "Container page" : "Containers"}
         </Button>
       </div>
 

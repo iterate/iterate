@@ -70,7 +70,7 @@ function parseFrame(data: unknown): unknown {
           : data instanceof ArrayBuffer
             ? Buffer.from(data).toString("utf8")
             : undefined;
-  return !text ? data : JSON.parse(text);
+  return text ? JSON.parse(text) : data;
 }
 
 function createSocket(
@@ -149,7 +149,7 @@ export async function connectItxReady(
   CapnRpcStub<Agent> | CapnRpcStub<Project> | CapnRpcStub<Session> | CapnRpcStub<UnauthenticatedOs>
 > {
   const retryOptions = options.retryInitialConnection;
-  const delayMs = !retryOptions ? 0 : initialRetryDelay(retryOptions.delayMs);
+  const delayMs = retryOptions ? initialRetryDelay(retryOptions.delayMs) : 0;
 
   for (const attempt of [1, 2] as const) {
     const startedAt = new Date();

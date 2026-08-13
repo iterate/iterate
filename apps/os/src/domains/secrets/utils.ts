@@ -132,7 +132,7 @@ function collectSecretReferences(byKey: Map<string, SecretReference>, value: str
     for (const match of candidate.matchAll(SECRET_REFERENCE)) {
       const path = normalizeSecretPath(match[1]!);
       const field = match[2];
-      byKey.set(`${path} ${field ?? ""}`, !field ? { path } : { field, path });
+      byKey.set(`${path} ${field ?? ""}`, field ? { field, path } : { path });
     }
   }
 }
@@ -143,7 +143,7 @@ function collectJsonSecretReferences(byKey: Map<string, SecretReference>, value:
     if (!match) return;
     const path = normalizeSecretPath(match[1]!);
     const field = match[2];
-    byKey.set(`${path} ${field || ""}`, !field ? { path } : { field, path });
+    byKey.set(`${path} ${field || ""}`, field ? { field, path } : { path });
     return;
   }
   if (Array.isArray(value)) {
@@ -164,7 +164,7 @@ function collectJsonSecretReferences(byKey: Map<string, SecretReference>, value:
  */
 function headerValuesForSecretScan(value: string): string[] {
   const decoded = decodeBasicAuthorizationCredential(value);
-  return !decoded ? [value] : [value, decoded.credential];
+  return decoded ? [value, decoded.credential] : [value];
 }
 
 /**
@@ -197,7 +197,7 @@ function substituteSecretPlaceholdersInText(
 ): string {
   return value.replaceAll(SECRET_REFERENCE, (_match, path: string, field: string | undefined) =>
     resolve(
-      !field ? { path: normalizeSecretPath(path) } : { field, path: normalizeSecretPath(path) },
+      field ? { field, path: normalizeSecretPath(path) } : { path: normalizeSecretPath(path) },
     ),
   );
 }
@@ -387,7 +387,7 @@ export async function substituteSecretRequest(
     (_match, path: string, field: string | undefined) => {
       pathHasPlaceholder = true;
       return resolve(
-        !field ? { path: normalizeSecretPath(path) } : { field, path: normalizeSecretPath(path) },
+        field ? { field, path: normalizeSecretPath(path) } : { path: normalizeSecretPath(path) },
       );
     },
   );
@@ -449,7 +449,7 @@ function substituteSecretJsonValues(
     if (!match) return value;
     const path = normalizeSecretPath(match[1]!);
     const field = match[2];
-    return resolve(!field ? { path } : { field, path });
+    return resolve(field ? { field, path } : { path });
   }
   if (Array.isArray(value)) return value.map((item) => substituteSecretJsonValues(item, resolve));
   if (typeof value !== "object" || !value) return value;
@@ -556,7 +556,7 @@ export class SecretSubstitutionError extends Error {
   readonly code: SecretErrorCode;
 
   constructor(code: SecretErrorCode, detail?: string) {
-    super(!detail ? code : `${code}: ${detail}`);
+    super(detail ? `${code}: ${detail}` : code);
     this.code = code;
     this.name = "SecretSubstitutionError";
   }

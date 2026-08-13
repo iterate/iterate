@@ -99,7 +99,7 @@ export function compileJsonataExpression(expression: string): jsonata.Expression
       typeof parserError?.message === "string" && parserError.message.length
         ? parserError.message
         : String(error);
-    const coordinates = [code, !Number.isFinite(position) ? undefined : `position ${position}`]
+    const coordinates = [code, Number.isFinite(position) ? `position ${position}` : undefined]
       .filter((value) => !!value)
       .join(", ");
     throw new Error(
@@ -149,8 +149,8 @@ export function applyJsonataTransform(
     return {
       ...event,
       type: produced.type ?? event.type,
-      ...(!produced.payload ? {} : { payload: produced.payload }),
-      ...(!produced.metadata ? {} : { metadata: produced.metadata }),
+      ...(produced.payload && { payload: produced.payload }),
+      ...(produced.metadata && { metadata: produced.metadata }),
     };
   } catch (error) {
     throw new Error(
@@ -169,9 +169,9 @@ export function applyJsonataTransform(
 export function compileEventFilter(filter: EventFilter | undefined): CompiledEventFilter {
   const eventTypes =
     !filter?.eventTypes || filter.eventTypes.includes("*") ? undefined : new Set(filter.eventTypes);
-  const condition = !filter?.jsonataCondition
-    ? undefined
-    : compileJsonataExpression(filter.jsonataCondition);
+  const condition = filter?.jsonataCondition
+    ? compileJsonataExpression(filter.jsonataCondition)
+    : undefined;
 
   return {
     matches(event) {

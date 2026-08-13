@@ -45,7 +45,7 @@ function inferShape(value: unknown, depth: number): Shape {
     let element: Shape | null = null;
     for (const item of value) {
       const itemShape = inferShape(item, depth + 1);
-      element = !element ? itemShape : mergeShapes(element, itemShape);
+      element = element ? mergeShapes(element, itemShape) : itemShape;
     }
     return { kind: "array", element, minLength: value.length, maxLength: value.length };
   }
@@ -72,7 +72,7 @@ function maybeRecord(shape: Extract<Shape, { kind: "object" }>, keyCount: number
   if (keyCount < RECORD_KEY_THRESHOLD) return shape;
   let merged: Shape | null = null;
   for (const field of shape.fields.values()) {
-    merged = !merged ? field.shape : mergeShapes(merged, field.shape);
+    merged = merged ? mergeShapes(merged, field.shape) : field.shape;
     if (merged.kind === "unknown") return shape;
     // A union of struct-ish shapes means the values genuinely differ — keep
     // the object rendering (the char budget will trim it if oversized).
@@ -95,11 +95,11 @@ function mergeShapes(a: Shape, b: Shape): Shape {
       return { kind: "string", distinct, maxLength: Math.max(a.maxLength, b.maxLength) };
     }
     if (a.kind === "array" && b.kind === "array") {
-      const element = !a.element
+      const element = a.element
         ? b.element
-        : !b.element
-          ? a.element
-          : mergeShapes(a.element, b.element);
+          ? mergeShapes(a.element, b.element)
+          : a.element
+        : b.element;
       return {
         kind: "array",
         element,
@@ -113,12 +113,12 @@ function mergeShapes(a: Shape, b: Shape): Shape {
         const existing = fields.get(key);
         fields.set(
           key,
-          !existing
-            ? incoming
-            : {
+          existing
+            ? {
                 shape: mergeShapes(existing.shape, incoming.shape),
                 seen: existing.seen + incoming.seen,
-              },
+              }
+            : incoming,
         );
       }
       return { kind: "object", fields, samples: a.samples + b.samples };

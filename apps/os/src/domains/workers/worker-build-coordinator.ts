@@ -35,7 +35,7 @@ function describeWorkerBuildSource(source: WorkerBuildRequest["source"]): string
   }
   const { client, server } = source.createApp;
   const entries = [
-    ...(!server ? [] : [`server=${server}`]),
+    ...(server ? [`server=${server}`] : []),
     ...(typeof client === "string" ? [client] : (client ?? [])).map((entry) => `client=${entry}`),
   ];
   return `createApp:${entries.join(",") || "(default entry)"}`;
@@ -146,8 +146,8 @@ export class WorkerBuildCoordinator {
       buildKey: flight.buildKey,
       ...(kind === "settled" && { durationMs: this.#now() - flight.startedAt }),
       kind,
-      ...(!outcome ? {} : { outcome }),
-      ...(!sizes ? {} : { sizes }),
+      ...(outcome && { outcome }),
+      ...(sizes && { sizes }),
       source: flight.source,
       waiters: flight.waiters.size,
     });

@@ -129,13 +129,13 @@ export class EmailAgentProcessor extends StreamProcessor<
               idempotencyKey: this.idempotencyKey("received-to-agent-context", event),
               payload: {
                 role: "developer",
-                content: !attachmentFailureNote
-                  ? inboundEmailAgentInput(event.payload)
-                  : `${inboundEmailAgentInput(event.payload)}\n\n${attachmentFailureNote}`,
+                content: attachmentFailureNote
+                  ? `${inboundEmailAgentInput(event.payload)}\n\n${attachmentFailureNote}`
+                  : inboundEmailAgentInput(event.payload),
                 actor: {
                   type: "email" as const,
-                  ...(!fromAddress ? {} : { address: fromAddress }),
-                  ...(!fromName ? {} : { name: fromName }),
+                  ...(fromAddress && { address: fromAddress }),
+                  ...(fromName && { name: fromName }),
                 },
                 refs: [
                   {
@@ -186,18 +186,18 @@ export class EmailAgentProcessor extends StreamProcessor<
           ...state,
           birthCertificate: event.payload,
           threadId: event.payload.config.threadId,
-          ...(!event.payload.config.counterpart
-            ? {}
-            : { counterpart: event.payload.config.counterpart }),
-          ...(!event.payload.config.subject ? {} : { subject: event.payload.config.subject }),
+          ...(event.payload.config.counterpart && {
+            counterpart: event.payload.config.counterpart,
+          }),
+          ...(event.payload.config.subject && { subject: event.payload.config.subject }),
         };
       case "events.iterate.com/email/thread-route-configured":
         return {
           ...state,
           threadId: event.payload.threadId,
           streamPath: event.payload.streamPath,
-          ...(!event.payload.counterpart ? {} : { counterpart: event.payload.counterpart }),
-          ...(!event.payload.subject ? {} : { subject: event.payload.subject }),
+          ...(event.payload.counterpart && { counterpart: event.payload.counterpart }),
+          ...(event.payload.subject && { subject: event.payload.subject }),
         };
       case "events.iterate.com/email/received": {
         // Neither our own looped-back mail nor automated mail (bounces,
@@ -206,8 +206,8 @@ export class EmailAgentProcessor extends StreamProcessor<
         const counterpart = emailCounterpart(event.payload);
         return {
           ...state,
-          ...(!counterpart ? {} : { counterpart }),
-          ...(!event.payload.message.subject ? {} : { subject: event.payload.message.subject }),
+          ...(counterpart && { counterpart }),
+          ...(event.payload.message.subject && { subject: event.payload.message.subject }),
         };
       }
       default:
@@ -258,8 +258,8 @@ function refreshedThreadBinding(input: {
   return {
     type: "email_thread",
     threadId: state.threadId,
-    ...(!subject ? {} : { subject }),
-    ...(!counterpart ? {} : { counterpart }),
+    ...(subject && { subject }),
+    ...(counterpart && { counterpart }),
   };
 }
 
@@ -273,15 +273,15 @@ function inboundEmailAgentInput(payload: InboundEmailPayload): string {
   const attachments = message.attachments.map((attachment) => ({
     filename: attachment.filename ?? null,
     mimeType: attachment.mimeType ?? null,
-    ...(!Number.isFinite(attachment.size) ? {} : { size: attachment.size }),
-    ...(!attachment.path ? {} : { path: attachment.path }),
+    ...(Number.isFinite(attachment.size) && { size: attachment.size }),
+    ...(attachment.path && { path: attachment.path }),
   }));
   const transcript = {
     from: { address: message.from.address ?? payload.envelope.from, name: message.from.name },
-    ...(!message.replyToAddress ? {} : { replyTo: message.replyToAddress }),
+    ...(message.replyToAddress && { replyTo: message.replyToAddress }),
     subject: message.subject ?? "",
-    ...(!message.messageId ? {} : { messageId: message.messageId }),
-    ...(!message.text ? {} : { text: message.text }),
+    ...(message.messageId && { messageId: message.messageId }),
+    ...(message.text && { text: message.text }),
     ...(!message.text && !!message.html && { html: message.html }),
     ...(attachments.length === 0 ? {} : { attachments }),
     ...(payload.automated && { automated: true }),

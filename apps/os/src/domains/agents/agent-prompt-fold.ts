@@ -43,9 +43,9 @@ export function reduceAgentEvent(input: {
   const runtime: AgentRuntime = deriveAgentRuntime(state, "agent/system-prompt");
   // Genesis zero stays absent. Every later count change is significant,
   // including changes which retain the same compact display state.
-  const changed = !state.runtimeChange
-    ? !isAgentRuntimeZero(runtime)
-    : !agentRuntimesEqual(state.runtimeChange.runtime, runtime);
+  const changed = state.runtimeChange
+    ? !agentRuntimesEqual(state.runtimeChange.runtime, runtime)
+    : !isAgentRuntimeZero(runtime);
   if (!changed) return state;
   return {
     ...state,
@@ -216,7 +216,7 @@ function reduceAgentEventCore(input: {
         update: event.payload,
         atOffset: event.offset,
       });
-      return !projection ? state : { ...state, ...projection };
+      return projection ? { ...state, ...projection } : state;
     }
     case "events.iterate.com/agent/paused":
       // The breaker consequence is appended in the background. If external
@@ -236,7 +236,7 @@ function reduceAgentEventCore(input: {
       return {
         ...state,
         paused: {
-          ...(!event.payload.reason ? {} : { reason: event.payload.reason }),
+          ...(event.payload.reason && { reason: event.payload.reason }),
           atOffset: event.offset,
         },
         pendingLlmRequestTrigger:
@@ -258,13 +258,13 @@ function reduceAgentEventCore(input: {
         // resume time instead of a possibly long-stale trigger time (a
         // pause longer than llmRequestExpiryMs would otherwise open a
         // request that instantly settles expired).
-        pendingLlmRequestTrigger: !state.pendingLlmRequestTrigger
-          ? null
-          : {
+        pendingLlmRequestTrigger: state.pendingLlmRequestTrigger
+          ? {
               offset: event.offset,
               atMs: Date.parse(event.createdAt),
               source: state.pendingLlmRequestTrigger.source,
-            },
+            }
+          : null,
       };
     case "events.iterate.com/capability-host/script-run-requested": {
       const source = event.source?.processor;
@@ -346,7 +346,7 @@ function contextTriggerSource(payload: AgentContextAddedPayload): "external" | "
     // event handler appends the script request from the SAME pure resolver)
     // — the model's turn comes later, driven by the script result's context
     // append.
-    return !resolveSlashCommand(payload.content) ? "external" : null;
+    return resolveSlashCommand(payload.content) ? null : "external";
   }
   const actorType = payload.actor?.type;
   return !actorType || actorType === "agent" || actorType === "script" ? "agent-loop" : "external";
@@ -450,16 +450,16 @@ export function buildAgentLlmRequestBody(input: {
     messages: [
       { role: "system", content: AGENT_CONTEXT_PROTOCOL_PROMPT },
       ...state.contextItems.map(renderProjectedContextItem),
-      ...(!requestedAt
-        ? []
-        : [
+      ...(requestedAt
+        ? [
             {
               // as const: in the array literal the role would widen to
               // string and fall out of AgentChatMessage's role union.
               role: "developer" as const,
               content: `Current date and time (UTC): ${requestedAt}`,
             },
-          ]),
+          ]
+        : []),
     ],
   };
 }
@@ -471,8 +471,8 @@ function renderProjectedContextItem(
   const actor = payload.actor;
   const fields = [
     `@${item.offset}`,
-    ...(!payload.key ? [] : [`key=${JSON.stringify(payload.key)}`]),
-    ...(!actor ? [] : [`actor=${renderContextActor(actor)}`]),
+    ...(payload.key ? [`key=${JSON.stringify(payload.key)}`] : []),
+    ...(actor ? [`actor=${renderContextActor(actor)}`] : []),
     ...(!payload.refs || payload.refs.length === 0
       ? []
       : [`refs=[${payload.refs.map(renderContextRef).join(",")}]`]),

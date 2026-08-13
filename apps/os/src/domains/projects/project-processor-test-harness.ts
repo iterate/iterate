@@ -186,7 +186,7 @@ export function makeProjectHarness(
   const Processor = options.processorClass ?? ProjectProcessor;
   const harness = makeProcessorHarness<ProjectProcessorContract>({
     path: "/",
-    ...(!options.substrate ? {} : { substrate: options.substrate }),
+    ...(options.substrate && { substrate: options.substrate }),
     createProcessor: (deps) =>
       new Processor({
         ...deps,

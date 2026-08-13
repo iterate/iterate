@@ -461,14 +461,12 @@ export class ProjectProcessor extends StreamProcessor<
           ...repoCreationEvents({
             path: CONFIG_REPO_PATH,
             projectId: this.deps.itx.projectId,
-            ...(!config.configRepoTemplate
-              ? {}
-              : {
-                  payload: {
-                    type: "github-public-template",
-                    ...parseConfigRepoTemplateReference(config.configRepoTemplate),
-                  },
-                }),
+            ...(config.configRepoTemplate && {
+              payload: {
+                type: "github-public-template",
+                ...parseConfigRepoTemplateReference(config.configRepoTemplate),
+              },
+            }),
           }),
           {
             type: "events.iterate.com/stream/subscription-configured",
@@ -499,7 +497,7 @@ export class ProjectProcessor extends StreamProcessor<
         appendTo(
           EMAIL_INTEGRATION_STREAM_PATH,
           ...emailRouterCreationEvents({
-            ...(!config.creatorEmail ? {} : { initialSender: config.creatorEmail }),
+            ...(config.creatorEmail && { initialSender: config.creatorEmail }),
             projectId: this.deps.itx.projectId,
           }),
         ),
@@ -708,9 +706,9 @@ export class ProjectProcessor extends StreamProcessor<
               path: source.path,
               connected: true,
               lastConnectedAt: source.createdAt,
-              ...(!previous?.lastDisconnectedAt
-                ? {}
-                : { lastDisconnectedAt: previous.lastDisconnectedAt }),
+              ...(previous?.lastDisconnectedAt && {
+                lastDisconnectedAt: previous.lastDisconnectedAt,
+              }),
               connectedAtOffsets,
             },
           },
@@ -791,9 +789,9 @@ export class ProjectProcessor extends StreamProcessor<
   }
 
   #sleep(ms: number): Promise<void> {
-    return !this.deps.sleep
-      ? new Promise((resolve) => setTimeout(resolve, ms))
-      : this.deps.sleep(ms);
+    return this.deps.sleep
+      ? this.deps.sleep(ms)
+      : new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
 

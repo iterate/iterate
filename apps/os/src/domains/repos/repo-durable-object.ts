@@ -343,7 +343,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       exclude: input.exclude,
       include: input.include,
     });
-    const wanted = !input.paths ? null : new Set(input.paths);
+    const wanted = input.paths ? new Set(input.paths) : null;
     const files: Record<string, string> = {};
     for (const path of selected) {
       if (wanted && !wanted.has(path)) continue;
@@ -1146,7 +1146,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // in a filename must not change what this reads.
     const { commitOid, files } = await this.getFilesSnapshot({ commitOid: input.commitOid });
     const content = files[path];
-    return !content ? null : { commitOid, content, path };
+    return content ? { commitOid, content, path } : null;
   }
 
   /** All committed file paths at HEAD (served from the lazy snapshot's manifest). */
@@ -1419,9 +1419,9 @@ export class RepoDurableObject extends DurableObject<Env> {
     }
     let transferDepth = input.depth;
     if (input.force !== true) {
-      const comparison = !previousCommitOid
-        ? { aheadBy: 0, status: "unrelated" }
-        : await this.#githubCompareStatus({ base: previousCommitOid, branch, link, token });
+      const comparison = previousCommitOid
+        ? await this.#githubCompareStatus({ base: previousCommitOid, branch, link, token })
+        : { aheadBy: 0, status: "unrelated" };
       if (comparison.status !== "ahead") {
         throw new Error(
           `syncFromGithub is not a fast-forward (GitHub says "${comparison.status}" relative to this repo's head ${previousCommitOid ?? "(none)"}). Pass force: true to discard local-only history and adopt GitHub's head.`,
@@ -1613,7 +1613,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     try {
       await git.clone({
         branch: args.branch,
-        ...(!Number.isFinite(args.depth) ? {} : { depth: args.depth }),
+        ...(Number.isFinite(args.depth) && { depth: args.depth }),
         noCheckout: true,
         singleBranch: true,
         url: githubRemoteUrl(args.link),
@@ -1780,7 +1780,7 @@ export class RepoDurableObject extends DurableObject<Env> {
         this.requireArtifacts(),
         {
           branch: REPO_DEFAULT_BRANCH,
-          ...(!Number.isFinite(input.depth) ? {} : { depth: input.depth }),
+          ...(Number.isFinite(input.depth) && { depth: input.depth }),
           name: artifactName,
           owner: input.owner,
           repo: input.repo,

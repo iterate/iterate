@@ -289,7 +289,7 @@ function RenderNode({ ctx, node }: { ctx: RenderContext; node: RootContent }): R
           renderChildren(ctx, node)
         );
       return (
-        <li {...blockAttrs(node)} data-task={!checkbox ? undefined : ""}>
+        <li {...blockAttrs(node)} data-task={checkbox ? "" : undefined}>
           {checkbox}
           {taskContent}
         </li>

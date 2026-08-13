@@ -174,7 +174,7 @@ export function deriveNotificationListRows(
 ): NotificationListRow[] {
   const journaled = new Set(
     deviceRows.flatMap((row) =>
-      !Number.isFinite(row.approvalRequestEventOffset) ? [] : [row.approvalRequestEventOffset],
+      Number.isFinite(row.approvalRequestEventOffset) ? [row.approvalRequestEventOffset] : [],
     ),
   );
   const requestedAtByOffset = new Map(

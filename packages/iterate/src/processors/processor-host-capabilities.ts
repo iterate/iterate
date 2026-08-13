@@ -90,7 +90,7 @@ export function announceContract(contract: {
     emits: [...contract.emits],
     ownedEvents: Object.entries(contract.events).map(([type, definition]) => ({
       type,
-      ...(!definition.description ? {} : { description: definition.description }),
+      ...(definition.description && { description: definition.description }),
     })),
   };
 }

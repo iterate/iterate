@@ -87,10 +87,10 @@ export function diffFileMaps(
     const counts = binary
       ? { additions: 0, deletions: 0 }
       : computeLineDiffStats(
-          !oldBytes ? "" : decoder.decode(oldBytes),
-          !newBytes ? "" : decoder.decode(newBytes),
+          oldBytes ? decoder.decode(oldBytes) : "",
+          newBytes ? decoder.decode(newBytes) : "",
         );
-    const status = !oldBytes ? "added" : !newBytes ? "deleted" : "modified";
+    const status = oldBytes ? (newBytes ? "modified" : "deleted") : "added";
     stats.push({ path, status, binary, ...counts });
   }
   return stats;

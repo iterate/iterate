@@ -154,9 +154,9 @@ export function formatAgentUiActivitySummary(
     );
   }
   if (summary.outcome === "failed") parts.push("failed");
-  const totalMs = !Number.isFinite(activity.endedAtMs)
-    ? null
-    : Math.max(0, activity.endedAtMs - activity.startedAtMs);
+  const totalMs = Number.isFinite(activity.endedAtMs)
+    ? Math.max(0, activity.endedAtMs - activity.startedAtMs)
+    : null;
   if (Number.isFinite(totalMs) && totalMs > 0) parts.push(formatAgentUiDuration(totalMs));
   return parts.join(" · ");
 }
@@ -701,7 +701,7 @@ function reduceAgentUiEvent(
           text: rendersFromRawEvent ? "" : text,
           ...(files.length === 0 ? {} : { files }),
           timestampMs,
-          via: { service: actorType, ...(!sender ? {} : { sender }) },
+          via: { service: actorType, ...(sender && { sender }) },
         });
       }
       return contextState;
@@ -714,9 +714,9 @@ function reduceAgentUiEvent(
       // response (a userland response interpreter) — the raw response text is
       // now redundant in pretty rendering.
       const extractedFromRequest = readLlmRequestOffset(event);
-      const marked = !Number.isFinite(extractedFromRequest)
-        ? state
-        : updateLlmStep(state, extractedFromRequest, (step) => ({ ...step, interpreted: true }));
+      const marked = Number.isFinite(extractedFromRequest)
+        ? updateLlmStep(state, extractedFromRequest, (step) => ({ ...step, interpreted: true }))
+        : state;
       const files = readFileAttachments(event);
       const item: AgentUiMessageItem = {
         kind: "assistant",
@@ -742,7 +742,7 @@ function reduceAgentUiEvent(
         id: `llm-${event.offset}`,
         llmRequestOffset: event.offset,
         status: "running",
-        ...(!model ? {} : { model }),
+        ...(model && { model }),
         thinkingText: "",
         responseText: "",
         startedAtMs: timestampMs,
@@ -796,10 +796,10 @@ function reduceAgentUiEvent(
                 : status === "cancelled"
                   ? { durationMs: Math.max(0, timestampMs - step.startedAtMs) }
                   : {}),
-              ...(!Number.isFinite(usage.input) ? {} : { inputTokens: usage.input }),
-              ...(!Number.isFinite(usage.output) ? {} : { outputTokens: usage.output }),
-              ...(!errorMessage ? {} : { errorMessage }),
-              ...(!cancelReason ? {} : { cancelReason }),
+              ...(Number.isFinite(usage.input) && { inputTokens: usage.input }),
+              ...(Number.isFinite(usage.output) && { outputTokens: usage.output }),
+              ...(errorMessage && { errorMessage }),
+              ...(cancelReason && { cancelReason }),
             },
       );
     }
@@ -822,9 +822,9 @@ function reduceAgentUiEvent(
       // marks that response's llm step interpreted: the Script tab now carries
       // the code, so pretty rendering can fold the raw response away.
       const extractedFromAssistantOffset = /^agent-output:(\d+)$/.exec(executionId);
-      const interpretedState = !extractedFromAssistantOffset
-        ? state
-        : markLlmStepInterpretedByAssistantOffset(state, Number(extractedFromAssistantOffset[1]));
+      const interpretedState = extractedFromAssistantOffset
+        ? markLlmStepInterpretedByAssistantOffset(state, Number(extractedFromAssistantOffset[1]))
+        : state;
       const live = ensureLive(interpretedState, event.offset, timestampMs);
       const step: AgentUiCodeStep = {
         kind: "code",
@@ -836,7 +836,7 @@ function reduceAgentUiEvent(
         expiresAtMs,
         // Inherit the stream's summary status from birth, so live headers and
         // inferred (deadline/idle) closes carry it — not only durable settles.
-        ...(!state.summaryActivity ? {} : { activitySummary: state.summaryActivity }),
+        ...(state.summaryActivity && { activitySummary: state.summaryActivity }),
       };
       return { ...interpretedState, live: { ...live, steps: [...live.steps, step] } };
     }
@@ -864,7 +864,7 @@ function reduceAgentUiEvent(
         ...applyDurableCodeOutcome(step, outcome, timestampMs),
         // The stream's summary status as of this round — inherited from an
         // earlier round when this one's script didn't update it.
-        ...(!state.summaryActivity ? {} : { activitySummary: state.summaryActivity }),
+        ...(state.summaryActivity && { activitySummary: state.summaryActivity }),
       };
       const next = { ...state, live: { ...state.live, steps } };
       // A visible reply the script sent was deferred while its step ran (see
@@ -936,7 +936,7 @@ function reduceAgentUiEvent(
         timestampMs,
         via: {
           service: "slack",
-          ...(!message.sender ? {} : { sender: message.sender }),
+          ...(message.sender && { sender: message.sender }),
         },
       };
       // Our bot's echoes land mid-turn (it posts from inside a code step), so
@@ -959,7 +959,7 @@ function reduceAgentUiEvent(
         timestampMs,
         via: {
           service: "telegram",
-          ...(!message.sender ? {} : { sender: message.sender }),
+          ...(message.sender && { sender: message.sender }),
         },
       });
     }
@@ -1003,8 +1003,8 @@ function reduceAgentUiEvent(
         connectionKind,
         connected: true,
         ...(typeof openedBy?.description === "string" && { description: openedBy.description }),
-        ...(!user ? {} : { user }),
-        ...(!announcement ? {} : { processor: announcement }),
+        ...(user && { user }),
+        ...(announcement && { processor: announcement }),
       };
       const existingIndex = state.presence.findIndex(
         (candidate) => candidate.connectionKey === connectionKey,
@@ -1056,8 +1056,8 @@ function reduceAgentUiEvent(
       return emitItem(state, items, {
         kind: "processor-revived",
         id: `processor-revived-${event.offset}`,
-        ...(!processorSlug ? {} : { processorSlug }),
-        ...(!Number.isFinite(revivals) ? {} : { revivals }),
+        ...(processorSlug && { processorSlug }),
+        ...(Number.isFinite(revivals) && { revivals }),
         timestampMs,
       });
     }
@@ -1254,7 +1254,7 @@ function emitUserMessageItem(
   if (isAgentUiActivityWorking(settled.live, undefined)) {
     return { ...settled, queuedUserMessages: [...settled.queuedUserMessages, item] };
   }
-  const flushed = !settled.live ? flushDeferredMessages(settled, items) : settled;
+  const flushed = settled.live ? settled : flushDeferredMessages(settled, items);
   return emitItem(flushed, items, item);
 }
 
@@ -1275,7 +1275,7 @@ function emitAssistantMessageItem(
       deferredAssistantMessages: [...settled.deferredAssistantMessages, item],
     };
   }
-  const flushed = !settled.live ? flushDeferredMessages(settled, items) : settled;
+  const flushed = settled.live ? settled : flushDeferredMessages(settled, items);
   return emitItem(flushed, items, item);
 }
 
@@ -1532,7 +1532,7 @@ function readSlackWebhookMessage(
   // the via label). Identity comes from the webhook's `authorizations`
   // envelope, mirroring the slack-agent processor's isOwnBotMessage — and
   // like it, an incomparable identity is assumed to be our own.
-  const kind = !fromBot ? "user" : isOwnSlackBotMessage(body, slackEvent) ? "assistant" : "user";
+  const kind = fromBot ? (isOwnSlackBotMessage(body, slackEvent) ? "assistant" : "user") : "user";
   return {
     text: slackMrkdwnToMarkdown(text),
     kind,
@@ -1611,7 +1611,7 @@ function readString(event: Event, key: string): string | null {
 
 function readOptionalReason(event: Event): { reason: string } | Record<string, never> {
   const reason = readString(event, "reason");
-  return !reason ? {} : { reason };
+  return reason ? { reason } : {};
 }
 
 function readNumber(event: Event, key: string): number | null {

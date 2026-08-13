@@ -403,7 +403,7 @@ export class StreamCoreProcessor {
             inbound: {
               ...next.subscriptions.inbound,
               // Only a NEW record can push the registry over its cap.
-              bySourcePath: !recorded ? evictInboundRecordsOverCap(bySourcePath) : bySourcePath,
+              bySourcePath: recorded ? bySourcePath : evictInboundRecordsOverCap(bySourcePath),
             },
           },
         };
@@ -537,7 +537,7 @@ export class StreamCoreProcessor {
                     reason: event.payload.reason,
                     afterOffset: event.payload.afterOffset,
                     attempts: event.payload.attempts,
-                    ...(!event.payload.error ? {} : { error: event.payload.error }),
+                    ...(event.payload.error && { error: event.payload.error }),
                   },
                 },
               },
@@ -623,9 +623,9 @@ export class StreamCoreProcessor {
   }): CoreProcessorState {
     const timestampMs = Date.parse(args.event.createdAt);
     if (!Number.isFinite(timestampMs)) return args.state;
-    const elapsedMs = !Number.isFinite(args.state.circuitBreaker.lastRefillAtMs)
-      ? 0
-      : Math.max(0, timestampMs - args.state.circuitBreaker.lastRefillAtMs);
+    const elapsedMs = Number.isFinite(args.state.circuitBreaker.lastRefillAtMs)
+      ? Math.max(0, timestampMs - args.state.circuitBreaker.lastRefillAtMs)
+      : 0;
     const tokens =
       Math.min(
         args.state.circuitBreaker.burstCapacity,

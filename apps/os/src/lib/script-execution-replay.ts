@@ -81,9 +81,9 @@ export function replayScriptExecution(input: {
   const invalidCompletion = !!completed && !settlement;
   const completionError = settlement?.status === "failed" ? settlement.error : null;
   const errorMessage = deadlineElapsed
-    ? !started
-      ? DEADLINE_BEFORE_START_ERROR
-      : DEADLINE_AFTER_START_ERROR
+    ? started
+      ? DEADLINE_AFTER_START_ERROR
+      : DEADLINE_BEFORE_START_ERROR
     : invalidCompletion
       ? INVALID_COMPLETION_ERROR
       : completionError;
@@ -92,9 +92,9 @@ export function replayScriptExecution(input: {
   const result = settlement?.status === "succeeded" ? settlement.result : undefined;
   const durationMs = deadlineElapsed
     ? deriveDurationThrough(started ?? requested, expiresAtMs)
-    : !completed
-      ? deriveDurationThrough(started ?? requested, input.nowMs)
-      : deriveDurationMs(started ?? requested, completed);
+    : completed
+      ? deriveDurationMs(started ?? requested, completed)
+      : deriveDurationThrough(started ?? requested, input.nowMs);
 
   return {
     executionId: input.executionId,
@@ -105,7 +105,7 @@ export function replayScriptExecution(input: {
     expiresAtMs,
     code: typeof requested.payload.code === "string" ? requested.payload.code : "",
     outcome: {
-      status: failed ? "failed" : !completed ? (!started ? "queued" : "running") : "completed",
+      status: failed ? "failed" : completed ? "completed" : started ? "running" : "queued",
       durationMs,
       errorMessage,
       settlement,

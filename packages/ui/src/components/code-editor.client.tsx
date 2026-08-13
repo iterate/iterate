@@ -54,7 +54,7 @@ export function CodeEditor({
         vsCodeLight,
         (language === "json" ? json : yaml)(),
         EditorView.lineWrapping,
-        !placeholder ? [] : placeholderExt(placeholder),
+        placeholder ? placeholderExt(placeholder) : [],
         keymap.of([
           {
             key: "Mod-Enter",

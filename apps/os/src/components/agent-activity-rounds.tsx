@@ -162,9 +162,9 @@ function RoundBody({
   onInspectScriptExecution?: (executionId: string) => void;
 }) {
   if (!round.code) {
-    return !round.llm ? null : (
+    return round.llm ? (
       <LlmOnlyRound llm={round.llm} onInspectLlmRequest={onInspectLlmRequest} />
-    );
+    ) : null;
   }
   return (
     <RoundTabs
@@ -205,7 +205,7 @@ function LlmOnlyRound({
           {llmStepLabel(llm)}
         </span>
         <span className="font-mono text-xs text-muted-foreground/70">{llmStepMeta(llm)}</span>
-        {!onInspectLlmRequest ? null : (
+        {onInspectLlmRequest ? (
           <Button
             variant="ghost"
             size="xs"
@@ -217,7 +217,7 @@ function LlmOnlyRound({
             Full trace
             <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground/50" />
           </Button>
-        )}
+        ) : null}
       </div>
       {llm.thinkingText === "" ? null : (
         <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm italic leading-relaxed text-muted-foreground">
@@ -242,11 +242,11 @@ function LlmOnlyRound({
           {llm.responseText}
         </div>
       )}
-      {!llm.errorMessage ? null : (
+      {llm.errorMessage ? (
         <pre className="max-w-2xl whitespace-pre-wrap px-1.5 font-mono text-xs text-destructive">
           {llm.errorMessage}
         </pre>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -295,7 +295,7 @@ function RoundTabs({
             {code.errorMessage}
           </pre>
         )}
-        {!onInspectScriptExecution ? null : (
+        {onInspectScriptExecution ? (
           <Button
             variant="ghost"
             size="xs"
@@ -307,7 +307,7 @@ function RoundTabs({
             Execution trace
             <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground/50" />
           </Button>
-        )}
+        ) : null}
       </TabsContent>
       <TabsContent value="result" className="flex flex-col gap-2">
         <RoundResult code={code} database={database} />
@@ -456,33 +456,35 @@ function RawRoundResult({ code }: { code: AgentUiCodeStep }) {
   // One YAML fold for every size; only the RENDERER is bounded — CodeMirror
   // is expensive near the stream event-size ceiling, so oversized results get
   // a plain-text preview of the same YAML instead of falling back to JSON.
-  const yaml = useMemo(() => (!code.result ? null : resultYaml(code.result)), [code.result]);
+  const yaml = useMemo(() => (code.result ? resultYaml(code.result) : null), [code.result]);
   return (
     <>
-      {!code.errorMessage ? null : (
+      {code.errorMessage ? (
         <pre className="whitespace-pre-wrap rounded-lg bg-destructive/5 px-3 py-2 font-mono text-xs leading-relaxed text-destructive">
           {code.errorMessage}
         </pre>
-      )}
-      {!yaml ? null : yaml.length <= MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS ? (
-        <div className="max-h-80 overflow-y-auto rounded-lg" data-testid="script-result-raw">
-          <SourceCodeBlock code={yaml} language="yaml" showLineNumbers={false} />
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-lg border bg-muted/20">
-          <p className="border-b px-3 py-2 text-xs text-muted-foreground">
-            This result is {yaml.length.toLocaleString()} characters as YAML. Showing the first{" "}
-            {MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS / 1024} KB without syntax highlighting.
-          </p>
-          <pre
-            className="max-h-80 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs leading-relaxed"
-            data-testid="script-result-bounded-preview"
-          >
-            {yaml.slice(0, MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS)}
-            {"\n…"}
-          </pre>
-        </div>
-      )}
+      ) : null}
+      {yaml ? (
+        yaml.length <= MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS ? (
+          <div className="max-h-80 overflow-y-auto rounded-lg" data-testid="script-result-raw">
+            <SourceCodeBlock code={yaml} language="yaml" showLineNumbers={false} />
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border bg-muted/20">
+            <p className="border-b px-3 py-2 text-xs text-muted-foreground">
+              This result is {yaml.length.toLocaleString()} characters as YAML. Showing the first{" "}
+              {MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS / 1024} KB without syntax highlighting.
+            </p>
+            <pre
+              className="max-h-80 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs leading-relaxed"
+              data-testid="script-result-bounded-preview"
+            >
+              {yaml.slice(0, MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS)}
+              {"\n…"}
+            </pre>
+          </div>
+        )
+      ) : null}
     </>
   );
 }
@@ -573,7 +575,7 @@ function roundHeaderMeta(round: AgentUiActivityRound) {
           ? ["Code failed"]
           : []),
       code.activitySummary || `Started ${formatClockTime(code.startedAtMs)}`,
-      ...(!Number.isFinite(code.durationMs) ? [] : [formatSeconds(code.durationMs)]),
+      ...(Number.isFinite(code.durationMs) ? [formatSeconds(code.durationMs)] : []),
       ...(llm?.outcome === "failed" ? ["request failed"] : []),
     ];
     return parts.join(" · ");

@@ -103,8 +103,8 @@ export function StreamFeedView({
     params,
   );
   const itemCount = Number(countResult.data[0]?.count ?? 0);
-  const live = !filter.agent ? null : (liveState?.live ?? null);
-  const transientItems = !filter.agent ? EMPTY_AGENT_ITEMS : transientAgentItems;
+  const live = filter.agent ? (liveState?.live ?? null) : null;
+  const transientItems = filter.agent ? transientAgentItems : EMPTY_AGENT_ITEMS;
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ids of activity summaries the user expanded. Operation rows inside an
   // expanded activity open their URL-backed inspector instead of nesting a
@@ -117,7 +117,7 @@ export function StreamFeedView({
   // anchorTo's mid-history compensation measures. Rendering it outside the
   // list would hide its height from both.
   const transientCount = transientItems.length;
-  const liveCount = !live ? 0 : 1;
+  const liveCount = live ? 1 : 0;
   const totalCount = itemCount + transientCount + liveCount;
 
   // Settled rows are append-only at dense positions, so the position is a
@@ -129,7 +129,7 @@ export function StreamFeedView({
     (index: number) => {
       if (index < itemCount) return index;
       const transient = transientItems[index - itemCount];
-      return !transient ? "live" : `transient:${transient.id}`;
+      return transient ? `transient:${transient.id}` : "live";
     },
     [itemCount, transientItems],
   );
@@ -292,7 +292,28 @@ export function StreamFeedView({
                     projectSlug={projectSlug}
                     database={database}
                   />
-                ) : !row ? (
+                ) : row ? (
+                  row.agentItem ? (
+                    <AgentFeedItemRow
+                      item={row.agentItem}
+                      toggledIds={toggledIds}
+                      onToggle={toggleExpanded}
+                      onInspectLlmRequest={onInspectLlmRequest}
+                      onInspectScriptExecution={onInspectScriptExecution}
+                      projectSlug={projectSlug}
+                      database={database}
+                    />
+                  ) : (
+                    <RawFeedItemRow
+                      row={row}
+                      // The gap is measured from the previous row's LAST moment,
+                      // so a group's delta is the idle time between rows, not
+                      // within one.
+                      previousTimestampMs={rowLastTimestampMs(rowsByIndex.get(index - 1)?.row)}
+                      onInspectEvent={onInspectEvent}
+                    />
+                  )
+                ) : (
                   // Not-yet-loaded rows must measure exactly estimateSize
                   // (56px, margins don't count toward offsetHeight): the
                   // initial jump to the end renders these before their SQL
@@ -302,25 +323,6 @@ export function StreamFeedView({
                   <div className="h-14 py-2">
                     <div className="h-full rounded-xl bg-muted/40" />
                   </div>
-                ) : row.agentItem ? (
-                  <AgentFeedItemRow
-                    item={row.agentItem}
-                    toggledIds={toggledIds}
-                    onToggle={toggleExpanded}
-                    onInspectLlmRequest={onInspectLlmRequest}
-                    onInspectScriptExecution={onInspectScriptExecution}
-                    projectSlug={projectSlug}
-                    database={database}
-                  />
-                ) : (
-                  <RawFeedItemRow
-                    row={row}
-                    // The gap is measured from the previous row's LAST moment,
-                    // so a group's delta is the idle time between rows, not
-                    // within one.
-                    previousTimestampMs={rowLastTimestampMs(rowsByIndex.get(index - 1)?.row)}
-                    onInspectEvent={onInspectEvent}
-                  />
                 )}
               </div>
             );
@@ -438,7 +440,7 @@ const RawFeedItemRow = memo(function RawFeedItemRow({
   const eventType =
     data && "eventType" in data ? data.eventType : (data?.events[0]?.type ?? row.kind);
   const createdAt = data?.events[0]?.createdAt;
-  const createdAtMs = !createdAt ? null : Date.parse(createdAt);
+  const createdAtMs = createdAt ? Date.parse(createdAt) : null;
   const deltaMs =
     !Number.isFinite(previousTimestampMs) ||
     !Number.isFinite(createdAtMs) ||
@@ -499,7 +501,7 @@ function rowLastTimestampMs(row: FeedRow | undefined): number | null {
   if (!row) return null;
   if (row.rawData) {
     const createdAt = row.rawData.events.at(-1)?.createdAt;
-    const parsed = !createdAt ? Number.NaN : Date.parse(createdAt);
+    const parsed = createdAt ? Date.parse(createdAt) : Number.NaN;
     return Number.isNaN(parsed) ? null : parsed;
   }
   const item = row.agentItem;

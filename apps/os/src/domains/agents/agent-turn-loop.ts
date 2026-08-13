@@ -137,7 +137,7 @@ export class AgentTurnLoop implements AgentComponent {
               result: {
                 status: "cancelled",
                 reason: "interrupted-by-user-input",
-                ...(!partialText ? {} : { partialText }),
+                ...(partialText && { partialText }),
               },
             },
             idempotencyKey: this.#host.idempotencyKey(`settle/${open.requestedAtOffset}`),

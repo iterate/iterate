@@ -96,10 +96,10 @@ export function RawEventInspectorContent({
   // Parse + reorder only when the underlying row changes, not on every render:
   // a fresh object identity would rebuild CodeMirror (its editor is keyed on
   // the doc value) even when an incidental re-render left the event untouched.
-  const selectedRawJson = !selected ? null : String(selected.raw_json);
+  const selectedRawJson = selected ? String(selected.raw_json) : null;
   const orderedEventData = useMemo(
     () =>
-      !selectedRawJson ? null : orderEventKeysForYamlDisplay(parseRawEventJson(selectedRawJson)),
+      selectedRawJson ? orderEventKeysForYamlDisplay(parseRawEventJson(selectedRawJson)) : null,
     [selectedRawJson],
   );
 
@@ -118,11 +118,11 @@ export function RawEventInspectorContent({
     <>
       <SheetHeader className="shrink-0 pr-12">
         <SheetTitle className="truncate" title={String(selected?.type ?? "")}>
-          {!selected ? `Event #${offset}` : shortEventType(String(selected.type))}
+          {selected ? shortEventType(String(selected.type)) : `Event #${offset}`}
         </SheetTitle>
         <SheetDescription>
           #{offset}
-          {!Number.isFinite(total) ? null : ` · ${total} mirrored events`}
+          {Number.isFinite(total) ? ` · ${total} mirrored events` : null}
           {typeof selected?.created_at === "string" ? ` · ${selected.created_at}` : null}
         </SheetDescription>
       </SheetHeader>
@@ -149,9 +149,9 @@ export function RawEventInspectorContent({
         </Button>
         <span className="text-xs text-muted-foreground/70">← → keys page the log</span>
         <span className="ml-auto flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
-          {!sincePrevious ? null : <span title="Since previous event">{sincePrevious}</span>}
+          {sincePrevious ? <span title="Since previous event">{sincePrevious}</span> : null}
           {sincePrevious && untilNext ? <span>·</span> : null}
-          {!untilNext ? null : <span title="Until next event">{untilNext} to next</span>}
+          {untilNext ? <span title="Until next event">{untilNext} to next</span> : null}
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto border-t px-4 py-3">

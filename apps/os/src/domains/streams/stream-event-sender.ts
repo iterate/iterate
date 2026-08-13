@@ -424,7 +424,7 @@ export class StreamEventSender {
     try {
       const state = this.#hooks.coreState();
       this.connections.closeStaleHosted((connectionKey) =>
-        !state.subscriptions.outbound.byName[connectionKey] ? "subscription-removed" : "replaced",
+        state.subscriptions.outbound.byName[connectionKey] ? "replaced" : "subscription-removed",
       );
       this.connections.sendQueued();
       if (this.connections.isTearingDown) {
@@ -672,9 +672,9 @@ export class StreamEventSender {
         }
         let openedBy: ConnectionOpenerDescriptor | undefined;
         try {
-          openedBy = !response.openedBy
-            ? undefined
-            : ConnectionOpenerDescriptorSchema.parse(response.openedBy);
+          openedBy = response.openedBy
+            ? ConnectionOpenerDescriptorSchema.parse(response.openedBy)
+            : undefined;
         } catch (error) {
           // Reject the malformed descriptor WITHOUT leaking the processEventBatch retained
           // moments earlier (round-1 finding 4.2 / round-2 blocker 4a).
@@ -686,9 +686,9 @@ export class StreamEventSender {
         // of event types the callback says it can handle.
         const consumes = openedBy?.processor?.announcement.consumes;
         const configuredFilter = compileEventFilter(current.configuration.filter);
-        const announcedFilter = !consumes
-          ? undefined
-          : compileEventFilter({ eventTypes: [...consumes] });
+        const announcedFilter = consumes
+          ? compileEventFilter({ eventTypes: [...consumes] })
+          : undefined;
         /*
          * NAMING THE TYPE IS THE OPT-IN, and it is the only one.
          *
@@ -1338,7 +1338,7 @@ export class StreamEventSender {
       attempt,
       nextAttemptAt,
       error: errorMessage(error),
-      ...(!failingEvent ? {} : { failingEvent }),
+      ...(failingEvent && { failingEvent }),
     });
     this.#hooks.armAlarm(nextAttemptAt);
   }
@@ -1367,7 +1367,7 @@ export class StreamEventSender {
         reason: "delivery-failed",
         afterOffset: row?.confirmedOffset ?? 0,
         attempts,
-        ...(!terminalError ? {} : { error: terminalError }),
+        ...(terminalError && { error: terminalError }),
       },
     });
     if (!recorded) {
@@ -1522,9 +1522,9 @@ export class StreamEventSender {
             nextAttemptAt: row?.nextAttemptAt ?? null,
             inFlightDeadlineAt: row?.inFlightDeadlineAt ?? null,
             lastError: row?.lastError ?? null,
-            ...(!metrics ? {} : { bytesSent: metrics.bytesSent }),
-            ...(!completionLatencyMs ? {} : { completionLatencyMs }),
-            ...(!deliveryDurationMs ? {} : { deliveryDurationMs }),
+            ...(metrics && { bytesSent: metrics.bytesSent }),
+            ...(completionLatencyMs && { completionLatencyMs }),
+            ...(deliveryDurationMs && { deliveryDurationMs }),
           },
         ];
       }),
@@ -1710,8 +1710,8 @@ function deliveryErrorDiagnostics(error: unknown): {
   return {
     errorName,
     errorMessage,
-    ...(!itxCallId ? {} : { itxCallId }),
-    ...(!cloudflareErrorReference ? {} : { cloudflareErrorReference }),
+    ...(itxCallId && { itxCallId }),
+    ...(cloudflareErrorReference && { cloudflareErrorReference }),
   };
 }
 
@@ -1872,18 +1872,16 @@ export class StreamConnections {
       connectionGeneration: expectedDelivery.connectionGeneration,
       deliveredThroughOffset: connection.deliveredThroughOffset,
       streamMaxOffset: state.maxOffset,
-      ...(!Number.isFinite(pendingDeliveryStartedAtMs)
-        ? {}
-        : { pendingDeliveryStartedAt: new Date(pendingDeliveryStartedAtMs).toISOString() }),
-      ...(!Number.isFinite(pendingDeliveryDeadlineAtMs)
-        ? {}
-        : { pendingDeliveryDeadlineAt: new Date(pendingDeliveryDeadlineAtMs).toISOString() }),
-      ...(!processorAnnouncement
-        ? {}
-        : {
-            processorSlug: processorAnnouncement.slug,
-            processorContractVersion: processorAnnouncement.version,
-          }),
+      ...(Number.isFinite(pendingDeliveryStartedAtMs) && {
+        pendingDeliveryStartedAt: new Date(pendingDeliveryStartedAtMs).toISOString(),
+      }),
+      ...(Number.isFinite(pendingDeliveryDeadlineAtMs) && {
+        pendingDeliveryDeadlineAt: new Date(pendingDeliveryDeadlineAtMs).toISOString(),
+      }),
+      ...(processorAnnouncement && {
+        processorSlug: processorAnnouncement.slug,
+        processorContractVersion: processorAnnouncement.version,
+      }),
     };
     if (error instanceof EventFilterEvaluationError) {
       console.info("stream hosted callback filter condition failed; backing off", details);
@@ -1964,21 +1962,15 @@ export class StreamConnections {
             bytesSent: connection.bytesSent,
             lastDeliveredAt: connection.lastDeliveredAt,
             hasPendingDelivery: connection.hasPendingDelivery(),
-            ...(!Number.isFinite(pendingDeliveryDeadlineAtMs)
-              ? {}
-              : {
-                  pendingDeliveryDeadlineAt: new Date(pendingDeliveryDeadlineAtMs).toISOString(),
-                  ...(!Number.isFinite(pendingDeliveryStartedAtMs)
-                    ? {}
-                    : {
-                        pendingDeliveryStartedAt: new Date(
-                          pendingDeliveryStartedAtMs,
-                        ).toISOString(),
-                      }),
-                }),
-            ...(!completionLatencyMs ? {} : { completionLatencyMs }),
-            ...(!pingRttMs ? {} : { pingRttMs }),
-            ...(!connection.openedBy ? {} : { openedBy: connection.openedBy }),
+            ...(Number.isFinite(pendingDeliveryDeadlineAtMs) && {
+              pendingDeliveryDeadlineAt: new Date(pendingDeliveryDeadlineAtMs).toISOString(),
+              ...(Number.isFinite(pendingDeliveryStartedAtMs) && {
+                pendingDeliveryStartedAt: new Date(pendingDeliveryStartedAtMs).toISOString(),
+              }),
+            }),
+            ...(completionLatencyMs && { completionLatencyMs }),
+            ...(pingRttMs && { pingRttMs }),
+            ...(connection.openedBy && { openedBy: connection.openedBy }),
           },
         ];
       }),
@@ -2141,7 +2133,7 @@ export class StreamConnections {
         payload: {
           connectionKey,
           kind,
-          ...(!args.openedBy ? {} : { openedBy: args.openedBy }),
+          ...(args.openedBy && { openedBy: args.openedBy }),
         },
       });
       if (!openedRecorded) {
@@ -2195,9 +2187,9 @@ export class StreamConnections {
               // always received them — they own no durable cursor, so a hole
               // costs them nothing.
               const visible = readEvents;
-              const matched = !args.filter
-                ? visible
-                : visible.filter((entry) => args.filter!.matches(entry.event));
+              const matched = args.filter
+                ? visible.filter((entry) => args.filter!.matches(entry.event))
+                : visible;
               const delivered =
                 kind === "hosted"
                   ? matched.slice(0, HOSTED_CALLBACK_EVENT_LIMIT)
@@ -2359,11 +2351,9 @@ export class StreamConnections {
 
     connection = {
       kind,
-      ...(!args.expectedHostedDelivery
-        ? {}
-        : { expectedHostedDelivery: args.expectedHostedDelivery }),
+      ...(args.expectedHostedDelivery && { expectedHostedDelivery: args.expectedHostedDelivery }),
       startedAt: new Date(this.#hooks.now()).toISOString(),
-      ...(!args.openedBy ? {} : { openedBy: args.openedBy }),
+      ...(args.openedBy && { openedBy: args.openedBy }),
       getProcessorRuntimeState: retainGetProcessorRuntimeState(args.getRuntimeState),
       ping: retainConnectionPing(args.ping),
       get deliveredThroughOffset() {
@@ -2400,7 +2390,7 @@ export class StreamConnections {
         // opened/closed events, remains authoritative for "open now".
         void this.#hooks.appendDeliveryEvent({
           type: "events.iterate.com/stream/connection-closed",
-          payload: { connectionKey, reason, ...(!error ? {} : { error }) },
+          payload: { connectionKey, reason, ...(error && { error }) },
         });
         if (reason === "rpc-broken" || reason === "delivery-failed") {
           this.#hooks.sendDueSubscriptions();

@@ -19,7 +19,7 @@ export function sandboxCreateClaimEvent(input: { create: SandboxCreateInput; pat
       instanceType,
       ...((sleepAfter || sleepAfter === 0) && { sleepAfter }),
       ...(typeof input.create.keepAlive === "boolean" && { keepAlive: input.create.keepAlive }),
-      ...(!input.create.env ? {} : { env: input.create.env }),
+      ...(input.create.env && { env: input.create.env }),
     },
   });
 }

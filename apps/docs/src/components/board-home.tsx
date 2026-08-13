@@ -44,12 +44,7 @@ export function BoardHome() {
   return (
     <div className="relative min-h-svh overflow-auto bg-muted/30">
       <SidebarTrigger className="absolute top-3 left-3 md:hidden" />
-      {!loaded ? (
-        <div className="flex min-h-svh flex-col items-center justify-center gap-3 text-muted-foreground">
-          <Loader2Icon aria-hidden className="size-6 animate-spin" />
-          <p className="text-sm">Loading repos…</p>
-        </div>
-      ) : (
+      {loaded ? (
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-10">
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Task boards</h1>
@@ -69,25 +64,7 @@ export function BoardHome() {
               <ul className="divide-y">
                 {workspaces.map((entry) => (
                   <li key={entry.path}>
-                    {!entry.board ? (
-                      <Link
-                        to="/w"
-                        search={{
-                          group: "folder",
-                          q: "",
-                          repo: "",
-                          task: "",
-                          workspace: entry.path,
-                        }}
-                        className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-muted/50"
-                      >
-                        <span className="truncate font-mono text-sm">{entry.path}</span>
-                        <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-                          <ClockIcon aria-hidden className="size-3.5" />
-                          {relativeTimeLong(entry.createdAt)}
-                        </span>
-                      </Link>
-                    ) : (
+                    {entry.board ? (
                       <Link
                         to="/w/$boardId"
                         params={{ boardId: entry.board.boardId }}
@@ -108,6 +85,24 @@ export function BoardHome() {
                             <ClockIcon aria-hidden className="size-3.5" />
                             {relativeTimeLong(entry.createdAt)}
                           </span>
+                        </span>
+                      </Link>
+                    ) : (
+                      <Link
+                        to="/w"
+                        search={{
+                          group: "folder",
+                          q: "",
+                          repo: "",
+                          task: "",
+                          workspace: entry.path,
+                        }}
+                        className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-muted/50"
+                      >
+                        <span className="truncate font-mono text-sm">{entry.path}</span>
+                        <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                          <ClockIcon aria-hidden className="size-3.5" />
+                          {relativeTimeLong(entry.createdAt)}
                         </span>
                       </Link>
                     )}
@@ -163,6 +158,11 @@ export function BoardHome() {
               </section>
             );
           })}
+        </div>
+      ) : (
+        <div className="flex min-h-svh flex-col items-center justify-center gap-3 text-muted-foreground">
+          <Loader2Icon aria-hidden className="size-6 animate-spin" />
+          <p className="text-sm">Loading repos…</p>
         </div>
       )}
     </div>

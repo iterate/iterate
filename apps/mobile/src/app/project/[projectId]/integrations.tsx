@@ -282,9 +282,9 @@ export default function IntegrationsScreen() {
                 <View key={entry.path} style={styles.card}>
                   <Text style={styles.cardTitle}>{entry.integration}</Text>
                   <Text style={styles.description}>
-                    {!entry.connection
-                      ? "Integration-level mount provided by project code."
-                      : `Connection ${entry.connection} provided by project code.`}
+                    {entry.connection
+                      ? `Connection ${entry.connection} provided by project code.`
+                      : "Integration-level mount provided by project code."}
                   </Text>
                   <Text selectable style={styles.namespace}>
                     {entry.path}

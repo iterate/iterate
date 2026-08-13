@@ -18,12 +18,12 @@ async function bornStream() {
   const stream = new MemoryStream(PATH);
   const creation = capabilityHostCreationEvents({ path: PATH, projectId: PROJECT_ID }).map(
     (event) =>
-      !event.idempotencyKey
-        ? event
-        : {
+      event.idempotencyKey
+        ? {
             ...event,
             idempotencyKey: `${event.idempotencyKey}@source-stream:${SOURCE_STREAM_ID}`,
-          },
+          }
+        : event,
   );
   await stream.append(...creation);
   return stream;

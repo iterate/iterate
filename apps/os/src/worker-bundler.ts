@@ -107,7 +107,7 @@ function normalizeBuildResult(result: CreateWorkerResult): {
     mainModule: result.mainModule,
     modules: loaderReadyModules(result.modules),
     warnings: result.warnings ?? [],
-    ...(!result.wranglerConfig ? {} : { wranglerConfig: result.wranglerConfig }),
+    ...(result.wranglerConfig && { wranglerConfig: result.wranglerConfig }),
   };
 }
 
@@ -125,12 +125,12 @@ function normalizeAppBuildResult(result: CreateAppResult): WorkerBundlerCreateAp
   const assetManifest: Record<string, WorkerBuildAssetMetadata> = {};
   for (const [pathname, metadata] of result.assetManifest) {
     assetManifest[pathname] = {
-      ...(!metadata.contentType ? {} : { contentType: metadata.contentType }),
+      ...(metadata.contentType && { contentType: metadata.contentType }),
       etag: metadata.etag,
     };
   }
   return {
-    ...(!result.assetConfig ? {} : { assetConfig: result.assetConfig }),
+    ...(result.assetConfig && { assetConfig: result.assetConfig }),
     assetManifest,
     assets,
     ...normalizeBuildResult(result),
@@ -152,10 +152,10 @@ function loaderReadyModules(modules: Modules): Record<string, WorkerBuildModule>
         );
       }
       result[name] = {
-        ...(!module.cjs ? {} : { cjs: module.cjs }),
-        ...(!module.js ? {} : { js: module.js }),
-        ...(!module.json ? {} : { json: module.json }),
-        ...(!module.text ? {} : { text: module.text }),
+        ...(module.cjs && { cjs: module.cjs }),
+        ...(module.js && { js: module.js }),
+        ...(module.json && { json: module.json }),
+        ...(module.text && { text: module.text }),
       };
     }
   }

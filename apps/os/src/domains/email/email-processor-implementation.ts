@@ -90,8 +90,8 @@ export class EmailProcessor extends StreamProcessor<EmailProcessorContract> {
             payload: {
               threadId: resolution.threadId,
               streamPath: resolution.streamPath,
-              ...(!counterpart ? {} : { counterpart }),
-              ...(!event.payload.message.subject ? {} : { subject: event.payload.message.subject }),
+              ...(counterpart && { counterpart }),
+              ...(event.payload.message.subject && { subject: event.payload.message.subject }),
             },
           };
           blockProcessorWhile(async () => {
@@ -146,9 +146,9 @@ export class EmailProcessor extends StreamProcessor<EmailProcessorContract> {
         return {
           ...state,
           threads: { ...state.threads, [resolution.threadId]: resolution.streamPath },
-          threadByMessageId: !messageId
-            ? state.threadByMessageId
-            : { ...state.threadByMessageId, [messageId]: resolution.threadId },
+          threadByMessageId: messageId
+            ? { ...state.threadByMessageId, [messageId]: resolution.threadId }
+            : state.threadByMessageId,
         };
       }
       case "events.iterate.com/email/sender-allowed": {
@@ -222,7 +222,7 @@ function resolveEmailThread(input: {
     .filter((id): id is string => !!id);
   for (const id of headerIds) {
     const threadId = state.threadByMessageId[id];
-    const streamPath = !threadId ? undefined : state.threads[threadId];
+    const streamPath = threadId ? state.threads[threadId] : undefined;
     if (threadId && streamPath) {
       return { isNew: false, streamPath, threadId };
     }
@@ -258,8 +258,8 @@ function emailAgentCreationEvents(input: {
         payload: {
           type: "email_thread",
           threadId: input.threadId,
-          ...(!subject ? {} : { subject }),
-          ...(!counterpart ? {} : { counterpart }),
+          ...(subject && { subject }),
+          ...(counterpart && { counterpart }),
         },
       },
     ],
@@ -275,8 +275,8 @@ function emailAgentCreationEvents(input: {
         payload: {
           config: {
             threadId: input.threadId,
-            ...(!input.counterpart ? {} : { counterpart: input.counterpart }),
-            ...(!input.subject ? {} : { subject: input.subject }),
+            ...(input.counterpart && { counterpart: input.counterpart }),
+            ...(input.subject && { subject: input.subject }),
           },
         },
       }),

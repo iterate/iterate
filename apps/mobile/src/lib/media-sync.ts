@@ -100,7 +100,7 @@ export async function runSyncPass(input: {
       mediaSubtypes: "screenshot",
       sortBy: [["creationTime", false]],
       first: 50,
-      ...(!after ? {} : { after }),
+      ...(after && { after }),
     });
     const sinceMs = new Date(input.since).getTime();
     for (const asset of page.assets) {

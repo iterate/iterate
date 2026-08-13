@@ -35,7 +35,7 @@ export function configRepoTemplateFromSlug(slug: string): string | null {
   const reference: ConfigRepoTemplateReference = {
     ...CANONICAL_TEMPLATE_REPOSITORY,
     path: `configs/${templateName}`,
-    ...(!pullRequest ? {} : { ref: `pull/${pullRequest[1]}/head` }),
+    ...(pullRequest && { ref: `pull/${pullRequest[1]}/head` }),
   };
   return formatConfigRepoTemplateReference(reference);
 }

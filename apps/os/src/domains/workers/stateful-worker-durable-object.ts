@@ -176,9 +176,9 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     if (!ref) return;
     // Plain copy: AlarmInvocationInfo is a host object and does not
     // serialize across the facet RPC hop (DataCloneError).
-    const info = !alarmInfo
-      ? undefined
-      : { isRetry: alarmInfo.isRetry, retryCount: alarmInfo.retryCount };
+    const info = alarmInfo
+      ? { isRetry: alarmInfo.isRetry, retryCount: alarmInfo.retryCount }
+      : undefined;
     const loaded = await this.#facet(ref);
     if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
     try {
@@ -250,7 +250,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     }
 
     return {
-      ...(!resolved.commitOid ? {} : { commitOid: resolved.commitOid }),
+      ...(resolved.commitOid && { commitOid: resolved.commitOid }),
       ok: true,
       target,
     };

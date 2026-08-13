@@ -110,7 +110,7 @@ function makeScriptedLlm() {
   return {
     calls,
     respond(text: string, usage?: { inputTokens: number; outputTokens: number }) {
-      calls.at(-1)!.resolve({ text, ...(!usage ? {} : { usage }) });
+      calls.at(-1)!.resolve({ text, ...(usage && { usage }) });
     },
     fail(message: string) {
       calls.at(-1)!.reject(new Error(message));
@@ -137,7 +137,7 @@ function makeAgentHarness(substrate?: HarnessSubstrate, extraDeps?: Partial<Agen
     createProcessor: (deps) =>
       new AgentProcessor({ ...deps, callLlm: llm.transport, ...extraDeps }),
     path: "/agents/test",
-    ...(!substrate ? {} : { substrate }),
+    ...(substrate && { substrate }),
   });
   return { ...harness, llm };
 }

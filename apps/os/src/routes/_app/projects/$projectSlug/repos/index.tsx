@@ -219,104 +219,106 @@ function ProjectReposIndexContent() {
           </Button>
         </div>
 
-        {!repos ? (
+        {repos ? (
+          repos.length === 0 ? (
+            <Empty className="rounded-lg border">
+              <EmptyHeader>
+                <EmptyTitle>No Repos</EmptyTitle>
+                <EmptyDescription>
+                  Project Repos will appear here after they are created.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            <div className="rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <SortableHead
+                      active={sort.key === "path"}
+                      direction={sort.direction}
+                      label="Repo"
+                      onClick={() => setSort(nextSort(sort, "path"))}
+                    />
+                    <SortableHead
+                      active={sort.key === "createdAt"}
+                      direction={sort.direction}
+                      label="Created"
+                      onClick={() => setSort(nextSort(sort, "createdAt"))}
+                    />
+                    <TableHead>Artifact</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {visibleRepos.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
+                        No Repos match.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    visibleRepos.map((repo) => {
+                      const artifactName = RepoArtifactNameCodec.stringify({
+                        projectId: project.id,
+                        path: repo.path,
+                      });
+                      const artifactDashboardUrl = buildCloudflareArtifactDashboardUrl({
+                        accountId: routeConfig.cloudflareAccountId,
+                        artifactName,
+                        namespace: routeConfig.cloudflareArtifactsNamespace,
+                      });
+                      const repoSplat = repoPathToSplat(repo.path);
+
+                      return (
+                        <TableRow key={repo.path}>
+                          <TableCell className="min-w-[18rem] py-3">
+                            <Link
+                              className="block min-w-0 truncate rounded-sm text-sm font-medium hover:underline"
+                              to="/projects/$projectSlug/repos/$"
+                              params={{
+                                projectSlug: params.projectSlug,
+                                _splat: repoSplat,
+                              }}
+                              search={{}}
+                            >
+                              {repo.path}
+                            </Link>
+                          </TableCell>
+                          <TableCell className="w-40 text-muted-foreground">
+                            {formatTimeAgo(repo.createdAt)}
+                          </TableCell>
+                          <TableCell className="w-32">
+                            {artifactDashboardUrl ? (
+                              <a
+                                className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                                href={artifactDashboardUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                <ExternalLink className="size-4" />
+                                Artifact
+                              </a>
+                            ) : (
+                              <span
+                                className="inline-flex items-center gap-1 text-sm text-muted-foreground"
+                                title="Cloudflare account ID is not configured."
+                              >
+                                <ExternalLink className="size-4" />
+                                Artifact
+                              </span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          )
+        ) : (
           <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
             Loading repos…
-          </div>
-        ) : repos.length === 0 ? (
-          <Empty className="rounded-lg border">
-            <EmptyHeader>
-              <EmptyTitle>No Repos</EmptyTitle>
-              <EmptyDescription>
-                Project Repos will appear here after they are created.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <div className="rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <SortableHead
-                    active={sort.key === "path"}
-                    direction={sort.direction}
-                    label="Repo"
-                    onClick={() => setSort(nextSort(sort, "path"))}
-                  />
-                  <SortableHead
-                    active={sort.key === "createdAt"}
-                    direction={sort.direction}
-                    label="Created"
-                    onClick={() => setSort(nextSort(sort, "createdAt"))}
-                  />
-                  <TableHead>Artifact</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {visibleRepos.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
-                      No Repos match.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  visibleRepos.map((repo) => {
-                    const artifactName = RepoArtifactNameCodec.stringify({
-                      projectId: project.id,
-                      path: repo.path,
-                    });
-                    const artifactDashboardUrl = buildCloudflareArtifactDashboardUrl({
-                      accountId: routeConfig.cloudflareAccountId,
-                      artifactName,
-                      namespace: routeConfig.cloudflareArtifactsNamespace,
-                    });
-                    const repoSplat = repoPathToSplat(repo.path);
-
-                    return (
-                      <TableRow key={repo.path}>
-                        <TableCell className="min-w-[18rem] py-3">
-                          <Link
-                            className="block min-w-0 truncate rounded-sm text-sm font-medium hover:underline"
-                            to="/projects/$projectSlug/repos/$"
-                            params={{
-                              projectSlug: params.projectSlug,
-                              _splat: repoSplat,
-                            }}
-                            search={{}}
-                          >
-                            {repo.path}
-                          </Link>
-                        </TableCell>
-                        <TableCell className="w-40 text-muted-foreground">
-                          {formatTimeAgo(repo.createdAt)}
-                        </TableCell>
-                        <TableCell className="w-32">
-                          {artifactDashboardUrl ? (
-                            <a
-                              className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-                              href={artifactDashboardUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              <ExternalLink className="size-4" />
-                              Artifact
-                            </a>
-                          ) : (
-                            <span
-                              className="inline-flex items-center gap-1 text-sm text-muted-foreground"
-                              title="Cloudflare account ID is not configured."
-                            >
-                              <ExternalLink className="size-4" />
-                              Artifact
-                            </span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
           </div>
         )}
       </div>

@@ -105,8 +105,8 @@ class WorkingTreeStore {
       if (!working && !staged) next.delete(path);
       else
         next.set(path, {
-          ...(!working ? {} : { working }),
-          ...(!staged ? {} : { staged }),
+          ...(working && { working }),
+          ...(staged && { staged }),
         });
     }
     this.#commit(next);
@@ -133,8 +133,8 @@ class WorkingTreeStore {
     if (!updated.working && !updated.staged) next.delete(path);
     else
       next.set(path, {
-        ...(!updated.working ? {} : { working: updated.working }),
-        ...(!updated.staged ? {} : { staged: updated.staged }),
+        ...(updated.working && { working: updated.working }),
+        ...(updated.staged && { staged: updated.staged }),
       });
     this.#commit(next);
   }
