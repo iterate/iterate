@@ -995,6 +995,11 @@ const plugin: StrictPlugin = {
           if (operator === "===" || operator === "==") return { member, nonEmpty: false };
           return undefined;
         };
+        // `x.length === 0 ? a : b` reads better than `!x.length ? a : b` — an
+        // explicit emptiness test as a ternary condition stays.
+        const isEmptinessTernaryTest = (reportNode: any) =>
+          reportNode.parent?.type === "ConditionalExpression" &&
+          reportNode.parent.test === reportNode;
         const reportLengthComparison = (node: any, comparison: LengthComparison) => {
           const memberText = context.sourceCode.getText(comparison.member);
           // `x && x.length > 0` collapses further, to `x?.length`.
@@ -1016,6 +1021,7 @@ const plugin: StrictPlugin = {
               context.sourceCode.getText(guard) ===
                 context.sourceCode.getText(comparison.member.object)
             ) {
+              if (!comparison.nonEmpty && isEmptinessTernaryTest(parent)) return;
               const optionalChain = `${context.sourceCode.getText(comparison.member.object)}?.length`;
               const replacement = comparison.nonEmpty
                 ? isBooleanContext(parent)
@@ -1037,6 +1043,7 @@ const plugin: StrictPlugin = {
               return;
             }
           }
+          if (!comparison.nonEmpty && isEmptinessTernaryTest(node)) return;
           const replacement = comparison.nonEmpty
             ? isBooleanContext(node)
               ? memberText

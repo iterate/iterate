@@ -227,6 +227,22 @@ test("collapses guarded .length comparisons to optional chains", () => {
   );
 });
 
+test("leaves explicit emptiness ternaries alone", () => {
+  using fixture = createOxlintFixture();
+  fixture.write(
+    "empty-ternary.ts",
+    [
+      "declare const projects: string[], maybe: string[] | undefined;",
+      // `x.length === 0 ? a : b` reads better than `!x.length ? a : b`
+      'export const label = projects.length === 0 ? "none" : "some";',
+      'export const guarded = !maybe || maybe.length === 0 ? "none" : "some";',
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["empty-ternary.ts"]);
+});
+
 test("leaves risky or meaningful length comparisons alone", () => {
   using fixture = createOxlintFixture();
   fixture.write(
