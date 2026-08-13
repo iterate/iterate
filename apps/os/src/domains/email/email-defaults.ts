@@ -24,7 +24,7 @@ export function emailRouterCreationEvents(input: {
       idempotencyKey: `email-created:${projectId}`,
       payload: input.payload ?? { config: {} },
     }),
-    ...(initialSender === undefined
+    ...(!initialSender
       ? []
       : [
           EmailProcessorContract.buildEvent({

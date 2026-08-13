@@ -57,7 +57,7 @@ export function retainCallback<Arg>(callback: (arg: Arg) => unknown): RetainedCa
 /** Thenable probe: RPC stubs and their call results are thenable-shaped. */
 export function isThenable(value: unknown): value is PromiseLike<unknown> {
   return (
-    value !== null &&
+    !!value &&
     (typeof value === "object" || typeof value === "function") &&
     typeof (value as PromiseLike<unknown>).then === "function"
   );
@@ -70,7 +70,7 @@ export function isThenable(value: unknown): value is PromiseLike<unknown> {
  */
 export function disposeIgnoredRpcResult(result: unknown): void {
   if (
-    result !== null &&
+    result &&
     (typeof result === "object" || typeof result === "function") &&
     Symbol.dispose in result
   ) {

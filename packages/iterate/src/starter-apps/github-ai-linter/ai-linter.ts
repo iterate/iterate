@@ -76,7 +76,7 @@ export class GithubAiLinterProcessor extends StreamProcessor<
       case githubAiLinterEventTypes.diagnosticReported: {
         const current = state.currentAnalysis;
         if (
-          current === null ||
+          !current ||
           current.analysisRequestOffset !== event.payload.analysisRequestOffset ||
           current.diagnostics.some(
             ({ diagnostic }) => diagnostic.diagnosticKey === event.payload.diagnosticKey,
@@ -121,13 +121,13 @@ export class GithubAiLinterProcessor extends StreamProcessor<
       case githubAiLinterEventTypes.diagnosticSuppressed: {
         const current = state.currentAnalysis;
         if (
-          current === null ||
+          !current ||
           current.analysisRequestOffset !== event.payload.analysisRequestOffset ||
           !current.diagnostics.some(
             ({ diagnostic, eventOffset, suppression }) =>
               eventOffset === event.payload.diagnosticOffset &&
               diagnostic.filename === event.payload.filename &&
-              suppression === null,
+              !suppression,
           )
         ) {
           return state;
@@ -158,7 +158,7 @@ export class GithubAiLinterProcessor extends StreamProcessor<
           ({ analysisRequestOffset }) =>
             analysisRequestOffset === event.payload.analysisRequestOffset,
         );
-        if (summary === undefined || summary.status !== "running") return state;
+        if (!summary || summary.status !== "running") return state;
 
         const current = state.currentAnalysis;
         const settlesCurrent =
@@ -192,9 +192,8 @@ export class GithubAiLinterProcessor extends StreamProcessor<
         // persistent. Keeping that out of the LLM makes the eventual behavior
         // deterministic instead of prompt-memory based.
         const previousDiagnostics =
-          state.latestSuccessfulAnalysis?.diagnostics.filter(
-            ({ suppression }) => suppression === null,
-          ) ?? [];
+          state.latestSuccessfulAnalysis?.diagnostics.filter(({ suppression }) => !suppression) ??
+          [];
         const previousKeys = new Set(
           previousDiagnostics.map(({ diagnostic }) => diagnostic.diagnosticKey),
         );
@@ -204,7 +203,7 @@ export class GithubAiLinterProcessor extends StreamProcessor<
         );
         const currentVisibleKeys = new Set(
           current.diagnostics
-            .filter(({ suppression }) => suppression === null)
+            .filter(({ suppression }) => !suppression)
             .map(({ diagnostic }) => diagnostic.diagnosticKey),
         );
         // These assertions only preserve the schema's classification
@@ -212,7 +211,7 @@ export class GithubAiLinterProcessor extends StreamProcessor<
         // object properties to `string`. The runtime values are the same
         // closed vocabulary validated by ReducedDiagnostic.
         const diagnostics = current.diagnostics.map((diagnostic) => {
-          if (diagnostic.suppression !== null) return diagnostic;
+          if (diagnostic.suppression) return diagnostic;
           if (previousKeys.has(diagnostic.diagnostic.diagnosticKey)) {
             return { ...diagnostic, classification: "persistent" as const };
           }
@@ -278,7 +277,7 @@ export class GithubAiLinterProcessor extends StreamProcessor<
 
     if (
       event?.type === githubAiLinterEventTypes.analysisRequested &&
-      previousState.currentAnalysis !== null &&
+      previousState.currentAnalysis &&
       previousState.currentAnalysis.analysisRequestOffset !== event.offset
     ) {
       const supersededOffset = previousState.currentAnalysis.analysisRequestOffset;
@@ -302,13 +301,13 @@ export class GithubAiLinterProcessor extends StreamProcessor<
       );
     }
 
-    if (event?.type === "events.iterate.com/agent/paused" && state.currentAnalysis !== null) {
+    if (event?.type === "events.iterate.com/agent/paused" && state.currentAnalysis) {
       const analysisRequestOffset = state.currentAnalysis.analysisRequestOffset;
       // A breaker pause is appended in the background. A newer analysis may
       // have committed first; its request offset then proves this pause
       // belongs to the superseded analysis and must not fail the new head.
       const pauseIsCurrent =
-        event.payload.triggerOffset === undefined ||
+        !Number.isFinite(event.payload.triggerOffset) ||
         event.payload.triggerOffset >= analysisRequestOffset;
       if (pauseIsCurrent) {
         const reason = event.payload.reason
@@ -385,7 +384,7 @@ export class GithubAiLinterProcessor extends StreamProcessor<
       );
     }
 
-    if (latest === null) return;
+    if (!latest) return;
     const latestSummary = state.analyses.find(
       ({ analysisRequestOffset }) => analysisRequestOffset === latest.analysisRequestOffset,
     );
@@ -483,9 +482,7 @@ export async function publishGithubAiLinterReview(
   itx: Project,
   analysis: GithubAiLinterPublicationAnalysis,
 ): Promise<GithubAiLinterPublicationResult> {
-  const hasVisibleDiagnostics = analysis.diagnostics.some(
-    ({ suppression }) => suppression === null,
-  );
+  const hasVisibleDiagnostics = analysis.diagnostics.some(({ suppression }) => !suppression);
   const publishesReview = hasVisibleDiagnostics || analysis.assessment.verdict !== "approve";
 
   const { request } = analysis;
@@ -530,25 +527,24 @@ export async function publishGithubAiLinterReview(
   const existingCheck = existingChecks.data.check_runs.find(
     (checkRun) => checkRun.external_id === publicationId,
   );
-  const checkResponse =
-    existingCheck === undefined
-      ? await octokit.rest.checks.create({
-          conclusion: publishesReview ? "neutral" : "success",
-          external_id: publicationId,
-          head_sha: request.headSha,
-          name: checkName,
-          output: {
-            summary: publishesReview
-              ? `The linter completed and found advisory issues. A non-blocking COMMENT review contains the inline details when publication succeeds.\n\n${analysis.assessment.summary}`
-              : analysis.assessment.summary,
-            title: publishesReview ? "Advisory findings found" : "No issues found",
-          },
-          owner: params.owner,
-          repo: params.repo,
-          status: "completed",
-        })
-      : { data: existingCheck };
-  if (checkResponse.data.html_url === null) {
+  const checkResponse = !existingCheck
+    ? await octokit.rest.checks.create({
+        conclusion: publishesReview ? "neutral" : "success",
+        external_id: publicationId,
+        head_sha: request.headSha,
+        name: checkName,
+        output: {
+          summary: publishesReview
+            ? `The linter completed and found advisory issues. A non-blocking COMMENT review contains the inline details when publication succeeds.\n\n${analysis.assessment.summary}`
+            : analysis.assessment.summary,
+          title: publishesReview ? "Advisory findings found" : "No issues found",
+        },
+        owner: params.owner,
+        repo: params.repo,
+        status: "completed",
+      })
+    : { data: existingCheck };
+  if (!checkResponse.data.html_url) {
     throw new Error(`GitHub Check Run ${checkResponse.data.id} did not provide an HTML URL.`);
   }
   const checkRun = { id: checkResponse.data.id, url: checkResponse.data.html_url };
@@ -571,7 +567,7 @@ export async function publishGithubAiLinterReview(
       candidate.user?.login === `${request.appSlug}[bot]` &&
       candidate.body?.includes(marker) === true,
   );
-  if (existingReview !== undefined) {
+  if (existingReview) {
     return {
       checkRun,
       reviewId: existingReview.id,
@@ -600,7 +596,7 @@ export async function publishGithubAiLinterReview(
 }
 
 function githubAiLinterReviewBody(analysis: GithubAiLinterPublicationAnalysis, marker: string) {
-  const visible = analysis.diagnostics.filter(({ suppression }) => suppression === null);
+  const visible = analysis.diagnostics.filter(({ suppression }) => !suppression);
   const suppressedCount = analysis.diagnostics.length - visible.length;
   const sections = [
     marker,
@@ -648,18 +644,18 @@ function githubAiLinterReviewBody(analysis: GithubAiLinterPublicationAnalysis, m
 
 function githubAiLinterReviewComments(analysis: GithubAiLinterPublicationAnalysis) {
   return analysis.diagnostics
-    .filter(({ suppression }) => suppression === null)
+    .filter(({ suppression }) => !suppression)
     .map(({ classification, diagnostic }) => {
       const span = diagnostic.fix?.span ?? diagnostic.labels[0]!.span;
       const body = [
-        `**[${diagnostic.ruleName}]**${classification === null ? "" : ` _${classification}_`}`,
+        `**[${diagnostic.ruleName}]**${!classification ? "" : ` _${classification}_`}`,
         diagnostic.message,
         diagnostic.help,
-        diagnostic.fix === undefined
+        !diagnostic.fix
           ? undefined
           : `${suggestionFence(diagnostic.fix.content)}suggestion\n${diagnostic.fix.content}\n${suggestionFence(diagnostic.fix.content)}`,
       ]
-        .filter((part) => part !== undefined)
+        .filter((part) => !!part)
         .join("\n\n");
       // Octokit requires literal RIGHT-side enum members. These assertions
       // preserve those constants across the map/spread expression; locations

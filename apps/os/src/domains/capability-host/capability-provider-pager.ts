@@ -103,7 +103,7 @@ export class CapabilityProviderPagers {
   /** Bind the connected event to the exact Pager that prompted it. */
   connect(pagerDialId: string, connectedAtOffset: number): boolean {
     const claimed = this.#pagers.claim({ pagerId: pagerDialId, pagerKey: pagerDialId });
-    if (claimed === undefined) return false;
+    if (!claimed) return false;
     return this.#pagers.stamp(claimed.ws, {
       v: 1,
       connectedAtOffset,
@@ -120,7 +120,7 @@ export class CapabilityProviderPagers {
 
   /** Whether runtime socket inventory still contains this exact durable Pager. */
   hasPager(connectedAtOffset: number): boolean {
-    return this.#entryFor(connectedAtOffset) !== undefined;
+    return !!this.#entryFor(connectedAtOffset);
   }
 
   /** Adopt one short provider leg after an activation Page. */
@@ -131,9 +131,9 @@ export class CapabilityProviderPagers {
     const key = record.providedAtOffset;
     const pending = this.#pendingProviders.get(key);
     if (
-      pending === undefined ||
+      !pending ||
       input.connectedAtOffset !== record.providerPager.connectedAtOffset ||
-      this.#entryFor(record.providerPager.connectedAtOffset) === undefined
+      !this.#entryFor(record.providerPager.connectedAtOffset)
     ) {
       return undefined;
     }
@@ -182,7 +182,7 @@ export class CapabilityProviderPagers {
   removeMount(record: LiveCapabilityRecord): void {
     const key = record.providedAtOffset;
     const entry = this.#entryFor(record.providerPager.connectedAtOffset);
-    if (entry !== undefined) {
+    if (entry) {
       this.#pagers.page(entry.ws, { type: "retire", providedAtOffset: key });
     }
     this.#disposeActive(key, "removal");
@@ -208,12 +208,12 @@ export class CapabilityProviderPagers {
   async #acquire(record: LiveCapabilityRecord): Promise<ActiveProvider> {
     const key = record.providedAtOffset;
     let active = this.#activeProviders.get(key);
-    if (active === undefined) {
+    if (!active) {
       let pending = this.#pendingProviders.get(key);
       pending ??= this.#requestProvider(record);
       await pending.promise;
       active = this.#activeProviders.get(key);
-      if (active === undefined) {
+      if (!active) {
         throw new Error(
           `capability "${record.path.join(".")}" provider activation completed empty`,
         );
@@ -225,7 +225,7 @@ export class CapabilityProviderPagers {
 
   #requestProvider(record: LiveCapabilityRecord): PendingProvider {
     const entry = this.#entryFor(record.providerPager.connectedAtOffset);
-    if (entry === undefined) throw new Error(`capability "${record.path.join(".")}" is offline`);
+    if (!entry) throw new Error(`capability "${record.path.join(".")}" is offline`);
     const key = record.providedAtOffset;
     const { promise, reject, resolve } = Promise.withResolvers<void>();
     const pending: PendingProvider = {
@@ -266,12 +266,12 @@ export class CapabilityProviderPagers {
       });
     }
     const entry = this.#entryFor(active.record.providerPager.connectedAtOffset);
-    if (entry !== undefined) this.#pagers.page(entry.ws, { type: "idle", providedAtOffset: key });
+    if (entry) this.#pagers.page(entry.ws, { type: "idle", providedAtOffset: key });
   }
 
   #disposeActive(key: number, reason: string): void {
     const active = this.#activeProviders.get(key);
-    if (active === undefined) return;
+    if (!active) return;
     this.#activeProviders.delete(key);
     try {
       active.invoker[Symbol.dispose]();
@@ -286,7 +286,7 @@ export class CapabilityProviderPagers {
 
   #failPending(key: number, error: Error): void {
     const pending = this.#pendingProviders.get(key);
-    if (pending === undefined) return;
+    if (!pending) return;
     clearTimeout(pending.timer);
     this.#pendingProviders.delete(key);
     pending.reject(error);
@@ -304,7 +304,7 @@ export class CapabilityProviderPagers {
 
 function isCapabilityProviderInvoker(value: unknown): value is CapabilityProviderInvoker {
   return (
-    value !== null &&
+    !!value &&
     (typeof value === "object" || typeof value === "function") &&
     "invoke" in value &&
     typeof value.invoke === "function"

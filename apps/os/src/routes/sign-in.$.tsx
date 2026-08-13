@@ -71,7 +71,7 @@ function SignInRoute() {
               className="w-full border-border bg-background text-foreground shadow-sm transition-colors hover:bg-muted"
               variant="outline"
               size="lg"
-              disabled={redirectingTo !== null}
+              disabled={!!redirectingTo}
               onClick={startEmailSignIn}
             >
               <MailIcon className="size-4" />
@@ -82,7 +82,7 @@ function SignInRoute() {
             className="w-full"
             variant="outline"
             size="lg"
-            disabled={redirectingTo !== null}
+            disabled={!!redirectingTo}
             onClick={startGoogleSignIn}
           >
             <GoogleIcon />

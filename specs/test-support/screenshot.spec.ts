@@ -61,8 +61,8 @@ const environmentVariable = (name: string, value: string) => {
   process.env[name] = value;
   return {
     [Symbol.dispose]: () => {
-      if (previous === undefined) delete process.env[name];
-      else process.env[name] = previous;
+      if (typeof previous === "string") process.env[name] = previous;
+      else delete process.env[name];
     },
   };
 };

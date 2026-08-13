@@ -71,14 +71,14 @@ test("a linked connection gets a hosted review processor", async () => {
   const receiver = subscription.payload?.receiver;
   if (
     typeof receiver !== "object" ||
-    receiver === null ||
+    !receiver ||
     !("expression" in receiver) ||
     !Array.isArray(receiver.expression)
   ) {
     throw new Error("test subscription has no processor expression");
   }
   const getStep = receiver.expression[1];
-  if (!Array.isArray(getStep) || typeof getStep[1] !== "object" || getStep[1] === null) {
+  if (!Array.isArray(getStep) || typeof getStep[1] !== "object" || !getStep[1]) {
     throw new Error("test subscription has no worker ref");
   }
   const ref = getStep[1] as {
@@ -235,18 +235,17 @@ function projectEnv(
                   maxOffset: fixture?.maxOffset ?? 0,
                   subscriptions: {
                     outbound: {
-                      byName:
-                        existingReviewBotCutoff === undefined
-                          ? {}
-                          : {
-                              "review-bot": {
-                                configuration: {
-                                  filter: {
-                                    jsonataCondition: `offset > ${existingReviewBotCutoff}`,
-                                  },
+                      byName: !Number.isFinite(existingReviewBotCutoff)
+                        ? {}
+                        : {
+                            "review-bot": {
+                              configuration: {
+                                filter: {
+                                  jsonataCondition: `offset > ${existingReviewBotCutoff}`,
                                 },
                               },
                             },
+                          },
                     },
                   },
                 },

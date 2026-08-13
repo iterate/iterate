@@ -45,12 +45,12 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
   // senderIdentity) — accepts inbound mail, so a thread's reply address
   // always lives on the domain the mail arrived on.
   const emailDomain = emailDomainForDeployment(config.projectHostnameBases);
-  if (recipient === null || emailDomain === null || recipient.domain !== emailDomain) {
+  if (!recipient || !emailDomain || recipient.domain !== emailDomain) {
     message.setReject("No such address.");
     return;
   }
   const project = await readProjectBySlug(itxEnv.PROJECT_DIRECTORY, recipient.slug);
-  if (project === null) {
+  if (!project) {
     message.setReject("No such address.");
     return;
   }
@@ -179,7 +179,7 @@ async function readCreatedProjectAllowedSenders(projectId: string): Promise<stri
     ).processorFacade({ name: EmailProcessorContract.slug });
     const snapshot = await facade.snapshot();
     const state = EmailProcessorContract.stateSchema.parse(snapshot.state);
-    if (state.birthCertificate === null) {
+    if (!state.birthCertificate) {
       throw new Error(`Email router for project ${projectId} has not been created`);
     }
     return state.allowedSenders;
@@ -249,13 +249,13 @@ async function storeInboundAttachments(input: {
 
 /** The address of a postal-mime Address, which may be a mailbox or a group. */
 function mailboxAddress(address: Email["from"] | undefined): string | undefined {
-  if (address === undefined) return undefined;
-  if (address.address !== undefined) return address.address;
-  return address.group?.find((mailbox) => mailbox.address !== undefined)?.address;
+  if (!address) return undefined;
+  if (address.address) return address.address;
+  return address.group?.find((mailbox) => !!mailbox.address)?.address;
 }
 
 function truncatedBody(key: "text" | "html", value: string | undefined) {
-  if (value === undefined) return {};
+  if (!value) return {};
   if (value.length <= EMAIL_BODY_TRUNCATE_CHARS) return { [key]: value };
   return { [key]: `${value.slice(0, EMAIL_BODY_TRUNCATE_CHARS)}\n[truncated]` };
 }
@@ -277,7 +277,7 @@ function isAutomatedMail(parsed: Email, envelopeFrom: string): boolean {
       ?.value.trim()
       .toLowerCase();
   const autoSubmitted = header("auto-submitted");
-  if (autoSubmitted !== undefined && autoSubmitted !== "no") return true;
+  if (autoSubmitted && autoSubmitted !== "no") return true;
   const precedence = header("precedence");
   if (precedence === "bulk" || precedence === "list" || precedence === "junk") return true;
   const sender = envelopeFrom.trim().toLowerCase();

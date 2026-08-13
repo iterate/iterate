@@ -48,9 +48,9 @@ export async function mintProjectAppSession(
     token: await signJWT(
       {
         audience: input.audience,
-        ...(input.email === undefined ? {} : { email: input.email }),
-        ...(input.image === undefined ? {} : { image: input.image }),
-        ...(input.name === undefined ? {} : { name: input.name }),
+        ...(!input.email ? {} : { email: input.email }),
+        ...(!input.image ? {} : { image: input.image }),
+        ...(!input.name ? {} : { name: input.name }),
         projectId: input.projectId,
         type: "project-app-session",
         userId: input.userId,
@@ -104,7 +104,7 @@ function parseMintInput(input: MintProjectAppSessionInput) {
 /** Empty or absent display fields stay out of the claims entirely. */
 function optionalDisplayField(value: string | undefined, maxLength: number): string | undefined {
   const trimmed = z.string().max(maxLength).optional().parse(value)?.trim();
-  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+  return !trimmed || trimmed === "" ? undefined : trimmed;
 }
 
 function parseValidateInput(input: ValidateProjectAppSessionInput) {

@@ -63,14 +63,13 @@ export function selectStrugglingSubscriptions(
 ): SubscriptionHealth[] {
   return Object.entries(args?.configured ?? {}).flatMap(([name, configured]) => {
     const runtime = args?.runtime?.[name];
-    if (runtime === undefined) return [];
-    const status: SubscriptionHealth["status"] | null =
-      configured.deliveryHalted !== undefined
-        ? "halted"
-        : runtime.nextAttemptAt !== null
-          ? "backoff"
-          : null;
-    if (status === null) return [];
+    if (!runtime) return [];
+    const status: SubscriptionHealth["status"] | null = configured.deliveryHalted
+      ? "halted"
+      : Number.isFinite(runtime.nextAttemptAt)
+        ? "backoff"
+        : null;
+    if (!status) return [];
     return [
       {
         name,

@@ -32,7 +32,7 @@ function TodoList({ slug }: { slug: string }) {
         <Link to="/">← lists</Link>
       </p>
       <h1>{slug}</h1>
-      {todos === undefined ? (
+      {!todos ? (
         <p>connecting…</p>
       ) : (
         <ul style={{ listStyle: "none", padding: 0 }}>
@@ -79,9 +79,9 @@ function TodoList({ slug }: { slug: string }) {
           onChange={(event) => setDraft(event.target.value)}
           placeholder="add a todo"
           aria-label="add a todo"
-          disabled={api === null}
+          disabled={!api}
         />
-        <button type="submit" disabled={api === null}>
+        <button type="submit" disabled={!api}>
           add
         </button>
       </form>

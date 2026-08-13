@@ -18,20 +18,19 @@
 
 function requireEnv(name: string): string {
   const value = process.env[name];
-  if (value === undefined || value === "") throw new Error(`Missing required env var ${name}`);
+  if (!value || value === "") throw new Error(`Missing required env var ${name}`);
   return value;
 }
 
 function flag(name: string, fallback: number): number {
   const fromCli = process.argv.indexOf(`--${name}`);
-  if (fromCli !== -1 && process.argv[fromCli + 1] !== undefined)
-    return Number(process.argv[fromCli + 1]);
+  if (fromCli !== -1 && process.argv[fromCli + 1]) return Number(process.argv[fromCli + 1]);
   return fallback;
 }
 
 function flagStr(name: string, fallback: string): string {
   const fromCli = process.argv.indexOf(`--${name}`);
-  if (fromCli !== -1 && process.argv[fromCli + 1] !== undefined) return process.argv[fromCli + 1]!;
+  if (fromCli !== -1 && process.argv[fromCli + 1]) return process.argv[fromCli + 1]!;
   return fallback;
 }
 

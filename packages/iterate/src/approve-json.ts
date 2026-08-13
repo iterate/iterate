@@ -89,7 +89,7 @@ export async function runApprovalJson(input: {
     loggedIn: true,
     principal,
     projectId: input.projectId,
-    key: key === null ? null : { kind: key.kind, keyId: key.keyId, label: key.label },
+    key: !key ? null : { kind: key.kind, keyId: key.keyId, label: key.label },
   });
 
   // The held batches announced but not yet resolved — kept so a decision has
@@ -147,7 +147,7 @@ export async function runApprovalJson(input: {
         pending.delete(offset);
         if (settlement.kind === "released") {
           const errors = settlement.outcomes.flatMap((outcome) =>
-            outcome.error === null ? [] : [outcome.error],
+            !outcome.error ? [] : [outcome.error],
           );
           if (errors.length === 0) {
             emit({
@@ -223,7 +223,7 @@ export async function runApprovalJson(input: {
       return;
     }
     const payload = pending.get(offset);
-    if (payload === undefined) {
+    if (!payload) {
       emit({ type: "error", offset, message: "no such pending batch" });
       return;
     }

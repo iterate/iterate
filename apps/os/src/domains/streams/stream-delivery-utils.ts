@@ -45,7 +45,7 @@ export function hasStructuredIdPrefix(
   prefix: string,
   ...parts: readonly (string | number | null)[]
 ): boolean {
-  if (value === undefined || !value.startsWith(`${prefix}:`)) return false;
+  if (!value || !value.startsWith(`${prefix}:`)) return false;
   try {
     const tuple: unknown = JSON.parse(value.slice(prefix.length + 1));
     return Array.isArray(tuple) && parts.every((part, index) => Object.is(tuple[index], part));
@@ -70,7 +70,7 @@ export async function withDeliveryTimeout<T>(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_DELIVERY_TIMEOUT_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
-  if (opts.onLateResolve !== undefined) {
+  if (opts.onLateResolve) {
     const onLateResolve = opts.onLateResolve;
     void promise.then(
       (value) => {
@@ -101,7 +101,7 @@ export function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message || "unknown error";
   if (
     typeof error === "object" &&
-    error !== null &&
+    error &&
     "message" in error &&
     typeof error.message === "string" &&
     error.message.length > 0
@@ -128,8 +128,8 @@ export function sameCopiedEventIdentity(
   const existingHop = existing.source?.copiedFrom?.at(-1);
   const incomingHop = incoming.source?.copiedFrom?.at(-1);
   return (
-    existingHop !== undefined &&
-    incomingHop !== undefined &&
+    !!existingHop &&
+    !!incomingHop &&
     existingHop.name === incomingHop.name &&
     existingHop.cursorChangedAtSourceOffset === incomingHop.cursorChangedAtSourceOffset &&
     existingHop.projectId === incomingHop.projectId &&

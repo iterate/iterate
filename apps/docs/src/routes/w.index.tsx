@@ -37,7 +37,7 @@ function BoardLensPage() {
       void navigate({ replace: true, search: (current) => ({ ...current, ...patch }) }),
     [navigate],
   );
-  if (repoPath === null) {
+  if (!repoPath) {
     return (
       <div className="mx-auto max-w-md p-8 text-sm text-muted-foreground">
         <h1 className="mb-2 text-base font-semibold text-foreground">Bad repo in this link</h1>

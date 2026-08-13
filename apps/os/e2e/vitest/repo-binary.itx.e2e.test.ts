@@ -16,7 +16,7 @@ test("commitFiles contentBase64 and readFile base64 round-trip bytes exactly", a
   await waitForCondition(
     async () => {
       const read = await project.repo.readFile({ path: "package.json" }).catch(() => null);
-      return read !== null;
+      return !!read;
     },
     { description: "project repo to be seeded", intervalMs: 1_000, timeoutMs: 60_000 },
   );

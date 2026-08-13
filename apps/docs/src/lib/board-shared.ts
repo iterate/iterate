@@ -15,7 +15,7 @@ export const DEFAULT_REPO_PATH = "/repos/config";
  * empty, dotted, or exotic segments. Returns null when invalid.
  */
 export function normalizeRepoPath(value: string | null | undefined): string | null {
-  if (value === null || value === undefined || value === "") return DEFAULT_REPO_PATH;
+  if (!value || value === "") return DEFAULT_REPO_PATH;
   if (!value.startsWith("/repos/")) return null;
   const segments = value.slice(1).split("/");
   if (segments.length < 2) return null;
@@ -51,9 +51,9 @@ export function boardAddressFor(
   repoPaths: readonly string[],
 ): { boardId: string; repoPath: string } | null {
   const boardId = boardIdOf(path);
-  if (boardId === null) return null;
+  if (!boardId) return null;
   const repoPath = repoPaths.find((candidate) => boardWorkspacePath(boardId, candidate) === path);
-  return repoPath === undefined ? null : { boardId, repoPath };
+  return !repoPath ? null : { boardId, repoPath };
 }
 
 /** The board id a /workspaces/tasks/ path carries, if it is shaped like one. */
@@ -86,7 +86,7 @@ export type BoardAddress = {
  */
 export function isGuestWorkspacePath(workspacePath: string, repoPath: string): boolean {
   const boardId = boardIdOf(workspacePath);
-  return boardId === null || boardWorkspacePath(boardId, repoPath) !== workspacePath;
+  return !boardId || boardWorkspacePath(boardId, repoPath) !== workspacePath;
 }
 
 /** 32-bit FNV-1a as 8 lowercase hex chars. */

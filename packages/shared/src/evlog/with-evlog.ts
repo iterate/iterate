@@ -229,7 +229,7 @@ function configureEvlogRuntime() {
 function createRequestContextFields(request: Request) {
   const cf = Reflect.get(request, "cf");
   const workerContext =
-    typeof cf === "object" && cf !== null
+    typeof cf === "object" && cf
       ? {
           colo: typeof Reflect.get(cf, "colo") === "string" ? Reflect.get(cf, "colo") : undefined,
           country:
@@ -314,7 +314,7 @@ function flushCurrentEvlog(options: { status: number; durationMs: number }) {
 }
 
 function extractErrorStatus(error: unknown) {
-  if (typeof error !== "object" || error === null) {
+  if (typeof error !== "object" || !error) {
     return 500;
   }
 

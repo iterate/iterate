@@ -72,7 +72,7 @@ export class DocsApiRoot extends RpcTarget implements DocsApi {
       if (token === "") throw new Error("project-app-session token must not be empty");
       return { type: "project-app-session", token };
     }
-    if (credential !== undefined) {
+    if (credential) {
       if (credential.type === "project-app-session" && credential.token !== "") return credential;
       if (credential.type === "project-secret" && credential.secret !== "") {
         projectCredentialAddress(credential);
@@ -80,7 +80,7 @@ export class DocsApiRoot extends RpcTarget implements DocsApi {
       }
       throw new Error("unsupported credential — expected project-app-session or project-secret");
     }
-    if (this.#cookieToken !== undefined) {
+    if (this.#cookieToken) {
       return { type: "project-app-session", token: this.#cookieToken };
     }
     throw new Error(
@@ -120,7 +120,7 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
    */
   board(boardId: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspace {
     const normalized = normalizeRepoPath(repoPath);
-    if (!isBoardId(boardId) || normalized === null) {
+    if (!isBoardId(boardId) || !normalized) {
       throw new Error("bad board id or repo path");
     }
     return new TasksWorkspaceApi(this.#dial, boardWorkspacePath(boardId, normalized), normalized, {
@@ -138,7 +138,7 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
    */
   workspaceAt(workspacePath: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspace {
     const normalized = normalizeRepoPath(repoPath);
-    if (normalized === null) throw new Error("bad repo path");
+    if (!normalized) throw new Error("bad repo path");
     return new TasksWorkspaceApi(this.#dial, requireWorkspacePath(workspacePath), normalized, {
       lazyCreate: false,
     });
@@ -274,7 +274,7 @@ class DocsWorkspaceApi extends RpcTarget implements DocsWorkspace {
     const path = resolveDocumentPath(this.#workspacePath, rawPath);
     return this.#withWorkspace(async (workspace) => {
       const content = await workspace.readFile(path);
-      if (content === null) {
+      if (!content) {
         throw new Error(`document "${path}" does not exist`);
       }
       return {
@@ -334,7 +334,7 @@ class DocsWorkspaceApi extends RpcTarget implements DocsWorkspace {
     operation: (workspace: WorkspaceDocumentStub) => Promise<T>,
   ): Promise<T> {
     return this.#withWorkspace(async (workspace) => {
-      if ((await workspace.readFile(path)) === null) {
+      if (!(await workspace.readFile(path))) {
         throw new Error(`document "${path}" does not exist`);
       }
       return operation(workspace);

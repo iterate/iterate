@@ -38,13 +38,12 @@ export function analyzeTestTelemetryCompleteness(
   expectedWorkspaces: readonly string[],
 ): TestTelemetryCompleteness {
   const primaryArtifact = selectPrimaryArtifact(artifacts);
-  const currentArtifacts =
-    primaryArtifact === undefined
-      ? artifacts
-      : artifacts.filter(
-          (artifact) =>
-            ciScopeKey(artifactCiScope(artifact)) === ciScopeKey(artifactCiScope(primaryArtifact)),
-        );
+  const currentArtifacts = !primaryArtifact
+    ? artifacts
+    : artifacts.filter(
+        (artifact) =>
+          ciScopeKey(artifactCiScope(artifact)) === ciScopeKey(artifactCiScope(primaryArtifact)),
+      );
   const foreignArtifactIds = artifacts
     .filter((artifact) => !currentArtifacts.includes(artifact))
     .map(({ artifactId }) => artifactId);
@@ -54,7 +53,7 @@ export function analyzeTestTelemetryCompleteness(
   const observedWorkspaces = [
     ...new Set(
       currentArtifacts.flatMap((artifact) =>
-        artifact.context.workspace === undefined ? [] : [artifact.context.workspace],
+        !artifact.context.workspace ? [] : [artifact.context.workspace],
       ),
     ),
   ];
@@ -65,7 +64,7 @@ export function analyzeTestTelemetryCompleteness(
   );
   const observedScopedArtifactSources = currentArtifacts.flatMap((artifact) => {
     const source = testTelemetryArtifactSource(artifact);
-    return source === null ? [] : [scopedArtifactSource(artifact, source)];
+    return !source ? [] : [scopedArtifactSource(artifact, source)];
   });
 
   return {
@@ -93,7 +92,7 @@ export function testTelemetryArtifactSource(
   artifact: TestTelemetryArtifact,
 ): TestTelemetryArtifactSource | null {
   const { workspace } = artifact.context;
-  if (workspace === undefined) return null;
+  if (!workspace) return null;
   return {
     producer: artifact.producer,
     framework: artifact.context.framework,
@@ -173,7 +172,7 @@ function artifactCiScope(artifact: TestTelemetryArtifact): ArtifactCiScope {
     repository: artifact.ci.repository,
     workflowRunId: artifact.ci.workflowRunId,
     workflowRunAttempt: artifact.ci.workflowRunAttempt,
-    ...(artifact.ci.jobName === undefined ? {} : { jobName: artifact.ci.jobName }),
+    ...(!artifact.ci.jobName ? {} : { jobName: artifact.ci.jobName }),
   };
 }
 

@@ -45,7 +45,7 @@ describe("Agent presentation family", () => {
     });
     const child = record(`${parent.path}/child`);
     const [node] = buildAgentForest({ [parent.path]: parent, [child.path]: child });
-    if (node === undefined) throw new Error("missing test node");
+    if (!node) throw new Error("missing test node");
 
     const markup = renderToStaticMarkup(
       <AgentCommandPresentation expanded={false} node={node} nowMs={Date.parse(CREATED_AT)} />,
@@ -78,7 +78,7 @@ describe("Agent presentation family", () => {
       },
     });
     const [node] = buildAgentForest({ [agent.path]: agent });
-    if (node === undefined) throw new Error("missing test node");
+    if (!node) throw new Error("missing test node");
 
     const markup = renderToStaticMarkup(<AgentSidebarRow node={node} onOpen={() => undefined} />);
 
@@ -104,7 +104,7 @@ describe("Agent presentation family", () => {
       },
     });
     const [node] = buildAgentForest({ [parent.path]: parent, [child.path]: child });
-    if (node === undefined) throw new Error("missing test node");
+    if (!node) throw new Error("missing test node");
 
     const markup = renderToStaticMarkup(
       <AgentListRow
@@ -139,7 +139,7 @@ describe("Agent presentation family", () => {
       },
     });
     const [node] = buildAgentForest({ [agent.path]: agent });
-    if (node === undefined) throw new Error("missing test node");
+    if (!node) throw new Error("missing test node");
 
     const markup = renderToStaticMarkup(
       <AgentListRow
@@ -169,7 +169,7 @@ describe("Agent presentation family", () => {
       summary: { pinned: false, waitingFor: "timer" },
     });
     const [node] = buildAgentForest({ [agent.path]: agent });
-    if (node === undefined) throw new Error("missing test node");
+    if (!node) throw new Error("missing test node");
 
     const markup = renderToStaticMarkup(
       <AgentListRow
@@ -193,7 +193,7 @@ describe("Agent presentation family", () => {
       summary: { pinned: false, waitingFor: "user_input" },
     });
     const [node] = buildAgentForest({ [parent.path]: parent, [child.path]: child });
-    if (node === undefined) throw new Error("missing test node");
+    if (!node) throw new Error("missing test node");
 
     const collapsedMarkup = renderToStaticMarkup(
       <AgentListRow
@@ -231,7 +231,7 @@ describe("Agent presentation family", () => {
       },
     });
     const [node] = buildAgentForest({ [agent.path]: agent });
-    if (node === undefined) throw new Error("missing test node");
+    if (!node) throw new Error("missing test node");
 
     const markup = renderToStaticMarkup(
       <AgentListRow

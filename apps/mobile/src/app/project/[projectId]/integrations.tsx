@@ -117,7 +117,7 @@ export default function IntegrationsScreen() {
         "Only these numeric Telegram user IDs can use project capabilities. Separate IDs with commas or new lines; leave empty to deny all.",
         access.allowedUserIds.join("\n"),
       );
-      if (value === null) return null;
+      if (!value) return null;
       const allowedUserIds = value.split(/[\s,]+/).filter(Boolean);
       await project.integrations.setTelegramAccess({ allowedUserIds, connection });
       return allowedUserIds;
@@ -127,7 +127,7 @@ export default function IntegrationsScreen() {
   const connectAccount = useMutation({
     mutationFn: async () => {
       const account = await promptForAccountConnection();
-      if (account === null) return null;
+      if (!account) return null;
       const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
       const project = await getProjectItx(baseUrl, projectId);
       await project.secrets
@@ -140,10 +140,10 @@ export default function IntegrationsScreen() {
       return account;
     },
     onSuccess: (account) => {
-      if (account === null) return;
+      if (!account) return;
       queryClient.setQueryData<MobileIntegrations>(queryKey, (current) => {
         if (
-          current === undefined ||
+          !current ||
           current.accounts.some(
             (entry) =>
               entry.integration === account.integration && entry.connection === account.connection,
@@ -282,7 +282,7 @@ export default function IntegrationsScreen() {
                 <View key={entry.path} style={styles.card}>
                   <Text style={styles.cardTitle}>{entry.integration}</Text>
                   <Text style={styles.description}>
-                    {entry.connection === null
+                    {!entry.connection
                       ? "Integration-level mount provided by project code."
                       : `Connection ${entry.connection} provided by project code.`}
                   </Text>
@@ -413,7 +413,7 @@ function AccountConnectionsCard({
             <Text numberOfLines={1} style={styles.path}>
               itx.worker.{account.integration}.{account.connection}
             </Text>
-            {account.connected === null ? null : (
+            {typeof account.connected !== "boolean" ? null : (
               <Text style={account.connected ? styles.connected : styles.disconnected}>
                 {account.connected ? "Connected" : "Disconnected"}
               </Text>
@@ -497,23 +497,23 @@ async function promptForAccountConnection() {
     "Lowercase name for the account provider.",
     "waitrose",
   );
-  if (integration === null) return null;
+  if (!integration) return null;
   const connection = await promptForText(
     "Connection name",
     "Your name for this account, such as personal or mum.",
     "",
   );
-  if (connection === null) return null;
+  if (!connection) return null;
   const username = await promptForText("Username / email", "The provider login.", "");
-  if (username === null) return null;
+  if (!username) return null;
   const password = await promptForText("Password", "Stored write-only.", "", true);
-  if (password === null) return null;
+  if (!password) return null;
   const loginUrl = await promptForText(
     "Login URL",
     "The provider session-login endpoint. Egress is pinned to its origin.",
     "https://www.waitrose.com/api/graphql-prod/graph/live",
   );
-  if (loginUrl === null) return null;
+  if (!loginUrl) return null;
   if (!/^[a-z][a-z0-9-]*$/.test(integration) || !/^[a-z][a-z0-9-]*$/.test(connection)) {
     throw new Error("Integration and connection names need lowercase letters, digits, and dashes.");
   }

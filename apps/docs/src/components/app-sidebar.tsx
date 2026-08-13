@@ -96,9 +96,7 @@ export function AppSidebar() {
                       <Link
                         to="/"
                         search={
-                          workspacePath === undefined
-                            ? {}
-                            : { repo: search.repo, workspace: workspacePath }
+                          !workspacePath ? {} : { repo: search.repo, workspace: workspacePath }
                         }
                       />
                     }
@@ -238,9 +236,9 @@ function WorkspaceSwitcher({
               <DropdownMenuLabel className="text-xs text-muted-foreground">
                 Workspaces
               </DropdownMenuLabel>
-              {workspaces === null ? (
+              {!workspaces ? (
                 <DropdownMenuItem disabled className="p-2">
-                  <span className={listError === null ? "truncate" : "truncate text-red-700"}>
+                  <span className={!listError ? "truncate" : "truncate text-red-700"}>
                     {listError ?? "Loading…"}
                   </span>
                 </DropdownMenuItem>
@@ -292,7 +290,7 @@ function WorkspaceSwitcher({
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-        {createError !== null && (
+        {!!createError && (
           <p className="px-2 pt-1 text-xs text-red-700 group-data-[collapsible=icon]:hidden">
             {createError}
           </p>

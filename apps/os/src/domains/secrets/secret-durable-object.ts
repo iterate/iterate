@@ -136,7 +136,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     const idempotencyKey = `secret/created:${this.#name.projectId}:${this.#name.path}`;
 
     const existing = await this.#stream.getEvent({ idempotencyKey });
-    if (existing !== undefined) {
+    if (existing) {
       // Duplicate create. The stream's same-key-different-body rejection
       // cannot police secret payloads (encrypted material has a fresh IV per
       // encryption), so the loud different-payload failure lives here: the
@@ -161,23 +161,22 @@ export class SecretDurableObject extends DurableObject<Env> {
 
     for (let attempt = 1; attempt <= MAX_MATERIAL_APPEND_ATTEMPTS; attempt += 1) {
       const snapshot = await this.#snapshotWithOffset();
-      if (snapshot.state.birthCertificate !== null) {
+      if (snapshot.state.birthCertificate) {
         throw new Error(`secret already created: ${this.#name.path}`);
       }
       const offset = snapshot.offset + 1;
-      const encryptedMaterial =
-        input.material === undefined
-          ? undefined
-          : await encryptSecretCellMaterial(
-              JSON.stringify(input.material),
-              this.env.SECRET_ENCRYPTION_KEY,
-              {
-                egressOrigins: egressOrigins(egress),
-                offset,
-                path: this.#name.path,
-                projectId: this.#name.projectId,
-              },
-            );
+      const encryptedMaterial = !input.material
+        ? undefined
+        : await encryptSecretCellMaterial(
+            JSON.stringify(input.material),
+            this.env.SECRET_ENCRYPTION_KEY,
+            {
+              egressOrigins: egressOrigins(egress),
+              offset,
+              path: this.#name.path,
+              projectId: this.#name.projectId,
+            },
+          );
       try {
         const [created, configured] = await this.#stream.append(
           ...secretCreationEvents({
@@ -186,7 +185,7 @@ export class SecretDurableObject extends DurableObject<Env> {
             payload: {
               config: {
                 egress,
-                ...(encryptedMaterial === undefined ? {} : { encryptedMaterial }),
+                ...(!encryptedMaterial ? {} : { encryptedMaterial }),
                 refresh: input.refresh ?? null,
                 visibility,
               },
@@ -259,7 +258,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     for (let attempt = 1; attempt <= MAX_MATERIAL_APPEND_ATTEMPTS; attempt += 1) {
       const snapshot = await this.#snapshotWithOffset();
       if (snapshot.state.updatedOffset !== input.expectedUpdatedOffset) return false;
-      if (snapshot.state.encryptedMaterial === null) return true;
+      if (!snapshot.state.encryptedMaterial) return true;
       try {
         const [event] = await this.#appendSecretEvent({
           offset: snapshot.offset + 1,
@@ -278,21 +277,21 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   async #update(input: SecretUpdateInput) {
-    if (input.material === undefined && input.egress === undefined && input.refresh === undefined) {
+    if (!input.material && !input.egress && !input.refresh) {
       throw new Error("secret.update requires material, egress, or refresh");
     }
-    if (input.material !== undefined && input.egress === undefined) {
+    if (input.material && !input.egress) {
       throw new Error("secret.update requires egress with replacement material");
     }
     const initialSnapshot = await this.#snapshotWithOffset();
     assertSecretCreated(initialSnapshot.state, this.#name.path);
 
-    const egress = input.egress === undefined ? undefined : normalizeEgress(input.egress);
+    const egress = !input.egress ? undefined : normalizeEgress(input.egress);
     // The create()-side exclusivity as an invariant: a readable secret's
     // "never substituted outbound" property must survive every later update.
     if (
       initialSnapshot.state.birthCertificate?.config.visibility === "readable" &&
-      egress !== undefined &&
+      egress &&
       egress.urls.length > 0
     ) {
       throw new Error(
@@ -303,12 +302,12 @@ export class SecretDurableObject extends DurableObject<Env> {
     // A material-less update is intentionally destructive in the reduction. It
     // needs no privileged append lane: egress, refresh, and audit facts are all
     // ordinary public stream coordination.
-    if (input.material === undefined) {
+    if (!input.material) {
       const [event] = await this.#appendSecretEvent({
         type: "events.iterate.com/secret/updated",
         payload: {
-          ...(egress === undefined ? {} : { egress }),
-          ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
+          ...(!egress ? {} : { egress }),
+          ...(!input.refresh ? {} : { refresh: input.refresh }),
         },
       });
       await this.#waitUntilProcessed(event!.offset);
@@ -325,7 +324,7 @@ export class SecretDurableObject extends DurableObject<Env> {
           egress: egress!,
           material: input.material,
           offset: snapshot.offset + 1,
-          ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
+          ...(!input.refresh ? {} : { refresh: input.refresh }),
         });
         await this.#waitUntilProcessed(event.offset);
         return event;
@@ -354,7 +353,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   async exportForProjectSeed(): Promise<SecretProjectSeedExport> {
     const state = await this.#snapshot();
     assertSecretCreated(state, this.#name.path);
-    if (state.encryptedMaterial === null) {
+    if (!state.encryptedMaterial) {
       throw new Error(`secret has no material: ${this.#name.path}`);
     }
     const { offset, ...encrypted } = state.encryptedMaterial;
@@ -396,7 +395,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     revision: { kind: "any-revision" } | { kind: "exact-revision"; updatedOffset: number },
   ): Promise<Response> {
     const { problems, references } = await secretReferencesFromRequest(request);
-    if (problems[0] !== undefined) return secretErrorResponse(problems[0].code);
+    if (problems[0]) return secretErrorResponse(problems[0].code);
     if (references.length === 0) return secretErrorResponse("secret_reference_required");
     if (references.some((reference) => reference.path !== this.#name.path)) {
       // One request, one secret: cross-secret chaining is not supported.
@@ -411,14 +410,13 @@ export class SecretDurableObject extends DurableObject<Env> {
 
       // A refresh-and-retry needs the body twice; clone while it is still
       // undisturbed. (The cast is workers-types Request<Cf> vs bare Request.)
-      let retry =
-        state.refresh === null
-          ? null
-          : {
-              source: request.clone() as unknown as Request,
-              strategy: state.refresh,
-              updatedOffset: state.updatedOffset,
-            };
+      let retry = !state.refresh
+        ? null
+        : {
+            source: request.clone() as unknown as Request,
+            strategy: state.refresh,
+            updatedOffset: state.updatedOffset,
+          };
 
       let substituted: Request;
       try {
@@ -426,7 +424,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       } catch (error) {
         // No material / missing field with a strategy configured: mint first
         // (the first-use case — e.g. a fresh GitHub installation), then retry.
-        if (retry === null || !isMintableMiss(error)) throw error;
+        if (!retry || !isMintableMiss(error)) throw error;
         await this.#refresh(retry);
         state = await this.#snapshot();
         assertSecretRevision(state, revision);
@@ -439,7 +437,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       const response = await fetchWithCredentialRedirects(substituted, {
         assertUrlAllowed: (url) => assertOriginPinned(url, state),
       });
-      if (response.status !== 401 || retry === null) {
+      if (response.status !== 401 || !retry) {
         return await withWebSocketHandshakeHeaders(request, response);
       }
 
@@ -482,7 +480,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     if (state.birthCertificate?.config.visibility !== "readable") {
       throw new Error(`secret is write-only (not born readable): ${this.#name.path}`);
     }
-    if (state.encryptedMaterial === null) return null;
+    if (!state.encryptedMaterial) return null;
     return await this.#decrypt(state.encryptedMaterial, state.egress);
   }
 
@@ -498,7 +496,7 @@ export class SecretDurableObject extends DurableObject<Env> {
    */
   async verifyMaterialField(input: { field?: string; value: string }): Promise<boolean> {
     const { state } = await this.#snapshotWithOffset();
-    if (state.encryptedMaterial === null) return false;
+    if (!state.encryptedMaterial) return false;
     const material = await this.#decrypt(state.encryptedMaterial, state.egress);
     let expected: unknown;
     try {
@@ -512,12 +510,11 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   /** Substitute this secret's placeholders (headers, URL path, opted-in JSON) from material. */
   async #substitute(request: Request, state: SecretState): Promise<Request> {
-    const material =
-      state.encryptedMaterial === null
-        ? null
-        : await this.#decrypt(state.encryptedMaterial, state.egress);
+    const material = !state.encryptedMaterial
+      ? null
+      : await this.#decrypt(state.encryptedMaterial, state.egress);
     return substituteSecretRequest(request, (reference) => {
-      if (material === null) throw new SecretSubstitutionError("secret_not_found");
+      if (!material) throw new SecretSubstitutionError("secret_not_found");
       return selectSecretField(material, reference.field);
     });
   }
@@ -555,10 +552,9 @@ export class SecretDurableObject extends DurableObject<Env> {
       // fences changes that land after this snapshot.
       throw new SecretSubstitutionError("secret_not_found");
     }
-    const material =
-      state.encryptedMaterial === null
-        ? {}
-        : await this.#decrypt(state.encryptedMaterial, state.egress);
+    const material = !state.encryptedMaterial
+      ? {}
+      : await this.#decrypt(state.encryptedMaterial, state.egress);
     const record = asMaterialRecord(material);
     const refresh = expected.strategy;
     if (refresh.kind === "oauth-refresh-token") {
@@ -604,12 +600,12 @@ export class SecretDurableObject extends DurableObject<Env> {
     const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken });
     // A confidential client authenticates with HTTP Basic; a public client (no
     // secret) instead identifies itself with client_id in the body (RFC 6749 §6).
-    if (creds.clientSecret === undefined) body.set("client_id", creds.clientId);
+    if (!creds.clientSecret) body.set("client_id", creds.clientId);
     const response = await fetchWithCredentialRedirects(
       new Request(refresh.tokenEndpoint, {
         method: "POST",
         headers: {
-          ...(creds.clientSecret === undefined
+          ...(!creds.clientSecret
             ? {}
             : { authorization: `Basic ${btoa(`${creds.clientId}:${creds.clientSecret}`)}` }),
           "content-type": "application/x-www-form-urlencoded",
@@ -822,7 +818,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       payload: {
         egress: input.egress,
         encryptedMaterial,
-        ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
+        ...(!input.refresh ? {} : { refresh: input.refresh }),
       },
     });
     return event!;
@@ -918,7 +914,7 @@ function assertOriginPinned(url: string, state: SecretState): void {
 }
 
 function asMaterialRecord(material: unknown): Record<string, unknown> {
-  if (typeof material !== "object" || material === null || Array.isArray(material)) {
+  if (typeof material !== "object" || !material || Array.isArray(material)) {
     // Non-record material cannot hold the fields a refresh strategy reads.
     throw new SecretSubstitutionError("secret_reference_field_not_found");
   }
@@ -941,7 +937,7 @@ function optionalStringField(material: Record<string, unknown>, field: string): 
 }
 
 function sameRefresh(current: SecretRefresh | null, expected: SecretRefresh | null): boolean {
-  if (current === null || expected === null) return current === expected;
+  if (!current || !expected) return current === expected;
   if (current.kind !== expected.kind) return false;
   // Refresh facts are JSON values produced by the same schema. Comparing their
   // serialized form preserves the exact-fact semantics: even a configuration
@@ -958,16 +954,16 @@ function sameRefresh(current: SecretRefresh | null, expected: SecretRefresh | nu
 export function describeSecretState(state: SecretState): SecretDescription {
   return {
     audit: state.audit,
-    created: state.birthCertificate !== null,
+    created: !!state.birthCertificate,
     egress: state.egress,
-    hasMaterial: state.encryptedMaterial !== null,
+    hasMaterial: !!state.encryptedMaterial,
     visibility: state.birthCertificate?.config.visibility ?? "write-only",
     refresh: state.refresh?.kind ?? null,
   };
 }
 
 function assertSecretCreated(state: SecretState, path: string): void {
-  if (state.birthCertificate === null) {
+  if (!state.birthCertificate) {
     throw new Error(`secret has not been created: ${path}`);
   }
 }

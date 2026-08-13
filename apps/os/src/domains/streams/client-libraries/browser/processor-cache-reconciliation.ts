@@ -49,7 +49,7 @@ export async function reconcileBrowserProcessorCache<
 
   assertCurrentWriter();
   const serverStreamId = args.serverState.streamId;
-  if (serverStreamId === undefined) {
+  if (!serverStreamId) {
     throw new Error("stream runtime state has no stream ID after stream creation");
   }
   let discardedAny = false;
@@ -68,7 +68,7 @@ export async function reconcileBrowserProcessorCache<
 
     // No recorded schema and no checkpoint is a genuinely empty cache, not a
     // schema change. Avoid clearing/VACUUMing a new OPFS database.
-    const hasNoLocalProcessorData = localMaxOffset <= 0 && localSchemaVersion === undefined;
+    const hasNoLocalProcessorData = localMaxOffset <= 0 && !Number.isFinite(localSchemaVersion);
 
     if (!hasNoLocalProcessorData && localSchemaVersion !== processor.schemaVersion) {
       console.warn(

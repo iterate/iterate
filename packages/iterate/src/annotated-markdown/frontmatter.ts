@@ -18,7 +18,7 @@ type FrontmatterYamlParse =
 export function parseRestrictedFrontmatterYaml(text: string): FrontmatterYamlParse {
   const document = parseDocument(text, { uniqueKeys: true });
   const firstError = document.errors[0];
-  if (firstError !== undefined) {
+  if (firstError) {
     return {
       ok: false,
       code: "frontmatter-yaml-error",
@@ -32,7 +32,7 @@ export function parseRestrictedFrontmatterYaml(text: string): FrontmatterYamlPar
       message: "%YAML directives are not allowed",
     };
   }
-  if (document.contents !== null && !isMap(document.contents)) {
+  if (document.contents && !isMap(document.contents)) {
     return {
       ok: false,
       code: "frontmatter-not-a-map",
@@ -49,14 +49,14 @@ export function parseRestrictedFrontmatterYaml(text: string): FrontmatterYamlPar
       return visit.BREAK;
     },
     Node(_key, node, path) {
-      if (node.anchor !== undefined) {
+      if (node.anchor) {
         failure = {
           code: "frontmatter-alias",
           message: "YAML anchors are not allowed in front matter",
         };
         return visit.BREAK;
       }
-      if (node.tag !== undefined) {
+      if (node.tag) {
         failure = {
           code: "frontmatter-tag",
           message: `YAML tags are not allowed in front matter (${node.tag})`,
@@ -97,9 +97,9 @@ export function parseRestrictedFrontmatterYaml(text: string): FrontmatterYamlPar
       return undefined;
     },
   });
-  if (failure !== null)
-    return { ok: false, ...(failure as { code: DiagnosticCode; message: string }) };
-  const data: Record<string, unknown> =
-    document.contents === null ? {} : ((document.toJS() ?? {}) as Record<string, unknown>);
+  if (failure) return { ok: false, ...(failure as { code: DiagnosticCode; message: string }) };
+  const data: Record<string, unknown> = !document.contents
+    ? {}
+    : ((document.toJS() ?? {}) as Record<string, unknown>);
   return { ok: true, data, document };
 }

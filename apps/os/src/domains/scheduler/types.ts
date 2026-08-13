@@ -103,7 +103,7 @@ function sameJsonValue(left: unknown, right: unknown): boolean {
       left.every((value, index) => sameJsonValue(value, right[index]))
     );
   }
-  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
+  if (typeof left !== "object" || !left || typeof right !== "object" || !right) {
     return false;
   }
   const leftRecord = left as Record<string, unknown>;

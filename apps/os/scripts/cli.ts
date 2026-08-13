@@ -77,7 +77,7 @@ if (isMainModule(import.meta.url)) {
    */
   if (!process.env.DOPPLER_CONFIG) {
     const captureEnvironment = projectSeedCaptureEnvironment(args);
-    if (captureEnvironment !== null) {
+    if (captureEnvironment) {
       spawnAndExit("doppler", [
         "run",
         "--project",
@@ -107,7 +107,7 @@ if (isMainModule(import.meta.url)) {
 function projectSeedCaptureEnvironment(args: readonly string[]): string | null {
   if (args[0] !== "project-seed" || args[1] !== "capture") return null;
   const equalsArgument = args.find((argument) => argument.startsWith("--environment="));
-  if (equalsArgument !== undefined) {
+  if (equalsArgument) {
     return equalsArgument.slice("--environment=".length).trim() || "prd";
   }
   const flagIndex = args.indexOf("--environment");

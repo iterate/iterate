@@ -91,7 +91,7 @@ export class StreamBrowserDatabase implements Disposable {
     ) => {
       const { id, ok, result, error } = event.data;
       const pending = this.#pending.get(id);
-      if (pending === undefined) return;
+      if (!pending) return;
       this.#pending.delete(id);
       if (ok) pending.resolve(result);
       else pending.reject(new Error(error ?? "stream db worker error"));
@@ -243,7 +243,7 @@ export class StreamBrowserDatabase implements Disposable {
   query(sql: string, params: SqlValue[]): SqliteQueryHandle {
     const key = `${sql}\0${JSON.stringify(params)}`;
     const existing = this.#queries.get(key);
-    if (existing !== undefined) return existing.handle;
+    if (existing) return existing.handle;
     // The visible-range query changes on every virtual scroll range. Seed a new
     // range query with the previous successful result for the same SQL shape so
     // the feed does not briefly render an all-pending window while SQLite catches up.
@@ -254,10 +254,9 @@ export class StreamBrowserDatabase implements Disposable {
     const entry: RegisteredQuery = {
       sql,
       params,
-      snapshot:
-        previousSnapshot === undefined
-          ? PENDING
-          : { ...previousSnapshot, status: "pending", error: undefined },
+      snapshot: !previousSnapshot
+        ? PENDING
+        : { ...previousSnapshot, status: "pending", error: undefined },
       started: false,
       gcTimer: undefined,
       listeners: new Set(),
@@ -265,7 +264,7 @@ export class StreamBrowserDatabase implements Disposable {
         getSnapshot: () => entry.snapshot,
         subscribe: (listener) => {
           entry.listeners.add(listener);
-          if (entry.gcTimer !== undefined) {
+          if (entry.gcTimer) {
             clearTimeout(entry.gcTimer);
             entry.gcTimer = undefined;
           }
@@ -276,7 +275,7 @@ export class StreamBrowserDatabase implements Disposable {
           // exact "feed frozen until reload" bug. The dedupe slot may have been
           // re-taken by a newer identical entry; #liveQueries is what change
           // notification iterates, so re-adding there is what matters.
-          if (this.#queries.get(key) === undefined) this.#queries.set(key, entry);
+          if (!this.#queries.get(key)) this.#queries.set(key, entry);
           this.#liveQueries.add(entry);
           if (!entry.started) {
             entry.started = true;
@@ -300,7 +299,7 @@ export class StreamBrowserDatabase implements Disposable {
   }
 
   #armQueryGc(key: string, entry: RegisteredQuery) {
-    if (entry.gcTimer !== undefined) clearTimeout(entry.gcTimer);
+    if (entry.gcTimer) clearTimeout(entry.gcTimer);
     entry.gcTimer = setTimeout(() => {
       entry.gcTimer = undefined;
       if (entry.listeners.size === 0) {
@@ -357,7 +356,7 @@ export class StreamBrowserDatabase implements Disposable {
       `SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?`,
       [name],
     );
-    return row !== undefined;
+    return !!row;
   }
 
   #publishChange(change: StreamDbChange) {
@@ -475,12 +474,13 @@ function fnv1a32(value: string) {
 }
 
 function isSqlRow(value: unknown): value is Record<string, SqlValue> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   return Object.values(value).every(isSqlValue);
 }
 
 function isSqlValue(value: unknown): value is SqlValue {
   return (
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- SQLite has null but no undefined/false; the guard must not lie about those
     value === null ||
     typeof value === "string" ||
     typeof value === "number" ||

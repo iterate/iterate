@@ -37,7 +37,7 @@ export function useAdminStreamSource(projectId: string) {
   // project via session.projects.get(id).
   const source = useMemo(
     () => async (streamPath: string) =>
-      streamProjectId == null
+      !streamProjectId
         ? (await connectIterateSession()).streams.get(streamPath)
         : (await connectItx(streamProjectId)).streams.get(streamPath),
     [streamProjectId],

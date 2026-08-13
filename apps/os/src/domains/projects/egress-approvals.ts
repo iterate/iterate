@@ -67,21 +67,17 @@ export function matchEgressRule(
   const method = request.method.toUpperCase();
   return rules.find((rule) => {
     const match = rule.match;
-    if (match.hosts !== undefined) {
-      if (url === null || !match.hosts.some((host) => hostMatches(url.hostname, host)))
-        return false;
+    if (match.hosts) {
+      if (!url || !match.hosts.some((host) => hostMatches(url.hostname, host))) return false;
     }
-    if (match.pathPrefix !== undefined) {
-      if (url === null || !url.pathname.startsWith(match.pathPrefix)) return false;
+    if (match.pathPrefix) {
+      if (!url || !url.pathname.startsWith(match.pathPrefix)) return false;
     }
-    if (
-      match.methods !== undefined &&
-      !match.methods.some((candidate) => candidate.toUpperCase() === method)
-    ) {
+    if (match.methods && !match.methods.some((candidate) => candidate.toUpperCase() === method)) {
       return false;
     }
     if (
-      match.secretPaths !== undefined &&
+      match.secretPaths &&
       !match.secretPaths.some((path) => request.secretPaths.includes(path))
     ) {
       return false;
@@ -114,7 +110,7 @@ export function canonicalJson(value: unknown): string {
 
 function sortKeysDeep(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeysDeep);
-  if (typeof value === "object" && value !== null) {
+  if (typeof value === "object" && value) {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
@@ -224,11 +220,11 @@ export async function evaluateDecision(input: {
   message: Uint8Array;
 }): Promise<{ accepted: true } | { accepted: false; reason: string }> {
   if (input.decision.verdicts.every((verdict) => verdict === "reject")) return { accepted: true };
-  const activeKeys = input.keys.filter((key) => key.revokedAt === null);
+  const activeKeys = input.keys.filter((key) => !key.revokedAt);
   if (activeKeys.length === 0) return { accepted: true };
   const key = activeKeys.find((candidate) => candidate.keyId === input.decision.keyId);
-  if (key === undefined) return { accepted: false, reason: "unknown or missing keyId" };
-  if (input.decision.signature === undefined) {
+  if (!key) return { accepted: false, reason: "unknown or missing keyId" };
+  if (!input.decision.signature) {
     return { accepted: false, reason: "missing signature" };
   }
   const verified = await verifyApprovalSignature({

@@ -26,7 +26,7 @@ const CANONICAL_TEMPLATE_REPOSITORY = { owner: "iterate", repo: "iterate" };
  */
 export function configRepoTemplateFromSlug(slug: string): string | null {
   const match = /^(.+?)-template-([a-z0-9][a-z0-9-]*)$/.exec(slug);
-  if (match === null) return null;
+  if (!match) return null;
   const [, prefix, templateName] = match;
   // The prefix only needs to START with pr<N> — `pr2477-alice-template-x`
   // still pins to PR 2477, so several people can demo one PR's template
@@ -35,7 +35,7 @@ export function configRepoTemplateFromSlug(slug: string): string | null {
   const reference: ConfigRepoTemplateReference = {
     ...CANONICAL_TEMPLATE_REPOSITORY,
     path: `configs/${templateName}`,
-    ...(pullRequest === null ? {} : { ref: `pull/${pullRequest[1]}/head` }),
+    ...(!pullRequest ? {} : { ref: `pull/${pullRequest[1]}/head` }),
   };
   return formatConfigRepoTemplateReference(reference);
 }
@@ -52,7 +52,7 @@ export function configRepoTemplateFromSlug(slug: string): string | null {
  */
 export async function resolveSlugConventionTemplate(slug: string): Promise<string | undefined> {
   const derived = configRepoTemplateFromSlug(slug);
-  if (derived === null) return undefined;
+  if (!derived) return undefined;
   const existence = await checkSlugConfigTemplate(derived);
   if (existence === "missing") {
     console.warn(
@@ -80,12 +80,12 @@ export async function checkSlugConfigTemplate(
   githubFetch: (url: string, init: RequestInit) => Promise<Response> = globalThis.fetch,
 ): Promise<"exists" | "missing" | "unknown"> {
   const match = /^github:([^/]+)\/([^#]+)#(?:(.+)&)?path:(.+)$/.exec(templateReference);
-  if (match === null) return "missing";
+  if (!match) return "missing";
   const [, owner, repo, ref, path] = match;
   const url = new URL(
     `https://api.github.com/repos/${encodeURIComponent(owner!)}/${encodeURIComponent(repo!)}/contents/${path}`,
   );
-  if (ref !== undefined) url.searchParams.set("ref", ref);
+  if (ref) url.searchParams.set("ref", ref);
   try {
     const response = await githubFetch(url.toString(), {
       headers: { "User-Agent": "iterate-os", Accept: "application/vnd.github+json" },

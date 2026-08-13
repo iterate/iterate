@@ -168,8 +168,8 @@ export function sqliteCollabStore(storage: {
       sql.exec(`SELECT 1 FROM collab_sessions WHERE path = ?`, path).toArray().length > 0,
     markFlushed: (path, version, epoch) => {
       sql.exec(
-        `UPDATE collab_sessions SET overlay_version = ? WHERE path = ?${epoch === undefined ? "" : " AND epoch = ?"}`,
-        ...(epoch === undefined ? [version, path] : [version, path, epoch]),
+        `UPDATE collab_sessions SET overlay_version = ? WHERE path = ?${!epoch ? "" : " AND epoch = ?"}`,
+        ...(!epoch ? [version, path] : [version, path, epoch]),
       );
     },
     // One atomic transition for every baseline a commit stamps: partial

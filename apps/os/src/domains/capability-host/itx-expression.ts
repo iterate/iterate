@@ -84,5 +84,5 @@ function assertObjectLike(value: unknown, segment: string): asserts value is obj
 }
 
 function isObjectLike(value: unknown): value is object | Function {
-  return (typeof value === "object" && value !== null) || typeof value === "function";
+  return (typeof value === "object" && !!value) || typeof value === "function";
 }

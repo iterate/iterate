@@ -86,7 +86,7 @@ export function parseLiveStatePagerLaneTag(tag: string): string | undefined {
  */
 export function liveStatePagerLaneKey(request: Request): string | undefined {
   const match = /^\/lane\/(.+)$/.exec(new URL(request.url).pathname);
-  return match === null ? undefined : decodeURIComponent(match[1]!);
+  return !match ? undefined : decodeURIComponent(match[1]!);
 }
 
 /**
@@ -166,7 +166,7 @@ export class LiveStatePagers {
    * equally valid seed.
    */
   async acceptUpgrade(request: Request): Promise<Response | undefined> {
-    if (request.headers.get(LIVE_STATE_PAGER_HEADER) === null) return undefined;
+    if (!request.headers.get(LIVE_STATE_PAGER_HEADER)) return undefined;
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return Response.json(
         { error: "the Live State Pager lane accepts only WebSocket upgrades" },
@@ -222,7 +222,7 @@ export class LiveStatePagers {
    * flushed later could overtake a fresher send and rewind the relay.
    */
   scheduleFlush(): void {
-    if (this.#flushTimer !== undefined || !this.hasPagers()) return;
+    if (this.#flushTimer || !this.hasPagers()) return;
     this.#flushTimer = setTimeout(() => {
       this.#flushTimer = undefined;
       this.#flush();
@@ -246,7 +246,7 @@ export class LiveStatePagers {
       this.scheduleFlush();
       return;
     }
-    if (this.#reloadInFlight !== undefined) return;
+    if (this.#reloadInFlight) return;
     this.#reloadInFlight = Promise.resolve()
       .then(() => this.#hooks.refresh())
       .then(() => undefined)
@@ -271,7 +271,7 @@ export class LiveStatePagers {
    */
   refreshThenFlush(): void {
     if (!this.hasPagers()) return;
-    if (this.#externalRefresh !== undefined) {
+    if (this.#externalRefresh) {
       this.#externalRefreshAgain = true;
       return;
     }
@@ -332,10 +332,9 @@ export async function dialLiveStatePager(
   },
   options?: { lane?: string },
 ): Promise<LiveStatePagerUpgrade> {
-  const url =
-    options?.lane === undefined
-      ? LIVE_STATE_PAGER_URL
-      : `${LIVE_STATE_PAGER_URL}lane/${encodeURIComponent(options.lane)}`;
+  const url = !options?.lane
+    ? LIVE_STATE_PAGER_URL
+    : `${LIVE_STATE_PAGER_URL}lane/${encodeURIComponent(options.lane)}`;
   return await stub.fetch(url, {
     headers: { Upgrade: "websocket", [LIVE_STATE_PAGER_HEADER]: "watch" },
   });
@@ -393,7 +392,7 @@ export function openRelayedLiveState<State extends object>(input: {
   const abandonedSockets = new WeakSet<WebSocket>();
 
   const releaseSocketIfUnwatched = () => {
-    if (pendingSubscribes > 0 || engine.observed || socket === undefined) return;
+    if (pendingSubscribes > 0 || engine.observed || !socket) return;
     const ws = socket;
     socket = undefined;
     abandonedSockets.add(ws);
@@ -410,10 +409,10 @@ export function openRelayedLiveState<State extends object>(input: {
         // Inside the try so EVERY completion clears the memo below — a
         // memoized rejection would leave the relay permanently broken, and a
         // memoized early return would block re-dials after a socket close.
-        if (socket !== undefined) return;
+        if (socket) return;
         const upgrade = await input.dialPager();
         const ws = upgrade.webSocket ?? undefined;
-        if (ws === undefined) {
+        if (!ws) {
           throw new Error(`Live State Pager upgrade refused with status ${upgrade.status}`);
         }
         ws.accept();
@@ -433,7 +432,7 @@ export function openRelayedLiveState<State extends object>(input: {
             // trusting may touch the engine, however late it arrives.
             if (abandonedSockets.has(ws)) return;
             const page = parseLiveStatePage(event.data);
-            if (page === undefined) return;
+            if (!page) return;
             // The only producer of state Pages is the host DO's flusher,
             // which sends exactly what its snapshot read returns typed. The
             // protocol keeps the payload `unknown` for forward-compat across

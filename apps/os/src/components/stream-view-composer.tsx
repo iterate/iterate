@@ -89,7 +89,7 @@ export function StreamViewComposer({
 
   async function submitMessage() {
     const trimmed = messageText.trim();
-    if (messageComposer == null) return;
+    if (!messageComposer) return;
     const { onSubmit, onSubmitFiles } = messageComposer;
     // Time the whole submit: this is the real consume-own-append t0, and the
     // committed offset the handler returns is what closes the loop when this
@@ -99,7 +99,7 @@ export function StreamViewComposer({
       const committed = await submit();
       store.noteExternalAppend({ maxCommittedOffset: committed.offset, t0 });
     };
-    if (attachments.files.length > 0 && onSubmitFiles != null) {
+    if (attachments.files.length > 0 && onSubmitFiles) {
       await runSubmit(async () => {
         await measured(() => onSubmitFiles({ files: attachments.files, message: trimmed }));
         setMessageText("");
@@ -146,15 +146,13 @@ export function StreamViewComposer({
 
   return (
     <>
-      {messageComposer?.onSubmitFiles == null ? null : (
-        <AttachmentFileInput attachments={attachments} />
-      )}
+      {!messageComposer?.onSubmitFiles ? null : <AttachmentFileInput attachments={attachments} />}
       <AgentPillComposer
         mode={mode}
         onModeChange={setMode}
         autoFocusMessage={autoFocusMessage}
         examples={<ExampleEventsPanel presence={presence} onLoadExample={loadRawExample} />}
-        {...(messageComposer == null
+        {...(!messageComposer
           ? {}
           : {
               message: {
@@ -163,19 +161,19 @@ export function StreamViewComposer({
                 onSubmit: submitMessage,
                 canSubmit:
                   messageText.trim() !== "" ||
-                  (attachments.files.length > 0 && messageComposer.onSubmitFiles != null),
-                ...(attachmentChips == null ? {} : { attachments: attachmentChips }),
-                ...(messageComposer.onSubmitFiles == null
+                  (attachments.files.length > 0 && !!messageComposer.onSubmitFiles),
+                ...(!attachmentChips ? {} : { attachments: attachmentChips }),
+                ...(!messageComposer.onSubmitFiles
                   ? {}
                   : {
                       onAttach: attachments.openFilePicker,
                       onAddFiles: attachments.addFiles,
                     }),
-                ...(messageComposer.placeholder == null
+                ...(!messageComposer.placeholder
                   ? {}
                   : { placeholder: messageComposer.placeholder }),
               },
-              ...(interrupt == null
+              ...(!interrupt
                 ? {}
                 : { onInterrupt: interrupt.run, isInterrupting: interrupt.isInterrupting }),
             })}
@@ -186,7 +184,7 @@ export function StreamViewComposer({
         }}
         isSubmitting={isSubmitting}
         disabled={disabled}
-        {...(error == null ? {} : { error })}
+        {...(!error ? {} : { error })}
       />
     </>
   );

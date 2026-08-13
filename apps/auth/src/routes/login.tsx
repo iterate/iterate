@@ -121,7 +121,7 @@ function RouteComponent() {
     loginHint: search.login_hint,
     emailOtpEnabled,
     fixedTestOtpEnabled,
-    signedIn: signedInUser !== null,
+    signedIn: !!signedInUser,
   });
 
   return (

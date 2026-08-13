@@ -272,7 +272,7 @@ describe("Depot validation capacity", () => {
       const packageJson = JSON.parse(readFileSync(resolve(repoRoot, file), "utf8")) as {
         scripts?: Record<string, string>;
       };
-      return packageJson.scripts?.test !== undefined;
+      return !!packageJson.scripts?.test;
     });
     const expectedWorkspaces = packageFiles.map((file) => {
       const packageJson = JSON.parse(readFileSync(resolve(repoRoot, file), "utf8")) as {

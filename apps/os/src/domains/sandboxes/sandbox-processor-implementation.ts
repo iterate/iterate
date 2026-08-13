@@ -42,7 +42,7 @@ export class SandboxProcessor extends StreamProcessor<SandboxProcessorContract> 
       case "events.iterate.com/sandbox/created":
         // A duplicate committed certificate is harmless here. Conflicting
         // create payloads are rejected at the stream's idempotency boundary.
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return {
           ...state,
           birthCertificate: event.payload,
@@ -68,7 +68,7 @@ export class SandboxProcessor extends StreamProcessor<SandboxProcessorContract> 
         // because undefined does not survive JSON).
         const env = { ...state.env };
         for (const [key, value] of Object.entries(event.payload.env)) {
-          if (value === null) delete env[key];
+          if (!value) delete env[key];
           else env[key] = value;
         }
         return { ...state, env };

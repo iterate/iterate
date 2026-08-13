@@ -38,7 +38,7 @@ async function runPhase(name: string, args: string[]): Promise<void> {
       child.once("close", (code, signal) => resolve({ code, signal }));
     },
   );
-  if (result.signal !== null) {
+  if (result.signal) {
     throw new Error(`pnpm ${args.join(" ")} terminated by ${result.signal}`);
   }
   if (result.code !== 0) {

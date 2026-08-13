@@ -92,10 +92,10 @@ export function itxEntrypointProps(input: ItxEntrypointScope): ItxEntrypointProp
 export function scopeFromItxEntrypointProps(
   props: ItxEntrypointProps | undefined,
 ): ItxEntrypointScope {
-  if (props === undefined) {
+  if (!props) {
     throw new Error("env.ITX.get() requires itx binding props with projectId, path, and purpose");
   }
-  if (props.projectId !== null && props.projectId.trim() === "") {
+  if (props.projectId && props.projectId.trim() === "") {
     throw new Error("env.ITX.get() requires a non-empty projectId (or null for the global scope)");
   }
   if (props.purpose !== "stream-delivery" && props.purpose !== "userspace") {

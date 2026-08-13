@@ -261,7 +261,7 @@ function osSmokes(env: DeployedEnv) {
 export async function isExactOsProjectMiss(response: Response): Promise<boolean> {
   if (response.status !== 404) return false;
   const body: unknown = await response.json().catch(() => null);
-  return typeof body === "object" && body !== null && "error" in body && body.error === "not found";
+  return typeof body === "object" && !!body && "error" in body && body.error === "not found";
 }
 
 /**
@@ -275,7 +275,7 @@ export function resolveOsContainerDeployArgs(input: {
 }): string[] | undefined {
   const requestedRollout = input.requestedRollout?.trim();
   if (
-    requestedRollout !== undefined &&
+    requestedRollout &&
     requestedRollout !== "" &&
     requestedRollout !== "immediate" &&
     requestedRollout !== "none"

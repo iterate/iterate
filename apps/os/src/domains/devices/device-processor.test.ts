@@ -48,9 +48,7 @@ function notificationRequested(overrides?: {
 }): DeviceEventInput {
   return {
     type: "events.iterate.com/device/notification-requested",
-    ...(overrides?.idempotencyKey === undefined
-      ? {}
-      : { idempotencyKey: overrides.idempotencyKey }),
+    ...(!overrides?.idempotencyKey ? {} : { idempotencyKey: overrides.idempotencyKey }),
     payload: {
       body: overrides?.body ?? "Buy milk",
       destination: overrides?.destination ?? { kind: "project" },

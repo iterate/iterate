@@ -496,7 +496,7 @@ return await itx.projects.get(pid).__describe();
       const path = "/sandboxes/" + name;
       const sandbox = itx.sandboxes.get(path);
       await sandbox.create({
-        ...(vars.instanceType === undefined ? {} : { instanceType: vars.instanceType }),
+        ...(!vars.instanceType ? {} : { instanceType: vars.instanceType }),
       });
 
       // exec runs a shell command; the first one boots the container.
@@ -548,7 +548,7 @@ return await itx.projects.get(pid).__describe();
       });
 
       return {
-        readmePresent: readme !== null,
+        readmePresent: !!readme,
         edited,
         status,
         commitOid: committed.commitOid,
@@ -640,7 +640,7 @@ return await itx.projects.get(pid).__describe();
       const repo = itx.repos.get(vars.repoPath ?? "/repos/config");
       const file = await repo.readFile({ path });
 
-      if (file === null) {
+      if (!file) {
         return { exists: false, path };
       }
 
@@ -675,7 +675,7 @@ return await itx.projects.get(pid).__describe();
 
       // create waits for repos/created, and commitFiles is a read-your-write boundary.
       const before = await repo.readFile({ path });
-      if (before === null) throw new Error("Expected seeded file to exist.");
+      if (!before) throw new Error("Expected seeded file to exist.");
 
       const edit = await repo.edit({
         path,
@@ -686,7 +686,7 @@ return await itx.projects.get(pid).__describe();
 
       // edit has the same read-your-write guarantee.
       const after = await repo.readFile({ path });
-      if (after === null) throw new Error("Expected edited file to exist.");
+      if (!after) throw new Error("Expected edited file to exist.");
 
       return {
         before: before.content,
@@ -953,7 +953,7 @@ return await itx.projects.get(pid).__describe();
     fn: async (itx, vars: { agentPath?: string; message?: string }) => {
       const agent = itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
       const snapshot = await agent.processor.snapshot();
-      if (snapshot.state.birthCertificate === null) await agent.create();
+      if (!snapshot.state.birthCertificate) await agent.create();
       // The returned value is the committed stream event — the durable record
       // the agent loop reduces into its context projection.
       const sent = await agent.message(vars.message ?? "Hello from the examples catalogue");
@@ -1386,7 +1386,7 @@ return {
 
       return {
         fileCount: files.paths.length,
-        readmePreview: readme === null ? null : readme.slice(0, 120),
+        readmePreview: !readme ? null : readme.slice(0, 120),
       };
     },
   }),

@@ -39,10 +39,10 @@ export function buildCollectSecretUrl(input: {
   url.pathname = `/collect-secret/${encodeURIComponent(input.projectSlug)}`;
   url.searchParams.set("path", input.search.path);
   url.searchParams.set("egress", JSON.stringify(input.search.egress));
-  if (input.search.description !== undefined) {
+  if (input.search.description) {
     url.searchParams.set("description", JSON.stringify(input.search.description));
   }
-  if (input.search.notify !== undefined) {
+  if (input.search.notify) {
     url.searchParams.set("notify", input.search.notify);
   }
   return url.toString();

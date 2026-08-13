@@ -541,11 +541,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     // and the project (see docs/dev-environments.md, "Template-carrying
     // login links"). Slug-shaped or dropped; a hint never creates anything
     // by itself.
-    if (
-      projectHint !== null &&
-      projectHint.length <= 50 &&
-      /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(projectHint)
-    ) {
+    if (projectHint && projectHint.length <= 50 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(projectHint)) {
       url.searchParams.set("project_hint", projectHint);
     }
     if (requestURL.searchParams.get("prompt") === "select_account") {
@@ -711,7 +707,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
       return c.json({ authenticated: false } satisfies SessionResponse, 401);
     }
 
-    if (staleRefreshReason !== null && !refreshed) {
+    if (staleRefreshReason && !refreshed) {
       // A refresh that produced no fresh tokens is invisible in the 200 body:
       // the caller asked for current claims and got the cookie's old ones. Say
       // so — the header lets fetchSession warn in the browser console, the log

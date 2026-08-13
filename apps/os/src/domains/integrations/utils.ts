@@ -51,7 +51,7 @@ export function webhookAckIsFresh(event: { createdAt: string }, now: number): bo
 }
 
 export function readRecord(value: unknown): Record<string, unknown> | null {
-  return value != null && typeof value === "object" && !Array.isArray(value)
+  return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
 }
@@ -211,9 +211,8 @@ export function telegramChatStreamPath(input: {
   session?: string;
 }): string {
   const base = `/agents/telegram/${input.connection}/chat-${input.chatId}`;
-  const topical =
-    input.messageThreadId === undefined ? base : `${base}/topic-${input.messageThreadId}`;
-  return input.session === undefined ? topical : `${topical}/session-${input.session}`;
+  const topical = !input.messageThreadId ? base : `${base}/topic-${input.messageThreadId}`;
+  return !input.session ? topical : `${topical}/session-${input.session}`;
 }
 
 /** Authenticated OS page for editing one Telegram connection's user access.

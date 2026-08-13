@@ -10,7 +10,7 @@ function fakeLocalLayer() {
   const workspace = {
     readFile: async (path: string) => {
       const bytes = files.get(path);
-      return bytes === undefined ? null : new TextDecoder().decode(bytes);
+      return !bytes ? null : new TextDecoder().decode(bytes);
     },
     readFileBytes: async (path: string) => files.get(path) ?? null,
     writeFile: async (path: string, content: string) =>
@@ -32,7 +32,7 @@ function fakeLocalLayer() {
         if (!key.startsWith(prefix)) continue;
         const rest = key.slice(prefix.length);
         const [head, ...tail] = rest.split("/");
-        if (head === "" || head === undefined) continue;
+        if (head === "" || !head) continue;
         children.set(head, tail.length > 0 ? "directory" : "file");
       }
       return [...children.entries()].map(([name, type]) => ({
@@ -63,7 +63,7 @@ function fakeRepo(tree: Record<string, string>) {
   const repo: MountRepoAccess = {
     readFile: async ({ encoding, path }) => {
       const content = tree[path];
-      if (content === undefined) return null;
+      if (!content) return null;
       return {
         commitOid: "head-oid",
         content: encoding === "base64" ? btoa(content) : content,
@@ -76,14 +76,14 @@ function fakeRepo(tree: Record<string, string>) {
       // a 32MiB cap — an unscoped call on a big repo IS the outage (43.7MB
       // crossed for 560KB of task files on iterate/iterate). Refusing it here
       // means no fall-through pathway can regress to full-tree pulls.
-      if (input?.paths === undefined) {
+      if (!input?.paths) {
         throw new Error("unscoped getFilesSnapshot: the full HEAD tree must never cross the RPC");
       }
       snapshotCalls.push([...input.paths]);
       const files: Record<string, string> = {};
       for (const path of input.paths) {
         const content = tree[path];
-        if (content !== undefined) files[path] = content;
+        if (content) files[path] = content;
       }
       return { commitOid: "head-oid", files };
     },

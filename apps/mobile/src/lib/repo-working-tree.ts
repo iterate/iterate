@@ -46,7 +46,7 @@ class RepoWorkingTreeStore {
 
   setHead(commitOid: string, paths: string[]) {
     if (this.#snapshot.headCommitOid === commitOid) return;
-    if (this.#snapshot.headCommitOid !== null && pendingChanges(this.#snapshot).length > 0) {
+    if (this.#snapshot.headCommitOid && pendingChanges(this.#snapshot).length > 0) {
       this.#update({ headChanged: true });
       return;
     }
@@ -88,9 +88,9 @@ class RepoWorkingTreeStore {
 
   updateSelected(content: string) {
     const path = this.#snapshot.selectedPath;
-    if (path === null) return;
+    if (!path) return;
     const buffer = this.#snapshot.buffers[path];
-    if (!buffer || buffer.current === null || buffer.current === content) return;
+    if (!buffer || !buffer.current || buffer.current === content) return;
     this.#update({
       buffers: { ...this.#snapshot.buffers, [path]: { ...buffer, current: content } },
     });
@@ -114,7 +114,7 @@ class RepoWorkingTreeStore {
 
   remove(path: string) {
     const buffer = this.#snapshot.buffers[path];
-    if (buffer?.head === null) {
+    if (!buffer?.head) {
       const buffers = { ...this.#snapshot.buffers };
       delete buffers[path];
       this.#update({
@@ -139,7 +139,7 @@ class RepoWorkingTreeStore {
   discard(path: string) {
     const buffer = this.#snapshot.buffers[path];
     if (!buffer) return;
-    if (buffer.head === null || !buffer.loaded) {
+    if (!buffer.head || !buffer.loaded) {
       const buffers = { ...this.#snapshot.buffers };
       delete buffers[path];
       this.#update({
@@ -160,7 +160,7 @@ class RepoWorkingTreeStore {
       if (change.kind === "delete") {
         headPaths.delete(change.path);
         const buffer = buffers[change.path];
-        if (!buffer || buffer.current === null) delete buffers[change.path];
+        if (!buffer || !buffer.current) delete buffers[change.path];
         else buffers[change.path] = { ...buffer, head: null };
       } else {
         const current = change.content;
@@ -244,7 +244,7 @@ export function useRepoWorkingTree(projectId: string) {
 function visiblePaths(snapshot: Snapshot) {
   const paths = new Set(snapshot.headPaths);
   for (const [path, buffer] of Object.entries(snapshot.buffers)) {
-    if (buffer.current === null) paths.delete(path);
+    if (!buffer.current) paths.delete(path);
     else paths.add(path);
   }
   return [...paths].sort();
@@ -254,12 +254,12 @@ function pendingChanges(snapshot: Snapshot): PendingRepoChange[] {
   const changes: PendingRepoChange[] = [];
   for (const [path, buffer] of Object.entries(snapshot.buffers)) {
     if (buffer.current === buffer.head) continue;
-    if (buffer.current === null) changes.push({ path, delete: true, kind: "delete" });
+    if (!buffer.current) changes.push({ path, delete: true, kind: "delete" });
     else
       changes.push({
         path,
         content: buffer.current,
-        kind: buffer.head === null ? "create" : "edit",
+        kind: !buffer.head ? "create" : "edit",
       });
   }
   return changes.sort((a, b) => a.path.localeCompare(b.path));

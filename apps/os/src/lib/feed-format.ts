@@ -10,7 +10,7 @@ import {
 
 /** `950`, `2.5k` — compact token count; `?` when the model reported none. */
 export function formatTokens(count: number | undefined): string {
-  if (count == null) return "?";
+  if (!Number.isFinite(count)) return "?";
   if (count < 1000) return String(count);
   return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}k`;
 }
@@ -39,7 +39,7 @@ export function liveActivityLabel(runningSteps: readonly AgentUiStep[]): string 
   if (runningCode) return "Running code";
 
   const llm = runningSteps.findLast((step) => step.kind === "llm");
-  if (llm == null || llm.kind !== "llm") return "Working…";
+  if (!llm || llm.kind !== "llm") return "Working…";
   if (llm.thinkingText !== "" && llm.responseText === "") return "Thinking";
   return "Waiting for a response";
 }

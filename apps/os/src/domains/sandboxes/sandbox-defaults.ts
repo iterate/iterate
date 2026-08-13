@@ -9,16 +9,17 @@ export function sandboxCreateClaimEvent(input: { create: SandboxCreateInput; pat
   const instanceType = SandboxInstanceType.parse(
     input.create.instanceType ?? DEFAULT_SANDBOX_INSTANCE_TYPE,
   );
-  if (input.create.sleepAfter !== undefined) assertValidSleepAfter(input.create.sleepAfter);
+  const sleepAfter = input.create.sleepAfter;
+  if (sleepAfter || sleepAfter === 0) assertValidSleepAfter(sleepAfter);
   return SandboxProcessorContract.buildEvent({
     type: "events.iterate.com/sandbox/create-requested",
     idempotencyKey: sandboxCreateClaimKey(input.path),
     payload: {
       path: input.path,
       instanceType,
-      ...(input.create.sleepAfter === undefined ? {} : { sleepAfter: input.create.sleepAfter }),
-      ...(input.create.keepAlive === undefined ? {} : { keepAlive: input.create.keepAlive }),
-      ...(input.create.env === undefined ? {} : { env: input.create.env }),
+      ...((sleepAfter || sleepAfter === 0) && { sleepAfter }),
+      ...(typeof input.create.keepAlive === "boolean" && { keepAlive: input.create.keepAlive }),
+      ...(!input.create.env ? {} : { env: input.create.env }),
     },
   });
 }
@@ -37,7 +38,7 @@ export function sandboxCreationEvents(input: {
       idempotencyKey: `sandbox/created:${projectId}:${path}`,
       payload: { config: { instanceType } },
     }),
-    ...(input.env === undefined || Object.keys(input.env).length === 0
+    ...(!input.env || Object.keys(input.env).length === 0
       ? []
       : [
           SandboxProcessorContract.buildEvent({

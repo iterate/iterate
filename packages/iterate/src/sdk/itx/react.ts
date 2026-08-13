@@ -123,7 +123,7 @@ const ProjectScopeContext = createContext<string | undefined>(undefined);
  */
 export function useIterateSession(): SessionStub {
   const snap = useSyncExternalStore(subscribeSession, currentSnapshot, serverSnapshot);
-  if (snap.session !== undefined) return snap.session;
+  if (snap.session) return snap.session;
   return use(snap.connecting);
 }
 
@@ -141,7 +141,7 @@ export function useItx(explicitSlug?: string): ProjectStub {
   // Read the scope UNCONDITIONALLY (rules-of-hooks): never behind a default arg.
   const scopedSlug = useContext(ProjectScopeContext);
   const slug = explicitSlug ?? scopedSlug;
-  if (slug === undefined) {
+  if (!slug) {
     throw new Error(
       "useItx() needs a project: pass useItx(slug) or render under <ProjectScope slug>.",
     );
@@ -212,7 +212,7 @@ export function useItxQuery<T>({
   query: (itx: ProjectStub) => Promise<T>;
 }): T {
   const slug = useContext(ProjectScopeContext);
-  if (slug === undefined) {
+  if (!slug) {
     throw new Error("useItxQuery needs a project: render it under <ProjectScope slug>.");
   }
   return useSuspenseQuery({
@@ -322,7 +322,7 @@ function useReconnectableEffect<Root>(
     if (!enabled) return;
     const signal = { disposed: false };
     let cleanup: void | (() => void);
-    if (connection.connect !== undefined) {
+    if (connection.connect) {
       // Await the connection INSIDE the effect: mounting never suspends the tree.
       connection.connect().then(
         (root) => {
@@ -522,7 +522,7 @@ export function useStreamConnection(
     deps,
     {
       key: slug,
-      ...(slug === undefined
+      ...(!slug
         ? {
             missingMessage:
               "useStreamConnection needs a project: pass { slug } or render under <ProjectScope slug>.",
@@ -568,10 +568,9 @@ export function useLiveState<State, Selected = State>(
 } {
   const scopedSlug = useContext(ProjectScopeContext);
   const slug = opts?.slug ?? scopedSlug;
-  const useAmbientProvider =
-    scopedSlug !== undefined && (opts?.slug === undefined || slug === scopedSlug);
+  const useAmbientProvider = !!scopedSlug && (!opts?.slug || slug === scopedSlug);
   const makeConnection = useCallback(async () => {
-    if (slug === undefined) {
+    if (!slug) {
       throw new Error(
         "useLiveState needs a project: pass { slug } or render under <ProjectScope slug>.",
       );

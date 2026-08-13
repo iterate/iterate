@@ -44,7 +44,7 @@ export class ChatReplyNotifyProcessor extends StreamProcessor<ChatReplyNotifyPro
     // notifiableReply with ITS OWN offset. Anything else (no turn open, or a
     // later multi-message burst) does not match and emits nothing.
     const reply = state.notifiableReply;
-    if (reply === null || reply.replyEventOffset !== event.offset) return;
+    if (!reply || reply.replyEventOffset !== event.offset) return;
     // Per-event consequence, so it blocks the checkpoint: this event is
     // delivered once, and a dropped append would silently lose the push.
     // Everything in the body derives from the event + turn identity alone,
@@ -55,9 +55,8 @@ export class ChatReplyNotifyProcessor extends StreamProcessor<ChatReplyNotifyPro
         idempotencyKey: this.idempotencyKey("chat-reply", event),
         payload: {
           agentReplyEventOffset: event.offset,
-          audience:
-            reply.userId === null ? { kind: "project" } : { kind: "user", userId: reply.userId },
-          title: state.title === null ? "Agent replied" : state.title,
+          audience: !reply.userId ? { kind: "project" } : { kind: "user", userId: reply.userId },
+          title: !state.title ? "Agent replied" : state.title,
           body: pushBody(event.payload.message),
           destination: { kind: "agent-chat", path: this.path },
           expiresAt: Date.parse(event.createdAt) + REPLY_PUSH_TTL_MS,
@@ -72,7 +71,7 @@ export class ChatReplyNotifyProcessor extends StreamProcessor<ChatReplyNotifyPro
   }: ReduceArgs<ChatReplyNotifyProcessorContract>): ChatReplyNotifyProcessorState {
     switch (event.type) {
       case "events.iterate.com/chat-reply-notify/created":
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/agents/context-added": {
         // Only user-authored turns owe a push; agent/script/integration
@@ -80,12 +79,12 @@ export class ChatReplyNotifyProcessor extends StreamProcessor<ChatReplyNotifyPro
         // one. actor is optional on the wire — an actor-less user item still
         // opens a turn, just without a sender to address.
         const { actor, role } = event.payload;
-        if (role !== "user" || (actor !== undefined && actor.type !== "user")) return state;
-        const userId = actor?.type === "user" && actor.userId !== undefined ? actor.userId : null;
+        if (role !== "user" || (actor && actor.type !== "user")) return state;
+        const userId = actor?.type === "user" && actor.userId ? actor.userId : null;
         return { ...state, pendingTurn: { messageOffset: event.offset, userId } };
       }
       case "events.iterate.com/agents/web-message-sent":
-        if (state.pendingTurn === null) return state;
+        if (!state.pendingTurn) return state;
         return {
           ...state,
           pendingTurn: null,
@@ -97,7 +96,7 @@ export class ChatReplyNotifyProcessor extends StreamProcessor<ChatReplyNotifyPro
       case "events.iterate.com/agent/summary-updated": {
         // Title patches only (omission preserves, null clears) — the
         // conditional waiting-clear variant carries no title.
-        if (!("title" in event.payload) || event.payload.title === undefined) return state;
+        if (!("title" in event.payload) || !event.payload.title) return state;
         return { ...state, title: event.payload.title };
       }
       default:

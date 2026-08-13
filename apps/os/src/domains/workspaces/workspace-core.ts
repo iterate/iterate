@@ -160,7 +160,7 @@ export class WorkspaceCore {
   #clearWhiteout(path: string): void {
     const whiteouts = this.#whiteouts();
     const resolved = resolveAbsolutePath(path);
-    if (whiteouts[resolved] === undefined) return;
+    if (!whiteouts[resolved]) return;
     delete whiteouts[resolved];
     this.#kv.put(WHITEOUTS_KEY, whiteouts);
   }
@@ -245,7 +245,7 @@ export class WorkspaceCore {
         `Workspace path is not writable: "${path}" is a mount point or a directory containing one.`,
       );
     }
-    if (routeMount(mounts, resolved) !== null) return;
+    if (routeMount(mounts, resolved)) return;
     if (resolved.startsWith(`${this.#scratchRoot}/`)) return;
     throw new Error(
       `Workspace path is not writable: "${path}". Private files live under your workspace directory ("${this.#scratchRoot}/..."; relative paths resolve there), repo files under a mounted repo path (${summarizeMountPoints(mounts)}).`,
@@ -256,13 +256,13 @@ export class WorkspaceCore {
 
   async readFile(path: string): Promise<string | null> {
     const local = await this.#workspace.readFile(path);
-    if (local !== null) return local;
+    if (local) return local;
     const resolved = this.resolveMountFallThrough(await this.#mounts(), path);
-    if (resolved === null) return null;
+    if (!resolved) return null;
     const file = await this.#repo(resolved.mount.repoPath).readFile({
       path: resolved.repoRelativePath,
     });
-    return file === null ? null : file.content;
+    return !file ? null : file.content;
   }
 
   /**
@@ -279,7 +279,7 @@ export class WorkspaceCore {
     if (this.isMaskedFromMount(path)) return null;
     if (isVirtualDirectoryPath(mounts, path)) return null;
     const resolved = routeMount(mounts, path);
-    return resolved === null || resolved.repoRelativePath === "" ? null : resolved;
+    return !resolved || resolved.repoRelativePath === "" ? null : resolved;
   }
 
   /** The OVERLAY copy only — no mount fall-through (bulk readers take the
@@ -309,7 +309,7 @@ export class WorkspaceCore {
     >();
     for (const path of paths) {
       const resolved = this.resolveMountFallThrough(mounts, path);
-      if (resolved === null) {
+      if (!resolved) {
         result[path] = null;
         continue;
       }
@@ -345,23 +345,23 @@ export class WorkspaceCore {
   /** The mount read arm for readBase (baselines ignore whiteouts by design). */
   async #mountRead(mounts: Record<string, WorkspaceMount>, path: string): Promise<string | null> {
     const resolved = routeMount(mounts, path);
-    if (resolved === null || resolved.repoRelativePath === "") return null;
+    if (!resolved || resolved.repoRelativePath === "") return null;
     const file = await this.#repo(resolved.mount.repoPath).readFile({
       path: resolved.repoRelativePath,
     });
-    return file === null ? null : file.content;
+    return !file ? null : file.content;
   }
 
   async readFileBytes(path: string): Promise<Uint8Array | null> {
     const local = await this.#workspace.readFileBytes(path);
-    if (local !== null) return local;
+    if (local) return local;
     const resolved = this.resolveMountFallThrough(await this.#mounts(), path);
-    if (resolved === null) return null;
+    if (!resolved) return null;
     const file = await this.#repo(resolved.mount.repoPath).readFile({
       encoding: "base64",
       path: resolved.repoRelativePath,
     });
-    return file === null ? null : Uint8Array.from(atob(file.content), (c) => c.charCodeAt(0));
+    return !file ? null : Uint8Array.from(atob(file.content), (c) => c.charCodeAt(0));
   }
 
   async exists(path: string): Promise<boolean> {
@@ -373,7 +373,7 @@ export class WorkspaceCore {
     if (isVirtualDirectoryPath(mounts, path)) return true;
     const resolved = routeMount(mounts, path);
     if (this.isMaskedFromMount(path)) return false;
-    if (resolved === null) return false;
+    if (!resolved) return false;
     const target = resolveAbsolutePath(path);
     const mountFiles = await this.#mountFilePaths(resolved.mountPath, resolved.mount);
     return mountFiles.some(
@@ -407,7 +407,7 @@ export class WorkspaceCore {
       await this.#assertWritable(input.path);
       // Copy-up: editing a mount file materializes the edited copy locally.
       const content = await this.readFile(input.path);
-      if (content === null) {
+      if (!content) {
         throw new Error(`Workspace file does not exist: "${input.path}".`);
       }
       const occurrenceCount = countOccurrences(content, input.oldString);
@@ -448,11 +448,11 @@ export class WorkspaceCore {
       // caller's uncommitted work) or left a whiteout behind.
       const resolved = await this.#mountFor(path);
       const mountHas =
-        resolved !== null &&
+        !!resolved &&
         resolved.repoRelativePath !== "" &&
-        (await this.#repo(resolved.mount.repoPath).readFile({
+        !!(await this.#repo(resolved.mount.repoPath).readFile({
           path: resolved.repoRelativePath,
-        })) !== null;
+        }));
       // Whiteout before the local delete, so an unserialized read arriving
       // between them can never fall through and resurrect the mount copy
       // mid-delete. The local delete CAN fail (R2 + SQL); retract the
@@ -608,12 +608,12 @@ export class WorkspaceCore {
     const unmounted: WorkspaceChange[] = [];
     for (const path of localFiles) {
       const resolved = routeMount(snapshot.mounts, path);
-      if (resolved === null) unmounted.push({ change: "added", path });
+      if (!resolved) unmounted.push({ change: "added", path });
       else localByMount.get(resolved.mountPath)!.push(path);
     }
     for (const key of Object.keys(this.#whiteouts())) {
       const resolved = routeMount(snapshot.mounts, key);
-      if (resolved !== null) whiteoutsByMount.get(resolved.mountPath)!.push(key);
+      if (resolved) whiteoutsByMount.get(resolved.mountPath)!.push(key);
     }
     unmounted.sort((a, b) => a.path.localeCompare(b.path));
     return { localByMount, unmounted, whiteoutsByMount };
@@ -719,14 +719,14 @@ export class WorkspaceCore {
       const whiteouts = this.#whiteouts();
       let changed = false;
       for (const key of candidates) {
-        if (whiteouts[key] === undefined) continue;
+        if (!whiteouts[key]) continue;
         const resolved = routeMount(snapshot.mounts, key);
-        if (resolved === null) continue;
+        if (!resolved) continue;
         const masksFile =
           resolved.repoRelativePath !== "" &&
-          (await this.#repo(resolved.mount.repoPath).readFile({
+          !!(await this.#repo(resolved.mount.repoPath).readFile({
             path: resolved.repoRelativePath,
-          })) !== null;
+          }));
         if (masksFile) continue;
         delete whiteouts[key];
         changed = true;
@@ -756,7 +756,7 @@ export class WorkspaceCore {
       const grouped = this.#groupLocalAndWhiteouts(snapshot, await this.#localFilePaths());
 
       let mountPath: string;
-      if (input.scope === undefined) {
+      if (!input.scope) {
         // Inferred WITHOUT repo listings: any mount holding a PUBLISHABLE
         // local file or a whiteout may have changes — .gitignored files
         // never nominate a mount, so they cannot fabricate span errors. (A
@@ -816,7 +816,7 @@ export class WorkspaceCore {
       const repoChanges: RepoFileChange[] = [];
       for (const path of localPaths) {
         const bytes = await this.#workspace.readFileBytes(path);
-        if (bytes === null) continue;
+        if (!bytes) continue;
         repoChanges.push({ path: path.slice(mountPath.length + 1), ...encodeRepoContent(bytes) });
       }
       for (const change of changes) {
@@ -866,7 +866,7 @@ export class WorkspaceCore {
   async gitLog(input: WorkspaceGitLogInput = {}): Promise<WorkspaceGitLogEntry[]> {
     const snapshot = await this.#mountSnapshot();
     let mountPath: string;
-    if (input.scope === undefined) {
+    if (!input.scope) {
       if (snapshot.mountPaths.length !== 1) {
         throw new Error(
           `log needs { scope } when the workspace has ${snapshot.mountPaths.length} mounts ` +
@@ -963,9 +963,9 @@ export function routeMount(
     // reduces to a harmless dead entry).
     const owns = resolved === mountPath || resolved.startsWith(`${mountPath}/`);
     if (!owns) continue;
-    if (best === null || mountPath.length > best.mountPath.length) best = { mount, mountPath };
+    if (!best || mountPath.length > best.mountPath.length) best = { mount, mountPath };
   }
-  if (best === null) return null;
+  if (!best) return null;
   if (resolved === best.mountPath) {
     return { mount: best.mount, mountPath: best.mountPath, repoRelativePath: "" };
   }

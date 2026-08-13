@@ -15,11 +15,11 @@ export interface MarkdownPreviewProjection {
  */
 export function projectMarkdownPreview(content: string): MarkdownPreviewProjection {
   const opening = /^(?:\uFEFF)?---[ \t]*\r?\n/.exec(content);
-  if (opening === null) return { body: content, metadata: [] };
+  if (!opening) return { body: content, metadata: [] };
 
   const afterOpening = content.slice(opening[0].length);
   const closing = /^(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/m.exec(afterOpening);
-  if (closing === null) return { body: content, metadata: [] };
+  if (!closing) return { body: content, metadata: [] };
 
   const parsed = parseRestrictedFrontmatterYaml(afterOpening.slice(0, closing.index));
   if (!parsed.ok) return { body: content, metadata: [] };
@@ -35,7 +35,8 @@ export function projectMarkdownPreview(content: string): MarkdownPreviewProjecti
 
 function formatFrontmatterValue(value: unknown): string {
   if (Array.isArray(value)) return value.map(formatFrontmatterValue).join(", ");
-  if (typeof value === "object" && value !== null) return JSON.stringify(value);
+  if (typeof value === "object" && value) return JSON.stringify(value);
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/''/false must format as themselves; only null formats as "null"
   if (value === null) return "null";
   return String(value);
 }

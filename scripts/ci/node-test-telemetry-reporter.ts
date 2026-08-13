@@ -51,7 +51,7 @@ export default async function* nodeTestTelemetryReporter(source: AsyncIterable<T
         const key = testIdentityCandidate(event);
         const observations = attempts.get(key) ?? [];
         const attempt = event.data.details.attempt;
-        if (attempt === undefined || attempt === 0) {
+        if (!Number.isFinite(attempt) || attempt === 0) {
           observations.push([observed]);
         } else {
           const observation = observations.find(
@@ -66,7 +66,7 @@ export default async function* nodeTestTelemetryReporter(source: AsyncIterable<T
         }
         attempts.set(key, observations);
       }
-    } else if (event.type === "test:summary" && event.data.file === undefined) {
+    } else if (event.type === "test:summary" && !event.data.file) {
       summary = event;
     }
   }
@@ -152,9 +152,9 @@ export default async function* nodeTestTelemetryReporter(source: AsyncIterable<T
         phases: [],
         errors,
         ...(errors[0] && { firstFailure: errors[0].message.slice(0, 300) }),
-        ...(final.data.testNumber === undefined ? {} : { testNumber: final.data.testNumber }),
-        ...(final.data.line === undefined ? {} : { testLine: final.data.line }),
-        ...(final.data.column === undefined ? {} : { testColumn: final.data.column }),
+        ...(!Number.isFinite(final.data.testNumber) ? {} : { testNumber: final.data.testNumber }),
+        ...(!Number.isFinite(final.data.line) ? {} : { testLine: final.data.line }),
+        ...(!Number.isFinite(final.data.column) ? {} : { testColumn: final.data.column }),
       });
     }
   }

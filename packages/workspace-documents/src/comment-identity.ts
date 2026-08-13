@@ -11,11 +11,11 @@ export function commentIdentityFor(user: {
   userId: string | null;
 }): CommentIdentity {
   const author =
-    user.email !== null && isValidAuthor(user.email)
+    user.email && isValidAuthor(user.email)
       ? user.email
       : slug(user.name ?? user.userId ?? "") || "someone";
   const authorDisplay = user.name ?? user.email ?? undefined;
-  return authorDisplay === undefined ? { author } : { author, authorDisplay };
+  return !authorDisplay ? { author } : { author, authorDisplay };
 }
 
 function slug(value: string): string {

@@ -123,7 +123,7 @@ function handleLoopbackRequest(input: {
   for (const [key, value] of Object.entries(input.req.headers)) {
     if (Array.isArray(value)) {
       for (const item of value) headers.append(key, item);
-    } else if (value !== undefined) {
+    } else if (value) {
       headers.set(key, value);
     }
   }
@@ -142,7 +142,7 @@ function handleLoopbackRequest(input: {
       });
       const response = await input.handler(request);
       input.res.writeHead(response.status, Object.fromEntries(response.headers));
-      if (response.body === null) {
+      if (!response.body) {
         input.res.end();
         return;
       }

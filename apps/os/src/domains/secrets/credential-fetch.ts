@@ -47,7 +47,7 @@ export async function fetchWithCredentialRedirects(
     if (!REDIRECT_STATUSES.has(response.status)) return sanitizeResponse(response);
 
     const location = response.headers.get("location");
-    if (location === null) return sanitizeResponse(response);
+    if (!location) return sanitizeResponse(response);
 
     try {
       if (redirects >= MAX_CREDENTIAL_REDIRECTS) {
@@ -91,7 +91,7 @@ function sanitizeResponse(response: Response): Response {
   const headers = new Headers(response.headers);
   for (const name of RESPONSE_URL_HEADERS) headers.delete(name);
   const socket = response.webSocket;
-  if (socket != null) {
+  if (socket) {
     return new Response(null, {
       headers,
       status: response.status,
@@ -134,7 +134,7 @@ function buildRedirectRequest(source: Request, url: URL, status: number): Reques
 }
 
 async function cancelBody(response: Response): Promise<void> {
-  if (response.body === null) return;
+  if (!response.body) return;
   try {
     await response.body.cancel();
   } catch {

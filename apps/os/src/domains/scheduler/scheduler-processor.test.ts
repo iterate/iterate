@@ -72,7 +72,7 @@ function setEvent(
       action: { kind: "itx-script", script },
       key,
       recurrence: extra?.recurrence ?? { every: 60 },
-      ...(extra?.metadata === undefined ? {} : { metadata: extra.metadata }),
+      ...(!extra?.metadata ? {} : { metadata: extra.metadata }),
     },
   };
 }

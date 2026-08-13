@@ -9,10 +9,11 @@ export async function sha256Hex(input: string): Promise<string> {
 }
 
 function stableJson(value: unknown): string {
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/''/false/null are all JSON-encodable; only undefined is not
   if (value === undefined) {
     throw new Error("stableJson cannot encode undefined");
   }
-  if (value === null || typeof value !== "object") {
+  if (!value || typeof value !== "object") {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
@@ -20,6 +21,7 @@ function stableJson(value: unknown): string {
   }
 
   const entries = Object.entries(value as Record<string, unknown>)
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- falsy JSON values (0, '', false, null) must survive into the stable hash
     .filter(([, item]) => item !== undefined)
     .sort(([a], [b]) => a.localeCompare(b));
   return `{${entries

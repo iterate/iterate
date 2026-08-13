@@ -99,7 +99,7 @@ function unresolvedImportFailures(warnings: readonly string[]): string[] {
       continue;
     }
     const match = /^Failed to resolve '([^']+)' from /.exec(warning);
-    if (match === null) continue;
+    if (!match) continue;
     const specifier = match[1]!;
     if (/^[a-zA-Z][\w+.-]*:/.test(specifier)) continue;
     const base = specifier.startsWith("@")
@@ -136,7 +136,7 @@ function applyIterateRepoPkgOverrides(
   },
 ): Record<string, string> {
   const content = files["package.json"];
-  if (content === undefined) return files;
+  if (!content) return files;
 
   let parsed: unknown;
   try {
@@ -145,7 +145,7 @@ function applyIterateRepoPkgOverrides(
     // Preserve worker-bundler's own invalid-manifest error classification.
     return files;
   }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return files;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return files;
   // Safe after the object guard; dependency fields get their own shape checks below.
   const manifest = parsed as PackageManifest;
   const specOverrides = overrides.specOverrides || {};
@@ -155,17 +155,17 @@ function applyIterateRepoPkgOverrides(
   let changed = false;
   for (const field of PACKAGE_DEPENDENCY_FIELDS) {
     const dependencies = manifest[field];
-    if (dependencies === null || typeof dependencies !== "object" || Array.isArray(dependencies)) {
+    if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) {
       continue;
     }
     for (const [name, declared] of Object.entries(dependencies)) {
       if (typeof declared !== "string") continue;
       let next = declared;
-      let matched = parseIterateRepoPkgSpec(declared) !== null;
-      if (matched && overrides.ref !== undefined) {
+      let matched = !!parseIterateRepoPkgSpec(declared);
+      if (matched && overrides.ref) {
         next = pinIterateRepoPkgRef(declared, overrides.ref)!;
       }
-      if (specOverrides[name] !== undefined) {
+      if (specOverrides[name]) {
         next = specOverrides[name];
         matched = true;
       }
@@ -250,12 +250,7 @@ function classifyBuildResult<T>(
     return sourceFailure(result.error);
   }
   const built = result.result;
-  if (
-    typeof built === "object" &&
-    built !== null &&
-    "warnings" in built &&
-    Array.isArray(built.warnings)
-  ) {
+  if (typeof built === "object" && built && "warnings" in built && Array.isArray(built.warnings)) {
     const warnings = built.warnings.filter(
       (warning): warning is string => typeof warning === "string",
     );

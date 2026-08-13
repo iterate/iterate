@@ -118,10 +118,11 @@ export function envShapedVars(env: DeployedEnv) {
     APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: env.cloudflareAiGatewayTransport,
     // Wrangler inherits missing top-level vars into env blocks. Keep the key
     // explicit everywhere; an empty value means the response cache is off.
-    APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS:
-      env.cloudflareAiGatewayResponseCacheTtlSeconds === undefined
-        ? ""
-        : String(env.cloudflareAiGatewayResponseCacheTtlSeconds),
+    APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: !Number.isFinite(
+      env.cloudflareAiGatewayResponseCacheTtlSeconds,
+    )
+      ? ""
+      : String(env.cloudflareAiGatewayResponseCacheTtlSeconds),
   };
 }
 

@@ -85,7 +85,7 @@ export function parseCodemodeResponse(content: string): CodemodeParseOutcome {
     };
   }
   const statusMatch = lines[openIndex].match(STATUS_ATTR_RE);
-  const status = (statusMatch === null ? "" : statusMatch[1]).trim() || undefined;
+  const status = (!statusMatch ? "" : statusMatch[1]).trim() || undefined;
   const beforeProse = lines.slice(0, openIndex).join("\n").trim();
   const afterProse = lines
     .slice(closeIndex + 1)
@@ -98,7 +98,7 @@ export function parseCodemodeResponse(content: string): CodemodeParseOutcome {
     // standard codemode envelope; a body that is already a complete async
     // function passes through untouched.
     code: ASYNC_FUNCTION_BODY_RE.test(body) ? body : `async (itx) => {\n${body}\n}`,
-    ...(status === undefined ? {} : { status }),
+    ...(!status ? {} : { status }),
     ...(prose === "" ? {} : { prose }),
   };
 }

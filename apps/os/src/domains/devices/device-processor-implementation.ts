@@ -164,7 +164,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     // Plain code over the reduced state, after every delivery. Act only at
     // head — behind it the state is partial and settlements may sit in pages
     // not yet replayed.
-    if (!delivery.caughtUp || state.birthCertificate === null) return;
+    if (!delivery.caughtUp || !state.birthCertificate) return;
     const { pushTokenSecret } = state;
 
     // Settle what can no longer be attempted. Whether an orphaned `started`
@@ -174,7 +174,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     const settlements: { requestOffset: number; outcome: DeviceNotificationOutcome }[] = [];
     for (const [offset, notification] of Object.entries(state.notifications)) {
       const requestOffset = Number(offset);
-      if (notification.status === "requested" && notification.presentedAt !== undefined) {
+      if (notification.status === "requested" && Number.isFinite(notification.presentedAt)) {
         // A claim landed while the obligation was still unattempted: the user
         // is already looking at the batch, so the push dies here — checked
         // before expiry because both mean "never dial Expo" and suppression
@@ -182,7 +182,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         settlements.push({ requestOffset, outcome: { kind: "suppressed" } });
       } else if (notification.status === "requested" && notification.expiresAt <= this.deps.now()) {
         settlements.push({ requestOffset, outcome: { kind: "expired" } });
-      } else if (notification.status === "requested" && pushTokenSecret === null) {
+      } else if (notification.status === "requested" && !pushTokenSecret) {
         settlements.push({ requestOffset, outcome: { kind: "device-unavailable" } });
       } else if (notification.status === "started" && !this.#liveSendAttempts.has(requestOffset)) {
         settlements.push({
@@ -201,18 +201,22 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     const nextReceiptCheck = Object.values(state.notifications)
       .filter(
         (notification) =>
-          notification.status === "ticketed" && notification.ticketObservedAt !== undefined,
+          notification.status === "ticketed" && Number.isFinite(notification.ticketObservedAt),
       )
       .reduce<number | null>((earliest, notification) => {
         const at = notification.ticketObservedAt! + state.config.receiptCheckDelayMs;
-        return earliest === null || at < earliest ? at : earliest;
+        return !Number.isFinite(earliest) || at < earliest ? at : earliest;
       }, null);
     // Claimable obligations (approval batches, chat replies) inside their
     // grace window wait for a claim that may never come, and a grace expiry
     // appends NO event — so point the DO's grace alarm slice at the earliest
     // pending expiry; its firing calls releaseGraces below.
     const nextGraceExpiry = this.#nextGraceExpiry(state);
-    if (settlements.length > 0 || nextReceiptCheck !== null || nextGraceExpiry !== null) {
+    if (
+      settlements.length > 0 ||
+      Number.isFinite(nextReceiptCheck) ||
+      Number.isFinite(nextGraceExpiry)
+    ) {
       runInBackground(async () => {
         if (settlements.length > 0) {
           // Race-tolerant: the alarm-driven receipt check (or a raced sibling
@@ -228,10 +232,10 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
             })),
           );
         }
-        if (nextReceiptCheck !== null) {
+        if (Number.isFinite(nextReceiptCheck)) {
           await this.deps.repointReceiptAlarm(nextReceiptCheck);
         }
-        if (nextGraceExpiry !== null) {
+        if (Number.isFinite(nextGraceExpiry)) {
           await this.deps.repointGraceAlarm(nextGraceExpiry);
         }
       });
@@ -241,7 +245,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     // in this incarnation is already driving. The live-set entry is taken
     // SYNCHRONOUSLY, before any await, so the same pass never classifies its
     // own attempt as orphaned.
-    if (pushTokenSecret === null || this.projectId === null) return;
+    if (!pushTokenSecret || !this.projectId) return;
     for (const [offset, notification] of Object.entries(state.notifications)) {
       const requestOffset = Number(offset);
       // A claimable obligation is not runnable until its grace window
@@ -251,7 +255,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       if (
         notification.status !== "requested" ||
         notification.expiresAt <= this.deps.now() ||
-        notification.presentedAt !== undefined ||
+        Number.isFinite(notification.presentedAt) ||
         this.deps.now() < graceUntil ||
         this.#liveSendAttempts.has(requestOffset)
       ) {
@@ -276,7 +280,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       case "events.iterate.com/device/created":
         // Duplicate birth facts must not wedge an already-committed frame.
         // Conflicting create retries fail earlier at stream idempotency.
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return {
           ...state,
           birthCertificate: event.payload,
@@ -291,20 +295,19 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
           ...state,
           // The birth certificate tracks the CURRENT enrollment: every field
           // replaced except the immutable platform.
-          birthCertificate:
-            state.birthCertificate === null
-              ? null
-              : {
-                  config: {
-                    appVersion: event.payload.appVersion,
-                    label: event.payload.label,
-                    notificationsStatus: event.payload.notificationsStatus,
-                    ownerId: event.payload.ownerId,
-                    platform: state.birthCertificate.config.platform,
-                    pushTokenSecretPath: event.payload.pushTokenSecretPath,
-                    pushTokenSecretUpdatedOffset: event.payload.pushTokenSecretUpdatedOffset,
-                  },
+          birthCertificate: !state.birthCertificate
+            ? null
+            : {
+                config: {
+                  appVersion: event.payload.appVersion,
+                  label: event.payload.label,
+                  notificationsStatus: event.payload.notificationsStatus,
+                  ownerId: event.payload.ownerId,
+                  platform: state.birthCertificate.config.platform,
+                  pushTokenSecretPath: event.payload.pushTokenSecretPath,
+                  pushTokenSecretUpdatedOffset: event.payload.pushTokenSecretUpdatedOffset,
                 },
+              },
           pushTokenSecret: {
             path: event.payload.pushTokenSecretPath,
             updatedOffset: event.payload.pushTokenSecretUpdatedOffset,
@@ -336,17 +339,16 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         // presented, so the send pass settles it suppressed.
         const approvalRequestEventOffset = event.payload.approvalRequestEventOffset;
         const pendingApprovalPresentations = { ...state.pendingApprovalPresentations };
-        const approvalPresentedAt =
-          approvalRequestEventOffset === undefined
-            ? undefined
-            : pendingApprovalPresentations[String(approvalRequestEventOffset)];
-        if (approvalRequestEventOffset !== undefined) {
+        const approvalPresentedAt = !Number.isFinite(approvalRequestEventOffset)
+          ? undefined
+          : pendingApprovalPresentations[String(approvalRequestEventOffset)];
+        if (Number.isFinite(approvalRequestEventOffset)) {
           delete pendingApprovalPresentations[String(approvalRequestEventOffset)];
         }
         const replyOffset = event.payload.agentReplyEventOffset;
         const destination = event.payload.destination;
         const claimed =
-          replyOffset !== undefined && destination.kind === "agent-chat"
+          Number.isFinite(replyOffset) && destination.kind === "agent-chat"
             ? state.recentReplyClaims.find(
                 (claim) =>
                   claim.path === destination.path && claim.replyEventOffset === replyOffset,
@@ -354,18 +356,19 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
             : undefined;
         return {
           ...state,
-          latestApprovalRequestEventOffset:
-            approvalRequestEventOffset === undefined
-              ? state.latestApprovalRequestEventOffset
-              : Math.max(state.latestApprovalRequestEventOffset, approvalRequestEventOffset),
+          latestApprovalRequestEventOffset: !Number.isFinite(approvalRequestEventOffset)
+            ? state.latestApprovalRequestEventOffset
+            : Math.max(state.latestApprovalRequestEventOffset, approvalRequestEventOffset),
           pendingApprovalPresentations,
           notifications: {
             ...state.notifications,
             [event.offset]: {
-              ...(event.payload.agentReplyEventOffset === undefined
+              ...(!Number.isFinite(event.payload.agentReplyEventOffset)
                 ? {}
                 : { agentReplyEventOffset: event.payload.agentReplyEventOffset }),
-              ...(approvalRequestEventOffset === undefined ? {} : { approvalRequestEventOffset }),
+              ...(!Number.isFinite(approvalRequestEventOffset)
+                ? {}
+                : { approvalRequestEventOffset }),
               ...((approvalPresentedAt || claimed?.claimedAt) && {
                 presentedAt: approvalPresentedAt || claimed?.claimedAt,
               }),
@@ -390,7 +393,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
           ([, notification]) =>
             notification.status === "requested" &&
             notification.approvalRequestEventOffset === event.payload.approvalRequestEventOffset &&
-            notification.presentedAt === undefined,
+            !Number.isFinite(notification.presentedAt),
         );
         if (claimed.length > 0) {
           const notifications = { ...state.notifications };
@@ -437,7 +440,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
             notification.agentReplyEventOffset === event.payload.replyEventOffset &&
             notification.destination.kind === "agent-chat" &&
             notification.destination.path === event.payload.path &&
-            notification.presentedAt === undefined,
+            !Number.isFinite(notification.presentedAt),
         );
         if (claimed.length === 0) return { ...state, recentReplyClaims };
         const notifications = { ...state.notifications };
@@ -448,7 +451,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       }
       case "events.iterate.com/device/notification-attempt-started": {
         const notification = state.notifications[event.payload.requestOffset];
-        if (notification === undefined) return state;
+        if (!notification) return state;
         return {
           ...state,
           notifications: {
@@ -459,7 +462,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       }
       case "events.iterate.com/device/notification-ticket-observed": {
         const notification = state.notifications[event.payload.requestOffset];
-        if (notification === undefined) return state;
+        if (!notification) return state;
         return {
           ...state,
           notifications: {
@@ -503,14 +506,16 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     for (const [offset, notification] of Object.entries(state.notifications)) {
       if (
         notification.status !== "ticketed" ||
-        notification.ticketId === undefined ||
-        notification.ticketObservedAt === undefined
+        !notification.ticketId ||
+        !Number.isFinite(notification.ticketObservedAt)
       ) {
         continue;
       }
       const firstCheckAt = notification.ticketObservedAt + state.config.receiptCheckDelayMs;
       if (now < firstCheckAt) {
-        nextCheckAt = nextCheckAt === null ? firstCheckAt : Math.min(nextCheckAt, firstCheckAt);
+        nextCheckAt = !Number.isFinite(nextCheckAt)
+          ? firstCheckAt
+          : Math.min(nextCheckAt, firstCheckAt);
         continue;
       }
       const receipt = await this.deps.getReceipt(notification.ticketId);
@@ -542,14 +547,14 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         });
       } else {
         const retryAt = now + state.config.receiptCheckDelayMs;
-        nextCheckAt = nextCheckAt === null ? retryAt : Math.min(nextCheckAt, retryAt);
+        nextCheckAt = !Number.isFinite(nextCheckAt) ? retryAt : Math.min(nextCheckAt, retryAt);
       }
     }
     // The clear is fenced on the credential revision the attempts were made
     // with: a rotation that landed meanwhile makes it a no-op, and only a
     // WINNING clear may revoke the device.
     const pushTokenInvalidated =
-      pushTokenInvalid && state.pushTokenSecret !== null
+      pushTokenInvalid && state.pushTokenSecret
         ? await this.deps.clearPushToken({
             pushTokenSecretPath: state.pushTokenSecret.path,
             pushTokenSecretUpdatedOffset: state.pushTokenSecret.updatedOffset,
@@ -606,7 +611,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       if (
         notification.status !== "requested" ||
         graceUntil === 0 ||
-        notification.presentedAt !== undefined ||
+        Number.isFinite(notification.presentedAt) ||
         now < graceUntil
       ) {
         continue;
@@ -625,11 +630,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         );
         continue;
       }
-      if (
-        state.pushTokenSecret === null ||
-        this.projectId === null ||
-        this.#liveSendAttempts.has(requestOffset)
-      ) {
+      if (!state.pushTokenSecret || !this.projectId || this.#liveSendAttempts.has(requestOffset)) {
         continue;
       }
       this.#liveSendAttempts.add(requestOffset);
@@ -655,12 +656,12 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     return Object.values(state.notifications)
       .filter(
         (notification) =>
-          notification.status === "requested" && notification.presentedAt === undefined,
+          notification.status === "requested" && !Number.isFinite(notification.presentedAt),
       )
       .reduce<number | null>((earliest, notification) => {
         const at = obligationGraceUntil(notification, state.config);
         if (at <= now) return earliest;
-        return earliest === null || at < earliest ? at : earliest;
+        return !Number.isFinite(earliest) || at < earliest ? at : earliest;
       }, null);
   }
 
@@ -893,10 +894,10 @@ function obligationGraceUntil(
   notification: DeviceProcessorState["notifications"][string],
   config: DeviceProcessorState["config"],
 ): number {
-  if (notification.approvalRequestEventOffset !== undefined) {
+  if (Number.isFinite(notification.approvalRequestEventOffset)) {
     return notification.requestedAt + config.approvalGraceMs;
   }
-  if (notification.agentReplyEventOffset !== undefined) {
+  if (Number.isFinite(notification.agentReplyEventOffset)) {
     return notification.requestedAt + config.replyGraceMs;
   }
   return 0;

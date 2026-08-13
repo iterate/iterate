@@ -160,7 +160,7 @@ async function runByokAttempt(input: {
 }): Promise<WorkersAiCompletion> {
   const { transport } = input;
   const gateway = input.ai.gateway?.(transport.gatewayId);
-  if (gateway === undefined) {
+  if (!gateway) {
     throw new Error("AI binding does not expose gateway(); BYOK transport unavailable.");
   }
   const containsFiles = input.messages.some((message) => message.containsFiles === true);
@@ -169,7 +169,7 @@ async function runByokAttempt(input: {
     messages: adaptMessagesForModel(input.messages, { supportsDeveloperRole: true }),
     stream: true,
     ...openAiReasoningExtras(input.model),
-    ...(transport.openaiPromptCacheKey === undefined
+    ...(!transport.openaiPromptCacheKey
       ? {}
       : { prompt_cache_key: transport.openaiPromptCacheKey }),
   };
@@ -180,7 +180,7 @@ async function runByokAttempt(input: {
     "content-type": "application/json",
   };
   const ttlSeconds = transport.responseCacheTtlSeconds;
-  if (ttlSeconds !== undefined && !containsFiles) {
+  if (Number.isFinite(ttlSeconds) && !containsFiles) {
     headers["cf-aig-cache-ttl"] = String(ttlSeconds);
     headers["cf-aig-cache-key"] = await cloudflareAiGatewayResponseCacheKey(body);
   } else {
@@ -193,7 +193,7 @@ async function runByokAttempt(input: {
   const response = await input.deadline.race(
     gateway.run({ provider: "openai", endpoint: "chat/completions", headers, query: body }),
   );
-  if (!response.ok || response.body === null) {
+  if (!response.ok || !response.body) {
     const detail = await input.deadline.race(response.text()).catch(() => "");
     throw new Error(
       `AI Gateway BYOK request failed with status ${response.status}: ${detail.slice(0, 500)}`,
@@ -205,7 +205,7 @@ async function runByokAttempt(input: {
     deadline: input.deadline,
     onChunk: input.onChunk,
   });
-  if (cacheStatus === null) return completion;
+  if (!cacheStatus) return completion;
   return {
     ...completion,
     rawResponse: {
@@ -320,7 +320,7 @@ async function drainSseResponse(input: {
       buffered = frames.pop() ?? "";
       for (const frame of frames) {
         const chunk = parseSseFrame(frame);
-        if (chunk !== undefined) await handleChunk(chunk);
+        if (chunk) await handleChunk(chunk);
       }
     }
   } catch (error) {
@@ -331,17 +331,17 @@ async function drainSseResponse(input: {
   }
   buffered += decoder.decode();
   const finalChunk = parseSseFrame(buffered);
-  if (finalChunk !== undefined) await handleChunk(finalChunk);
+  if (finalChunk) await handleChunk(finalChunk);
 
   return {
     rawResponse: {
       streamed: true,
       chunkCount,
       response: text,
-      ...(usage === undefined ? {} : { usage }),
+      ...(!usage ? {} : { usage }),
     },
     text,
-    ...(usage === undefined ? {} : { usage }),
+    ...(!usage ? {} : { usage }),
   };
 }
 
@@ -365,7 +365,7 @@ function parseSseFrame(frame: string): unknown | undefined {
 
 function extractAssistantText(raw: unknown): string {
   if (typeof raw === "string") return raw;
-  if (typeof raw !== "object" || raw === null) {
+  if (typeof raw !== "object" || !raw) {
     throw new Error("AI response did not contain assistant text.");
   }
   if ("response" in raw && typeof raw.response === "string") return raw.response;
@@ -384,7 +384,7 @@ function extractAssistantText(raw: unknown): string {
     return content
       .map((block) =>
         typeof block === "object" &&
-        block !== null &&
+        block &&
         "type" in block &&
         block.type === "text" &&
         "text" in block &&
@@ -400,7 +400,7 @@ function extractAssistantText(raw: unknown): string {
 
 export function extractChunkText(chunk: unknown): string {
   if (typeof chunk === "string") return chunk;
-  if (typeof chunk !== "object" || chunk === null) return "";
+  if (typeof chunk !== "object" || !chunk) return "";
   if ("response" in chunk && typeof chunk.response === "string") return chunk.response;
 
   const choices = (chunk as { choices?: unknown }).choices;
@@ -414,7 +414,7 @@ export function extractChunkText(chunk: unknown): string {
 }
 
 function extractUsage(raw: unknown): unknown | undefined {
-  return typeof raw === "object" && raw !== null && "usage" in raw ? raw.usage : undefined;
+  return typeof raw === "object" && raw && "usage" in raw ? raw.usage : undefined;
 }
 
 /**
@@ -459,7 +459,7 @@ export function normalizeLlmUsage(usage: unknown):
   if (!parsed.success) return undefined;
   const inputTokens = parsed.data.prompt_tokens ?? parsed.data.input_tokens;
   const outputTokens = parsed.data.completion_tokens ?? parsed.data.output_tokens;
-  if (inputTokens === undefined || outputTokens === undefined) return undefined;
+  if (!Number.isFinite(inputTokens) || !Number.isFinite(outputTokens)) return undefined;
   const cachedInputTokens =
     parsed.data.prompt_tokens_details?.cached_tokens ??
     parsed.data.input_tokens_details?.cached_tokens;
@@ -469,8 +469,8 @@ export function normalizeLlmUsage(usage: unknown):
   return {
     inputTokens,
     outputTokens,
-    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-    ...(reasoningOutputTokens === undefined ? {} : { reasoningOutputTokens }),
+    ...(!Number.isFinite(cachedInputTokens) ? {} : { cachedInputTokens }),
+    ...(!Number.isFinite(reasoningOutputTokens) ? {} : { reasoningOutputTokens }),
   };
 }
 

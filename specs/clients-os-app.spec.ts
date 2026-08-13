@@ -71,7 +71,7 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
         { timeout: 15_000 },
       )
       .toBe("ready");
-    if (url === undefined) throw new Error(`client ${clientPath} reported ready without a URL`);
+    if (!url) throw new Error(`client ${clientPath} reported ready without a URL`);
     return url;
   };
   const urls = await Promise.all(bothPaths.map((clientPath) => tabUrl(clientPath)));
@@ -81,7 +81,7 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
   const ofPage = bothPaths[urls.findIndex((url) => replUrl.test(url))];
   const ofPageTwo =
     bothPaths[urls.findIndex((url) => url.endsWith(`/projects/${slug}/integrations`))];
-  if (ofPage === undefined || ofPageTwo === undefined || ofPage === ofPageTwo) {
+  if (!ofPage || !ofPageTwo || ofPage === ofPageTwo) {
     throw new Error(`could not map clients to tabs: paths=${bothPaths} urls=${urls}`);
   }
 

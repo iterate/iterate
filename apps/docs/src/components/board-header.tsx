@@ -43,7 +43,7 @@ export function BoardBreadcrumbs({
       <BreadcrumbList className="flex-nowrap text-xs">
         {/* No project crumb: the whole app is one project (its host says
             which), so the hierarchy starts at the workspace. */}
-        {workspace === undefined ? (
+        {!workspace ? (
           <BreadcrumbItem>
             <BreadcrumbLink render={<Link to="/" />}>workspaces</BreadcrumbLink>
           </BreadcrumbItem>
@@ -58,7 +58,7 @@ export function BoardBreadcrumbs({
             <BreadcrumbItem>tasks</BreadcrumbItem>
           </>
         )}
-        {rootPath === undefined ? null : (
+        {!rootPath ? null : (
           <>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
@@ -207,7 +207,7 @@ export function MobileOverflow({
         <DropdownMenuItem
           onClick={() => {
             const next = window.prompt("Filter tasks", filter);
-            if (next !== null) onChangeFilter(next);
+            if (next) onChangeFilter(next);
           }}
         >
           {filter === "" ? "Filter tasks…" : `Filtered: ${filter}`}

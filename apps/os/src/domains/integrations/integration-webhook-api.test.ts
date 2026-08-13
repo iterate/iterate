@@ -60,8 +60,8 @@ function githubRequest(
     "content-type": "application/json",
     "x-hub-signature-256": sig,
   });
-  if (delivery !== null) headers.set("x-github-delivery", delivery);
-  if (eventName !== null) headers.set("x-github-event", eventName);
+  if (delivery) headers.set("x-github-delivery", delivery);
+  if (eventName) headers.set("x-github-event", eventName);
   return new Request("https://os.example.test/api/integrations/github/webhook", {
     body,
     headers,
@@ -180,7 +180,7 @@ describe("handleIntegrationWebhookApiRequest (github)", () => {
       mockRoute,
       signature,
     }) => {
-      if (mockRoute !== undefined) routeIntegrationWebhook.mockResolvedValue(mockRoute);
+      if (mockRoute) routeIntegrationWebhook.mockResolvedValue(mockRoute);
 
       const response = await handleIntegrationWebhookApiRequest({
         config: bare === true ? bareConfig() : config(),
@@ -189,7 +189,7 @@ describe("handleIntegrationWebhookApiRequest (github)", () => {
 
       expect(response?.status).toBe(expectedStatus);
       expect(await response?.json()).toEqual(expectedJson);
-      if (expectedCall === undefined) {
+      if (!expectedCall) {
         expect(routeIntegrationWebhook).not.toHaveBeenCalled();
       } else {
         expect(routeIntegrationWebhook).toHaveBeenCalledTimes(1);
@@ -230,16 +230,16 @@ describe("handleIntegrationWebhookApiRequest (slack + routing)", () => {
       },
     },
   ])("$name", async ({ body, expectedCall, expectedJson, expectedStatus, mockRoute }) => {
-    if (mockRoute !== undefined) routeIntegrationWebhook.mockResolvedValue(mockRoute);
+    if (mockRoute) routeIntegrationWebhook.mockResolvedValue(mockRoute);
 
     const response = await handleIntegrationWebhookApiRequest({
       config: config(),
       request: slackRequest(body),
     });
 
-    if (expectedStatus !== undefined) expect(response?.status).toBe(expectedStatus);
+    if (Number.isFinite(expectedStatus)) expect(response?.status).toBe(expectedStatus);
     expect(await response?.json()).toEqual(expectedJson);
-    if (expectedCall === undefined) {
+    if (!expectedCall) {
       expect(routeIntegrationWebhook).not.toHaveBeenCalled();
     } else {
       expect(routeIntegrationWebhook.mock.calls[0]![0]).toMatchObject(expectedCall);

@@ -50,7 +50,7 @@ export async function executeCoordinatedWorkerBuild(
 ): Promise<WorkerBuildResult> {
   const store = new KvWorkerBuildArtifactStore(buildEnv.WORKER_BUILD_CACHE);
   const cached = await store.get(request.buildKey);
-  if (cached !== null) return { artifact: cached, ok: true };
+  if (cached) return { artifact: cached, ok: true };
 
   const files = await resolvedSourceFiles(buildEnv, request.projectId, request.resolved);
   const result = await executeWorkerBuild({
@@ -69,7 +69,7 @@ export async function executeCoordinatedWorkerBuild(
     });
   }
   const artifact: WorkerBuildArtifact = {
-    ...(built.assetConfig === undefined ? {} : { assetConfig: built.assetConfig }),
+    ...(!built.assetConfig ? {} : { assetConfig: built.assetConfig }),
     assetManifest: built.assetManifest,
     assets: built.assets,
     buildKey: request.buildKey,
@@ -77,7 +77,7 @@ export async function executeCoordinatedWorkerBuild(
     mainModule: built.mainModule,
     modules: built.modules,
     ...(built.warnings.length === 0 ? {} : { warnings: built.warnings }),
-    ...(built.wranglerConfig === undefined ? {} : { wranglerConfig: built.wranglerConfig }),
+    ...(!built.wranglerConfig ? {} : { wranglerConfig: built.wranglerConfig }),
   };
   await store.put(artifact);
   return { artifact, ok: true };

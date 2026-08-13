@@ -97,7 +97,7 @@ function replScriptBody(body: string): string {
     if (
       statementsEnd !== ";" &&
       statementsEnd !== "}" &&
-      expressionStart !== undefined &&
+      expressionStart &&
       LINE_BREAK_CONTINUATION_STARTS.has(expressionStart)
     ) {
       continue;
@@ -177,7 +177,7 @@ export function deriveReplEntries(events: readonly StreamEvent[]): ReplRunEntry[
   for (const event of events) {
     const payload = event.payload as Record<string, unknown>;
     const executionId = typeof payload?.executionId === "string" ? payload.executionId : null;
-    if (executionId === null) continue;
+    if (!executionId) continue;
     if (event.type === SCRIPT_RUN_REQUESTED && typeof payload.code === "string") {
       entries.set(executionId, {
         code: scriptBodyForDisplay(payload.code),
@@ -241,5 +241,5 @@ export function pendingRunVisibleInEntries(entries: readonly ReplRunEntry[], run
  */
 export function runErrorAlreadyJournaled(entries: readonly ReplRunEntry[], message: string) {
   const newest = entries.at(-1);
-  return newest !== undefined && newest.status === "error" && newest.error === message;
+  return !!newest && newest.status === "error" && newest.error === message;
 }

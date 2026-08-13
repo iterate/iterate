@@ -114,7 +114,7 @@ function webhook(input?: {
       body: {
         action,
         comment: {
-          body: input?.commentBody === undefined ? "@iterate please review" : input.commentBody,
+          body: !input?.commentBody ? "@iterate please review" : input.commentBody,
           html_url: "https://github.com/acme/widgets/pull/7#issuecomment-991",
           id: 991,
         },
@@ -126,7 +126,7 @@ function webhook(input?: {
           state: "open",
         },
         review: {
-          body: input?.reviewBody === undefined ? "@iterate please review" : input.reviewBody,
+          body: !input?.reviewBody ? "@iterate please review" : input.reviewBody,
           html_url: "https://github.com/acme/widgets/pull/7#pullrequestreview-992",
           id: 992,
         },
@@ -166,10 +166,9 @@ function harness(input?: {
     const committed = committedEvents.get(path) ?? [];
     const results = events.map((event) => {
       const existing = committed.find(
-        ({ idempotencyKey }) =>
-          event.idempotencyKey !== undefined && idempotencyKey === event.idempotencyKey,
+        ({ idempotencyKey }) => !!event.idempotencyKey && idempotencyKey === event.idempotencyKey,
       );
-      if (existing !== undefined) return existing;
+      if (existing) return existing;
       const appended: StreamEvent = {
         ...event,
         createdAt: "2026-07-17T12:00:02.000Z",
@@ -206,7 +205,7 @@ function harness(input?: {
   });
   const getEvents = vi.fn(async (path: string) => {
     const birth = births.get(path);
-    return birth === undefined ? [] : [birth];
+    return !birth ? [] : [birth];
   });
   const subscribeToEventsFrom = vi.fn(async (_path: string, _args: unknown) => ({
     inbound: {},
@@ -222,7 +221,7 @@ function harness(input?: {
     },
   }));
   const routes = input?.routes ?? {
-    "/repos/config": input?.route === undefined ? route : input.route,
+    "/repos/config": !input?.route ? route : input.route,
   };
   const availableRuleFiles = input?.ruleFiles || ruleFiles;
   const repoList = vi.fn(async () => Object.keys(routes).map((path) => ({ path })));
@@ -230,7 +229,7 @@ function harness(input?: {
     listFiles: async () => ({ commitOid: "rules-abc", paths: Object.keys(availableRuleFiles) }),
     readFile: async ({ path: filePath }: { path: string }) => {
       const content = availableRuleFiles[filePath];
-      return content === undefined ? null : { commitOid: "rules-abc", content, path: filePath };
+      return !content ? null : { commitOid: "rules-abc", content, path: filePath };
     },
     processor: {
       snapshot: async () => ({ offset: 1, state: { github: routes[path] ?? null } }),

@@ -180,7 +180,7 @@ function AnnotatedPreview({
     for (const thread of threads) {
       if (thread.status !== "open") continue;
       const resolution = resolveThreadAnchor(body, thread.id, thread.anchor?.selector ?? null);
-      if (resolution.range !== null) entries.push({ thread, resolution });
+      if (resolution.range) entries.push({ thread, resolution });
     }
     return entries;
   }, [body, threads]);
@@ -190,7 +190,7 @@ function AnnotatedPreview({
   // re-registering fresh Ranges against the freshly rendered nodes.
   useLayoutEffect(() => {
     const root = markdownRef.current;
-    if (root === null) return;
+    if (!root) return;
     const projection = buildProjection(root);
     projectionRef.current = projection;
     const groups = new Map<string, Range[]>();
@@ -199,7 +199,7 @@ function AnnotatedPreview({
       groups.set(key, [...(groups.get(key) ?? []), ...ranges]);
     };
     for (const { thread, resolution } of resolved) {
-      if (resolution.range === null) continue;
+      if (!resolution.range) continue;
       const ranges = projection.sourceRangeToDomRanges(resolution.range);
       if (resolution.state === "needs_review") push("review", ranges);
       else push(`a-${slugForAuthor(authorOf(thread))}`, ranges);
@@ -207,7 +207,7 @@ function AnnotatedPreview({
     }
     // A pending range only paints against the body it was computed on — a
     // kept-for-its-draft stale selection must not highlight the wrong text.
-    if (pending !== null && pending.sourceBody === body) {
+    if (pending && pending.sourceBody === body) {
       push("pending", projection.sourceRangeToDomRanges(pending.range));
     }
     // Registration order is paint order: selected and pending go last so
@@ -230,10 +230,10 @@ function AnnotatedPreview({
   useEffect(() => {
     if (selectedThreadId === scrolledThreadRef.current) return;
     scrolledThreadRef.current = selectedThreadId;
-    if (selectedThreadId === null) return;
+    if (!selectedThreadId) return;
     const projection = projectionRef.current;
     const entry = resolved.find(({ thread }) => thread.id === selectedThreadId);
-    if (projection === null || entry === undefined || entry.resolution.range === null) return;
+    if (!projection || !entry || !entry.resolution.range) return;
     const first = projection.sourceRangeToDomRanges(entry.resolution.range)[0];
     first?.startContainer.parentElement?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [selectedThreadId, resolved]);
@@ -255,7 +255,7 @@ function AnnotatedPreview({
   // state loop: the write below pins sourceBody to body, so the next run
   // early-returns.
   useLayoutEffect(() => {
-    if (pending === null || pending.sourceBody === body) return;
+    if (!pending || pending.sourceBody === body) return;
     const exact = pending.sourceBody.slice(pending.range.start, pending.range.end);
     const first = body.indexOf(exact);
     const projection = projectionRef.current;
@@ -264,12 +264,11 @@ function AnnotatedPreview({
       first !== -1 && body.indexOf(exact, first + 1) === -1
         ? { start: first, end: first + exact.length }
         : null;
-    const rect =
-      range === null
-        ? undefined
-        : projection?.sourceRangeToDomRanges(range)[0]?.getBoundingClientRect();
+    const rect = !range
+      ? undefined
+      : projection?.sourceRangeToDomRanges(range)[0]?.getBoundingClientRect();
     const wrapperRect = wrapper?.getBoundingClientRect();
-    if (range === null || rect === undefined || wrapperRect === undefined) {
+    if (!range || !rect || !wrapperRect) {
       if (!composerOpen) setPending(null);
       return;
     }
@@ -283,17 +282,17 @@ function AnnotatedPreview({
   }, [body, composerOpen, pending]);
 
   const onMouseUp = useCallback(() => {
-    if (identity === null || composerOpen) return;
+    if (!identity || composerOpen) return;
     const root = markdownRef.current;
     const wrapper = wrapperRef.current;
     const projection = projectionRef.current;
-    if (root === null || wrapper === null || projection === null) return;
+    if (!root || !wrapper || !projection) return;
     const selection = root.ownerDocument.getSelection();
-    if (selection === null || selection.isCollapsed || selection.rangeCount === 0) return;
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
     const domRange = selection.getRangeAt(0);
     if (!root.contains(domRange.startContainer) || !root.contains(domRange.endContainer)) return;
     const range = projection.domRangeToSource(domRange);
-    if (range === null) return;
+    if (!range) return;
     const rect = domRange.getBoundingClientRect();
     const wrapperRect = wrapper.getBoundingClientRect();
     setPending({
@@ -310,28 +309,28 @@ function AnnotatedPreview({
       if (composerOpen) return;
       const projection = projectionRef.current;
       const root = markdownRef.current;
-      if (projection === null || root === null) return;
+      if (!projection || !root) return;
       const selection = root.ownerDocument.getSelection();
-      if (selection !== null && !selection.isCollapsed) return; // a drag, not a click
+      if (selection && !selection.isCollapsed) return; // a drag, not a click
       const offset = sourceOffsetAtPoint(
         projection,
         root.ownerDocument,
         event.clientX,
         event.clientY,
       );
-      if (offset === null) {
+      if (!Number.isFinite(offset)) {
         onSelectThread(null);
         return;
       }
       let best: { threadId: string; width: number } | null = null;
       for (const { thread, resolution } of resolved) {
         const range = resolution.range;
-        if (range === null || offset < range.start || offset > range.end) continue;
+        if (!range || offset < range.start || offset > range.end) continue;
         const width = range.end - range.start;
-        if (best === null || width < best.width) best = { threadId: thread.id, width };
+        if (!best || width < best.width) best = { threadId: thread.id, width };
       }
       onSelectThread(best?.threadId ?? null);
-      if (best === null) cancelPending();
+      if (!best) cancelPending();
     },
     [composerOpen, resolved, onSelectThread, cancelPending],
   );
@@ -346,7 +345,7 @@ function AnnotatedPreview({
 
   const submitThread = (commentBody: string) => {
     const selection = pending;
-    if (selection === null || identity === null) return Promise.resolve(false);
+    if (!selection || !identity) return Promise.resolve(false);
     return apply((doc) => {
       // The document may have moved since the selection was made: the range
       // is only valid against the body it was computed on (the remap effect
@@ -396,7 +395,7 @@ function AnnotatedPreview({
     <div className="min-h-0 flex-1 overflow-y-auto">
       <style>{highlightCss}</style>
       <div ref={wrapperRef} className="relative mx-auto w-full max-w-3xl px-8 py-6">
-        {identity !== null ? (
+        {identity ? (
           <p className="mb-4 text-xs text-muted-foreground">Select text to comment on a passage.</p>
         ) : null}
         <FrontmatterTable metadata={metadata} />
@@ -404,7 +403,7 @@ function AnnotatedPreview({
         <div ref={markdownRef} onMouseUp={onMouseUp} onClick={onClick} className="cursor-text">
           <AnnotatedMarkdownView source={body} className={BODY_STYLES} />
         </div>
-        {pending !== null && !composerOpen && (
+        {!!pending && !composerOpen && (
           <div
             className="absolute z-10"
             style={{ top: pending.top, left: Math.min(pending.left, 560) }}
@@ -419,7 +418,7 @@ function AnnotatedPreview({
             </Button>
           </div>
         )}
-        {pending !== null && composerOpen && (
+        {!!pending && composerOpen && (
           <div
             className="absolute z-10 w-80 rounded-lg border bg-popover p-2 shadow-lg"
             style={{ top: pending.top, left: Math.min(pending.left, 420) }}
@@ -431,7 +430,7 @@ function AnnotatedPreview({
               onSubmit={submitThread}
               onCancel={cancelPending}
             />
-            {opError !== null && <p className="pt-1 text-xs text-red-700">{opError}</p>}
+            {!!opError && <p className="pt-1 text-xs text-red-700">{opError}</p>}
           </div>
         )}
       </div>
@@ -448,7 +447,8 @@ function metadataFromRecord(record: Record<string, unknown>): { key: string; val
 
 function formatMetadataValue(value: unknown): string {
   if (Array.isArray(value)) return value.map(formatMetadataValue).join(", ");
-  if (typeof value === "object" && value !== null) return JSON.stringify(value);
+  if (typeof value === "object" && value) return JSON.stringify(value);
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/''/false must format as themselves; only null formats as "null"
   if (value === null) return "null";
   return String(value);
 }

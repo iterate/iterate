@@ -219,21 +219,21 @@ function buildProcessorDocs(): ProcessorDoc[] {
       consumes: contract.consumes
         .filter((type) => type !== "*")
         .map((type) => eventReferencesByType.get(type))
-        .filter((event): event is EventReferenceDoc => event != null),
+        .filter((event): event is EventReferenceDoc => !!event),
       dependencies: (contract.processorDeps ?? [])
         .map((dep) => referencesByContractSlug.get(dep.slug))
-        .filter((dep): dep is ProcessorReferenceDoc => dep != null),
+        .filter((dep): dep is ProcessorReferenceDoc => !!dep),
       dependents: dependentsByContractSlug.get(contract.slug) ?? [],
       emits: (contract.emits ?? [])
         .map((type) => eventReferencesByType.get(type))
-        .filter((event): event is EventReferenceDoc => event != null),
+        .filter((event): event is EventReferenceDoc => !!event),
     };
   });
 }
 
 function pushMapArray<Key, Value>(map: Map<Key, Value[]>, key: Key, value: Value) {
   const values = map.get(key);
-  if (values === undefined) {
+  if (!values) {
     map.set(key, [value]);
   } else {
     values.push(value);
@@ -243,8 +243,8 @@ function pushMapArray<Key, Value>(map: Map<Key, Value[]>, key: Key, value: Value
 function processorReferenceDoc(contract: ProcessorContractForDocs): ProcessorReferenceDoc {
   const docsPath = processorDocsPath(contract);
   return {
-    ...(contract.description == null ? {} : { description: contract.description }),
-    ...(contract.version == null ? {} : { version: contract.version }),
+    ...(!contract.description ? {} : { description: contract.description }),
+    ...(!contract.version ? {} : { version: contract.version }),
     contractSlug: contract.slug,
     docsPath,
     href: processorDocsPathForSlug(docsPath),
@@ -266,7 +266,7 @@ function buildEventDoc(args: {
     processorSlug: args.processor.slug,
   });
   return {
-    ...(args.definition.description == null ? {} : { description: args.definition.description }),
+    ...(!args.definition.description ? {} : { description: args.definition.description }),
     consumedBy: args.consumedBy,
     emittedBy: args.emittedBy,
     eventPath,
@@ -286,7 +286,7 @@ function buildEventDoc(args: {
 
 function eventReferenceDoc(event: EventDoc): EventReferenceDoc {
   return {
-    ...(event.description == null ? {} : { description: event.description }),
+    ...(!event.description ? {} : { description: event.description }),
     href: event.href,
     ownerContractSlug: event.processor.contractSlug,
     routeParams: event.routeParams,

@@ -44,7 +44,11 @@ export async function retryTransientCloudflarePropagation<T>(
     } catch (error) {
       const status = cloudflareStatus(error);
       const delayMs = options.delaysMs[attempt];
-      if (!status || !transientCloudflarePropagationStatuses.has(status) || delayMs === undefined) {
+      if (
+        !status ||
+        !transientCloudflarePropagationStatuses.has(status) ||
+        !Number.isFinite(delayMs)
+      ) {
         throw error;
       }
       console.warn(

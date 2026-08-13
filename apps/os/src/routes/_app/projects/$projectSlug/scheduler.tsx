@@ -110,9 +110,7 @@ function ProjectSchedulerContent() {
                     {recurrenceLabel(schedule.recurrence)}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">
-                    {schedule.nextTriggerAt === null
-                      ? "—"
-                      : formatRelativeTime(schedule.nextTriggerAt)}
+                    {!schedule.nextTriggerAt ? "—" : formatRelativeTime(schedule.nextTriggerAt)}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{schedule.runCount}</TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">
@@ -124,7 +122,7 @@ function ProjectSchedulerContent() {
                         type="button"
                         size="sm"
                         variant="outline"
-                        disabled={pendingKey !== undefined}
+                        disabled={!!pendingKey}
                         onClick={() => triggerSchedule.mutate(schedule.key)}
                       >
                         {pendingKey === schedule.key && triggerSchedule.isPending
@@ -135,7 +133,7 @@ function ProjectSchedulerContent() {
                         type="button"
                         size="sm"
                         variant="outline"
-                        disabled={pendingKey !== undefined}
+                        disabled={!!pendingKey}
                         onClick={() => cancelSchedule.mutate(schedule.key)}
                       >
                         {pendingKey === schedule.key && cancelSchedule.isPending
@@ -179,10 +177,9 @@ function compareByNextTrigger(
   left: Pick<ScheduleView, "key" | "nextTriggerAt">,
   right: Pick<ScheduleView, "key" | "nextTriggerAt">,
 ) {
-  if (left.nextTriggerAt === null && right.nextTriggerAt === null)
-    return left.key.localeCompare(right.key);
-  if (left.nextTriggerAt === null) return 1;
-  if (right.nextTriggerAt === null) return -1;
+  if (!left.nextTriggerAt && !right.nextTriggerAt) return left.key.localeCompare(right.key);
+  if (!left.nextTriggerAt) return 1;
+  if (!right.nextTriggerAt) return -1;
   const byTime = Date.parse(left.nextTriggerAt) - Date.parse(right.nextTriggerAt);
   return byTime !== 0 ? byTime : left.key.localeCompare(right.key);
 }

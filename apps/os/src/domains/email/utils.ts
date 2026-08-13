@@ -97,7 +97,7 @@ type EmailParty = {
  */
 export function emailDomainForDeployment(projectHostnameBases: readonly string[]): string | null {
   const base = projectHostnameBases[0];
-  if (base === undefined) return null;
+  if (!base) return null;
   const normalized = normalizeProjectHostnameBase(base);
   return normalized === "" ? null : normalized;
 }
@@ -164,7 +164,7 @@ export function parseInboundRecipient(address: string): InboundEmailRecipient | 
   const slug = plus === -1 ? localPart : localPart.slice(0, plus);
   if (slug.length === 0) return null;
   const tag = plus === -1 ? null : localPart.slice(plus + 1);
-  const threadId = tag !== null && /^t[a-z0-9-]+$/.test(tag) ? tag.slice(1) : null;
+  const threadId = tag && /^t[a-z0-9-]+$/.test(tag) ? tag.slice(1) : null;
   return { domain, slug, threadId };
 }
 
@@ -226,7 +226,7 @@ export function normalizeInboundEmailAllowedSender(pattern: string): string {
  * real CF fail is not overridden by an earlier forgery.
  */
 export function dmarcPasses(authenticationResults: string | null): boolean {
-  if (authenticationResults === null) return false;
+  if (!authenticationResults) return false;
 
   let lastCloudflareRecord: string | undefined;
   for (const record of splitAuthenticationResultsRecords(authenticationResults)) {
@@ -258,7 +258,7 @@ function splitAuthenticationResultsRecords(value: string): string[] {
     // a Headers.get join and legitimate CF-stamped mail would be dropped.
     const re = /,(?=\s*[^,;\s]+(?:\s+\d+)?\s*;)/g;
     let match: RegExpExecArray | null;
-    while ((match = re.exec(line)) !== null) {
+    while ((match = re.exec(line))) {
       const left = line.slice(start, match.index);
       if (left.includes(";")) {
         records.push(left);
@@ -303,7 +303,7 @@ type InboundMailIdentitySlice = {
  */
 function isProjectOwnedInboundAddress(address: string, payload: InboundMailIdentitySlice): boolean {
   const recipient = parseInboundRecipient(payload.envelope.to);
-  if (recipient === null) return false;
+  if (!recipient) return false;
   const slug = payload.recipient.slug.toLowerCase();
   return (
     address === `${slug}@${recipient.domain}` ||
@@ -328,7 +328,7 @@ export function emailCounterpart(payload: InboundMailIdentitySlice): string | nu
     payload.envelope.from,
   ]) {
     const normalized = normalizeBareAddress(candidate);
-    if (normalized !== null && !isProjectOwnedInboundAddress(normalized, payload)) {
+    if (normalized && !isProjectOwnedInboundAddress(normalized, payload)) {
       return normalized;
     }
   }
@@ -339,7 +339,7 @@ export function isOwnProjectMail(payload: InboundMailIdentitySlice): boolean {
   // Header From when parsed, else the SMTP envelope from — mirrors the
   // counterpart fallback chain so the loop filter sees the same identity.
   const from = normalizeBareAddress(payload.message.from.address ?? payload.envelope.from);
-  if (from === null) return false;
+  if (!from) return false;
   // Same predicate as the counterpart chain: the bare inbox AND any +tagged
   // variant count as our own mail.
   return isProjectOwnedInboundAddress(from, payload);
@@ -369,18 +369,18 @@ export async function fallbackInboundMessageKey(input: {
 
 /** Strip whitespace and angle brackets from an RFC 5322 Message-ID. */
 export function normalizeMessageId(value: string | null | undefined): string | null {
-  if (value == null) return null;
+  if (!value) return null;
   const trimmed = value.trim().replace(/^<|>$/g, "").trim();
   return trimmed.length === 0 ? null : trimmed;
 }
 
 /** Every `<...>` message id in a References/In-Reply-To header value, normalized. */
 export function parseMessageIdList(value: string | null | undefined): string[] {
-  if (value == null) return [];
+  if (!value) return [];
   const ids = value.match(/<[^<>\s]+>/g) ?? [];
   return ids
     .map((id) => normalizeMessageId(id))
-    .filter((id): id is string => id !== null && id.length > 0);
+    .filter((id): id is string => !!id && id.length > 0);
 }
 
 /** Re-add the angle brackets an RFC 5322 message-id header value requires. */

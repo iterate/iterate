@@ -76,18 +76,18 @@ export class DocsAppRpcTarget extends RpcTarget {
     const repo = wantsBoard ? requireRepoPath(loose.repo!) : undefined;
     // task belongs to the board lens alone — a document link ignores it
     // rather than failing board-path checks for a view that never reads it.
-    const task = wantsBoard && loose.task !== undefined ? requireTaskPath(loose.task) : undefined;
+    const task = wantsBoard && loose.task ? requireTaskPath(loose.task) : undefined;
     const itx = await this.#env.ITX.get();
     try {
       const url = new URL(await itx.appUrl("docs"));
       url.searchParams.set("workspace", workspace);
-      if (path !== undefined) {
+      if (path) {
         url.searchParams.set("path", path);
         return url.href;
       }
       url.pathname = "/w";
       url.searchParams.set("repo", repo!);
-      if (task !== undefined) url.searchParams.set("task", task);
+      if (task) url.searchParams.set("task", task);
       return url.href;
     } finally {
       itx[Symbol.dispose]();
@@ -104,12 +104,11 @@ export const DocsApp = {
         const itx = await env.ITX.get();
         try {
           const denied = await itx.auth.get(options.auth).fetch(request);
-          if (denied !== null) return denied;
+          if (denied) return denied;
           const override = await itx.kv.get(options.proxy.originOverrideKvKey);
-          const origin =
-            override === null || override === undefined || override === ""
-              ? configuredOrigin
-              : parseOverride(override, options.proxy.originOverrideKvKey);
+          const origin = !override
+            ? configuredOrigin
+            : parseOverride(override, options.proxy.originOverrideKvKey);
           const target = new URL(request.url);
           target.protocol = origin.protocol;
           target.host = origin.host;

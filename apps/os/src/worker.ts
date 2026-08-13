@@ -189,7 +189,7 @@ async function apiFetch(
       method: route.fetch.method,
       redirect: request.redirect,
     };
-    if (request.body !== null) {
+    if (request.body) {
       (init as RequestInit & { duplex: "half" }).duplex = "half";
     }
     // Project-app HTTP is ONE transport: the fetch-native worker lane. Pages,
@@ -237,7 +237,7 @@ async function apiFetch(
         method: route.fetch.method,
       }),
     });
-    if (outcome !== null) wideLogger.setOutcome(outcome);
+    if (outcome) wideLogger.setOutcome(outcome);
     return response;
   }
 
@@ -263,7 +263,7 @@ async function apiFetch(
   // lane): this pipeline has the engine bindings, so a signed event routes
   // straight into the claiming project's stream without a capnweb round trip.
   const webhookResponse = await handleIntegrationWebhookApiRequest({ config, request });
-  if (webhookResponse !== null) return webhookResponse;
+  if (webhookResponse) return webhookResponse;
 
   if (url.pathname !== "/api") return Response.json({ error: "not found" }, { status: 404 });
   const unauthenticated = new UnauthenticatedOsRpcTarget({

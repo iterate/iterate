@@ -86,7 +86,7 @@ export class NotificationProcessor extends StreamProcessor<NotificationProcessor
       case "events.iterate.com/notification/created":
         // Bootstrap's birth append is idempotency-keyed, but a duplicate that
         // slips through must reduce to a no-op, never wedge the frame.
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return { ...state, birthCertificate: event.payload };
       default:
         return state;

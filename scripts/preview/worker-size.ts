@@ -91,12 +91,12 @@ export function renderWorkerSizeCell(
   gzipKib: number | null | undefined,
   mainGzipKib: number | null | undefined,
 ) {
-  if (gzipKib == null) {
+  if (!Number.isFinite(gzipKib)) {
     return "";
   }
 
   const size = formatKib(gzipKib);
-  if (mainGzipKib == null) {
+  if (!Number.isFinite(mainGzipKib)) {
     return size;
   }
 

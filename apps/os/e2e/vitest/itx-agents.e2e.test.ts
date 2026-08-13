@@ -275,7 +275,7 @@ test("Agent create replays its earlier birth and setup events through its subscr
     predicate: (event: (typeof events)[number]) => boolean,
   ) => {
     const offset = events.find(predicate)?.offset;
-    if (offset === undefined) throw new Error(`agent creation has no ${description}`);
+    if (!Number.isFinite(offset)) throw new Error(`agent creation has no ${description}`);
     return offset;
   };
 

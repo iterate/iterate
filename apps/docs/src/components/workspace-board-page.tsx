@@ -57,9 +57,7 @@ function BoardPresence({
   clients: { clientId: string; name: string }[];
 }) {
   const everyone = [
-    ...(self !== null && !clients.some((client) => client.clientId === self.clientId)
-      ? [self]
-      : []),
+    ...(self && !clients.some((client) => client.clientId === self.clientId) ? [self] : []),
     ...clients,
   ];
   if (everyone.length === 0) return null;
@@ -181,7 +179,7 @@ export function WorkspaceBoardPage({
     for (const [claimedPath, at] of claimedRef.current) {
       if (now - at > 5_000) claimedRef.current.delete(claimedPath);
     }
-    return boardRef.current.files?.[path] !== undefined || claimedRef.current.has(path);
+    return !!boardRef.current.files?.[path] || claimedRef.current.has(path);
   }, []);
 
   const claimPath = useCallback(
@@ -199,7 +197,7 @@ export function WorkspaceBoardPage({
    * and read must route around it as if no editor were open. */
   const liveApi = useCallback((path: string) => {
     const api = editorApiRef.current;
-    return api !== null && api.path === path && api.isLive() ? api : null;
+    return api && api.path === path && api.isLive() ? api : null;
   }, []);
 
   /** Live text of the open file, else the board's copy. */
@@ -212,7 +210,7 @@ export function WorkspaceBoardPage({
   const applyLive = useCallback(
     (path: string, transform: (source: string) => string): boolean => {
       const api = liveApi(path);
-      if (api === null) return false;
+      if (!api) return false;
       api.applyTransform(transform);
       // Reflect immediately so cards/commit summaries don't lag the doc.
       board.reflectLiveContent(path, api.source());
@@ -341,7 +339,7 @@ export function WorkspaceBoardPage({
       const transform = (current: string) => {
         let next =
           taskColumnState(task.state) === state ? current : setTaskCardState(current, state);
-        if (labels !== undefined) next = setTaskCardLabels(next, labels);
+        if (labels) next = setTaskCardLabels(next, labels);
         return next;
       };
       if (folder === task.folder) {
@@ -391,7 +389,7 @@ export function WorkspaceBoardPage({
         event.target instanceof HTMLElement &&
         (event.target.isContentEditable ||
           ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName) ||
-          event.target.closest(".cm-editor") !== null)
+          event.target.closest(".cm-editor"))
       ) {
         return;
       }
@@ -418,7 +416,7 @@ export function WorkspaceBoardPage({
       }
       claimedRef.current.set(target, Date.now());
       // Adding from a tag row: the task wears that tag from birth.
-      const content = label === undefined ? file.content : setTaskCardLabels(file.content, [label]);
+      const content = !label ? file.content : setTaskCardLabels(file.content, [label]);
       draftFocusRef.current = "select";
       setDraftPath(target);
       // The card shows instantly (optimistic), but the SHEET opens only once
@@ -447,7 +445,7 @@ export function WorkspaceBoardPage({
       // with another rename lane (a drag, a path-input edit).
       if (current.changes.get(path) !== "added" || renamingRef.current) return;
       const source = liveSource ?? current.files?.[path];
-      if (source === undefined) return;
+      if (!source) return;
       const folder = path.split("/").slice(0, -1).join("/");
       const desired = taskPathInFolder(taskPathForTitle(parseTaskCard(path, source).title), folder);
       if (desired === path) return;
@@ -477,10 +475,10 @@ export function WorkspaceBoardPage({
    * then settle the filename, so the commit records the title's name. */
   const settleDraft = useCallback(async (): Promise<void> => {
     const path = draftPathRef.current;
-    if (path === null) return;
+    if (!path) return;
     const api = liveApi(path);
     const liveSource = api?.source() ?? null;
-    if (api !== null) await api.flushPending().catch(() => {});
+    if (api) await api.flushPending().catch(() => {});
     await settleDraftRename(path, liveSource);
   }, [liveApi, settleDraftRename]);
 
@@ -493,7 +491,7 @@ export function WorkspaceBoardPage({
       if (!isTaskFilePath(nextPath))
         return 'Path must be a .md file inside a folder named "tasks".';
       if (nextPath === task.path) return null;
-      if (board.files?.[nextPath] !== undefined) return "A file already exists at that path.";
+      if (board.files?.[nextPath]) return "A file already exists at that path.";
       if (renamingRef.current) return "A rename is already in progress — retry in a moment.";
       renamingRef.current = true;
       try {
@@ -527,9 +525,7 @@ export function WorkspaceBoardPage({
       <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-background px-3">
         <SidebarTrigger className="-ml-1 md:hidden" />
         <BoardBreadcrumbs
-          workspace={
-            address.boardId !== null ? `/workspaces/tasks/${address.boardId}` : workspacePath
-          }
+          workspace={address.boardId ? `/workspaces/tasks/${address.boardId}` : workspacePath}
           rootPath={repoPath}
         />
         {guest && (
@@ -560,7 +556,7 @@ export function WorkspaceBoardPage({
               grouping={rowField}
               onChangeGrouping={(next) =>
                 patchSearch({
-                  group: next === null ? "none" : next === "label" ? "label" : "folder",
+                  group: !next ? "none" : next === "label" ? "label" : "folder",
                 })
               }
               trackChanges={trackChanges}
@@ -574,7 +570,7 @@ export function WorkspaceBoardPage({
               group={rowField}
               onChangeGroup={(next) =>
                 patchSearch({
-                  group: next === null ? "none" : next === "label" ? "label" : "folder",
+                  group: !next ? "none" : next === "label" ? "label" : "folder",
                 })
               }
             />
@@ -603,10 +599,10 @@ export function WorkspaceBoardPage({
           )}
         </div>
       </header>
-      {board.error !== null && (
+      {!!board.error && (
         <p className="border-b bg-amber-500/10 px-3 py-1 text-xs text-amber-800">{board.error}</p>
       )}
-      {actionError !== null && (
+      {!!actionError && (
         <p className="border-b bg-destructive/10 px-3 py-1 text-xs text-red-700">{actionError}</p>
       )}
       <DeletedTasksStrip deletedChanges={deletedChanges} onRestore={board.revertTask} />
@@ -634,31 +630,29 @@ export function WorkspaceBoardPage({
         guest={guest}
         columns={columns}
         allTags={allTags}
-        changeStatus={openTask === null ? undefined : board.changes.get(openTask.path)}
+        changeStatus={!openTask ? undefined : board.changes.get(openTask.path)}
         onLiveContent={board.reflectLiveContent}
         onChangeState={(state) => {
-          if (openTask !== null)
-            void mutateTask(openTask, (current) => setTaskCardState(current, state));
+          if (openTask) void mutateTask(openTask, (current) => setTaskCardState(current, state));
         }}
         onChangeLabels={(labels) => {
-          if (openTask !== null)
-            void mutateTask(openTask, (current) => setTaskCardLabels(current, labels));
+          if (openTask) void mutateTask(openTask, (current) => setTaskCardLabels(current, labels));
         }}
         onRename={(nextPath) =>
-          openTask === null ? Promise.resolve(null) : renameTask(openTask, nextPath)
+          !openTask ? Promise.resolve(null) : renameTask(openTask, nextPath)
         }
         editorEpoch={editorEpoch}
         redline={trackChanges}
         editorApiRef={editorApiRef}
         commentIdentity={commentIdentity}
         onApplyTransform={(transform) =>
-          openTask === null ? Promise.resolve(false) : mutateTask(openTask, transform)
+          !openTask ? Promise.resolve(false) : mutateTask(openTask, transform)
         }
         onAssignAgent={
           guest
             ? undefined
             : async () => {
-                if (openTask === null) return;
+                if (!openTask) return;
                 setActionError(null);
                 try {
                   // Server-side write + commit — reseed so the card wears its
@@ -675,16 +669,14 @@ export function WorkspaceBoardPage({
                 }
               }
         }
-        focusHeadline={
-          openTask !== null && openTask.path === draftPath ? draftFocusRef.current : undefined
-        }
+        focusHeadline={openTask && openTask.path === draftPath ? draftFocusRef.current : undefined}
         liveSource={() => {
           // Read the ref AT CALL TIME — it fills after mount without a
           // re-render, so a render-time conditional would miss it.
-          return openTask === null ? null : (liveApi(openTask.path)?.source() ?? null);
+          return !openTask ? null : (liveApi(openTask.path)?.source() ?? null);
         }}
         onRevert={() => {
-          if (openTask === null) return;
+          if (!openTask) return;
           // Remount only AFTER the revert RPC ended the old session — an
           // early remount would attach to the dying session and see it end.
           void board.revertTask(openTask.path).then((ok) => {
@@ -692,7 +684,7 @@ export function WorkspaceBoardPage({
           });
         }}
         onDelete={() => {
-          if (openTask !== null) {
+          if (openTask) {
             board.deleteTask(openTask.path);
             if (openTask.path === draftPath) {
               setDraftPath(null);
@@ -706,13 +698,13 @@ export function WorkspaceBoardPage({
           // title — the rename runs now, with nothing mounted to flash, never
           // under the open editor. Reopening is an ordinary open.
           const path = draftPathRef.current;
-          const api = path === null ? null : liveApi(path);
+          const api = !path ? null : liveApi(path);
           const liveSource = api?.source() ?? null;
-          const flushed = api === null ? Promise.resolve() : api.flushPending().catch(() => {});
+          const flushed = !api ? Promise.resolve() : api.flushPending().catch(() => {});
           setDraftPath(null);
           draftFocusRef.current = undefined;
           patchSearch({ task: "" });
-          if (path !== null) void flushed.then(() => settleDraftRename(path, liveSource));
+          if (path) void flushed.then(() => settleDraftRename(path, liveSource));
         }}
       />
     </>

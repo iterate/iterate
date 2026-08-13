@@ -123,9 +123,9 @@ type SandboxEnvVars = Record<string, string>;
 function definedEnvEntries(
   env: Record<string, string | undefined> | undefined,
 ): Record<string, string | null> | undefined {
-  if (env === undefined) return undefined;
+  if (!env) return undefined;
   return Object.fromEntries(
-    Object.entries(env).map(([key, value]) => [key, value === undefined ? null : value]),
+    Object.entries(env).map(([key, value]) => [key, !value ? null : value]),
   );
 }
 
@@ -224,7 +224,7 @@ async function resolveEgressProjectId(
   instanceType: SandboxInstanceType,
 ): Promise<string> {
   const cached = projectIdByContainerId.get(containerId);
-  if (cached !== undefined) return cached;
+  if (cached) return cached;
   const binding = SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].binding as keyof Env;
   const namespace = env[binding] as DurableObjectNamespace<SandboxDurableObject>;
   const stub = namespace.get(namespace.idFromString(containerId));
@@ -364,7 +364,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   #processorResourcesValue: SandboxProcessorResources | undefined;
 
   #processorResources(): SandboxProcessorResources {
-    if (this.#processorResourcesValue !== undefined) return this.#processorResourcesValue;
+    if (this.#processorResourcesValue) return this.#processorResourcesValue;
     const { path, projectId } = this.#identity();
     const stream = new StreamRpcTarget({
       auth: trustedInternalAuthContext(),
@@ -412,7 +412,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   /** This class's instance type, from the subclass's static declaration. */
   #instanceType(): SandboxInstanceType {
     const instanceType = (this.constructor as typeof SandboxDurableObject).sandboxInstanceType;
-    if (instanceType === undefined) {
+    if (!instanceType) {
       throw new Error(
         `sandbox class "${this.constructor.name}" declares no instance type — see instance-types.ts`,
       );
@@ -478,25 +478,25 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     // Validate BEFORE any durable write: a bad sleepAfter must reject the
     // create outright, not burn the name (record written) or wedge the DO
     // (see assertValidSleepAfter).
-    if (input.sleepAfter !== undefined) assertValidSleepAfter(input.sleepAfter);
+    if (input.sleepAfter || input.sleepAfter === 0) assertValidSleepAfter(input.sleepAfter);
     this.#ensureIdentity({ path: input.path, projectId: input.projectId });
     if (this.#creationInFlight) {
       throw new Error(`sandbox "${input.path}" creation is already in progress`);
     }
     const existing = this.#record();
-    if (existing?.destroyedAt !== undefined) {
+    if (existing?.destroyedAt) {
       throw new Error(
         `sandbox "${input.path}" was destroyed and its name cannot be reused — create one with a new name`,
       );
     }
-    if (existing !== undefined && existing.creationPending !== true) {
+    if (existing && existing.creationPending !== true) {
       return {
         createdAt: existing.createdAt,
         instanceType: existing.instanceType,
         path: this.#identity().path,
       };
     }
-    if (existing?.instanceType !== undefined && existing.instanceType !== input.instanceType) {
+    if (existing?.instanceType && existing.instanceType !== input.instanceType) {
       throw new Error(
         `sandbox instance-type mismatch while resuming creation: expected "${existing.instanceType}", got "${input.instanceType}"`,
       );
@@ -508,7 +508,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
         createdAt: new Date().toISOString(),
         instanceType: input.instanceType,
       } satisfies SandboxRecord);
-    if (existing === undefined) {
+    if (!existing) {
       this.ctx.storage.kv.put(SANDBOX_RECORD_STORAGE_KEY, record);
     }
     this.#creationInFlight = true;
@@ -521,21 +521,21 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       // events are idempotency-keyed, so the next create retry safely heals the
       // same catalogue claim and waits for the same reducer boundary.
       await this.#appendBirth(input.instanceType, input.env);
-      if (input.sleepAfter !== undefined) await this.setSleepAfter(input.sleepAfter);
-      if (input.keepAlive !== undefined) await this.setKeepAlive(input.keepAlive);
-      if (input.env !== undefined && Object.keys(input.env).length > 0) {
+      if (input.sleepAfter || input.sleepAfter === 0) await this.setSleepAfter(input.sleepAfter);
+      if (typeof input.keepAlive === "boolean") await this.setKeepAlive(input.keepAlive);
+      if (input.env && Object.keys(input.env).length > 0) {
         const initialEnv = Object.fromEntries(
           Object.entries(input.env).filter((entry): entry is [string, string] => {
-            return entry[1] !== undefined;
+            return !!entry[1];
           }),
         );
         this.ctx.storage.kv.put(SANDBOX_ENV_STORAGE_KEY, initialEnv);
       }
       const current = this.#record();
-      if (current === undefined) {
+      if (!current) {
         throw new Error(`sandbox "${input.path}": creation record disappeared during setup`);
       }
-      if (current.destroyedAt !== undefined) {
+      if (current.destroyedAt) {
         throw new Error(`sandbox "${input.path}" was destroyed while creation was finishing`);
       }
       const { creationPending: _creationPending, ...completedRecord } = current;
@@ -696,10 +696,10 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    */
   override async destroy(): Promise<void> {
     const record = this.#record();
-    if (record === undefined) {
+    if (!record) {
       throw new Error("sandbox was never created — nothing to destroy");
     }
-    if (record.destroyedAt !== undefined) return;
+    if (record.destroyedAt) return;
     this.#emitLifecycleEvent({
       type: "events.iterate.com/sandbox/destroy-requested",
       payload: {},
@@ -790,13 +790,13 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       projectId: identity.projectId,
       path,
     });
-    if (this.ctx.id.name !== undefined && this.ctx.id.name !== expectedName) {
+    if (this.ctx.id.name && this.ctx.id.name !== expectedName) {
       throw new Error(
         `sandbox identity mismatch: durable object is named "${this.ctx.id.name}", got "${expectedName}"`,
       );
     }
     const stored = this.ctx.storage.kv.get<SandboxIdentity>(IDENTITY_STORAGE_KEY);
-    if (stored !== undefined) {
+    if (stored) {
       if (stored.projectId !== identity.projectId || stored.path !== path) {
         throw new Error(
           `sandbox identity mismatch: this sandbox is "${stored.projectId}:${stored.path}", got "${identity.projectId}:${path}"`,
@@ -809,7 +809,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
 
   #identity(): SandboxIdentity {
     const name = this.ctx.id.name;
-    if (name !== undefined) {
+    if (name) {
       const parsed = DurableObjectNameCodec.parse(name);
       return { path: assertSandboxPath(parsed.path), projectId: parsed.projectId };
     }
@@ -830,12 +830,12 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * gate every command and `get()` passes through. */
   #usableRecord(): SandboxRecord {
     const record = this.#record();
-    if (record === undefined) {
+    if (!record) {
       throw new Error(
         "sandbox does not exist — sandboxes are created explicitly: itx.sandboxes.get(path).create({ instanceType })",
       );
     }
-    if (record.destroyedAt !== undefined) {
+    if (record.destroyedAt) {
       throw new Error(
         `sandbox was destroyed at ${record.destroyedAt} and its name cannot be reused — create one with a new name`,
       );
@@ -970,7 +970,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    */
   async #restoreWorkspace(): Promise<string | null> {
     const backup = this.ctx.storage.kv.get<DirectoryBackup>(BACKUP_HANDLE_STORAGE_KEY);
-    if (backup === undefined) return null;
+    if (!backup) return null;
     try {
       // Same redial as every command: an interrupted SESSION dial means the
       // restore never started, and giving up would silently discard a valid
@@ -1000,7 +1000,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    */
   async #ensureWorkspaceCurrent(): Promise<void> {
     while (true) {
-      if (this.#workspaceReady === undefined) {
+      if (!this.#workspaceReady) {
         await this.#redialOnInterruptedSessionSetup(() => super.exec(":"));
       }
       const run = this.#ensureWorkspace();
@@ -1038,7 +1038,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     const stored = this.ctx.storage.kv.get<SandboxEnvVars>(SANDBOX_ENV_STORAGE_KEY) ?? {};
     const merged = { ...stored };
     for (const [key, value] of Object.entries(vars)) {
-      if (value === undefined) delete merged[key];
+      if (!value) delete merged[key];
       else merged[key] = value;
     }
     this.ctx.storage.kv.put(SANDBOX_ENV_STORAGE_KEY, merged);
@@ -1080,7 +1080,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     try {
       const connections = await listIntegrationConnections(this.#identity().projectId);
       const placeholder = githubTokenEnvForConnections(connections);
-      return placeholder === null ? {} : { GH_TOKEN: placeholder };
+      return !placeholder ? {} : { GH_TOKEN: placeholder };
     } catch (error) {
       console.warn("sandbox GH_TOKEN discovery failed; starting without it", error);
       return {};
@@ -1149,7 +1149,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
         return await call();
       } catch (error) {
         const delayMs = SANDBOX_SESSION_SETUP_REDIAL_DELAYS_MS[attempt];
-        if (!isInterruptedSessionSetup(error) || delayMs === undefined) throw error;
+        if (!isInterruptedSessionSetup(error) || !Number.isFinite(delayMs)) throw error;
         attempt += 1;
         console.warn(
           "sandbox session dial interrupted mid-setup; re-dialing",
@@ -1262,7 +1262,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       );
     });
     const aborted = new Promise<{ kind: "aborted" }>((resolve) => {
-      if (options.signal === undefined) return;
+      if (!options.signal) return;
       abortListener = () => resolve({ kind: "aborted" });
       if (options.signal.aborted) abortListener();
       else options.signal.addEventListener("abort", abortListener, { once: true });
@@ -1289,8 +1289,8 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       }
       throw error;
     } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-      if (abortListener !== undefined) options.signal?.removeEventListener("abort", abortListener);
+      if (timeoutId) clearTimeout(timeoutId);
+      if (abortListener) options.signal?.removeEventListener("abort", abortListener);
     }
 
     if (outcome.kind === "completed") {
@@ -1360,14 +1360,14 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
         }),
       ]);
     } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      if (timeoutId) clearTimeout(timeoutId);
     }
   }
 
   override async exec(...args: Parameters<Sandbox<Env>["exec"]>) {
     await this.#ensureReady();
     const [command, options] = args;
-    if (options?.timeout !== undefined) {
+    if (Number.isFinite(options?.timeout)) {
       try {
         return await this.#execSessionlessWithVerifiedTimeout(command, {
           ...options,
@@ -1486,7 +1486,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   }
 
   #ensureWorkspace(): Promise<void> {
-    if (this.#workspaceReady !== undefined) return this.#workspaceReady;
+    if (this.#workspaceReady) return this.#workspaceReady;
     // `run` is only read inside the closures below, which execute strictly
     // after the assignment at the bottom (the first read sits behind two
     // awaits) — initialized to undefined so TS's definite-assignment analysis
@@ -1512,7 +1512,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       // Report only now that the workspace is whole and this run still owns
       // the container: an event emitted mid-provisioning would tell consumers
       // the files are back while the restore is still running.
-      if (restoredBackupId !== null) {
+      if (restoredBackupId) {
         this.#emitLifecycleEvent({
           type: "events.iterate.com/sandbox/workspace-restored",
           payload: { backupId: restoredBackupId },
@@ -1592,7 +1592,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   async #appendLifecycleEvent(input: SandboxLifecycleEventInput): Promise<number> {
     const event = SandboxProcessorContract.buildEvent(input);
     const [appended] = await this.#processorResources().registry.stream.append(event);
-    if (appended === undefined) {
+    if (!appended) {
       throw new Error(`sandbox lifecycle append returned no event (${input.type})`);
     }
     return appended.offset;
@@ -1635,7 +1635,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * already in the requested condition; catchUp still closes any reducer lag
    * left by an earlier incarnation's durable lifecycle append. */
   async #catchUpLifecycleCompletion(offset: number | undefined): Promise<void> {
-    if (offset === undefined) {
+    if (!Number.isFinite(offset)) {
       await this.#processorResources().registry.catchUp(SandboxProcessorContract.slug);
       return;
     }

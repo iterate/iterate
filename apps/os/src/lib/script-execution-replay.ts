@@ -57,7 +57,7 @@ export function replayScriptExecution(input: {
       event.type === SCRIPT_EXECUTION_REQUESTED_EVENT_TYPE &&
       readExecutionId(event.payload) === input.executionId,
   );
-  if (requested == null || !isRecord(requested.payload)) return null;
+  if (!requested || !isRecord(requested.payload)) return null;
 
   const started = events.find(
     (event) =>
@@ -75,13 +75,13 @@ export function replayScriptExecution(input: {
   if (typeof expiresAtMs !== "number" || !Number.isSafeInteger(expiresAtMs) || expiresAtMs <= 0) {
     return null;
   }
-  const deadlineElapsed = completed == null && input.nowMs >= expiresAtMs;
+  const deadlineElapsed = !completed && input.nowMs >= expiresAtMs;
   const completionPayload = isRecord(completed?.payload) ? completed.payload : null;
   const settlement = readSettlement(completionPayload?.settlement);
-  const invalidCompletion = completed != null && settlement == null;
+  const invalidCompletion = !!completed && !settlement;
   const completionError = settlement?.status === "failed" ? settlement.error : null;
   const errorMessage = deadlineElapsed
-    ? started == null
+    ? !started
       ? DEADLINE_BEFORE_START_ERROR
       : DEADLINE_AFTER_START_ERROR
     : invalidCompletion
@@ -92,7 +92,7 @@ export function replayScriptExecution(input: {
   const result = settlement?.status === "succeeded" ? settlement.result : undefined;
   const durationMs = deadlineElapsed
     ? deriveDurationThrough(started ?? requested, expiresAtMs)
-    : completed == null
+    : !completed
       ? deriveDurationThrough(started ?? requested, input.nowMs)
       : deriveDurationMs(started ?? requested, completed);
 
@@ -105,13 +105,7 @@ export function replayScriptExecution(input: {
     expiresAtMs,
     code: typeof requested.payload.code === "string" ? requested.payload.code : "",
     outcome: {
-      status: failed
-        ? "failed"
-        : completed == null
-          ? started == null
-            ? "queued"
-            : "running"
-          : "completed",
+      status: failed ? "failed" : !completed ? (!started ? "queued" : "running") : "completed",
       durationMs,
       errorMessage,
       settlement,
@@ -135,7 +129,7 @@ function deriveDurationMs(
   start: StreamEventValue,
   completed: StreamEventValue | undefined,
 ): number | null {
-  if (completed == null) return null;
+  if (!completed) return null;
   const startMs = Date.parse(start.createdAt);
   const completedMs = Date.parse(completed.createdAt);
   if (Number.isNaN(startMs) || Number.isNaN(completedMs)) return null;
@@ -156,7 +150,7 @@ function parseEventRows(rawEventJsons: readonly string[]): StreamEventValue[] {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value != null && !Array.isArray(value);
+  return typeof value === "object" && !!value && !Array.isArray(value);
 }
 
 function readSettlement(value: unknown): ScriptExecutionSettlementValue | null {

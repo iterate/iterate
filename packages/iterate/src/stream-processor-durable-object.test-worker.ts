@@ -31,7 +31,7 @@ const PROJECT_ID = "proj_test";
 // scope, so it must not be constructed at module load.
 let storeSingleton: MemoryStream | undefined;
 function getStore(): MemoryStream {
-  if (storeSingleton === undefined) {
+  if (!storeSingleton) {
     storeSingleton = new MemoryStream(STREAM_PATH);
     storeSingleton.streamId = STREAM_ID;
   }

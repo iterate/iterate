@@ -67,15 +67,15 @@ export type Mismatch =
  * server's sign-in — that's what a switch would land on.
  */
 export function recommendationMismatches(phone: PhoneState, rec: Recommendation): Mismatch[] {
-  if (rec.server === null) return [];
+  if (!rec.server) return [];
   const mismatches: Mismatch[] = [];
   const backendDiffers = rec.server.baseUrl !== phone.serverBaseUrl;
   if (backendDiffers) {
     mismatches.push({ kind: "backend", current: phone.serverBaseUrl, recommended: rec.server });
   }
-  if (rec.email !== null) {
+  if (rec.email) {
     const landing = backendDiffers ? phone.recommendedServerEmail : phone.email;
-    if (landing === null || landing.toLowerCase() !== rec.email.toLowerCase()) {
+    if (!landing || landing.toLowerCase() !== rec.email.toLowerCase()) {
       mismatches.push({ kind: "identity", current: landing, recommended: rec.email });
     }
   }
@@ -95,14 +95,14 @@ export function recommendationSwitchPlan(
   rec: Recommendation,
 ): SwitchPlan | null {
   const mismatches = recommendationMismatches(phone, rec);
-  if (rec.server === null || mismatches.length === 0) return null;
+  if (!rec.server || mismatches.length === 0) return null;
   const { baseUrl, label } = rec.server;
   if (mismatches.some((m) => m.kind === "identity")) {
     return { type: "sign-in", baseUrl, label, loginHint: rec.email };
   }
   // Backend is the only difference. A sign-in already parked on the
   // recommended server makes this a pure repoint; otherwise OAuth it is.
-  return phone.recommendedServerEmail !== null
+  return phone.recommendedServerEmail
     ? { type: "use-server", baseUrl, label }
     : { type: "sign-in", baseUrl, label, loginHint: rec.email };
 }

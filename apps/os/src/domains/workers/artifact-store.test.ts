@@ -15,13 +15,13 @@ class FakeKv {
 
   async get(key: string, type?: string): Promise<unknown> {
     const value = this.data.get(key);
-    if (value === undefined) return null;
+    if (!value) return null;
     return type === "json" ? JSON.parse(value) : value;
   }
 
   async put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> {
     this.data.set(key, value);
-    if (options?.expirationTtl !== undefined) this.putTtls.push(options.expirationTtl);
+    if (Number.isFinite(options?.expirationTtl)) this.putTtls.push(options.expirationTtl);
   }
 }
 

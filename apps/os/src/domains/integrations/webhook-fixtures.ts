@@ -50,8 +50,8 @@ export function slackHumanMessageWebhookPayload(input: {
         text: input.text ?? defaultText,
         ts: input.ts ?? "111.222",
         blocks: [{ type: "rich_text", elements: [] }],
-        ...(input.subtype === undefined ? {} : { subtype: input.subtype }),
-        ...(input.threadTs === undefined ? {} : { thread_ts: input.threadTs }),
+        ...(!input.subtype ? {} : { subtype: input.subtype }),
+        ...(!input.threadTs ? {} : { thread_ts: input.threadTs }),
       } as Record<string, unknown>,
     },
   };
@@ -76,7 +76,7 @@ export function slackBotMessageWebhookPayload(
   });
   const event = payload.body.event;
   event.bot_id = input.botId ?? SLACK_BOT_ID;
-  if (input.botProfile !== undefined) event.bot_profile = input.botProfile;
+  if (input.botProfile) event.bot_profile = input.botProfile;
   delete event.user;
   return payload;
 }
@@ -103,7 +103,7 @@ export function telegramMessageWebhookPayload(input: {
         chat: { id: input.chatId ?? TELEGRAM_CHAT_ID, type: input.chatType ?? "private" },
         date: input.date ?? 1_760_000_000,
         text: input.text ?? "hello agent",
-        ...(input.replyToMessage === undefined ? {} : { reply_to_message: input.replyToMessage }),
+        ...(!input.replyToMessage ? {} : { reply_to_message: input.replyToMessage }),
       } as Record<string, unknown>,
     },
   };

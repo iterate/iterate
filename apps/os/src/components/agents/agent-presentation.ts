@@ -27,7 +27,7 @@ export const AGENT_DISPLAY_STATE_PRESENTATION: Record<
 
 /** Self-only or aggregate in-flight work, phrased as compact count fragments. */
 export function runtimeCountFragments(runtime: AgentRuntime | undefined): string[] {
-  if (runtime === undefined) return [];
+  if (!runtime) return [];
   const unreadyTriggers = Math.max(0, runtime.triggers.pending - runtime.triggers.runnable);
   const modelRequests = runtime.llmRequests.started + runtime.llmRequests.requested;
   const queued = runtime.llmRequests.scheduled + runtime.triggers.runnable;
@@ -36,7 +36,7 @@ export function runtimeCountFragments(runtime: AgentRuntime | undefined): string
     modelRequests > 0 ? pluralCount(modelRequests, "model request") : null,
     queued > 0 ? `${queued} queued` : null,
     unreadyTriggers > 0 ? pluralCount(unreadyTriggers, "pending trigger") : null,
-  ].filter((value): value is string => value !== null);
+  ].filter((value): value is string => !!value);
 }
 
 function pluralCount(count: number, noun: string): string {

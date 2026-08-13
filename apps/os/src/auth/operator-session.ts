@@ -378,7 +378,7 @@ export async function verifyOperatorGrant(input: {
   token: string;
 }): Promise<OperatorGrant | null> {
   const [payload, signature, extra] = input.token.split(".");
-  if (!payload || !signature || extra !== undefined) return null;
+  if (!payload || !signature || extra) return null;
 
   let signatureBytes: Uint8Array;
   let rawClaims: unknown;
@@ -410,7 +410,7 @@ export async function verifyOperatorGrant(input: {
  * Non-browser clients normally omit Origin and authenticate explicitly. */
 export function isSameOriginBrowserRequest(request: Pick<Request, "headers" | "url">): boolean {
   const rawOrigin = request.headers.get("origin");
-  if (rawOrigin === null) return true;
+  if (!rawOrigin) return true;
   try {
     return new URL(rawOrigin).origin === new URL(request.url).origin;
   } catch {

@@ -47,7 +47,7 @@ export async function applyOpenAiAiGatewayCacheHeaders(input: {
     if (input.headers instanceof Headers) input.headers.delete(name);
     else delete input.headers[name];
   };
-  if (input.responseCacheTtlSeconds !== undefined) {
+  if (Number.isFinite(input.responseCacheTtlSeconds)) {
     set("cf-aig-cache-ttl", String(input.responseCacheTtlSeconds));
     set("cf-aig-cache-key", await cloudflareAiGatewayResponseCacheKey(input.body));
     del("cf-aig-skip-cache");
@@ -81,7 +81,7 @@ export function openAiAiGatewayBindingHeaders(input: {
     "cf-aig-metadata": JSON.stringify({
       projectId: input.projectId,
       source: "project-egress",
-      ...(caller !== undefined && { caller }),
+      ...(!!caller && { caller }),
     }),
   };
   for (const [name, value] of input.requestHeaders.entries()) {
@@ -104,13 +104,13 @@ export function openAiAiGatewayRoutingFromConfig(config: AppConfig): {
   // require a deployed-shaped config (ARTIFACTS_ACCOUNT_ID → cloudflare.accountId
   // on preview/prd) so local miniflare without CF account does not call a
   // missing/half-wired gateway binding with the real platform key.
-  if (config.cloudflare.accountId === undefined || config.cloudflare.accountId.length === 0) {
+  if (!config.cloudflare.accountId || config.cloudflare.accountId.length === 0) {
     return null;
   }
   return {
     gatewayId: config.cloudflareAiGateway.id,
     openaiApiKey: config.openAiApiKey.exposeSecret(),
-    ...(config.cloudflareAiGateway.responseCacheTtlSeconds !== undefined && {
+    ...(Number.isFinite(config.cloudflareAiGateway.responseCacheTtlSeconds) && {
       responseCacheTtlSeconds: config.cloudflareAiGateway.responseCacheTtlSeconds,
     }),
   };

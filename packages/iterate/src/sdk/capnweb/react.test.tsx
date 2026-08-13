@@ -36,7 +36,7 @@ function makeRoot() {
     disposeRoot,
     push(name: string) {
       const sink = sinks.at(-1);
-      if (sink === undefined) throw new Error("live-state subscription is not ready");
+      if (!sink) throw new Error("live-state subscription is not ready");
       sink({ revision: 0, state: { name }, type: "snapshot" });
     },
     root,

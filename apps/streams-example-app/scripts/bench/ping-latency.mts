@@ -6,7 +6,7 @@
 import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";
 
 const [wsBase, path, nArg, intervalArg] = process.argv.slice(2);
-if (wsBase === undefined || path === undefined) {
+if (!wsBase || !path) {
   console.error("usage: ping-latency.mts <wsBase> <path> [n] [intervalMs]");
   process.exit(1);
 }

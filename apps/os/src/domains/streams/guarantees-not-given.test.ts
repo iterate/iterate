@@ -78,8 +78,7 @@ function durableObjectContext(name: string) {
     sql: wrapSqlStorage(db),
     kv: {
       get<T>(key: string): T | undefined {
-        const value = values.get(key);
-        return value === undefined ? undefined : structuredClone(value as T);
+        return values.has(key) ? structuredClone(values.get(key) as T) : undefined;
       },
       put(key: string, value: unknown): void {
         values.set(key, structuredClone(value));
@@ -160,7 +159,7 @@ function streamNamespace(
       getByName: (name: string) => ({
         async appendCoreEvent(eventInput: StreamEventInput): Promise<StreamEvent> {
           const target = streams.get(name);
-          if (target !== undefined) return target.appendCoreEvent(eventInput);
+          if (target) return target.appendCoreEvent(eventInput);
           // Ancestor announcements may address streams a test never creates.
           return {
             ...eventInput,
@@ -175,7 +174,7 @@ function streamNamespace(
             return holdCopiesWhen.transportAck.promise;
           }
           const target = streams.get(name);
-          if (target === undefined) throw new Error(`test stream ${name} does not exist`);
+          if (!target) throw new Error(`test stream ${name} does not exist`);
           return target.receiveCopiedEvents(batch);
         },
       }),

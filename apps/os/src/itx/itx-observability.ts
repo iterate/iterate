@@ -20,7 +20,7 @@ function safeNamePart(value: unknown, fallback: string) {
 }
 
 function targetName(target: unknown): string {
-  if ((typeof target !== "object" && typeof target !== "function") || target === null) {
+  if ((typeof target !== "object" && typeof target !== "function") || !target) {
     return "Callable";
   }
   try {
@@ -40,9 +40,9 @@ function methodName(target: unknown, path: RpcCallInfo["path"]): string {
   if (typeof candidate !== "string") return "call";
   try {
     let prototype = Object.getPrototypeOf(target) as object | null;
-    for (let depth = 0; prototype !== null && depth < 10; depth++) {
+    for (let depth = 0; prototype && depth < 10; depth++) {
       const descriptor = Object.getOwnPropertyDescriptor(prototype, candidate);
-      if (descriptor !== undefined) {
+      if (descriptor) {
         return typeof descriptor.value === "function" ? safeNamePart(candidate, "call") : "call";
       }
       prototype = Object.getPrototypeOf(prototype) as object | null;
@@ -73,7 +73,7 @@ function itxErrorOutcome(error: unknown): ItxErrorOutcome {
     // application/server defect. Keep it observable without polluting the
     // error signal that release gates audit.
     if (isStreamUnavailableError(error)) return "unavailable";
-    if (typeof error === "object" && error !== null) {
+    if (typeof error === "object" && error) {
       const inheritedOutcome: unknown = Reflect.get(error, itxOutcome);
       if (inheritedOutcome === "client_error" || inheritedOutcome === "unavailable") {
         return inheritedOutcome;

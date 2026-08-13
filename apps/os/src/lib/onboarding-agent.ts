@@ -83,7 +83,7 @@ export async function waitForOnboardingGreeting<Event extends OnboardingGreeting
   const deadline = now() + input.timeoutMs;
   const wait = (timeoutMs: number, afterOffset?: number) =>
     input.stream.waitForEvent({
-      ...(afterOffset === undefined ? {} : { afterOffset }),
+      ...(!Number.isFinite(afterOffset) ? {} : { afterOffset }),
       eventTypes: [ONBOARDING_GREETING_EVENT_TYPE],
       timeoutMs,
     });
@@ -96,7 +96,7 @@ export async function waitForOnboardingGreeting<Event extends OnboardingGreeting
 
     const events = await input.stream.getEvents({});
     const committed = events.findLast((event) => event.type === ONBOARDING_GREETING_EVENT_TYPE);
-    if (committed !== undefined) return committed;
+    if (committed) return committed;
 
     // Empty streams have a durable head of zero and their first row is offset
     // one, so zero is also a gap-free replay cursor.

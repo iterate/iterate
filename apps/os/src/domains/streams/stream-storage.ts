@@ -171,7 +171,7 @@ export class StreamEventLog {
     const row = this.sql
       .exec<{ offset: number }>("select offset from events where offset = ? limit 1", offset)
       .toArray()[0];
-    return row === undefined ? undefined : this.#readEventFromChunks(row.offset);
+    return !row ? undefined : this.#readEventFromChunks(row.offset);
   }
 
   getByIdempotencyKey(idempotencyKey: string): StreamEvent | undefined {
@@ -181,7 +181,7 @@ export class StreamEventLog {
         idempotencyKey,
       )
       .toArray()[0];
-    return row === undefined ? undefined : this.#readEventFromChunks(row.offset);
+    return !row ? undefined : this.#readEventFromChunks(row.offset);
   }
 
   getRange(args: {
@@ -206,9 +206,10 @@ export class StreamEventLog {
   }): SizedStreamEvent[] {
     if (args.eventTypes?.length === 0) return [];
     const eventTypes =
-      args.eventTypes === undefined || args.eventTypes.includes("*") ? undefined : args.eventTypes;
-    const eventTypeClause =
-      eventTypes === undefined ? "" : `and type in (${eventTypes.map(() => "?").join(", ")})`;
+      !args.eventTypes || args.eventTypes.includes("*") ? undefined : args.eventTypes;
+    const eventTypeClause = !eventTypes
+      ? ""
+      : `and type in (${eventTypes.map(() => "?").join(", ")})`;
     // One indexed metadata subquery picks the replay window; the join then streams each
     // event's chunks in primary-key order (offset, chunk_index).
     const chunks = this.sql
@@ -238,11 +239,11 @@ export class StreamEventLog {
       .toArray();
     const chunksByOffset = new Map<number, ArrayBuffer[]>();
     for (const chunk of chunks) {
-      if (chunk.chunkIndex === null || chunk.chunkBytes === null) {
+      if (!Number.isFinite(chunk.chunkIndex) || !chunk.chunkBytes) {
         throw new Error(`stream event at path "${this.path}", offset ${chunk.offset} has no body`);
       }
       const eventChunks = chunksByOffset.get(chunk.offset);
-      if (eventChunks === undefined) {
+      if (!eventChunks) {
         if (chunk.chunkIndex !== 0) {
           throw new Error(
             `stream event at path "${this.path}", offset ${chunk.offset} starts at body chunk ${chunk.chunkIndex}`,
@@ -804,7 +805,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       preserveFailingEventSkips: options.preserveFailingEventSkips === true ? 1 : 0,
       updatedAt: new Date().toISOString(),
     };
-    if (options.cursorChangedAtOffset === undefined) {
+    if (!Number.isFinite(options.cursorChangedAtOffset)) {
       this.#db.ack(params);
     } else {
       this.#db.ackIfCursorUnchanged({
@@ -827,7 +828,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
 
   confirm(name: string, offset: number, options: { cursorChangedAtOffset?: number } = {}): void {
     const params = { name, offset, updatedAt: new Date().toISOString() };
-    if (options.cursorChangedAtOffset === undefined) {
+    if (!Number.isFinite(options.cursorChangedAtOffset)) {
       this.#db.confirm(params);
     } else {
       this.#db.confirmIfCursorUnchanged({
@@ -933,10 +934,10 @@ export function clearSubscriptionCursorFailuresAfterStateRebuild(
     if (
       configuredSubscriptionNames.has(row.name) &&
       (row.attempt !== 0 ||
-        row.nextAttemptAt !== null ||
-        row.inFlightDeadlineAt !== null ||
-        row.lastError !== null ||
-        row.failingEventOffset !== null ||
+        Number.isFinite(row.nextAttemptAt) ||
+        Number.isFinite(row.inFlightDeadlineAt) ||
+        row.lastError ||
+        Number.isFinite(row.failingEventOffset) ||
         row.failingEventAttempt !== 0 ||
         row.failingEventSkipsSinceLastSuccess !== 0)
     ) {

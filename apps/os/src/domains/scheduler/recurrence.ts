@@ -61,7 +61,7 @@ export function dueSchedules(
   nowMs: number,
 ): [string, SchedulerProcessorState["schedules"][string]][] {
   return Object.entries(schedules)
-    .filter(([, entry]) => entry.nextTriggerAt !== null && entry.nextTriggerAt <= nowMs)
+    .filter(([, entry]) => Number.isFinite(entry.nextTriggerAt) && entry.nextTriggerAt <= nowMs)
     .sort(([leftKey, left], [rightKey, right]) => {
       return left.nextTriggerAt! - right.nextTriggerAt! || leftKey.localeCompare(rightKey);
     });
@@ -82,7 +82,7 @@ export function nextWakeAtMs(
   if (schedules.length === 0 && Object.keys(state.pendingTriggers).length === 0) return null;
   let wakeAtMs = nowMs + SCHEDULER_HEARTBEAT_MS;
   for (const entry of schedules) {
-    if (entry.nextTriggerAt === null) continue;
+    if (!Number.isFinite(entry.nextTriggerAt)) continue;
     wakeAtMs = Math.min(wakeAtMs, Math.max(entry.nextTriggerAt, nowMs + MIN_WAKE_DELAY_MS));
   }
   return wakeAtMs;
@@ -115,7 +115,7 @@ export function assertValidRecurrence(recurrence: SchedulerRecurrence): void {
   // Constructing the Cron validates the expression; croner only evaluates the
   // timezone lazily, so force one occurrence computation too.
   const next = new Cron(recurrence.cron, { timezone: recurrence.timezone }).nextRun();
-  if (next === null) {
+  if (!next) {
     throw new Error(`cron "${recurrence.cron}" has no future occurrence`);
   }
 }
@@ -146,7 +146,7 @@ function nextCronMs(
     const next = new Cron(recurrence.cron, { timezone: recurrence.timezone }).nextRun(
       new Date(afterMs),
     );
-    return next === null ? null : next.getTime();
+    return !next ? null : next.getTime();
   } catch {
     return null;
   }

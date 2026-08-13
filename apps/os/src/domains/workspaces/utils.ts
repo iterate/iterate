@@ -86,7 +86,7 @@ export function effectiveWorkspaceMounts(
     // overlay must not revive a root mount in the live table either.
     if (path === "/") continue;
     const merged = { ...mounts[path], ...overlay };
-    if (merged.policy === undefined || merged.repoPath === undefined) continue;
+    if (!merged.policy || !merged.repoPath) continue;
     mounts[path] = { policy: merged.policy, repoPath: merged.repoPath };
   }
   return mounts;
@@ -117,7 +117,7 @@ export function normalizeWorkspaceMountKeys<
     if (path in normalized) {
       throw new Error(`duplicate mount path "${path}" — mount paths must be unique`);
     }
-    if (value !== null && value.repoPath !== undefined) {
+    if (value && value.repoPath) {
       const repoPath = normalizePath(value.repoPath);
       if (!repoPath.startsWith("/repos/")) {
         throw new Error(`mount repoPath must name a /repos/** stream, got "${value.repoPath}"`);
@@ -144,19 +144,18 @@ export function workspaceCreationEvents(input: {
   path: string;
   projectId: string;
 }) {
-  const desiredMounts =
-    input.mounts === undefined
-      ? undefined
-      : WorkspaceProcessorContract.stateSchema.shape.config.parse({
-          mounts: normalizeWorkspaceMountKeys(input.mounts),
-        }).mounts;
+  const desiredMounts = !input.mounts
+    ? undefined
+    : WorkspaceProcessorContract.stateSchema.shape.config.parse({
+        mounts: normalizeWorkspaceMountKeys(input.mounts),
+      }).mounts;
   return [
     WorkspaceProcessorContract.buildEvent({
       type: "events.iterate.com/workspace/created",
       idempotencyKey: `workspace-created:${input.projectId}:${input.path}`,
       payload: {},
     }),
-    ...(desiredMounts === undefined
+    ...(!desiredMounts
       ? []
       : [
           WorkspaceProcessorContract.buildEvent({

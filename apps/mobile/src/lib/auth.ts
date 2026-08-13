@@ -168,7 +168,7 @@ export async function signIn(baseUrl: string, options: { loginHint?: string } = 
 }
 
 export async function hasSignIn(baseUrl: string): Promise<boolean> {
-  return (await getStoredAuth(baseUrl)) !== null;
+  return !!(await getStoredAuth(baseUrl));
 }
 
 /**

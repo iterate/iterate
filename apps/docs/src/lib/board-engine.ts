@@ -64,7 +64,7 @@ function rowGroups(
   tasks: BoardTask[],
   rowField: RowField,
 ): Array<{ key: string; label: string | null; value: string | null; tasks: BoardTask[] }> {
-  if (rowField === null) return [{ key: "all", label: null, value: null, tasks }];
+  if (!rowField) return [{ key: "all", label: null, value: null, tasks }];
   const groups = new Map<string, BoardTask[]>();
   if (rowField === "folder") {
     for (const task of tasks) {

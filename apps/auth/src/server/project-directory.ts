@@ -167,10 +167,7 @@ export async function userCanAccessProject(
     })
     .parse(rawInput);
   const access = await getProjectAccessForUser(client, input);
-  return (
-    access !== null &&
-    (isPlatformAdminUser({ role: access.userRole }) || access.hasMembership === 1)
-  );
+  return !!access && (isPlatformAdminUser({ role: access.userRole }) || access.hasMembership === 1);
 }
 
 export function toProjectRecord(project: {

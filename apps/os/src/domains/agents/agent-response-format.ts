@@ -80,7 +80,7 @@ export const fencedTsResponseFormat: AgentResponseFormat = {
     // habitually open code with a comment line). Only a fence-free non-script
     // response is a deliberate no-op turn; the system prompt promises
     // rejection-with-feedback for everything else.
-    return fenced !== null || /^[ \t]*```/m.test(content)
+    return fenced || /^[ \t]*```/m.test(content)
       ? {
           kind: "malformed",
           feedback:

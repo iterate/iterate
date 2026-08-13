@@ -92,7 +92,7 @@ const EVENT_DOCS_RESERVED_ROOT_SEGMENTS = new Set([
 
 function isPotentialEventDocsPagePath(pathname: string) {
   const [head] = pathname.split("/").filter(Boolean);
-  return head == null || !EVENT_DOCS_RESERVED_ROOT_SEGMENTS.has(head);
+  return !head || !EVENT_DOCS_RESERVED_ROOT_SEGMENTS.has(head);
 }
 
 function RootDocument({ children }: { children: ReactNode }) {

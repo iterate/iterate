@@ -192,7 +192,7 @@ function ProjectIntegrationsContent() {
   const githubStealState =
     search.error === "github_installation_already_claimed" ? search.githubSteal || null : null;
   const oauthErrorLabel =
-    search.error && githubStealState === null ? search.error.replaceAll("_", " ") : null;
+    search.error && !githubStealState ? search.error.replaceAll("_", " ") : null;
 
   const startSlack = useMutation({
     mutationFn: async () => {
@@ -340,7 +340,7 @@ function ProjectIntegrationsContent() {
   const panel = (
     <>
       <AlertDialog
-        open={githubStealState !== null}
+        open={!!githubStealState}
         onOpenChange={(open) => {
           if (!open && !stealGithub.isPending) dismissGithubSteal();
         }}
@@ -361,7 +361,7 @@ function ProjectIntegrationsContent() {
               variant="destructive"
               disabled={stealGithub.isPending}
               onClick={() => {
-                if (githubStealState !== null) stealGithub.mutate(githubStealState);
+                if (githubStealState) stealGithub.mutate(githubStealState);
               }}
             >
               {stealGithub.isPending ? <Spinner data-icon="inline-start" /> : null}
@@ -478,7 +478,7 @@ function ProjectIntegrationsContent() {
           />
           <AccountConnectionsItem />
         </ItemGroup>
-        {telegramAccessConnection === null ? null : (
+        {!telegramAccessConnection ? null : (
           <Suspense
             fallback={<TelegramAccessSheetLoading onOpenChange={setTelegramAccessSheetOpen} />}
           >
@@ -633,7 +633,7 @@ function ConnectableIntegrationCard({
                 disconnecting={disconnecting}
                 entry={entry}
                 onConfigureAccess={
-                  onConfigureAccess === null ? null : () => onConfigureAccess(entry.connection)
+                  !onConfigureAccess ? null : () => onConfigureAccess(entry.connection)
                 }
                 onDisconnect={() => onDisconnect(entry.connection)}
                 onOpenFeed={() => onOpenFeed(entry.path)}
@@ -663,7 +663,7 @@ function ProvidedIntegrationCard({
         <div className="min-w-0 space-y-1">
           <ItemTitle>{entry.integration}</ItemTitle>
           <ItemDescription className="line-clamp-3">
-            {entry.connection == null
+            {!entry.connection
               ? "Integration-level mount provided by project code."
               : `Connection ${entry.connection} provided by project code.`}
           </ItemDescription>
@@ -709,7 +709,7 @@ function ConnectionRow({
         <IntegrationMetadata connection={entry.status ?? undefined} provider={provider} />
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
-        {entry.status?.connected && onConfigureAccess !== null ? (
+        {entry.status?.connected && onConfigureAccess ? (
           <Button
             size="icon-sm"
             variant="outline"
@@ -765,7 +765,7 @@ function IntegrationMetadata({
       {connection.displayName ? (
         <IntegrationMetadataRow label="Account" value={connection.displayName} />
       ) : null}
-      {scopeCount === null ? null : (
+      {!Number.isFinite(scopeCount) ? null : (
         <IntegrationMetadataRow
           label="Scopes"
           value={scopeCount === 1 ? "1 scope" : `${scopeCount} scopes`}
@@ -839,7 +839,7 @@ function TelegramAccessSheet({
             </SheetDescription>
           </SheetHeader>
           <FieldGroup className="flex flex-1 flex-col gap-4 p-4">
-            {access === undefined ? (
+            {!access ? (
               <Skeleton className="h-40 w-full" />
             ) : (
               <Field data-invalid={saveAccess.isError}>
@@ -865,7 +865,7 @@ function TelegramAccessSheet({
             )}
           </FieldGroup>
           <SheetFooter>
-            <Button type="submit" disabled={access === undefined || saveAccess.isPending}>
+            <Button type="submit" disabled={!access || saveAccess.isPending}>
               {saveAccess.isPending ? <Spinner /> : null}
               {saveAccess.isPending ? "Saving..." : "Save access"}
             </Button>
@@ -1152,7 +1152,7 @@ function TelegramConnectSheet({
   onOpenChange: (open: boolean) => void;
   open: boolean;
 }) {
-  const stealPrompt = connect.data !== undefined && !connect.data.ok ? connect.data : null;
+  const stealPrompt = connect.data && !connect.data.ok ? connect.data : null;
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetTrigger render={<Button type="button" size="sm" />}>
@@ -1228,7 +1228,7 @@ function TelegramConnectSheet({
           from wherever it lives now. Possession of the token is the
           authorization; this confirm is the foot-gun gate. */}
       <AlertDialog
-        open={stealPrompt !== null}
+        open={!!stealPrompt}
         onOpenChange={(dialogOpen) => {
           if (!dialogOpen) connect.reset();
         }}
@@ -1248,7 +1248,7 @@ function TelegramConnectSheet({
             <AlertDialogAction
               disabled={connect.isPending}
               onClick={() => {
-                if (connect.variables !== undefined) {
+                if (connect.variables) {
                   connect.mutate({ botToken: connect.variables.botToken, steal: true });
                 }
               }}

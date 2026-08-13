@@ -65,7 +65,7 @@ export function App() {
     await chrome.storage.local.set({ [PROJECT_STORAGE_KEY]: value });
   }
 
-  if (authenticated === undefined) return <main>Loading…</main>;
+  if (typeof authenticated !== "boolean") return <main>Loading…</main>;
   if (!authenticated) {
     return (
       <main>
@@ -211,11 +211,7 @@ function ProjectState({ projectSlug }: { projectSlug: string }) {
       <textarea
         aria-label="Project processor state"
         readOnly
-        value={
-          state.value === undefined
-            ? "Waiting for live state…"
-            : JSON.stringify(state.value, null, 2)
-        }
+        value={!state.value ? "Waiting for live state…" : JSON.stringify(state.value, null, 2)}
       />
       {state.error ? <p className="error">{state.error}</p> : null}
     </section>

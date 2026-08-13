@@ -17,7 +17,7 @@ test("lazy commits, reads, and clone-lane writes share one history", async () =>
   await waitForCondition(
     async () => {
       const read = await project.repo.readFile({ path: "package.json" }).catch(() => null);
-      return read !== null;
+      return !!read;
     },
     { description: "config repo to be seeded", intervalMs: 1_000, timeoutMs: 60_000 },
   );

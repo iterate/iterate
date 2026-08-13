@@ -122,6 +122,6 @@ describe("verifySlackSignature", () => {
     const signature = `v0=${Array.from(mac, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 
     const input: SlackSignatureInput = { body, signature, signingSecret, timestamp };
-    expect(await verifySlackSignature(tamper === undefined ? input : tamper(input))).toBe(expected);
+    expect(await verifySlackSignature(!tamper ? input : tamper(input))).toBe(expected);
   });
 });

@@ -149,8 +149,7 @@ export class BrowserStreamProcessorGroup implements AnyHostedProcessor {
           isVolatileAgentProjection(entry.processor),
         );
         const volatileCandidate =
-          volatileProcessor === undefined ||
-          !isVolatileAgentProjection(volatileProcessor.entry.processor)
+          !volatileProcessor || !isVolatileAgentProjection(volatileProcessor.entry.processor)
             ? null
             : volatileProcessor.entry.processor.prepareVolatileBatch({
                 events: batch.events,
@@ -185,10 +184,7 @@ export class BrowserStreamProcessorGroup implements AnyHostedProcessor {
             batch.scannedThroughOffset,
           );
         }
-        if (
-          volatileProcessor !== undefined &&
-          isVolatileAgentProjection(volatileProcessor.entry.processor)
-        ) {
+        if (volatileProcessor && isVolatileAgentProjection(volatileProcessor.entry.processor)) {
           volatileProcessor.entry.processor.commitVolatileBatch(volatileCandidate);
         }
       },

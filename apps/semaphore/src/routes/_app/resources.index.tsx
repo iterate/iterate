@@ -32,6 +32,7 @@ type SerializableSemaphoreResource = Omit<SemaphoreResourceRecord, "data"> & {
 
 function toSerializableJsonValue(value: unknown): SerializableJsonValue {
   if (
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- JSON has null but no undefined; truthiness would let undefined through
     value === null ||
     typeof value === "boolean" ||
     typeof value === "number" ||
@@ -321,7 +322,7 @@ function PreviewSlotCard({ slot }: { slot: SerializableSemaphoreResource }) {
 
   function onClaim() {
     const answer = window.prompt(`Claim ${slot.slug} — for which PR? (number, e.g. 1656)`);
-    if (answer === null) return;
+    if (!answer) return;
     const trimmed = answer.trim();
     const holder = /^#?\d+$/.test(trimmed) ? `pr-${trimmed.replace(/^#/, "")}` : trimmed;
     if (!holder) {
@@ -381,7 +382,7 @@ function PreviewSlotCard({ slot }: { slot: SerializableSemaphoreResource }) {
           ) : null}
         </dl>
 
-        {slotNumber !== null ? (
+        {Number.isFinite(slotNumber) ? (
           <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
             {(["os", "auth", "semaphore"] as const).map((app) => (
               <a

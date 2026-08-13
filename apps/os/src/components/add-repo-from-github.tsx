@@ -115,9 +115,9 @@ function AddRepoFromGithubWizard({
   const normalizedPath = path.trim();
   // undefined = the live repo list has not arrived yet: the gate stays
   // CLOSED (submit disabled) rather than treating every path as free.
-  const pathsKnown = existingRepoPaths !== undefined;
+  const pathsKnown = !!existingRepoPaths;
   const pathTaken =
-    existingRepoPaths !== undefined &&
+    !!existingRepoPaths &&
     existingRepoPaths.includes(normalizedPath) &&
     !createdHere.has(normalizedPath);
   const pathFormatValid = REPO_PATH_PATTERN.test(normalizedPath);
@@ -128,7 +128,7 @@ function AddRepoFromGithubWizard({
       // The wizard only ADDS repos. Re-check against the live list right
       // before mutating: the submit gate can race a repo created since the
       // last render.
-      if (existingRepoPaths === undefined) {
+      if (!existingRepoPaths) {
         throw new Error("The project's repo list has not loaded yet; try again in a moment.");
       }
       if (existingRepoPaths.includes(input.path) && !createdHere.has(input.path)) {
@@ -160,7 +160,7 @@ function AddRepoFromGithubWizard({
       className="flex flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
-        if (selected === null || !pathValid || addRepo.isPending) return;
+        if (!selected || !pathValid || addRepo.isPending) return;
         addRepo.mutate({ path: normalizedPath, repo: selected });
       }}
     >
@@ -255,11 +255,7 @@ function AddRepoFromGithubWizard({
         <DialogClose render={<Button type="button" variant="outline" size="sm" />}>
           Close
         </DialogClose>
-        <Button
-          type="submit"
-          size="sm"
-          disabled={selected === null || !pathValid || addRepo.isPending}
-        >
+        <Button type="submit" size="sm" disabled={!selected || !pathValid || addRepo.isPending}>
           {addRepo.isPending ? "Adding…" : "Add repo"}
         </Button>
       </DialogFooter>

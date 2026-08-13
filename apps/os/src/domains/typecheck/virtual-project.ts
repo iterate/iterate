@@ -209,13 +209,12 @@ export async function checkCapabilityTypes(input: {
   // used to poison the whole scope's typecheck). This rule is LOCAL — it needs
   // no compiler — so it holds even when the sidecar is unreachable below; a
   // permissive checker failure must not let an export-less mount slip in.
-  const exportLess =
-    firstExportedTypeName(input.types) === undefined
-      ? [
-          "types — exports no top-level type/interface/class/enum; " +
-            "the FIRST exported declaration names the mount's type.",
-        ]
-      : [];
+  const exportLess = !firstExportedTypeName(input.types)
+    ? [
+        "types — exports no top-level type/interface/class/enum; " +
+          "the FIRST exported declaration names the mount's type.",
+      ]
+    : [];
   const fileName = mountFileName("provided");
   const moduleText = mountModuleText(input.types);
   let checked: TypecheckResult;
@@ -380,7 +379,7 @@ function assembleScriptProject(
   // The preamble injects AFTER the Itx alias (its loaders reference `Itx`)
   // and BEFORE the script const, at module scope: the emitted module then
   // carries the preamble for free and the script closes over its names.
-  const preambleLines = preamble === undefined || preamble === "" ? [] : preamble.split("\n");
+  const preambleLines = !preamble || preamble === "" ? [] : preamble.split("\n");
   const prelude = [
     `import type { Project } from "./itx-types";`,
     `type Itx = ${["Project", ...mountTerms].join(" & ")};`,
@@ -552,12 +551,12 @@ export async function checkItxScriptForExecution(input: {
   // set time; this catches entries gone stale against a changed scope).
   const range = project.preambleLineRange;
   if (
-    range !== null &&
+    range &&
     checked.diagnostics.some(
       (diagnostic) =>
         diagnostic.category === "error" &&
         diagnostic.fileName === "script.ts" &&
-        diagnostic.line !== undefined &&
+        Number.isFinite(diagnostic.line) &&
         diagnostic.line >= range.start &&
         diagnostic.line <= range.end,
     )
@@ -587,7 +586,7 @@ export async function checkItxScriptForExecution(input: {
   // were in scope, so a typo near-missing `results` keeps its did-you-mean
   // (a bare re-check would see plain cannot-find-name and let it run). One
   // extra compile, only on this rare double condition.
-  if (range !== null && input.preamble !== undefined) {
+  if (range && input.preamble) {
     const probe = await checkPreamble({
       capabilities: input.capabilities,
       preamble: input.preamble,
@@ -646,30 +645,31 @@ function formatProblems(
     .filter((diagnostic) => diagnostic.category === "error")
     .map((diagnostic) => {
       const { fileName } = diagnostic;
-      if (fileName === undefined || fileName === options.primaryFile) {
+      if (!fileName || fileName === options.primaryFile) {
         const range = options.preambleLineRange;
         // Blame the scope's injected preamble by name — a "script:-3" (or a
         // positionless "script") error for code the caller never wrote reads
         // as compiler gaslighting.
         if (
-          range != null &&
-          diagnostic.line !== undefined &&
+          range &&
+          Number.isFinite(diagnostic.line) &&
           diagnostic.line >= range.start &&
           diagnostic.line <= range.end
         ) {
           return `preamble:${diagnostic.line - range.start + 1} — ${diagnostic.message} (TS${diagnostic.code})`;
         }
-        const line =
-          diagnostic.line === undefined ? undefined : diagnostic.line + options.lineOffset;
+        const line = !Number.isFinite(diagnostic.line)
+          ? undefined
+          : diagnostic.line + options.lineOffset;
         // Lines the assembly prepended (the prelude, an injected import) map
         // below 1 — report without a position rather than lying about one.
         // tswasm columns are 0-based; +1 to match the 1-based line and every
         // editor's gutter (a `line:col` that disagrees on the col base misleads).
-        const column = diagnostic.column === undefined ? "" : `:${diagnostic.column + 1}`;
-        const position = line === undefined || line < 1 ? "" : `:${line}${column}`;
+        const column = !Number.isFinite(diagnostic.column) ? "" : `:${diagnostic.column + 1}`;
+        const position = !Number.isFinite(line) || line < 1 ? "" : `:${line}${column}`;
         return `${options.label}${position} — ${diagnostic.message} (TS${diagnostic.code})`;
       }
       const where = fileName.replace(/^mounts\//, "mount ").replace(/\.ts$/, "");
-      return `${where}${diagnostic.line === undefined ? "" : `:${diagnostic.line}`} — ${diagnostic.message} (TS${diagnostic.code})`;
+      return `${where}${!Number.isFinite(diagnostic.line) ? "" : `:${diagnostic.line}`} — ${diagnostic.message} (TS${diagnostic.code})`;
     });
 }

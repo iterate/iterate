@@ -40,7 +40,7 @@ export function useBrowserStreamMetrics(store: {
     const tick = () => {
       const current = store.metrics();
       const rtt = current.transportRttMs;
-      if (rtt !== null && rtt.lastAt !== lastSampleAt) {
+      if (rtt && rtt.lastAt !== lastSampleAt) {
         lastSampleAt = rtt.lastAt;
         spark = [...spark.slice(-(SPARK_LENGTH - 1)), rtt.last];
       }

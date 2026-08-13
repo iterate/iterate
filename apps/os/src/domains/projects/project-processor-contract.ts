@@ -652,7 +652,7 @@ export function parseProjectCreationTerminal(input: {
   requestOffset: number;
 }): ProjectCreationTerminal | null {
   const { event, projectId, request, requestOffset } = input;
-  if (event.path !== "/" || event.source?.copiedFrom !== undefined) {
+  if (event.path !== "/" || event.source?.copiedFrom) {
     return null;
   }
 

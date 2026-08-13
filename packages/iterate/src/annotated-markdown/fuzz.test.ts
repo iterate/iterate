@@ -30,7 +30,7 @@ function mulberry32(seed: number): () => number {
 
 const pick = <T>(rand: () => number, items: readonly T[]): T => {
   const item = items[Math.floor(rand() * items.length)];
-  if (item === undefined) throw new Error("pick from empty list");
+  if (!item) throw new Error("pick from empty list");
   return item;
 };
 
@@ -271,7 +271,7 @@ describe("edit-sequence fuzz", () => {
             body,
             author: pick(rand, ["lee", "sam", "jonas@nustom.com"]),
             createdAt: isoAt(counter),
-            ...(anchor === undefined ? {} : { anchor }),
+            ...(!anchor ? {} : { anchor }),
           });
           doc = result.doc;
           expectedBodies.set(result.commentId, normalize(body));
@@ -285,7 +285,7 @@ describe("edit-sequence fuzz", () => {
             body,
             author: "lee",
             createdAt: isoAt(counter),
-            ...(replyTo === undefined ? {} : { inReplyTo: replyTo }),
+            ...(!replyTo ? {} : { inReplyTo: replyTo }),
           });
           doc = result.doc;
           expectedBodies.set(result.commentId, normalize(body));
@@ -317,7 +317,7 @@ describe("edit-sequence fuzz", () => {
       for (const thread of reparsed.discussion?.threads ?? []) {
         for (const comment of thread.comments) {
           const expected = expectedBodies.get(comment.id);
-          if (expected !== undefined) {
+          if (expected) {
             expect(comment.body, `body of ${comment.id} at iteration ${i}`).toBe(expected);
           }
         }

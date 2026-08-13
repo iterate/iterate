@@ -57,7 +57,7 @@ test("the bundle's expectation survives to a real auth screen with the test OTP 
   page,
   context,
 }) => {
-  test.skip(target === undefined, "needs APP_CONFIG_BASE_URL pointing at a deployed preview slot");
+  test.skip(!target, "needs APP_CONFIG_BASE_URL pointing at a deployed preview slot");
 
   await page.addInitScript(
     ([env, email]) => {

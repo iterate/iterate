@@ -92,7 +92,7 @@ async function startRpcServer(options: { describeError?: Error; rejectUpgradeCou
 
   await listen(httpServer);
   const address = httpServer.address();
-  if (address === null || typeof address === "string") {
+  if (!address || typeof address === "string") {
     throw new Error("Expected an IP test server address.");
   }
 

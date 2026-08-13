@@ -199,10 +199,8 @@ export class AgentLlmRequest implements AgentComponent {
               result: {
                 status: "succeeded",
                 text: completion.text,
-                ...(usage === undefined ? {} : { usage }),
-                ...(completion.rawResponse === undefined
-                  ? {}
-                  : { rawResponse: completion.rawResponse }),
+                ...(!usage ? {} : { usage }),
+                ...(!completion.rawResponse ? {} : { rawResponse: completion.rawResponse }),
               },
             },
             idempotencyKey: this.#host.idempotencyKey(`settle/${requestOffset}`),
@@ -210,7 +208,7 @@ export class AgentLlmRequest implements AgentComponent {
           // The normalized token report rides the same atomic append: same
           // information, one commit. Skipped (not failed) when the vendor
           // reported no parseable usage.
-          ...(usage === undefined
+          ...(!usage
             ? []
             : ([
                 {
@@ -295,7 +293,7 @@ export class AgentLlmRequest implements AgentComponent {
     };
     rawResponse?: unknown;
   }> {
-    if (this.#host.deps.callLlm !== undefined) {
+    if (this.#host.deps.callLlm) {
       return await this.#host.deps.callLlm({
         model: input.model,
         messages: input.messages,
@@ -304,7 +302,7 @@ export class AgentLlmRequest implements AgentComponent {
       });
     }
     const ai = this.#host.deps.ai;
-    if (ai === undefined) {
+    if (!ai) {
       throw new Error("Agent processor has no AI binding configured.");
     }
     const completion = await raceAbort(
@@ -323,7 +321,7 @@ export class AgentLlmRequest implements AgentComponent {
     const usage = normalizeLlmUsage(completion.usage);
     return {
       text: completion.text,
-      ...(usage === undefined ? {} : { usage }),
+      ...(!usage ? {} : { usage }),
       rawResponse: completion.rawResponse,
     };
   }
@@ -409,7 +407,7 @@ export class AgentLlmRequest implements AgentComponent {
             `(~${contextTokens} tokens > ${thresholdTokens}). Summary:]\n\n${summary.text}`,
           compaction: {
             replacesHistoryThrough: llmRequestOffset,
-            ...(summary.usage === undefined ? {} : { usage: summary.usage }),
+            ...(!summary.usage ? {} : { usage: summary.usage }),
           },
           llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
@@ -446,7 +444,7 @@ export class AgentLlmRequest implements AgentComponent {
           return (
             parsed.success &&
             parsed.data.role === "developer" &&
-            parsed.data.compaction !== undefined &&
+            !!parsed.data.compaction &&
             parsed.data.compaction.replacesHistoryThrough >= offset &&
             parsed.data.compaction.replacesHistoryThrough < candidate.offset
           );
@@ -529,12 +527,11 @@ export async function prepareAgentLlmMessages(
     messages.map(async (message) => {
       const files = message.files ?? [];
       if (files.length === 0) return { role: message.role, content: message.content };
-      const resolvedFiles =
-        resolveModelFileUrl === undefined
-          ? files
-          : await Promise.all(
-              files.map(async (file) => ({ ...file, url: await resolveModelFileUrl(file) })),
-            );
+      const resolvedFiles = !resolveModelFileUrl
+        ? files
+        : await Promise.all(
+            files.map(async (file) => ({ ...file, url: await resolveModelFileUrl(file) })),
+          );
       return {
         role: message.role,
         content: flattenMessageToText({ ...message, files: resolvedFiles }),
@@ -591,7 +588,7 @@ export function contextWindowTokens(model: string): number {
   let best: { prefixLength: number; tokens: number } | undefined;
   for (const [prefix, tokens] of Object.entries(MODEL_CONTEXT_WINDOW_TOKENS)) {
     if (!model.startsWith(prefix)) continue;
-    if (best === undefined || prefix.length > best.prefixLength) {
+    if (!best || prefix.length > best.prefixLength) {
       best = { prefixLength: prefix.length, tokens };
     }
   }

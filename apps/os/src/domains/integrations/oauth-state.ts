@@ -63,7 +63,7 @@ export async function verifyOAuthState(
   if (!constantTimeEqual(expected, signature)) return null;
 
   const data = decodeStatePayload(payload);
-  if (data === null) return null;
+  if (!data) return null;
   if (data.provider !== input.provider) return null;
   if (data.expiresAt < Date.now()) return null;
   return data;

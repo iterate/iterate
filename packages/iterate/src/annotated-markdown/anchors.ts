@@ -68,8 +68,8 @@ export function resolveThreadAnchor(
   selector: AnchorSelector | null,
 ): AnchorResolution {
   const marker = findInlineMarker(body, threadId);
-  if (marker !== null) {
-    if (selector !== null) {
+  if (marker) {
+    if (selector) {
       const exact = selector.quote.exact;
       // The writer inserts the marker directly after the quote, optionally
       // separated by one space — recover the quoted range when it survived.
@@ -87,13 +87,13 @@ export function resolveThreadAnchor(
     }
     return { state: "attached", method: "marker", range: marker, confidence: 1 };
   }
-  if (selector === null) {
+  if (!selector) {
     return { state: "orphaned", method: null, range: null, confidence: 0 };
   }
 
   const exact = selector.quote.exact;
   const position = selector.position;
-  if (position !== undefined && body.startsWith(exact, position.start)) {
+  if (position && body.startsWith(exact, position.start)) {
     return {
       state: "attached",
       method: "position",
@@ -107,7 +107,7 @@ export function resolveThreadAnchor(
     occurrences.push(i);
     if (occurrences.length > MAX_OCCURRENCES) break;
   }
-  if (occurrences.length === 1 && occurrences[0] !== undefined) {
+  if (occurrences.length === 1 && Number.isFinite(occurrences[0])) {
     return {
       state: "attached",
       method: "quote",
@@ -185,11 +185,11 @@ function fuzzyResolve(body: string, selector: AnchorSelector): AnchorResolution 
       normOccurrences.push(i);
       if (normOccurrences.length > MAX_OCCURRENCES) break;
     }
-    if (normOccurrences.length === 1 && normOccurrences[0] !== undefined) {
+    if (normOccurrences.length === 1 && Number.isFinite(normOccurrences[0])) {
       const start = normalizedBody.map[normOccurrences[0]];
       const endMapIndex = normOccurrences[0] + normalizedExact.length - 1;
       const endChar = normalizedBody.map[endMapIndex];
-      if (start !== undefined && endChar !== undefined) {
+      if (Number.isFinite(start) && Number.isFinite(endChar)) {
         return {
           state: "attached",
           method: "fuzzy",
@@ -227,36 +227,34 @@ function fuzzyResolve(body: string, selector: AnchorSelector): AnchorResolution 
     const context =
       contextScore(body, match.start, match.end - match.start, selector) /
       Math.max(1, selector.quote.prefix.length + selector.quote.suffix.length);
-    const positionCloseness =
-      selector.position === undefined
-        ? 0
-        : 1 -
-          Math.min(1, Math.abs(match.start - selector.position.start) / Math.max(1, body.length));
+    const positionCloseness = !selector.position
+      ? 0
+      : 1 - Math.min(1, Math.abs(match.start - selector.position.start) / Math.max(1, body.length));
     const rank = similarity + 0.25 * context + 0.1 * positionCloseness;
     const candidate: Candidate = {
       range: { start: match.start, end: match.end },
       similarity,
       rank,
     };
-    if (best !== null && Math.abs(candidate.range.start - best.range.start) < exact.length) {
+    if (best && Math.abs(candidate.range.start - best.range.start) < exact.length) {
       // Same region as the current best: keep the better, don't count it as
       // an independent runner-up.
       if (candidate.rank > best.rank) best = candidate;
       continue;
     }
-    if (best === null || candidate.rank > best.rank) {
+    if (!best || candidate.rank > best.rank) {
       runnerUp = best;
       best = candidate;
-    } else if (runnerUp === null || candidate.rank > runnerUp.rank) {
+    } else if (!runnerUp || candidate.rank > runnerUp.rank) {
       runnerUp = candidate;
     }
   }
-  if (best === null || best.similarity < FUZZY_REVIEW_THRESHOLD) {
+  if (!best || best.similarity < FUZZY_REVIEW_THRESHOLD) {
     return { state: "orphaned", method: null, range: null, confidence: 0 };
   }
   if (
     best.similarity >= FUZZY_ATTACH_THRESHOLD &&
-    (runnerUp === null || best.rank - runnerUp.rank >= FUZZY_AMBIGUITY_MARGIN)
+    (!runnerUp || best.rank - runnerUp.rank >= FUZZY_AMBIGUITY_MARGIN)
   ) {
     return { state: "attached", method: "fuzzy", range: best.range, confidence: best.similarity };
   }
@@ -269,7 +267,7 @@ function normalizeWithMap(text: string): { text: string; map: number[] } {
   let pendingSpace = false;
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
-    if (char === undefined) break;
+    if (!char) break;
     if (/\s/.test(char)) {
       pendingSpace = out.length > 0;
       continue;

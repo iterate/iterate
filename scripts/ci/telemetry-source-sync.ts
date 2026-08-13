@@ -127,7 +127,7 @@ function sourceHealthEvent(input: {
 }
 
 function errorProperties(error: unknown) {
-  if (error === undefined) return {};
+  if (!error) return {};
   if (error instanceof Error) {
     return { error_name: error.name, error_message: error.message.slice(0, 1_000) };
   }

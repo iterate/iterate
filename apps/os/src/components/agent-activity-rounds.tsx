@@ -161,8 +161,8 @@ function RoundBody({
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
   onInspectScriptExecution?: (executionId: string) => void;
 }) {
-  if (round.code == null) {
-    return round.llm == null ? null : (
+  if (!round.code) {
+    return !round.llm ? null : (
       <LlmOnlyRound llm={round.llm} onInspectLlmRequest={onInspectLlmRequest} />
     );
   }
@@ -205,7 +205,7 @@ function LlmOnlyRound({
           {llmStepLabel(llm)}
         </span>
         <span className="font-mono text-xs text-muted-foreground/70">{llmStepMeta(llm)}</span>
-        {onInspectLlmRequest == null ? null : (
+        {!onInspectLlmRequest ? null : (
           <Button
             variant="ghost"
             size="xs"
@@ -242,7 +242,7 @@ function LlmOnlyRound({
           {llm.responseText}
         </div>
       )}
-      {llm.errorMessage == null ? null : (
+      {!llm.errorMessage ? null : (
         <pre className="max-w-2xl whitespace-pre-wrap px-1.5 font-mono text-xs text-destructive">
           {llm.errorMessage}
         </pre>
@@ -265,8 +265,7 @@ function RoundTabs({
   onInspectScriptExecution?: (executionId: string) => void;
 }) {
   const [selected, setSelected] = useState("script");
-  const hasResult =
-    code.status === "done" && (code.result !== undefined || code.errorMessage != null);
+  const hasResult = code.status === "done" && (!!code.result || !!code.errorMessage);
   const active = selected === "result" && !hasResult ? "script" : selected;
   return (
     <Tabs
@@ -291,12 +290,12 @@ function RoundTabs({
         <div className="max-h-80 overflow-y-auto rounded-lg">
           <SourceCodeBlock code={code.code} language="typescript" showLineNumbers={false} />
         </div>
-        {hasResult || code.errorMessage == null ? null : (
+        {hasResult || !code.errorMessage ? null : (
           <pre className="whitespace-pre-wrap px-1.5 font-mono text-xs text-destructive">
             {code.errorMessage}
           </pre>
         )}
-        {onInspectScriptExecution == null ? null : (
+        {!onInspectScriptExecution ? null : (
           <Button
             variant="ghost"
             size="xs"
@@ -315,7 +314,7 @@ function RoundTabs({
       </TabsContent>
       <TabsContent value="meta" className="flex flex-col gap-1.5">
         <RoundMeta llm={llm} code={code} database={database} />
-        {llm == null || onInspectLlmRequest == null ? null : (
+        {!llm || !onInspectLlmRequest ? null : (
           <Button
             variant="ghost"
             size="xs"
@@ -351,7 +350,7 @@ function RoundResult({
   code: AgentUiCodeStep;
   database?: StreamBrowserDatabase;
 }) {
-  if (database == null) return <RawRoundResult code={code} />;
+  if (!database) return <RawRoundResult code={code} />;
   return <AgentRenderedRoundResult code={code} database={database} />;
 }
 
@@ -384,7 +383,7 @@ function AgentRenderedRoundResult({
   );
   const agentText = useMemo(() => {
     const row = eventsResult.data[0];
-    if (eventsResult.status !== "ok" || row == null) return null;
+    if (eventsResult.status !== "ok" || !row) return null;
     try {
       const parsed = JSON.parse(String(row.raw_json)) as { payload?: { content?: unknown } };
       const content = parsed.payload?.content;
@@ -396,7 +395,7 @@ function AgentRenderedRoundResult({
   // Wait for the local mirror (it answers in ms) instead of painting the raw
   // view and swapping it out from under the reader.
   if (eventsResult.status === "pending") return null;
-  if (agentText == null) return <RawRoundResult code={code} />;
+  if (!agentText) return <RawRoundResult code={code} />;
   const showRaw = toggled ?? !renderIsTransformed(code, agentText);
   return (
     <>
@@ -448,9 +447,8 @@ function AgentRenderedRoundResult({
  * claiming the agent saw everything.
  */
 function renderIsTransformed(code: AgentUiCodeStep, agentText: string): boolean {
-  const full =
-    code.result !== undefined ? stringifyScriptResult(code.result) : (code.errorMessage ?? null);
-  if (full == null) return true;
+  const full = code.result ? stringifyScriptResult(code.result) : (code.errorMessage ?? null);
+  if (!full) return true;
   return !agentText.includes(full);
 }
 
@@ -458,18 +456,15 @@ function RawRoundResult({ code }: { code: AgentUiCodeStep }) {
   // One YAML fold for every size; only the RENDERER is bounded — CodeMirror
   // is expensive near the stream event-size ceiling, so oversized results get
   // a plain-text preview of the same YAML instead of falling back to JSON.
-  const yaml = useMemo(
-    () => (code.result === undefined ? null : resultYaml(code.result)),
-    [code.result],
-  );
+  const yaml = useMemo(() => (!code.result ? null : resultYaml(code.result)), [code.result]);
   return (
     <>
-      {code.errorMessage == null ? null : (
+      {!code.errorMessage ? null : (
         <pre className="whitespace-pre-wrap rounded-lg bg-destructive/5 px-3 py-2 font-mono text-xs leading-relaxed text-destructive">
           {code.errorMessage}
         </pre>
       )}
-      {yaml == null ? null : yaml.length <= MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS ? (
+      {!yaml ? null : yaml.length <= MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS ? (
         <div className="max-h-80 overflow-y-auto rounded-lg" data-testid="script-result-raw">
           <SourceCodeBlock code={yaml} language="yaml" showLineNumbers={false} />
         </div>
@@ -507,7 +502,7 @@ function RoundMeta({
   code: AgentUiCodeStep;
   database?: StreamBrowserDatabase;
 }) {
-  if (database == null || llm == null) {
+  if (!database || !llm) {
     return <MetaYamlBlock yamlText={buildRoundMetaYaml(llm, code, null)} />;
   }
   return <RoundMetaWithPrompt llm={llm} code={code} database={database} />;
@@ -570,7 +565,7 @@ function MetaYamlBlock({ yamlText }: { yamlText: string }) {
  */
 function roundHeaderMeta(round: AgentUiActivityRound) {
   const { code, llm } = round;
-  if (code != null) {
+  if (code) {
     const parts = [
       ...(code.status === "running"
         ? ["Running code"]
@@ -578,12 +573,12 @@ function roundHeaderMeta(round: AgentUiActivityRound) {
           ? ["Code failed"]
           : []),
       code.activitySummary || `Started ${formatClockTime(code.startedAtMs)}`,
-      ...(code.durationMs == null ? [] : [formatSeconds(code.durationMs)]),
+      ...(!Number.isFinite(code.durationMs) ? [] : [formatSeconds(code.durationMs)]),
       ...(llm?.outcome === "failed" ? ["request failed"] : []),
     ];
     return parts.join(" · ");
   }
-  if (llm == null) return "";
+  if (!llm) return "";
   return [llmStepLabel(llm), llmStepMeta(llm)].filter((part) => part !== "").join(" · ");
 }
 
@@ -596,11 +591,11 @@ function llmStepLabel(llm: AgentUiLlmStep) {
 
 function llmStepMeta(llm: AgentUiLlmStep) {
   const parts: string[] = [];
-  if (llm.cancelReason != null && llm.model != null) parts.push(llm.model);
-  if (llm.inputTokens != null || llm.outputTokens != null) {
+  if (llm.cancelReason && llm.model) parts.push(llm.model);
+  if (Number.isFinite(llm.inputTokens) || Number.isFinite(llm.outputTokens)) {
     parts.push(`${formatTokens(llm.inputTokens)} → ${formatTokens(llm.outputTokens)} tok`);
   }
-  if (llm.durationMs != null) parts.push(formatSeconds(llm.durationMs));
+  if (Number.isFinite(llm.durationMs)) parts.push(formatSeconds(llm.durationMs));
   if (llm.outcome === "failed") parts.push("failed");
   return parts.join(" · ");
 }

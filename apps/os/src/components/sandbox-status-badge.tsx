@@ -8,14 +8,14 @@ export function SandboxStatusBadge({
   error?: string;
   state: SandboxProcessorState | undefined;
 }) {
-  if (error !== undefined) {
+  if (error) {
     return (
       <Badge variant="destructive" title={error}>
         Unavailable
       </Badge>
     );
   }
-  if (state === undefined) {
+  if (!state) {
     return (
       <Badge variant="secondary" data-spinner="true">
         Loading…
@@ -24,6 +24,6 @@ export function SandboxStatusBadge({
   }
   if (state.status === "destroyed") return <Badge variant="destructive">Destroyed</Badge>;
   if (state.running) return <Badge>Running</Badge>;
-  if (state.status === null) return <Badge variant="outline">Unknown</Badge>;
+  if (!state.status) return <Badge variant="outline">Unknown</Badge>;
   return <Badge variant="secondary">Stopped</Badge>;
 }

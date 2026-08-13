@@ -54,7 +54,7 @@ const GITHUB_REFRESH = {
  * project root stream "/" land somewhere observable. Pass another harness's
  * substrate for a replay incarnation over the SAME stream. */
 function makeSecretHarness(substrate?: HarnessSubstrate) {
-  if (substrate === undefined) {
+  if (!substrate) {
     const clock = { now: 1_000_000 };
     const network = new MemoryStreamNetwork(() => clock.now);
     substrate = {
@@ -378,7 +378,7 @@ describe("registry + runner drive (the secret DO's wiring)", () => {
       catchUpBeforeSnapshot: () => registry.catchUp(SecretProcessorContract.slug),
       // The DO's describeSecretState redaction, reduced to the fact under
       // test: material must leave as hasMaterial, never as ciphertext.
-      publicState: (state) => ({ hasMaterial: state.encryptedMaterial !== null }),
+      publicState: (state) => ({ hasMaterial: !!state.encryptedMaterial }),
     });
 
     // The write: the DO's update() appends to the stream. NO push delivery

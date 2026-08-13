@@ -139,7 +139,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     // settled fact may sit in stream pages not yet replayed — acting early
     // would re-run a settled script.
     if (!delivery.caughtUp) return;
-    if (state.birthCertificate === null) return;
+    if (!state.birthCertificate) return;
     // ONE outer blocking closure per at-head pass — a nested
     // blockProcessorWhile would register after the runner's per-event blocker
     // snapshot and never be awaited. Blocking (not background) is deliberate:
@@ -180,7 +180,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     for (const [executionId, execution] of Object.entries(args.state.scriptExecutions)) {
       if (this.#liveExecutions.has(executionId)) continue;
       const pendingSettlement = this.#pendingSettlements.get(executionId);
-      if (pendingSettlement !== undefined) {
+      if (pendingSettlement) {
         settle.push({
           executionId,
           expiresAt: execution.expiresAt,
@@ -252,13 +252,13 @@ export class CapabilityHostProcessor extends StreamProcessor<
     // root host reducing those would grow phantom pager entries keyed by copy
     // offsets that no real disconnect can ever clear (or worse, a source
     // offset colliding with a real root pager's would clear the real one).
-    if (event.source?.copiedFrom !== undefined) return state;
+    if (event.source?.copiedFrom) return state;
     switch (event.type) {
       case "events.iterate.com/capability-host/created":
         // The first created event wins; a duplicate is a no-op (explicit
         // creation rejects conflicting births at the append door — a throwing
         // reducer would only wedge the frame).
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/capability-host/capability-provider-pager-connected":
         return {
@@ -310,7 +310,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
             // With providedAtOffset the revoke names ONE exact mount: a path
             // re-mounted since then keeps its newer row.
             return (
-              revoke.providedAtOffset !== undefined &&
+              Number.isFinite(revoke.providedAtOffset) &&
               capability.providedAtOffset !== revoke.providedAtOffset
             );
           }),
@@ -333,7 +333,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
         const existing = state.scriptExecutions[event.payload.executionId];
         // A started fact for an already-settled (deleted) obligation reduces
         // to nothing — the settle won.
-        if (existing === undefined) return state;
+        if (!existing) return state;
         return {
           ...state,
           scriptExecutions: {
@@ -357,7 +357,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
         return {
           ...state,
           scriptExecutions,
-          ...(retained === null
+          ...(!retained
             ? {}
             : {
                 settledScriptResults: [...state.settledScriptResults, retained].slice(
@@ -476,14 +476,14 @@ export class CapabilityHostProcessor extends StreamProcessor<
     assertCapabilityPath(path);
     const { state } = await this.deps.reads.snapshot();
     const current = state.capabilities.find((record) => sameCapabilityPath(record.path, path));
-    if (providedAtOffset !== undefined && current?.providedAtOffset !== providedAtOffset) {
+    if (Number.isFinite(providedAtOffset) && current?.providedAtOffset !== providedAtOffset) {
       return;
     }
     const [committed] = await this.append({
       type: "events.iterate.com/capability-host/capability-revoked",
       payload: {
         path,
-        ...(providedAtOffset === undefined ? {} : { providedAtOffset }),
+        ...(!Number.isFinite(providedAtOffset) ? {} : { providedAtOffset }),
       },
     });
     await this.deps.reads.waitUntilEvent({
@@ -511,13 +511,13 @@ export class CapabilityHostProcessor extends StreamProcessor<
       throw new Error('setPreamble requires string "code" — TypeScript statements to inject');
     }
     const checkPreamble = this.deps.checkPreamble;
-    if (checkPreamble !== undefined) {
+    if (checkPreamble) {
       const { state } = await this.deps.reads.snapshot();
       const withCandidate = assemblePreamble({
         entries: upsertPreambleEntry(state.preamble, input),
         results: state.settledScriptResults,
       });
-      if (withCandidate !== null) {
+      if (withCandidate) {
         const capabilities = await this.#describeCapabilitiesFrom(
           state.capabilities,
           state.birthCertificate?.fallback ?? null,
@@ -535,7 +535,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
           // MULTISET, not a set: a candidate adding a second occurrence of an
           // already-stale message is still introducing a problem.
           const preexisting = new Map<string, number>();
-          for (const problem of without === null
+          for (const problem of !without
             ? []
             : await checkPreamble({ capabilities, preamble: without.ts }).catch(() => [])) {
             const key = positionlessProblem(problem);
@@ -598,7 +598,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       entries: state.preamble,
       results: state.settledScriptResults,
     });
-    if (assembled === null) return null;
+    if (!assembled) return null;
     return {
       text: assembled.ts,
       entries: state.preamble.map(({ key, code }) => ({ key, code })),
@@ -618,7 +618,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       idempotencyKey: `capability-host/script-run-settled@${executionId}`,
     });
     const settlement = settlementFromSettledEvent(event, executionId);
-    if (settlement === undefined) {
+    if (!settlement) {
       throw new Error(`no settled script execution "${executionId}" in scope ${this.#scopePath}`);
     }
     if (settlement.status === "failed") {
@@ -634,7 +634,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     // here with "invalid capability path segment".
     assertCapabilityPath(path[path.length - 1] === "__describe" ? path.slice(0, -1) : path);
     const { state } = await this.deps.reads.snapshot();
-    if (state.birthCertificate === null) {
+    if (!state.birthCertificate) {
       throw new Error(`capability host at ${this.#scopePath} has not been created`);
     }
     const hit = resolveLongestPrefix(state.capabilities, path);
@@ -664,7 +664,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       const provider = await normalizeCapabilityProvider(evaluated, hit.record);
       return await invokeNormalizedCapability(provider, hit.rest, args);
     }
-    if (this.deps.invokeLiveCapability === undefined) {
+    if (!this.deps.invokeLiveCapability) {
       // Live mounts are Pager-bound: the durable record outlives the
       // provider's Pager, and a call while it is away fails plainly. (A
       // dedicated receiver-absent signal that PARKS a stream delivery
@@ -695,7 +695,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
 
   async #assertCreated(): Promise<void> {
     const { state } = await this.deps.reads.snapshot();
-    if (state.birthCertificate === null) {
+    if (!state.birthCertificate) {
       throw new Error(`capability host at ${this.#scopePath} has not been created`);
     }
   }
@@ -743,7 +743,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     // silent rot every docs read and typecheck inherits. This runs AFTER the
     // cheap structural checks above so a malformed payload never costs a
     // network-bound compile before its real error surfaces.
-    if (input.types !== undefined) {
+    if (input.types) {
       const problems = (await this.deps.validateCapabilityTypes?.(input.types)) ?? [];
       if (problems.length > 0) {
         throw new Error(
@@ -901,7 +901,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     preamble: AssembledPreamble | null,
   ): Promise<{ rejection: string | null; emittedJs?: string }> {
     const typecheckScript = this.deps.typecheckScript;
-    if (typecheckScript === undefined) return { rejection: null };
+    if (!typecheckScript) return { rejection: null };
     try {
       const capabilities = await this.#describeCapabilitiesFrom(records, fallback);
       const checked = await typecheckScript({ capabilities, code, preamble: preamble?.ts });
@@ -972,7 +972,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       }
       if (checkedOutcome.status === "rejected") throw checkedOutcome.error;
       const checked = checkedOutcome.value;
-      if (checked.rejection !== null) {
+      if (checked.rejection) {
         await this.#appendSettlementWithin(
           {
             executionId: input.executionId,
@@ -1127,7 +1127,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
                 idempotencyKey: settlement.idempotencyKey,
               });
               const durable = settlementFromSettledEvent(event, inputs[index]!.executionId);
-              if (durable === undefined) throw appendError;
+              if (!durable) throw appendError;
               return durable;
             }),
           ),

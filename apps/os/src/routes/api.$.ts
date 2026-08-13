@@ -56,7 +56,7 @@ export const Route = createFileRoute("/api/$")({
           context: requestContext,
           request,
         });
-        if (integrationResponse !== null) return integrationResponse;
+        if (integrationResponse) return integrationResponse;
 
         return Response.json({ error: "not_found" }, { status: 404 });
       },

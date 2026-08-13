@@ -193,7 +193,7 @@ export class DynamicWorkerRunner {
             resolved.assets,
             resolved.assetConfig,
           );
-          if (asset !== null) {
+          if (asset) {
             return withWorkerCommit(asset, resolved.commitOid);
           }
         }
@@ -207,7 +207,7 @@ export class DynamicWorkerRunner {
             ) as unknown as Fetcher
           ).fetch(withWorkerFetchDispatchHeader(currentRequest, { buildBudgetMs, ref }));
         }
-        if (resolved === undefined) {
+        if (!resolved) {
           const result = await resolveWorkerSource({
             buildBudgetMs,
             projectId: this.#projectId,
@@ -429,7 +429,7 @@ export class DynamicWorkerRunner {
     mode: "cached" | "one-off",
     freshInstanceNonce?: string,
   ): WorkerStub {
-    if (freshInstanceNonce !== undefined) {
+    if (freshInstanceNonce) {
       this.#loaderInstanceNonce = freshInstanceNonce;
     }
     return loadResolvedWorker({

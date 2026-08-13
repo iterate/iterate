@@ -165,7 +165,7 @@ export async function capture(options: CaptureOptions) {
   ) {
     throw new Error(`Auth and OS disagree about project ${identity.slug}.`);
   }
-  if (authSnapshot.project.archivedAt !== null) {
+  if (authSnapshot.project.archivedAt) {
     throw new Error(`Project ${identity.slug} is archived.`);
   }
 
@@ -213,7 +213,7 @@ export async function capture(options: CaptureOptions) {
         return { path, ...(await captureSecret(project, identity.projectId, path)) };
       }),
     )
-  ).filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+  ).filter((entry): entry is NonNullable<typeof entry> => !!entry);
   const integrations = await Promise.all(
     connected.map(async (entry): Promise<SeedIntegration> => {
       const externalId = entry.status.externalId?.trim();
@@ -452,15 +452,14 @@ export async function apply(options: SeedOptions) {
     hostnames: [...seed.directHostnames, ...seed.cloudflareHostnames],
     slug: seed.slug,
   });
-  const configRepo =
-    seed.configRepo === undefined
-      ? null
-      : await restoreConfigRepository({
-          project,
-          seed: seed.configRepo,
-          integrations: restoredIntegrations,
-          workerUrls,
-        });
+  const configRepo = !seed.configRepo
+    ? null
+    : await restoreConfigRepository({
+        project,
+        seed: seed.configRepo,
+        integrations: restoredIntegrations,
+        workerUrls,
+      });
   return {
     targetEnvironment: archive.targetEnvironment,
     project: identity,
@@ -518,7 +517,7 @@ async function captureConfigRepository(input: {
     repository.listFiles(),
   ]);
   const github = snapshot.state.github;
-  if (github !== null) {
+  if (github) {
     const installation = input.connected.find(
       (entry) =>
         entry.provider === "github" &&
@@ -550,7 +549,7 @@ async function captureConfigRepository(input: {
         encoding: "base64",
         commitOid: local.commitOid,
       });
-      if (file === null) throw new Error(`/repos/config/${path} disappeared during capture.`);
+      if (!file) throw new Error(`/repos/config/${path} disappeared during capture.`);
       return { path, contentBase64: file.content };
     }),
   );
@@ -593,8 +592,7 @@ async function restoreConfigRepository(input: {
     if (!sameStrings(after.paths, [...wanted])) {
       throw new Error(`${path} file-tree proof failed.`);
     }
-    const served =
-      input.workerUrls === undefined ? null : await proveWorkers(input.workerUrls, after.commitOid);
+    const served = !input.workerUrls ? null : await proveWorkers(input.workerUrls, after.commitOid);
     return {
       path,
       source: "local" as const,
@@ -635,10 +633,9 @@ async function restoreConfigRepository(input: {
   ) {
     throw new Error(`${path} changed while it was restored from GitHub.`);
   }
-  const served =
-    input.workerUrls === undefined
-      ? null
-      : await proveWorkers(input.workerUrls, restored.commitOid);
+  const served = !input.workerUrls
+    ? null
+    : await proveWorkers(input.workerUrls, restored.commitOid);
   return {
     path,
     source: "github" as const,
@@ -674,8 +671,8 @@ async function proveWorkers(urls: readonly string[], expectedCommitOid: string) 
       if (
         observed.commitOid === expectedCommitOid &&
         observed.status < 500 &&
-        observed.buildFailed === null &&
-        observed.serveError === null
+        !observed.buildFailed &&
+        !observed.serveError
       ) {
         results.push(observed);
         break;
@@ -683,8 +680,8 @@ async function proveWorkers(urls: readonly string[], expectedCommitOid: string) 
       if (
         observed.status !== 503 ||
         observed.building !== "1" ||
-        observed.buildFailed !== null ||
-        observed.serveError !== null ||
+        observed.buildFailed ||
+        observed.serveError ||
         Date.now() >= deadline
       ) {
         throw new Error(
@@ -704,7 +701,7 @@ function projectWorkerUrls(input: { baseUrl: string; hostnames: readonly string[
     projectHostnameBases: hostnameBases,
     projectSlug: input.slug,
   });
-  if (canonical === null) throw new Error(`Cannot derive the ${input.slug} project URL.`);
+  if (!canonical) throw new Error(`Cannot derive the ${input.slug} project URL.`);
   return [
     ...new Set([
       canonical,
@@ -715,7 +712,7 @@ function projectWorkerUrls(input: { baseUrl: string; hostnames: readonly string[
           projectHostnameBases: hostnameBases,
           projectSlug: input.slug,
         });
-        if (url === null) throw new Error(`Cannot derive the ${customHostname} project URL.`);
+        if (!url) throw new Error(`Cannot derive the ${customHostname} project URL.`);
         return url;
       }),
     ]),
@@ -867,7 +864,7 @@ function projectSeedPlan(archive: ProjectSeedArchive, project: SeedProject) {
 }
 
 function repositorySummary(repository: RepositorySeed | undefined) {
-  if (repository === undefined) return null;
+  if (!repository) return null;
   return repository.source === "github"
     ? {
         source: "github",
@@ -918,7 +915,7 @@ function sameStrings(left: readonly string[], right: readonly string[]) {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function requiredOption(value: string | undefined, name: string) {

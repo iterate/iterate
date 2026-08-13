@@ -154,7 +154,7 @@ export default function MediaScreen() {
         setSyncProgress(null);
       }
     },
-    enabled: baseUrl !== undefined && settings?.enabled === true,
+    enabled: !!baseUrl && settings?.enabled === true,
     staleTime: 5 * 60_000,
     retry: false,
   });
@@ -182,7 +182,7 @@ export default function MediaScreen() {
       const project = await getProjectItx(baseUrl!, projectId);
       return await readAllMediaEvents(project.streams.get(MEDIA_STREAM_PATH));
     },
-    enabled: baseUrl !== undefined,
+    enabled: !!baseUrl,
     eventTypes: MEDIA_EVENT_TYPES,
     projectId,
     streamPath: MEDIA_STREAM_PATH,
@@ -223,7 +223,7 @@ export default function MediaScreen() {
           // toMarkdown — fail the card here with something actionable
           // instead of uploading bytes doomed to fail.
           const unsupported = unsupportedImageReason(image.contentType);
-          if (unsupported !== null) {
+          if (unsupported) {
             patchCard(image, { status: "error", error: unsupported });
             return;
           }
@@ -349,7 +349,7 @@ export default function MediaScreen() {
         <Pressable
           accessibilityRole="button"
           onPress={() => capture.mutate()}
-          disabled={capture.isPending || baseUrl === undefined}
+          disabled={capture.isPending || !baseUrl}
           style={[styles.captureButton, capture.isPending && styles.captureDisabled]}
         >
           <Text style={styles.captureText}>+ Add</Text>
@@ -488,7 +488,7 @@ export default function MediaScreen() {
         onRequestClose={() => setViewer(null)}
         statusBarTranslucent
         transparent
-        visible={viewer !== null}
+        visible={!!viewer}
       >
         {viewer ? (
           <MediaViewer
@@ -658,7 +658,7 @@ function SyncDialog({
  * the row. Last so a long summary truncates it first. */
 function syncSummary(result: SyncPassResult | undefined, sinceIso: string): string {
   const backTo = `back to ${shortDate(sinceIso)}`;
-  if (result === undefined) return `Auto-collect on · ${backTo}`;
+  if (!result) return `Auto-collect on · ${backTo}`;
   if (result.status === "denied") return "Photo access denied — allow it in Settings";
   const limited = result.accessPrivileges === "limited" ? " · limited access" : "";
   const more = result.more ? " · more next pass" : "";
@@ -751,7 +751,7 @@ function MediaRow({
     <Pressable onPress={() => setExpanded(!expanded)} style={styles.row}>
       <Pressable
         accessibilityLabel="View full screen"
-        disabled={imageUri === null}
+        disabled={!imageUri}
         onPress={() => imageUri && onViewImage(imageUri)}
       >
         {imageUri ? (

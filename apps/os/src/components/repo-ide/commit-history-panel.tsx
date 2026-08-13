@@ -129,7 +129,7 @@ function ExpandedCommit({
         <span>{new Date(details.timestamp).toLocaleString()}</span>
         <span className="font-mono">
           {details.oid.slice(0, 7)}
-          {details.parentOid === null ? " (root commit)" : ` ← ${details.parentOid.slice(0, 7)}`}
+          {!details.parentOid ? " (root commit)" : ` ← ${details.parentOid.slice(0, 7)}`}
         </span>
       </div>
       <div className="flex flex-col gap-0.5 border-t pt-1.5">

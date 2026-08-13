@@ -66,9 +66,9 @@ function makeJournal() {
 
   const commit = (event: StreamEventInput): StreamEvent => {
     attempts.push(event);
-    if (event.idempotencyKey !== undefined) {
+    if (event.idempotencyKey) {
       const existing = rows.find((row) => row.idempotencyKey === event.idempotencyKey);
-      if (existing !== undefined) return existing;
+      if (existing) return existing;
     }
     const committed = {
       ...event,
@@ -114,7 +114,7 @@ function makeJournal() {
             .filter(
               (row) =>
                 row.offset > cursor &&
-                (args?.beforeOffset == null || row.offset < args.beforeOffset),
+                (!Number.isFinite(args?.beforeOffset) || row.offset < args.beforeOffset),
             )
             .slice(0, limit);
           if (page.length > 0) cursor = page.at(-1)!.offset;
@@ -131,7 +131,7 @@ function makeJournal() {
     attempts,
     head: () => rows.at(-1)?.offset ?? 0,
     pauseGuardedAppends() {
-      if (guardedAppendGate !== undefined) throw new Error("guarded appends are already paused");
+      if (guardedAppendGate) throw new Error("guarded appends are already paused");
       guardedAppendGate = deferred();
       return () => {
         const gate = guardedAppendGate;
@@ -244,7 +244,7 @@ function makeRunner(args: {
         storage: args.storage,
         name: SLUG,
       }),
-      ...(args.recovery === undefined ? {} : { recovery: args.recovery }),
+      ...(!args.recovery ? {} : { recovery: args.recovery }),
     },
     now: () => 0,
   });
@@ -348,7 +348,7 @@ describe("durableObjectRecovery", () => {
         kv: { get(key: string): unknown; put(key: string, value: unknown): void };
       }
     ).kv;
-    if (kv.get(processorProgressKey(SLUG)) === undefined) {
+    if (!kv.get(processorProgressKey(SLUG))) {
       kv.put(processorProgressKey(SLUG), progressAt(0));
     }
     const clock = { now: Date.parse("2026-07-14T12:00:00Z") };
@@ -632,7 +632,7 @@ describe("durableObjectRecovery", () => {
       storage,
       hooks: {
         onProcess: (args) => {
-          if (args.event === null) return;
+          if (!args.event) return;
           processedTypes.push(args.event.type);
         },
       },

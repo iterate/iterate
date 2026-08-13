@@ -66,7 +66,7 @@ export default async function run(
     });
     const exitCode = await new Promise<number>((resolve, reject) => {
       child.on("error", reject);
-      child.on("close", (code) => resolve(code === null ? 1 : code));
+      child.on("close", (code) => resolve(typeof code === "number" ? code : 1));
     });
     if (exitCode !== 0) throw new Error(`Codex exited with code ${exitCode}`);
   } finally {

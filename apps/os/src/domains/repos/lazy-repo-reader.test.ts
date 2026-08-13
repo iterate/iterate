@@ -40,7 +40,7 @@ function nodeStorage() {
     },
     sql: {
       exec: (query: string, ...bindings: unknown[]) => {
-        if (fault.armed !== null && query.includes(fault.armed.fragment)) {
+        if (fault.armed && query.includes(fault.armed.fragment)) {
           fault.armed.remaining -= 1;
           if (fault.armed.remaining <= 0) {
             fault.armed = null;
@@ -97,7 +97,7 @@ function fakeRemote() {
   const closure = (oid: string, out: Set<string>, cutParents: boolean) => {
     if (out.has(oid)) return;
     const object = objects.get(oid);
-    if (object === undefined) return; // missing oids drop silently, like gitty
+    if (!object) return; // missing oids drop silently, like gitty
     out.add(oid);
     if (object.type === "commit") {
       const commit = parseCommit(object.payload);
@@ -145,8 +145,7 @@ function fakeRemote() {
         throw new Error("ls-refs transiently unavailable");
       }
       // Eventually-consistent reads: serve a pre-push snapshot while armed.
-      const source =
-        faults.staleRefReads > 0 && staleRefsSnapshot !== null ? staleRefsSnapshot : refs;
+      const source = faults.staleRefReads > 0 && staleRefsSnapshot ? staleRefsSnapshot : refs;
       if (faults.staleRefReads > 0) faults.staleRefReads -= 1;
       // gitty ignores ref-prefix filters; always return everything.
       const entries: LsRefsEntry[] = [];

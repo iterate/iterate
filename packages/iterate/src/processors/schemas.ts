@@ -85,7 +85,7 @@ export const StreamEventInput = z
     ephemeral: z.literal(true).optional(),
   })
   .superRefine((event, context) => {
-    if (event.ephemeral === true && event.idempotencyKey !== undefined) {
+    if (event.ephemeral === true && event.idempotencyKey) {
       context.addIssue({
         code: "custom",
         message: "ephemeral events cannot have an idempotencyKey",

@@ -261,7 +261,7 @@ test("a live filter failure closes the callback and records the concrete error",
           eventTypes: ["events.iterate.com/stream/connection-closed"],
         })
       ).find((event) => event.payload?.connectionKey === connectionKey);
-      return closed !== undefined;
+      return !!closed;
     },
     { description: "the failing live filter to close its callback" },
   );
@@ -318,7 +318,7 @@ test("waitForEvent records one open and close pair and cleans up after a timeout
         connectionKey = payload.connectionKey;
         return true;
       });
-      return opened !== undefined;
+      return !!opened;
     },
     { description: "waitForEvent connection-opened presence fact" },
   );
@@ -645,8 +645,7 @@ test("callback capabilities cross the worker proxy and disappear with their sess
     disposeRpc(callbackSession);
     await waitForCondition(
       async () =>
-        runtimeState(await observerStream.runtimeState()).runtime.connections[connectionKey] ===
-        undefined,
+        !runtimeState(await observerStream.runtimeState()).runtime.connections[connectionKey],
       { description: "session disposal to revoke the callback" },
     );
   } finally {
@@ -937,7 +936,7 @@ test("bare subscribeToEventsFrom generates an offset key, starts now, and copies
 // Cloudflare documents ctx.abort() as unavailable in local Wrangler
 // development. Reset deletes the source's storage and must then end that
 // incarnation, so this proof belongs on a real preview deployment.
-test.skipIf(deployedBaseUrl() === null)(
+test.skipIf(!deployedBaseUrl())(
   "a receiver accepts the same offsets again after its source is deleted and recreated",
   { timeout: 45_000 },
   async () => {
@@ -2048,8 +2047,8 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
       const runtime = await stream.getProcessorRuntimeState({ name: subscriptionName });
       return (
         (runtime?.snapshot.offset ?? 0) >= created!.offset &&
-        (runtime?.snapshot.state as { birthCertificate?: { config?: object } } | undefined)
-          ?.birthCertificate?.config !== undefined
+        !!(runtime?.snapshot.state as { birthCertificate?: { config?: object } } | undefined)
+          ?.birthCertificate?.config
       );
     },
     { description: "the scheduler processor to reduce its own birth certificate" },
@@ -2092,8 +2091,7 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
         runtime?.snapshot.state as { schedules?: Record<string, unknown> } | undefined
       )?.schedules;
       return (
-        (runtime?.snapshot.offset ?? 0) >= durableScheduleSet!.offset &&
-        schedules?.[durableKey] !== undefined
+        (runtime?.snapshot.offset ?? 0) >= durableScheduleSet!.offset && !!schedules?.[durableKey]
       );
     },
     { description: "the hosted processor to reduce the durable schedule after an ephemeral one" },
@@ -2113,8 +2111,7 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
     { description: "the hosted callback to settle before its idle alarm" },
   );
   await waitForCondition(
-    async () =>
-      runtimeState(await stream.runtimeState()).runtime.connections[subscriptionName] === undefined,
+    async () => !runtimeState(await stream.runtimeState()).runtime.connections[subscriptionName],
     {
       description: "the bounded idle alarm to release the hosted callback",
       timeoutMs: 15_000,
@@ -2184,8 +2181,8 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
       const runtime = await stream.getProcessorRuntimeState({ name: subscriptionName });
       return (
         (runtime?.snapshot.offset ?? 0) >= scheduleSetAfterIdle!.offset &&
-        (runtime?.snapshot.state as { schedules?: Record<string, unknown> } | undefined)
-          ?.schedules?.[afterIdleKey] !== undefined
+        !!(runtime?.snapshot.state as { schedules?: Record<string, unknown> } | undefined)
+          ?.schedules?.[afterIdleKey]
       );
     },
     {
@@ -2209,8 +2206,8 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
       const runtime = await stream.getProcessorRuntimeState({ name: subscriptionName });
       return (
         (runtime?.snapshot.offset ?? 0) >= scheduleSetAfterEviction!.offset &&
-        (runtime?.snapshot.state as { schedules?: Record<string, unknown> } | undefined)
-          ?.schedules?.[afterEvictionKey] !== undefined
+        !!(runtime?.snapshot.state as { schedules?: Record<string, unknown> } | undefined)
+          ?.schedules?.[afterEvictionKey]
       );
     },
     {
@@ -2254,8 +2251,7 @@ test("an idle-torn session connection resumes on the next matching append withou
     });
 
     await waitForCondition(
-      async () =>
-        runtimeState(await stream.runtimeState()).runtime.connections[connectionKey] === undefined,
+      async () => !runtimeState(await stream.runtimeState()).runtime.connections[connectionKey],
       {
         description: "the real idle alarm to leave only the subscriber's hibernatable Pager",
         timeoutMs: 15_000,
@@ -2342,8 +2338,7 @@ test("an idle close never Pages the subscriber it closed, even when its filter n
       description: "the live connection to deliver the seed event",
     });
     await waitForCondition(
-      async () =>
-        runtimeState(await stream.runtimeState()).runtime.connections[connectionKey] === undefined,
+      async () => !runtimeState(await stream.runtimeState()).runtime.connections[connectionKey],
       {
         description: "the real idle alarm to sever the lifecycle-filtered session connection",
         timeoutMs: 15_000,
@@ -2389,7 +2384,7 @@ test("an idle close never Pages the subscriber it closed, even when its filter n
 // Reset ends one source-stream lifetime and starts another at the same path.
 // Wrangler cannot model the required ctx.abort(), so this host-survival proof
 // runs only against a real preview deployment.
-test.skipIf(deployedBaseUrl() === null)(
+test.skipIf(!deployedBaseUrl())(
   "a surviving hosted processor resets its checkpoint and folded state for a recreated source",
   { timeout: 45_000 },
   async () => {
@@ -2429,9 +2424,9 @@ test.skipIf(deployedBaseUrl() === null)(
           ?.snapshot;
         return (
           (snapshot?.offset ?? 0) >= oldSchedule!.offset &&
-          (snapshot?.state as { schedules?: Record<string, unknown> } | undefined)?.schedules?.[
+          !!(snapshot?.state as { schedules?: Record<string, unknown> } | undefined)?.schedules?.[
             oldKey
-          ] !== undefined
+          ]
         );
       },
       {
@@ -2459,7 +2454,8 @@ test.skipIf(deployedBaseUrl() === null)(
           | undefined;
         return (
           (runtime?.snapshot.offset ?? 0) >= newConfiguration!.offset &&
-          state?.birthCertificate === null &&
+          !!state &&
+          !state.birthCertificate &&
           Object.keys(state.schedules ?? {}).length === 0
         );
       },
@@ -2491,8 +2487,8 @@ test.skipIf(deployedBaseUrl() === null)(
           | undefined;
         return (
           (snapshot?.offset ?? 0) >= newSchedule!.offset &&
-          state?.birthCertificate?.config !== undefined &&
-          state.schedules?.[newKey] !== undefined
+          !!state?.birthCertificate?.config &&
+          !!state.schedules?.[newKey]
         );
       },
       {
@@ -2565,8 +2561,8 @@ test("hosted delivery intersects the stored filter with the processor's announce
       const runtime = await stream.getProcessorRuntimeState({ name: subscriptionName });
       return (
         (runtime?.snapshot.offset ?? 0) >= created!.offset &&
-        (runtime?.snapshot.state as { birthCertificate?: { config?: object } } | undefined)
-          ?.birthCertificate?.config !== undefined
+        !!(runtime?.snapshot.state as { birthCertificate?: { config?: object } } | undefined)
+          ?.birthCertificate?.config
       );
     },
     {
@@ -2959,8 +2955,8 @@ test("the consecutive-failure limit survives stream eviction and halts before ma
   });
   await waitForCondition(
     async () =>
-      coreState(await source.runtimeState()).subscriptions.outbound.byName[subscriptionName]
-        ?.deliveryHalted !== undefined,
+      !!coreState(await source.runtimeState()).subscriptions.outbound.byName[subscriptionName]
+        ?.deliveryHalted,
     {
       description: "the durable consecutive-failure limit to halt event sending",
       timeoutMs: 60_000,

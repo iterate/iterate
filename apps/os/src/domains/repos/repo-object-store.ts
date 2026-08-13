@@ -114,7 +114,7 @@ export function sqliteGitObjectStore(storage: {
 
     getObject: async (oid) => {
       const row = sql.exec(`SELECT type, size FROM git_objects WHERE oid = ?`, oid).toArray()[0];
-      if (row === undefined) return null;
+      if (!row) return null;
       const chunks = sql
         .exec(`SELECT idx, bytes FROM git_object_chunks WHERE oid = ? ORDER BY idx`, oid)
         .toArray();
@@ -158,7 +158,7 @@ export function sqliteGitObjectStore(storage: {
       const row = sql
         .exec(`SELECT commit_oid, root_tree_oid FROM git_heads WHERE branch = ?`, branch)
         .toArray()[0];
-      return row === undefined
+      return !row
         ? null
         : { commitOid: row.commit_oid as string, rootTreeOid: row.root_tree_oid as string };
     },

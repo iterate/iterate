@@ -27,7 +27,7 @@ export function EventsStreamPathLabel({
       onOpenChange={(open, eventDetails) => {
         if (!open || displayValue !== path) return;
         const text = eventDetails.trigger?.querySelector("[data-slot=stream-path-label-text]");
-        const truncated = text != null && text.scrollWidth > text.clientWidth;
+        const truncated = !!text && text.scrollWidth > text.clientWidth;
         if (!truncated) eventDetails.cancel();
       }}
     >

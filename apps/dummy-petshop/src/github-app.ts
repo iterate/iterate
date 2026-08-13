@@ -48,9 +48,7 @@ function bytesFromBase64Url(value: string): Uint8Array {
 function jsonFromBase64UrlSegment(segment: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(new TextDecoder().decode(bytesFromBase64Url(segment)));
-    return typeof parsed === "object" && parsed !== null
-      ? (parsed as Record<string, unknown>)
-      : null;
+    return typeof parsed === "object" && parsed ? (parsed as Record<string, unknown>) : null;
   } catch {
     return null;
   }

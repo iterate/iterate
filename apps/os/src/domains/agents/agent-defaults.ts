@@ -42,7 +42,7 @@ function contentHash(text: string): string {
  */
 function embeddedTemplateFile(path: string): string {
   const file = PROJECT_REPO_INITIAL_FILES.find((candidate) => candidate.path === path);
-  if (file === undefined) throw new Error(`missing embedded config template file: ${path}`);
+  if (!file) throw new Error(`missing embedded config template file: ${path}`);
   return file.content.replace(/\n$/, "");
 }
 
@@ -55,7 +55,7 @@ function interpolatePromptTemplate(template: string, values: Record<string, stri
     content = content.replaceAll(`{{${key}}}`, value);
   }
   const leftover = content.match(/\{\{\w+\}\}/);
-  if (leftover !== null) throw new Error(`unfilled prompt template placeholder: ${leftover[0]}`);
+  if (leftover) throw new Error(`unfilled prompt template placeholder: ${leftover[0]}`);
   return content;
 }
 
@@ -199,7 +199,7 @@ export function telegramAgentSystemPrompt(input: {
   return interpolatePromptTemplate(embeddedTemplateFile("prompts/telegram.md"), {
     agentPathJson: JSON.stringify(input.agentPath),
     agentSummaryInstruction: AGENT_SUMMARY_INSTRUCTION,
-    chatIdNote: input.chatId === null ? "" : ` (this chat's id is ${input.chatId})`,
+    chatIdNote: !input.chatId ? "" : ` (this chat's id is ${input.chatId})`,
     telegramConnection: `itx.integrations.telegram.get(${JSON.stringify(input.connection)})`,
   });
 }
@@ -381,7 +381,7 @@ export function validateAgentBirthEvents(
       // exists purely to hand the parser something to accept or reject.
       AgentProcessorContract.parseConsumedInput({
         type: event.type,
-        ...(event.payload === undefined ? {} : { payload: event.payload }),
+        ...(!event.payload ? {} : { payload: event.payload }),
       } as never);
     } catch (error) {
       return {
@@ -463,7 +463,7 @@ export function agentCreationForPath<
     candidate.payload?.role === "system" &&
     candidate.payload?.key === "agent/system-prompt";
   const birthEvents = (birthEventsCheck.ok ? rawBirthEvents : []).filter(
-    (candidate) => input.systemPromptPolicy === undefined || !isPromptSlotEvent(candidate),
+    (candidate) => !input.systemPromptPolicy || !isPromptSlotEvent(candidate),
   );
   const defaultsCarryPrompt = birthEvents.some(isPromptSlotEvent);
   const birthEventsHash = hashAgentBirthDefaults(birthEvents);
@@ -532,18 +532,16 @@ export function agentCreationForPath<
     // the stream's same-key-different-body rejection. Fact-less births keep
     // the bare key, so router replays dedupe exactly as before.
     idempotencyKey: `agent/boot-system-context:v${AGENT_BOOT_CONTEXT_REVISION}:${projectId}:${agentPath}${
-      project === undefined
-        ? ""
-        : `:${JSON.stringify([project.name, project.slug, project.workerUrl ?? null])}`
+      !project ? "" : `:${JSON.stringify([project.name, project.slug, project.workerUrl ?? null])}`
     }`,
     payload: {
       role: "system",
       key: "agent/boot-context",
       content: [
         "Context for this agent:",
-        project === undefined
+        !project
           ? `- Project id: ${projectId}`
-          : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.workerUrl === undefined ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
+          : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${!project.workerUrl ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
         `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
         `- Your workspace directory: ${agentWorkspacePath(agentPath)} — private scratch; relative workspace paths resolve there. Every project repo is mounted in your workspace at its own path.`,
         // One seed list, marked non-exhaustive, and ONE rule for choosing
@@ -582,17 +580,17 @@ export function agentCreationForPath<
       },
     },
   });
-  const siblingBirthCertificates: SiblingBirthCertificate[] =
-    input.sibling === undefined ? [] : [input.sibling.birthCertificate];
-  const siblingSubscriptions =
-    input.sibling === undefined
-      ? []
-      : [
-          buildFacetProcessorSubscriptionConfiguredEvent({
-            idempotencyKey: `stream/subscription-configured:${input.sibling.name}`,
-            name: input.sibling.name,
-          }),
-        ];
+  const siblingBirthCertificates: SiblingBirthCertificate[] = !input.sibling
+    ? []
+    : [input.sibling.birthCertificate];
+  const siblingSubscriptions = !input.sibling
+    ? []
+    : [
+        buildFacetProcessorSubscriptionConfiguredEvent({
+          idempotencyKey: `stream/subscription-configured:${input.sibling.name}`,
+          name: input.sibling.name,
+        }),
+      ];
 
   return {
     birthCertificate,

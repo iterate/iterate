@@ -27,7 +27,7 @@ export function StreamIndexTablePanel({
       </p>
     );
   }
-  if (streams === undefined) {
+  if (!streams) {
     return (
       <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
         {error ? "Project stream index unavailable." : "Waiting for project stream index…"}
@@ -91,16 +91,12 @@ export function StreamIndexTable({
               data-stream-path={row.original.path}
               className={cn(
                 "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 font-mono text-xs",
-                selected
-                  ? "bg-accent"
-                  : row.original.indexRow === undefined
-                    ? undefined
-                    : "hover:bg-accent/70",
+                selected ? "bg-accent" : !row.original.indexRow ? undefined : "hover:bg-accent/70",
               )}
             >
               <StreamTreeRowContent
                 row={row}
-                onOpen={row.original.indexRow === undefined ? undefined : onOpenPath}
+                onOpen={!row.original.indexRow ? undefined : onOpenPath}
                 selected={selected}
                 onToggleExpanded={(path) => {
                   setCollapseState((current) => ({

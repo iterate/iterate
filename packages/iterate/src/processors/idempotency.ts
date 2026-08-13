@@ -46,7 +46,7 @@ export function jsonValuesEqual(left: unknown, right: unknown): boolean {
       left.every((value, index) => jsonValuesEqual(value, right[index]))
     );
   }
-  if (typeof left === "object" && typeof right === "object" && left !== null && right !== null) {
+  if (typeof left === "object" && typeof right === "object" && left && right) {
     const leftKeys = Object.keys(left).sort();
     const rightKeys = Object.keys(right).sort();
     if (leftKeys.length !== rightKeys.length) return false;

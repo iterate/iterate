@@ -171,8 +171,8 @@ function jsonSchemaCodeMirrorExtensions(input: {
 export function parseJsonDocumentColonFixed(state: EditorState) {
   const parsed = parseJSONDocumentState(state);
   for (const [pointer, positions] of parsed.pointers) {
-    if (!("valueFrom" in positions) || positions.valueFrom === undefined) continue;
-    if (positions.valueTo === undefined) continue;
+    if (!("valueFrom" in positions) || !Number.isFinite(positions.valueFrom)) continue;
+    if (!Number.isFinite(positions.valueTo)) continue;
     // A real string value of ":" would slice as `":"` (with quotes), so a
     // bare colon can only be the structural token.
     if (state.sliceDoc(positions.valueFrom, positions.valueTo) !== ":") continue;
@@ -219,7 +219,7 @@ export function useRepoFileJsonSchema(input: {
 }): RepoFileJsonSchema {
   const { path, language, content } = input;
   const url = useMemo(
-    () => (language === null ? null : repoFileSchemaUrl({ path, language, content })),
+    () => (!language ? null : repoFileSchemaUrl({ path, language, content })),
     [path, language, content],
   );
 
@@ -241,14 +241,14 @@ export function useRepoFileJsonSchema(input: {
       return { url };
     },
   });
-  const settledUrl = settledUrlQuery.data === undefined ? null : settledUrlQuery.data.url;
+  const settledUrl = !settledUrlQuery.data ? null : settledUrlQuery.data.url;
 
   // Errored entries don't poison the infinite-staleTime cache: staleTime
   // governs *data* freshness, and an errored query has none — react-query
   // refetches it when the file is next opened.
   const schemaQuery = useQuery({
     queryKey: ["repo-ide-json-schema", settledUrl],
-    enabled: settledUrl !== null,
+    enabled: !!settledUrl,
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 60 * 60 * 1000,
     retry: 1,
@@ -257,7 +257,7 @@ export function useRepoFileJsonSchema(input: {
     // keepPreviousData — switching `$schema` shouldn't blink diagnostics off.
     placeholderData: keepPreviousData,
     queryFn: async (): Promise<JSONSchema7> => {
-      if (settledUrl === null) throw new Error("unreachable: query disabled without a url");
+      if (!settledUrl) throw new Error("unreachable: query disabled without a url");
       const response = await fetch(settledUrl);
       if (!response.ok) throw new Error(`Schema fetch failed: ${response.status} ${settledUrl}`);
       return (await response.json()) as JSONSchema7;
@@ -267,23 +267,21 @@ export function useRepoFileJsonSchema(input: {
   const schema = schemaQuery.data;
   const extensions = useMemo(
     () =>
-      language !== null && schema !== undefined
-        ? jsonSchemaCodeMirrorExtensions({ language, schema })
-        : NO_EXTENSIONS,
+      language && schema ? jsonSchemaCodeMirrorExtensions({ language, schema }) : NO_EXTENSIONS,
     [language, schema],
   );
 
-  if (url === null) return { status: "none", extensions: NO_EXTENSIONS };
+  if (!url) return { status: "none", extensions: NO_EXTENSIONS };
   // A failed fetch means no validation — check this BEFORE the active branch,
   // because keepPreviousData keeps an earlier schema in `schemaQuery.data` even
   // while the current URL's fetch is errored. Without this the stale schema
   // would keep linting and the failure would read as "active", masking it.
-  if (schemaQuery.status === "error" && settledUrl !== null) {
+  if (schemaQuery.status === "error" && settledUrl) {
     return { status: "unavailable", url: settledUrl, extensions: NO_EXTENSIONS };
   }
   // Mid-settle (url !== settledUrl) or mid-refetch, keepPreviousData keeps the
   // previous schema applying — the header note names what's actually validating.
-  if (schema !== undefined && settledUrl !== null) {
+  if (schema && settledUrl) {
     return { status: "active", url: settledUrl, extensions };
   }
   return { status: "loading", url, extensions };

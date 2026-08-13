@@ -110,7 +110,7 @@ function makeScriptedLlm() {
   return {
     calls,
     respond(text: string, usage?: { inputTokens: number; outputTokens: number }) {
-      calls.at(-1)!.resolve({ text, ...(usage === undefined ? {} : { usage }) });
+      calls.at(-1)!.resolve({ text, ...(!usage ? {} : { usage }) });
     },
     fail(message: string) {
       calls.at(-1)!.reject(new Error(message));
@@ -137,7 +137,7 @@ function makeAgentHarness(substrate?: HarnessSubstrate, extraDeps?: Partial<Agen
     createProcessor: (deps) =>
       new AgentProcessor({ ...deps, callLlm: llm.transport, ...extraDeps }),
     path: "/agents/test",
-    ...(substrate === undefined ? {} : { substrate }),
+    ...(!substrate ? {} : { substrate }),
   });
   return { ...harness, llm };
 }
@@ -2256,7 +2256,7 @@ describe("AgentProcessor compaction", () => {
     // The compaction item folded: coverage sealed through the barrier,
     // pre-barrier history dropped, the system prompt retained in front, the
     // summary in place behind it.
-    const compacted = h.state().contextItems.find((item) => item.payload.compaction !== undefined);
+    const compacted = h.state().contextItems.find((item) => !!item.payload.compaction);
     expect(compacted).toMatchObject({
       payload: {
         role: "developer",
@@ -2304,9 +2304,7 @@ describe("AgentProcessor compaction", () => {
       ],
     );
     expect(h.llm.calls).toHaveLength(1); // no summary turn
-    expect(h.state().contextItems.every((item) => item.payload.compaction === undefined)).toBe(
-      true,
-    );
+    expect(h.state().contextItems.every((item) => !item.payload.compaction)).toBe(true);
   });
 
   it("a malformed compaction item whose cutoff is not earlier than itself folds to nothing", async () => {
@@ -2330,9 +2328,7 @@ describe("AgentProcessor compaction", () => {
     // summary itself, so the raw append rewrites nothing — and folds to
     // nothing itself.
     expect(h.state().contextItems.some((item) => item.payload.content === "keep me")).toBe(true);
-    expect(h.state().contextItems.some((item) => item.payload.compaction !== undefined)).toBe(
-      false,
-    );
+    expect(h.state().contextItems.some((item) => !!item.payload.compaction)).toBe(false);
     expect(
       h.state().contextItems.some((item) => item.payload.content === "malformed summary"),
     ).toBe(false);
@@ -2382,7 +2378,7 @@ describe("AgentProcessor compaction", () => {
 
     const items = h.state().contextItems;
     expect(items[0]!.payload.role).toBe("system");
-    const summaryIndex = items.findIndex((item) => item.payload.compaction !== undefined);
+    const summaryIndex = items.findIndex((item) => !!item.payload.compaction);
     const survivorIndex = items.findIndex(
       (item) => item.payload.content === "unanswered while compacting",
     );
@@ -2440,7 +2436,7 @@ describe("AgentProcessor compaction", () => {
       { payload: { content: "You are v2." } },
     ]);
     const factIndex = items.findIndex((item) => item.payload.content === "Unkeyed durable fact.");
-    const summaryIndex = items.findIndex((item) => item.payload.compaction !== undefined);
+    const summaryIndex = items.findIndex((item) => !!item.payload.compaction);
     expect(factIndex).toBeGreaterThanOrEqual(0);
     expect(summaryIndex).toBeGreaterThan(factIndex);
     expect(items.some((item) => item.payload.content === "First question")).toBe(false);
@@ -2491,9 +2487,7 @@ describe("AgentProcessor compaction", () => {
     await replay.settle();
     expect(replay.llm.calls).toHaveLength(0);
     expect(replay.events().map((row) => row.offset)).toEqual(journalledOffsets);
-    expect(
-      replay.state().contextItems.filter((item) => item.payload.compaction !== undefined),
-    ).toHaveLength(1);
+    expect(replay.state().contextItems.filter((item) => !!item.payload.compaction)).toHaveLength(1);
   });
 
   it("an earlier-cutoff summary does not suppress compaction of a later request", async () => {
@@ -2543,9 +2537,7 @@ describe("AgentProcessor compaction", () => {
     await catchUp;
     await h.settle();
 
-    const compactionRows = h
-      .events(CONTEXT_ADDED)
-      .filter((row) => row.payload.compaction !== undefined);
+    const compactionRows = h.events(CONTEXT_ADDED).filter((row) => !!row.payload.compaction);
     expect(compactionRows).toHaveLength(2);
     expect(compactionRows[1]).toMatchObject({
       payload: { compaction: { replacesHistoryThrough: secondRequestOffset } },
@@ -2599,9 +2591,9 @@ describe("AgentProcessor compaction", () => {
     await h.settle();
 
     expect(h.llm.calls).toHaveLength(3); // the older report never dialed
-    expect(
-      h.state().contextItems.filter((item) => item.payload.compaction !== undefined),
-    ).toMatchObject([{ payload: { compaction: { replacesHistoryThrough: secondRequestOffset } } }]);
+    expect(h.state().contextItems.filter((item) => !!item.payload.compaction)).toMatchObject([
+      { payload: { compaction: { replacesHistoryThrough: secondRequestOffset } } },
+    ]);
   });
 
   it("token tallies accumulate cached and reasoning components", async () => {

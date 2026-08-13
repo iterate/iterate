@@ -124,7 +124,7 @@ test(
   },
 );
 
-test.skipIf(deployedBaseUrl() === null)(
+test.skipIf(!deployedBaseUrl())(
   "runScript caps an in-script sandbox timeout to its absolute deadline and kills the process group",
   { timeout: 90_000 },
   async ({ annotate }) => {
@@ -229,7 +229,7 @@ test.skipIf(deployedBaseUrl() === null)(
                 event.type === "events.iterate.com/capability-host/script-run-settled" &&
                 event.payload?.executionId === executionId,
             );
-            if (completion === undefined) return false;
+            if (!completion) return false;
             settlement = completion.payload?.settlement;
             return true;
           },
@@ -251,7 +251,7 @@ test.skipIf(deployedBaseUrl() === null)(
         forwardedTimeoutMatch,
         `sandbox timeout stderr did not report the forwarded timeout: ${result.timedOut.stderr}`,
       ).not.toBeNull();
-      if (forwardedTimeoutMatch === null) throw new Error("missing forwarded sandbox timeout");
+      if (!forwardedTimeoutMatch) throw new Error("missing forwarded sandbox timeout");
       const forwardedTimeoutMs = Number(forwardedTimeoutMatch[1]);
       expect(forwardedTimeoutMs).toBeGreaterThan(0);
       expect(forwardedTimeoutMs).toBeLessThanOrEqual(SCRIPT_SANDBOX_EXECUTION_BUDGET_CEILING_MS);

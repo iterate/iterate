@@ -147,7 +147,7 @@ export class SchedulerDurableObject extends DurableObject<Env> {
       const definition = parseScheduleSetPayload(input);
       assertValidRecurrence(definition.recurrence);
       const current = await this.#schedulerProcessor.getScheduleView(definition.key);
-      if (current !== undefined && sameScheduleDefinition(current, definition)) return current;
+      if (current && sameScheduleDefinition(current, definition)) return current;
       return await this.#commitSchedule(definition);
     });
   }
@@ -161,7 +161,7 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     );
     await this.#waitUntilProcessed(event!.offset);
     const view = await this.#schedulerProcessor.getScheduleView(input.key);
-    if (view === undefined) throw new Error(`schedule "${input.key}" not visible after set`);
+    if (!view) throw new Error(`schedule "${input.key}" not visible after set`);
     return view;
   }
 

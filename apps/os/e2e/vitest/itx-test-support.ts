@@ -30,7 +30,7 @@ export async function appendSyntheticProviderOutput(
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const { coreProcessorState } = await stream.runtimeState();
     if (
-      coreProcessorState == null ||
+      !coreProcessorState ||
       typeof coreProcessorState !== "object" ||
       typeof (coreProcessorState as { maxOffset?: unknown }).maxOffset !== "number"
     ) {
@@ -175,14 +175,14 @@ export class PathFunctionTarget extends RpcTarget {
 
     let receiver = this.target;
     for (const segment of path.slice(0, -1)) {
-      if (receiver === null || (typeof receiver !== "object" && typeof receiver !== "function")) {
+      if (!receiver || (typeof receiver !== "object" && typeof receiver !== "function")) {
         throw new Error(`path "${path.join(".")}" hit ${String(receiver)}`);
       }
       receiver = Reflect.get(receiver, segment);
     }
 
     const method = path.at(-1)!;
-    if (receiver === null || (typeof receiver !== "object" && typeof receiver !== "function")) {
+    if (!receiver || (typeof receiver !== "object" && typeof receiver !== "function")) {
       throw new Error(`path "${path.join(".")}" hit ${String(receiver)}`);
     }
     const handler = Reflect.get(receiver, method);

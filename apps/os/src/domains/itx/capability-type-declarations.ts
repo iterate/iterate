@@ -46,6 +46,7 @@ export function openApiCapabilityTypeReference(specUrl: string): string {
  */
 export function jsonSchemaToTypeText(schema: unknown, root?: JsonSchema, depth = 0): string {
   const resolved = resolveJsonSchema(schema, root ?? {});
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- boolean JSON Schemas: `false` ("never") must stay distinct from undefined ("unresolvable")
   if (resolved === undefined || resolved === true) return "unknown";
   if (resolved === false) return "never";
   if (depth >= MAX_SCHEMA_DEPTH) return "unknown";
@@ -105,9 +106,7 @@ function objectSchemaMembers(
   return Object.entries(properties).map(([name, property]) => {
     const resolvedProperty = resolveJsonSchema(property, root ?? {});
     const description =
-      resolvedProperty !== undefined &&
-      typeof resolvedProperty === "object" &&
-      typeof resolvedProperty.description === "string"
+      typeof resolvedProperty === "object" && typeof resolvedProperty.description === "string"
         ? `/** ${escapeCommentText(resolvedProperty.description)} */ `
         : "";
     const optional = required.has(name) ? "" : "?";
@@ -203,7 +202,7 @@ function openApiMembers(operations: OpenApiOperation[], spec: Record<string, unk
       } else {
         parts.push("[key: string]: unknown");
       }
-    } else if (body !== undefined) {
+    } else if (typeof body === "object" || typeof body === "boolean") {
       parts.push(`body?: ${jsonSchemaToTypeText(body, spec as JsonSchema, 1)}`);
     }
     const input =

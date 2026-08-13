@@ -60,19 +60,19 @@ export function generateItxExamples(): string {
   }
 
   if (
-    bodies.size + ITX_EXAMPLE_SOURCES.filter((entry) => entry.code !== undefined).length !==
+    bodies.size + ITX_EXAMPLE_SOURCES.filter((entry) => !!entry.code).length !==
     ITX_EXAMPLE_SOURCES.length
   ) {
     throw new Error(
       `examples-source.ts: ${ITX_EXAMPLE_SOURCES.length} entries, but ` +
         `${bodies.size} fn bodies + ` +
-        `${ITX_EXAMPLE_SOURCES.filter((entry) => entry.code !== undefined).length} code strings — `,
+        `${ITX_EXAMPLE_SOURCES.filter((entry) => !!entry.code).length} code strings — `,
     );
   }
 
   const entries = ITX_EXAMPLE_SOURCES.map((entry) => {
     const fromFn = bodies.get(entry.id);
-    if ((fromFn === undefined) === (entry.code === undefined)) {
+    if (!fromFn === !entry.code) {
       throw new Error(`example "${entry.id}": exactly one of fn / code must be authored`);
     }
     const code = fromFn ?? entry.code!;

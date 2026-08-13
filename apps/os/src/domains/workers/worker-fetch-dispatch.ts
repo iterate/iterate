@@ -150,7 +150,7 @@ export function takeWorkerFetchDispatch(
   request: Request,
 ): { dispatch: WorkerFetchDispatch; request: Request } | null {
   const raw = request.headers.get(WORKER_FETCH_DISPATCH_HEADER);
-  if (raw === null) return null;
+  if (!raw) return null;
   const dispatch = WorkerFetchDispatch.parse(JSON.parse(raw));
   const headers = new Headers(request.headers);
   headers.delete(WORKER_FETCH_DISPATCH_HEADER);

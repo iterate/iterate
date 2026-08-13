@@ -20,7 +20,7 @@ test(
     await waitForCondition(
       async () => {
         const read = await project.repo.readFile({ path: "package.json" }).catch(() => null);
-        return read !== null;
+        return !!read;
       },
       { description: "config repo to be seeded", intervalMs: 1_000, timeoutMs: 60_000 },
     );
@@ -256,7 +256,7 @@ test(
     await waitForCondition(
       async () => {
         const read = await workspace.readFile("/repos/e2e-side/side.md").catch(() => null);
-        return read !== null;
+        return !!read;
       },
       { description: "fresh repo to auto-mount", intervalMs: 500, timeoutMs: 30_000 },
     );

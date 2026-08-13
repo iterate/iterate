@@ -77,7 +77,7 @@ const MAX_COMPILED_EXPRESSIONS = 200;
  */
 export function compileJsonataExpression(expression: string): jsonata.Expression {
   const cached = compiledExpressions.get(expression);
-  if (cached !== undefined) return cached;
+  if (cached) return cached;
   let compiled: jsonata.Expression;
   try {
     compiled = jsonata(expression);
@@ -99,8 +99,8 @@ export function compileJsonataExpression(expression: string): jsonata.Expression
       typeof parserError?.message === "string" && parserError.message.length > 0
         ? parserError.message
         : String(error);
-    const coordinates = [code, position === undefined ? undefined : `position ${position}`]
-      .filter((value) => value !== undefined)
+    const coordinates = [code, !Number.isFinite(position) ? undefined : `position ${position}`]
+      .filter((value) => !!value)
       .join(", ");
     throw new Error(
       `invalid JSONata expression${coordinates.length === 0 ? "" : ` (${coordinates})`}: ${message}`,
@@ -141,7 +141,7 @@ export function applyJsonataTransform(
   transformSource: string | undefined,
   event: StreamEvent,
 ): StreamEvent {
-  if (transformSource === undefined) return event;
+  if (!transformSource) return event;
   try {
     const produced = JsonataTransformResult.parse(
       compileJsonataExpression(transformSource).evaluate(event),
@@ -149,8 +149,8 @@ export function applyJsonataTransform(
     return {
       ...event,
       type: produced.type ?? event.type,
-      ...(produced.payload === undefined ? {} : { payload: produced.payload }),
-      ...(produced.metadata === undefined ? {} : { metadata: produced.metadata }),
+      ...(!produced.payload ? {} : { payload: produced.payload }),
+      ...(!produced.metadata ? {} : { metadata: produced.metadata }),
     };
   } catch (error) {
     throw new Error(
@@ -168,18 +168,15 @@ export function applyJsonataTransform(
  */
 export function compileEventFilter(filter: EventFilter | undefined): CompiledEventFilter {
   const eventTypes =
-    filter?.eventTypes === undefined || filter.eventTypes.includes("*")
-      ? undefined
-      : new Set(filter.eventTypes);
-  const condition =
-    filter?.jsonataCondition === undefined
-      ? undefined
-      : compileJsonataExpression(filter.jsonataCondition);
+    !filter?.eventTypes || filter.eventTypes.includes("*") ? undefined : new Set(filter.eventTypes);
+  const condition = !filter?.jsonataCondition
+    ? undefined
+    : compileJsonataExpression(filter.jsonataCondition);
 
   return {
     matches(event) {
-      if (eventTypes !== undefined && !eventTypes.has(event.type)) return false;
-      if (condition !== undefined) {
+      if (eventTypes && !eventTypes.has(event.type)) return false;
+      if (condition) {
         let result: unknown;
         try {
           result = condition.evaluate(event);

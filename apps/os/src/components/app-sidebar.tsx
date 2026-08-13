@@ -245,7 +245,7 @@ function AppSidebarUser() {
       ? session.session.scope
       : null
     : null;
-  const isOperatorSession = operatorScope !== null;
+  const isOperatorSession = !!operatorScope;
   const label = [user?.name, user?.email, "Account"].find((value) => value?.trim())?.trim() ?? "";
   const detail =
     operatorScope === "operator admin"
@@ -523,7 +523,7 @@ function ProjectSidebarGroup({
       (itx) => itx.agents.liveState,
       (state) => state.agents,
       [projectId],
-      { slug: projectId ?? "", enabled: projectId !== null },
+      { slug: projectId ?? "", enabled: !!projectId },
     ).value ?? {};
   const agentAttentionCount = Object.values(agents).filter(
     (agent) => deriveAgentDisplayState(undefined, agent.summary.waitingFor) !== "idle",
@@ -531,7 +531,7 @@ function ProjectSidebarGroup({
   // A registered custom domain (garple.com) is the project's real address —
   // the Homepage link prefers it over the platform host (<slug>.<base>).
   const customHostnames = useQuery({
-    enabled: projectId !== null,
+    enabled: !!projectId,
     queryKey: ["project-custom-hostnames", projectId],
     queryFn: () => getProjectCustomHostnames({ data: { projectId: projectId ?? "" } }),
     staleTime: 5 * 60_000,
@@ -632,7 +632,7 @@ function ProjectSidebarGroup({
         </SidebarGroupContent>
       </SidebarGroup>
       {/* The capped live agent hierarchy shares one project projection. */}
-      {projectId === null ? null : (
+      {!projectId ? null : (
         <DeferredSurface active={showAgentRows}>
           <SidebarAgents agents={agents} projectSlug={projectSlug} />
         </DeferredSurface>

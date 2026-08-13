@@ -59,7 +59,7 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
   ): undefined {
     const event = args.event;
     // Event-less caught-up call: this projection has no caught-up work.
-    if (event === null) return;
+    if (!event) return;
     // Sparse offsets are expected: memory-only ephemeral events are
     // intentionally absent. The runner validates the enclosing scan envelope before this
     // hook runs, so accepting a gap here means "proved omitted", not "lost".

@@ -144,7 +144,7 @@ async function forEachWithConcurrency<T>(
   const queue = [...items];
   await Promise.all(
     Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
-      for (let item = queue.shift(); item !== undefined; item = queue.shift()) await visit(item);
+      for (let item = queue.shift(); item; item = queue.shift()) await visit(item);
     }),
   );
 }
@@ -186,9 +186,9 @@ export async function detachExternalDurableObjectBindings(input: {
   const targetSlot = previewSlotOfWorkerName(input.targetWorkerName);
   const candidates = input.workerNames.filter((workerName) => {
     if (workerName === input.targetWorkerName) return false;
-    if (targetSlot === null) return true;
+    if (!Number.isFinite(targetSlot)) return true;
     const slot = previewSlotOfWorkerName(workerName);
-    return slot === null || slot === targetSlot;
+    return !Number.isFinite(slot) || slot === targetSlot;
   });
 
   await forEachWithConcurrency(candidates, SETTINGS_SCAN_CONCURRENCY, async (workerName) => {
@@ -343,7 +343,7 @@ export async function resetWorkerDurableObjects(input: {
   const retiredApplications = applications.filter((application) => {
     const namespaceId = application.durable_objects?.namespace_id;
     const namespace = namespaceId ? namespaceById.get(namespaceId) : undefined;
-    return namespace !== undefined && !currentContainerClasses.has(namespace.className);
+    return !!namespace && !currentContainerClasses.has(namespace.className);
   });
   for (const application of retiredApplications) {
     const namespaceId = application.durable_objects?.namespace_id;
@@ -369,7 +369,7 @@ export async function resetWorkerDurableObjects(input: {
     );
     const lingering = applications.filter((application) => {
       const namespaceId = application.durable_objects?.namespace_id;
-      return namespaceId !== undefined && retiredNamespaceIds.has(namespaceId);
+      return !!namespaceId && retiredNamespaceIds.has(namespaceId);
     });
     if (lingering.length > 0) {
       throw new Error(

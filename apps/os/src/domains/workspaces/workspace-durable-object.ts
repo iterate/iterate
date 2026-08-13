@@ -172,7 +172,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
    * against the mirror; every public op refreshes it first (#assertCreated). */
   #currentConfig(): WorkspaceConfig {
     const state = this.#reducedState;
-    if (state === undefined) {
+    if (!state) {
       throw new Error("workspace reduced state read before its operation refreshed it");
     }
     return state.config;
@@ -192,14 +192,13 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   #repoPathsRefresh: Promise<string[]> | null = null;
 
   async #repoPaths(options: { refresh?: boolean } = {}): Promise<string[]> {
-    if (this.#repoPathsCache !== null && options.refresh !== true) return this.#repoPathsCache;
+    if (this.#repoPathsCache && options.refresh !== true) return this.#repoPathsCache;
     this.#repoPathsRefresh ??= (async () => {
       try {
         const projectId = this.#name.projectId;
-        const paths =
-          projectId === null
-            ? []
-            : (await projectProcessorState(projectId)).repos.map((repo) => repo.path);
+        const paths = !projectId
+          ? []
+          : (await projectProcessorState(projectId)).repos.map((repo) => repo.path);
         this.#repoPathsCache = paths;
         return paths;
       } finally {
@@ -228,7 +227,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       const resolved = resolveAbsolutePath(path);
       return (
         resolved.startsWith("/repos/") &&
-        routeMount(mounts, resolved) === null &&
+        !routeMount(mounts, resolved) &&
         !isVirtualDirectoryPath(mounts, resolved)
       );
     });
@@ -255,7 +254,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
    * synchronous `#currentConfig` reads fresh per operation. */
   async #assertCreated(): Promise<void> {
     const state = await this.#refreshReducedState();
-    if (state.birthCertificate !== null) return;
+    if (state.birthCertificate) return;
     throw new Error(
       `workspace "${this.#name.path}" does not exist — create it with itx.workspaces.get(${JSON.stringify(this.#name.path)}).create({})`,
     );
@@ -292,7 +291,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       await this.#refreshReducedState();
       const current = this.#currentConfig();
       const patch = plan(current);
-      if (patch === null) return current;
+      if (!patch) return current;
       const next = mergeWorkspaceConfigPatch(current, patch);
       // Ownership/collision safety, judged inside the lock against the exact
       // EFFECTIVE tables this append will transition between (same derived
@@ -354,10 +353,9 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
    */
   async configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceEffectiveConfig> {
     await this.#assertCreated();
-    const config: WorkspaceConfigPatch =
-      input.config.mounts === undefined
-        ? input.config
-        : { ...input.config, mounts: normalizeWorkspaceMountKeys(input.config.mounts) };
+    const config: WorkspaceConfigPatch = !input.config.mounts
+      ? input.config
+      : { ...input.config, mounts: normalizeWorkspaceMountKeys(input.config.mounts) };
     // Under the collab BARRIER (settle + run as ONE coordinated job): live
     // sessions settle so their dirtiness is visible to the transition-safety
     // check, and no debounce flush can interleave between that settle and the
@@ -383,7 +381,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
           const merged = mergeWorkspaceConfigPatch(current, config);
           const effective = effectiveWorkspaceMounts(repoPaths, merged.mounts);
           for (const [key, value] of Object.entries(config.mounts ?? {})) {
-            if (value === null) continue;
+            if (!value) continue;
             if (!(key in effective)) {
               throw new Error(
                 `mount "${key}" patch does not produce a complete mount — new mounts need { repoPath, policy }`,
@@ -392,7 +390,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
             // A ghost repoPath would route (writes accepted!) but every
             // enumeration (listAllFiles/glob/status) then dies on the
             // unseeded repo stub — one typo must not break the workspace.
-            if (value.repoPath !== undefined && !repoPaths.includes(value.repoPath)) {
+            if (value.repoPath && !repoPaths.includes(value.repoPath)) {
               throw new Error(
                 `mount "${key}" names "${value.repoPath}", which is not a repo in this project — create it first (itx.repos.get(path).create(...))`,
               );
@@ -494,12 +492,12 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       paths.map(async (path) => {
         const resolved = this.#resolvePath(path);
         const live = await this.#collab.readFile(resolved);
-        if (live !== null) {
+        if (live) {
           result[path] = live;
           return;
         }
         const local = await this.#core.readOverlayFile(resolved);
-        if (local !== null) {
+        if (local) {
           result[path] = local;
           return;
         }
@@ -618,10 +616,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     // A whiteouted path is DELETED: an empty-seed birth would make it exist
     // again (and its first flush would clear the whiteout, undoing the
     // delete). Recreation is an explicit write, never an open.
-    if (
-      this.#core.isMaskedFromMount(resolved) &&
-      (await this.#core.readOverlayFile(resolved)) === null
-    ) {
+    if (this.#core.isMaskedFromMount(resolved) && !(await this.#core.readOverlayFile(resolved))) {
       throw new Error(`"${resolved}" was deleted — write it to recreate before opening a session`);
     }
     const opened = await this.#collab.open(resolved);
@@ -683,7 +678,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   /** Announce (or clear, with null name) one client viewing the board. */
   async boardPresent(clientId: string, name: string | null): Promise<void> {
     await this.#assertCreated();
-    if (name === null) this.#boardClients.delete(clientId);
+    if (!name) this.#boardClients.delete(clientId);
     else this.#boardClients.set(clientId, { at: Date.now(), name: name.slice(0, 80) });
   }
 
@@ -731,8 +726,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   async gitCommit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
     await this.#assertCreated();
     await this.#effectiveMounts({ refresh: true });
-    const resolved =
-      input.scope === undefined ? input : { ...input, scope: this.#resolvePath(input.scope) };
+    const resolved = !input.scope ? input : { ...input, scope: this.#resolvePath(input.scope) };
     // Settle → commit → stamp as ONE fence: no flush timer, open, or
     // configure can interleave, and baselines advance mount-scoped to
     // exactly what the commit contained (a commit never spans mounts;
@@ -754,8 +748,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   async gitLog(input: WorkspaceGitLogInput = {}): Promise<WorkspaceGitLogEntry[]> {
     await this.#assertCreated();
     await this.#effectiveMounts({ refresh: true });
-    const resolved =
-      input.scope === undefined ? input : { ...input, scope: this.#resolvePath(input.scope) };
+    const resolved = !input.scope ? input : { ...input, scope: this.#resolvePath(input.scope) };
     return this.#core.gitLog(resolved);
   }
 }

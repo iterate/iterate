@@ -71,12 +71,12 @@ function makeEmailAgentHarness(input?: {
         stream: deps.stream,
         path: deps.path,
         projectId: null,
-        ...(input?.resolveStoredAttachments === undefined
+        ...(!input?.resolveStoredAttachments
           ? {}
           : { resolveStoredAttachments: input.resolveStoredAttachments }),
       }),
     path: "/agents/email/t1",
-    ...(input?.substrate === undefined ? {} : { substrate: input.substrate }),
+    ...(!input?.substrate ? {} : { substrate: input.substrate }),
   });
 }
 

@@ -8,7 +8,7 @@ const h = vi.hoisted(() => {
 
     async get(key: string, type?: string): Promise<unknown> {
       const value = this.data.get(key);
-      if (value === undefined) return null;
+      if (!value) return null;
       return type === "json" ? JSON.parse(value) : value;
     }
 
@@ -40,7 +40,7 @@ const h = vi.hoisted(() => {
   };
   const executeWorkerBuild = async (input: { files: Record<string, string> }) => {
     state.buildCalls.push(input.files["worker.ts"] ?? input.files["main.js"] ?? "unknown source");
-    if (state.buildGate !== undefined) await state.buildGate;
+    if (state.buildGate) await state.buildGate;
     if (state.failBuilds) {
       return {
         failure: { kind: "source" as const, message: "esbuild exploded" },

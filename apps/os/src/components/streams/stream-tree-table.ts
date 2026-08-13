@@ -30,7 +30,7 @@ export function buildIndexedStreamForest(
   const nodes = new Map<string, StreamTreeNode>();
   const ensureNode = (path: string): StreamTreeNode => {
     const existing = nodes.get(path);
-    if (existing !== undefined) return existing;
+    if (existing) return existing;
 
     const node: StreamTreeNode = { path, children: [] };
     nodes.set(path, node);
@@ -45,7 +45,7 @@ export function buildIndexedStreamForest(
   for (const stream of Object.values(streams)) ensureNode(stream.path).indexRow = stream;
 
   const root = nodes.get("/");
-  if (root === undefined) return [];
+  if (!root) return [];
   sortStreamNodes(root.children);
   return [root];
 }

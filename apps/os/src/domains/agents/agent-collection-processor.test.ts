@@ -21,7 +21,7 @@ function makeCollectionHarness(substrate?: HarnessSubstrate) {
   return makeProcessorHarness<AgentCollectionProcessorContract>({
     createProcessor: (deps) => new AgentCollectionStreamProcessor(deps),
     path: "/agents",
-    ...(substrate === undefined ? {} : { substrate }),
+    ...(!substrate ? {} : { substrate }),
   });
 }
 

@@ -47,7 +47,7 @@ describe("command palette models", () => {
 
   test("routes root-level cmdk keys to the selected row", () => {
     const target = paletteKeyboardTarget("agents", "agent:/agents/research");
-    if (target === undefined) throw new Error("missing keyboard target");
+    if (!target) throw new Error("missing keyboard target");
 
     expect(
       paletteKeyboardAction({

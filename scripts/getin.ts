@@ -54,7 +54,7 @@ export default async function getin(options?: GetinOptions) {
   const projectRef = options?.project || "test";
   const config = options?.config;
 
-  if (options?.worktree !== undefined && options.worktree !== false) {
+  if (options?.worktree) {
     const ref = typeof options.worktree === "string" ? options.worktree : undefined;
     return runInWorktree(ref, [
       ...(options.email ? ["--email", options.email] : []),

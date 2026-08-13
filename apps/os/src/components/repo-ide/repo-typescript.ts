@@ -119,7 +119,7 @@ class RepoTypeScriptSession {
   }
 
   #reconcile(): void {
-    if (this.#terminated || this.#store === null) return;
+    if (this.#terminated || !this.#store) return;
     const desired = desiredRepoVfs(this.#headContents, this.#store.changes);
     const { updates, removals } = repoVfsDiff(this.#pushed, desired);
     this.#pushed = desired;

@@ -121,7 +121,7 @@ function wrapProject(itx: Project & Disposable): Project & Disposable {
       }
       if (property === Symbol.dispose) {
         const dispose = Reflect.get(target, property, target) as (() => void) | undefined;
-        return dispose === undefined ? undefined : () => Reflect.apply(dispose, target, []);
+        return !dispose ? undefined : () => Reflect.apply(dispose, target, []);
       }
       // Cap'n Web uses the same callable proxy shape for methods, nested
       // capabilities, and property promises. Preserve that proxy verbatim;
@@ -226,7 +226,7 @@ async function withProject<T>(env: IterateEnv, fn: (project: Project) => Promise
  * obtained through it; each stream call owns its own result reference.
  */
 function detachPlainRpcResult<T>(result: T): T {
-  if (result === null || (typeof result !== "object" && typeof result !== "function")) {
+  if (!result || (typeof result !== "object" && typeof result !== "function")) {
     return result;
   }
   // ProcessorStream returns JSON-shaped data only. Workers RPC adds a hidden
@@ -341,7 +341,7 @@ const SELF_REF_STORAGE_KEY = "iterate:self-ref";
 function selfAlarmState<State extends DurableObjectState>(ctx: State, env: IterateEnv): State {
   const withSelf = <T>(fn: (worker: DynamicWorkerCapability) => Promise<T>): Promise<T> => {
     const ref = ctx.storage.kv.get<StatefulDynamicWorkerRef>(SELF_REF_STORAGE_KEY);
-    if (ref === undefined) {
+    if (!ref) {
       // Unreachable after any platform contact — every call, fetch, and
       // alarm fire delivers the ref first. Constructor bodies run before
       // that first contact, hence the carve-out in the error.
@@ -539,7 +539,7 @@ class ProcessorWakeTarget extends RpcTarget {
   async wakeStreamProcessor(
     request: StreamProcessorWakeRequest,
   ): Promise<StreamProcessorWakeResponse> {
-    if (request.stream.projectId === null) {
+    if (!request.stream.projectId) {
       throw new Error("hosted stream processors require project streams");
     }
     // The registry fences mismatched coordinates itself, so a host with a
@@ -620,7 +620,7 @@ export function createProcessorHost<State extends object = Record<string, unknow
     | undefined;
 
   const ensure = (projectId: string, path: string) => {
-    if (built === undefined) {
+    if (!built) {
       args.ctx.storage.kv.put(HOST_PROJECT_ID_KEY, projectId);
       args.ctx.storage.kv.put(HOST_STREAM_PATH_KEY, path);
       const stream = itxProjectStream(args.env, path);
@@ -632,7 +632,7 @@ export function createProcessorHost<State extends object = Record<string, unknow
       });
       const processor = registry.register(
         args.createProcessor({ path, projectId, stream }),
-        args.recovery === undefined ? undefined : { recovery: args.recovery },
+        !args.recovery ? undefined : { recovery: args.recovery },
       );
       built = {
         // `RegisterableProcessor` erases the contract, so `reads` comes back
@@ -646,9 +646,9 @@ export function createProcessorHost<State extends object = Record<string, unknow
   };
 
   const buildOutsideWake = async () => {
-    if (built !== undefined) return built;
+    if (built) return built;
     const path = args.path ?? args.ctx.storage.kv.get<string>(HOST_STREAM_PATH_KEY);
-    if (path === undefined) {
+    if (!path) {
       throw new Error("this processor host learns its stream from the first wake request");
     }
     const projectId =
@@ -667,7 +667,7 @@ export function createProcessorHost<State extends object = Record<string, unknow
     async handleAlarm(alarmInfo?: AlarmInvocationInfo) {
       const projectId = args.ctx.storage.kv.get<string>(HOST_PROJECT_ID_KEY);
       const path = args.path ?? args.ctx.storage.kv.get<string>(HOST_STREAM_PATH_KEY);
-      if (projectId === undefined || path === undefined) return;
+      if (!projectId || !path) return;
       await ensure(projectId, path).registry.handleAlarm(alarmInfo);
     },
   };
@@ -856,7 +856,7 @@ export abstract class StreamProcessorFacet<
    * through, and the single processor is registered under this facet's name.
    */
   protected createHost(identity: ProcessorFacetIdentity): ProcessorFacetHost {
-    if (identity.projectId === null) {
+    if (!identity.projectId) {
       throw new Error("userspace stream-processor facets require a project stream");
     }
     const { projectId, path } = identity;

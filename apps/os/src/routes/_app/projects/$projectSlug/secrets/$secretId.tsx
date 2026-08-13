@@ -56,7 +56,7 @@ function ProjectSecretDetailContent() {
 
   // While the processor's first push is in flight, the loading placeholder is
   // the PANEL — the stream view mounts immediately and warms in parallel.
-  if (secret === undefined) {
+  if (!secret) {
     return (
       <ProjectStreamView
         panel={
@@ -152,7 +152,7 @@ function SecretDetail({
         <div className="space-y-2 rounded-lg border bg-card p-4">
           <div className="flex items-center justify-between">
             <div className="text-sm font-medium">Value</div>
-            {revealSecret.data === undefined ? (
+            {!revealSecret.data ? (
               <Button
                 size="sm"
                 variant="outline"
@@ -183,7 +183,7 @@ function SecretDetail({
             This secret was born readable — reveal it as often as you need. Update below to rotate
             it.
           </p>
-          {revealSecret.data === undefined ? null : (
+          {!revealSecret.data ? null : (
             <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
               {revealedText}
             </pre>

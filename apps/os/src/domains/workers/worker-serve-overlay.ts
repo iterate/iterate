@@ -99,7 +99,7 @@ export function allowStyleNonceInCsp(policyList: string, nonce: string): string 
         : names.includes("style-src")
           ? "style-src"
           : null;
-      if (target !== null) {
+      if (target) {
         return directives
           .map((directive, index) => {
             if (names[index] !== target) return directive;
@@ -131,7 +131,7 @@ function randomCspNonce(): string {
 function allowOverlayStyleInHeaders(headers: Headers, nonce: string): void {
   for (const name of ["content-security-policy", "content-security-policy-report-only"]) {
     const policy = headers.get(name);
-    if (policy !== null) headers.set(name, allowStyleNonceInCsp(policy, nonce));
+    if (policy) headers.set(name, allowStyleNonceInCsp(policy, nonce));
   }
 }
 
@@ -361,9 +361,9 @@ export function workerServeErrorResponse(urlPrefix = ""): Response {
 /** The common streaming-transform boundary: a project-served HTML document,
  * not a socket, encoded body, or subresource. */
 function workerHtmlDocumentCommit(request: Request, response: Response): string | null {
-  if (response.status === 101 || response.webSocket || response.body === null) return null;
+  if (response.status === 101 || response.webSocket || !response.body) return null;
   const raw = response.headers.get(WORKER_SERVE_HEADER);
-  if (raw === null) return null;
+  if (!raw) return null;
   if (!response.headers.get("content-type")?.includes("text/html")) return null;
   // A pre-encoded body (a worker returning bytes it compressed itself) cannot
   // be parsed, let alone transformed.
@@ -371,13 +371,13 @@ function workerHtmlDocumentCommit(request: Request, response: Response): string 
   // Subresource fetches (XHR returning HTML fragments) don't need chrome;
   // absent sec-fetch-dest (curl, old clients) counts as a document.
   const dest = request.headers.get("sec-fetch-dest");
-  if (dest !== null && dest !== "document") return null;
+  if (dest && dest !== "document") return null;
   return raw.length > 0 ? raw : null;
 }
 
 export function workerOverlayDecision(request: Request, response: Response): string | null {
   const commitOid = workerHtmlDocumentCommit(request, response);
-  if (commitOid === null) return null;
+  if (!commitOid) return null;
   if (response.headers.has(OVERLAY_OPT_OUT_HEADER)) return null;
   return commitOid;
 }
@@ -391,10 +391,10 @@ export function workerOverlayDecision(request: Request, response: Response): str
  * transformation streaming; everything else passes through untouched.
  */
 export function applyProjectWorkerOverlay(request: Request, response: Response): Response {
-  if (workerHtmlDocumentCommit(request, response) === null) return response;
+  if (!workerHtmlDocumentCommit(request, response)) return response;
   const commitOid = workerOverlayDecision(request, response);
   const urlPrefix = request.headers.get("x-iterate-url-prefix") ?? "";
-  const styleNonce = commitOid === null ? null : randomCspNonce();
+  const styleNonce = !commitOid ? null : randomCspNonce();
   let hasFavicon = false;
   let hasOverlay = false;
   const rewriter = new HTMLRewriter()
@@ -405,21 +405,21 @@ export function applyProjectWorkerOverlay(request: Request, response: Response):
     })
     .on("meta", {
       element(element) {
-        if (styleNonce === null) return;
+        if (!styleNonce) return;
         if (
           element.getAttribute("http-equiv")?.trim().toLowerCase() !== "content-security-policy"
         ) {
           return;
         }
         const policy = element.getAttribute("content");
-        if (policy !== null) {
+        if (policy) {
           element.setAttribute("content", allowStyleNonceInCsp(policy, styleNonce));
         }
       },
     })
     .on("body", {
       element(element) {
-        if (commitOid !== null && styleNonce !== null && !hasOverlay) {
+        if (commitOid && styleNonce && !hasOverlay) {
           element.append(workerOverlayHtml({ commitOid, kind: "live" }, { styleNonce }), {
             html: true,
           });
@@ -437,7 +437,7 @@ export function applyProjectWorkerOverlay(request: Request, response: Response):
         }
         // Malformed/minimal HTML need not contain an explicit body. The
         // document-end fallback keeps the platform status present there too.
-        if (commitOid !== null && styleNonce !== null && !hasOverlay) {
+        if (commitOid && styleNonce && !hasOverlay) {
           end.append(workerOverlayHtml({ commitOid, kind: "live" }, { styleNonce }), {
             html: true,
           });
@@ -446,7 +446,7 @@ export function applyProjectWorkerOverlay(request: Request, response: Response):
     });
   const transformed = rewriter.transform(response);
   const out = new Response(transformed.body, transformed);
-  if (styleNonce !== null) allowOverlayStyleInHeaders(out.headers, styleNonce);
+  if (styleNonce) allowOverlayStyleInHeaders(out.headers, styleNonce);
   // The transform changes byte length, and fetch already decompressed the
   // upstream body — a copied length header would lie about this body.
   out.headers.delete("content-length");

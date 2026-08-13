@@ -94,7 +94,7 @@ beforeEach(() => {
 
 afterEach(() => {
   document.body.replaceChildren();
-  if (originalOffsetHeight !== undefined) {
+  if (originalOffsetHeight) {
     Object.defineProperty(HTMLElement.prototype, "offsetHeight", originalOffsetHeight);
   }
   HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
@@ -122,7 +122,7 @@ async function setSearch(container: HTMLElement, value: string) {
   const input = container.querySelector('input[aria-label="Search agents"]');
   if (!(input instanceof HTMLInputElement)) throw new Error("missing agent search input");
   const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-  if (setInputValue === undefined) throw new Error("missing native input value setter");
+  if (!setInputValue) throw new Error("missing native input value setter");
 
   await act(async () => {
     setInputValue.call(input, value);

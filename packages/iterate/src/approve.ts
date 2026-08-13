@@ -66,12 +66,12 @@ export async function runApprovalCli(input: {
     if (input.softwareKey === true) {
       throw new Error("--native needs a Secure Enclave key; drop --software-key.");
     }
-    if (key !== null && key.kind !== "secure-enclave") {
+    if (key && key.kind !== "secure-enclave") {
       throw new Error(
         "--native needs a Secure Enclave key, but this project's local key is a software key. Revoke it (--revoke) and re-enroll on this Mac.",
       );
     }
-    if (key === null && input.enroll !== true) {
+    if (!key && input.enroll !== true) {
       throw new Error("--native needs an enrolled Secure Enclave key: run with --enroll first.");
     }
   }
@@ -91,7 +91,7 @@ export async function runApprovalCli(input: {
     );
   }
   prompts.log.info(
-    key === null
+    !key
       ? "No local approval key: decisions will be plain events. Run with --enroll to sign approvals."
       : `Approvals are signed with ${key.kind} key ${key.keyId} (${key.label}).`,
   );
@@ -172,7 +172,7 @@ export async function runApprovalCli(input: {
       // path signs here, which is where Touch ID pops for an enclave key.
       const spinner = prompts.spinner();
       spinner.start(
-        signature !== undefined
+        signature
           ? "Submitting…"
           : key?.kind === "secure-enclave"
             ? "Signing — check Touch ID..."
@@ -287,13 +287,13 @@ async function listKeys(input: {
   for (const key of keys) {
     const marks = [
       key.keyId === input.localKey?.keyId ? "this machine" : null,
-      key.revokedAt === null ? null : `revoked ${key.revokedAt}`,
-    ].filter((mark) => mark !== null);
+      !key.revokedAt ? null : `revoked ${key.revokedAt}`,
+    ].filter((mark) => !!mark);
     prompts.log.info(
       `${key.keyId}  ${key.label}  added ${key.addedAt}${marks.length > 0 ? `  (${marks.join(", ")})` : ""}`,
     );
   }
-  prompts.outro(`${keys.filter((key) => key.revokedAt === null).length} active key(s).`);
+  prompts.outro(`${keys.filter((key) => !key.revokedAt).length} active key(s).`);
 }
 
 /**
@@ -306,7 +306,7 @@ async function revokeKey(input: {
   projectId: string;
   stream: RpcStub<Stream>;
 }): Promise<void> {
-  if (input.key === null) {
+  if (!input.key) {
     prompts.outro("No local approval key for this project — nothing to revoke.");
     return;
   }
@@ -355,7 +355,7 @@ async function settleWithRetry(
 function reportSettlement(offset: number, settlement: Exclude<Settlement, { kind: "error" }>) {
   switch (settlement.kind) {
     case "released": {
-      const failures = settlement.outcomes.filter((outcome) => outcome.error !== null);
+      const failures = settlement.outcomes.filter((outcome) => !!outcome.error);
       if (failures.length === 0) {
         const statuses = [...new Set(settlement.outcomes.map((outcome) => outcome.status))];
         return prompts.log.success(

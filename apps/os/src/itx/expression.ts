@@ -41,7 +41,7 @@ export const ItxExpressionStep: z.ZodType<ItxExpressionStep> = z
   ])
   .superRefine((step, context) => {
     const reserved = reservedItxPropertyName(step);
-    if (reserved === undefined) return;
+    if (!reserved) return;
     context.addIssue({
       code: "custom",
       message: `itx expressions cannot use reserved property name "${reserved}"`,
@@ -157,7 +157,7 @@ function assertItxExpression(expression: ItxExpression): void {
       throw new Error(`invalid itx expression step ${JSON.stringify(step)}`);
     }
     const reserved = reservedItxPropertyName(step);
-    if (reserved !== undefined) {
+    if (reserved) {
       throw new Error(`itx expression cannot use reserved property name "${reserved}"`);
     }
   }
@@ -170,5 +170,5 @@ function assertObjectLike(value: unknown, segment: string): asserts value is obj
 }
 
 function isObjectLike(value: unknown): value is object | Function {
-  return (typeof value === "object" && value !== null) || typeof value === "function";
+  return (typeof value === "object" && !!value) || typeof value === "function";
 }

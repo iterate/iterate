@@ -46,7 +46,7 @@ export function AppProviders<TConfig>(props: {
         attribute="class"
         defaultTheme={props.theme?.defaultTheme ?? "system"}
         enableSystem={props.theme?.enableSystem ?? true}
-        enableColorScheme={props.forcedTheme == null}
+        enableColorScheme={!props.forcedTheme}
         storageKey={props.theme?.storageKey ?? "theme"}
         disableTransitionOnChange
         forcedTheme={props.forcedTheme ?? props.theme?.forcedTheme}
@@ -79,5 +79,5 @@ function getPosthogApiKeyFromConfig(config: unknown) {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && !!value;
 }

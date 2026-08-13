@@ -58,9 +58,9 @@ export async function downloadPublicGithubTemplate(
     throw new Error("The GitHub repository tree is too large to copy as a config template.");
   }
 
-  const prefix = reference.path === undefined ? "" : `${reference.path}/`;
+  const prefix = !reference.path ? "" : `${reference.path}/`;
   if (
-    reference.path !== undefined &&
+    reference.path &&
     !tree.tree.some((entry) => entry.type === "tree" && entry.path === reference.path)
   ) {
     throw new Error(`Config template folder ${JSON.stringify(reference.path)} was not found.`);
@@ -74,7 +74,7 @@ export async function downloadPublicGithubTemplate(
       entry.type === "commit" ||
       (entry.type === "blob" && entry.mode !== "100644" && entry.mode !== "100755"),
   );
-  if (unsupportedEntry !== undefined) {
+  if (unsupportedEntry) {
     throw new Error(
       `Config templates cannot contain submodules or symbolic links (${unsupportedEntry.path}).`,
     );
@@ -105,7 +105,7 @@ export async function downloadPublicGithubTemplate(
         `The selected config template contains an unsafe path: ${JSON.stringify(file.path)}.`,
       );
     }
-    if (file.size === undefined) {
+    if (!Number.isFinite(file.size)) {
       throw new Error(
         `GitHub did not report the size of template file ${JSON.stringify(file.sourcePath)}.`,
       );
@@ -210,7 +210,7 @@ async function fetchGithub(
     }
     throw new Error(message);
   }
-  if (response.body === null) return new Uint8Array();
+  if (!response.body) return new Uint8Array();
 
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;

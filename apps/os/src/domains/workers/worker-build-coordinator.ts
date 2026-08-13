@@ -35,7 +35,7 @@ function describeWorkerBuildSource(source: WorkerBuildRequest["source"]): string
   }
   const { client, server } = source.createApp;
   const entries = [
-    ...(server === undefined ? [] : [`server=${server}`]),
+    ...(!server ? [] : [`server=${server}`]),
     ...(typeof client === "string" ? [client] : (client ?? [])).map((entry) => `client=${entry}`),
   ];
   return `createApp:${entries.join(",") || "(default entry)"}`;
@@ -73,7 +73,7 @@ export class WorkerBuildCoordinator {
 
   async build(request: WorkerBuildRequest): Promise<WorkerBuildResult> {
     const settled = this.#settled;
-    if (settled !== undefined) {
+    if (settled) {
       this.#assertBuildKey(settled.buildKey, request.buildKey);
       this.#observe({
         buildKey: request.buildKey,
@@ -86,7 +86,7 @@ export class WorkerBuildCoordinator {
     }
 
     const existing = this.#flight;
-    if (existing !== undefined) {
+    if (existing) {
       this.#assertBuildKey(existing.buildKey, request.buildKey);
       return await new Promise<WorkerBuildResult>((resolve, reject) => {
         existing.waiters.add({ reject, resolve });
@@ -146,8 +146,8 @@ export class WorkerBuildCoordinator {
       buildKey: flight.buildKey,
       ...(kind === "settled" && { durationMs: this.#now() - flight.startedAt }),
       kind,
-      ...(outcome === undefined ? {} : { outcome }),
-      ...(sizes === undefined ? {} : { sizes }),
+      ...(!outcome ? {} : { outcome }),
+      ...(!sizes ? {} : { sizes }),
       source: flight.source,
       waiters: flight.waiters.size,
     });

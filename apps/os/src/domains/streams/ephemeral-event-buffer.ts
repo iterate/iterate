@@ -69,7 +69,7 @@ export class EphemeralEventBuffer {
       // only its newest suffix.
       while (this.#bytes > this.#maxBytes) {
         const evicted = this.#events[this.#head];
-        if (evicted === undefined) {
+        if (!evicted) {
           throw new Error("ephemeral event buffer byte accounting became inconsistent");
         }
         this.#events[this.#head] = undefined;
@@ -91,7 +91,7 @@ export class EphemeralEventBuffer {
   getByOffset(offset: number): StreamEvent | undefined {
     for (let index = this.#head; index < this.#events.length; index += 1) {
       const entry = this.#events[index];
-      if (entry === undefined) continue;
+      if (!entry) continue;
       if (entry.event.offset === offset) return entry.event;
       if (entry.event.offset > offset) return undefined;
     }
@@ -106,17 +106,15 @@ export class EphemeralEventBuffer {
   }): SizedStreamEvent[] {
     if (args.eventTypes?.length === 0) return [];
     const eventTypes =
-      args.eventTypes === undefined || args.eventTypes.includes("*")
-        ? undefined
-        : new Set(args.eventTypes);
+      !args.eventTypes || args.eventTypes.includes("*") ? undefined : new Set(args.eventTypes);
     const selected: SizedStreamEvent[] = [];
     for (let index = this.#head; index < this.#events.length; index += 1) {
       const entry = this.#events[index];
-      if (entry === undefined) continue;
+      if (!entry) continue;
       const event = entry.event;
       if (event.offset <= args.afterOffset) continue;
       if (event.offset >= args.beforeOffset) break;
-      if (eventTypes !== undefined && !eventTypes.has(event.type)) continue;
+      if (eventTypes && !eventTypes.has(event.type)) continue;
       selected.push(entry);
       if (selected.length === args.limit) break;
     }

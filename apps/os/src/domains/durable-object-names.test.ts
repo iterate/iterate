@@ -25,7 +25,7 @@ describe("DurableObjectNameCodec", () => {
     },
   ])("$name", ({ input, options, expected }) => {
     expect(
-      options === undefined
+      !options
         ? DurableObjectNameCodec.stringify(input as { projectId: string; path: string })
         : DurableObjectNameCodec.stringify(input, options),
     ).toBe(expected);
@@ -50,9 +50,7 @@ describe("DurableObjectNameCodec", () => {
     },
   ])("$name", ({ input, options, expected }) => {
     expect(
-      options === undefined
-        ? DurableObjectNameCodec.parse(input)
-        : DurableObjectNameCodec.parse(input, options),
+      !options ? DurableObjectNameCodec.parse(input) : DurableObjectNameCodec.parse(input, options),
     ).toEqual(expected);
   });
 

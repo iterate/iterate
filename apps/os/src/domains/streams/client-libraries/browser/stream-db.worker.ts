@@ -75,7 +75,7 @@ async function openWithRetry(path: string): Promise<number> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= 60; attempt += 1) {
     try {
-      if (sqlite3 === undefined) throw new Error("sqlite not initialised");
+      if (!sqlite3) throw new Error("sqlite not initialised");
       return await sqlite3.open_v2(path, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, VFS_NAME);
     } catch (error) {
       lastError = error;
@@ -92,10 +92,10 @@ async function openWithRetry(path: string): Promise<number> {
 
 /** Runs one statement, collecting any result rows as plain objects. */
 async function exec(sql: string, params?: SqlValue[]): Promise<Record<string, SqlValue>[]> {
-  if (sqlite3 === undefined || db === undefined) throw new Error("db not initialised");
+  if (!sqlite3 || !Number.isFinite(db)) throw new Error("db not initialised");
   const rows: Record<string, SqlValue>[] = [];
   for await (const stmt of sqlite3.statements(db, sql)) {
-    if (params !== undefined && params.length > 0) sqlite3.bind_collection(stmt, params);
+    if (params && params.length > 0) sqlite3.bind_collection(stmt, params);
     const columns = sqlite3.column_names(stmt);
     while ((await sqlite3.step(stmt)) === SQLITE_ROW) {
       const values = sqlite3.row(stmt);
@@ -108,14 +108,14 @@ async function exec(sql: string, params?: SqlValue[]): Promise<Record<string, Sq
 }
 
 async function batch(statements: Statement[], transaction: boolean): Promise<void> {
-  if (sqlite3 === undefined || db === undefined) throw new Error("db not initialised");
+  if (!sqlite3 || !Number.isFinite(db)) throw new Error("db not initialised");
   if (transaction) await sqlite3.exec(db, "BEGIN IMMEDIATE;");
   try {
     for (const statement of statements) await exec(statement.sql, statement.params);
     if (transaction) await sqlite3.exec(db, "COMMIT;");
   } catch (error) {
     // Roll back in its own try/catch: a ROLLBACK failure must NOT replace the original
-    // error, or withBusyRetry/isBusyError can no longer classify the real busy error and
+    // error, or withBusyRetry can no longer classify the real busy error and
     // would stop retrying. Swallow (log) the rollback error and rethrow the original.
     if (transaction) {
       try {
@@ -137,16 +137,12 @@ async function withBusyRetry<T>(run: () => Promise<T>): Promise<T> {
     try {
       return await run();
     } catch (error) {
-      if (!isBusyError(error) || attempt >= 25) throw error;
+      const busy =
+        !!error && typeof error === "object" && "code" in error && error.code === SQLITE_BUSY;
+      if (!busy || attempt >= 25) throw error;
       await new Promise((resolve) => setTimeout(resolve, Math.min(50, 2 ** attempt)));
     }
   }
-}
-
-function isBusyError(error: unknown) {
-  return (
-    error !== null && typeof error === "object" && "code" in error && error.code === SQLITE_BUSY
-  );
 }
 
 async function exportFile(): Promise<ArrayBuffer> {
@@ -160,7 +156,7 @@ async function exportFile(): Promise<ArrayBuffer> {
 }
 
 async function closeDatabase(): Promise<void> {
-  if (sqlite3 !== undefined && db !== undefined) {
+  if (sqlite3 && Number.isFinite(db)) {
     await sqlite3.close(db);
   }
   db = undefined;

@@ -32,7 +32,7 @@ export function withOwnedRpcSession<T extends object>(stub: T, ...owned: Disposa
 }
 
 function dup(disposable: DisposableLike): DisposableLike {
-  if (disposable.dup === undefined) {
+  if (!disposable.dup) {
     throw new Error("Cannot dup scoped RPC stub because an owned stub does not expose dup()");
   }
   return disposable.dup();
@@ -47,5 +47,5 @@ function disposeAll(...disposables: DisposableLike[]): void {
       firstError ??= error;
     }
   }
-  if (firstError !== undefined) throw firstError;
+  if (firstError) throw firstError;
 }

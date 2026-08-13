@@ -224,7 +224,7 @@ export function normalizeTestTelemetryError(
   error: unknown,
   fallbackMessage = "Unknown test telemetry error",
 ): TestTelemetryError {
-  if (typeof error !== "object" || error === null) return { message: String(error) };
+  if (typeof error !== "object" || !error) return { message: String(error) };
   const candidate = error as { message?: unknown; name?: unknown; stack?: unknown };
   return {
     message: typeof candidate.message === "string" ? candidate.message : fallbackMessage,
@@ -277,7 +277,7 @@ export function writeTestTelemetryFailureSentinel(
       createdAt: input.startedAt,
       ci: input.ci,
       context: input.context,
-      ...(input.expectedArtifactSources === undefined
+      ...(!input.expectedArtifactSources
         ? {}
         : { expectedArtifactSources: [...input.expectedArtifactSources] }),
       run: {
@@ -331,7 +331,7 @@ export function resolveTestTelemetryArtifactPaths(
 }
 
 export function testTelemetryArtifactId(...parts: Array<string | number | undefined>) {
-  return parts.filter((part) => part !== undefined && part !== "").join(":");
+  return parts.filter((part) => part || part === 0).join(":");
 }
 
 export function testTelemetryContextFromEnvironment(

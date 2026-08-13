@@ -280,6 +280,12 @@
       }
     },
     {
+      "files": ["lint/**"],
+      "rules": {
+        "iterate/simple-truthiness-check": "off"
+      }
+    },
+    {
       "files": ["apps/os/src/rpc-targets.ts"],
       "rules": {
         "iterate/mechanical-class-impl": "error"

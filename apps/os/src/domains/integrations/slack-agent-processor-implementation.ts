@@ -127,7 +127,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     const { append, blockProcessorWhile, delivery, event, previousState, runInBackground, state } =
       args;
     const { birthCertificate } = state;
-    if (birthCertificate === null) return;
+    if (!birthCertificate) return;
 
     switch (event?.type) {
       case "events.iterate.com/agent/summary-updated": {
@@ -161,7 +161,7 @@ export class SlackAgentProcessor extends StreamProcessor<
               connection,
               channelId: channel,
               threadTs: event.payload.threadTs,
-              ...(name === null ? {} : { channelName: name }),
+              ...(!name ? {} : { channelName: name }),
             },
           });
         });
@@ -188,13 +188,12 @@ export class SlackAgentProcessor extends StreamProcessor<
             idempotencyKey: this.idempotencyKey("webhook-to-agent-context", event),
             payload: {
               role: "developer",
-              content:
-                input.contentNote === undefined
-                  ? slackWebhookAgentInput(event.payload)
-                  : `${slackWebhookAgentInput(event.payload)}\n\n${input.contentNote}`,
+              content: !input.contentNote
+                ? slackWebhookAgentInput(event.payload)
+                : `${slackWebhookAgentInput(event.payload)}\n\n${input.contentNote}`,
               actor: {
                 type: "slack",
-                ...(senderUserId == null ? {} : { userId: senderUserId }),
+                ...(!senderUserId ? {} : { userId: senderUserId }),
               },
               refs: [
                 {
@@ -204,10 +203,8 @@ export class SlackAgentProcessor extends StreamProcessor<
                   eventType: event.type,
                 },
               ],
-              ...(input.files == null || input.files.length === 0 ? {} : { files: input.files }),
-              ...(input.llmRequestPolicy == null
-                ? {}
-                : { llmRequestPolicy: input.llmRequestPolicy }),
+              ...(!input.files || input.files.length === 0 ? {} : { files: input.files }),
+              ...(!input.llmRequestPolicy ? {} : { llmRequestPolicy: input.llmRequestPolicy }),
             },
           });
         };
@@ -261,7 +258,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           message: messageText,
           threadTs,
         });
-        if (bangCommand != null) {
+        if (bangCommand) {
           // Explicit !commands are directed at the bot even without an
           // @mention.
           blockProcessorWhile(async () => {
@@ -308,7 +305,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           const sharedFiles = readSlackMessageFiles(slackEvent);
           let files: AgentFileAttachment[] | undefined;
           let attachmentFailureNote: string | undefined;
-          if (sharedFiles.length > 0 && this.deps.storeSlackFiles != null) {
+          if (sharedFiles.length > 0 && this.deps.storeSlackFiles) {
             try {
               files = await this.deps.storeSlackFiles({
                 connection: birthCertificate.config.connection,
@@ -326,8 +323,8 @@ export class SlackAgentProcessor extends StreamProcessor<
             }
           }
           await appendAgentMessage({
-            ...(attachmentFailureNote === undefined ? {} : { contentNote: attachmentFailureNote }),
-            ...(files == null ? {} : { files }),
+            ...(!attachmentFailureNote ? {} : { contentNote: attachmentFailureNote }),
+            ...(!files ? {} : { files }),
             ...(shouldTriggerLlm
               ? {}
               : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
@@ -373,7 +370,7 @@ export class SlackAgentProcessor extends StreamProcessor<
   }: ReduceArgs<SlackAgentProcessorContract>): SlackAgentProcessorState {
     switch (event.type) {
       case "events.iterate.com/slack-agent/created":
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return {
           ...state,
           birthCertificate: event.payload,
@@ -392,7 +389,7 @@ export class SlackAgentProcessor extends StreamProcessor<
         };
       case "events.iterate.com/slack/webhook-received": {
         const target = slackAgentTargetFromWebhookPayload(event.payload);
-        if (target == null) return state;
+        if (!target) return state;
         const botUserId = state.botUserId ?? botUserIdFromPayload(event.payload);
         const botBotId = state.botBotId ?? botBotIdFromPayload(event.payload);
         const channelType = slackChannelTypeFromWebhookPayload(event.payload);
@@ -400,7 +397,7 @@ export class SlackAgentProcessor extends StreamProcessor<
         const getsEyesReaction =
           !target.isBotMessage &&
           !target.isReactionEvent &&
-          target.messageTs !== undefined &&
+          !!target.messageTs &&
           (mentioned ||
             slackWebhookCompilesBangCommand(
               event.payload,
@@ -409,10 +406,10 @@ export class SlackAgentProcessor extends StreamProcessor<
             ));
         return {
           ...state,
-          ...(botBotId == null ? {} : { botBotId }),
-          ...(botUserId == null ? {} : { botUserId }),
+          ...(!botBotId ? {} : { botBotId }),
+          ...(!botUserId ? {} : { botUserId }),
           channel: target.channel,
-          ...(channelType == null ? {} : { channelType }),
+          ...(!channelType ? {} : { channelType }),
           conversationActive: state.conversationActive || mentioned,
           ...(getsEyesReaction && { eyesReactionMessageTs: target.messageTs }),
           threadTs: target.threadTs,
@@ -439,9 +436,9 @@ export class SlackAgentProcessor extends StreamProcessor<
     state: SlackAgentProcessorState,
     transition: AgentRuntimeTransition,
   ): void {
-    if (state.birthCertificate === null) return;
+    if (!state.birthCertificate) return;
     const generation = ++this.#runtimePresentationGeneration;
-    if (this.#runtimeIdleTimer !== undefined) {
+    if (this.#runtimeIdleTimer) {
       clearTimeout(this.#runtimeIdleTimer);
       this.#runtimeIdleTimer = undefined;
     }
@@ -471,7 +468,7 @@ export class SlackAgentProcessor extends StreamProcessor<
 
   disposeRuntimePresentation(): void {
     ++this.#runtimePresentationGeneration;
-    if (this.#runtimeIdleTimer !== undefined) {
+    if (this.#runtimeIdleTimer) {
       clearTimeout(this.#runtimeIdleTimer);
       this.#runtimeIdleTimer = undefined;
     }
@@ -487,11 +484,11 @@ export class SlackAgentProcessor extends StreamProcessor<
     runtime: AgentRuntime,
     generation: number,
   ): Promise<void> {
-    if (generation !== this.#runtimePresentationGeneration || state.birthCertificate === null) {
+    if (generation !== this.#runtimePresentationGeneration || !state.birthCertificate) {
       return;
     }
     const { channel, channelType, eyesReactionMessageTs, summary, threadTs } = state;
-    if (channel == null || threadTs == null) return;
+    if (!channel || !threadTs) return;
     const connection = state.birthCertificate.config.connection;
     const hasAssistantThreadUi = slackConversationHasAssistantThreadUi({
       channel,
@@ -499,7 +496,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     });
     const fallbackActivity = fallbackActivityForRuntime(runtime);
 
-    if (fallbackActivity !== undefined) {
+    if (fallbackActivity) {
       if (!hasAssistantThreadUi || generation !== this.#runtimePresentationGeneration) return;
       await this.#paintActivityStatus({
         activity: summary.activity,
@@ -512,11 +509,11 @@ export class SlackAgentProcessor extends StreamProcessor<
     }
 
     if (generation !== this.#runtimePresentationGeneration) return;
-    if (this.#paintedActivityText === undefined && eyesReactionMessageTs == null) return;
+    if (!this.#paintedActivityText && !eyesReactionMessageTs) return;
     await this.#clearStatus({
       channel,
       connection,
-      ...(eyesReactionMessageTs == null ? {} : { eyesReactionMessageTs }),
+      ...(!eyesReactionMessageTs ? {} : { eyesReactionMessageTs }),
       hasAssistantThreadUi,
       threadTs,
     });
@@ -536,7 +533,7 @@ export class SlackAgentProcessor extends StreamProcessor<
   }): Promise<void> {
     const paintedText = `${input.activity ?? input.fallbackActivity}…`;
     if (paintedText === this.#paintedActivityText) return;
-    if (this.deps.callSlackApi == null) return;
+    if (!this.deps.callSlackApi) return;
     await this.#callSlackApi(input.connection, "assistant.threads.setStatus", {
       channel_id: input.channel,
       thread_ts: input.threadTs,
@@ -562,11 +559,11 @@ export class SlackAgentProcessor extends StreamProcessor<
     this.#unpaintedPresenceFact = undefined;
     this.#unpaintedRevival = false;
     this.#titleRepaintDue = false;
-    if (latest == null) return;
-    if (args.state.birthCertificate === null) return;
+    if (!latest) return;
+    if (!args.state.birthCertificate) return;
     const connection = args.state.birthCertificate.config.connection;
     const { channel, channelType, eyesReactionMessageTs, summary, threadTs } = args.state;
-    if (channel == null || threadTs == null) return;
+    if (!channel || !threadTs) return;
     const fresh = webhookAckIsFresh(latest, this.#now());
     const hasAssistantThreadUi = slackConversationHasAssistantThreadUi({ channel, channelType });
 
@@ -580,7 +577,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (
       hasAssistantThreadUi &&
       slackTitle !== this.#paintedTitle &&
-      (title !== undefined || titleRepaint || this.#paintedTitle !== undefined)
+      (title || titleRepaint || this.#paintedTitle)
     ) {
       await this.#callSlackApi(connection, "assistant.threads.setTitle", {
         channel_id: channel,
@@ -594,7 +591,7 @@ export class SlackAgentProcessor extends StreamProcessor<
       this.deps.getAgentRuntimeTransition?.()?.runtime ?? ZERO_AGENT_RUNTIME,
     );
 
-    if (fallbackActivity !== undefined) {
+    if (fallbackActivity) {
       if (!fresh || !hasAssistantThreadUi) return;
       await this.#paintActivityStatus({
         activity: summary.activity,
@@ -610,7 +607,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     await this.#clearStatus({
       channel,
       connection,
-      ...(eyesReactionMessageTs == null ? {} : { eyesReactionMessageTs }),
+      ...(!eyesReactionMessageTs ? {} : { eyesReactionMessageTs }),
       hasAssistantThreadUi,
       threadTs,
     });
@@ -631,7 +628,7 @@ export class SlackAgentProcessor extends StreamProcessor<
         status: "",
       });
     }
-    if (target.eyesReactionMessageTs != null) {
+    if (target.eyesReactionMessageTs) {
       await this.#callSlackApi(target.connection, "reactions.remove", {
         channel: target.channel,
         name: "eyes",
@@ -649,15 +646,10 @@ export class SlackAgentProcessor extends StreamProcessor<
     event: { createdAt: string },
     previousMessageTs: string | undefined,
   ) {
-    if (
-      target == null ||
-      target.isBotMessage ||
-      target.isReactionEvent ||
-      target.messageTs == null
-    ) {
+    if (!target || target.isBotMessage || target.isReactionEvent || !target.messageTs) {
       return;
     }
-    if (previousMessageTs != null && previousMessageTs !== target.messageTs) {
+    if (previousMessageTs && previousMessageTs !== target.messageTs) {
       await this.#callSlackApi(connection, "reactions.remove", {
         channel: target.channel,
         name: "eyes",
@@ -680,10 +672,10 @@ export class SlackAgentProcessor extends StreamProcessor<
    * once and settled — this is a cosmetic lane and must never wedge the
    * durable pipeline in a retry loop. */
   async #callSlackApi(connection: string, method: string, body: Record<string, unknown>) {
-    if (body.timestamp == null && (method === "reactions.add" || method === "reactions.remove")) {
+    if (!body.timestamp && (method === "reactions.add" || method === "reactions.remove")) {
       return;
     }
-    if (this.deps.callSlackApi == null) return;
+    if (!this.deps.callSlackApi) return;
 
     try {
       await this.deps.callSlackApi({ body, connection, method });
@@ -770,7 +762,7 @@ function fallbackActivityForRuntime(runtime: AgentRuntime): string | undefined {
  */
 function slackWebhookSenderUserId(body: unknown): string | undefined {
   const record = readRecord(body);
-  if (record == null) return undefined;
+  if (!record) return undefined;
   return (
     readString(readRecord(record.event)?.user) ??
     readString(readRecord(record.user)?.id) ??
@@ -837,12 +829,12 @@ function slackWebhookAgentInput(payload: unknown) {
 
 function curateSlackWebhookPayload(payload: unknown): unknown {
   const record = readRecord(payload);
-  if (record == null) return payload;
+  if (!record) return payload;
   // headers are transport dedup facts (event id, request timestamp) — the
   // curated body already carries everything the model can act on.
   const { headers: _headers, ...envelope } = record;
   const body = readRecord(record.body);
-  if (body == null) return envelope;
+  if (!body) return envelope;
   const curatedBody: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(body)) {
     if (SLACK_ENVELOPE_NOISE.has(key)) continue;
@@ -853,7 +845,7 @@ function curateSlackWebhookPayload(payload: unknown): unknown {
 
 function curateSlackEvent(event: unknown): unknown {
   const record = readRecord(event);
-  if (record == null) return event;
+  if (!record) return event;
   const curated: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
     if (SLACK_EVENT_NOISE.has(key)) continue;
@@ -864,18 +856,18 @@ function curateSlackEvent(event: unknown): unknown {
 
 function curateSlackFile(file: unknown): unknown {
   const record = readRecord(file);
-  if (record == null) return file;
+  if (!record) return file;
   const curated: Record<string, unknown> = {};
   for (const key of SLACK_FILE_KEYS) {
-    if (record[key] !== undefined) curated[key] = record[key];
+    if (record[key]) curated[key] = record[key];
   }
   return curated;
 }
 
 function isBotMessage(slackEvent: Record<string, unknown>): boolean {
   if (readString(slackEvent.subtype) === "bot_message") return true;
-  if (readString(slackEvent.bot_id) != null) return true;
-  if (readRecord(slackEvent.bot_profile) != null) return true;
+  if (readString(slackEvent.bot_id)) return true;
+  if (readRecord(slackEvent.bot_profile)) return true;
   return false;
 }
 
@@ -892,14 +884,14 @@ function isOwnBotMessage(
 
   let comparedIdentity = false;
   const msgBotId = readString(slackEvent.bot_id);
-  if (identity.botBotId != null && msgBotId != null) {
+  if (identity.botBotId && msgBotId) {
     comparedIdentity = true;
     if (msgBotId === identity.botBotId) return true;
   }
 
   const msgUserId =
     readString(slackEvent.user) ?? readString(readRecord(slackEvent.bot_profile)?.user_id);
-  if (identity.botUserId != null && msgUserId != null) {
+  if (identity.botUserId && msgUserId) {
     comparedIdentity = true;
     if (msgUserId === identity.botUserId) return true;
   }
@@ -912,7 +904,7 @@ function isOwnBotMessage(
  * our bot adding a reaction).
  */
 function isBotAction(slackEvent: Record<string, unknown>, botUserId: string | undefined): boolean {
-  if (botUserId == null) return false;
+  if (!botUserId) return false;
   return readString(slackEvent.user) === botUserId;
 }
 
@@ -924,12 +916,12 @@ function readSlackMessageFiles(slackEvent: Record<string, unknown>): SlackShared
   for (const file of files) {
     const record = readRecord(file);
     const urlPrivate = readString(record?.url_private);
-    if (record == null || urlPrivate == null) continue;
+    if (!record || !urlPrivate) continue;
     const mimetype = readString(record.mimetype);
     const name = readString(record.name);
     shared.push({
-      ...(mimetype == null ? {} : { mimetype }),
-      ...(name == null ? {} : { name }),
+      ...(!mimetype ? {} : { mimetype }),
+      ...(!name ? {} : { name }),
       urlPrivate,
     });
   }
@@ -952,7 +944,7 @@ export function compileBangCommand(input: {
   if (!rawCommand) return null;
 
   if (rawCommand === "debug" || rawCommand === "debug()") {
-    if (input.channel == null || input.threadTs == null || input.connection == null) return null;
+    if (!input.channel || !input.threadTs || !input.connection) return null;
     return {
       code: [
         "async (itx) => {",
@@ -993,12 +985,12 @@ function botUserIdFromPayload(payload: unknown): string | undefined {
   const botAuth = authorizations.find(
     (auth) => readRecord(auth)?.is_bot === true && typeof readRecord(auth)?.user_id === "string",
   );
-  return botAuth == null ? undefined : readString(readRecord(botAuth)?.user_id);
+  return !botAuth ? undefined : readString(readRecord(botAuth)?.user_id);
 }
 
 /** True when message text encodes a Slack user mention of our bot (`<@U…>`). */
 function slackTextMentionsBot(text: string | undefined, botUserId: string | undefined): boolean {
-  if (text == null || botUserId == null || botUserId.length === 0) return false;
+  if (!text || !botUserId || botUserId.length === 0) return false;
   // Slack encodes mentions as <@U123> or <@U123|display name>.
   return text.includes(`<@${botUserId}>`) || text.includes(`<@${botUserId}|`);
 }
@@ -1010,7 +1002,7 @@ function slackTextMentionsBot(text: string | undefined, botUserId: string | unde
 function slackWebhookMentionsOurBot(payload: unknown, botUserId: string | undefined): boolean {
   const body = readRecord(readRecord(payload)?.body);
   const slackEvent = readRecord(body?.event);
-  if (slackEvent == null) return false;
+  if (!slackEvent) return false;
   if (readString(slackEvent.type) === "app_mention") return true;
   return slackTextMentionsBot(readString(slackEvent.text), botUserId);
 }
@@ -1022,17 +1014,15 @@ function slackWebhookCompilesBangCommand(
 ): boolean {
   const body = readRecord(readRecord(payload)?.body);
   const slackEvent = readRecord(body?.event);
-  if (slackEvent == null) return false;
+  if (!slackEvent) return false;
   const eventType = readString(slackEvent.type);
   if (eventType !== "message" && eventType !== "app_mention") return false;
-  return (
-    compileBangCommand({
-      channel: target.channel,
-      connection,
-      message: readString(slackEvent.text)?.trim(),
-      threadTs: target.threadTs,
-    }) !== null
-  );
+  return !!compileBangCommand({
+    channel: target.channel,
+    connection,
+    message: readString(slackEvent.text)?.trim(),
+    threadTs: target.threadTs,
+  });
 }
 
 function botBotIdFromPayload(payload: unknown): string | undefined {
@@ -1042,13 +1032,13 @@ function botBotIdFromPayload(payload: unknown): string | undefined {
   const botAuth = authorizations.find(
     (auth) => readRecord(auth)?.is_bot === true && typeof readRecord(auth)?.bot_id === "string",
   );
-  return botAuth == null ? undefined : readString(readRecord(botAuth)?.bot_id);
+  return !botAuth ? undefined : readString(readRecord(botAuth)?.bot_id);
 }
 
 function slackAgentTargetFromWebhookPayload(payload: unknown): SlackAgentTarget | null {
   const body = readRecord(readRecord(payload)?.body);
   const slackEvent = readRecord(body?.event);
-  if (slackEvent == null) return null;
+  if (!slackEvent) return null;
 
   const item = readRecord(slackEvent.item);
   const message = readRecord(slackEvent.message);
@@ -1060,7 +1050,7 @@ function slackAgentTargetFromWebhookPayload(payload: unknown): SlackAgentTarget 
     readString(slackEvent.ts) ??
     readString(item?.ts) ??
     readString(message?.ts);
-  if (channel == null || threadTs == null) return null;
+  if (!channel || !threadTs) return null;
 
   const type = readString(slackEvent.type);
   const messageTs = readString(slackEvent.ts) ?? readString(message?.ts);
@@ -1068,10 +1058,10 @@ function slackAgentTargetFromWebhookPayload(payload: unknown): SlackAgentTarget 
     channel,
     isBotMessage:
       readString(slackEvent.subtype) === "bot_message" ||
-      readString(slackEvent.bot_id) != null ||
-      readRecord(slackEvent.bot_profile) != null,
+      !!readString(slackEvent.bot_id) ||
+      !!readRecord(slackEvent.bot_profile),
     isReactionEvent: type === "reaction_added" || type === "reaction_removed",
-    ...(messageTs == null ? {} : { messageTs }),
+    ...(!messageTs ? {} : { messageTs }),
     threadTs,
   };
 }
@@ -1089,7 +1079,7 @@ function slackConversationHasAssistantThreadUi(input: {
   channel: string;
   channelType?: string;
 }): boolean {
-  return input.channelType === "im" || (input.channelType == null && input.channel.startsWith("D"));
+  return input.channelType === "im" || (!input.channelType && input.channel.startsWith("D"));
 }
 
 /**
@@ -1107,13 +1097,13 @@ export function eyesReactionTargetFromWebhookPayload(
   payload: unknown,
 ): { channel: string; timestamp: string } | null {
   const target = slackAgentTargetFromWebhookPayload(payload);
-  if (target == null || target.isBotMessage || target.isReactionEvent) return null;
-  if (target.messageTs == null) return null;
+  if (!target || target.isBotMessage || target.isReactionEvent) return null;
+  if (!target.messageTs) return null;
   const body = readRecord(readRecord(payload)?.body);
   const slackEvent = readRecord(body?.event);
   const eventUserId = readString(slackEvent?.user);
   const botUserId = botUserIdFromPayload(payload);
-  if (eventUserId != null && botUserId != null && eventUserId === botUserId) return null;
+  if (eventUserId && botUserId && eventUserId === botUserId) return null;
   // Fast-ack only when this delivery is a mention of us. Follow-ups after
   // thread activation still wake the agent, but they do not re-add 👀 at the
   // router hop (the agent-side path also eyes only on mentions).

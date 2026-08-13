@@ -197,9 +197,9 @@ function isRpcStubLike(value: unknown): value is { dup(): unknown } {
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (!isObjectLike(value) || typeof value === "function") return false;
   const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
+  return proto === Object.prototype || !proto;
 }
 
 function isObjectLike(value: unknown): value is object | ((...args: never[]) => unknown) {
-  return value !== null && (typeof value === "object" || typeof value === "function");
+  return !!value && (typeof value === "object" || typeof value === "function");
 }

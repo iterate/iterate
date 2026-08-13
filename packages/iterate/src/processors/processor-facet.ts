@@ -152,12 +152,12 @@ export function facetProcessorDurableObjectState(
 export function plainAlarmInvocationInfo(
   info: AlarmInvocationInfo | undefined,
 ): AlarmInvocationInfo | undefined {
-  if (info === undefined) return undefined;
+  if (!info) return undefined;
   // scheduledTime is absent from this package's ambient AlarmInvocationInfo
   // but present at runtime (and in apps/os's patched types) — carry it through.
   const { scheduledTime } = info as { scheduledTime?: number };
   return {
-    ...(scheduledTime === undefined ? {} : { scheduledTime }),
+    ...(!Number.isFinite(scheduledTime) ? {} : { scheduledTime }),
     isRetry: info.isRetry,
     retryCount: info.retryCount,
   } as AlarmInvocationInfo;
@@ -219,7 +219,7 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
     // run; failures here only defer construction to the first RPC verb.
     void Promise.resolve().then(() => {
       try {
-        if (this.#readIdentity() !== undefined) this.#requireHost();
+        if (this.#readIdentity()) this.#requireHost();
       } catch (error) {
         console.error("ProcessorFacet boot host construction failed", error);
       }
@@ -249,7 +249,7 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
    */
   configure(identity: ProcessorFacetIdentity): void {
     const stashed = this.#readIdentity();
-    if (stashed !== undefined) {
+    if (stashed) {
       if (
         stashed.parentName !== identity.parentName ||
         stashed.projectId !== identity.projectId ||
@@ -288,7 +288,7 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
    * so the parent can rethrow and get the platform's alarm retry.
    */
   async handleAlarm(info?: AlarmInvocationInfo): Promise<void> {
-    if (this.#readIdentity() === undefined) {
+    if (!this.#readIdentity()) {
       // No identity means no keepalive record either — nothing to revive. Do
       // not throw: the parent would rethrow into the platform's alarm retry
       // loop with nothing to retry for.
@@ -367,14 +367,14 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
 
   #requireIdentity(): ProcessorFacetIdentity {
     const identity = this.#readIdentity();
-    if (identity === undefined) {
+    if (!identity) {
       throw new Error("ProcessorFacet has no stashed identity yet — call configure() first");
     }
     return identity;
   }
 
   #requireHost(): { registry: StreamProcessorRegistry } {
-    if (this.#host === undefined) {
+    if (!this.#host) {
       const identity = this.#requireIdentity();
       const host = this.createHost(identity);
       const registry = createStreamProcessorRegistry(
@@ -389,8 +389,8 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
           path: identity.path,
           projectId: identity.projectId,
           version: host.version,
-          ...(host.now === undefined ? {} : { now: host.now }),
-          ...(host.getLiveState === undefined ? {} : { getLiveState: host.getLiveState }),
+          ...(!host.now ? {} : { now: host.now }),
+          ...(!host.getLiveState ? {} : { getLiveState: host.getLiveState }),
         },
       );
       host.registerProcessors(registry);
@@ -401,7 +401,7 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
 
   #reads(name: string | undefined) {
     const { registry } = this.#requireHost();
-    if (name !== undefined) return registry.reads(name);
+    if (name) return registry.reads(name);
     const names = registry.names;
     if (names.length === 1) return registry.reads(names[0]!);
     throw new Error(

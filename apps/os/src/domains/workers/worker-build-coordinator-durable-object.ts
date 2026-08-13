@@ -31,26 +31,25 @@ export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
 
   async build(request: WorkerBuildRequest, buildBudgetMs?: number): Promise<WorkerBuildResult> {
     this.#assertRequest(request);
-    if (buildBudgetMs !== undefined && (!Number.isFinite(buildBudgetMs) || buildBudgetMs < 0)) {
+    if (Number.isFinite(buildBudgetMs) && (!Number.isFinite(buildBudgetMs) || buildBudgetMs < 0)) {
       throw new TypeError("worker build budget must be a non-negative finite number");
     }
     const terminalFailure = this.#takeTerminalFailure();
-    if (terminalFailure !== undefined) return { failure: terminalFailure, ok: false };
+    if (terminalFailure) return { failure: terminalFailure, ok: false };
 
     const operation = this.#coordinator.build(request);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const result =
-        buildBudgetMs === undefined
-          ? await operation
-          : await Promise.race([
-              operation,
-              new Promise<never>((_, reject) => {
-                timer = setTimeout(() => {
-                  this.enqueue(request).then(() => reject(workerBuildInProgressError()), reject);
-                }, buildBudgetMs);
-              }),
-            ]);
+      const result = !Number.isFinite(buildBudgetMs)
+        ? await operation
+        : await Promise.race([
+            operation,
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                this.enqueue(request).then(() => reject(workerBuildInProgressError()), reject);
+              }, buildBudgetMs);
+            }),
+          ]);
       // The foreground caller received this exact terminal result, so there is
       // no later caller to inform. Receipts remain only when timeout/alarm
       // ownership outlives the caller that started the operation.
@@ -71,7 +70,7 @@ export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
   /** Alarm ownership survives the caller, actor eviction, and transient build failure. */
   async alarm(): Promise<void> {
     const request = this.ctx.storage.kv.get<WorkerBuildRequest>(QUEUED_BUILD_STORAGE_KEY);
-    if (request === undefined) return;
+    if (!request) return;
     this.#assertRequest(request);
     if (this.#hasTerminalFailure()) {
       this.ctx.storage.kv.delete(QUEUED_BUILD_STORAGE_KEY);
@@ -90,14 +89,12 @@ export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
   }
 
   #hasTerminalFailure(): boolean {
-    return (
-      this.ctx.storage.kv.get<WorkerBuildFailure>(TERMINAL_BUILD_FAILURE_STORAGE_KEY) !== undefined
-    );
+    return !!this.ctx.storage.kv.get<WorkerBuildFailure>(TERMINAL_BUILD_FAILURE_STORAGE_KEY);
   }
 
   #takeTerminalFailure(): WorkerBuildFailure | undefined {
     const failure = this.ctx.storage.kv.get<WorkerBuildFailure>(TERMINAL_BUILD_FAILURE_STORAGE_KEY);
-    if (failure !== undefined) this.ctx.storage.kv.delete(TERMINAL_BUILD_FAILURE_STORAGE_KEY);
+    if (failure) this.ctx.storage.kv.delete(TERMINAL_BUILD_FAILURE_STORAGE_KEY);
     return failure;
   }
 

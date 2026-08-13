@@ -53,7 +53,7 @@ describe("agent path forest", () => {
       [child.path]: child,
     });
     const research = agentsRoot?.children[0];
-    if (research === undefined) throw new Error("missing research path node");
+    if (!research) throw new Error("missing research path node");
 
     expect(agentPathNodeRuntime(research, ZERO_AGENT_RUNTIME).runningScripts).toBe(2);
   });

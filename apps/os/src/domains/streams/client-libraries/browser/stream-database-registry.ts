@@ -12,7 +12,7 @@ export function acquireDatabase(
 ): { db: StreamBrowserDatabase; release: () => void } {
   const key = `${projectId}\0${streamPath}`;
   let entry = databaseRegistry.get(key);
-  if (entry === undefined) {
+  if (!entry) {
     entry = { db: new StreamBrowserDatabase(projectId, streamPath), refs: 0 };
     databaseRegistry.set(key, entry);
   }

@@ -74,7 +74,7 @@ export class DeviceDurableObject extends DurableObject<Env> {
     const snapshot = await this.#snapshot();
     const existingOwner = snapshot.state.birthCertificate?.config.ownerId;
     const pushTokenSecretUpdatedOffset = await this.#putPushTokenSecret(input.expoPushToken);
-    if (existingOwner === undefined) {
+    if (!existingOwner) {
       const committed = await this.#appendAfterPushTokenSecretUpdate(
         pushTokenSecretUpdatedOffset,
         ...deviceCreationEvents({
@@ -130,7 +130,7 @@ export class DeviceDurableObject extends DurableObject<Env> {
 
   async append(...events: DeviceAppendInput[]) {
     const snapshot = await this.#snapshot();
-    if (snapshot.state.birthCertificate === null) throw new Error("device has not been enrolled");
+    if (!snapshot.state.birthCertificate) throw new Error("device has not been enrolled");
     const parsed = events.map((event) => {
       const consumed = DeviceProcessorContract.parseConsumedInput(event);
       if (!PUBLIC_DEVICE_EVENT_TYPES.has(consumed.type as never)) {
@@ -151,8 +151,8 @@ export class DeviceDurableObject extends DurableObject<Env> {
 
   async #revoke(reason: "disabled" | "permission-denied" | "sign-out") {
     const snapshot = await this.#snapshot();
-    if (snapshot.state.birthCertificate === null) return null;
-    if (snapshot.state.pushTokenSecret !== null) {
+    if (!snapshot.state.birthCertificate) return null;
+    if (snapshot.state.pushTokenSecret) {
       await this.#clearPushTokenSecret({
         pushTokenSecretPath: snapshot.state.pushTokenSecret.path,
         pushTokenSecretUpdatedOffset: snapshot.state.pushTokenSecret.updatedOffset,
@@ -260,11 +260,11 @@ export function describeDeviceState(
   const config = state.birthCertificate?.config;
   return {
     appVersion: config?.appVersion || null,
-    created: config !== undefined,
+    created: !!config,
     deviceId,
     label: config?.label || null,
     lastNotificationOpenedAt: state.lastNotificationOpenedAt,
-    notificationsStatus: state.revokedAt !== null ? "revoked" : config?.notificationsStatus || null,
+    notificationsStatus: state.revokedAt ? "revoked" : config?.notificationsStatus || null,
     ownerId: config?.ownerId || null,
     platform: config?.platform || null,
     revokedAt: state.revokedAt,

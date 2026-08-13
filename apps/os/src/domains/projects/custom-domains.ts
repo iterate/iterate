@@ -133,7 +133,7 @@ export function createCloudflareCustomDomainProvisioner(options: {
         options.directory,
         normalized,
       );
-      if (registeredProject === null) return;
+      if (!registeredProject) return;
       if (registeredProject.id !== project.id) {
         throw new Error(`"${normalized}" is already routed to another project.`);
       }
@@ -194,7 +194,7 @@ async function assertHostnameAvailable(input: {
   if (covered && covered.record.id !== input.projectId) {
     throw new Error(
       `"${input.hostname}" is already covered by ${
-        covered.appSlug === null ? "a custom domain" : "a custom-domain app route"
+        !covered.appSlug ? "a custom domain" : "a custom-domain app route"
       }.`,
     );
   }

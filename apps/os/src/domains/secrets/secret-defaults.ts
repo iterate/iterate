@@ -52,7 +52,7 @@ export function secretCreationEvents(input: {
         idempotencyKey: `secret/created:${projectId}:${path}`,
         payload,
       }),
-      ...(offset === undefined ? {} : { offset }),
+      ...(!Number.isFinite(offset) ? {} : { offset }),
     } as StreamEventInput,
     buildFacetProcessorSubscriptionConfiguredEvent({
       idempotencyKey: `stream/subscription-configured:${SecretProcessorContract.slug}`,

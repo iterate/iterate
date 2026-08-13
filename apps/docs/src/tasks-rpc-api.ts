@@ -230,7 +230,7 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
       return Object.fromEntries(
         Object.entries(versions).flatMap(([path, version]) => {
           const key = this.#repoRelative(path);
-          return key === null ? [] : [[key, version]];
+          return !key ? [] : [[key, version]];
         }),
       );
     });
@@ -245,7 +245,7 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
     flat.paths.forEach((path, index) => {
       const clientId = flat.clientIds[index];
       const key = this.#repoRelative(path);
-      if (clientId !== undefined && key !== null) (summary[key] ??= []).push(clientId);
+      if (clientId && key) (summary[key] ??= []).push(clientId);
     });
     return summary;
   }
@@ -343,7 +343,7 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
       return Object.fromEntries(
         Object.entries(contents).flatMap(([path, content]) => {
           const key = this.#repoRelative(path);
-          return content === null || key === null ? [] : [[key, content]];
+          return !content || !key ? [] : [[key, content]];
         }),
       );
     });
@@ -390,9 +390,9 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
   async assignAgent(path: string): Promise<{ agentPath: string }> {
     this.#assertOwnerAct("assignAgent");
     const source = await this.#withWorkspace((ws) => ws.readFile(this.#qualified(path)));
-    if (source === null) throw new Error(`${path} does not exist in this workspace`);
+    if (!source) throw new Error(`${path} does not exist in this workspace`);
     const card = parseTaskCard(path, source);
-    if (card.agent !== null) return { agentPath: card.agent };
+    if (card.agent) return { agentPath: card.agent };
     const agentPath = taskAgentPath(this.#repoPath, path);
     const staged =
       taskColumnState(card.state) === "in-progress"
@@ -411,7 +411,7 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
         agentPath,
       );
       const snapshot = await agent.processor.snapshot();
-      if ((snapshot.state?.birthCertificate ?? null) === null) await agent.create();
+      if (!(snapshot.state?.birthCertificate ?? null)) await agent.create();
       await agent.message(taskAssignmentInstructions(this.#repoPath, path));
     });
     return { agentPath };

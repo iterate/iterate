@@ -289,7 +289,7 @@ function ProjectSecretsIndexContent() {
         </Sheet>
       </div>
 
-      {secretsList === undefined ? (
+      {!secretsList ? (
         <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
           Loading secrets…
         </div>

@@ -74,17 +74,16 @@ async function resolveThroughBuild(input: {
     source: input.source,
   });
   const memoized = resolvedArtifactMemo.get(buildKey);
-  const built =
-    memoized === undefined
-      ? await resolveArtifact(buildKey, {
-          buildBudgetMs: input.buildBudgetMs,
-          projectId: input.projectId,
-          resolved,
-          iterateRepoPkgRef,
-          iterateRepoPkgSpecOverrides,
-          source: input.source,
-        })
-      : { ok: true as const, source: memoized };
+  const built = !memoized
+    ? await resolveArtifact(buildKey, {
+        buildBudgetMs: input.buildBudgetMs,
+        projectId: input.projectId,
+        resolved,
+        iterateRepoPkgRef,
+        iterateRepoPkgSpecOverrides,
+        source: input.source,
+      })
+    : { ok: true as const, source: memoized };
   if (!built.ok) return built;
   return {
     ok: true,
@@ -106,7 +105,7 @@ async function resolveArtifact(
 ): Promise<ResolvedWorkerSourceResult> {
   const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
   const artifact = await store.get(buildKey);
-  if (artifact !== null) return { ok: true, source: memoizeArtifact(artifact) };
+  if (artifact) return { ok: true, source: memoizeArtifact(artifact) };
 
   const request: WorkerBuildRequest = {
     buildKey,
@@ -142,7 +141,7 @@ function memoizeArtifact(artifact: WorkerBuildArtifact): ResolvedWorkerSource {
   };
   if (resolvedArtifactMemo.size >= RESOLVED_ARTIFACT_MEMO_LIMIT) {
     const oldest = resolvedArtifactMemo.keys().next().value;
-    if (oldest !== undefined) resolvedArtifactMemo.delete(oldest);
+    if (oldest) resolvedArtifactMemo.delete(oldest);
   }
   resolvedArtifactMemo.set(artifact.buildKey, resolved);
   return resolved;
@@ -159,7 +158,7 @@ async function resolveFileSource({
   if (files.type === "inline") {
     return { files: files.files, type: "inline" };
   }
-  if (files.ref !== undefined && "commitOid" in files.ref) {
+  if (files.ref && "commitOid" in files.ref) {
     return {
       branch: files.ref.branch,
       commitOid: files.ref.commitOid,
@@ -174,7 +173,7 @@ async function resolveFileSource({
     DurableObjectNameCodec.stringify({ path: files.repoPath, projectId }),
   );
   try {
-    const head = await repo.getHead(files.ref === undefined ? {} : { branch: files.ref.branch });
+    const head = await repo.getHead(!files.ref ? {} : { branch: files.ref.branch });
     try {
       return {
         branch: head.branch,

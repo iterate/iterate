@@ -37,7 +37,7 @@ export function buildFacetProcessorSubscriptionConfiguredEvent(input: {
 }) {
   return CoreProcessorContract.buildEvent({
     type: "events.iterate.com/stream/subscription-configured",
-    ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+    ...(!input.idempotencyKey ? {} : { idempotencyKey: input.idempotencyKey }),
     payload: {
       name: input.name,
       receiver: {

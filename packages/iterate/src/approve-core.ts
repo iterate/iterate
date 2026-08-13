@@ -175,9 +175,9 @@ export async function decide(input: {
   reason?: string;
   signature?: string;
 }): Promise<void> {
-  const signs = input.key !== null && input.verdicts.includes("approve");
+  const signs = !!input.key && input.verdicts.includes("approve");
   let signature = input.signature;
-  if (signature === undefined && signs) {
+  if (!signature && signs) {
     signature = await signApprovalMessage(
       input.key!,
       messageFor(input.projectId, input.offset, input.payload, input.verdicts),
@@ -278,7 +278,7 @@ export async function reconcileBacklog(stream: RpcStub<Stream>): Promise<{
   // Map iteration is insertion order — paged ascending — so this is oldest first.
   for (const [offset, payload] of requests) {
     const verdicts = decisions.get(offset) ?? null;
-    if (verdicts !== null) {
+    if (verdicts) {
       const approved = verdicts.flatMap((verdict, index) => (verdict === "approve" ? [index] : []));
       if (approved.length === 0) continue; // all-reject (human or expiry) — terminal
       const settled = settledIndexes.get(offset) ?? new Set<number>();

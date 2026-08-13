@@ -93,7 +93,7 @@ export function buildCopyAppends({
   // The reducer updates the record from the committed events, so the fence
   // needs no configure-time handshake and replay reconstructs it identically.
   const recorded = inbound?.[batch.name];
-  if (recorded !== undefined && compareSourceStamp(batch, recorded) < 0) {
+  if (recorded && compareSourceStamp(batch, recorded) < 0) {
     throw new Error(
       `copy receiver ${self.path} already accepted a newer delivery for ${batch.path}#${batch.name} ` +
         `(recorded source lifetime ${recorded.streamId} created ${recorded.streamCreatedAt}, ` +
@@ -142,8 +142,8 @@ export function buildCopyAppends({
     // source-row eviction leaves no dangling reads.
     inputs.push({
       type: shaped.type,
-      ...(shaped.payload === undefined ? {} : { payload: shaped.payload }),
-      ...(shaped.metadata === undefined ? {} : { metadata: shaped.metadata }),
+      ...(!shaped.payload ? {} : { payload: shaped.payload }),
+      ...(!shaped.metadata ? {} : { metadata: shaped.metadata }),
       // Provenance is stamped AFTER the transform, from the platform's own
       // hop record — a transform can never forge or drop the chain.
       source: { ...event.source, copiedFrom },

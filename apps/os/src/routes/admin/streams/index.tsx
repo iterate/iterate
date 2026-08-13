@@ -53,14 +53,14 @@ function AdminStreamsProjectPicker() {
         }}
       >
         <FieldGroup>
-          <Field data-invalid={error != null}>
+          <Field data-invalid={!!error}>
             <FieldLabel htmlFor="admin-stream-project-id">Project ID</FieldLabel>
             <Input
               id="admin-stream-project-id"
               value={projectId}
               onChange={(event) => setProjectId(event.currentTarget.value)}
               placeholder="__null__ or prj_..."
-              aria-invalid={error != null}
+              aria-invalid={!!error}
               className="font-mono"
             />
             <FieldDescription>Use a project id to inspect that project's streams.</FieldDescription>

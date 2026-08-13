@@ -350,7 +350,7 @@ function deploymentTelemetryEvents(artifact: TestTelemetryArtifact): PostHogEven
       ["readiness", lane.readinessDurationMs],
       ["reuse proof", lane.reuseProofDurationMs],
     ] as const) {
-      if (durationMs == null) continue;
+      if (!Number.isFinite(durationMs)) continue;
       events.push(
         event(
           "ci deploy phase finished",
@@ -483,7 +483,7 @@ function ciProperties(artifact: TestTelemetryArtifact) {
 }
 
 function testFailed(test: TestTelemetryArtifact["tests"][number]) {
-  if (test.outcome !== undefined) return test.outcome === "unexpected";
+  if (test.outcome) return test.outcome === "unexpected";
   return ["failed", "timedout"].includes(test.state.toLowerCase());
 }
 
@@ -521,10 +521,9 @@ function phaseEvent(input: {
       phase_category: input.phase.category,
       duration_ms: input.phase.durationMs,
       attachment_count: input.phase.attachmentCount,
-      source_file:
-        input.phase.sourceFile === undefined
-          ? undefined
-          : normalizeModuleId(input.phase.sourceFile, input.artifact),
+      source_file: !input.phase.sourceFile
+        ? undefined
+        : normalizeModuleId(input.phase.sourceFile, input.artifact),
       source_line: input.phase.sourceLine,
       source_column: input.phase.sourceColumn,
       error_name: input.phase.error?.name,
@@ -583,7 +582,7 @@ function selectDetailedRecords<
     .map((value, index) => ({ index, value }))
     .sort(
       (left, right) =>
-        Number(right.value.error !== undefined) - Number(left.value.error !== undefined) ||
+        Number(!!right.value.error) - Number(!!left.value.error) ||
         Number(right.value.category === "test.step") -
           Number(left.value.category === "test.step") ||
         right.value.durationMs - left.value.durationMs ||

@@ -227,7 +227,7 @@ export function ApprovalBatchBody({
         </View>
       ) : showThreadInfo && streamContext?.kind === "scope" ? (
         <Text style={styles.sourceMeta}>Triggered from {streamContext.scopePath}</Text>
-      ) : showThreadInfo && streamContext === undefined ? (
+      ) : showThreadInfo && !streamContext ? (
         <Text style={styles.sourceMeta}>Source metadata unavailable for this request.</Text>
       ) : null}
 
@@ -280,7 +280,7 @@ export function ApprovalBatchActions({
       );
       if (decision === "reject") {
         const reason = await promptForRejectReason(payload.requests.length);
-        if (reason === null) return "cancelled"; // leave the batch held
+        if (!reason) return "cancelled"; // leave the batch held
         await decide({
           stream,
           projectId,
@@ -327,8 +327,8 @@ export function ApprovalBatchActions({
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          style={[styles.button, styles.approve, enrolledKey === null && styles.buttonDisabled]}
-          disabled={respond.isPending || decided || enrolledKey === null}
+          style={[styles.button, styles.approve, !enrolledKey && styles.buttonDisabled]}
+          disabled={respond.isPending || decided || !enrolledKey}
           onPress={() => respond.mutate("approve")}
         >
           <Text style={styles.approveText}>
@@ -336,7 +336,7 @@ export function ApprovalBatchActions({
               ? "Signing…"
               : decided
                 ? "Decided"
-                : enrolledKey === null
+                : !enrolledKey
                   ? "Enroll to approve"
                   : single
                     ? "Approve (Face ID)"
@@ -456,9 +456,9 @@ function RequestDetails({
             ? outcome.decidedBy === "expiry"
               ? "Expired"
               : "Rejected"
-            : outcome.settle === null
+            : !outcome.settle
               ? "Approved — awaiting the egress door…"
-              : outcome.settle.error !== null
+              : outcome.settle.error
                 ? `Delivery failed · ${outcome.settle.error}`
                 : `Upstream ${outcome.settle.status || "status unavailable"}`}
         </Text>

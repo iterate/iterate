@@ -31,7 +31,7 @@ export function useClaimReplyPresented(input: {
   const replyOffset = newestReplyOffset(events);
   useQuery({
     queryKey: ["reply-presented", projectId, path, replyOffset],
-    enabled: baseUrl !== undefined && replyOffset !== null,
+    enabled: !!baseUrl && Number.isFinite(replyOffset),
     queryFn: async () => {
       await appForegrounded();
       const project = await getProjectItx(baseUrl!, projectId);

@@ -29,7 +29,7 @@ export async function filterPublishablePaths(input: {
   for (const path of input.paths) {
     if (path.split("/").pop() !== ".gitignore") continue;
     const content = await input.readFile(path);
-    if (content === null) continue;
+    if (!content) continue;
     const dir = path.slice(0, path.lastIndexOf("/")) || "/";
     const patterns = content
       .split("\n")

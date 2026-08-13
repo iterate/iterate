@@ -219,7 +219,7 @@ function ProjectReposIndexContent() {
           </Button>
         </div>
 
-        {repos === undefined ? (
+        {!repos ? (
           <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
             Loading repos…
           </div>

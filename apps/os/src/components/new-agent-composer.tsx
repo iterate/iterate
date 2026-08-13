@@ -64,7 +64,7 @@ export function NewAgentComposer({
         onModeChange={() => {}}
         autoFocusMessage
         isSubmitting={busy}
-        {...(attachments.fileError == null ? {} : { error: attachments.fileError })}
+        {...(!attachments.fileError ? {} : { error: attachments.fileError })}
         message={{
           value: message,
           onValueChange: setMessage,

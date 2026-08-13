@@ -10,7 +10,7 @@ export function oversizedScriptResultPreview(
   maxCharacters = MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS,
 ): { preview: string; totalCharacters: number } | null {
   const serialized = JSON.stringify(value, null, 2);
-  if (serialized === undefined || serialized.length <= maxCharacters) return null;
+  if (!serialized || serialized.length <= maxCharacters) return null;
   return {
     preview: serialized.slice(0, maxCharacters),
     totalCharacters: serialized.length,

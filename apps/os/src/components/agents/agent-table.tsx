@@ -70,8 +70,7 @@ const AGENT_COLUMNS: ColumnDef<AgentPathTreeNode>[] = [
   {
     id: AGENT_COLUMN_ID.agent,
     header: "Agent",
-    accessorFn: (node) =>
-      node.agent === undefined ? node.path.toLowerCase() : agentSearchText(node.agent),
+    accessorFn: (node) => (!node.agent ? node.path.toLowerCase() : agentSearchText(node.agent)),
     cell: AgentCell,
   },
   { id: AGENT_COLUMN_ID.status, header: "Status", cell: StatusCell },
@@ -169,7 +168,7 @@ export function AgentTable({
       <TableBody className="relative grid" style={{ height: virtualizer.getTotalSize() }}>
         {virtualizer.getVirtualItems().map((virtualRow) => {
           const row = rows[virtualRow.index];
-          if (row === undefined) return null;
+          if (!row) return null;
           const rowProps: VirtualAgentRowProps = {
             ref: virtualizer.measureElement,
             dataIndex: virtualRow.index,
@@ -182,7 +181,7 @@ export function AgentTable({
             onTogglePinned,
           };
           const agent = row.original.agent;
-          return agent === undefined ? (
+          return !agent ? (
             <AgentTableRow key={row.id} {...rowProps} />
           ) : (
             <LiveAgentTableRow key={row.id} {...rowProps} agent={agent} projectId={projectId} />
@@ -249,9 +248,7 @@ function AgentTableRow({
   const agent = node.agent;
   const runtime = agentPathNodeRuntime(node, runtimeTransition?.runtime);
   const waitingFor =
-    agent !== undefined && row.getIsExpanded()
-      ? agent.summary.waitingFor
-      : agentNodeWaitingFor(node);
+    agent && row.getIsExpanded() ? agent.summary.waitingFor : agentNodeWaitingFor(node);
   const displayState = deriveAgentDisplayState(runtime, waitingFor);
   const context = useMemo<AgentTableRowContextValue>(
     () => ({
@@ -265,11 +262,11 @@ function AgentTableRow({
       onTogglePinned,
       state: AGENT_DISPLAY_STATE_PRESENTATION[displayState],
       runtimeCounts: runtimeCountFragments(runtime),
-      descendantCount: node.aggregateAgentCount - (agent === undefined ? 0 : 1),
+      descendantCount: node.aggregateAgentCount - (!agent ? 0 : 1),
       activeCount:
         node.aggregateActiveCount -
-        (agent === undefined || deriveAgentRuntimeDisplayState(agent.runtime) === "idle" ? 0 : 1),
-      updated: agent === undefined ? undefined : latestAgentUpdate(agent.timestamps),
+        (!agent || deriveAgentRuntimeDisplayState(agent.runtime) === "idle" ? 0 : 1),
+      updated: !agent ? undefined : latestAgentUpdate(agent.timestamps),
     }),
     [
       agent,
@@ -293,7 +290,7 @@ function AgentTableRow({
         data-index={dataIndex}
         data-agent-table-row
         data-agent-path={node.path}
-        data-agent-row-kind={agent === undefined ? "container" : "agent"}
+        data-agent-row-kind={!agent ? "container" : "agent"}
         data-agent-state={displayState}
         className={cn("absolute left-0 top-0 grid w-full items-center", TABLE_GRID)}
         style={style}
@@ -310,7 +307,7 @@ function AgentTableRow({
 
 function useAgentTableRow() {
   const context = useContext(AgentTableRowContext);
-  if (context === undefined) throw new Error("agent table cells require an agent table row");
+  if (!context) throw new Error("agent table cells require an agent table row");
   return context;
 }
 
@@ -334,7 +331,7 @@ function AgentCell() {
           </Button>
         ) : null}
       </span>
-      {agent === undefined ? (
+      {!agent ? (
         <>
           {row.getIsExpanded() ? (
             <FolderOpen className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
@@ -400,11 +397,11 @@ function ActivityCell() {
   return (
     <>
       <span className="block truncate">
-        {agent === undefined
+        {!agent
           ? `${node.aggregateAgentCount} descendant ${node.aggregateAgentCount === 1 ? "agent" : "agents"}`
           : (agent.summary.activity ?? "—")}
       </span>
-      {agent?.summary.description === undefined ? null : (
+      {!agent?.summary.description ? null : (
         <span className="block truncate text-xs text-muted-foreground">
           {agent.summary.description}
         </span>
@@ -415,7 +412,7 @@ function ActivityCell() {
 
 function SourceCell() {
   const { agent } = useAgentTableRow();
-  return agent?.binding === undefined ? (
+  return !agent?.binding ? (
     "—"
   ) : (
     <BindingLink binding={agent.binding} className="block max-w-full" />
@@ -451,7 +448,7 @@ function CreatedCell() {
 
 function PinCell() {
   const { agent, onTogglePinned } = useAgentTableRow();
-  return agent === undefined ? null : (
+  return !agent ? null : (
     <PinButton
       pinned={agent.summary.pinned}
       onToggle={() => onTogglePinned(agent)}
@@ -477,7 +474,7 @@ function latestAgentUpdate(timestamps: AgentRecord["timestamps"]): string {
     timestamps.activityUpdatedAt,
     timestamps.summaryUpdatedAt,
   ]) {
-    if (timestamp !== undefined && timestamp > latest) latest = timestamp;
+    if (timestamp && timestamp > latest) latest = timestamp;
   }
   return latest;
 }

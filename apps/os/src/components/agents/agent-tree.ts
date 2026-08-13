@@ -14,7 +14,7 @@ const forestCache = new WeakMap<Record<string, AgentRecord>, AgentTreeNode[]>();
 
 export function buildAgentForest(records: Record<string, AgentRecord>): AgentTreeNode[] {
   const cached = forestCache.get(records);
-  if (cached !== undefined) return cached;
+  if (cached) return cached;
 
   const roots = contractPathNodes(buildAgentPathForest(records));
   roots.sort(compareStructuralNodes);
@@ -28,7 +28,7 @@ function contractPathNodes(nodes: readonly AgentPathTreeNode[]): AgentTreeNode[]
   const contracted: AgentTreeNode[] = [];
   for (const node of nodes) {
     const children = contractPathNodes(node.children);
-    if (node.agent === undefined) {
+    if (!node.agent) {
       contracted.push(...children);
       continue;
     }
@@ -74,7 +74,7 @@ const AGENT_TREE_SHAPE = {
 
 /** Normalized text projected into TanStack Table's hidden search column. */
 export function agentSearchText(agent: AgentRecord): string {
-  const binding = agent.binding === undefined ? [] : Object.values(agent.binding);
+  const binding = !agent.binding ? [] : Object.values(agent.binding);
   return [
     agentTitle(agent),
     agent.summary.activity,
@@ -112,25 +112,23 @@ export function walkAgentForest(
 }
 
 export function agentTitle(agent: AgentRecord): string {
-  if (agent.summary.title !== undefined) return agent.summary.title;
+  if (agent.summary.title) return agent.summary.title;
   const bindingTitle = agentBindingTitle(agent.binding);
-  if (bindingTitle !== undefined) return bindingTitle;
+  if (bindingTitle) return bindingTitle;
   return agent.path.split("/").filter(Boolean).at(-1) ?? agent.path;
 }
 
 function agentBindingTitle(binding: AgentRecord["binding"]): string | undefined {
-  if (binding === undefined) return undefined;
+  if (!binding) return undefined;
   switch (binding.type) {
     case "slack_thread":
-      return binding.channelName === undefined
-        ? `Slack ${binding.channelId}`
-        : `#${binding.channelName}`;
+      return !binding.channelName ? `Slack ${binding.channelId}` : `#${binding.channelName}`;
     case "telegram_thread":
       return `Telegram chat ${binding.chatId}`;
     case "email_thread":
       return (
         binding.subject ??
-        (binding.counterpart === undefined ? "Email thread" : `Email with ${binding.counterpart}`)
+        (!binding.counterpart ? "Email thread" : `Email with ${binding.counterpart}`)
       );
     case "github_pull_request":
       return `${binding.owner}/${binding.repo} #${binding.number}`;

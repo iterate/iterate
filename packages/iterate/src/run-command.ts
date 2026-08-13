@@ -11,6 +11,6 @@ export function run(command: string, args: string[], stdin?: string) {
     child.on("error", reject);
     // A signal-killed child reports a null code; surface that as a failure, not 0.
     child.on("close", (code) => resolve({ stdout, stderr, exitCode: code ?? 1 }));
-    if (stdin !== undefined) child.stdin.end(stdin);
+    if (stdin) child.stdin.end(stdin);
   });
 }

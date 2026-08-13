@@ -65,7 +65,7 @@ export async function decideIngressRoute(input: {
     if (osHostKind === "eventDocs") return { lane: "os", hostKind: osHostKind };
 
     const [head, ...pathSegments] = url.pathname.split("/").filter(Boolean);
-    if (head !== undefined && head.startsWith("prj_")) {
+    if (head && head.startsWith("prj_")) {
       // The /prj_<id>/... path lane: the project worker sees the sub-path,
       // and the stripped prefix rides along so workers can render URLs the
       // BROWSER can use (e.g. form actions) — on host lanes there is no

@@ -43,7 +43,7 @@ export default function RepoScreen() {
 
   const files = useQuery({
     queryKey: ["mobile-repo", projectId, repoPath, "files"],
-    enabled: repoPath !== undefined,
+    enabled: !!repoPath,
     staleTime: 0,
     queryFn: async () => {
       const repo = await getProjectRepo(projectId, repoPath);
@@ -56,7 +56,7 @@ export default function RepoScreen() {
   const openFile = useMutation({
     mutationFn: async (path: string) => {
       const file = await (await getProjectRepo(projectId, repoPath)).readFile({ path });
-      if (file === null) throw new Error(`File no longer exists: ${path}`);
+      if (!file) throw new Error(`File no longer exists: ${path}`);
       return file;
     },
     onSuccess: (file) => store.open(file.path, file.content),
@@ -153,7 +153,7 @@ export default function RepoScreen() {
           <>
             <EditorHeader
               dirty={
-                repoState.selectedPath !== null &&
+                !!repoState.selectedPath &&
                 repoState.selectedBuffer?.current !== repoState.selectedBuffer?.head
               }
               onDelete={() => {

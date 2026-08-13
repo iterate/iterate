@@ -43,10 +43,7 @@ export async function startWebSocketEcho(input: CapabilityFixtureInput = {}): Pr
       if (!isWebSocketUpgradeRequest(request)) {
         return new Response("websocket upgrade required", { status: 426 });
       }
-      if (
-        input.expectedAuthorization !== undefined &&
-        authorization !== input.expectedAuthorization
-      ) {
+      if (input.expectedAuthorization && authorization !== input.expectedAuthorization) {
         return new Response("unauthorized", { status: 401 });
       }
 
@@ -82,7 +79,7 @@ export async function startMockOpenApi(
     fetch(request) {
       authHeaders.push(request.headers.get("authorization") ?? "");
       if (
-        input.expectedAuthorization !== undefined &&
+        input.expectedAuthorization &&
         request.headers.get("authorization") !== input.expectedAuthorization
       ) {
         return Response.json({ error: "unexpected_authorization" }, { status: 401 });
@@ -146,7 +143,7 @@ export async function startMockMcp(
       };
       authHeaders.push(request.headers.get("authorization") ?? "");
       if (
-        input.expectedAuthorization !== undefined &&
+        input.expectedAuthorization &&
         request.headers.get("authorization") !== input.expectedAuthorization
       ) {
         return Response.json(

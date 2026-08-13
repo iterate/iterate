@@ -61,7 +61,7 @@ export function InThreadApprovalCard({
       );
       if (decision === "reject") {
         const reason = await promptForRejectReason(batch.payload.requests.length);
-        if (reason === null) return; // cancelled — leave the batch held
+        if (!reason) return; // cancelled — leave the batch held
         await decide({
           stream,
           projectId,

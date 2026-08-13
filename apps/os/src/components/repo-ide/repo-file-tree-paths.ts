@@ -1,6 +1,6 @@
 export function untitledPath(directoryPath: string | null, taken: ReadonlySet<string>): string {
   const prefix =
-    directoryPath === null || directoryPath === ""
+    !directoryPath || directoryPath === ""
       ? ""
       : directoryPath.endsWith("/")
         ? directoryPath

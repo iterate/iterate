@@ -100,7 +100,7 @@ export class LiveState<State extends object> {
 
   #flush(): void {
     const patch = diff(this.#broadcast, this.#current);
-    if (patch === undefined) return;
+    if (!patch) return;
     const from = this.#revision;
     const to = (this.#revision += 1);
     this.#broadcast = this.#current;
@@ -133,7 +133,7 @@ export class LiveState<State extends object> {
   #drop(subscriber: RetainedCallback<LiveUpdate<State>>): void {
     if (!this.#subscribers.delete(subscriber)) return;
     subscriber[Symbol.dispose]();
-    if (this.#subscribers.size === 0 && this.#flushTimer !== undefined) {
+    if (this.#subscribers.size === 0 && this.#flushTimer) {
       clearTimeout(this.#flushTimer); // dormant again: no work until the next subscriber
       this.#flushTimer = undefined;
     }

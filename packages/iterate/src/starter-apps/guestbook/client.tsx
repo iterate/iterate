@@ -27,7 +27,7 @@ export function GuestbookClient() {
       const message = String(form.get("message") || "");
       // React resets uncontrolled fields after a form action resolves. Failed
       // submissions become the new defaults so that reset preserves the draft.
-      if (api == null) return { error: "Guestbook connection is not ready", message, name };
+      if (!api) return { error: "Guestbook connection is not ready", message, name };
       try {
         await api.sign(name, message);
         return { error: "", message: "", name };
@@ -43,8 +43,7 @@ export function GuestbookClient() {
   const entries = state?.entries || [];
   // Only claim the configured title once reduced state has arrived — the
   // seeded-apps heading wait must not pass on the HTML shell alone.
-  const title =
-    state === undefined ? "Loading…" : state.birthCertificate?.config.title || "Guestbook";
+  const title = !state ? "Loading…" : state.birthCertificate?.config.title || "Guestbook";
 
   return (
     <>
@@ -66,12 +65,12 @@ export function GuestbookClient() {
             workers, which takes over a second on a fresh deployment. Real
             users need the progress cue — and it is the visible-progress
             contract the e2e spinner policy extends its waits on. */}
-        <button data-spinner={signing || undefined} disabled={api == null || signing} type="submit">
+        <button data-spinner={signing || undefined} disabled={!api || signing} type="submit">
           {signing ? "Signing…" : "Sign guestbook"}
         </button>
       </form>
-      {error !== undefined && <p role="alert">{error}</p>}
-      {state === undefined ? (
+      {!!error && <p role="alert">{error}</p>}
+      {!state ? (
         <p>Loading…</p>
       ) : entries.length === 0 ? (
         <p>No entries yet.</p>
@@ -91,7 +90,7 @@ export function GuestbookClient() {
 }
 
 const root = document.getElementById("root");
-if (root === null) throw new Error("missing #root");
+if (!root) throw new Error("missing #root");
 createRoot(root).render(
   <CapnWebProvider makeConnection={makeConnection}>
     <GuestbookClient />

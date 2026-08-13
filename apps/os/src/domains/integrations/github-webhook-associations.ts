@@ -47,7 +47,7 @@ export function githubWebhookAssociations(input: {
   const repositoryOwner = nativeRepository?.owner?.login;
   const repositoryName = nativeRepository?.name;
   if (
-    nativeRepository === undefined ||
+    !nativeRepository ||
     typeof repositoryOwner !== "string" ||
     repositoryOwner.length === 0 ||
     !Number.isSafeInteger(nativeRepository.id) ||
@@ -66,7 +66,7 @@ export function githubWebhookAssociations(input: {
 
   switch (event.name) {
     case "issue_comment":
-      if (event.payload.issue?.pull_request !== undefined) {
+      if (event.payload.issue?.pull_request) {
         nativePullRequestNumber = event.payload.issue.number;
         content = event.payload.comment;
       }
@@ -103,13 +103,13 @@ export function githubWebhookAssociations(input: {
   for (const match of body.matchAll(
     /(^|[^\w@])@([a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38})(?![a-z\d_-])/gi,
   )) {
-    if (match[2] !== undefined) mentionedUsers.add(match[2].toLowerCase());
+    if (match[2]) mentionedUsers.add(match[2].toLowerCase());
   }
 
   return {
-    ...(author === undefined ? {} : { author }),
+    ...(!author ? {} : { author }),
     mentionedUsers: [...mentionedUsers],
-    ...(pullRequestNumber === undefined ? {} : { pullRequest: { number: pullRequestNumber } }),
+    ...(!Number.isFinite(pullRequestNumber) ? {} : { pullRequest: { number: pullRequestNumber } }),
     repository,
   };
 }

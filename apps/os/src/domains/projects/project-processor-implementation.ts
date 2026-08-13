@@ -113,12 +113,9 @@ export class ProjectProcessor extends StreamProcessor<
     // has birthed every sibling before the cursor can reach a later command,
     // so commands appended during a non-blocking create remain actionable
     // instead of being acknowledged and lost while project/created is open.
-    if (
-      state.createRequest === null &&
-      event?.type !== "events.iterate.com/project/create-requested"
-    )
+    if (!state.createRequest && event?.type !== "events.iterate.com/project/create-requested")
       return;
-    if (state.createFailure !== null) return;
+    if (state.createFailure) return;
 
     switch (event?.type) {
       case "events.iterate.com/project/create-requested": {
@@ -139,9 +136,9 @@ export class ProjectProcessor extends StreamProcessor<
           origin.path !== CONFIG_REPO_PATH ||
           origin.name !== "project-config-to-root" ||
           origin.type !== event.type ||
-          state.birthCertificate !== null ||
-          state.createRequest === null ||
-          state.createRequestedAtOffset === null
+          state.birthCertificate ||
+          !state.createRequest ||
+          !Number.isFinite(state.createRequestedAtOffset)
         ) {
           break;
         }
@@ -162,10 +159,10 @@ export class ProjectProcessor extends StreamProcessor<
             this.stream.getEvent({ idempotencyKey: projectCreatedIdempotencyKey }),
             this.stream.getEvent({ idempotencyKey: projectCreateFailedIdempotencyKey }),
           ]);
-          if (existingProjectCreated !== undefined && existingProjectCreateFailed !== undefined) {
+          if (existingProjectCreated && existingProjectCreateFailed) {
             throw new Error("Project creation has both a success and failure terminal.");
           }
-          if (existingProjectCreated !== undefined) {
+          if (existingProjectCreated) {
             const terminal = parseProjectCreationTerminal({
               event: existingProjectCreated,
               projectId: this.deps.itx.projectId,
@@ -182,7 +179,7 @@ export class ProjectProcessor extends StreamProcessor<
             // three committed; this is the lost-ack retry path.
             return;
           }
-          if (existingProjectCreateFailed !== undefined) {
+          if (existingProjectCreateFailed) {
             const terminal = parseProjectCreationTerminal({
               event: existingProjectCreateFailed,
               projectId: this.deps.itx.projectId,
@@ -286,7 +283,7 @@ export class ProjectProcessor extends StreamProcessor<
           origin.path !== CONFIG_REPO_PATH ||
           origin.name !== "project-config-to-root" ||
           origin.type !== event.type ||
-          state.birthCertificate === null
+          !state.birthCertificate
         ) {
           break;
         }
@@ -298,7 +295,7 @@ export class ProjectProcessor extends StreamProcessor<
           const existingOutcome = await this.stream.getEvent({
             idempotencyKey: outcomeIdempotencyKey,
           });
-          if (existingOutcome !== undefined) {
+          if (existingOutcome) {
             if (
               existingOutcome.type !== "events.iterate.com/project/worker-updated" &&
               (existingOutcome.type !== "events.iterate.com/project/worker-update-failed" ||
@@ -464,7 +461,7 @@ export class ProjectProcessor extends StreamProcessor<
           ...repoCreationEvents({
             path: CONFIG_REPO_PATH,
             projectId: this.deps.itx.projectId,
-            ...(config.configRepoTemplate === undefined
+            ...(!config.configRepoTemplate
               ? {}
               : {
                   payload: {
@@ -502,7 +499,7 @@ export class ProjectProcessor extends StreamProcessor<
         appendTo(
           EMAIL_INTEGRATION_STREAM_PATH,
           ...emailRouterCreationEvents({
-            ...(config.creatorEmail === undefined ? {} : { initialSender: config.creatorEmail }),
+            ...(!config.creatorEmail ? {} : { initialSender: config.creatorEmail }),
             projectId: this.deps.itx.projectId,
           }),
         ),
@@ -589,7 +586,7 @@ export class ProjectProcessor extends StreamProcessor<
           // Any application response proves the module built and loaded. Its
           // HTTP status belongs to userspace fetch behavior, not bootstrap.
           const commitOid = response.headers.get(WORKER_SERVE_HEADER);
-          if (commitOid === null) {
+          if (!commitOid) {
             throw new Error(
               `Default project worker response is missing trusted "${WORKER_SERVE_HEADER}" source identity.`,
             );
@@ -622,7 +619,7 @@ export class ProjectProcessor extends StreamProcessor<
   protected override reduce({ event, state }: ReduceArgs<ProjectProcessorContract>) {
     switch (event.type) {
       case "events.iterate.com/project/create-requested":
-        if (state.createRequest !== null) return state;
+        if (state.createRequest) return state;
         return {
           ...state,
           createRequest: event.payload,
@@ -632,10 +629,10 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/project/created":
       case "events.iterate.com/project/create-failed": {
         if (
-          state.createRequest === null ||
-          state.createRequestedAtOffset === null ||
-          state.birthCertificate !== null ||
-          state.createFailure !== null
+          !state.createRequest ||
+          !Number.isFinite(state.createRequestedAtOffset) ||
+          state.birthCertificate ||
+          state.createFailure
         ) {
           return state;
         }
@@ -645,7 +642,7 @@ export class ProjectProcessor extends StreamProcessor<
           request: state.createRequest,
           requestOffset: state.createRequestedAtOffset,
         });
-        if (terminal === null) return state;
+        if (!terminal) return state;
         return terminal.type === "events.iterate.com/project/created"
           ? { ...state, birthCertificate: terminal.payload }
           : { ...state, createFailure: terminal.payload };
@@ -700,7 +697,7 @@ export class ProjectProcessor extends StreamProcessor<
       // matching disconnect will name in its payload.
       case "events.iterate.com/capability-host/capability-provider-pager-connected": {
         const source = event.source?.copiedFrom?.at(-1);
-        if (source === undefined) return state;
+        if (!source) return state;
         const previous = state.clients[source.path];
         const connectedAtOffsets = [...(previous?.connectedAtOffsets ?? []), source.offset];
         return {
@@ -711,7 +708,7 @@ export class ProjectProcessor extends StreamProcessor<
               path: source.path,
               connected: true,
               lastConnectedAt: source.createdAt,
-              ...(previous?.lastDisconnectedAt === undefined
+              ...(!previous?.lastDisconnectedAt
                 ? {}
                 : { lastDisconnectedAt: previous.lastDisconnectedAt }),
               connectedAtOffsets,
@@ -721,9 +718,9 @@ export class ProjectProcessor extends StreamProcessor<
       }
       case "events.iterate.com/capability-host/capability-provider-pager-disconnected": {
         const source = event.source?.copiedFrom?.at(-1);
-        if (source === undefined) return state;
+        if (!source) return state;
         const previous = state.clients[source.path];
-        if (previous === undefined) return state;
+        if (!previous) return state;
         const connectedAtOffsets = previous.connectedAtOffsets.filter(
           (offset) => offset !== event.payload.connectedAtOffset,
         );
@@ -761,7 +758,7 @@ export class ProjectProcessor extends StreamProcessor<
         return {
           ...state,
           humanApprovalKeys: state.humanApprovalKeys.map((key) =>
-            key.keyId === event.payload.keyId && key.revokedAt === null
+            key.keyId === event.payload.keyId && !key.revokedAt
               ? { ...key, revokedAt: event.createdAt }
               : key,
           ),
@@ -794,7 +791,7 @@ export class ProjectProcessor extends StreamProcessor<
   }
 
   #sleep(ms: number): Promise<void> {
-    return this.deps.sleep === undefined
+    return !this.deps.sleep
       ? new Promise((resolve) => setTimeout(resolve, ms))
       : this.deps.sleep(ms);
   }
@@ -827,7 +824,7 @@ function recordDomainObject<
   Key extends "devices" | "repos" | "secrets",
 >(state: State, key: Key, event: StreamEvent): State {
   const path = event.source?.processor?.stream.path ?? event.source?.copiedFrom?.[0]?.path;
-  if (path === undefined) return state;
+  if (!path) return state;
   return {
     ...state,
     [key]: addStreamListItem(state[key], { path, createdAt: event.createdAt }),

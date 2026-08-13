@@ -72,7 +72,7 @@ test("an agent-style media-search run finds the swimming lesson among decoys", a
       afterOffset: Math.min(...uploads.map((entry) => entry.offset)),
       eventTypes: [MEDIA_PROCESSED_EVENT_TYPE],
       predicate: (event: any) =>
-        event.payload.stableKey === upload.stableKey && event.payload.error === null,
+        event.payload.stableKey === upload.stableKey && !event.payload.error,
       timeoutMs: 120_000,
     });
     expect(processed.payload).toMatchObject({ stableKey: upload.stableKey });

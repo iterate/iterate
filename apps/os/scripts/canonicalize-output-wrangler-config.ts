@@ -1,7 +1,7 @@
 import type { Plugin } from "vite";
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === "object" && !!value && !Array.isArray(value);
 }
 
 /**
@@ -15,7 +15,7 @@ export function canonicalizeContainerSsh(config: unknown): unknown {
   if (!isJsonObject(config)) throw new Error("Built Wrangler config must be a JSON object.");
 
   const { containers } = config;
-  if (containers === undefined) return config;
+  if (!containers) return config;
   if (!Array.isArray(containers)) {
     throw new Error("Built Wrangler config containers must be an array.");
   }
@@ -48,7 +48,7 @@ export function canonicalizeOutputWranglerConfig(): Plugin {
     enforce: "post",
     generateBundle(_options, bundle) {
       const outputConfig = bundle["wrangler.json"];
-      if (outputConfig === undefined) return;
+      if (!outputConfig) return;
       if (outputConfig.type !== "asset" || typeof outputConfig.source !== "string") {
         throw new Error("Expected the generated wrangler.json to be a string asset.");
       }

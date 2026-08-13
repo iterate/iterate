@@ -138,7 +138,7 @@ function makeHarness(
       projectId: null,
       version: "v-test",
       now: () => clock.now,
-      ...(opts.onLiveAssembled === undefined ? {} : { onLiveAssembled: opts.onLiveAssembled }),
+      ...(!opts.onLiveAssembled ? {} : { onLiveAssembled: opts.onLiveAssembled }),
     });
     registry.register(
       new RecorderProcessor({
@@ -222,7 +222,7 @@ function makeHarness(
      * handleAlarm path whenever it comes due within the window. */
     async advance(ms: number) {
       const target = clock.now + ms;
-      while (alarm.at !== null && alarm.at <= target) {
+      while (Number.isFinite(alarm.at) && alarm.at <= target) {
         clock.now = Math.max(clock.now, alarm.at);
         alarm.at = null; // the platform consumes the alarm by firing it
         await registry.handleAlarm();
@@ -399,7 +399,7 @@ describe("alarm multiplex", () => {
   it("routes one platform fire to EVERY runner: both died owing work, one fire revives both", async () => {
     const h = makeHarness({ betaRecovery: true });
     const hangOnRequested: RecorderHooks["onProcess"] = (args) => {
-      if (args.event === null) return;
+      if (!args.event) return;
       if (args.event.type === REQUESTED) args.runInBackground(hang);
     };
     h.hooks.alpha.onProcess = hangOnRequested;
@@ -432,7 +432,7 @@ describe("recovery revival", () => {
   it("revives ONLY the runner that owes work, and its revived fact reaches its processor through ordinary delivery", async () => {
     const h = makeHarness(); // beta has NO recovery — the registry routes it the fire anyway
     h.hooks.alpha.onProcess = (args) => {
-      if (args.event === null) return;
+      if (!args.event) return;
       if (args.event.type === REQUESTED) args.runInBackground(hang);
     };
     await h.stream.append({ type: REQUESTED, payload: { id: "a" } });
@@ -449,7 +449,7 @@ describe("recovery revival", () => {
 
     const processed: string[] = [];
     h.hooks.alpha.onProcess = (args) => {
-      if (args.event === null) return;
+      if (!args.event) return;
       processed.push(args.event.type);
     };
     await h.advance(KEEPALIVE_ALARM_LEAD_MS + 1);

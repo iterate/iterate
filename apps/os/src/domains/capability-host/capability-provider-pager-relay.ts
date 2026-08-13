@@ -143,7 +143,7 @@ export class CapabilityProviderPagerRelay {
   }
 
   async #ensurePager(): Promise<number> {
-    if (this.#pager !== undefined && this.#connectedAtOffset !== undefined) {
+    if (this.#pager && Number.isFinite(this.#connectedAtOffset)) {
       return this.#connectedAtOffset;
     }
 
@@ -196,7 +196,7 @@ export class CapabilityProviderPagerRelay {
 
   #enqueuePage(pager: WebSocket, data: unknown): void {
     const page = parseHibernatablePage(data, CapabilityProviderPage);
-    if (page === undefined) return;
+    if (!page) return;
     const task = this.#enqueue(async () => {
       if (this.#pager !== pager) return;
       try {
@@ -222,7 +222,7 @@ export class CapabilityProviderPagerRelay {
 
   async #handlePage(page: z.infer<typeof CapabilityProviderPage>): Promise<void> {
     const mounted = this.#mounts.get(page.providedAtOffset);
-    if (mounted === undefined) return;
+    if (!mounted) return;
     if (page.type === "retire") {
       this.#retireMount(page.providedAtOffset);
       return;
@@ -233,14 +233,14 @@ export class CapabilityProviderPagerRelay {
     }
 
     const connectedAtOffset = this.#connectedAtOffset;
-    if (connectedAtOffset === undefined) return;
+    if (!Number.isFinite(connectedAtOffset)) return;
     const activeLeg = await this.#durableObject.activateLiveCapability({
       connectedAtOffset,
       invoker: new CapabilityProviderInvokerRpcTarget(mounted.provider),
       providedAtOffset: mounted.providedAtOffset,
     });
     // No leg means this Page lost a pending-activation race and is stale.
-    if (activeLeg === undefined) return;
+    if (!activeLeg) return;
     this.#releaseActiveLeg(mounted);
     if (this.#mounts.get(mounted.providedAtOffset) === mounted) mounted.activeLeg = activeLeg;
     else activeLeg[Symbol.dispose]();
@@ -248,7 +248,7 @@ export class CapabilityProviderPagerRelay {
 
   async #failMount(providedAtOffset: number, error: unknown): Promise<void> {
     const mounted = this.#mounts.get(providedAtOffset);
-    if (mounted === undefined) return;
+    if (!mounted) return;
     this.#retireMount(providedAtOffset);
     try {
       await this.#durableObject.revokeCapability({
@@ -266,7 +266,7 @@ export class CapabilityProviderPagerRelay {
 
   #retireMount(providedAtOffset: number): void {
     const mounted = this.#mounts.get(providedAtOffset);
-    if (mounted === undefined) return;
+    if (!mounted) return;
     this.#mounts.delete(providedAtOffset);
     this.#releaseActiveLeg(mounted);
     try {
@@ -275,7 +275,7 @@ export class CapabilityProviderPagerRelay {
       console.error("live provider disposal failed", { error, providedAtOffset });
     }
     const pager = this.#pager;
-    if (this.#mounts.size > 0 || pager === undefined) return;
+    if (this.#mounts.size > 0 || !pager) return;
     this.#pager = undefined;
     this.#connectedAtOffset = undefined;
     try {
@@ -287,7 +287,7 @@ export class CapabilityProviderPagerRelay {
 
   #releaseActiveLeg(mounted: MountedProvider): void {
     const activeLeg = mounted.activeLeg;
-    if (activeLeg === undefined) return;
+    if (!activeLeg) return;
     mounted.activeLeg = undefined;
     try {
       activeLeg[Symbol.dispose]();

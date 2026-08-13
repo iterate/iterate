@@ -155,7 +155,7 @@ export async function restoreIntegrationConnection(
     }
 
     const existingClaim = await lookupConnectionClaim("slack", input.teamId);
-    if (existingClaim !== null && existingClaim.projectId !== input.projectId) {
+    if (existingClaim && existingClaim.projectId !== input.projectId) {
       throw new Error(
         `Slack team ${input.teamId} is already claimed by project ${existingClaim.projectId}.`,
       );
@@ -163,11 +163,7 @@ export async function restoreIntegrationConnection(
     const requestedConnection = input.connection
       ? requireCanonicalConnectionName(input.connection)
       : null;
-    if (
-      requestedConnection !== null &&
-      existingClaim !== null &&
-      existingClaim.connection !== requestedConnection
-    ) {
+    if (requestedConnection && existingClaim && existingClaim.connection !== requestedConnection) {
       throw new Error(
         `Slack team ${input.teamId} is already connected as ${existingClaim.connection}, not archived connection ${requestedConnection}.`,
       );
@@ -335,16 +331,12 @@ export async function restoreIntegrationConnection(
     ? requireCanonicalConnectionName(input.connection)
     : null;
   const existingClaim = await lookupConnectionClaim("github", input.installationId);
-  if (existingClaim !== null && existingClaim.projectId !== input.projectId) {
+  if (existingClaim && existingClaim.projectId !== input.projectId) {
     throw new Error(
       `GitHub installation ${input.installationId} is already claimed by project ${existingClaim.projectId}.`,
     );
   }
-  if (
-    requestedConnection !== null &&
-    existingClaim !== null &&
-    existingClaim.connection !== requestedConnection
-  ) {
+  if (requestedConnection && existingClaim && existingClaim.connection !== requestedConnection) {
     throw new Error(
       `GitHub installation ${input.installationId} is already connected as ${existingClaim.connection}, not archived connection ${requestedConnection}.`,
     );
@@ -523,12 +515,12 @@ export async function completeConnect(input: {
 }): Promise<CompleteConnectResult> {
   switch (input.provider) {
     case "slack":
-      if (input.code === undefined) {
+      if (!input.code) {
         return { callbackUrl: null, error: "slack_oauth_missing_code", ok: false };
       }
       return await completeSlackConnect({ ...input, code: input.code });
     case "google":
-      if (input.code === undefined) {
+      if (!input.code) {
         return { callbackUrl: null, error: "google_oauth_missing_code", ok: false };
       }
       return await completeGoogleConnect({ ...input, code: input.code });
@@ -564,7 +556,7 @@ async function gateConnectState(input: {
     };
   }
   const callbackUrl = stateData.callbackUrl ?? null;
-  if (input.userId === null || stateData.userId !== input.userId) {
+  if (!input.userId || stateData.userId !== input.userId) {
     return {
       ok: false,
       result: { callbackUrl, error: `${input.errorPrefix}_user_mismatch`, ok: false },
@@ -707,7 +699,7 @@ async function completeSlackConnect(input: {
 
   const teamId = tokenData.team.id;
   const existingClaim = await lookupConnectionClaim("slack", teamId);
-  if (existingClaim !== null && existingClaim.projectId !== input.projectId) {
+  if (existingClaim && existingClaim.projectId !== input.projectId) {
     return { callbackUrl, error: "slack_team_already_claimed", ok: false };
   }
 
@@ -803,8 +795,8 @@ async function completeGithubConnect(input: {
   // the first callback only as a prompt to start user OAuth. The signed second
   // state carries that tentative id; the user token must enumerate it before
   // we persist a claim or create a platform-key refresh strategy.
-  if (stateData.githubInstallationId === undefined) {
-    if (input.installationId === undefined) {
+  if (!stateData.githubInstallationId) {
+    if (!input.installationId) {
       return { callbackUrl, error: "github_missing_installation_id", ok: false };
     }
     const codeVerifier = randomBase64Url(32);
@@ -834,13 +826,10 @@ async function completeGithubConnect(input: {
     return { callbackUrl: authorizationUrl.toString(), ok: true };
   }
 
-  if (input.code === undefined) {
+  if (!input.code) {
     return { callbackUrl, error: "github_oauth_missing_code", ok: false };
   }
-  if (
-    input.installationId !== undefined &&
-    input.installationId !== stateData.githubInstallationId
-  ) {
+  if (input.installationId && input.installationId !== stateData.githubInstallationId) {
     return { callbackUrl, error: "github_installation_mismatch", ok: false };
   }
 
@@ -849,7 +838,7 @@ async function completeGithubConnect(input: {
     codeVerifier: stateData.codeVerifier,
     config: input.config,
   });
-  if (userAccessToken === null) {
+  if (!userAccessToken) {
     return { callbackUrl, error: "github_oauth_failed", ok: false };
   }
   const installationId = stateData.githubInstallationId;
@@ -858,7 +847,7 @@ async function completeGithubConnect(input: {
   }
 
   const existingClaim = await lookupConnectionClaim("github", installationId);
-  if (existingClaim !== null && existingClaim.projectId !== input.projectId) {
+  if (existingClaim && existingClaim.projectId !== input.projectId) {
     return {
       callbackUrl,
       error: "github_installation_already_claimed",
@@ -945,11 +934,11 @@ export async function confirmGithubSteal(input: {
     itxEnv.SECRET_ENCRYPTION_KEY,
   );
   if (
-    stateData === null ||
+    !stateData ||
     stateData.projectId !== input.projectId ||
     stateData.userId !== input.userId ||
     stateData.githubInstallationAuthorized !== true ||
-    stateData.githubInstallationId === undefined
+    !stateData.githubInstallationId
   ) {
     throw new Error("Invalid or expired GitHub installation move confirmation.");
   }
@@ -1027,7 +1016,7 @@ export async function confirmGithubSteal(input: {
       continue;
     }
     await appendConnectionDirectoryEvents([
-      ...(claim === null
+      ...(!claim
         ? []
         : [
             {
@@ -1046,7 +1035,7 @@ export async function confirmGithubSteal(input: {
         slug: "github",
       },
     ]);
-    if (claim !== null) {
+    if (claim) {
       // Clean every owner this confirmation attempted to displace, not only
       // the owner from the attempt that finally verifies. Another stealer can
       // take ownership between this atomic directory batch and the read below;
@@ -1242,7 +1231,7 @@ async function exchangeGithubUserCode(input: {
       client_id: github.oauthClientId,
       client_secret: github.oauthClientSecret.exposeSecret(),
       code: input.code,
-      ...(input.codeVerifier === undefined ? {} : { code_verifier: input.codeVerifier }),
+      ...(!input.codeVerifier ? {} : { code_verifier: input.codeVerifier }),
       redirect_uri: oauthRedirectUri({
         baseUrl: requestBaseUrl({ config: input.config }),
         provider: "github",
@@ -1433,8 +1422,8 @@ export async function connectTelegram(input: {
 
   const existingClaim = await lookupConnectionClaim("telegram", bot.id);
   const foreignClaim =
-    existingClaim !== null && existingClaim.projectId !== input.projectId ? existingClaim : null;
-  if (foreignClaim !== null && input.steal !== true) {
+    existingClaim && existingClaim.projectId !== input.projectId ? existingClaim : null;
+  if (foreignClaim && input.steal !== true) {
     return { botUsername: bot.username ?? null, error: "telegram_bot_already_claimed", ok: false };
   }
   // Same-project reconnects reuse the claiming connection's name; fresh
@@ -1442,7 +1431,7 @@ export async function connectTelegram(input: {
   // derive it from the bot username (or the bot id when the username
   // sanitizes away).
   const connection =
-    (foreignClaim === null ? existingClaim?.connection : undefined) ??
+    (!foreignClaim ? existingClaim?.connection : undefined) ??
     (sanitizeConnectionName(bot.username ?? "") || `bot-${sanitizeConnectionName(bot.id)}`);
 
   // Record BEFORE setWebhook — claim-first, so no update can arrive at the
@@ -1489,7 +1478,7 @@ export async function connectTelegram(input: {
     },
     directoryClaim: {
       externalId: bot.id,
-      ...(foreignClaim === null
+      ...(!foreignClaim
         ? {}
         : {
             unclaimFirst: {
@@ -1500,7 +1489,7 @@ export async function connectTelegram(input: {
     },
   });
 
-  if (foreignClaim !== null) {
+  if (foreignClaim) {
     // Dispossess the old project AFTER the swap: brick its stored token
     // (egress emptied) and append its disconnected fact. Its directory claim
     // is already gone (the atomic swap above), so no unclaim here. The old
@@ -1620,9 +1609,9 @@ async function telegramGetMe(input: {
   const username = readString(result?.username);
   const firstName = readString(result?.first_name);
   return {
-    ...(firstName === undefined ? {} : { firstName }),
+    ...(!firstName ? {} : { firstName }),
     id: String(id),
-    ...(username === undefined ? {} : { username }),
+    ...(!username ? {} : { username }),
   };
 }
 
@@ -1642,7 +1631,7 @@ async function callTelegramWithToken(input: {
     ok?: boolean;
     result?: unknown;
   } | null;
-  if (data === null || !response.ok || data.ok !== true) {
+  if (!data || !response.ok || data.ok !== true) {
     // 401 here means the pasted token is wrong — the one failure users hit.
     const reason =
       data?.description ??
@@ -1675,7 +1664,7 @@ async function latestLifecycleFact(input: {
     input.connectedType,
     input.disconnectedType,
   ]);
-  return event === null
+  return !event
     ? null
     : {
         connected: event.type === input.connectedType,
@@ -1742,7 +1731,7 @@ export async function getConnectionStatus(input: {
       const botUsername = readString(fact.payload.botUsername);
       return {
         connected: fact.connected,
-        displayName: botUsername === undefined ? null : `@${botUsername}`,
+        displayName: !botUsername ? null : `@${botUsername}`,
         externalId: readString(fact.payload.externalId) ?? null,
         metadata: {
           botFirstName: readString(fact.payload.botFirstName),
@@ -2020,7 +2009,7 @@ export async function listIntegrationConnections(
   const entries: { connection: string; integration: string; path: string }[] = [];
   for (const stream of state.streams) {
     const coordinates = integrationCoordinatesFromStreamPath(stream.path);
-    if (coordinates === null) continue;
+    if (!coordinates) continue;
     entries.push({
       connection: coordinates.connection,
       integration: coordinates.slug,

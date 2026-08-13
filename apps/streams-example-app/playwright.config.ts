@@ -9,7 +9,7 @@ const localUrl = "http://127.0.0.1:5173";
 // The global setup writes the saved session only for a DEPLOYED (admin-only)
 // target; a loopback WORKER_URL is the auth-less playground. Gate storageState
 // on the SAME predicate so the config never points at a file setup skipped.
-const usesSavedSession = resolveDeployedEnv(workerUrl) !== null;
+const usesSavedSession = !!resolveDeployedEnv(workerUrl);
 
 export default defineConfig({
   testDir: "e2e/playwright",
@@ -36,14 +36,13 @@ export default defineConfig({
     ["json", { outputFile: "test-results/playwright-results.json" }],
     ["../../scripts/ci/playwright-telemetry-reporter.ts"],
   ],
-  webServer:
-    workerUrl === undefined
-      ? {
-          command: "pnpm exec vite dev --host 127.0.0.1",
-          url: localUrl,
-          reuseExistingServer: !process.env.CI,
-        }
-      : undefined,
+  webServer: !workerUrl
+    ? {
+        command: "pnpm exec vite dev --host 127.0.0.1",
+        url: localUrl,
+        reuseExistingServer: !process.env.CI,
+      }
+    : undefined,
   use: {
     baseURL: workerUrl ?? localUrl,
     extraHTTPHeaders: cloudflareWorkerVersionOverrideHeaders(process.env),

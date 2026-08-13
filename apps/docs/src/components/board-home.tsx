@@ -69,7 +69,7 @@ export function BoardHome() {
               <ul className="divide-y">
                 {workspaces.map((entry) => (
                   <li key={entry.path}>
-                    {entry.board === null ? (
+                    {!entry.board ? (
                       <Link
                         to="/w"
                         search={{

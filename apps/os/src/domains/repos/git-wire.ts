@@ -166,7 +166,7 @@ export function parseCommit(payload: Uint8Array): CommitFields {
   const headerEnd = raw.indexOf("\n\n");
   const headers = (headerEnd < 0 ? raw : raw.slice(0, headerEnd)).split("\n");
   const tree = headers.find((line) => line.startsWith("tree "))?.slice(5);
-  if (tree === undefined) throw new Error("commit without a tree header");
+  if (!tree) throw new Error("commit without a tree header");
   return {
     message: headerEnd < 0 ? "" : raw.slice(headerEnd + 2),
     parents: headers.filter((line) => line.startsWith("parent ")).map((line) => line.slice(7)),
@@ -213,7 +213,7 @@ function inflateAt(pack: Uint8Array, offset: number): { consumed: number; out: U
   // HERE with a clear message (callers fall back to the clone lane) instead
   // of corrupting pack cursor arithmetic silently.
   const strm = (inflator as unknown as { strm?: { avail_in?: number } }).strm;
-  if (strm === undefined || typeof strm.avail_in !== "number") {
+  if (!strm || typeof strm.avail_in !== "number") {
     throw new Error("pako Inflate no longer exposes strm.avail_in — pack parsing cannot proceed");
   }
   return { consumed: pushed - strm.avail_in, out: concat(chunks) };
@@ -329,7 +329,7 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
       shift += 7;
     }
     const kind = OBJECT_TYPE_CODES[typeCode];
-    if (kind === undefined) throw new Error(`unknown pack object type ${typeCode}`);
+    if (!kind) throw new Error(`unknown pack object type ${typeCode}`);
     const entry: Entry = { offset: entryOffset, payload: new Uint8Array(0) };
     if (kind === "ofs-delta") {
       let distanceByte = pack[cursor]!;
@@ -369,23 +369,23 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
   const resolving = new Set<Entry>();
   const resolve = (entry: Entry): { payload: Uint8Array; type: GitObjectType } => {
     const done = resolved.get(entry);
-    if (done !== undefined) return done;
+    if (done) return done;
     if (resolving.has(entry)) throw new Error("delta cycle in pack");
     resolving.add(entry);
     try {
       let out: { payload: Uint8Array; type: GitObjectType };
-      if (entry.type !== undefined) {
+      if (entry.type) {
         out = { payload: entry.payload, type: entry.type };
-      } else if (entry.baseOffset !== undefined) {
+      } else if (Number.isFinite(entry.baseOffset)) {
         const base = byEntryOffset.get(entry.baseOffset);
-        if (base === undefined) {
+        if (!base) {
           throw new Error(`ofs-delta base at ${entry.baseOffset} not in pack`);
         }
         const baseResolved = resolve(base);
         out = { payload: applyDelta(baseResolved.payload, entry.payload), type: baseResolved.type };
       } else {
         const base = byOid.get(entry.baseOid!);
-        if (base === undefined) {
+        if (!base) {
           // Retryable: a later pass may have hashed this base by then.
           throw new Error(`thin pack: ref-delta base ${entry.baseOid} not in pack`);
         }
@@ -406,8 +406,8 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
     byOid.set(oid, out);
     objects.push({ oid, ...out });
   };
-  for (const entry of entries) if (entry.type !== undefined) await emit(entry);
-  let pending = entries.filter((entry) => entry.type === undefined);
+  for (const entry of entries) if (entry.type) await emit(entry);
+  let pending = entries.filter((entry) => !entry.type);
   while (pending.length > 0) {
     const next: Entry[] = [];
     for (const entry of pending) {
@@ -465,7 +465,7 @@ export function encodeFetchRequest(input: {
   const parts = [pktLine("command=fetch"), DELIM];
   for (const want of input.wants) parts.push(pktLine(`want ${want}`));
   for (const have of input.haves ?? []) parts.push(pktLine(`have ${have}`));
-  if (input.deepen !== undefined) parts.push(pktLine(`deepen ${input.deepen}`));
+  if (Number.isFinite(input.deepen)) parts.push(pktLine(`deepen ${input.deepen}`));
   parts.push(pktLine("no-progress"));
   parts.push(pktLine("done"));
   parts.push(FLUSH);
@@ -490,7 +490,7 @@ export function parseLsRefs(body: Uint8Array): LsRefsEntry[] {
   for (const frame of pktFrames(body)) {
     if (frame.kind !== "line") continue;
     const [oid, name, ...attributes] = pktText(frame.payload).split(" ");
-    if (oid === undefined || name === undefined) continue;
+    if (!oid || !name) continue;
     const entry: LsRefsEntry = { name, oid };
     for (const attribute of attributes) {
       if (attribute.startsWith("symref-target:")) entry.symrefTarget = attribute.slice(14);
@@ -584,10 +584,10 @@ export function parseReceivePackResponse(body: Uint8Array, expectedRef: string):
   // applied). `applied` is a proof it did. Everything else — truncated
   // report, missing status line, someone else's ref — is `indeterminate`,
   // and the caller must reconcile against the ref itself.
-  if (unpackLine !== undefined && unpackLine !== "unpack ok") {
+  if (unpackLine && unpackLine !== "unpack ok") {
     return { detail: unpackLine, kind: "rejected" };
   }
-  if (expectedRefNg !== undefined) return { detail: expectedRefNg, kind: "rejected" };
+  if (expectedRefNg) return { detail: expectedRefNg, kind: "rejected" };
   if (unpackLine === "unpack ok" && expectedRefOk) return { kind: "applied" };
   notes.push(expectedRefOk ? "ok without unpack status" : `no status line for ${expectedRef}`);
   return { detail: notes.join("; "), kind: "indeterminate" };

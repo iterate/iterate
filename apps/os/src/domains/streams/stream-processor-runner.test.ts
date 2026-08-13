@@ -125,7 +125,7 @@ class TaskProcessor extends StreamProcessor<
   }
 
   protected override processEvent(args: ProcessArgs): undefined {
-    if (args.event !== null) {
+    if (args.event) {
       const consumed = args as ConsumedProcessArgs;
       this.deps.hooks.onProcess?.(consumed, (key) => this.idempotencyKey(key, consumed.event));
     }
@@ -162,7 +162,7 @@ function makeJournal(homePath = HOME) {
 
   const rowsFor = (path: string): StreamEvent[] => {
     let rows = rowsByPath.get(path);
-    if (rows === undefined) {
+    if (!rows) {
       rows = [];
       rowsByPath.set(path, rows);
     }
@@ -171,14 +171,14 @@ function makeJournal(homePath = HOME) {
 
   const commit = (path: string, event: StreamEventInput): StreamEvent => {
     const injected = failNext.get(path);
-    if (injected !== undefined) {
+    if (injected) {
       failNext.delete(path);
       throw injected;
     }
     const rows = rowsFor(path);
-    if (event.idempotencyKey !== undefined) {
+    if (event.idempotencyKey) {
       const existing = rows.find((row) => row.idempotencyKey === event.idempotencyKey);
-      if (existing !== undefined) {
+      if (existing) {
         if (!sameIdempotentEvent(existing, event)) {
           throw new Error(idempotencyConflictMessage(event.idempotencyKey, existing.offset));
         }
@@ -214,7 +214,7 @@ function makeJournal(homePath = HOME) {
         beforeOffset?: number | null;
         limit?: number;
       }) => {
-        if (failNextRead !== undefined) {
+        if (failNextRead) {
           const error = failNextRead;
           failNextRead = undefined;
           return Promise.reject(error);
@@ -249,7 +249,7 @@ function makeJournal(homePath = HOME) {
               hangNextRead = false;
               return new Promise<StreamEvent[]>(() => {});
             }
-            if (failNextRead !== undefined) {
+            if (failNextRead) {
               const error = failNextRead;
               failNextRead = undefined;
               return Promise.reject(error);
@@ -258,7 +258,7 @@ function makeJournal(homePath = HOME) {
               .filter(
                 (row) =>
                   row.offset > cursor &&
-                  (args?.beforeOffset == null || row.offset < args.beforeOffset),
+                  (!Number.isFinite(args?.beforeOffset) || row.offset < args.beforeOffset),
               )
               .slice(0, limit);
             if (page.length > 0) cursor = page.at(-1)!.offset;
@@ -297,7 +297,7 @@ function makeJournal(homePath = HOME) {
       hangNextRead = true;
     },
     pauseGuardedAppends() {
-      if (guardedAppendGate !== undefined) throw new Error("guarded appends are already paused");
+      if (guardedAppendGate) throw new Error("guarded appends are already paused");
       guardedAppendGate = deferred();
       return () => {
         const gate = guardedAppendGate;
@@ -327,9 +327,9 @@ function makeProgressStore() {
   const commits: ProcessorProgress<TaskState>[] = [];
   let failNextCommit: Error | undefined;
   const store: ProcessorProgressStore<TaskState> = {
-    read: () => (record === undefined ? undefined : structuredClone(record)),
+    read: () => (!record ? undefined : structuredClone(record)),
     commit: (progress, opts) => {
-      if (failNextCommit !== undefined) {
+      if (failNextCommit) {
         const error = failNextCommit;
         failNextCommit = undefined;
         throw error;
@@ -351,7 +351,7 @@ function makeProgressStore() {
       // backward acknowledgement is a stale incarnation rolling the cursor
       // back; only a revision-bumping rewind may move it backward.
       if (
-        record !== undefined &&
+        record &&
         progress.processing.acknowledgedThroughOffset <
           record.processing.acknowledgedThroughOffset &&
         progress.processing.cursorRevision <= persistedRevision
@@ -414,8 +414,9 @@ type HarnessArgs = {
 };
 
 function eventBatch(events: StreamEvent[], streamMaxOffset: number, streamId = TEST_STREAM_ID) {
-  const scannedAfterOffset =
-    events[0]?.offset === undefined ? streamMaxOffset : events[0].offset - 1;
+  const scannedAfterOffset = !Number.isFinite(events[0]?.offset)
+    ? streamMaxOffset
+    : events[0].offset - 1;
   return {
     streamId,
     events,
@@ -457,10 +458,10 @@ function makeHarness(args: HarnessArgs = {}) {
     stream: journal.stream,
     durability: {
       progress: store.store,
-      ...(args.recovery === undefined ? {} : { recovery: args.recovery }),
+      ...(!args.recovery ? {} : { recovery: args.recovery }),
     },
     now: args.now ?? (() => 0),
-    ...(args.readPageSize === undefined ? {} : { readPageSize: args.readPageSize }),
+    ...(!Number.isFinite(args.readPageSize) ? {} : { readPageSize: args.readPageSize }),
   });
 
   return {
@@ -896,7 +897,7 @@ describe("StreamProcessorRunner crash/redelivery", () => {
     return {
       onProcess: (args, eventKey) => {
         args.blockProcessorWhile(async () => {
-          if (args.event.offset === state.gateOffset && state.gate !== undefined) {
+          if (args.event.offset === state.gateOffset && state.gate) {
             await state.gate;
           }
           await args.appendTo(SIBLING, {

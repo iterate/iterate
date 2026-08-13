@@ -201,6 +201,6 @@ it("writes unit tests without performing network I/O", async () => {
 });
 
 function restoreEnv(name: string, value: string | undefined) {
-  if (value === undefined) delete process.env[name];
+  if (!value) delete process.env[name];
   else process.env[name] = value;
 }

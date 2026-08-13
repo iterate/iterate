@@ -21,7 +21,7 @@ export const fetchAuthSnapshot: () => Promise<AuthSnapshot> = createServerFn({
 }).handler(async ({ context }): Promise<AuthSnapshot> => {
   const principal = context.principal ?? null;
   return {
-    authenticated: principal !== null,
+    authenticated: !!principal,
     isAdmin: principal?.isAdmin ?? false,
     email: principal?.email,
   };

@@ -86,12 +86,12 @@ export function createLazyRepoReader(input: {
     fromPack: Map<string, RawGitObject>,
   ): Promise<TreeEntry[]> => {
     const packed = fromPack.get(oid);
-    if (packed !== undefined) {
+    if (packed) {
       if (packed.type !== "tree") throw new Error(`object ${oid} is a ${packed.type}, not a tree`);
       return parseTree(packed.payload);
     }
     let stored = await store.getObject(oid).catch(() => null);
-    if (stored === null) {
+    if (!stored) {
       // Corrupt (now quarantined) or missing — the server excluded it via a
       // have-closure while our copy rotted. Heal by exact oid; a tree that
       // stays unavailable would otherwise wedge every future sync, because
@@ -99,7 +99,7 @@ export function createLazyRepoReader(input: {
       await hydrate([oid]);
       stored = await store.getObject(oid);
     }
-    if (stored === null || stored.type !== "tree") {
+    if (!stored || stored.type !== "tree") {
       throw new Error(`tree ${oid} is unavailable from the pack, the store, and the remote`);
     }
     return parseTree(stored.payload);
@@ -148,7 +148,7 @@ export function createLazyRepoReader(input: {
     });
     const fromPack = new Map(objects.map((object) => [object.oid, object]));
     const commit = fromPack.get(targetOid);
-    if (commit === undefined || commit.type !== "commit") {
+    if (!commit || commit.type !== "commit") {
       // Wants for unknown oids are silently dropped by the server — surface
       // the inconsistency instead of persisting a half-synced head.
       throw new Error(`sync fetch did not return commit ${targetOid}`);
@@ -159,14 +159,14 @@ export function createLazyRepoReader(input: {
     const nextPaths = new Set(next.files.map((file) => file.path));
     const upserts = next.files.filter((file) => {
       const old = before.get(file.path);
-      return old === undefined || old.blobOid !== file.blobOid || old.mode !== file.mode;
+      return !old || old.blobOid !== file.blobOid || old.mode !== file.mode;
     });
     // Persist pack objects, then make sure every NEW manifest blob is really
     // held: the server's have-closure exclusion can swallow a blob that moved
     // into a changed directory from an unchanged one (rename/copy).
     store.putObjects(objects);
     await hydrate(upserts.filter((file) => file.mode !== GITLINK_MODE).map((file) => file.blobOid));
-    if (stillWanted !== undefined && !stillWanted()) {
+    if (stillWanted && !stillWanted()) {
       // The caller's policy moved on during the fetch (a commit advanced the
       // floor). The fetched objects are content-addressed and harmless;
       // installing the now-stale snapshot is not.
@@ -187,23 +187,23 @@ export function createLazyRepoReader(input: {
     const entries = store.manifestEntries(branch, paths);
     await hydrate(
       entries
-        .filter((entry): entry is ManifestFile => entry !== null && entry.mode !== GITLINK_MODE)
+        .filter((entry): entry is ManifestFile => !!entry && entry.mode !== GITLINK_MODE)
         .map((entry) => entry.blobOid),
     );
     const out: (Uint8Array | null)[] = [];
     for (const entry of entries) {
-      if (entry === null || entry.mode === GITLINK_MODE) {
+      if (!entry || entry.mode === GITLINK_MODE) {
         out.push(null);
         continue;
       }
       let object = await store.getObject(entry.blobOid).catch(() => null);
-      if (object === null) {
+      if (!object) {
         // Missing after hydration = a corrupt row was deleted mid-read; give
         // the remote one chance to replace it.
         await hydrate([entry.blobOid]);
         object = await store.getObject(entry.blobOid);
       }
-      if (object === null) throw new Error(`blob ${entry.blobOid} unavailable after rehydration`);
+      if (!object) throw new Error(`blob ${entry.blobOid} unavailable after rehydration`);
       out.push(object.payload);
     }
     return out;
@@ -254,7 +254,7 @@ export function createLazyRepoReader(input: {
     const refs = await wire.lsRefs([`refs/heads/${branch}`]);
     // gitty ignores ref-prefix filters (probed) — match by exact name.
     const tip = refs.find((ref) => ref.name === `refs/heads/${branch}`)?.oid;
-    if (tip === undefined) throw new Error(`remote has no refs/heads/${branch}`);
+    if (!tip) throw new Error(`remote has no refs/heads/${branch}`);
     return tip;
   };
 
@@ -274,8 +274,8 @@ export function createLazyRepoReader(input: {
     syncToHead: (targetOid: string, opts?: { stillWanted?: () => boolean }): Promise<StoredHead> =>
       serialized(async () => {
         const current = store.head(branch);
-        if (opts?.stillWanted !== undefined && !opts.stillWanted()) {
-          if (current === null) throw new Error("sync skipped by its guard and no snapshot exists");
+        if (opts?.stillWanted && !opts.stillWanted()) {
+          if (!current) throw new Error("sync skipped by its guard and no snapshot exists");
           return current;
         }
         return syncOnce(targetOid, opts?.stillWanted);
@@ -288,7 +288,7 @@ export function createLazyRepoReader(input: {
     listHead: (): Promise<{ head: StoredHead; paths: string[] }> =>
       serialized(async () => {
         const head = store.head(branch);
-        if (head === null) throw new Error("listHead requires a synced head");
+        if (!head) throw new Error("listHead requires a synced head");
         return {
           head,
           paths: store
@@ -306,7 +306,7 @@ export function createLazyRepoReader(input: {
     readHeadPaths: (paths: string[]): Promise<{ bytes: (Uint8Array | null)[]; head: StoredHead }> =>
       serialized(async () => {
         const head = store.head(branch);
-        if (head === null) throw new Error("readHeadPaths requires a synced head");
+        if (!head) throw new Error("readHeadPaths requires a synced head");
         return { bytes: await readPathBytesLocked(paths), head };
       }),
 
@@ -318,7 +318,7 @@ export function createLazyRepoReader(input: {
     readHeadSnapshot: (): Promise<{ files: Record<string, string>; head: StoredHead }> =>
       serialized(async () => {
         const head = store.head(branch);
-        if (head === null) throw new Error("readHeadSnapshot requires a synced head");
+        if (!head) throw new Error("readHeadSnapshot requires a synced head");
         const paths = store
           .manifest(branch)
           .filter((file) => file.mode !== GITLINK_MODE)
@@ -327,7 +327,7 @@ export function createLazyRepoReader(input: {
         const files: Record<string, string> = {};
         paths.forEach((path, index) => {
           const payload = bytes[index];
-          if (payload !== null && payload !== undefined) {
+          if (payload) {
             files[path] = textDecoder.decode(payload);
           }
         });
@@ -338,7 +338,7 @@ export function createLazyRepoReader(input: {
     readPaths: async (paths: string[]): Promise<(string | null)[]> =>
       serialized(async () =>
         (await readPathBytesLocked(paths)).map((payload) =>
-          payload === null ? null : textDecoder.decode(payload),
+          !payload ? null : textDecoder.decode(payload),
         ),
       ),
 
@@ -371,7 +371,7 @@ export function createLazyRepoReader(input: {
   ): Promise<LazyCommitOutcome> {
     {
       const head = store.head(branch);
-      if (head === null) throw new Error("lazy commit requires a synced head");
+      if (!head) throw new Error("lazy commit requires a synced head");
       const manifest = new Map(store.manifest(branch).map((file) => [file.path, file]));
       const oldDirs = new Map(store.dirTrees(branch).map((dir) => [dir.path, dir.treeOid]));
 
@@ -426,7 +426,7 @@ export function createLazyRepoReader(input: {
         if (dir === "") return;
         const parent = parentDirOf(dir);
         let set = childDirs.get(parent);
-        if (set === undefined) childDirs.set(parent, (set = new Set()));
+        if (!set) childDirs.set(parent, (set = new Set()));
         if (!set.has(dir)) {
           set.add(dir);
           noteChild(parent);
@@ -437,7 +437,7 @@ export function createLazyRepoReader(input: {
         noteChild(dir);
         if (!changedDirs.has(dir)) continue;
         let list = filesByDir.get(dir);
-        if (list === undefined) filesByDir.set(dir, (list = []));
+        if (!list) filesByDir.set(dir, (list = []));
         list.push(file);
       }
       for (const dir of oldDirs.keys()) if (dir !== "") noteChild(dir);
@@ -449,7 +449,7 @@ export function createLazyRepoReader(input: {
         const entries: TreeEntry[] = [];
         for (const child of childDirs.get(dir) ?? []) {
           const childOid = await buildDir(child);
-          if (childOid === null) newDirs.delete(child);
+          if (!childOid) newDirs.delete(child);
           else {
             newDirs.set(child, childOid);
             entries.push({

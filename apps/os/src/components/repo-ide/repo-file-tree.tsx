@@ -66,17 +66,17 @@ export function RepoFileTree({
   const { model } = useFileTree({
     paths: mergedPaths,
     initialExpansion: "open",
-    ...(selectedPath === undefined ? {} : { initialSelectedPaths: [selectedPath] }),
+    ...(!selectedPath ? {} : { initialSelectedPaths: [selectedPath] }),
     onSelectionChange: (paths) => {
       const path = paths[0];
-      if (path !== undefined && model.getItem(path)?.isDirectory() === false) {
+      if (path && model.getItem(path)?.isDirectory() === false) {
         onSelectRef.current(path);
       }
     },
     renaming: {
       onRename: (event) => {
         const pendingNewFile = pendingNewFileRef.current;
-        if (pendingNewFile !== null && event.sourcePath === pendingNewFile) {
+        if (pendingNewFile && event.sourcePath === pendingNewFile) {
           pendingNewFileRef.current = null;
           actionsRef.current.createFile(event.destinationPath);
           return;

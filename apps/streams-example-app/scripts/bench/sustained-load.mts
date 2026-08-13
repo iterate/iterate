@@ -9,7 +9,7 @@ process.on("uncaughtException", (error) => {
 });
 
 const [wsBase, path, rateArg, batchArg, secondsArg] = process.argv.slice(2);
-if (wsBase === undefined || path === undefined) {
+if (!wsBase || !path) {
   console.error("usage: sustained-load.mts <wsBase> <path> [ratePerSec] [batchSize] [seconds]");
   process.exit(1);
 }

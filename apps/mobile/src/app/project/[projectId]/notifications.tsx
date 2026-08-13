@@ -71,7 +71,7 @@ export default function NotificationsScreen() {
     queryFn: () => getMobileDeviceId(),
     staleTime: Infinity,
   });
-  const deviceStreamPath = device.data === undefined ? undefined : `/devices/${device.data}`;
+  const deviceStreamPath = !device.data ? undefined : `/devices/${device.data}`;
 
   const events = useLiveEvents({
     queryKey: ["device-notification-events", baseUrl || "pending", projectId, deviceStreamPath],
@@ -81,7 +81,7 @@ export default function NotificationsScreen() {
         .get(deviceStreamPath!)
         .getEvents({ eventTypes: DEVICE_NOTIFICATION_EVENT_TYPES });
     },
-    enabled: baseUrl !== undefined && deviceStreamPath !== undefined,
+    enabled: !!baseUrl && !!deviceStreamPath,
     eventTypes: DEVICE_NOTIFICATION_EVENT_TYPES,
     projectId,
     streamPath: deviceStreamPath || "/devices/pending",
@@ -98,7 +98,7 @@ export default function NotificationsScreen() {
       const project = await getProjectItx(baseUrl!, projectId);
       return await readAllApprovalEvents(project.streams.get("/"));
     },
-    enabled: baseUrl !== undefined,
+    enabled: !!baseUrl,
     eventTypes: APPROVAL_STREAM_EVENT_TYPES,
     projectId,
     streamPath: "/",
@@ -111,7 +111,7 @@ export default function NotificationsScreen() {
   return (
     <View style={styles.screen}>
       <Stack.Screen options={{ title: slug ? `${slug} notifications` : "Notifications" }} />
-      {baseUrl === undefined ? null : <ApproverKeyBanner baseUrl={baseUrl} projectId={projectId} />}
+      {!baseUrl ? null : <ApproverKeyBanner baseUrl={baseUrl} projectId={projectId} />}
       {events.isPending || device.isPending || approvalEvents.isPending ? (
         <View style={styles.center}>
           <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
@@ -159,7 +159,7 @@ export default function NotificationsScreen() {
               projectSlug={slug || ""}
               row={row}
               targeted={
-                row.approvalRequestEventOffset !== null &&
+                Number.isFinite(row.approvalRequestEventOffset) &&
                 row.approvalRequestEventOffset === targetOffset
               }
             />
@@ -197,7 +197,7 @@ function NotificationRow({
   // default — expanded when this row is what a push navigated here for.
   const [toggled, setToggled] = useState<boolean | null>(null);
   const expanded = toggled ?? targeted;
-  const expandable = row.approvalRequestEventOffset !== null;
+  const expandable = Number.isFinite(row.approvalRequestEventOffset);
   const openDestination = () => {
     // Synthetic rows are always expandable, so this only fires for a device
     // row without a batch identity — the push's own tap behavior.
@@ -207,7 +207,7 @@ function NotificationRow({
       projectId,
       requestOffset: row.requestOffset,
     });
-    if (route !== null) router.push(route);
+    if (route) router.push(route);
   };
   return (
     <View
@@ -245,7 +245,7 @@ function NotificationRow({
           {row.status.label}
         </Text>
       </Pressable>
-      {expanded && row.approvalRequestEventOffset !== null ? (
+      {expanded && Number.isFinite(row.approvalRequestEventOffset) ? (
         <ApprovalNotificationDetail
           baseUrl={baseUrl}
           batchOffset={row.approvalRequestEventOffset}
@@ -320,7 +320,7 @@ function ApprovalNotificationDetail({
   // the live window.
   const liveDetail = deriveBatchDetail(liveApprovalEvents, batchOffset);
   const detail = (liveDetail?.resolved ? liveDetail : null) || batch.data || liveDetail;
-  if (detail === null || detail === undefined) {
+  if (!detail) {
     if (batch.isPending) {
       return (
         <View style={styles.detail}>
@@ -389,7 +389,7 @@ function ApprovalNotificationDetail({
         showThreadInfo={true}
         surface="notification"
       />
-      {resolved === null && !expired ? (
+      {!resolved && !expired ? (
         // A still-open batch is decidable right here — this screen is the
         // approvals surface now. An expired-undecided one shows nothing
         // extra: the door's expiry decision lands within the provisional

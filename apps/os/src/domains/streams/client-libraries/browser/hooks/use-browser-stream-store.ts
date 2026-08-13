@@ -40,7 +40,7 @@ export function useBrowserStreamStore(input: {
     () =>
       acquireStreamRuntime({
         createStreamClient,
-        ...(resetTransport === undefined ? {} : { resetTransport }),
+        ...(!resetTransport ? {} : { resetTransport }),
         projectId,
         streamPath,
         processors: BROWSER_STREAM_PROCESSORS,

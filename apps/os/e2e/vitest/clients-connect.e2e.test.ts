@@ -154,7 +154,7 @@ async function settleClient(
   while (Date.now() < deadline) {
     const list = await project.clients.list();
     latest = list.find((client) => client.path === path);
-    if (latest !== undefined && accept(latest)) break;
+    if (latest && accept(latest)) break;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return latest;

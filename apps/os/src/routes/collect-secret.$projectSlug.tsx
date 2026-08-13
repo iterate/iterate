@@ -120,7 +120,7 @@ function CollectSecretCard() {
       if ((await secret.__describe()).hasMaterial !== true) {
         throw new Error(`The secret at ${search.path} did not report stored material.`);
       }
-      if (search.notify === undefined) return "no-notify";
+      if (!search.notify) return "no-notify";
       // The secret IS stored from here on — a notify failure must not present
       // as total failure (the user would retype; the agent would wait forever).
       try {
@@ -143,7 +143,7 @@ function CollectSecretCard() {
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
 
-  if (saved !== null) {
+  if (saved) {
     return (
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
@@ -172,7 +172,7 @@ function CollectSecretCard() {
       </CardHeader>
       <Separator />
       <CardContent className="space-y-4 pt-6">
-        {search.description === undefined ? null : (
+        {!search.description ? null : (
           <div className="space-y-1 text-sm">
             <div className="text-muted-foreground">The requester says</div>
             <div>{search.description}</div>

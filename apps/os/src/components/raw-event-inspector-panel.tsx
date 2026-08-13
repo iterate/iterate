@@ -76,11 +76,11 @@ export function RawEventInspectorContent({
       // arrow keys instead of paging the event log.
       if (isTypingTarget(event.target)) return;
       const { previousOffset, nextOffset } = neighboursRef.current;
-      if (event.key === "ArrowLeft" && previousOffset != null) {
+      if (event.key === "ArrowLeft" && Number.isFinite(previousOffset)) {
         event.preventDefault();
         navigate(previousOffset);
       }
-      if (event.key === "ArrowRight" && nextOffset != null) {
+      if (event.key === "ArrowRight" && Number.isFinite(nextOffset)) {
         event.preventDefault();
         navigate(nextOffset);
       }
@@ -96,12 +96,10 @@ export function RawEventInspectorContent({
   // Parse + reorder only when the underlying row changes, not on every render:
   // a fresh object identity would rebuild CodeMirror (its editor is keyed on
   // the doc value) even when an incidental re-render left the event untouched.
-  const selectedRawJson = selected == null ? null : String(selected.raw_json);
+  const selectedRawJson = !selected ? null : String(selected.raw_json);
   const orderedEventData = useMemo(
     () =>
-      selectedRawJson == null
-        ? null
-        : orderEventKeysForYamlDisplay(parseRawEventJson(selectedRawJson)),
+      !selectedRawJson ? null : orderEventKeysForYamlDisplay(parseRawEventJson(selectedRawJson)),
     [selectedRawJson],
   );
 
@@ -120,11 +118,11 @@ export function RawEventInspectorContent({
     <>
       <SheetHeader className="shrink-0 pr-12">
         <SheetTitle className="truncate" title={String(selected?.type ?? "")}>
-          {selected == null ? `Event #${offset}` : shortEventType(String(selected.type))}
+          {!selected ? `Event #${offset}` : shortEventType(String(selected.type))}
         </SheetTitle>
         <SheetDescription>
           #{offset}
-          {total == null ? null : ` · ${total} mirrored events`}
+          {!Number.isFinite(total) ? null : ` · ${total} mirrored events`}
           {typeof selected?.created_at === "string" ? ` · ${selected.created_at}` : null}
         </SheetDescription>
       </SheetHeader>
@@ -132,8 +130,10 @@ export function RawEventInspectorContent({
         <Button
           size="sm"
           variant="outline"
-          disabled={!navigationEnabled || previousOffset == null}
-          onClick={() => navigationEnabled && previousOffset != null && onNavigate(previousOffset)}
+          disabled={!navigationEnabled || !Number.isFinite(previousOffset)}
+          onClick={() =>
+            navigationEnabled && Number.isFinite(previousOffset) && onNavigate(previousOffset)
+          }
         >
           <ChevronLeftIcon />
           Prev
@@ -141,21 +141,21 @@ export function RawEventInspectorContent({
         <Button
           size="sm"
           variant="outline"
-          disabled={!navigationEnabled || nextOffset == null}
-          onClick={() => navigationEnabled && nextOffset != null && onNavigate(nextOffset)}
+          disabled={!navigationEnabled || !Number.isFinite(nextOffset)}
+          onClick={() => navigationEnabled && Number.isFinite(nextOffset) && onNavigate(nextOffset)}
         >
           Next
           <ChevronRightIcon />
         </Button>
         <span className="text-xs text-muted-foreground/70">← → keys page the log</span>
         <span className="ml-auto flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
-          {sincePrevious == null ? null : <span title="Since previous event">{sincePrevious}</span>}
-          {sincePrevious != null && untilNext != null ? <span>·</span> : null}
-          {untilNext == null ? null : <span title="Until next event">{untilNext} to next</span>}
+          {!sincePrevious ? null : <span title="Since previous event">{sincePrevious}</span>}
+          {sincePrevious && untilNext ? <span>·</span> : null}
+          {!untilNext ? null : <span title="Until next event">{untilNext} to next</span>}
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto border-t px-4 py-3">
-        {orderedEventData != null ? (
+        {orderedEventData ? (
           // Paging seeds each new query with the prior row while SQLite catches
           // up (stale-while-revalidate), so keep painting the last payload
           // instead of flashing the placeholder — the swap is a clean SQL read.
@@ -200,7 +200,7 @@ function parseTimestamp(value: unknown): number | null {
 
 /** `+950ms`, `+3.2s`, `+1m40s` — inter-event gap between two mirror timestamps. */
 function elapsedBetween(fromMs: number | null, toMs: number | null): string | null {
-  if (fromMs == null || toMs == null) return null;
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return null;
   const ms = Math.max(0, Math.floor(toMs - fromMs));
   if (ms < 1_000) return `+${ms}ms`;
   if (ms < 60_000) {
@@ -239,7 +239,7 @@ function orderEventKeysForYamlDisplay(event: Record<string, unknown>): Record<st
 function parseRawEventJson(rawJson: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(rawJson) as unknown;
-    return typeof parsed === "object" && parsed != null
+    return typeof parsed === "object" && parsed
       ? (parsed as Record<string, unknown>)
       : { value: parsed };
   } catch {

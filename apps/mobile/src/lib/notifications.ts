@@ -113,7 +113,7 @@ export function deriveDeviceNotifications(events: readonly StreamEvent[]): Devic
     const requestOffset = (event.payload as { requestOffset?: number }).requestOffset;
     if (typeof requestOffset !== "number") continue;
     const row = rows.get(requestOffset);
-    if (row === undefined) continue;
+    if (!row) continue;
     if (event.type === "events.iterate.com/device/notification-attempt-started") {
       row.status = { kind: "sending", label: "Sending…" };
     } else if (event.type === "events.iterate.com/device/notification-ticket-observed") {
@@ -174,7 +174,7 @@ export function deriveNotificationListRows(
 ): NotificationListRow[] {
   const journaled = new Set(
     deviceRows.flatMap((row) =>
-      row.approvalRequestEventOffset === null ? [] : [row.approvalRequestEventOffset],
+      !Number.isFinite(row.approvalRequestEventOffset) ? [] : [row.approvalRequestEventOffset],
     ),
   );
   const requestedAtByOffset = new Map(

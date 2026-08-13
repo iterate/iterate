@@ -63,7 +63,7 @@ const op = (version: number, clientId = "a", clientSeq = version) => ({
 const implementations: [string, () => CollabSessionStore][] = [
   ["fake", () => fakeSessionStore().store],
 ];
-if (sqlite !== null) {
+if (sqlite) {
   implementations.push(["sqlite", () => sqliteCollabStore(nodeSqliteStorage())]);
 }
 
@@ -203,7 +203,7 @@ describe.each(implementations)("putSnapshot lifecycle (%s)", (_name, makeStore) 
   });
 });
 
-(sqlite === null ? describe.skip : describe)("sqlite schema migration", () => {
+(!sqlite ? describe.skip : describe)("sqlite schema migration", () => {
   test("append works on a database born with the pre-created_at schema", async () => {
     const storage = nodeSqliteStorage();
     storage.sql.exec(

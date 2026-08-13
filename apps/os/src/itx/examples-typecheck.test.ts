@@ -61,7 +61,7 @@ test.for(ITX_EXAMPLES.map((example) => ({ id: example.id, example })))(
     expect(nameMisses, "bodies must be self-contained (itx, vars, globals only)").toEqual([]);
 
     const gapReason = SURFACE_GAPS[example.id];
-    if (gapReason === undefined) {
+    if (!gapReason) {
       expect(problems).toEqual([]);
     } else {
       // The gap must be real: an excused entry that compiles clean means the

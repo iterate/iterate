@@ -82,11 +82,7 @@ export function AgentPillComposer({
   const [isDragging, setIsDragging] = useState(false);
   // Clamp to a mode the supplied configs can actually render.
   const activeMode: AgentComposerMode =
-    mode === "message" && message == null
-      ? "raw"
-      : mode !== "message" && raw == null
-        ? "message"
-        : mode;
+    mode === "message" && !message ? "raw" : mode !== "message" && !raw ? "message" : mode;
   const isExamples = activeMode === "examples";
   const canSubmit =
     !disabled &&
@@ -95,8 +91,8 @@ export function AgentPillComposer({
     (activeMode === "message"
       ? (message?.canSubmit ?? (message?.value.trim() ?? "") !== "")
       : (raw?.value.trim() ?? "") !== "");
-  const showInterrupt = activeMode === "message" && onInterrupt != null;
-  const acceptsFileDrop = message?.onAddFiles != null && !isSubmitting;
+  const showInterrupt = activeMode === "message" && !!onInterrupt;
+  const acceptsFileDrop = !!message?.onAddFiles && !isSubmitting;
 
   useEffect(() => {
     if (autoFocusMessage && activeMode === "message") messageRef.current?.focus();
@@ -109,7 +105,7 @@ export function AgentPillComposer({
   }
 
   function interrupt() {
-    if (disabled || isSubmitting || isInterrupting || onInterrupt == null) return;
+    if (disabled || isSubmitting || isInterrupting || !onInterrupt) return;
     void onInterrupt();
   }
 
@@ -143,7 +139,7 @@ export function AgentPillComposer({
 
   return (
     <div className="w-full">
-      {error == null ? null : (
+      {!error ? null : (
         <p className="mb-2 ml-4 truncate font-mono text-xs text-destructive" role="alert">
           {error}
         </p>
@@ -160,8 +156,8 @@ export function AgentPillComposer({
           isDragging && "ring-2 ring-primary/40 border-primary/40",
         )}
       >
-        {raw == null ? (
-          message?.onAttach == null ? null : (
+        {!raw ? (
+          !message?.onAttach ? null : (
             <Button
               variant="ghost"
               size="icon-lg"
@@ -192,7 +188,7 @@ export function AgentPillComposer({
                 value={activeMode}
                 onValueChange={(value) => onModeChange(value as AgentComposerMode)}
               >
-                <DropdownMenuRadioItem value="message" closeOnClick disabled={message == null}>
+                <DropdownMenuRadioItem value="message" closeOnClick disabled={!message}>
                   <MessageSquareIcon className="text-muted-foreground" />
                   <span className="flex min-w-0 flex-1 flex-col py-0.5">
                     <span className="font-medium">Message</span>
@@ -206,7 +202,7 @@ export function AgentPillComposer({
                     <span className="text-xs text-muted-foreground">Append YAML or JSON</span>
                   </span>
                 </DropdownMenuRadioItem>
-                {examples == null ? null : (
+                {!examples ? null : (
                   <DropdownMenuRadioItem value="examples" closeOnClick>
                     <SparklesIcon className="text-muted-foreground" />
                     <span className="flex min-w-0 flex-1 flex-col py-0.5">
@@ -218,7 +214,7 @@ export function AgentPillComposer({
                   </DropdownMenuRadioItem>
                 )}
               </DropdownMenuRadioGroup>
-              {message?.onAttach == null ? null : (
+              {!message?.onAttach ? null : (
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
@@ -246,7 +242,7 @@ export function AgentPillComposer({
 
         {isExamples ? (
           <div className="max-h-80 min-w-0 flex-1 overflow-y-auto px-2 py-1">{examples}</div>
-        ) : activeMode === "raw" && raw != null ? (
+        ) : activeMode === "raw" && raw ? (
           <CodeEditor
             value={raw.value}
             onValueChange={raw.onValueChange}
@@ -257,9 +253,7 @@ export function AgentPillComposer({
           />
         ) : (
           <div className="flex min-w-0 flex-1 flex-col">
-            {message?.attachments == null ? null : (
-              <div className="px-1 pb-1">{message.attachments}</div>
-            )}
+            {!message?.attachments ? null : <div className="px-1 pb-1">{message.attachments}</div>}
             <textarea
               ref={messageRef}
               value={message?.value ?? ""}

@@ -243,7 +243,7 @@ function FeedItemRows({
               />
             )}
             <span>
-              {snapshot.connectionError === undefined
+              {!snapshot.connectionError
                 ? snapshot.connectionStatus === "receiving-events"
                   ? "No feed items yet"
                   : `Stream connection is ${snapshot.connectionStatus}`
@@ -316,7 +316,7 @@ function FeedItemRows({
                     // Direct DOM write: lands at the exact bottom, and the
                     // scroll event it fires re-engages the stick (≤2px).
                     const scroller = parentRef.current;
-                    if (scroller != null) scroller.scrollTop = scroller.scrollHeight;
+                    if (scroller) scroller.scrollTop = scroller.scrollHeight;
                   }}
                 >
                   <span className="text-base leading-none">↓</span>
@@ -341,7 +341,7 @@ function FeedRuntimeNotice({
   itemCount: number;
   snapshot: StreamBrowserSnapshot;
 }) {
-  if (snapshot.connectionError !== undefined) {
+  if (snapshot.connectionError) {
     return (
       <div
         className="grid gap-[3px] border-b border-[#fecdca] bg-[#fff4f2] py-[9px] pr-4 text-xs text-[#912018]"
@@ -403,14 +403,14 @@ function FeedItemWindow({
     const rows = new Map<number, FeedItemRow>();
     for (const row of rowQueryResult.data) {
       const parsed = parseFeedItem(row);
-      if (parsed !== undefined) rows.set(parsed.local_index, parsed);
+      if (parsed) rows.set(parsed.local_index, parsed);
     }
     return rows;
   }, [rowQueryResult.data]);
 
   return virtualItems.map((virtualItem) => {
     const row = rowsByLocalIndex.get(virtualItem.index);
-    const isExpanded = row !== undefined && expandedLocalIndexes.has(row.local_index);
+    const isExpanded = !!row && expandedLocalIndexes.has(row.local_index);
     const isLastFeedRow = virtualItem.index === itemCount - 1;
 
     return (
@@ -427,7 +427,7 @@ function FeedItemWindow({
         // measurement cache, so unmeasured pending rows would never be placed.
         ref={measureElement}
       >
-        {row === undefined ? (
+        {!row ? (
           <article
             className="box-border h-9 rounded-md border border-[#e1e5eb]"
             data-testid="feed-item-pending"
@@ -600,14 +600,13 @@ function ChildStreamCreatedFeedItem({
   onToggle(): void;
 }) {
   const childPath = childStreamPathFromRow(row);
-  const childSearch =
-    childPath === undefined
-      ? undefined
-      : streamViewSearch({
-          path: childPath,
-          projectId: streamView.projectId,
-          view: "browser-feed",
-        });
+  const childSearch = !childPath
+    ? undefined
+    : streamViewSearch({
+        path: childPath,
+        projectId: streamView.projectId,
+        view: "browser-feed",
+      });
 
   return (
     <article
@@ -626,7 +625,7 @@ function ChildStreamCreatedFeedItem({
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-xs font-medium text-violet-950">Child stream created</p>
-            {childPath === undefined ? (
+            {!childPath ? (
               <p className="mt-1 font-mono text-[11px] text-violet-700/80">
                 missing childPath in payload
               </p>
@@ -635,7 +634,7 @@ function ChildStreamCreatedFeedItem({
                 Under <span className="font-mono text-violet-900">{streamView.path}</span>
               </p>
             )}
-            {childSearch === undefined ? null : (
+            {!childSearch ? null : (
               <Link
                 className="mt-2 inline-flex items-center gap-1 font-mono text-xs text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
                 data-testid="feed-child-stream-link"
@@ -677,9 +676,9 @@ function FeedItemJson({ row }: { row: FeedItemRow }) {
 
 function childStreamPathFromRow(row: FeedItemRow): string | undefined {
   const event = feedItemEvents(row)[0];
-  if (event === undefined) return undefined;
+  if (!event) return undefined;
   const payload = event.payload;
-  if (payload === null || typeof payload !== "object") return undefined;
+  if (!payload || typeof payload !== "object") return undefined;
   const childPath = (payload as Record<string, unknown>).childPath;
   return typeof childPath === "string" && childPath.length > 0 ? childPath : undefined;
 }
@@ -687,14 +686,14 @@ function childStreamPathFromRow(row: FeedItemRow): string | undefined {
 function feedItemEventType(row: FeedItemRow) {
   if (typeof row.data.eventType === "string") return row.data.eventType;
   const first = feedItemEvents(row)[0];
-  if (first !== undefined && typeof first.type === "string") return first.type;
+  if (first && typeof first.type === "string") return first.type;
   return SPECIFIC_RENDERER_TYPES[row.kind] ?? row.kind;
 }
 
 function feedItemEvents(row: FeedItemRow): Record<string, unknown>[] {
   if (!Array.isArray(row.data.events)) return [];
   return row.data.events.flatMap((entry) =>
-    entry !== null && typeof entry === "object" ? [entry as Record<string, unknown>] : [],
+    entry && typeof entry === "object" ? [entry as Record<string, unknown>] : [],
   );
 }
 
@@ -717,7 +716,7 @@ function parseFeedItem(row: Record<string, unknown>): FeedItemRow | undefined {
   if (typeof row.data === "string") {
     try {
       const parsed: unknown = JSON.parse(row.data);
-      if (parsed !== null && typeof parsed === "object") data = parsed as Record<string, unknown>;
+      if (parsed && typeof parsed === "object") data = parsed as Record<string, unknown>;
     } catch {
       data = {};
     }
@@ -750,7 +749,7 @@ function FeedComposer({ streamStore }: { streamStore: StreamBrowserStore }) {
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
-    if (textarea === null) return;
+    if (!textarea) return;
     textarea.style.height = "auto";
     textarea.style.height = `${textarea.scrollHeight}px`;
   }, [composerText]);

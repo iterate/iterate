@@ -82,7 +82,7 @@ export class TelegramProcessor extends StreamProcessor<
   protected override processEvent(args: ProcessEventArgs<TelegramProcessorContract>): undefined {
     const { appendTo, blockProcessorWhile, event, previousState, runInBackground, state } = args;
     const connection = state.birthCertificate?.config.connection;
-    if (connection === undefined) return;
+    if (!connection) return;
     switch (event?.type) {
       case "events.iterate.com/telegram/access-configured": {
         if (!webhookAckIsFresh(event, this.deps.now())) return;
@@ -110,10 +110,10 @@ export class TelegramProcessor extends StreamProcessor<
         // update belong to? Chat-less updates (inline queries, poll
         // results, …) are dropped — v1 handles chat-scoped updates only.
         const target = telegramChatFromUpdate(event.payload.body);
-        if (target == null) return;
+        if (!target) return;
 
         const senderId = telegramSenderIdFromUpdate(event.payload.body);
-        if (senderId === undefined) return;
+        if (!senderId) return;
         if (!state.allowedUserIds.includes(senderId)) {
           // Denial is deterministic router work: no agent stream, context,
           // or LLM exists for an unauthorized sender. Only ordinary messages
@@ -121,11 +121,11 @@ export class TelegramProcessor extends StreamProcessor<
           // denied silently. Freshness-gated: a replay of historical
           // webhooks must not re-send months-old denials.
           if (
-            readRecord(readRecord(event.payload.body)?.message) !== null &&
+            readRecord(readRecord(event.payload.body)?.message) &&
             webhookAckIsFresh(event, this.deps.now())
           ) {
             runInBackground(async () => {
-              if (this.projectId === null) {
+              if (!this.projectId) {
                 throw new Error(
                   "Telegram router cannot build access settings without a project id",
                 );
@@ -138,7 +138,7 @@ export class TelegramProcessor extends StreamProcessor<
                 connection,
                 body: {
                   chat_id: coerceTelegramId(target.chatId),
-                  ...(target.messageThreadId === undefined
+                  ...(!target.messageThreadId
                     ? {}
                     : { message_thread_id: coerceTelegramId(target.messageThreadId) }),
                   text: telegramAccessDeniedMessage({ settingsUrl, userId: senderId }),
@@ -175,7 +175,7 @@ export class TelegramProcessor extends StreamProcessor<
         });
 
         blockProcessorWhile(async () => {
-          if (this.projectId === null) {
+          if (!this.projectId) {
             throw new Error("Telegram router cannot create a project agent without a project id");
           }
           await appendTo(
@@ -190,7 +190,7 @@ export class TelegramProcessor extends StreamProcessor<
             {
               type: "events.iterate.com/telegram/webhook-received",
               idempotencyKey: `telegram:forward-webhook:${event.offset}`,
-              payload: { ...event.payload, ...(replyHint === null ? {} : { replyHint }) },
+              payload: { ...event.payload, ...(!replyHint ? {} : { replyHint }) },
             },
           );
         });
@@ -206,7 +206,7 @@ export class TelegramProcessor extends StreamProcessor<
     const { event, state } = args;
     switch (event.type) {
       case "events.iterate.com/telegram/created":
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/telegram/access-configured":
         return {
@@ -230,22 +230,22 @@ export class TelegramProcessor extends StreamProcessor<
         // webhook event itself is the session-start fact, so replay rebuilds
         // the exact same thread model with no extra event type.
         const connection = state.birthCertificate?.config.connection;
-        if (connection === undefined) return state;
+        if (!connection) return state;
         const senderId = telegramSenderIdFromUpdate(event.payload.body);
-        if (senderId === undefined) return state;
+        if (!senderId) return state;
         if (state.accessPolicyConfigured && !state.allowedUserIds.includes(senderId)) return state;
         const sessionStart = telegramSessionStartFromUpdate(event.payload.body, {
           connection,
           senderId,
         });
-        if (sessionStart === null) return state;
+        if (!sessionStart) return state;
         const existing = state.sessionsByChat[sessionStart.chatKey] ?? [];
         const latest = existing.at(-1);
         // (date, message_id) ordering: same-second /new pairs are ordered by
         // message_id (strictly increasing per chat); an out-of-order or
         // duplicate delivery must not roll the live session backwards.
         if (
-          latest !== undefined &&
+          latest &&
           (latest.date > sessionStart.date ||
             (latest.date === sessionStart.date && latest.messageId >= sessionStart.messageId))
         ) {
@@ -272,7 +272,7 @@ export class TelegramProcessor extends StreamProcessor<
         // effect): bot message_id → the session stream its request lived on,
         // so replies to bot messages resolve to their exact thread.
         const { chatId, messageId, sessionPath } = event.payload;
-        if (chatId === undefined || sessionPath === undefined) return state;
+        if (!chatId || !sessionPath) return state;
         return {
           ...state,
           sentMessages: {
@@ -338,9 +338,7 @@ function telegramAgentCreationEvents(input: {
           type: "telegram_thread",
           connection: input.connection,
           chatId: input.chatId,
-          ...(input.messageThreadId === undefined
-            ? {}
-            : { messageThreadId: input.messageThreadId }),
+          ...(!input.messageThreadId ? {} : { messageThreadId: input.messageThreadId }),
         },
       },
     ],
@@ -361,9 +359,7 @@ function telegramAgentCreationEvents(input: {
           config: {
             chatId: input.chatId,
             connection: input.connection,
-            ...(input.messageThreadId === undefined
-              ? {}
-              : { messageThreadId: input.messageThreadId }),
+            ...(!input.messageThreadId ? {} : { messageThreadId: input.messageThreadId }),
           },
         },
       }),
@@ -376,7 +372,7 @@ function telegramAgentCreationEvents(input: {
 /** The chat-scoped part of a routed stream path (`chat-{id}` or
  * `chat-{id}/topic-{tid}`) — the sessionsByChat key. */
 function telegramChatKey(target: { chatId: string; messageThreadId?: string }): string {
-  return target.messageThreadId === undefined
+  return !target.messageThreadId
     ? `chat-${target.chatId}`
     : `chat-${target.chatId}/topic-${target.messageThreadId}`;
 }
@@ -389,7 +385,7 @@ function telegramChatKey(target: { chatId: string; messageThreadId?: string }): 
 export function telegramNewCommand(text: unknown): { trailingText: string | null } | null {
   if (typeof text !== "string") return null;
   const match = /^\/new(?:@\S+)?(?:\s+([\s\S]+))?$/.exec(text.trim());
-  if (match === null) return null;
+  if (!match) return null;
   const trailingText = match[1]?.trim() || null;
   return { trailingText };
 }
@@ -411,13 +407,13 @@ function telegramSessionStartFromUpdate(
 } | null {
   const update = readRecord(body);
   const message = readRecord(update?.message);
-  if (message == null) return null;
+  if (!message) return null;
   if (readRecord(message.from)?.is_bot === true) return null;
-  if (telegramNewCommand(message.text) === null) return null;
+  if (!telegramNewCommand(message.text)) return null;
   const target = telegramChatFromUpdate(body);
   const date = message.date;
   const messageId = message.message_id;
-  if (target == null || typeof date !== "number" || typeof messageId !== "number") return null;
+  if (!target || typeof date !== "number" || typeof messageId !== "number") return null;
   return {
     chatKey: telegramChatKey(target),
     date,
@@ -467,21 +463,18 @@ function resolveTelegramReplyHint(input: {
   const update = readRecord(input.body);
   const message = readRecord(update?.message) ?? readRecord(update?.edited_message);
   const repliedTo = readRecord(message?.reply_to_message);
-  if (message == null || repliedTo == null) return null;
+  if (!message || !repliedTo) return null;
   const repliedToMessageId = repliedTo.message_id;
   if (typeof repliedToMessageId !== "number") return null;
   // Forum quirk: every topic message "replies to" the topic-creation service
   // message; that is threading plumbing, not a human reply gesture.
-  if (
-    input.target.messageThreadId !== undefined &&
-    String(repliedToMessageId) === input.target.messageThreadId
-  ) {
+  if (input.target.messageThreadId && String(repliedToMessageId) === input.target.messageThreadId) {
     return null;
   }
 
   const hint = ((): TelegramReplyHint => {
     const claim = input.sentMessages[`${input.chatId}:${repliedToMessageId}`];
-    if (readRecord(repliedTo.from)?.is_bot === true && claim !== undefined) {
+    if (readRecord(repliedTo.from)?.is_bot === true && claim) {
       return { resolvedBy: "sent-claim", sessionPath: claim.sessionPath };
     }
     const repliedToDate = typeof repliedTo.date === "number" ? repliedTo.date : 0;
@@ -517,7 +510,7 @@ function telegramChatFromUpdate(
   body: unknown,
 ): { chatId: string; messageThreadId?: string } | null {
   const update = readRecord(body);
-  if (update == null) return null;
+  if (!update) return null;
   const container =
     readRecord(update.message) ??
     readRecord(update.edited_message) ??
@@ -528,10 +521,10 @@ function telegramChatFromUpdate(
     readRecord(update.chat_member) ??
     readRecord(update.chat_join_request);
   const chatId = readTelegramId(readRecord(container?.chat)?.id);
-  if (chatId == null) return null;
+  if (!chatId) return null;
   const messageThreadId =
     container?.is_topic_message === true ? readTelegramId(container.message_thread_id) : undefined;
-  return { chatId, ...(messageThreadId === undefined ? {} : { messageThreadId }) };
+  return { chatId, ...(!messageThreadId ? {} : { messageThreadId }) };
 }
 
 /** Telegram ids arrive as JSON integers (possibly negative, up to 52 bits);

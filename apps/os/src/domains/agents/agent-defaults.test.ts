@@ -28,7 +28,7 @@ describe("agentCreationForPath", () => {
       const events = agentCreationForPath({
         agentPath: "/agents/demo",
         projectId: PROJECT_ID,
-        ...(project === undefined ? {} : { project }),
+        ...(!project ? {} : { project }),
       }).events;
       const boot = events.find((event) =>
         String(event.idempotencyKey).startsWith("agent/boot-system-context:"),

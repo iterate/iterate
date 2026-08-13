@@ -170,11 +170,11 @@ export class StreamSubscriberPagerRegistry {
   > {
     const dormant: Record<string, { idleDeliveredThrough: number; pageSentAtOffset?: number }> = {};
     for (const { attachment } of this.#pagers.entries()) {
-      if (attachment.idleDeliveredThrough === undefined) continue;
+      if (!Number.isFinite(attachment.idleDeliveredThrough)) continue;
       if (this.#hooks.hasConnection(attachment.connectionKey)) continue;
       dormant[attachment.connectionKey] = {
         idleDeliveredThrough: attachment.idleDeliveredThrough,
-        ...(attachment.pageSentAtOffset === undefined
+        ...(!Number.isFinite(attachment.pageSentAtOffset)
           ? {}
           : { pageSentAtOffset: attachment.pageSentAtOffset }),
       };
@@ -193,7 +193,7 @@ export class StreamSubscriberPagerRegistry {
    */
   departedOnClose(ws: WebSocket): { connectionKey: string; pagerId: string } | undefined {
     const attachment = this.#pagers.attachment(ws);
-    if (attachment === undefined || attachment.idleDeliveredThrough === undefined) {
+    if (!attachment || !Number.isFinite(attachment.idleDeliveredThrough)) {
       return undefined;
     }
     if (this.#hooks.hasConnection(attachment.connectionKey)) return undefined;
@@ -219,12 +219,12 @@ export class StreamSubscriberPagerRegistry {
     filter: EventFilter;
     events?: boolean;
   }): void {
-    const hasFilter = Object.values(args.filter).some((value) => value !== undefined);
+    const hasFilter = Object.values(args.filter).some((value) => !!value);
     const claimed = this.#pagers.claim({
       pagerKey: args.connectionKey,
       pagerId: args.subscriberPagerId ?? "missing-stream-subscriber-pager-id",
     });
-    if (claimed !== undefined) {
+    if (claimed) {
       this.#pagers.stamp(claimed.ws, {
         v: 1,
         connectionKey: args.connectionKey,
@@ -277,7 +277,7 @@ export class StreamSubscriberPagerRegistry {
     if (pagerEntries.length === 0) return;
 
     for (const { ws, attachment } of pagerEntries) {
-      if (attachment.pageSentAtOffset !== undefined) continue;
+      if (Number.isFinite(attachment.pageSentAtOffset)) continue;
       if (this.#hooks.hasConnection(attachment.connectionKey)) continue;
       // A stamped attachment is ordinary dormancy (idle teardown). An
       // UNSTAMPED socket whose connection is absent means the RPC leg died
@@ -289,8 +289,7 @@ export class StreamSubscriberPagerRegistry {
       const explicitTypes = attachment.filter?.eventTypes;
       let matcher: ReturnType<typeof compileEventFilter> | undefined;
       try {
-        matcher =
-          attachment.filter === undefined ? undefined : compileEventFilter(attachment.filter);
+        matcher = !attachment.filter ? undefined : compileEventFilter(attachment.filter);
       } catch (error) {
         // A stored spec that compiled at bind time can stop compiling under a
         // later deploy; throwing out of the post-commit send check would put
@@ -304,13 +303,13 @@ export class StreamSubscriberPagerRegistry {
         continue;
       }
       const matched = news.some((event) => {
-        if (idleDeliveredThrough !== undefined && event.offset <= idleDeliveredThrough) {
+        if (Number.isFinite(idleDeliveredThrough) && event.offset <= idleDeliveredThrough) {
           return false;
         }
         // Lifecycle facts Page only a subscriber whose filter names them.
         if (!eventCanWakeDormantSubscriber(event.type, explicitTypes)) return false;
         // A state-only connection wants any state change; a filterless one wants everything.
-        if (attachment.events === false || matcher === undefined) return true;
+        if (attachment.events === false || !matcher) return true;
         try {
           return matcher.matches(event);
         } catch {

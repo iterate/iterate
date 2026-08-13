@@ -210,11 +210,11 @@ function ApprovalGlyphs({
  */
 function roundHeaderMeta(round: { llm: AgentUiLlmStep | null; code: AgentUiCodeStep | null }) {
   const { code, llm } = round;
-  if (code == null) {
+  if (!code) {
     // An llm-only round (cancelled, failed, or its code half never arrived):
     // now that collapsed rounds hide LlmStepView's stat line, the header
     // carries the outcome — same vocabulary as footerStats.
-    if (llm == null) return "";
+    if (!llm) return "";
     return [
       ...(llm.cancelReason === "interrupted-by-user-input"
         ? ["stopped for your new message"]
@@ -225,12 +225,12 @@ function roundHeaderMeta(round: { llm: AgentUiLlmStep | null; code: AgentUiCodeS
             : llm.outcome === "failed"
               ? ["failed"]
               : []),
-      ...(llm.durationMs == null ? [] : [`${(llm.durationMs / 1000).toFixed(1)}s`]),
+      ...(!Number.isFinite(llm.durationMs) ? [] : [`${(llm.durationMs / 1000).toFixed(1)}s`]),
     ].join(" · ");
   }
   return [
     ...(code.activitySummary ? [code.activitySummary] : []),
-    ...(code.durationMs == null ? [] : [`${(code.durationMs / 1000).toFixed(1)}s`]),
+    ...(!Number.isFinite(code.durationMs) ? [] : [`${(code.durationMs / 1000).toFixed(1)}s`]),
   ].join(" · ");
 }
 
@@ -249,13 +249,13 @@ function LlmStepView({ code, step }: { code: AgentUiCodeStep | null; step: Agent
   // bubbles, and the verbatim text in Meta → response. It renders only for
   // code-less moments — the live stream before a script lands, or a round
   // whose code half never arrived.
-  const responseText = code === null ? step.responseText : "";
+  const responseText = !code ? step.responseText : "";
   return (
     <View style={styles.stepBody}>
       {/* Once the round has a code step, this stat line lives in its Meta
           tab instead; with no code step there is no tab bar, so it renders
           here (streaming llm, or a round whose code half never arrived). */}
-      {code === null ? (
+      {!code ? (
         <Text style={styles.stepLabel}>
           {`llm${step.model ? ` · ${step.model}` : ""}${footerStats(step)}`}
         </Text>
@@ -310,13 +310,12 @@ function CodeStepTabs({
   const tabs = [
     { key: "script" as const, name: "Script" },
     ...(batches.length > 0 ? [{ key: "approvals" as const, name: "Approvals" }] : []),
-    ...(step.status === "done" && (step.result !== undefined || step.errorMessage)
+    ...(step.status === "done" && (step.result || step.errorMessage)
       ? [{ key: "result" as const, name: "Result" }]
       : []),
     { key: "meta" as const, name: "Meta" },
   ];
-  const active =
-    selected !== null && tabs.some((tab) => tab.key === selected) ? selected : "script";
+  const active = selected && tabs.some((tab) => tab.key === selected) ? selected : "script";
   // The prompt replay only needs `messages`, and those fold purely from
   // events at or before the request offset — immutable history. So it runs
   // once the Meta tab is open AND the window has reached the request offset,
@@ -327,10 +326,10 @@ function CodeStepTabs({
   // input set. (Request-scoped lifecycle events feed only the replay's
   // response/stats, which this tab doesn't show — not fetched.)
   const requestCovered =
-    llm !== null && threadEvents.length > 0 && threadEvents.at(-1)!.offset >= llm.llmRequestOffset;
-  const llmRequestOffset = llm === null ? null : llm.llmRequestOffset;
+    !!llm && threadEvents.length > 0 && threadEvents.at(-1)!.offset >= llm.llmRequestOffset;
+  const llmRequestOffset = !llm ? null : llm.llmRequestOffset;
   const promptReplay = useMemo(() => {
-    if (active !== "meta" || llmRequestOffset === null || !requestCovered) return null;
+    if (active !== "meta" || !Number.isFinite(llmRequestOffset) || !requestCovered) return null;
     const relevant = threadEvents.filter(
       (event) => LLM_REPLAY_EVENT_TYPES.includes(event.type) && event.offset <= llmRequestOffset,
     );
@@ -422,7 +421,7 @@ function CodeStepTabs({
         </View>
       ) : (
         <View style={styles.tabBody}>
-          {step.result !== undefined ? (
+          {step.result ? (
             <CodeBlock language="yaml" text={previewResultYaml(step.result)} muted />
           ) : null}
           {step.errorMessage ? <Text style={styles.error}>{step.errorMessage}</Text> : null}
@@ -450,16 +449,16 @@ function metaYaml(
     ...(llm && {
       llm: {
         ...(llm.model && { model: llm.model }),
-        ...(llm.durationMs == null ? {} : { duration: seconds(llm.durationMs) }),
-        ...(llm.inputTokens == null ? {} : { inputTokens: llm.inputTokens }),
-        ...(llm.outputTokens == null ? {} : { outputTokens: llm.outputTokens }),
+        ...(!Number.isFinite(llm.durationMs) ? {} : { duration: seconds(llm.durationMs) }),
+        ...(!Number.isFinite(llm.inputTokens) ? {} : { inputTokens: llm.inputTokens }),
+        ...(!Number.isFinite(llm.outputTokens) ? {} : { outputTokens: llm.outputTokens }),
         ...(llm.outcome && llm.outcome !== "completed" && { outcome: llm.outcome }),
         ...(llm.cancelReason && { cancelReason: llm.cancelReason }),
       },
     }),
     code: {
       ...(code.status === "running" && { status: "running" }),
-      ...(code.durationMs == null ? {} : { duration: seconds(code.durationMs) }),
+      ...(!Number.isFinite(code.durationMs) ? {} : { duration: seconds(code.durationMs) }),
       ...(code.status === "done" && code.success === false && { failed: true }),
     },
     ...(promptMessages &&

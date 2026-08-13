@@ -24,7 +24,7 @@ export async function getItemAsync(
 ): Promise<string | null> {
   if (Platform.OS !== "web") return SecureStore.getItemAsync(key, options);
   const value = localStorage.getItem(WEB_PREFIX + key);
-  if (value !== null && options.requireAuthentication) {
+  if (value && options.requireAuthentication) {
     const approved = window.confirm(options.authenticationPrompt || "Unlock secure storage?");
     if (!approved) throw new Error("Authentication was cancelled.");
   }

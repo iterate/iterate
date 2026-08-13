@@ -76,7 +76,7 @@ export function repoFileKind(path: string): RepoFileKind {
   const basename = path.split("/").pop() ?? path;
   const extension = basename.includes(".") ? basename.split(".").pop()!.toLowerCase() : "";
   const imageMimeType = IMAGE_MIME_TYPES[extension];
-  if (imageMimeType !== undefined) return { kind: "image", mimeType: imageMimeType };
+  if (imageMimeType) return { kind: "image", mimeType: imageMimeType };
   if (extension === "pdf") return { kind: "pdf" };
   if (OPAQUE_BINARY_EXTENSIONS.has(extension)) return { kind: "binary" };
   if (isJsoncByConvention(path, basename)) return { kind: "text", language: "jsonc" };

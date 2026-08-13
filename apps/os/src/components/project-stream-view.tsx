@@ -185,8 +185,8 @@ function BrowserDatabaseProjectStreamView({
     return {
       id: authSession.user.id,
       email: authSession.user.email,
-      ...(name === undefined || name === "" ? {} : { name }),
-      ...(picture === undefined || picture === "" ? {} : { picture }),
+      ...(!name || name === "" ? {} : { name }),
+      ...(!picture || picture === "" ? {} : { picture }),
     };
   }, [authSession]);
   const { resolvedStreamSource, store, snapshot } = useProjectStreamDatabase({
@@ -236,18 +236,14 @@ function BrowserDatabaseProjectStreamView({
     [streamPath],
     {
       slug: projectId ?? "",
-      enabled:
-        suppliedAgentRuntimeTransition === undefined &&
-        projectId !== null &&
-        streamPath.startsWith("/agents/"),
+      enabled: !suppliedAgentRuntimeTransition && !!projectId && streamPath.startsWith("/agents/"),
     },
   ).value;
-  const agentRuntimeTransition =
-    suppliedAgentRuntimeTransition === undefined
-      ? liveAgentRuntimeTransition
-      : (suppliedAgentRuntimeTransition ?? undefined);
+  const agentRuntimeTransition = !suppliedAgentRuntimeTransition
+    ? liveAgentRuntimeTransition
+    : (suppliedAgentRuntimeTransition ?? undefined);
   const agentPresentation = useMemo(() => {
-    if (agentUiState == null || agentRuntimeTransition == null) {
+    if (!agentUiState || !agentRuntimeTransition) {
       return { state: agentUiState, transientItems: [] };
     }
     const projected = reduceAgentUiRuntime(agentUiState, agentRuntimeTransition);
@@ -338,7 +334,7 @@ function BrowserDatabaseProjectStreamView({
       {...(caps.agentFeed ? { onInspectScriptExecution: panels.inspectScriptExecution } : {})}
       emptyLabel={connectionLabel}
       projectSlug={projectSlug}
-      isPending={caps.agentFeed ? agentUiState == null : !streamContentsReady}
+      isPending={caps.agentFeed ? !agentUiState : !streamContentsReady}
       pendingLabel={caps.agentFeed ? "Initializing agent" : undefined}
     />
   );
@@ -372,7 +368,7 @@ function BrowserDatabaseProjectStreamView({
                 role="status"
               >
                 Showing cached events while
-                {snapshot.connectionStatus === "reconnecting" || snapshot.connectionError != null
+                {snapshot.connectionStatus === "reconnecting" || snapshot.connectionError
                   ? " reconnecting…"
                   : " connecting…"}
               </p>
@@ -385,19 +381,17 @@ function BrowserDatabaseProjectStreamView({
               <QueuedMessagesPanel
                 messages={queuedUserMessages}
                 isInterrupting={interrupt?.isInterrupting ?? false}
-                {...(interrupt == null || !streamTransportReady
-                  ? {}
-                  : { onInterrupt: interrupt.run })}
+                {...(!interrupt || !streamTransportReady ? {} : { onInterrupt: interrupt.run })}
               />
               <StreamViewComposer
                 autoFocusMessage={autoFocusMessageComposer}
-                {...(defaultComposerMode == null
+                {...(!defaultComposerMode
                   ? caps.agentFeed
                     ? { defaultMode: "message" as const }
                     : { defaultMode: "raw" as const }
                   : { defaultMode: defaultComposerMode })}
                 interrupt={interrupt}
-                {...(messageComposer == null ? {} : { messageComposer })}
+                {...(!messageComposer ? {} : { messageComposer })}
                 onNudgeDeliveries={nudgeDeliveries}
                 presence={presence}
                 store={store}
@@ -460,7 +454,7 @@ function BrowserDatabaseProjectStreamView({
       {showHeader ? filterRow : null}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
-        {panel == null ? null : (
+        {!panel ? null : (
           <aside className="max-h-[45svh] min-h-0 shrink-0 overflow-y-auto border-b lg:max-h-none lg:w-[26rem] lg:border-b-0 lg:border-r">
             <div className="flex flex-col gap-4 p-4">{panel}</div>
           </aside>
@@ -498,23 +492,22 @@ function useProjectStreamDatabase({
     () =>
       streamSource ??
       (async (path) =>
-        projectId == null
+        !projectId
           ? (await connectIterateSession()).streams.get(path)
           : (await connectItx(projectId)).streams.get(path)),
     [projectId, streamSource],
   );
   const streamClientFactory = useMemo(() => {
-    if (streamSource !== undefined) {
+    if (streamSource) {
       return async (input: { streamPath: string }) => {
         const stub = await streamSource(input.streamPath);
         return asBrowserStreamClient(stub, () => (stub as Partial<Disposable>)[Symbol.dispose]?.());
       };
     }
     return async (input: { streamPath: string }) => {
-      const stub =
-        projectId == null
-          ? (await connectIterateSession()).streams.get(input.streamPath)
-          : (await connectItx(projectId)).streams.get(input.streamPath);
+      const stub = !projectId
+        ? (await connectIterateSession()).streams.get(input.streamPath)
+        : (await connectItx(projectId)).streams.get(input.streamPath);
       return asBrowserStreamClient(
         stub,
         () => (stub as Partial<Disposable>)[Symbol.dispose]?.(),
@@ -525,17 +518,15 @@ function useProjectStreamDatabase({
     };
   }, [projectId, streamSource]);
   const resetTransport = useMemo(
-    () =>
-      resetStreamSourceTransport ??
-      (streamSource === undefined ? reportTransportSuspicion : undefined),
+    () => resetStreamSourceTransport ?? (!streamSource ? reportTransportSuspicion : undefined),
     [resetStreamSourceTransport, streamSource],
   );
   // One downloaded batch is passed to both the raw-event writer and browser-feed projector.
   const browserStore = useBrowserStreamStore({
     createStreamClient: streamClientFactory,
-    ...(resetTransport === undefined ? {} : { resetTransport }),
+    ...(!resetTransport ? {} : { resetTransport }),
     projectId: streamRuntimeProjectKey,
-    ...(subscriberUser === undefined ? {} : { subscriberUser }),
+    ...(!subscriberUser ? {} : { subscriberUser }),
     streamPath,
   });
   return { resolvedStreamSource, ...browserStore };
@@ -567,13 +558,13 @@ function StreamInspectorSheet({
     | { kind: "script"; executionId: string }
     | null
   >(() => {
-    if (caps.eventInspector && panels.inspectedOffset != null) {
+    if (caps.eventInspector && Number.isFinite(panels.inspectedOffset)) {
       return { kind: "event", offset: panels.inspectedOffset };
     }
-    if (panels.inspectedLlmRequestOffset != null) {
+    if (Number.isFinite(panels.inspectedLlmRequestOffset)) {
       return { kind: "llm", offset: panels.inspectedLlmRequestOffset };
     }
-    if (panels.inspectedScriptExecutionId != null) {
+    if (panels.inspectedScriptExecutionId) {
       return { kind: "script", executionId: panels.inspectedScriptExecutionId };
     }
     return null;
@@ -585,7 +576,7 @@ function StreamInspectorSheet({
   ]);
   const activeInspectorContext = useMemo(
     () =>
-      activeInspector == null
+      !activeInspector
         ? null
         : {
             inspector: activeInspector,
@@ -598,7 +589,7 @@ function StreamInspectorSheet({
   const activeInspectorKey =
     activeInspector?.kind === "script"
       ? `script:${activeInspector.executionId}`
-      : activeInspector == null
+      : !activeInspector
         ? null
         : `${activeInspector.kind}:${activeInspector.offset}`;
   // Base UI reports dismissal before TanStack Router commits the URL search
@@ -607,10 +598,10 @@ function StreamInspectorSheet({
   // Keep suppression latched past animation completion if the router is slow;
   // release it only after the URL actually leaves this selection.
   const [dismissedInspectorKey, setDismissedInspectorKey] = useState<string | null>(null);
-  const inspectorOpen = activeInspectorKey != null && activeInspectorKey !== dismissedInspectorKey;
+  const inspectorOpen = !!activeInspectorKey && activeInspectorKey !== dismissedInspectorKey;
 
   useEffect(() => {
-    if (dismissedInspectorKey != null && activeInspectorKey !== dismissedInspectorKey) {
+    if (dismissedInspectorKey && activeInspectorKey !== dismissedInspectorKey) {
       setDismissedInspectorKey(null);
     }
   }, [activeInspectorKey, dismissedInspectorKey]);
@@ -620,14 +611,14 @@ function StreamInspectorSheet({
   // closes the sheet, so a stream switch cannot briefly query the new stream
   // with the previous stream's inspector identifier.
   useEffect(() => {
-    if (activeInspectorContext != null) setRetainedInspectorContext(activeInspectorContext);
+    if (activeInspectorContext) setRetainedInspectorContext(activeInspectorContext);
   }, [activeInspectorContext]);
 
   const inspectorContext = activeInspectorContext ?? retainedInspectorContext;
   let content: ReactNode = null;
   let testId: string | undefined;
 
-  if (inspectorContext != null) {
+  if (inspectorContext) {
     const { inspector } = inspectorContext;
     if (inspector.kind === "event") {
       testId = "raw-event-inspector";
@@ -650,7 +641,7 @@ function StreamInspectorSheet({
       content = (
         <LlmRequestInspectorContent
           database={inspectorContext.database}
-          {...(liveStep == null ? {} : { liveStep })}
+          {...(!liveStep ? {} : { liveStep })}
           llmRequestOffset={inspector.offset}
         />
       );
@@ -883,11 +874,11 @@ function useAgentInterrupt(args: {
     setError(undefined);
   }
 
-  if (onInterrupt == null || runningLlmRequestId == null) return null;
+  if (!onInterrupt || !Number.isFinite(runningLlmRequestId)) return null;
 
   return {
     isInterrupting,
-    ...(error == null ? {} : { error }),
+    ...(!error ? {} : { error }),
     run: async () => {
       if (isInterrupting) return;
       setIsInterrupting(true);
@@ -928,7 +919,7 @@ function useAgentUiReducedState(
     // signal that makes this snapshot read run again.
     void liveRevision;
     const live = store.agentUiState();
-    if (live !== null) return live;
+    if (live) return live;
     const raw = result.data[0]?.reduced_state;
     if (typeof raw !== "string") return null;
     try {
@@ -966,7 +957,7 @@ function useClaimReplyPresented(args: {
   const replyOffset = Number(newestReply.data[0]?.offset ?? 0) || null;
   useQuery({
     queryKey: ["agent-reply-presented", projectId, streamPath, replyOffset],
-    enabled: projectId !== null && replyOffset !== null && streamPath.startsWith("/agents/"),
+    enabled: !!projectId && Number.isFinite(replyOffset) && streamPath.startsWith("/agents/"),
     queryFn: async () => {
       await documentVisible();
       const itx = await connectItx(projectId!);
@@ -1009,6 +1000,6 @@ function useStreamPauseState(database: StreamBrowserDatabase): {
      LIMIT 1`,
   );
   const latest = result.data[0];
-  const reason = latest == null || typeof latest.reason !== "string" ? null : latest.reason;
+  const reason = !latest || typeof latest.reason !== "string" ? null : latest.reason;
   return { paused: latest?.type === "events.iterate.com/stream/paused", reason };
 }

@@ -68,7 +68,7 @@ function humanMessageWebhookPayload(input: {
         chat: { id: input.chatId ?? CHAT_ID, type: "private" },
         date: input.date ?? 1_760_000_000,
         text: input.text ?? "hello agent",
-        ...(input.replyToMessage === undefined ? {} : { reply_to_message: input.replyToMessage }),
+        ...(!input.replyToMessage ? {} : { reply_to_message: input.replyToMessage }),
       },
     },
   };
@@ -124,7 +124,7 @@ function makeAgentHarness(
         },
         sendTelegramMessage: async ({ body }) => {
           const failure = sendFailures.shift();
-          if (failure !== undefined) throw failure;
+          if (failure) throw failure;
           calls.push("telegram:sendMessage");
           sentMessages.push(body);
           return { messageId: 9000 + sentMessages.length };

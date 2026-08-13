@@ -24,7 +24,7 @@ export function workspaceFor(project: unknown, address: BoardAddress): TasksWork
     workspaceAt(workspacePath: string, repoPath?: string): unknown;
   };
   return (
-    address.boardId !== null
+    address.boardId
       ? doors.board(address.boardId, address.repoPath)
       : doors.workspaceAt(address.workspacePath, address.repoPath)
   ) as TasksWorkspace;

@@ -100,7 +100,7 @@ export async function runSyncPass(input: {
       mediaSubtypes: "screenshot",
       sortBy: [["creationTime", false]],
       first: 50,
-      ...(after === undefined ? {} : { after }),
+      ...(!after ? {} : { after }),
     });
     const sinceMs = new Date(input.since).getTime();
     for (const asset of page.assets) {
@@ -108,7 +108,7 @@ export async function runSyncPass(input: {
       if (asset.creationTime && asset.creationTime < sinceMs) break scan;
       input.onProgress(`Checking library (${candidates.length + known + 1} seen)…`);
       const read = await readAssetBase64(asset);
-      if (read === null) continue; // e.g. iCloud asset without a local copy
+      if (!read) continue; // e.g. iCloud asset without a local copy
       const stableKey = await Crypto.digestStringAsync(
         Crypto.CryptoDigestAlgorithm.SHA256,
         read.base64,

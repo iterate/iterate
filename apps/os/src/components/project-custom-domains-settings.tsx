@@ -120,7 +120,7 @@ function CustomDomainsEditor({
         <p className="text-xs text-muted-foreground">
           Custom domains require a deployed DNS project hostname base.
         </p>
-      ) : domains === undefined ? (
+      ) : !domains ? (
         <p className="text-xs text-muted-foreground">Loading custom domains...</p>
       ) : domains.length === 0 ? (
         <p className="text-xs text-muted-foreground">No custom domains configured.</p>

@@ -91,7 +91,7 @@ export function WorkspaceDocumentEditor({
 
   return (
     <>
-      {editor.recovery !== null && (
+      {!!editor.recovery && (
         <div className="border-b bg-amber-500/10 px-4 py-2 text-xs text-amber-900">
           <div className="flex items-center gap-2">
             <span>Unaccepted text from before the re-sync (not in the document):</span>

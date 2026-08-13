@@ -13,7 +13,7 @@ export function repoArtifactPushFromEventPayload(payload: unknown): RepoArtifact
   const ref = string(push?.ref);
   const before = string(push?.before);
   const after = string(push?.after);
-  if (ref === null || before === null || after === null || !ref.startsWith("refs/heads/")) {
+  if (!ref || !before || !after || !ref.startsWith("refs/heads/")) {
     return null;
   }
   const branch = ref.slice("refs/heads/".length);
@@ -53,10 +53,10 @@ export function repoGithubPushFromWebhookPayload(payload: unknown): {
   const ref = string(body?.ref);
   const afterCommitOid = string(body?.after);
   if (
-    ref === null ||
-    afterCommitOid === null ||
-    installationId === null ||
-    repositoryId === null ||
+    !ref ||
+    !afterCommitOid ||
+    !installationId ||
+    !Number.isFinite(repositoryId) ||
     afterCommitOid === ZERO_COMMIT_OID ||
     !ref.startsWith("refs/heads/")
   )
@@ -66,7 +66,7 @@ export function repoGithubPushFromWebhookPayload(payload: unknown): {
 }
 
 function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
+  return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
 }

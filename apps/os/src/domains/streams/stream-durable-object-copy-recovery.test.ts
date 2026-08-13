@@ -74,14 +74,10 @@ function durableObjectContext(name: string) {
     sql: wrapSqlStorage(db),
     kv: {
       get<T>(key: string): T | undefined {
-        const value = values.get(key);
-        return value === undefined ? undefined : structuredClone(value as T);
+        return values.has(key) ? structuredClone(values.get(key) as T) : undefined;
       },
       put(key: string, value: unknown): void {
-        if (
-          kvPutFailure !== undefined &&
-          (kvPutFailure.key === undefined || kvPutFailure.key === key)
-        ) {
+        if (kvPutFailure && (!kvPutFailure.key || kvPutFailure.key === key)) {
           throw kvPutFailure.error;
         }
         values.set(key, structuredClone(value));
@@ -144,11 +140,10 @@ function durableObjectContext(name: string) {
       ).run(offset, bytes);
     },
     failKvPutsWith(error: Error | undefined, key?: string): void {
-      kvPutFailure = error === undefined ? undefined : { error, key };
+      kvPutFailure = !error ? undefined : { error, key };
     },
     getKv<T>(key: string): T | undefined {
-      const value = values.get(key);
-      return value === undefined ? undefined : structuredClone(value as T);
+      return values.has(key) ? structuredClone(values.get(key) as T) : undefined;
     },
     setKv(key: string, value: unknown): void {
       values.set(key, structuredClone(value));
@@ -581,7 +576,7 @@ describe("StreamDurableObject reconciliation recovery", () => {
     const streamNamespace = {
       getByName(name: string): StreamStub {
         const target = streams.get(name);
-        if (target === undefined) throw new Error(`test stream ${name} does not exist`);
+        if (!target) throw new Error(`test stream ${name} does not exist`);
         return {
           async appendCoreEvent(event) {
             return target.appendCoreEvent(event);

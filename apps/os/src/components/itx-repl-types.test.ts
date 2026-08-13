@@ -211,7 +211,7 @@ function createReplLanguageService(
     getScriptFileNames: () => [...files.keys()],
     getScriptSnapshot: (fileName) => {
       const content = files.get(fileName) ?? ts.sys.readFile(fileName);
-      return content === undefined ? undefined : ts.ScriptSnapshot.fromString(content);
+      return !content ? undefined : ts.ScriptSnapshot.fromString(content);
     },
     getScriptVersion: () => "0",
     readDirectory: ts.sys.readDirectory,

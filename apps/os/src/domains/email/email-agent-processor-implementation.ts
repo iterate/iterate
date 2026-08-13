@@ -56,9 +56,9 @@ export class EmailAgentProcessor extends StreamProcessor<
 
     switch (event?.type) {
       case "events.iterate.com/email/thread-route-configured": {
-        if (state.birthCertificate === null) return;
+        if (!state.birthCertificate) return;
         const binding = refreshedThreadBinding({ previousState, state });
-        if (binding !== null) {
+        if (binding) {
           blockProcessorWhile(() =>
             append({
               type: "events.iterate.com/agent/binding-set",
@@ -70,9 +70,9 @@ export class EmailAgentProcessor extends StreamProcessor<
         return;
       }
       case "events.iterate.com/email/received": {
-        if (state.birthCertificate === null) return;
+        if (!state.birthCertificate) return;
         const binding = refreshedThreadBinding({ previousState, state });
-        if (binding !== null) {
+        if (binding) {
           blockProcessorWhile(() =>
             append({
               type: "events.iterate.com/agent/binding-set",
@@ -102,7 +102,7 @@ export class EmailAgentProcessor extends StreamProcessor<
           );
           let files: AgentFileAttachment[] | undefined;
           let attachmentFailureNote: string | undefined;
-          if (stored.length > 0 && this.deps.resolveStoredAttachments != null) {
+          if (stored.length > 0 && this.deps.resolveStoredAttachments) {
             try {
               files = await this.deps.resolveStoredAttachments(
                 stored.map((attachment) => ({
@@ -129,14 +129,13 @@ export class EmailAgentProcessor extends StreamProcessor<
               idempotencyKey: this.idempotencyKey("received-to-agent-context", event),
               payload: {
                 role: "developer",
-                content:
-                  attachmentFailureNote === undefined
-                    ? inboundEmailAgentInput(event.payload)
-                    : `${inboundEmailAgentInput(event.payload)}\n\n${attachmentFailureNote}`,
+                content: !attachmentFailureNote
+                  ? inboundEmailAgentInput(event.payload)
+                  : `${inboundEmailAgentInput(event.payload)}\n\n${attachmentFailureNote}`,
                 actor: {
                   type: "email" as const,
-                  ...(fromAddress == null ? {} : { address: fromAddress }),
-                  ...(fromName == null ? {} : { name: fromName }),
+                  ...(!fromAddress ? {} : { address: fromAddress }),
+                  ...(!fromName ? {} : { name: fromName }),
                 },
                 refs: [
                   {
@@ -146,7 +145,7 @@ export class EmailAgentProcessor extends StreamProcessor<
                     eventType: event.type,
                   },
                 ],
-                ...(files == null || files.length === 0 ? {} : { files }),
+                ...(!files || files.length === 0 ? {} : { files }),
                 // Automated mail (Auto-Submitted, bulk precedence,
                 // mailer-daemon) is recorded but never triggers a reply —
                 // the classic mail-loop guard.
@@ -182,27 +181,23 @@ export class EmailAgentProcessor extends StreamProcessor<
   }: ReduceArgs<EmailAgentProcessorContract>): EmailAgentProcessorState {
     switch (event.type) {
       case "events.iterate.com/email-agent/created":
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return {
           ...state,
           birthCertificate: event.payload,
           threadId: event.payload.config.threadId,
-          ...(event.payload.config.counterpart === undefined
+          ...(!event.payload.config.counterpart
             ? {}
             : { counterpart: event.payload.config.counterpart }),
-          ...(event.payload.config.subject === undefined
-            ? {}
-            : { subject: event.payload.config.subject }),
+          ...(!event.payload.config.subject ? {} : { subject: event.payload.config.subject }),
         };
       case "events.iterate.com/email/thread-route-configured":
         return {
           ...state,
           threadId: event.payload.threadId,
           streamPath: event.payload.streamPath,
-          ...(event.payload.counterpart === undefined
-            ? {}
-            : { counterpart: event.payload.counterpart }),
-          ...(event.payload.subject === undefined ? {} : { subject: event.payload.subject }),
+          ...(!event.payload.counterpart ? {} : { counterpart: event.payload.counterpart }),
+          ...(!event.payload.subject ? {} : { subject: event.payload.subject }),
         };
       case "events.iterate.com/email/received": {
         // Neither our own looped-back mail nor automated mail (bounces,
@@ -211,10 +206,8 @@ export class EmailAgentProcessor extends StreamProcessor<
         const counterpart = emailCounterpart(event.payload);
         return {
           ...state,
-          ...(counterpart === null ? {} : { counterpart }),
-          ...(event.payload.message.subject === undefined
-            ? {}
-            : { subject: event.payload.message.subject }),
+          ...(!counterpart ? {} : { counterpart }),
+          ...(!event.payload.message.subject ? {} : { subject: event.payload.message.subject }),
         };
       }
       default:
@@ -256,7 +249,7 @@ function refreshedThreadBinding(input: {
   state: EmailAgentProcessorState;
 }): { type: "email_thread"; threadId: string; subject?: string; counterpart?: string } | null {
   const { previousState, state } = input;
-  if (state.threadId === undefined) return null;
+  if (!state.threadId) return null;
   if (previousState.subject === state.subject && previousState.counterpart === state.counterpart) {
     return null;
   }
@@ -265,8 +258,8 @@ function refreshedThreadBinding(input: {
   return {
     type: "email_thread",
     threadId: state.threadId,
-    ...(subject === undefined ? {} : { subject }),
-    ...(counterpart === undefined ? {} : { counterpart }),
+    ...(!subject ? {} : { subject }),
+    ...(!counterpart ? {} : { counterpart }),
   };
 }
 
@@ -280,16 +273,16 @@ function inboundEmailAgentInput(payload: InboundEmailPayload): string {
   const attachments = message.attachments.map((attachment) => ({
     filename: attachment.filename ?? null,
     mimeType: attachment.mimeType ?? null,
-    ...(attachment.size === undefined ? {} : { size: attachment.size }),
-    ...(attachment.path === undefined ? {} : { path: attachment.path }),
+    ...(!Number.isFinite(attachment.size) ? {} : { size: attachment.size }),
+    ...(!attachment.path ? {} : { path: attachment.path }),
   }));
   const transcript = {
     from: { address: message.from.address ?? payload.envelope.from, name: message.from.name },
-    ...(message.replyToAddress == null ? {} : { replyTo: message.replyToAddress }),
+    ...(!message.replyToAddress ? {} : { replyTo: message.replyToAddress }),
     subject: message.subject ?? "",
-    ...(message.messageId == null ? {} : { messageId: message.messageId }),
-    ...(message.text === undefined ? {} : { text: message.text }),
-    ...(message.text === undefined && message.html !== undefined && { html: message.html }),
+    ...(!message.messageId ? {} : { messageId: message.messageId }),
+    ...(!message.text ? {} : { text: message.text }),
+    ...(!message.text && !!message.html && { html: message.html }),
     ...(attachments.length === 0 ? {} : { attachments }),
     ...(payload.automated && { automated: true }),
   };

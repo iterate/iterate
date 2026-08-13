@@ -92,8 +92,8 @@ export function RepoEditorPane({
   const stagedText = kind.kind === "text" ? textContentForEntry(staged) : undefined;
   const hasUndecodableTextEntry =
     kind.kind === "text" &&
-    ((working?.type === "write-base64" && workingText === undefined) ||
-      (staged?.type === "write-base64" && stagedText === undefined));
+    ((working?.type === "write-base64" && !workingText) ||
+      (staged?.type === "write-base64" && !stagedText));
 
   // Diffs and dirty checks run against the git-shaped baseline: the staged
   // snapshot when one exists, else HEAD.
@@ -146,7 +146,7 @@ export function RepoEditorPane({
     if (kind.kind !== "text") return [];
     // A never-committed file has no baseline to diff against, but the
     // language service still applies.
-    if (textBaseline === undefined) return typeScriptExtensions;
+    if (!textBaseline) return typeScriptExtensions;
     if (!diffOpen) return [...typeScriptExtensions, changedLinesGutter(textBaseline)];
     return [
       ...typeScriptExtensions,
@@ -187,7 +187,7 @@ export function RepoEditorPane({
   // chunk controls — inspection only.
   const stagedDiffExtensions = useMemo(
     () =>
-      stagedView && stagedText !== undefined
+      stagedView && stagedText
         ? [
             unifiedMergeView({
               original: headContent ?? "",
@@ -236,7 +236,7 @@ export function RepoEditorPane({
 
   const stageAndDiscardButtons = (
     <>
-      {working !== undefined ? (
+      {working ? (
         <Button
           variant="ghost"
           size="sm"
@@ -248,7 +248,7 @@ export function RepoEditorPane({
           Discard
         </Button>
       ) : null}
-      {working !== undefined ? (
+      {working ? (
         <Button
           variant="ghost"
           size="sm"
@@ -263,7 +263,7 @@ export function RepoEditorPane({
     </>
   );
 
-  const entry = change === undefined ? undefined : effectiveEntry(change);
+  const entry = !change ? undefined : effectiveEntry(change);
   if (entry?.type === "delete") {
     return (
       <FileChrome path={path} status="deleted">
@@ -280,10 +280,9 @@ export function RepoEditorPane({
     );
   }
 
-  const status =
-    entry === undefined ? undefined : headHasPath ? ("modified" as const) : ("added" as const);
+  const status = !entry ? undefined : headHasPath ? ("modified" as const) : ("added" as const);
 
-  if (stagedView && stagedText !== undefined && kind.kind === "text") {
+  if (stagedView && stagedText && kind.kind === "text") {
     // Same Code/Preview toggle as the working view, over the staged snapshot
     // — the Index pseudo-file stays readonly either way.
     const showStagedPreview = previewOpen && isPreviewablePath(path);
@@ -378,7 +377,7 @@ export function RepoEditorPane({
           <>
             {schemaNote}
             {/* The preview replaces the editor, diff and all. */}
-            {!showPreview && (headHasPath || staged !== undefined) ? (
+            {!showPreview && (headHasPath || staged) ? (
               <Button
                 variant={diffOpen ? "secondary" : "ghost"}
                 size="sm"
@@ -433,7 +432,7 @@ export function RepoEditorPane({
     </>
   );
 
-  if (base64 === undefined || base64 === null) {
+  if (!base64) {
     return (
       <FileChrome path={path} status={status} actions={binaryActions}>
         <EmptyPane label="No content." />
@@ -500,10 +499,10 @@ export function FileChrome({
         {leading}
         <span className="min-w-0 truncate font-mono text-xs">
           {path}
-          {suffix === undefined ? null : <span className="text-muted-foreground"> {suffix}</span>}
+          {!suffix ? null : <span className="text-muted-foreground"> {suffix}</span>}
         </span>
         {readonly ? <LockIcon className="size-3 shrink-0 text-muted-foreground" /> : null}
-        {status === undefined ? null : (
+        {!status ? null : (
           <Badge
             variant={status === "deleted" ? "destructive" : "secondary"}
             className="text-[10px]"

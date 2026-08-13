@@ -36,7 +36,7 @@ export const STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX = "stream-wait-timeout: ";
  * dependency-free: the browser stream database imports this module directly.
  */
 export function isDurableObjectLifecycleError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
+  if (typeof error !== "object" || !error) return false;
   const flags = error as {
     durableObjectReset?: unknown;
     overloaded?: unknown;
@@ -57,7 +57,7 @@ export function isDurableObjectLifecycleError(error: unknown): boolean {
 export function isRetryableDurableObjectAvailabilityError(error: unknown): boolean {
   const seen = new Set<object>();
   let candidate = error;
-  while (typeof candidate === "object" && candidate !== null) {
+  while (typeof candidate === "object" && candidate) {
     if (isDurableObjectLifecycleError(candidate) || isStreamUnavailableError(candidate)) {
       return true;
     }

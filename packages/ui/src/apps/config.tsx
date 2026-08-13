@@ -9,7 +9,7 @@ export function ConfigProvider<TConfig>(props: { value: TConfig; children: React
 // oxlint-disable-next-line react/only-export-components -- hook is colocated with ConfigProvider
 export function useConfig<TConfig>() {
   const value = useContext(ConfigContext);
-  if (value === undefined) {
+  if (!value) {
     throw new Error("useConfig must be used within a ConfigProvider.");
   }
 

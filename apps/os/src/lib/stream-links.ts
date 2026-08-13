@@ -31,7 +31,7 @@ export function streamPathToSplat(path: StreamPath) {
 }
 
 function streamPathCandidateFromSplat(value: string | undefined) {
-  if (value == null || value === "" || value === ROOT_SPLAT) return "/";
+  if (!value || value === "" || value === ROOT_SPLAT) return "/";
   const normalized = value.replace(/^\/+/, "");
   return normalized ? `/${normalized}` : "/";
 }

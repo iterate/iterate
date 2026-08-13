@@ -115,8 +115,8 @@ function describeStreamDelivery(input: {
         const context = event.payload?.streamContext;
         return (
           event.type === "events.iterate.com/project/human-approval-requested" &&
+          !!context &&
           typeof context === "object" &&
-          context !== null &&
           "executionId" in context &&
           context.executionId === executionId
         );
@@ -136,18 +136,17 @@ function describeStreamDelivery(input: {
           event.type === "events.iterate.com/notification/requested" &&
           numberField(event, "approvalRequestEventOffset") === approval?.offset,
       );
-      const firstMissingTransition =
-        started === undefined
-          ? "script-run-started"
-          : approval === undefined
-            ? settled === undefined
-              ? "human-approval-requested (script still started)"
-              : "human-approval-requested (script already settled)"
-            : notification === undefined
-              ? "notification/requested on project root"
-              : deviceNotification === undefined
-                ? "notification/requested copied to device"
-                : "none; durable delivery is complete, so the UI projection failed to render";
+      const firstMissingTransition = !started
+        ? "script-run-started"
+        : !approval
+          ? !settled
+            ? "human-approval-requested (script still started)"
+            : "human-approval-requested (script already settled)"
+          : !notification
+            ? "notification/requested on project root"
+            : !deviceNotification
+              ? "notification/requested copied to device"
+              : "none; durable delivery is complete, so the UI projection failed to render";
 
       return {
         approvalRequestOffset: approval?.offset,

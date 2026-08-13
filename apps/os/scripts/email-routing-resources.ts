@@ -17,7 +17,7 @@ export async function ensureInboundEmailRouting(
   },
 ): Promise<"configured" | "deferred-until-worker-deploy" | "deferred-until-zone"> {
   const emailBase = emailDomainForDeployment(input.projectHostnameBases);
-  if (emailBase === null) {
+  if (!emailBase) {
     throw new Error(`${ctx.name} has no project hostname base for inbound email`);
   }
 

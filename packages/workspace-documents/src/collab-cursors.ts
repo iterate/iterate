@@ -124,7 +124,7 @@ export function remoteCursorsExtension(connection: CollabConnection) {
       }
 
       schedule() {
-        if (this.timer !== null) return;
+        if (Number.isFinite(this.timer)) return;
         this.timer = setTimeout(() => {
           this.timer = null;
           this.send();
@@ -141,7 +141,7 @@ export function remoteCursorsExtension(connection: CollabConnection) {
       destroy() {
         connection.onPresence = null;
         clearInterval(this.heartbeat);
-        if (this.timer !== null) clearTimeout(this.timer);
+        if (Number.isFinite(this.timer)) clearTimeout(this.timer);
         // Leave quietly so peers drop this caret instead of aging it out.
         connection.present(null);
       }

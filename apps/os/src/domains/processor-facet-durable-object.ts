@@ -173,10 +173,10 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       // otherwise mirror the registry's own default — the primary
       // (first-registered) runner's committed fold.
       getLiveState: () => {
-        if (this.#getLiveState !== undefined) return this.#getLiveState();
+        if (this.#getLiveState) return this.#getLiveState();
         const registry = this.#registry;
         const primary = registry?.names[0];
-        if (registry === undefined || primary === undefined) return {};
+        if (!registry || !primary) return {};
         // Safe: every registered contract's stateSchema is a z.object, so a
         // committed fold is always a plain JSON object; the by-name registry
         // read erases the per-contract state type, and Record<string, unknown>
@@ -272,15 +272,15 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   }
 
   #requireRegistry(): StreamProcessorRegistry {
-    if (this.#registry === undefined) {
+    if (!this.#registry) {
       // A fresh incarnation may serve one of THIS subclass's doors before the
       // base's boot microtask has rebuilt the host. Re-run the idempotent
       // first-contact path from the stashed identity ourselves.
       const identity = this.ctx.storage.kv.get<ProcessorFacetIdentity>(FACET_IDENTITY_KEY);
-      if (identity !== undefined) this.configure(identity);
+      if (identity) this.configure(identity);
     }
     const registry = this.#registry;
-    if (registry === undefined) {
+    if (!registry) {
       throw new Error("ProcessorFacet has no registry yet — call configure() first");
     }
     return registry;
@@ -290,7 +290,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     // Touch the host first so a fresh incarnation (re)builds its composition.
     this.#requireRegistry();
     const processor = this.#capabilityHostProcessor;
-    if (processor === undefined) {
+    if (!processor) {
       throw new Error("this stream's facet composition hosts no capability-host processor");
     }
     return processor;
@@ -351,7 +351,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     // paths are agent scopes) — the capability-host processor is registered
     // everywhere, exactly as its Durable Object existed at every
     // {projectId, path}.
-    if (projectId === null) return;
+    if (!projectId) return;
     this.#registerCapabilityHost(identity, stream, registry);
   }
 
@@ -365,7 +365,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     const projectId = identity.projectId!;
     let reads: CapabilityHostProcessorReads | undefined;
     const requireReads = (): CapabilityHostProcessorReads => {
-      if (reads === undefined) throw new Error("capability-host reads are not wired yet");
+      if (!reads) throw new Error("capability-host reads are not wired yet");
       return reads;
     };
     // Registered WITH recovery: script executions are consequential
@@ -601,12 +601,11 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       // frozen classic fold on opted-in agents.
       const classic = agentReads.currentState.runtimeChange;
       const headless = headlessReads.currentState.runtimeChange;
-      const newer =
-        classic === undefined
-          ? headless
-          : headless === undefined || classic.sinceOffset >= headless.sinceOffset
-            ? classic
-            : headless;
+      const newer = !classic
+        ? headless
+        : !headless || classic.sinceOffset >= headless.sinceOffset
+          ? classic
+          : headless;
       return { runtimeChange: newer };
     };
 
@@ -679,7 +678,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     // transition whenever the slack fold changes.
     registry.observeStateChanges(agentProcessor, () => {
       const transition = agentReads.currentState.runtimeChange;
-      if (transition === undefined) return;
+      if (!transition) return;
       void Promise.resolve(this.#parentStub(identity).presentAgentRuntimeTransition({ transition }))
         .then(disposeIgnoredRpcResult)
         .catch((error: unknown) => {
@@ -694,7 +693,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     };
     registry.observeStateChanges(slackAgentProcessor, () => {
       const transition = this.#latestAgentRuntimeTransition;
-      if (transition === undefined) return;
+      if (!transition) return;
       slackAgentProcessor.presentRuntimeTransition(slackAgentReads.currentState, transition);
     });
 
@@ -809,7 +808,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         projectId,
         acknowledgeRoutedWebhook: async ({ connection, payload }) => {
           const ack = eyesReactionTargetFromWebhookPayload(payload);
-          if (ack == null) return;
+          if (!ack) return;
           try {
             await callProjectSlackWebApi({
               body: { channel: ack.channel, name: "eyes", timestamp: ack.timestamp },
@@ -857,7 +856,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
           }),
         telegramAccessSettingsUrl: async ({ connection, projectId: settingsProjectId }) => {
           const project = await readProjectById(this.env.PROJECT_DIRECTORY, settingsProjectId);
-          if (project === null) {
+          if (!project) {
             throw new Error(
               `Telegram access denial cannot link project ${settingsProjectId}: directory record missing`,
             );
@@ -907,7 +906,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         }): ReturnType<DevicePushSender> => {
           const state = deviceReads.currentState;
           if (
-            state.pushTokenSecret === null ||
+            !state.pushTokenSecret ||
             state.pushTokenSecret.path !== pushTokenSecretPath ||
             state.pushTokenSecret.updatedOffset !== pushTokenSecretUpdatedOffset
           ) {

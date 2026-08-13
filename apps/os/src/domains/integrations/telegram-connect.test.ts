@@ -617,7 +617,7 @@ async function startFakeTelegramApi(
     requests,
     async [Symbol.asyncDispose]() {
       await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error === undefined ? resolve() : reject(error)));
+        server.close((error) => (!error ? resolve() : reject(error)));
         // close() first prevents new connections; the fake owns every
         // remaining socket, so disposal can then terminate them immediately.
         server.closeAllConnections();

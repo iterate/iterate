@@ -27,15 +27,15 @@ export function formatStepLine(step: AgentUiStep): string {
             : (step.model ?? "LLM request");
   const parts: string[] = [label];
   if (step.kind === "llm") {
-    if (step.outcome === "cancelled" && step.model != null) parts.push(step.model);
-    if (step.inputTokens != null || step.outputTokens != null) {
+    if (step.outcome === "cancelled" && step.model) parts.push(step.model);
+    if (Number.isFinite(step.inputTokens) || Number.isFinite(step.outputTokens)) {
       parts.push(`${formatTokens(step.inputTokens)} → ${formatTokens(step.outputTokens)} tok`);
     }
     if (step.outcome === "failed") parts.push("failed");
   } else if (step.success === false) {
     parts.push("failed");
   }
-  if (step.durationMs != null) parts.push(formatSeconds(step.durationMs));
+  if (Number.isFinite(step.durationMs)) parts.push(formatSeconds(step.durationMs));
   return parts.join(" · ");
 }
 
@@ -50,12 +50,12 @@ export function formatLiveActivityLabel(
 ): string {
   const running = activity.steps.filter((step) => step.status === "running");
   const code = running.findLast((step) => step.kind === "code");
-  if (code != null) {
+  if (code) {
     const startedAtMs = code.startedAtMs;
     return `Running code ${formatSeconds(Math.max(0, nowMs - startedAtMs))}`;
   }
   const llm = running.findLast((step) => step.kind === "llm");
-  if (llm == null || llm.kind !== "llm") {
+  if (!llm || llm.kind !== "llm") {
     return "Working…";
   }
   if (llm.thinkingText !== "" && llm.responseText === "") return "Thinking";
@@ -67,7 +67,7 @@ function formatSeconds(ms: number): string {
 }
 
 function formatTokens(count: number | undefined): string {
-  if (count == null) return "?";
+  if (!Number.isFinite(count)) return "?";
   if (count < 1000) return String(count);
   return `${(count / 1000).toFixed(1)}k`;
 }

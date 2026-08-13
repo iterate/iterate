@@ -22,7 +22,7 @@ export const getProjectCustomHostnames = createServerFn({ method: "GET" })
     const principal = context.principal;
     if (!principal) return [];
     const auth = itxAuthFromPrincipal(principal, {
-      allowDirectoryFallback: context.operatorSession == null,
+      allowDirectoryFallback: !context.operatorSession,
     });
     await auth.ensureCanAccessProject?.(data.projectId);
     auth.assertCanAccessProject(data.projectId);

@@ -59,7 +59,7 @@ export async function catchUpToLiveReplayBoundary(args: {
       throughOffset: catchUpThroughOffset,
       pageLimit,
     });
-    if (catchUp === undefined || !shouldContinue()) return undefined;
+    if (!catchUp || !shouldContinue()) return undefined;
     replayAfterOffset = catchUp.replayAfterOffset;
     pageLimit = catchUp.pageLimit;
 

@@ -345,7 +345,7 @@ export function collectSecrets(
   const missing: string[] = [];
   for (const key of required) {
     const value = ctx.secrets[key];
-    if (value === undefined || value === "") missing.push(key);
+    if (!value || value === "") missing.push(key);
     else secretValues[key] = value;
   }
   if (missing.length > 0) {

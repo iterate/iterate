@@ -88,7 +88,7 @@ export const getRootProjectRedirectServerFn: (input?: {
     try {
       const projects = new ProjectCollectionRpcTarget({
         auth: itxAuthFromPrincipal(principal, {
-          allowDirectoryFallback: context.operatorSession == null,
+          allowDirectoryFallback: !context.operatorSession,
         }),
         config: context.config,
         ctx: context.executionCtx,

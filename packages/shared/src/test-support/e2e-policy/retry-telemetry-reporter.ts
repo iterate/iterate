@@ -149,7 +149,7 @@ export class RetryTelemetryReporter {
   onHookEnd(hook: ReportedHookContext): void {
     if (hook.name !== "beforeEach" && hook.name !== "afterEach") return;
     const startedAt = this.hookStarts.get(hook.entity)?.[hook.name];
-    if (startedAt === undefined) return;
+    if (!Number.isFinite(startedAt)) return;
     const durations = this.hookDurations.get(hook.entity) ?? { beforeEach: 0, afterEach: 0 };
     durations[hook.name] += performance.now() - startedAt;
     this.hookDurations.set(hook.entity, durations);
@@ -184,7 +184,7 @@ export class RetryTelemetryReporter {
               ([moduleId, duration]) => ({
                 moduleId,
                 selfDurationMs: Math.round(duration.selfTime),
-                ...(duration.totalTime === undefined
+                ...(!Number.isFinite(duration.totalTime)
                   ? {}
                   : { totalDurationMs: Math.round(duration.totalTime) }),
               }),
@@ -193,10 +193,12 @@ export class RetryTelemetryReporter {
             ...optionalIsoTime("collectedAt", moduleTimes?.collectedAtMs),
             ...optionalIsoTime("startedAt", moduleTimes?.startedAtMs),
             ...optionalIsoTime("finishedAt", moduleTimes?.finishedAtMs),
-            ...(moduleTimes?.queuedAtMs === undefined || moduleTimes.startedAtMs === undefined
+            ...(!Number.isFinite(moduleTimes?.queuedAtMs) ||
+            !Number.isFinite(moduleTimes.startedAtMs)
               ? {}
               : { queueDurationMs: Math.max(0, moduleTimes.startedAtMs - moduleTimes.queuedAtMs) }),
-            ...(moduleTimes?.startedAtMs === undefined || moduleTimes.finishedAtMs === undefined
+            ...(!Number.isFinite(moduleTimes?.startedAtMs) ||
+            !Number.isFinite(moduleTimes.finishedAtMs)
               ? {}
               : {
                   executionWallDurationMs: Math.max(
@@ -232,7 +234,7 @@ export class RetryTelemetryReporter {
                     ? "failed"
                     : "passed",
             }),
-            ...(test.options?.timeout === undefined
+            ...(!Number.isFinite(test.options?.timeout)
               ? {}
               : { configuredTimeoutMs: test.options.timeout }),
             tags: [...(test.tags ?? [])],
@@ -240,23 +242,24 @@ export class RetryTelemetryReporter {
               type,
               ...(message && { description: message }),
             })),
-            ...(diagnostic?.repeatCount === undefined
+            ...(!Number.isFinite(diagnostic?.repeatCount)
               ? {}
               : { repeatCount: diagnostic.repeatCount }),
-            ...(diagnostic?.slow === undefined ? {} : { slow: diagnostic.slow }),
-            ...(diagnostic?.heap === undefined ? {} : { heapBytes: diagnostic.heap }),
+            ...(typeof diagnostic?.slow !== "boolean" ? {} : { slow: diagnostic.slow }),
+            ...(!Number.isFinite(diagnostic?.heap) ? {} : { heapBytes: diagnostic.heap }),
             retryCount: diagnostic?.retryCount ?? 0,
             passedAfterRetry: diagnostic?.flaky ?? false,
             state: result.state,
             durationMs,
             attemptDetail: "aggregate-only",
-            ...(diagnostic?.startTime === undefined
+            ...(!Number.isFinite(diagnostic?.startTime)
               ? {}
               : {
                   startedAt: new Date(diagnostic.startTime).toISOString(),
                   startedAtSource: "runner",
                 }),
-            ...(diagnostic?.startTime === undefined || moduleTimes?.startedAtMs === undefined
+            ...(!Number.isFinite(diagnostic?.startTime) ||
+            !Number.isFinite(moduleTimes?.startedAtMs)
               ? {}
               : {
                   scheduleDelayMs: Math.max(
@@ -353,7 +356,7 @@ export class RetryTelemetryReporter {
 export default RetryTelemetryReporter;
 
 function optionalIsoTime<Key extends string>(key: Key, value: number | undefined) {
-  return value === undefined
+  return !Number.isFinite(value)
     ? {}
     : ({ [key]: new Date(value).toISOString() } as Record<Key, string>);
 }
@@ -383,7 +386,7 @@ function parseTelemetryPhases(
 /** Keep retry evidence useful in one-line logs, annotations, and PR tables. */
 export function compactRetryFailure(error: unknown): string | undefined {
   let value: unknown = error;
-  if (typeof error === "object" && error !== null) {
+  if (typeof error === "object" && error) {
     const record = error as Record<string, unknown>;
     value = record.message ?? record.stack ?? record.name;
   }

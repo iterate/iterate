@@ -41,7 +41,7 @@ export function watchMetroBundles(page: Page) {
             existing?.remove();
             return;
           }
-          if (existing !== null) return;
+          if (existing) return;
           const marker = document.createElement("div");
           marker.setAttribute("data-metro-bundle-spinner", "");
           marker.setAttribute("data-spinner", "true");

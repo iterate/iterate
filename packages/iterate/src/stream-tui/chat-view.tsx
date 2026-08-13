@@ -81,7 +81,7 @@ export function FeedItem(props: { item: AgentUiItem }) {
   if (item.kind === "processor-revived") {
     return (
       <text fg={COLORS.textMuted}>
-        ✦ {item.processorSlug == null ? "processor" : `${item.processorSlug} processor`} revived
+        ✦ {!item.processorSlug ? "processor" : `${item.processorSlug} processor`} revived
       </text>
     );
   }
@@ -123,7 +123,7 @@ let liveCodeClockTimer: ReturnType<typeof setInterval> | undefined;
 function subscribeLiveCodeClock(onStoreChange: () => void) {
   liveCodeClockListeners.add(onStoreChange);
   liveCodeClockNow = Date.now();
-  if (liveCodeClockTimer == null) {
+  if (!liveCodeClockTimer) {
     liveCodeClockTimer = setInterval(() => {
       liveCodeClockNow = Date.now();
       for (const listener of liveCodeClockListeners) listener();
@@ -137,7 +137,7 @@ function subscribeLiveCodeClock(onStoreChange: () => void) {
   });
   return () => {
     liveCodeClockListeners.delete(onStoreChange);
-    if (liveCodeClockListeners.size === 0 && liveCodeClockTimer != null) {
+    if (liveCodeClockListeners.size === 0 && liveCodeClockTimer) {
       clearInterval(liveCodeClockTimer);
       liveCodeClockTimer = undefined;
     }
@@ -147,7 +147,7 @@ function subscribeLiveCodeClock(onStoreChange: () => void) {
 function getLiveCodeClockSnapshot() {
   // Idle: refresh only when a full tick has elapsed so remounts aren't stuck
   // on a stale freeze, but consecutive getSnapshot calls stay Object.is-stable.
-  if (liveCodeClockTimer == null) {
+  if (!liveCodeClockTimer) {
     const wall = Date.now();
     if (wall - liveCodeClockNow >= 100) liveCodeClockNow = wall;
   }

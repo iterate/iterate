@@ -241,7 +241,7 @@ function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T>
       timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
     }),
   ]).finally(() => {
-    if (timer !== undefined) clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   });
 }
 
@@ -327,7 +327,7 @@ async function keepMountAlive(input: {
   };
 
   while (true) {
-    if (session === undefined) {
+    if (!session) {
       // (Re)connect. connectAndProvide self-disposes on failure, so nothing leaks
       // and no abandoned attempt can late-mount.
       try {

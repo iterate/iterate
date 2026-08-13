@@ -101,7 +101,7 @@ function ProjectReactivityContent() {
   // when the fold actually changes, e.g. a child stream is born.)
   const [pushCount, setPushCount] = useState(0);
   useEffect(() => {
-    if (live.value === undefined) return;
+    if (!live.value) return;
     setPushCount((current) => current + 1);
   }, [live.value]);
 
@@ -110,10 +110,9 @@ function ProjectReactivityContent() {
   const [incrementing, setIncrementing] = useState(false);
 
   const projectState = live.value;
-  const phase = projectState === undefined ? "unknown" : deploymentStatusFromState(projectState);
+  const phase = !projectState ? "unknown" : deploymentStatusFromState(projectState);
   const projectId = project.id;
-  const indexedCount =
-    streamsIndex.value === undefined ? "-" : String(Object.keys(streamsIndex.value).length);
+  const indexedCount = !streamsIndex.value ? "-" : String(Object.keys(streamsIndex.value).length);
 
   async function appendTestEvent() {
     const marker = `reactivity-event-${nextActionId.current++}`;
@@ -194,7 +193,7 @@ function ProjectReactivityContent() {
             icon={<TimerIcon aria-hidden="true" data-icon="icon" />}
             label="Stateless ticker"
             detail="itx.liveDemo.ticker · no DO"
-            value={ticker.value === undefined ? "…" : String(ticker.value)}
+            value={!Number.isFinite(ticker.value) ? "…" : String(ticker.value)}
             testId="livedemo-ticker"
           />
           {/* DO-BACKED counter, shared across every watcher. */}
@@ -205,7 +204,7 @@ function ProjectReactivityContent() {
             </div>
             <div className="mt-2 flex items-end justify-between gap-3">
               <span className="font-mono text-2xl font-semibold" data-testid="livedemo-count">
-                {counter.value === undefined ? "…" : String(counter.value.count)}
+                {!counter.value ? "…" : String(counter.value.count)}
               </span>
               <Button
                 type="button"
@@ -256,9 +255,7 @@ function ProjectReactivityContent() {
                 </dd>
                 <dt className="text-muted-foreground">Created</dt>
                 <dd data-testid="reactivity-onboarding">
-                  {projectState === undefined
-                    ? "unknown"
-                    : String(projectState.birthCertificate !== null)}
+                  {!projectState ? "unknown" : String(!!projectState.birthCertificate)}
                 </dd>
                 <dt className="text-muted-foreground">Project ID</dt>
                 <dd className="truncate font-mono text-xs" data-testid="reactivity-project-id">
@@ -266,7 +263,7 @@ function ProjectReactivityContent() {
                 </dd>
                 <dt className="text-muted-foreground">Streams</dt>
                 <dd className="truncate font-mono text-xs">
-                  {projectState === undefined ? "-" : String(projectState.streams.length)}
+                  {!projectState ? "-" : String(projectState.streams.length)}
                 </dd>
               </dl>
             </section>

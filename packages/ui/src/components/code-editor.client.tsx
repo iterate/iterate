@@ -45,7 +45,7 @@ export function CodeEditor({
   // Recreate only when the structural config (language, placeholder) changes —
   // not on every value/callback change, which would steal focus mid-edit.
   useEffect(() => {
-    if (containerRef.current == null) return;
+    if (!containerRef.current) return;
     const view = new EditorView({
       doc: value,
       parent: containerRef.current,
@@ -54,7 +54,7 @@ export function CodeEditor({
         vsCodeLight,
         (language === "json" ? json : yaml)(),
         EditorView.lineWrapping,
-        placeholder == null ? [] : placeholderExt(placeholder),
+        !placeholder ? [] : placeholderExt(placeholder),
         keymap.of([
           {
             key: "Mod-Enter",
@@ -91,7 +91,7 @@ export function CodeEditor({
   // Keep the document in sync when the value is driven from outside.
   useEffect(() => {
     const view = viewRef.current;
-    if (view == null) return;
+    if (!view) return;
     const current = view.state.doc.toString();
     if (current === value) return;
     view.dispatch({ changes: { from: 0, to: current.length, insert: value } });

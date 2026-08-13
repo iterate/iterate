@@ -62,7 +62,7 @@ export class EmailProcessor extends StreamProcessor<EmailProcessorContract> {
     switch (event?.type) {
       case "events.iterate.com/email/received": {
         // Project creation owns the router's birth; no mail routes before it.
-        if (state.birthCertificate === null) return;
+        if (!state.birthCertificate) return;
 
         // Resolve against the state BEFORE this event — the same input
         // reduce() consumed — so the forward target and the reduced routing
@@ -90,15 +90,13 @@ export class EmailProcessor extends StreamProcessor<EmailProcessorContract> {
             payload: {
               threadId: resolution.threadId,
               streamPath: resolution.streamPath,
-              ...(counterpart === null ? {} : { counterpart }),
-              ...(event.payload.message.subject === undefined
-                ? {}
-                : { subject: event.payload.message.subject }),
+              ...(!counterpart ? {} : { counterpart }),
+              ...(!event.payload.message.subject ? {} : { subject: event.payload.message.subject }),
             },
           };
           blockProcessorWhile(async () => {
             await append(routeEvent);
-            if (this.projectId === null) {
+            if (!this.projectId) {
               throw new Error("Email router cannot create a project agent without a project id");
             }
             await appendTo(
@@ -136,7 +134,7 @@ export class EmailProcessor extends StreamProcessor<EmailProcessorContract> {
   }: ReduceArgs<EmailProcessorContract>): EmailProcessorState {
     switch (event.type) {
       case "events.iterate.com/email/created":
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/email/received": {
         const resolution = resolveEmailThread({
@@ -148,10 +146,9 @@ export class EmailProcessor extends StreamProcessor<EmailProcessorContract> {
         return {
           ...state,
           threads: { ...state.threads, [resolution.threadId]: resolution.streamPath },
-          threadByMessageId:
-            messageId === null
-              ? state.threadByMessageId
-              : { ...state.threadByMessageId, [messageId]: resolution.threadId },
+          threadByMessageId: !messageId
+            ? state.threadByMessageId
+            : { ...state.threadByMessageId, [messageId]: resolution.threadId },
         };
       }
       case "events.iterate.com/email/sender-allowed": {
@@ -164,7 +161,7 @@ export class EmailProcessor extends StreamProcessor<EmailProcessorContract> {
         // to the agent's own messages route back without the +t tag.
         const threadId = event.payload.threadId;
         const messageId = normalizeMessageId(event.payload.messageId);
-        if (threadId === undefined || messageId === null) return state;
+        if (!threadId || !messageId) return state;
         return {
           ...state,
           threadByMessageId: { ...state.threadByMessageId, [messageId]: threadId },
@@ -215,18 +212,18 @@ function resolveEmailThread(input: {
   const { offset, payload, state } = input;
 
   const tagged = payload.recipient.threadId;
-  if (tagged !== null) {
+  if (tagged) {
     const streamPath = state.threads[tagged];
-    if (streamPath !== undefined) return { isNew: false, streamPath, threadId: tagged };
+    if (streamPath) return { isNew: false, streamPath, threadId: tagged };
   }
 
   const headerIds = [payload.message.inReplyTo, ...payload.message.references]
     .map((id) => normalizeMessageId(id))
-    .filter((id): id is string => id !== null);
+    .filter((id): id is string => !!id);
   for (const id of headerIds) {
     const threadId = state.threadByMessageId[id];
-    const streamPath = threadId === undefined ? undefined : state.threads[threadId];
-    if (threadId !== undefined && streamPath !== undefined) {
+    const streamPath = !threadId ? undefined : state.threads[threadId];
+    if (threadId && streamPath) {
       return { isNew: false, streamPath, threadId };
     }
   }
@@ -261,8 +258,8 @@ function emailAgentCreationEvents(input: {
         payload: {
           type: "email_thread",
           threadId: input.threadId,
-          ...(subject === undefined ? {} : { subject }),
-          ...(counterpart === undefined ? {} : { counterpart }),
+          ...(!subject ? {} : { subject }),
+          ...(!counterpart ? {} : { counterpart }),
         },
       },
     ],
@@ -278,8 +275,8 @@ function emailAgentCreationEvents(input: {
         payload: {
           config: {
             threadId: input.threadId,
-            ...(input.counterpart === undefined ? {} : { counterpart: input.counterpart }),
-            ...(input.subject === undefined ? {} : { subject: input.subject }),
+            ...(!input.counterpart ? {} : { counterpart: input.counterpart }),
+            ...(!input.subject ? {} : { subject: input.subject }),
           },
         },
       }),

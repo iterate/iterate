@@ -86,7 +86,7 @@ export function AgentCatalog({
               aria-label="Search agents"
             />
           </div>
-          {agents === undefined ? null : (
+          {!agents ? null : (
             <span className="hidden shrink-0 text-xs tabular-nums text-muted-foreground sm:block">
               {searching
                 ? `${matchCount} ${matchCount === 1 ? "match" : "matches"}`
@@ -120,7 +120,7 @@ export function AgentCatalog({
         </div>
       </div>
 
-      {agents === undefined ? (
+      {!agents ? (
         <p className="py-8 text-center text-sm text-muted-foreground">Loading agents…</p>
       ) : matchCount === 0 ? (
         <AgentCatalogEmpty agentCount={agentCount} />
@@ -209,7 +209,7 @@ function AgentCatalogList({
         <ul className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
           {virtualizer.getVirtualItems().map((virtualRow) => {
             const row = rows[virtualRow.index];
-            if (row === undefined) return null;
+            if (!row) return null;
             const node = row.original;
             return (
               <li

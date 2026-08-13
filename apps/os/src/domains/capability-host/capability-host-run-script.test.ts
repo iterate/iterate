@@ -18,7 +18,7 @@ async function bornStream() {
   const stream = new MemoryStream(PATH);
   const creation = capabilityHostCreationEvents({ path: PATH, projectId: PROJECT_ID }).map(
     (event) =>
-      event.idempotencyKey === undefined
+      !event.idempotencyKey
         ? event
         : {
             ...event,
@@ -48,7 +48,7 @@ function settleBeforeRequestAcknowledgement(
     append: async (...inputs: StreamEventInput[]) => {
       const committed = await stream.append(...inputs);
       const request = committed.find((event) => event.type === SCRIPT_REQUESTED);
-      if (request !== undefined) {
+      if (request) {
         const executionId = (request.payload as { executionId: string }).executionId;
         await stream.append({
           type: SCRIPT_SETTLED,

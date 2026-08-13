@@ -60,7 +60,7 @@ export function isPaletteResultKeyboardTarget(target: EventTarget | null): boole
   return (
     target instanceof Element &&
     (target.matches('[data-slot="command-input"]') ||
-      target.closest('[data-slot="command-item"]') !== null)
+      !!target.closest('[data-slot="command-item"]'))
   );
 }
 

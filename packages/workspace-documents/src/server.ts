@@ -110,11 +110,11 @@ export function projectIdClaim(token: string): string {
 
 export function tokenClaims(token: string): Record<string, unknown> {
   const parts = token.split(".");
-  if (parts.length !== 3 || parts[1] === undefined) return {};
+  if (parts.length !== 3 || !parts[1]) return {};
   const body = parts[1].replace(/-/g, "+").replace(/_/g, "/");
   try {
     const claims: unknown = JSON.parse(atob(body + "=".repeat((4 - (body.length % 4)) % 4)));
-    if (typeof claims !== "object" || claims === null || Array.isArray(claims)) return {};
+    if (typeof claims !== "object" || !claims || Array.isArray(claims)) return {};
     // The checks above prove this is a non-null object. Its members remain
     // unknown until each caller validates the claim it consumes.
     return claims as Record<string, unknown>;

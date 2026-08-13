@@ -60,7 +60,7 @@ test(
     // The obligation settles by writing title/tags INTO the file.
     const analyzed = await pollUntil(async () => {
       const content = await workspace.readFile(path);
-      if (content === null) return null;
+      if (!content) return null;
       const note = parseNoteFile(content);
       return typeof note.frontmatter.title === "string" && note.frontmatter.title !== ""
         ? note
@@ -109,7 +109,7 @@ async function pollUntil<T>(read: () => Promise<T | null>): Promise<T> {
   const deadline = Date.now() + 180_000;
   while (true) {
     const value = await read();
-    if (value !== null) return value;
+    if (value) return value;
     if (Date.now() > deadline) throw new Error("timed out waiting for condition");
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   }

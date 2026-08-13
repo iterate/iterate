@@ -9,7 +9,7 @@ const COMPLETION_MARKER = "ITERATE_WEBSOCKET_SMOKE_OK";
 
 const exactCodexProofEnabled = process.env.OS_E2E_STOCK_CODEX_WEBSOCKET === "1";
 
-test.skipIf(deployedBaseUrl() === null || !exactCodexProofEnabled)(
+test.skipIf(!deployedBaseUrl() || !exactCodexProofEnabled)(
   `completes a whole OpenAI turn with unmodified @openai/codex@${CODEX_VERSION}`,
   { timeout: 180_000 },
   async () => {

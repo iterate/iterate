@@ -82,13 +82,13 @@ export class BrowserProjectionWriteBuffer {
     const firstSuperseded = this.#entries.findIndex((entry) => entry.offset >= offset);
     if (firstSuperseded !== -1) {
       for (const entry of this.#entries.splice(firstSuperseded)) {
-        if (entry.coalesceKey !== undefined) this.#byCoalesceKey.delete(entry.coalesceKey);
+        if (entry.coalesceKey) this.#byCoalesceKey.delete(entry.coalesceKey);
       }
     }
     for (const write of writes) {
-      if (write.coalesceKey !== undefined) {
+      if (write.coalesceKey) {
         const pending = this.#byCoalesceKey.get(write.coalesceKey);
-        if (pending !== undefined) {
+        if (pending) {
           // Replace in place: the entry keeps its original offset slot, so a
           // later `drainThrough` / eviction still treats the row's statement
           // as belonging to the commit that first touched it.
@@ -98,10 +98,11 @@ export class BrowserProjectionWriteBuffer {
       }
       const entry: BufferEntry = { offset, coalesceKey: write.coalesceKey, build: write.build };
       this.#entries.push(entry);
-      if (entry.coalesceKey !== undefined) this.#byCoalesceKey.set(entry.coalesceKey, entry);
+      if (entry.coalesceKey) this.#byCoalesceKey.set(entry.coalesceKey, entry);
     }
-    this.#coveredOffset =
-      this.#coveredOffset === undefined ? offset : Math.max(this.#coveredOffset, offset);
+    this.#coveredOffset = !Number.isFinite(this.#coveredOffset)
+      ? offset
+      : Math.max(this.#coveredOffset, offset);
   }
 
   /**
@@ -116,7 +117,7 @@ export class BrowserProjectionWriteBuffer {
     while (count < this.#entries.length && this.#entries[count]!.offset <= offset) count += 1;
     const drained = this.#entries.splice(0, count);
     for (const entry of drained) {
-      if (entry.coalesceKey !== undefined) this.#byCoalesceKey.delete(entry.coalesceKey);
+      if (entry.coalesceKey) this.#byCoalesceKey.delete(entry.coalesceKey);
     }
     return drained.map((entry) => entry.build());
   }

@@ -107,7 +107,7 @@ export async function replayPathCall(
   let parent: unknown = target;
   for (const segment of call.path.slice(0, -1)) {
     parent = await (parent as Record<string, unknown>)[segment];
-    if (parent == null) {
+    if (!parent) {
       throw miss(`Capability path ${call.path.join(".")} hit ${String(parent)}.`);
     }
   }

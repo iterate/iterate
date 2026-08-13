@@ -55,35 +55,34 @@ function ProjectRepoDetailContent() {
   // before the artifact exists); until then the panel shows the bootstrap
   // progress the processor state pushes in live.
   const state = repoProcessor.value;
-  const panel =
-    state === undefined ? (
-      <div
-        className="grid flex-1 place-items-center text-sm text-muted-foreground"
-        data-spinner="true"
-      >
-        Loading repo…
+  const panel = !state ? (
+    <div
+      className="grid flex-1 place-items-center text-sm text-muted-foreground"
+      data-spinner="true"
+    >
+      Loading repo…
+    </div>
+  ) : state.initialized ? (
+    <RepoIde key={`${project.id}:${repoPath}`} projectId={project.id} repoPath={repoPath} />
+  ) : (
+    // data-spinner: this panel is live bootstrap progress (the processor
+    // pushes each step in), and right after repo creation it can also show a
+    // momentarily-stale checkpoint on a repo that IS already initialized —
+    // waits must keep extending until the live push replaces it.
+    <div className="overflow-y-auto p-4" data-spinner="true">
+      <div className="mx-auto w-full max-w-2xl rounded-lg border bg-card">
+        <InfoRow label="Created" value={state.birthCertificate ? "yes" : "not yet"} />
+        <InfoRow label="Initialized" value={state.initialized ? "yes" : "not yet"} />
+        <InfoRow label="Default branch" value={state.defaultBranch ?? "(none)"} />
+        <InfoRow
+          label="Remote"
+          value={state.remote ?? "(none)"}
+          copyValue={state.remote ?? undefined}
+        />
+        <InfoRow label="Artifact" value={state.artifactName ?? "(none)"} />
       </div>
-    ) : state.initialized ? (
-      <RepoIde key={`${project.id}:${repoPath}`} projectId={project.id} repoPath={repoPath} />
-    ) : (
-      // data-spinner: this panel is live bootstrap progress (the processor
-      // pushes each step in), and right after repo creation it can also show a
-      // momentarily-stale checkpoint on a repo that IS already initialized —
-      // waits must keep extending until the live push replaces it.
-      <div className="overflow-y-auto p-4" data-spinner="true">
-        <div className="mx-auto w-full max-w-2xl rounded-lg border bg-card">
-          <InfoRow label="Created" value={state.birthCertificate !== null ? "yes" : "not yet"} />
-          <InfoRow label="Initialized" value={state.initialized ? "yes" : "not yet"} />
-          <InfoRow label="Default branch" value={state.defaultBranch ?? "(none)"} />
-          <InfoRow
-            label="Remote"
-            value={state.remote ?? "(none)"}
-            copyValue={state.remote ?? undefined}
-          />
-          <InfoRow label="Artifact" value={state.artifactName ?? "(none)"} />
-        </div>
-      </div>
-    );
+    </div>
+  );
 
   return (
     <ProjectStreamView

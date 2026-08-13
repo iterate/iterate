@@ -140,19 +140,19 @@ export function ProjectCommandPaletteDialog({
     await updateAgentSummary(projectId, agent.path, { pinned: !agent.summary.pinned });
   }
 
-  const streamsLoading = streamsState.value === undefined;
+  const streamsLoading = !streamsState.value;
 
   // A live-state value is undefined for exactly one round trip after opening;
   // render that window as loading, not as an empty project.
   const streams = streamsState.value ?? {};
   const agents = agentsState.value ?? {};
-  const agentsLoading = agentsState.value === undefined;
+  const agentsLoading = !agentsState.value;
   const normalizedCreatePath = normalizeDestination(query);
 
   function handleCommandKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (!isPaletteResultKeyboardTarget(event.target)) return;
     const target = paletteKeyboardTarget(tab, selectedValue);
-    if (target === undefined) return;
+    if (!target) return;
     const paths = target.kind === "agent" ? Object.keys(agents) : Object.keys(streams);
     const expanded =
       target.kind === "agent"
@@ -166,12 +166,12 @@ export function ProjectCommandPaletteDialog({
       hasChildren: hasPathDescendant(paths, target.path),
       expanded,
     });
-    if (action === undefined) return;
+    if (!action) return;
     event.preventDefault();
     event.stopPropagation();
     if (action === "toggle_pin") {
       const agent = agents[target.path];
-      if (agent !== undefined) void togglePinned(agent);
+      if (agent) void togglePinned(agent);
       return;
     }
     if (target.kind === "agent") {
@@ -251,7 +251,7 @@ export function ProjectCommandPaletteDialog({
         </Tabs>
 
         <div className="shrink-0 border-t">
-          {tab === "tree" && normalizedCreatePath !== null ? (
+          {tab === "tree" && normalizedCreatePath ? (
             <div className="border-b px-2 py-1.5">
               <Button
                 type="button"
@@ -367,7 +367,7 @@ function StreamTreeResults({
             key={row.id}
             value={path}
             onSelect={() => {
-              if (row.original.indexRow !== undefined) onOpen(path);
+              if (row.original.indexRow) onOpen(path);
               else if (query.trim() === "") onToggleExpanded(path);
             }}
             className={cn(

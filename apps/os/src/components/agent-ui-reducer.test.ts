@@ -1632,7 +1632,7 @@ describe("agent-ui reducer", () => {
       cancelReason: "interrupted-by-user-input",
     });
     expect(state.live?.steps[0]).not.toHaveProperty("inputTokens");
-    if (state.live == null) throw new Error("expected live activity");
+    if (!state.live) throw new Error("expected live activity");
     expect(summarizeAgentUiActivity(state.live)).toMatchObject({
       outcome: "interrupted",
       requestCount: 1,

@@ -479,13 +479,13 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
     // PKCE (RFC 7636). A public client has no secret, so PKCE is its ONLY proof
     // and is mandatory. A confidential client is verified when it sent a
     // challenge (the legacy consent-only lane sends none — no verifier required).
-    if (client.public && code.codeChallenge === undefined) {
+    if (client.public && !code.codeChallenge) {
       return json(
         { error: "invalid_grant", error_description: "PKCE is required for public clients" },
         400,
       );
     }
-    if (code.codeChallenge !== undefined) {
+    if (code.codeChallenge) {
       const verifier = form.get("code_verifier") ?? "";
       if (!verifier || (await pkceS256(verifier)) !== code.codeChallenge) {
         return json(
@@ -706,7 +706,7 @@ async function deliverWebhook(input: {
     status: response?.status ?? 0,
     signature,
     payload: body,
-    ...(error === undefined ? {} : { error }),
+    ...(!error ? {} : { error }),
   };
 }
 
@@ -987,7 +987,7 @@ async function gatewaySubprotocolUpgrade(request: Request, deps: PetshopDeps): P
   return new Response(null, {
     status: 101,
     webSocket: client,
-    ...(selected === null ? {} : { headers: { "sec-websocket-protocol": selected } }),
+    ...(!selected ? {} : { headers: { "sec-websocket-protocol": selected } }),
   });
 }
 

@@ -97,7 +97,7 @@ function projectBirthEvents(args: {
     }
     return ProjectGroupBirthPayload.safeParse(event.payload).success;
   });
-  if (projectBirth === undefined) return [];
+  if (!projectBirth) return [];
 
   const project = ProjectGroupBirthPayload.parse(projectBirth.payload);
   const timestamp = normalizeEventTimestamp(projectBirth.createdAt);

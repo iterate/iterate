@@ -50,7 +50,7 @@ export function parseIterateRepoPkgSpec(spec: string): { name: string; ref: stri
  */
 export function pinIterateRepoPkgRef(spec: string, ref: string): string | null {
   const parsed = parseIterateRepoPkgSpec(spec);
-  if (parsed === null) return null;
+  if (!parsed) return null;
   return spec.slice(0, spec.length - parsed.ref.length) + ref;
 }
 
@@ -65,7 +65,7 @@ export function parseIterateRepoPkgSpecOverridesEnv(
 ): Record<string, string> | undefined {
   if (!raw || !raw.trim()) return undefined;
   const parsed: unknown = JSON.parse(raw);
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES must be a JSON object, got ${raw}`);
   }
   const overrides: Record<string, string> = {};

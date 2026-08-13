@@ -24,10 +24,10 @@ test("a newborn stream announces itself to every ancestor", async () => {
 
   await waitForCondition(
     async () =>
-      (await root.getEvent({ idempotencyKey: announcementKey("/", childPath) })) !== undefined &&
-      (await parent.getEvent({
+      !!(await root.getEvent({ idempotencyKey: announcementKey("/", childPath) })) &&
+      !!(await parent.getEvent({
         idempotencyKey: announcementKey(`/announce-birth-${marker}`, childPath),
-      })) !== undefined,
+      })),
     {
       description: `child-stream-created announcements for ${childPath} on / and its parent`,
       timeoutMs: 10_000,
@@ -88,8 +88,7 @@ test("a failed ancestor announcement retries on the child stream's next append",
   });
 
   await waitForCondition(
-    async () =>
-      (await root.getEvent({ idempotencyKey: announcementKey("/", childPath) })) !== undefined,
+    async () => !!(await root.getEvent({ idempotencyKey: announcementKey("/", childPath) })),
     {
       description: `root child-stream-created announcement for ${childPath} after another append`,
       timeoutMs: 10_000,

@@ -79,7 +79,7 @@ function hostedConfig(
   return {
     name: PROCESSOR_KEY,
     description: "Focused hosted processor test",
-    ...(filter === undefined ? {} : { filter }),
+    ...(!filter ? {} : { filter }),
     receiver: {
       action: "wake-processor",
       expression: ["agents", ["get", "/source"], "processor", "wakeStreamProcessor"],
@@ -986,7 +986,7 @@ describe("StreamEventSender stream delivery", () => {
         },
       });
       const error = appended[0]?.payload?.error;
-      if (expectedLength === undefined) expect(error).toBeUndefined();
+      if (!Number.isFinite(expectedLength)) expect(error).toBeUndefined();
       else expect(error).toHaveLength(expectedLength);
       expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
         attempt: 0,
@@ -2053,7 +2053,7 @@ describe("ephemeral delivery to hosted processors", () => {
     streamId: SOURCE_STREAM_ID,
     checkpointOffset: 0,
     processEventBatch: recordingProcessEventBatch(calls, () => undefined),
-    ...(consumes === undefined ? {} : { openedBy: announcing(consumes) }),
+    ...(!consumes ? {} : { openedBy: announcing(consumes) }),
   });
 
   const ephemeralFirst = (): StreamEvent[] => [
@@ -2282,7 +2282,7 @@ describe("StreamConnections hosted delivery watchdog", () => {
       [3, 4],
       [5],
     ]);
-    expect(calls.every(({ batch }) => batch.state === null)).toBe(true);
+    expect(calls.every(({ batch }) => !batch.state)).toBe(true);
     expect(h.connections.runtimeState()["capped-session"]).toMatchObject({
       deliveredThroughOffset: 5,
       batchesSent: 3,

@@ -46,17 +46,17 @@ export async function loadGithubAiLinterRules(
   const repo = itx.repos.get(source.repoPath);
   const paths = [...new Set(source.paths)].toSorted();
   const firstPath = paths[0];
-  if (firstPath === undefined) {
+  if (!firstPath) {
     throw new Error(`GitHub AI linter has no configured rule paths for ${source.repoPath}`);
   }
   const firstFile = await repo.readFile({ path: firstPath });
-  if (firstFile === null) {
+  if (!firstFile) {
     throw new Error(`GitHub AI linter rule does not exist: ${source.repoPath}:${firstPath}`);
   }
   const files = new Map([[firstPath, firstFile]]);
   for (const path of paths.slice(1)) {
     const file = await repo.readFile({ commitOid: firstFile.commitOid, path });
-    if (file === null) {
+    if (!file) {
       throw new Error(`GitHub AI linter rule does not exist: ${source.repoPath}:${path}`);
     }
     files.set(path, file);
@@ -81,7 +81,7 @@ function parseGithubAiLinterRule(path: string, content: string) {
   const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/.exec(content);
   const metadataSource = frontmatter?.[1];
   const body = frontmatter?.[2];
-  if (metadataSource === undefined || body === undefined) {
+  if (!metadataSource || !body) {
     throw new Error(`GitHub AI linter rule ${path} needs frontmatter with id, files, and severity`);
   }
   let metadata: z.infer<typeof RuleMetadata>;

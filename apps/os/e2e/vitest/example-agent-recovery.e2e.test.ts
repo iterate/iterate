@@ -72,7 +72,7 @@ test(
       type: PROMPT_RECEIVED,
       payload: { id: promptId, text: "hello" },
     } satisfies StreamEventInput);
-    if (subscription === undefined || prompt === undefined) {
+    if (!subscription || !prompt) {
       throw new Error("append returned no committed event");
     }
 
@@ -92,7 +92,7 @@ test(
     // deterministic rather than a race, and it directly exercises proxyGetAlarm.
     // (The arm is normally sub-second; were it ever slower than the 8s reply
     // generation, the next assertion would fail red — never a false pass.)
-    await waitForCondition(async () => (await stream.proxyGetAlarm()) !== null, {
+    await waitForCondition(async () => Number.isFinite(await stream.proxyGetAlarm()), {
       description: "the facet's keepalive to arm the parent's alarm over itx",
       timeoutMs: 30_000,
     });

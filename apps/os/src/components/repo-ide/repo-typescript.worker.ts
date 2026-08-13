@@ -115,11 +115,12 @@ function repoCompilerOptions(tsconfigText: string | null): ts.CompilerOptions {
   const parsed = ts.parseConfigFileTextToJson("/tsconfig.json", tsconfigText);
   const rawOptions: unknown = (parsed.config as { compilerOptions?: unknown } | undefined)
     ?.compilerOptions;
-  if (typeof rawOptions !== "object" || rawOptions === null) return defaultCompilerOptions;
+  if (typeof rawOptions !== "object" || !rawOptions) return defaultCompilerOptions;
   const converted = ts.convertCompilerOptionsFromJson(rawOptions, "/", "tsconfig.json");
   const picked: ts.CompilerOptions = {};
   for (const key of TSCONFIG_OPTION_WHITELIST) {
     const value = converted.options[key];
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- `strict: false` is a real option that must override defaults; only undefined means "not set"
     if (value !== undefined) (picked as Record<string, unknown>)[key] = value;
   }
   return { ...defaultCompilerOptions, ...picked };
@@ -135,7 +136,7 @@ function withShortLibNames(options: ts.CompilerOptions): ts.CompilerOptions {
   const lib = options.lib?.map((name) =>
     name.replace(/^lib\./, "").replace(/\.d\.ts$/, ""),
   ) as ts.CompilerOptions["lib"];
-  return lib === undefined ? options : { ...options, lib };
+  return !lib ? options : { ...options, lib };
 }
 
 /**

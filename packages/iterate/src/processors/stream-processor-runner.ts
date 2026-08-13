@@ -423,7 +423,7 @@ export class StreamProcessorRunner<
   /** Handle a durable recovery alarm routed here by the hosting registry. */
   async handleAlarm(info?: unknown): Promise<void> {
     const recovery = this.durability?.recovery;
-    if (recovery === undefined) return;
+    if (!recovery) return;
     await recovery.handleAlarm(info);
   }
 
@@ -459,7 +459,7 @@ export class StreamProcessorRunner<
    * real facts for state observers.
    */
   get currentState(): ProcessorState<Contract> {
-    if (this.#progress !== undefined) return this.#progress.reduction.state;
+    if (this.#progress) return this.#progress.reduction.state;
     this.#defaultState ??= this.hooks.initialState();
     return this.#defaultState;
   }
@@ -652,12 +652,12 @@ export class StreamProcessorRunner<
     try {
       for (const event of pending) {
         const reduction = this.hooks.reduceRawEvent({ event, state: ctx.state });
-        if (reduction !== undefined && "parseError" in reduction) {
+        if (reduction && "parseError" in reduction) {
           // A malformed consumed event is a fact of the log, not an
           // exception: collect it, keep advancing (the cursor must never
           // wedge on it), and record it AFTER its commit lands (below).
           ctx.uncommittedParseFailures.push({ event, error: reduction.parseError });
-        } else if (reduction !== undefined) {
+        } else if (reduction) {
           // `caughtUp` on the LAST delivered event of a batch that scanned through
           // the highest observed offset (not a comparison of this event alone — that
           // fails when a later unconsumed event is the batch's final row).
@@ -902,7 +902,7 @@ export class StreamProcessorRunner<
     }
 
     const persisted = await this.durability?.progress.read();
-    if (persisted === undefined) {
+    if (!persisted) {
       const fresh = this.#freshProgress(streamId, 0);
       await this.#commit(fresh, {
         expectedCursorRevision: 0,
@@ -917,7 +917,7 @@ export class StreamProcessorRunner<
     }
 
     const replaceForStream = this.durability?.progress.replaceForStream;
-    if (replaceForStream === undefined) {
+    if (!replaceForStream) {
       throw new Error(
         `stream processor "${this.hooks.contract.slug}" progress belongs to stream ID ` +
           `${persisted.streamId}, but the current stream ID is ${streamId}; ` +
@@ -951,7 +951,7 @@ export class StreamProcessorRunner<
       this.#loaded = undefined;
       this.#loadingStreamId = undefined;
     }
-    if (this.#loaded !== undefined) {
+    if (this.#loaded) {
       if (this.#loadingStreamId === streamId) return this.#loaded;
       return this.#loaded.then(() =>
         this.#loadWithStreamReplacement(streamId, replaceMismatchedStream),
@@ -985,7 +985,7 @@ export class StreamProcessorRunner<
 
   async #loadOnce(streamId: string, replaceMismatchedStream: boolean): Promise<void> {
     const persisted = await this.durability?.progress.read();
-    if (persisted === undefined) {
+    if (!persisted) {
       // Fresh processor: nothing observed yet, so the schema default IS the
       // fold of the (empty) acknowledged prefix. Persist the stream ID before
       // a checkpoint can escape, so no later wake can adopt unrelated
@@ -1008,7 +1008,7 @@ export class StreamProcessorRunner<
         );
       }
       const replaceForStream = this.durability?.progress.replaceForStream;
-      if (replaceForStream === undefined) {
+      if (!replaceForStream) {
         throw new Error(
           `stream processor "${this.hooks.contract.slug}" progress belongs to stream ID ` +
             `${persisted.streamId}, but the current stream ID is ${streamId}; ` +
@@ -1130,7 +1130,7 @@ export class StreamProcessorRunner<
           const reduction = this.hooks.reduceRawEvent({ event, state });
           // Parse failures were recorded when first processed (idempotent);
           // a refold silently folds past them, exactly like live delivery.
-          if (reduction !== undefined && !("parseError" in reduction)) {
+          if (reduction && !("parseError" in reduction)) {
             state = reduction.state;
           }
         }
@@ -1148,7 +1148,7 @@ export class StreamProcessorRunner<
     progress: ProcessorProgress<ProcessorState<Contract>>,
     opts: { expectedCursorRevision: number; expectedStreamId: string | undefined },
   ): Promise<void> {
-    if (this.durability === undefined) return;
+    if (!this.durability) return;
     await this.durability.progress.commit(progress, opts);
   }
 
@@ -1192,7 +1192,7 @@ export class StreamProcessorRunner<
     // Identity-only read: the page envelope carries the lifetime and head, so
     // do not transfer the stream's first retained event on every processor read.
     const page = await this.stream.getEventPage({ afterOffset: Number.MAX_SAFE_INTEGER, limit: 1 });
-    if (expectedStreamId !== undefined && page.streamId !== expectedStreamId) {
+    if (expectedStreamId && page.streamId !== expectedStreamId) {
       throw new Error(
         `stream processor "${this.hooks.contract.slug}" was opened for stream ID ` +
           `${expectedStreamId}, but the stream at this path is ${page.streamId}`,
@@ -1250,7 +1250,7 @@ export class StreamProcessorRunner<
   }
 
   #requireProgress(): ProcessorProgress<ProcessorState<Contract>> {
-    if (this.#progress === undefined) {
+    if (!this.#progress) {
       throw new Error("StreamProcessorRunner progress read before load — this is a runner bug");
     }
     return this.#progress;
@@ -1279,14 +1279,14 @@ export class StreamProcessorRunner<
     const promise = new Promise<void>((resolve, reject) => {
       waiter = { ...match, reject, resolve, signal: opts.signal };
       this.#eventWaiters.add(waiter);
-      if (opts.timeoutMs !== undefined) {
+      if (Number.isFinite(opts.timeoutMs)) {
         waiter.timer = setTimeout(() => {
           this.#settleEventWaiter(waiter, {
             error: new Error(`waitUntilEvent timed out after ${opts.timeoutMs}ms`),
           });
         }, opts.timeoutMs);
       }
-      if (opts.signal !== undefined) {
+      if (opts.signal) {
         waiter.abortListener = () => {
           this.#settleEventWaiter(waiter, { error: abortReason(opts.signal!) });
         };
@@ -1307,8 +1307,8 @@ export class StreamProcessorRunner<
     outcome: { error: unknown } | { value: undefined },
   ): void {
     if (!this.#eventWaiters.delete(waiter)) return;
-    if (waiter.timer !== undefined) clearTimeout(waiter.timer);
-    if (waiter.signal !== undefined && waiter.abortListener !== undefined) {
+    if (waiter.timer) clearTimeout(waiter.timer);
+    if (waiter.signal && waiter.abortListener) {
       waiter.signal.removeEventListener("abort", waiter.abortListener);
     }
     if ("error" in outcome) waiter.reject(outcome.error);

@@ -139,7 +139,7 @@ class MemoryKv {
 
   async get<T>(key: string, type?: string): Promise<T | string | null> {
     const value = this.values.get(key);
-    if (value === undefined) return null;
+    if (!value) return null;
     return type === "json" ? (JSON.parse(value) as T) : value;
   }
 
@@ -194,7 +194,7 @@ function createCloudflareFetchMock(initialHostnames: CloudflareHostname[]) {
         return Response.json({
           success: true,
           result: [...hostnames.values()].filter(
-            (candidate) => exact === null || candidate.hostname === exact,
+            (candidate) => !exact || candidate.hostname === exact,
           ),
         });
       }

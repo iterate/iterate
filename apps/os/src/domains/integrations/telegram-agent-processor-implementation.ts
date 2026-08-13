@@ -88,7 +88,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
     args: ProcessEventArgs<TelegramAgentProcessorContract>,
   ): undefined {
     const { append, appendTo, blockProcessorWhile, delivery, event, runInBackground, state } = args;
-    if (state.birthCertificate === null) return;
+    if (!state.birthCertificate) return;
     const { chatId, connection, messageThreadId } = state.birthCertificate.config;
     switch (event?.type) {
       case "events.iterate.com/telegram/webhook-received": {
@@ -107,10 +107,9 @@ export class TelegramAgentProcessor extends StreamProcessor<
         // is recorded as context without triggering an LLM turn. A bare /new
         // does not wake the agent either — its acknowledgement is the fixed
         // processor-level message, not an agent greeting.
-        const triggers =
-          newCommand !== null
-            ? newCommand.trailingText !== null
-            : target?.kind === "message" || target?.kind === "callback_query";
+        const triggers = newCommand
+          ? !!newCommand.trailingText
+          : target?.kind === "message" || target?.kind === "callback_query";
         blockProcessorWhile(() =>
           this.#transcribeWebhook({ append, connection, event, newCommand, target, triggers }),
         );
@@ -196,7 +195,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
     triggers: boolean;
   }): Promise<void> {
     const { append, connection, event, newCommand, target, triggers } = input;
-    if (newCommand !== null) {
+    if (newCommand) {
       // The fixed acknowledgement rides the journaled send pair, so it is
       // delivered with the same obligation semantics as any reply — and
       // lands in the chat before the agent's answer to any trailing text
@@ -230,7 +229,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
           ...((typeof senderId === "number" || typeof senderId === "string") && {
             userId: String(senderId),
           }),
-          ...(senderUsername == null ? {} : { username: senderUsername }),
+          ...(!senderUsername ? {} : { username: senderUsername }),
         },
         refs: [
           {
@@ -247,7 +246,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
     // not signal receipt of a message that could still be lost), show
     // "typing…" so the human knows the bot heard them. Freshness-gated: a
     // replay must not re-type on historical messages.
-    if (triggers && target != null && webhookAckIsFresh(event, (this.deps.now ?? Date.now)())) {
+    if (triggers && target && webhookAckIsFresh(event, (this.deps.now ?? Date.now)())) {
       await this.#sendTyping(connection, target);
     }
   }
@@ -309,10 +308,10 @@ export class TelegramAgentProcessor extends StreamProcessor<
   async #repaintTypingAtHead(state: TelegramAgentProcessorState): Promise<void> {
     const latest = this.#unpaintedTypingFact;
     this.#unpaintedTypingFact = undefined;
-    if (latest == null || !webhookAckIsFresh(latest, (this.deps.now ?? Date.now)())) return;
-    if (state.birthCertificate === null) return;
+    if (!latest || !webhookAckIsFresh(latest, (this.deps.now ?? Date.now)())) return;
+    if (!state.birthCertificate) return;
     const { chatId, messageThreadId } = state;
-    if (chatId == null) return;
+    if (!chatId) return;
     await this.#sendTyping(state.birthCertificate.config.connection, {
       chatId,
       messageThreadId,
@@ -328,7 +327,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
     latestInboundMessageId: number | undefined;
     messageThreadId: string | undefined;
   }): Promise<number> {
-    if (this.deps.sendTelegramMessage == null) {
+    if (!this.deps.sendTelegramMessage) {
       // Loud, not skipped: a send obligation with no delivery dep is a
       // misconfiguration; dropping it would silently eat the reply.
       throw new Error(
@@ -340,12 +339,11 @@ export class TelegramAgentProcessor extends StreamProcessor<
     // messages have arrived since — quoting the latest message is noise,
     // quoting a stale one disambiguates.
     const { answeringMessageId, latestInboundMessageId } = input;
-    const replyTo =
-      input.event.payload.reply_to_message_id !== undefined
-        ? undefined
-        : answeringMessageId !== undefined && answeringMessageId !== latestInboundMessageId
-          ? answeringMessageId
-          : undefined;
+    const replyTo = input.event.payload.reply_to_message_id
+      ? undefined
+      : Number.isFinite(answeringMessageId) && answeringMessageId !== latestInboundMessageId
+        ? answeringMessageId
+        : undefined;
     // Journaled sends are THREAD-BOUND: the stream's identity always wins over
     // payload-supplied chat_id/message_thread_id. Not a capability boundary
     // (the raw itx.integrations.telegram sendMessage can post anywhere) — a
@@ -361,10 +359,10 @@ export class TelegramAgentProcessor extends StreamProcessor<
     } = input.event.payload;
     const { messageId } = await this.deps.sendTelegramMessage({
       body: {
-        ...(replyTo === undefined ? {} : { reply_to_message_id: replyTo }),
+        ...(!Number.isFinite(replyTo) ? {} : { reply_to_message_id: replyTo }),
         ...payloadRest,
         chat_id: coerceTelegramId(input.chatId),
-        ...(input.messageThreadId === undefined
+        ...(!input.messageThreadId
           ? {}
           : { message_thread_id: coerceTelegramId(input.messageThreadId) }),
       },
@@ -396,12 +394,12 @@ export class TelegramAgentProcessor extends StreamProcessor<
   }
 
   async #sendTyping(connection: string, target: { chatId: string; messageThreadId?: string }) {
-    if (this.deps.callTelegramApi == null) return;
+    if (!this.deps.callTelegramApi) return;
     await this.deps.callTelegramApi({
       body: {
         action: "typing",
         chat_id: coerceTelegramId(target.chatId),
-        ...(target.messageThreadId === undefined
+        ...(!target.messageThreadId
           ? {}
           : { message_thread_id: coerceTelegramId(target.messageThreadId) }),
       },
@@ -435,35 +433,33 @@ export class TelegramAgentProcessor extends StreamProcessor<
     const { event, state } = args;
     switch (event.type) {
       case "events.iterate.com/telegram-agent/created":
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return {
           ...state,
           birthCertificate: event.payload,
           chatId: event.payload.config.chatId,
-          ...(event.payload.config.messageThreadId === undefined
+          ...(!event.payload.config.messageThreadId
             ? {}
             : { messageThreadId: event.payload.config.messageThreadId }),
         };
       case "events.iterate.com/telegram/webhook-received": {
         const target = telegramUpdateTarget(event.payload.body);
-        if (target == null) return state;
+        if (!target) return state;
         return {
           ...state,
           botId: readString(event.payload.botId) ?? state.botId,
           chatId: target.chatId,
-          ...(target.messageThreadId === undefined
-            ? {}
-            : { messageThreadId: target.messageThreadId }),
+          ...(!target.messageThreadId ? {} : { messageThreadId: target.messageThreadId }),
           // Half of the deterministic reply_to_message_id rule: the newest
           // human message on this session.
           ...(target.kind === "message" &&
             !target.fromIsBot &&
-            target.messageId !== undefined && { latestInboundMessageId: target.messageId }),
+            Number.isFinite(target.messageId) && { latestInboundMessageId: target.messageId }),
         };
       }
       case "events.iterate.com/agent/llm-request-requested":
         // The other half: snapshot which message this LLM turn is answering.
-        return state.latestInboundMessageId === undefined
+        return !Number.isFinite(state.latestInboundMessageId)
           ? state
           : { ...state, answeringMessageId: state.latestInboundMessageId };
       default:
@@ -539,7 +535,7 @@ function telegramWebhookAgentInput(
   // reading the hinted thread, then claimed the history was unavailable).
   const replyHint = readRecord(readRecord(payload)?.replyHint);
   const replyHintPath = readString(replyHint?.sessionPath);
-  if (replyHintPath !== undefined) {
+  if (replyHintPath) {
     lines.push(
       "",
       // The taught read is FILTERED to the two conversation event types — an
@@ -549,10 +545,10 @@ function telegramWebhookAgentInput(
     );
   }
   lines.push("", "```yaml", stringifyYaml(payload).trimEnd(), "```");
-  if (options.newCommand !== null) {
+  if (options.newCommand) {
     lines.push(
       "",
-      options.newCommand.trailingText === null
+      !options.newCommand.trailingText
         ? "The user started a fresh thread with /new. This session's transcript starts here; earlier conversation lives in the previous session streams."
         : `The user started a fresh thread with /new — treat the text after /new as their first message in this new conversation: ${JSON.stringify(options.newCommand.trailingText)}`,
     );
@@ -575,7 +571,7 @@ function telegramMediaPlaceholders(payload: unknown): string[] {
     readRecord(update?.message) ??
     readRecord(update?.edited_message) ??
     readRecord(update?.channel_post);
-  if (message == null) return [];
+  if (!message) return [];
   const mediaKinds: Array<[key: string, placeholder: string]> = [
     ["photo", "[photo]"],
     ["voice", "[voice message]"],
@@ -590,7 +586,7 @@ function telegramMediaPlaceholders(payload: unknown): string[] {
     ["poll", "[poll]"],
     ["venue", "[venue]"],
   ];
-  return mediaKinds.filter(([key]) => message[key] != null).map(([, placeholder]) => placeholder);
+  return mediaKinds.filter(([key]) => !!message[key]).map(([, placeholder]) => placeholder);
 }
 
 type TelegramUpdateTarget = {
@@ -606,7 +602,7 @@ type TelegramUpdateTarget = {
  * carries no chat. */
 function telegramUpdateTarget(body: unknown): TelegramUpdateTarget | null {
   const update = readRecord(body);
-  if (update == null) return null;
+  if (!update) return null;
   const containers: Array<[kind: TelegramUpdateTarget["kind"], value: unknown]> = [
     ["message", update.message],
     ["edited_message", update.edited_message],
@@ -619,7 +615,7 @@ function telegramUpdateTarget(body: unknown): TelegramUpdateTarget | null {
   for (const [kind, value] of containers) {
     const container = readRecord(value);
     const chatId = readTelegramId(readRecord(container?.chat)?.id);
-    if (container == null || chatId == null) continue;
+    if (!container || !chatId) continue;
     // The ACTOR: for callback queries it is the button presser (on the update,
     // not the message — the message's `from` is the bot that posted it).
     const from =
@@ -634,7 +630,7 @@ function telegramUpdateTarget(body: unknown): TelegramUpdateTarget | null {
       fromIsBot: from?.is_bot === true,
       kind,
       ...(typeof messageId === "number" && { messageId }),
-      ...(messageThreadId === undefined ? {} : { messageThreadId }),
+      ...(!messageThreadId ? {} : { messageThreadId }),
     };
   }
   return null;

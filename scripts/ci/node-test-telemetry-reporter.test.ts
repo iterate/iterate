@@ -79,6 +79,6 @@ it("keeps duplicate Node leaf identities distinct instead of inventing retries",
 });
 
 function restoreEnv(name: string, value: string | undefined) {
-  if (value === undefined) delete process.env[name];
+  if (!value) delete process.env[name];
   else process.env[name] = value;
 }

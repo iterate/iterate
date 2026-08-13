@@ -280,7 +280,7 @@ export function parseScheduleSetPayload(input: unknown): ScheduleSetPayload {
     SchedulerProcessorContract.events[
       "events.iterate.com/scheduler/schedule-set"
     ].payloadSchema.parse(input);
-  return parsed.metadata === undefined
+  return !parsed.metadata
     ? parsed
     : {
         ...parsed,
@@ -291,7 +291,7 @@ export function parseScheduleSetPayload(input: unknown): ScheduleSetPayload {
 function canonicalJson(value: unknown): unknown {
   if (typeof value === "number") return value === 0 ? 0 : value;
   if (Array.isArray(value)) return value.map(canonicalJson);
-  if (value === null || typeof value !== "object") return value;
+  if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>).map(([key, item]) => [
       key,

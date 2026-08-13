@@ -112,7 +112,7 @@ function getConfigSchemaMetadata(schema: z.ZodTypeAny) {
 }
 
 function isPlainObject(value: unknown): value is AppConfigObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === "object" && !!value && !Array.isArray(value);
 }
 
 function normalizeEnvSegment(segment: string) {

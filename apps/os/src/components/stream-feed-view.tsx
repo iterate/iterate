@@ -103,8 +103,8 @@ export function StreamFeedView({
     params,
   );
   const itemCount = Number(countResult.data[0]?.count ?? 0);
-  const live = filter.agent == null ? null : (liveState?.live ?? null);
-  const transientItems = filter.agent == null ? EMPTY_AGENT_ITEMS : transientAgentItems;
+  const live = !filter.agent ? null : (liveState?.live ?? null);
+  const transientItems = !filter.agent ? EMPTY_AGENT_ITEMS : transientAgentItems;
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ids of activity summaries the user expanded. Operation rows inside an
   // expanded activity open their URL-backed inspector instead of nesting a
@@ -117,7 +117,7 @@ export function StreamFeedView({
   // anchorTo's mid-history compensation measures. Rendering it outside the
   // list would hide its height from both.
   const transientCount = transientItems.length;
-  const liveCount = live == null ? 0 : 1;
+  const liveCount = !live ? 0 : 1;
   const totalCount = itemCount + transientCount + liveCount;
 
   // Settled rows are append-only at dense positions, so the position is a
@@ -129,7 +129,7 @@ export function StreamFeedView({
     (index: number) => {
       if (index < itemCount) return index;
       const transient = transientItems[index - itemCount];
-      return transient == null ? "live" : `transient:${transient.id}`;
+      return !transient ? "live" : `transient:${transient.id}`;
     },
     [itemCount, transientItems],
   );
@@ -223,13 +223,13 @@ export function StreamFeedView({
   }, []);
 
   const filtersNarrow =
-    (filter.agent?.searchQuery != null && filter.agent.searchQuery !== "") ||
-    (filter.raw != null &&
+    (!!filter.agent?.searchQuery && filter.agent.searchQuery !== "") ||
+    (!!filter.raw &&
       ((filter.raw.eventTypes?.length ?? 0) > 0 ||
         (filter.raw.components?.length ?? 0) > 0 ||
-        (filter.raw.searchQuery != null && filter.raw.searchQuery !== "") ||
-        filter.raw.offsetFrom != null ||
-        filter.raw.offsetTo != null));
+        (!!filter.raw.searchQuery && filter.raw.searchQuery !== "") ||
+        Number.isFinite(filter.raw.offsetFrom) ||
+        Number.isFinite(filter.raw.offsetTo)));
 
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
@@ -247,7 +247,7 @@ export function StreamFeedView({
                     ? "Nothing matches the current filters"
                     : "Waiting for events…"}
               </EmptyTitle>
-              {isPending || filtersNarrow || emptyLabel === null ? null : (
+              {isPending || filtersNarrow || !emptyLabel ? null : (
                 <EmptyDescription>{emptyLabel}</EmptyDescription>
               )}
             </EmptyHeader>
@@ -262,7 +262,7 @@ export function StreamFeedView({
           {virtualItems.map((virtualItem) => {
             const index = virtualItem.index;
             const transientItem = transientItems[index - itemCount];
-            const isLiveItem = live != null && index === itemCount + transientCount;
+            const isLiveItem = !!live && index === itemCount + transientCount;
             const row = index < itemCount ? rowsByIndex.get(index)?.row : undefined;
             return (
               <div
@@ -282,7 +282,7 @@ export function StreamFeedView({
                     onInspectScriptExecution={onInspectScriptExecution}
                     database={database}
                   />
-                ) : transientItem != null ? (
+                ) : transientItem ? (
                   <AgentFeedItemRow
                     item={transientItem}
                     toggledIds={toggledIds}
@@ -292,7 +292,7 @@ export function StreamFeedView({
                     projectSlug={projectSlug}
                     database={database}
                   />
-                ) : row == null ? (
+                ) : !row ? (
                   // Not-yet-loaded rows must measure exactly estimateSize
                   // (56px, margins don't count toward offsetHeight): the
                   // initial jump to the end renders these before their SQL
@@ -302,7 +302,7 @@ export function StreamFeedView({
                   <div className="h-14 py-2">
                     <div className="h-full rounded-xl bg-muted/40" />
                   </div>
-                ) : row.agentItem != null ? (
+                ) : row.agentItem ? (
                   <AgentFeedItemRow
                     item={row.agentItem}
                     toggledIds={toggledIds}
@@ -436,11 +436,13 @@ const RawFeedItemRow = memo(function RawFeedItemRow({
 }) {
   const data = row.rawData;
   const eventType =
-    data != null && "eventType" in data ? data.eventType : (data?.events[0]?.type ?? row.kind);
+    data && "eventType" in data ? data.eventType : (data?.events[0]?.type ?? row.kind);
   const createdAt = data?.events[0]?.createdAt;
-  const createdAtMs = createdAt == null ? null : Date.parse(createdAt);
+  const createdAtMs = !createdAt ? null : Date.parse(createdAt);
   const deltaMs =
-    previousTimestampMs == null || createdAtMs == null || Number.isNaN(createdAtMs)
+    !Number.isFinite(previousTimestampMs) ||
+    !Number.isFinite(createdAtMs) ||
+    Number.isNaN(createdAtMs)
       ? null
       : Math.max(0, createdAtMs - previousTimestampMs);
 
@@ -470,7 +472,7 @@ const RawFeedItemRow = memo(function RawFeedItemRow({
         </span>
       ) : null}
       <span className="ml-auto flex shrink-0 items-baseline gap-2.5 tabular-nums">
-        {deltaMs != null ? (
+        {Number.isFinite(deltaMs) ? (
           <span
             className={cn("text-[10px]", deltaColorClass(deltaMs))}
             title="Time since previous feed item"
@@ -494,14 +496,14 @@ const RawFeedItemRow = memo(function RawFeedItemRow({
  * item timestamp (activities: when they ended).
  */
 function rowLastTimestampMs(row: FeedRow | undefined): number | null {
-  if (row == null) return null;
-  if (row.rawData != null) {
+  if (!row) return null;
+  if (row.rawData) {
     const createdAt = row.rawData.events.at(-1)?.createdAt;
-    const parsed = createdAt == null ? Number.NaN : Date.parse(createdAt);
+    const parsed = !createdAt ? Number.NaN : Date.parse(createdAt);
     return Number.isNaN(parsed) ? null : parsed;
   }
   const item = row.agentItem;
-  if (item == null) return null;
+  if (!item) return null;
   if (item.kind === "activity") return item.endedAtMs ?? item.startedAtMs;
   return item.timestampMs;
 }

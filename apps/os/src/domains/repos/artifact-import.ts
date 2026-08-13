@@ -102,7 +102,7 @@ async function importGithubArtifactRepo(
         // Cloudflare documents depth as optional. Omitting it imports the
         // full history without transferring it through this Worker.
         // https://developers.cloudflare.com/artifacts/api/workers-binding/#importparams
-        ...(input.depth === undefined ? {} : { depth: input.depth }),
+        ...(!Number.isFinite(input.depth) ? {} : { depth: input.depth }),
         url: `https://github.com/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}.git`,
       },
       target: { name: input.name },

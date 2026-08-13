@@ -102,7 +102,7 @@ export function StreamEventsSheet({
     const heartbeat = setInterval(() => {
       void (async () => {
         if (cancelled || pinging) return; // a slow ping owns the verdict
-        if (handle === null) {
+        if (!handle) {
           // A failed (re)connect must keep retrying — a dead handle with no
           // retry would leave the sheet reading "live" forever.
           if (!connecting) {
@@ -144,7 +144,7 @@ export function StreamEventsSheet({
   // A log tail: stay pinned to the newest event unless the user scrolled up.
   useEffect(() => {
     const node = scroller.current;
-    if (node !== null && pinned.current) node.scrollTop = node.scrollHeight;
+    if (node && pinned.current) node.scrollTop = node.scrollHeight;
   }, [events]);
 
   return (

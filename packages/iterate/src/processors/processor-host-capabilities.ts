@@ -65,7 +65,7 @@ export function hostRuntimeCapabilities(
     ping: (input: StreamPingInput) => {
       const t1 = opts.now();
       const oneWayEstimateMs = opts.oneWayEstimateMs?.();
-      if (oneWayEstimateMs !== undefined) {
+      if (Number.isFinite(oneWayEstimateMs)) {
         processor.eventConsumptionMetrics.notePingObserved({ t0: input.t0, t1, oneWayEstimateMs });
       }
       return { t0: input.t0, t1, t2: opts.now() };
@@ -90,7 +90,7 @@ export function announceContract(contract: {
     emits: [...contract.emits],
     ownedEvents: Object.entries(contract.events).map(([type, definition]) => ({
       type,
-      ...(definition.description === undefined ? {} : { description: definition.description }),
+      ...(!definition.description ? {} : { description: definition.description }),
     })),
   };
 }

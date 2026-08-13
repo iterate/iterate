@@ -7,7 +7,7 @@ export class SingleFlightValue<T> {
   #promise: Promise<T> | undefined;
 
   get(load: () => Promise<T>, retain: (value: T) => boolean = () => true): Promise<T> {
-    if (this.#promise !== undefined) return this.#promise;
+    if (this.#promise) return this.#promise;
     const promise = load()
       .then((value) => {
         // A value can be useful to the current callers but unsafe to retain

@@ -27,7 +27,7 @@ const SLACK_INTEGRATION_STREAM_PATH = `/integrations/slack/${CONNECTION}`;
 
 const signingSecret = slackSigningSecret();
 
-test.skipIf(signingSecret === null)(
+test.skipIf(!signingSecret)(
   "inbound Slack webhook routes to a slack agent that attempts a Web API reply",
   { timeout: 240_000 },
   async () => {

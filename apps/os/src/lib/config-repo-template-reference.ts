@@ -95,7 +95,7 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
   let path: string | undefined;
   if (fragment?.startsWith("path:") === true) {
     path = fragment.slice("path:".length);
-  } else if (fragment !== undefined) {
+  } else if (fragment) {
     const pathSeparator = fragment.indexOf("&path:");
     if (pathSeparator === -1) ref = fragment;
     else {
@@ -104,7 +104,7 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
     }
   }
 
-  if (ref !== undefined) {
+  if (ref) {
     if (
       ref.length === 0 ||
       ref.startsWith("/") ||
@@ -122,7 +122,7 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
     }
   }
 
-  if (path !== undefined) {
+  if (path) {
     if (!isSafeConfigRepoTemplatePath(path)) {
       throw new Error(`Invalid path in config template reference: ${JSON.stringify(path)}.`);
     }
@@ -130,19 +130,19 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
 
   return {
     owner,
-    ...(path === undefined ? {} : { path }),
-    ...(ref === undefined ? {} : { ref }),
+    ...(!path ? {} : { path }),
+    ...(!ref ? {} : { ref }),
     repo,
   };
 }
 
 export function formatConfigRepoTemplateReference(reference: ConfigRepoTemplateReference): string {
   const repository = `github:${reference.owner}/${reference.repo}`;
-  if (reference.ref !== undefined && reference.path !== undefined) {
+  if (reference.ref && reference.path) {
     return `${repository}#${reference.ref}&path:${reference.path}`;
   }
-  if (reference.ref !== undefined) return `${repository}#${reference.ref}`;
-  if (reference.path !== undefined) return `${repository}#path:${reference.path}`;
+  if (reference.ref) return `${repository}#${reference.ref}`;
+  if (reference.path) return `${repository}#path:${reference.path}`;
   return repository;
 }
 

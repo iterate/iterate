@@ -104,7 +104,7 @@ export function DeepLinkEmptyState({ workspacePath }: { workspacePath?: string }
               <PlusIcon aria-hidden className="size-4" />
               {creating ? "Creating…" : "New workspace"}
             </Button>
-            {createError !== null && (
+            {!!createError && (
               <p className="max-w-56 text-right text-xs text-red-700">{createError}</p>
             )}
           </div>
@@ -122,8 +122,8 @@ export function DeepLinkEmptyState({ workspacePath }: { workspacePath?: string }
             spellCheck={false}
             className="mt-1 font-mono text-sm"
           />
-          {documentsError !== null && <p className="mt-1 text-xs text-red-700">{documentsError}</p>}
-          {documents !== null && (
+          {!!documentsError && <p className="mt-1 text-xs text-red-700">{documentsError}</p>}
+          {!!documents && (
             <ul className="mt-2 divide-y rounded-lg border bg-background">
               {documents.length === 0 ? (
                 <li className="px-4 py-2.5 text-sm text-muted-foreground">
@@ -152,9 +152,9 @@ export function DeepLinkEmptyState({ workspacePath }: { workspacePath?: string }
             <TelescopeIcon aria-hidden className="size-5 text-muted-foreground" />
             <h2 className="truncate text-sm font-semibold">All workspaces</h2>
           </div>
-          {workspaces === null ? (
+          {!workspaces ? (
             <p className="flex items-center gap-2 px-5 py-4 text-sm text-muted-foreground">
-              {listError === null ? (
+              {!listError ? (
                 <>
                   <Loader2Icon aria-hidden className="size-4 animate-spin" /> Loading…
                 </>

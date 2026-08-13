@@ -33,7 +33,7 @@ import {
 const MATRIX_EXAMPLES = ITX_EXAMPLES.filter(
   (example) =>
     example.runtimes.some((runtime) => (MATRIX_RUNTIMES as readonly string[]).includes(runtime)) &&
-    EXAMPLE_CASES[example.id] !== undefined,
+    !!EXAMPLE_CASES[example.id],
 ).sort(
   // Start known long cases first so their work overlaps the short catalogue
   // tail. Runtimes within a case are parallel unless the case opts out.

@@ -107,7 +107,7 @@ function normalizeBuildResult(result: CreateWorkerResult): {
     mainModule: result.mainModule,
     modules: loaderReadyModules(result.modules),
     warnings: result.warnings ?? [],
-    ...(result.wranglerConfig === undefined ? {} : { wranglerConfig: result.wranglerConfig }),
+    ...(!result.wranglerConfig ? {} : { wranglerConfig: result.wranglerConfig }),
   };
 }
 
@@ -125,12 +125,12 @@ function normalizeAppBuildResult(result: CreateAppResult): WorkerBundlerCreateAp
   const assetManifest: Record<string, WorkerBuildAssetMetadata> = {};
   for (const [pathname, metadata] of result.assetManifest) {
     assetManifest[pathname] = {
-      ...(metadata.contentType === undefined ? {} : { contentType: metadata.contentType }),
+      ...(!metadata.contentType ? {} : { contentType: metadata.contentType }),
       etag: metadata.etag,
     };
   }
   return {
-    ...(result.assetConfig === undefined ? {} : { assetConfig: result.assetConfig }),
+    ...(!result.assetConfig ? {} : { assetConfig: result.assetConfig }),
     assetManifest,
     assets,
     ...normalizeBuildResult(result),
@@ -145,17 +145,17 @@ function loaderReadyModules(modules: Modules): Record<string, WorkerBuildModule>
     if (typeof module === "string") {
       result[name] = module;
     } else {
-      if (module.data !== undefined) {
+      if (module.data) {
         throw new Error(
           `Worker build produced binary module ${JSON.stringify(name)}; ` +
             "the OS build cache does not yet encode ArrayBuffers.",
         );
       }
       result[name] = {
-        ...(module.cjs === undefined ? {} : { cjs: module.cjs }),
-        ...(module.js === undefined ? {} : { js: module.js }),
-        ...(module.json === undefined ? {} : { json: module.json }),
-        ...(module.text === undefined ? {} : { text: module.text }),
+        ...(!module.cjs ? {} : { cjs: module.cjs }),
+        ...(!module.js ? {} : { js: module.js }),
+        ...(!module.json ? {} : { json: module.json }),
+        ...(!module.text ? {} : { text: module.text }),
       };
     }
   }

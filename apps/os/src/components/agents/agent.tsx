@@ -75,7 +75,7 @@ export function AgentSidebarRow({ node, onOpen }: { node: AgentTreeNode; onOpen:
             <span className="min-w-0 flex-1 truncate text-sm">{agentTitle(agent)}</span>
             <StateDot state={state} className="size-1.5" />
           </span>
-          {agent.summary.activity === undefined ? null : (
+          {!agent.summary.activity ? null : (
             <span
               className={cn(
                 "block truncate text-[11px] text-muted-foreground",
@@ -121,7 +121,7 @@ export function AgentListRow({
   const waitingFor = expanded ? agent.summary.waitingFor : agentNodeWaitingFor(node);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
   const descendantCount = node.aggregateAgentCount - 1;
-  const expandable = node.children.length > 0 && onToggleChildren !== undefined;
+  const expandable = node.children.length > 0 && !!onToggleChildren;
   return (
     <div
       className="group/agent relative flex items-start gap-2 border-b py-2.5 pr-2 hover:bg-accent/40"
@@ -177,7 +177,7 @@ export function AgentListRow({
           </time>
         </div>
         <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          {agent.summary.activity === undefined ? null : (
+          {!agent.summary.activity ? null : (
             <>
               <span className="min-w-0 truncate">{agent.summary.activity}</span>
               <span aria-hidden>·</span>
@@ -192,7 +192,7 @@ export function AgentListRow({
               · {descendantCount} subagent{descendantCount === 1 ? "" : "s"}
             </span>
           ) : null}
-          {agent.binding === undefined && waitingFor === undefined ? null : (
+          {!agent.binding && !waitingFor ? null : (
             <span
               className="relative z-10 ml-auto flex min-w-0 shrink-0 items-center gap-1.5"
               data-agent-row-tail
@@ -220,26 +220,26 @@ function AgentRuntimeStatus({
   since?: string;
 }) {
   const active = runtimeState !== "idle";
-  const sinceMs = since === undefined ? null : Date.parse(since);
-  const nowMs = useTickingNowMs(LIVE_RUNTIME_TICK_MS, active && sinceMs !== null);
+  const sinceMs = !since ? null : Date.parse(since);
+  const nowMs = useTickingNowMs(LIVE_RUNTIME_TICK_MS, active && Number.isFinite(sinceMs));
   const label =
     runtimeState === "running_code"
       ? "Running code"
       : runtimeState === "idle"
         ? "Idle"
         : "Waiting for response";
-  const elapsed = active && sinceMs !== null ? formatElapsedSeconds(nowMs - sinceMs) : null;
+  const elapsed = active && Number.isFinite(sinceMs) ? formatElapsedSeconds(nowMs - sinceMs) : null;
 
   return (
     <span className="shrink-0 tabular-nums" data-testid="agent-runtime-status" title={since}>
       {label}
-      {elapsed === null ? null : ` ${elapsed}`}
+      {!elapsed ? null : ` ${elapsed}`}
     </span>
   );
 }
 
 function AgentWaitingBadge({ waitingFor }: { waitingFor: AgentRecord["summary"]["waitingFor"] }) {
-  if (waitingFor === undefined) return null;
+  if (!waitingFor) return null;
   return (
     <Badge variant="secondary" data-agent-waiting-for={waitingFor}>
       {WAITING_FOR_LABEL[waitingFor]}
@@ -272,13 +272,13 @@ export function AgentDetailCard({
   async function submitTitle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const title = draftTitle.trim();
-    if (title === "" || onRename === undefined) return;
+    if (title === "" || !onRename) return;
     if (await onRename(title)) setEditingTitle(false);
   }
 
   async function copyPath() {
     try {
-      if (navigator.clipboard === undefined) throw new Error("Clipboard access is unavailable.");
+      if (!navigator.clipboard) throw new Error("Clipboard access is unavailable.");
       await navigator.clipboard.writeText(agent.path);
       toast.success("Agent path copied.");
     } catch (error) {
@@ -340,7 +340,7 @@ export function AgentDetailCard({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {onRename !== undefined && !editingTitle ? (
+          {onRename && !editingTitle ? (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -364,10 +364,10 @@ export function AgentDetailCard({
           <PinButton pinned={agent.summary.pinned} onToggle={onTogglePinned} size="icon-sm" />
         </div>
       </div>
-      {agent.summary.activity === undefined ? null : (
+      {!agent.summary.activity ? null : (
         <p className="max-w-3xl text-sm">{agent.summary.activity}</p>
       )}
-      {agent.summary.description === undefined ? null : (
+      {!agent.summary.description ? null : (
         <p className="max-w-3xl text-sm text-muted-foreground">{agent.summary.description}</p>
       )}
       <div className="flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground">
@@ -519,7 +519,7 @@ export function AgentCommandPresentation({
       <span className="min-w-0 text-xs">
         <span className="block truncate">{state.label}</span>
         <span className="block truncate text-muted-foreground">
-          {agent.binding === undefined
+          {!agent.binding
             ? descendantCount > 0
               ? `${descendantCount} subagent${descendantCount === 1 ? "" : "s"}`
               : "—"
@@ -528,7 +528,7 @@ export function AgentCommandPresentation({
       </span>
       <span className="hidden min-w-0 sm:block">
         <span className="block truncate text-xs">{activity ?? "—"}</span>
-        {agent.summary.description === undefined ? null : (
+        {!agent.summary.description ? null : (
           <span className="block truncate text-[11px] text-muted-foreground">
             {agent.summary.description}
           </span>
@@ -631,7 +631,7 @@ function DetailTimestamps({
     ["Summary updated", timestamps.summaryUpdatedAt],
     ["Activity updated", timestamps.activityUpdatedAt],
     ["Runtime updated", timestamps.runtimeUpdatedAt],
-  ].filter((entry): entry is [string, string] => entry[1] !== undefined);
+  ].filter((entry): entry is [string, string] => !!entry[1]);
   return (
     <dl className="flex flex-wrap gap-x-4 gap-y-1">
       {entries.map(([label, value]) => (
@@ -655,10 +655,10 @@ export function BindingLink({
   binding: AgentBinding | undefined;
   className?: string;
 }) {
-  if (binding === undefined) return null;
+  if (!binding) return null;
   const label = bindingLabel(binding);
   const url = bindingUrl(binding);
-  if (url === undefined) return <span className={cn("truncate", className)}>{label}</span>;
+  if (!url) return <span className={cn("truncate", className)}>{label}</span>;
   return (
     <a
       href={url}

@@ -72,6 +72,7 @@ function makeProcessor(options: {
         )(code);
         return {
           status: "succeeded" as const,
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- a script can return null/false/0; only undefined means "no result"
           ...(result === undefined ? {} : { result }),
         };
       },

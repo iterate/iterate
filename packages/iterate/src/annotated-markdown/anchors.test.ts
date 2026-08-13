@@ -152,7 +152,7 @@ describe("findInlineMarker", () => {
     { name: "empty label", body: "[](#thread-th_1)", found: "[](#thread-th_1)" },
   ])("$name", ({ body, found }) => {
     const marker = findInlineMarker(body, "th_1");
-    if (found === null) expect(marker).toBeNull();
+    if (!found) expect(marker).toBeNull();
     else expect(body.slice(marker?.start, marker?.end)).toBe(found);
   });
 });

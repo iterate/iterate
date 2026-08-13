@@ -68,7 +68,7 @@ export function parseNoteFile(content: string): NoteFile {
   if (!match) return { frontmatter: {}, body: content };
   try {
     const parsed = YAML.parse(match[1]!);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return { frontmatter: {}, body: content };
     }
     return { frontmatter: parsed as Record<string, unknown>, body: content.slice(match[0].length) };
@@ -133,7 +133,7 @@ export function parseNoteListItem(path: string, content: string): NoteListItem {
  * Non-note files (the seeded template, agent-authored extras) are skipped. */
 export function deriveNotesList(files: Record<string, string | null>): NoteListItem[] {
   return Object.entries(files)
-    .filter((entry): entry is [string, string] => entry[1] !== null && isNoteFilePath(entry[0]))
+    .filter((entry): entry is [string, string] => !!entry[1] && isNoteFilePath(entry[0]))
     .map(([path, content]) => parseNoteListItem(path, content))
     .sort((a, b) => b.path.localeCompare(a.path));
 }

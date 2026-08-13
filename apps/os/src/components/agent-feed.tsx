@@ -118,9 +118,7 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
         data-kind="assistant"
       >
         <MessageContent>
-          {item.via == null ? null : (
-            <MessageViaLabel via={item.via} className="text-muted-foreground" />
-          )}
+          {!item.via ? null : <MessageViaLabel via={item.via} className="text-muted-foreground" />}
           {/* Settled messages never stream, so skip streamdown's unpaired-
               marker balancing — it appends a phantom `*` to text like "17 * 23".
               mode="static" is load-bearing for the virtualized feed: streaming
@@ -167,8 +165,7 @@ function ChildStreamCreatedRow({
 }) {
   const dateTime = formatDateTimeAttribute(item.timestampMs);
   const streamLabel = compactStreamPath(item.childPath);
-  const linkOptions =
-    projectSlug == null ? null : linkOptionsForStreamPath(projectSlug, item.childPath);
+  const linkOptions = !projectSlug ? null : linkOptionsForStreamPath(projectSlug, item.childPath);
 
   return (
     <div
@@ -179,7 +176,7 @@ function ChildStreamCreatedRow({
       <div className="h-px min-w-8 flex-1 bg-border/70" />
       <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden="true" />
       <span className="shrink-0">Created child stream</span>
-      {linkOptions == null ? (
+      {!linkOptions ? (
         <span className="min-w-0 truncate font-mono text-foreground/70">{streamLabel}</span>
       ) : (
         <Link
@@ -214,7 +211,7 @@ function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-wo
           title={formatDateTime(item.timestampMs)}
         >
           {item.text}
-          {item.count != null && item.count > 1 ? ` (${item.count})` : ""}
+          {Number.isFinite(item.count) && item.count > 1 ? ` (${item.count})` : ""}
         </time>
         <Tooltip>
           <TooltipTrigger
@@ -248,8 +245,9 @@ function ProcessorRevivedRow({
   item: Extract<AgentUiItem, { kind: "processor-revived" }>;
 }) {
   const dateTime = formatDateTimeAttribute(item.timestampMs);
-  const label =
-    item.processorSlug == null ? "Processor revived" : `${item.processorSlug} processor revived`;
+  const label = !item.processorSlug
+    ? "Processor revived"
+    : `${item.processorSlug} processor revived`;
 
   return (
     <div
@@ -315,7 +313,7 @@ function StreamPauseRow({
           dateTime={dateTime}
           title={formatDateTime(item.timestampMs)}
         >
-          {item.reason == null ? item.text : `${item.text}: ${item.reason}`}
+          {!item.reason ? item.text : `${item.text}: ${item.reason}`}
         </time>
       </div>
       <div className="h-px flex-1 bg-border" />
@@ -373,10 +371,10 @@ function AgentActivityRow({
         ) : (
           <CodeIcon data-icon="inline-start" className="text-muted-foreground/60" />
         )}
-        {activityLabel == null || summary.outcome !== "clean"
+        {!activityLabel || summary.outcome !== "clean"
           ? // No agent-authored label (or something went wrong — failures and
             // interruptions keep the full stats line): the quiet counts row.
-            `${activityLabel == null ? "" : `${activityLabel} · `}${formatAgentUiActivitySummary(
+            `${!activityLabel ? "" : `${activityLabel} · `}${formatAgentUiActivitySummary(
               activity,
               { summary, interruptedPartialHint: "click to see partial response" },
             )}`
@@ -384,11 +382,11 @@ function AgentActivityRow({
             // headline; counts are one expand away.
             [
               activityLabel,
-              activity.endedAtMs == null
+              !Number.isFinite(activity.endedAtMs)
                 ? null
                 : formatAgentUiDuration(Math.max(0, activity.endedAtMs - activity.startedAtMs)),
             ]
-              .filter((part) => part != null)
+              .filter((part) => !!part)
               .join(" · ")}
         <ChevronRightIcon
           data-icon="inline-end"
@@ -450,7 +448,7 @@ export function QueuedMessagesPanel({
             {expanded ? "collapse" : `+${hiddenCount} more`}
           </button>
         ) : null}
-        {onInterrupt == null ? null : (
+        {!onInterrupt ? null : (
           <Button
             variant="ghost"
             size="sm"
@@ -489,8 +487,8 @@ export function QueuedMessagesPanel({
 function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
   return (
     <>
-      {item.via == null ? null : <MessageViaLabel via={item.via} className="opacity-70" />}
-      {item.text === "" ? null : item.via == null ? (
+      {!item.via ? null : <MessageViaLabel via={item.via} className="opacity-70" />}
+      {item.text === "" ? null : !item.via ? (
         <div className="whitespace-pre-wrap leading-6">{item.text}</div>
       ) : (
         // Slack text is converted to markdown-ish (mentions, [label](url)
@@ -517,7 +515,7 @@ function MessageViaLabel({ via, className }: { via: AgentUiMessageVia; className
   return (
     <div className={cn("font-mono text-[11px] leading-none", className)}>
       {via.service}
-      {via.sender == null ? "" : ` · ${via.sender}`}
+      {!via.sender ? "" : ` · ${via.sender}`}
     </div>
   );
 }
@@ -529,7 +527,7 @@ function MessageAttachments({
   files: AgentUiMessageItem["files"];
   hasText: boolean;
 }) {
-  if (files == null || files.length === 0) return null;
+  if (!files || files.length === 0) return null;
   return (
     <div className={cn("flex max-w-full flex-col gap-2", hasText && "mt-1")}>
       {files.map((file) => (
@@ -631,15 +629,15 @@ export function AgentLiveActivity({
           : "Waiting for a response"
         : currentWorkKind === "queued"
           ? "Queued"
-          : liveActivityLabel(currentStep == null ? [] : [currentStep]);
+          : liveActivityLabel(!currentStep ? [] : [currentStep]);
   const currentStartedAtMs = currentStep?.startedAtMs ?? live.startedAtMs;
   const inspectCurrentWork =
     currentStep?.kind === "llm"
-      ? onInspectLlmRequest == null
+      ? !onInspectLlmRequest
         ? undefined
         : () => onInspectLlmRequest(currentStep.llmRequestOffset)
       : currentStep?.kind === "code"
-        ? onInspectScriptExecution == null
+        ? !onInspectScriptExecution
           ? undefined
           : () => onInspectScriptExecution(currentStep.executionId)
         : undefined;
@@ -695,7 +693,7 @@ export function AgentLiveActivity({
               still streaming (no code step, so no tab bar yet): its
               thinking/response text streams in place, exactly as before. */}
           {groupActivityRounds(live.steps).map((round, index) =>
-            round.code == null && round.llm != null && round.llm.status === "running" ? (
+            !round.code && round.llm && round.llm.status === "running" ? (
               round.llm === liveStep && liveStepHasVisibleContent(round.llm) ? (
                 <LiveStepStream key={round.llm.id} step={round.llm} />
               ) : null
@@ -736,18 +734,18 @@ function AgentLiveStatus({
 }) {
   const phaseClock = useLivePhaseClock(startedAtMs, deadlineMs, true);
   const phaseLabel = phaseClock.deadlineExceeded ? "Code deadline exceeded" : label;
-  const statusWithElapsed = `${phaseLabel}${phaseClock.elapsedLabel == null ? "" : ` ${phaseClock.elapsedLabel}`}`;
+  const statusWithElapsed = `${phaseLabel}${!phaseClock.elapsedLabel ? "" : ` ${phaseClock.elapsedLabel}`}`;
 
   return (
     <Button
       variant="ghost"
       size="sm"
-      disabled={onInspect == null}
+      disabled={!onInspect}
       onClick={onInspect}
       title={
         phaseClock.deadlineExceeded
           ? "The script has no durable settlement after its absolute deadline"
-          : onInspect == null
+          : !onInspect
             ? undefined
             : "Open the current operation's trace"
       }
@@ -770,7 +768,7 @@ function AgentLiveStatus({
       >
         {statusWithElapsed}
       </span>
-      {onInspect == null ? null : (
+      {!onInspect ? null : (
         <ChevronRightIcon
           className={cn(
             "size-2.5 text-primary/60",
@@ -801,13 +799,13 @@ function useLivePhaseClock(
   deadlineMs: number | null,
   enabled: boolean,
 ): { deadlineExceeded: boolean; elapsedLabel: string | null } {
-  const nowMs = useTickingNowMs(100, enabled && startedAtMs != null, deadlineMs);
-  if (startedAtMs == null) return { deadlineExceeded: false, elapsedLabel: null };
-  const deadlineExceeded = deadlineMs != null && nowMs >= deadlineMs;
+  const nowMs = useTickingNowMs(100, enabled && Number.isFinite(startedAtMs), deadlineMs);
+  if (!Number.isFinite(startedAtMs)) return { deadlineExceeded: false, elapsedLabel: null };
+  const deadlineExceeded = Number.isFinite(deadlineMs) && nowMs >= deadlineMs;
   return {
     deadlineExceeded,
     elapsedLabel: formatElapsedSeconds(
-      (deadlineExceeded && deadlineMs != null ? deadlineMs : nowMs) - startedAtMs,
+      (deadlineExceeded && Number.isFinite(deadlineMs) ? deadlineMs : nowMs) - startedAtMs,
     ),
   };
 }

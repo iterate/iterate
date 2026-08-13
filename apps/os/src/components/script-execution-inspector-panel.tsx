@@ -76,7 +76,7 @@ export function ScriptExecutionInspectorContent({
           Code execution · {executionId}
         </SheetTitle>
         <SheetDescription className="flex flex-wrap items-center gap-x-1">
-          {replay == null ? (
+          {!replay ? (
             "Submitted code and its result"
           ) : (
             <>
@@ -103,7 +103,7 @@ export function ScriptExecutionInspectorContent({
           </TabsList>
         </div>
         <TabsContent value="code" className="min-h-0 overflow-y-auto p-4">
-          {replay != null ? (
+          {replay ? (
             <SourceCodeBlock
               code={replay.code}
               language="typescript"
@@ -115,7 +115,7 @@ export function ScriptExecutionInspectorContent({
           )}
         </TabsContent>
         <TabsContent value="result" className="min-h-0 overflow-y-auto p-4">
-          {replay == null ? (
+          {!replay ? (
             <InspectorState
               result={eventsResult}
               empty={`No script execution named ${executionId} is in the local mirror yet.`}
@@ -143,7 +143,7 @@ function ScriptOutcomeSummary({ replay }: { replay: ScriptExecutionReplay }) {
       data-testid="script-execution-outcome"
     >
       {outcome.status}
-      {outcome.durationMs == null
+      {!Number.isFinite(outcome.durationMs)
         ? ""
         : ` ${outcome.status === "queued" || outcome.status === "running" ? "for" : "in"} ${formatSeconds(outcome.durationMs)}`}
     </span>
@@ -163,22 +163,24 @@ function ScriptResult({ replay }: { replay: ScriptExecutionReplay }) {
         <dt className="text-muted-foreground">status</dt>
         <dd>{outcome.status}</dd>
         <dt className="text-muted-foreground">duration</dt>
-        <dd>{outcome.durationMs == null ? "not finished" : formatSeconds(outcome.durationMs)}</dd>
-        <dt className="text-muted-foreground">started</dt>
         <dd>
-          {replay.startedAt == null ? "not recorded" : formatDateTime(Date.parse(replay.startedAt))}
+          {!Number.isFinite(outcome.durationMs)
+            ? "not finished"
+            : formatSeconds(outcome.durationMs)}
         </dd>
+        <dt className="text-muted-foreground">started</dt>
+        <dd>{!replay.startedAt ? "not recorded" : formatDateTime(Date.parse(replay.startedAt))}</dd>
         <dt className="text-muted-foreground">completed</dt>
         <dd>
-          {replay.completedAt == null
+          {!replay.completedAt
             ? outcome.status === "queued" || outcome.status === "running"
               ? "not yet"
               : "not recorded"
             : formatDateTime(Date.parse(replay.completedAt))}
         </dd>
         <dt className="text-muted-foreground">settlement</dt>
-        <dd>{outcome.settlement == null ? "not recorded" : "durable"}</dd>
-        {failure == null ? null : (
+        <dd>{!outcome.settlement ? "not recorded" : "durable"}</dd>
+        {!failure ? null : (
           <>
             <dt className="text-muted-foreground">failure kind</dt>
             <dd>{failure.failureKind}</dd>
@@ -192,7 +194,7 @@ function ScriptResult({ replay }: { replay: ScriptExecutionReplay }) {
         )}
       </dl>
 
-      {outcome.errorMessage == null ? null : (
+      {!outcome.errorMessage ? null : (
         <section>
           <h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-wider text-destructive">
             error
@@ -208,7 +210,7 @@ function ScriptResult({ replay }: { replay: ScriptExecutionReplay }) {
           <h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             returned value
           </h3>
-          {oversizedResult == null ? (
+          {!oversizedResult ? (
             <SerializedObjectCodeBlock
               data={outcome.result}
               initialFormat="json"

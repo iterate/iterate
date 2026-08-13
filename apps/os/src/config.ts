@@ -311,7 +311,7 @@ export function parseConfig(env: unknown): AppConfig {
 }
 
 function readStringBinding(env: unknown, key: string) {
-  if (env === null || typeof env !== "object") return null;
+  if (!env || typeof env !== "object") return null;
 
   const value = (env as Record<string, unknown>)[key];
   if (typeof value !== "string") return null;

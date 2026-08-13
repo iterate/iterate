@@ -88,7 +88,7 @@ const RETRYABLE_ARTIFACTS_HTTP_STATUS_CODES = new Set([429, 500, 502, 503, 504])
 const ARTIFACTS_HTTP_ERROR_MESSAGE = /^HTTP Error: (\d{3})(?:\s|$)/;
 
 function isArtifactsRepoNotReadyError(error: unknown) {
-  if (typeof error !== "object" || error === null) return false;
+  if (typeof error !== "object" || !error) return false;
   const code = "code" in error ? error.code : undefined;
   const message = "message" in error ? error.message : undefined;
   const name = "name" in error ? error.name : undefined;
@@ -118,7 +118,7 @@ export function isRepoNotSeededError(error: unknown): boolean {
 export function isRetryableArtifactsInfrastructureError(error: unknown): boolean {
   const seen = new Set<object>();
   let candidate = error;
-  while (typeof candidate === "object" && candidate !== null) {
+  while (typeof candidate === "object" && candidate) {
     if (seen.has(candidate)) return false;
     seen.add(candidate);
     const artifactError = candidate as {
@@ -164,7 +164,7 @@ export function isRetryableArtifactsInfrastructureError(error: unknown): boolean
 export function classifyRepoAccessError(error: unknown, branch?: string): unknown {
   const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
   const missingRequestedBranch =
-    branch !== undefined &&
+    !!branch &&
     typeof message === "string" &&
     (message === `Could not find ${branch}.` || message === `Could not find ${branch}`);
   const notSeeded =
@@ -266,7 +266,7 @@ export function base64ToBytes(base64: string): Uint8Array {
 export const RepoArtifactNameCodec = {
   stringify({ projectId, path }: RepoArtifactNameParts): string {
     const artifactProjectId = projectId ?? GLOBAL_REPO_ARTIFACT_PROJECT_ID;
-    if (projectId !== null) assertProjectId(projectId);
+    if (projectId) assertProjectId(projectId);
     return `${artifactProjectId}${SEPARATOR}${base64UrlEncode(normalizeRepoPath(path))}`;
   },
 
@@ -279,7 +279,7 @@ export const RepoArtifactNameCodec = {
     const artifactProjectId = name.slice(0, separatorIndex);
     const projectId =
       artifactProjectId === GLOBAL_REPO_ARTIFACT_PROJECT_ID ? null : artifactProjectId;
-    if (projectId !== null) assertProjectId(projectId);
+    if (projectId) assertProjectId(projectId);
 
     const path = base64UrlDecode(name.slice(separatorIndex + SEPARATOR.length));
     if (!path.startsWith("/")) {

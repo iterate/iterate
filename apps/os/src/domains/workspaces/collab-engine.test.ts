@@ -504,7 +504,7 @@ describe("discard during boot", () => {
       });
       return { content: "doomed seed", epoch: "e-orphan" };
     });
-    while (gate.release === undefined) await new Promise((r) => setTimeout(r, 1));
+    while (!gate.release) await new Promise((r) => setTimeout(r, 1));
     engine.discard(PATH); // destructive op lands while the seed is in flight
     gate.release();
     await expect(opening).rejects.toThrow(/ended while opening/);

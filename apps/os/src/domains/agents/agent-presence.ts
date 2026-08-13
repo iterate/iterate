@@ -163,7 +163,7 @@ export type AgentRecord = z.infer<typeof AgentRecord>;
  * copies of the canonical external thread. */
 export function normalizeAgentBindingLabel(value: string | undefined): string | undefined {
   const normalized = value?.trim();
-  if (normalized === undefined || normalized === "") return undefined;
+  if (!normalized || normalized === "") return undefined;
   return normalized.slice(0, AGENT_BINDING_LABEL_MAX_LENGTH);
 }
 
@@ -187,9 +187,9 @@ export function applyAgentSummaryUpdate(
     keyof AgentSummaryUpdate
   >) {
     const value = update[key];
-    if (value === undefined) continue;
-    if (value === null) {
-      if (next[key] !== undefined) {
+    if (!value) continue;
+    if (!value) {
+      if (next[key]) {
         delete next[key];
         changed = true;
       }
@@ -201,7 +201,7 @@ export function applyAgentSummaryUpdate(
     }
   }
 
-  if (update.pinned !== undefined && next.pinned !== update.pinned) {
+  if (typeof update.pinned === "boolean" && next.pinned !== update.pinned) {
     next.pinned = update.pinned;
     changed = true;
   }
@@ -223,20 +223,19 @@ export function foldAgentSummaryUpdated({
 }): { summary: AgentSummary; waitingForSinceOffset: number | undefined } | undefined {
   if (
     "clearWaitingForThroughOffset" in update &&
-    (summary.waitingFor === undefined ||
-      waitingForSinceOffset === undefined ||
+    (!summary.waitingFor ||
+      !Number.isFinite(waitingForSinceOffset) ||
       waitingForSinceOffset > update.clearWaitingForThroughOffset)
   ) {
     return undefined;
   }
 
   const nextSummary = applyAgentSummaryUpdate(summary, update);
-  const nextWaitingForSinceOffset =
-    update.waitingFor === undefined
-      ? waitingForSinceOffset
-      : update.waitingFor === null
-        ? undefined
-        : atOffset;
+  const nextWaitingForSinceOffset = !update.waitingFor
+    ? waitingForSinceOffset
+    : !update.waitingFor
+      ? undefined
+      : atOffset;
   if (nextSummary === summary && nextWaitingForSinceOffset === waitingForSinceOffset) {
     return undefined;
   }
@@ -254,7 +253,7 @@ export function deriveAgentRuntime(
   state: AgentRuntimeSource,
   systemPromptContextKey: string,
 ): AgentRuntimeRecord {
-  const pending = state.pendingLlmRequestTrigger === null ? 0 : 1;
+  const pending = !state.pendingLlmRequestTrigger ? 0 : 1;
   const runnable =
     pending === 1 &&
     state.contextItems.some(
@@ -270,7 +269,7 @@ export function deriveAgentRuntime(
     // pin to 0 and `requested` counts the single open slot.
     llmRequests: {
       scheduled: 0,
-      requested: state.openRequest === null ? 0 : 1,
+      requested: !state.openRequest ? 0 : 1,
       started: 0,
     },
     runningScripts: state.activeScriptExecutionIds.length,

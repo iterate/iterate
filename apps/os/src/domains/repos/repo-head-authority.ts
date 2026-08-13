@@ -57,7 +57,7 @@ export function decideHeadResolution(
   authority: RepoHeadAuthority,
   resolvedOid: string,
 ): { cache: true } | { cache: false; reason: "behind-own-push" | "unsettled-external-push" } {
-  if (authority.pushedFloor !== undefined && authority.pushedFloor !== resolvedOid) {
+  if (authority.pushedFloor && authority.pushedFloor !== resolvedOid) {
     return { cache: false, reason: "behind-own-push" };
   }
   const tips = frontierTips(authority.observedPushes);
@@ -79,7 +79,7 @@ export function shouldRetryHeadResolution(
   const decision = decideHeadResolution(authority, resolvedOid);
   if (decision.cache) return false;
   if (decision.reason === "behind-own-push") return true;
-  return frontierTips(authority.observedPushes).some((tip) => tip !== null);
+  return frontierTips(authority.observedPushes).some((tip) => !!tip);
 }
 
 type ObservedPushTransition = {
@@ -107,7 +107,7 @@ export function observeExternalPushTransition(
   const observedPushes = [...authority.observedPushes, push].slice(-OBSERVED_PUSH_MEMORY);
   const tips = frontierTips(observedPushes);
   const pushedFloor =
-    authority.pushedFloor !== undefined && tips.includes(authority.pushedFloor)
+    authority.pushedFloor && tips.includes(authority.pushedFloor)
       ? authority.pushedFloor
       : undefined;
   const frontierUnchanged =
@@ -142,11 +142,11 @@ export function recordOwnPushTransition(
 /** Element validation for the durably stored observed-push window (no casts:
  * `in` narrowing carries the property reads). */
 export function isObservedPushRecord(value: unknown): value is ObservedPush {
-  if (typeof value !== "object" || value === null) return false;
+  if (typeof value !== "object" || !value) return false;
   if (!("afterCommitOid" in value) || !("beforeCommitOid" in value)) return false;
   const { afterCommitOid, beforeCommitOid } = value;
   return (
-    (typeof afterCommitOid === "string" || afterCommitOid === null) &&
-    (typeof beforeCommitOid === "string" || beforeCommitOid === null)
+    (typeof afterCommitOid === "string" || !afterCommitOid) &&
+    (typeof beforeCommitOid === "string" || !beforeCommitOid)
   );
 }

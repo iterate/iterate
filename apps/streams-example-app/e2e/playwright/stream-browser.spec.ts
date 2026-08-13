@@ -224,8 +224,7 @@ test("random bulk insert creates multiple filterable event types and shows filte
   expect(generatedEventTypes.length).toBeGreaterThanOrEqual(3);
 
   const selectedType = generatedEventTypes[0];
-  if (selectedType === undefined)
-    throw new Error("random insert did not create a generated event type");
+  if (!selectedType) throw new Error("random insert did not create a generated event type");
   await page.getByLabel("Event type filter").selectOption(selectedType);
   await expect(page.getByTestId("filter-count")).toHaveText(
     /\d+ filtered events \/ 83 total events/,
@@ -390,7 +389,7 @@ test("first event row draws quickly", async ({ page }) => {
 
   const firstRowDrawMs = await page.evaluate(() => {
     const mark = performance.getEntriesByName("stream:first-event-row").at(-1);
-    if (mark === undefined) throw new Error("missing stream:first-event-row performance mark");
+    if (!mark) throw new Error("missing stream:first-event-row performance mark");
     return mark.startTime;
   });
   expect(firstRowDrawMs).toBeLessThan(10_000);
@@ -1382,7 +1381,7 @@ async function sampleUpwardScroll(page: Page, options: { stepCount: number; scro
       const virtualRows = [...element.querySelectorAll('[data-testid="virtual-row"]')];
       const indexFor = (row: Element | undefined) => {
         const value = row?.getAttribute("data-index");
-        return value === undefined || value === null ? null : Number(value);
+        return !value ? null : Number(value);
       };
 
       return {

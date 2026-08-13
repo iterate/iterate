@@ -296,7 +296,7 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract, Medi
         // A stableKey already present (legacy captured, or a duplicate
         // upload racing the phone's getEvent check) folds to a no-op — no
         // duplicate row, no redundant analysis.
-        if (state.items[event.payload.stableKey] !== undefined) return state;
+        if (state.items[event.payload.stableKey]) return state;
         return {
           ...state,
           items: {
@@ -323,7 +323,7 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract, Medi
         const item = state.items[event.payload.stableKey];
         // Nothing to re-analyze for an unknown item — skip rather than
         // invent an obligation with no file behind it.
-        if (item === undefined) return state;
+        if (!item) return state;
         return {
           ...state,
           pendingAnalyses: {
@@ -343,7 +343,7 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract, Medi
       }
       case "events.iterate.com/media/captured": {
         // Idempotency-keyed at the source; a duplicate folds to a no-op.
-        if (state.items[event.payload.stableKey] !== undefined) return state;
+        if (state.items[event.payload.stableKey]) return state;
         return {
           ...state,
           items: {
@@ -372,37 +372,38 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract, Medi
         // would swallow a legitimate offset of 0), always apply, and never
         // advance the floor — kept in lockstep with the phone's
         // deriveMediaList.
-        const requestOffset =
-          event.payload.requestOffset === undefined ? null : event.payload.requestOffset;
+        const requestOffset = !Number.isFinite(event.payload.requestOffset)
+          ? null
+          : event.payload.requestOffset;
         const settledFloor = Math.max(
-          pendingEntry === undefined ? 0 : pendingEntry.requestOffset,
+          !pendingEntry ? 0 : pendingEntry.requestOffset,
           existing?.settledRequestOffset || 0,
         );
-        if (requestOffset !== null && requestOffset < settledFloor) return state;
+        if (Number.isFinite(requestOffset) && requestOffset < settledFloor) return state;
         const { [event.payload.stableKey]: _settled, ...pendingAnalyses } = state.pendingAnalyses;
         // A processed event for an unknown item (e.g. pre-rename history)
         // has nothing to overlay — skip rather than invent a partial item.
-        if (existing === undefined) return { ...state, pendingAnalyses };
+        if (!existing) return { ...state, pendingAnalyses };
         // `||` folds legacy payloads (no error field, reduced without the
         // contract parse in old states) into the success arm.
         const error = event.payload.error || null;
-        const settledRequestOffset =
-          requestOffset === null ? existing.settledRequestOffset : requestOffset;
-        const item =
-          error === null
-            ? {
-                ...existing,
-                title: event.payload.title,
-                markdown: event.payload.markdown,
-                transcript: event.payload.transcript,
-                tags: event.payload.tags,
-                processedBy: event.payload.processedBy,
-                analysisError: null,
-                settledRequestOffset,
-              }
-            : // A failed analysis keeps whatever the item already shows; the
-              // failure itself becomes visible on the row.
-              { ...existing, analysisError: error, settledRequestOffset };
+        const settledRequestOffset = !Number.isFinite(requestOffset)
+          ? existing.settledRequestOffset
+          : requestOffset;
+        const item = !error
+          ? {
+              ...existing,
+              title: event.payload.title,
+              markdown: event.payload.markdown,
+              transcript: event.payload.transcript,
+              tags: event.payload.tags,
+              processedBy: event.payload.processedBy,
+              analysisError: null,
+              settledRequestOffset,
+            }
+          : // A failed analysis keeps whatever the item already shows; the
+            // failure itself becomes visible on the row.
+            { ...existing, analysisError: error, settledRequestOffset };
         return {
           ...state,
           items: { ...state.items, [event.payload.stableKey]: item },

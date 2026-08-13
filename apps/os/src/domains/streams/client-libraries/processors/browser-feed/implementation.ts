@@ -72,10 +72,7 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
     persistedThroughOffset: number;
     scannedThroughOffset: number;
   }): VolatileAgentState | null {
-    if (
-      this.#volatileAgentState === null &&
-      !args.events.some((event) => event.ephemeral === true)
-    ) {
+    if (!this.#volatileAgentState && !args.events.some((event) => event.ephemeral === true)) {
       return null;
     }
     const persistedState = BrowserFeedContract.stateSchema.parse(args.persistedState);
@@ -95,7 +92,7 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
   }
 
   commitVolatileBatch(candidate: VolatileAgentState | null): void {
-    if (candidate !== null) this.#volatileAgentState = candidate;
+    if (candidate) this.#volatileAgentState = candidate;
   }
 
   get volatileAgentUiState(): AgentUiState | null {
@@ -113,7 +110,7 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
   protected override processEvent(args: ProcessEventArgs<BrowserFeedContract>): undefined {
     // Event-less at-head pass: this projection has no at-head work.
     const { event } = args;
-    if (event === null) return;
+    if (!event) return;
     const { ops } = planBrowserFeedOps(args.previousState, [event]);
     // A drained buffer means a new batch has started. Pending rows exist only
     // to make late corrections inside ONE uncommitted batch visible; SQLite
@@ -125,21 +122,17 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
         ? readExecutionId(event.payload)
         : null;
     const alreadyCorrected =
-      executionId !== null &&
+      !!executionId &&
       ops.some(
         (op) =>
           op.kind === "replace" &&
           isAgentActivity(op.data) &&
           activityHasDurableExecution(op.data, executionId),
       );
-    if (executionId !== null && !alreadyCorrected) {
+    if (executionId && !alreadyCorrected) {
       args.blockProcessorWhile(async () => {
         const correction = await this.#findPrunedActivityCorrection(event, executionId);
-        this.#appendOps(
-          event.offset,
-          correction === null ? ops : [...ops, correction],
-          args.state.open,
-        );
+        this.#appendOps(event.offset, !correction ? ops : [...ops, correction], args.state.open);
       });
       return;
     }
@@ -156,7 +149,7 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
     this.projectionBuffer.append(
       offset,
       ops.map((op) => {
-        if (op.kind === "replace" || open === null || op.localIndex !== open.localIndex) {
+        if (op.kind === "replace" || !open || op.localIndex !== open.localIndex) {
           // Settled rows (agent items, raw singletons, groups closed within
           // this event): one immutable statement each.
           return { build: () => feedOpToStatement(op) };
@@ -197,7 +190,7 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
       executionId,
     );
     const matched = pending ?? (await readInferredActivityRow(this.deps.sql, executionId));
-    if (matched === null) return null;
+    if (!matched) return null;
     const start = initialAgentUiState();
     const reduced = reduceAgentUi(
       { ...start, provisionalActivities: { [matched.activity.id]: matched.activity } },
@@ -207,7 +200,7 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
       (item): item is AgentUiActivity =>
         item.kind === "activity" && item.id === matched.activity.id,
     );
-    if (corrected === undefined) return null;
+    if (!corrected) return null;
     return {
       kind: "replace",
       localIndex: matched.localIndex,
@@ -275,7 +268,7 @@ async function readInferredActivityRow(
 }
 
 function readExecutionId(payload: unknown): string | null {
-  return payload !== null &&
+  return payload &&
     typeof payload === "object" &&
     !Array.isArray(payload) &&
     typeof (payload as Record<string, unknown>).executionId === "string"

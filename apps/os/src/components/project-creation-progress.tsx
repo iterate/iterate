@@ -30,20 +30,20 @@ function creationSteps(state: ProjectProcessorState | undefined): CreationStep[]
   // The onboarding agent is not a saga step: its chat page explicitly creates
   // it before sending the first message.
   return [
-    { key: "registered", label: "Registering project", done: state?.createRequest != null },
+    { key: "registered", label: "Registering project", done: !!state?.createRequest },
     {
       key: "integrations",
       label: "Wiring integrations",
       done:
-        state !== undefined &&
+        !!state &&
         (state.streams.some((stream) => stream.path === "/integrations/email") ||
-          state.birthCertificate !== null),
+          !!state.birthCertificate),
     },
     { key: "repo", label: "Seeding repository", done: (state?.repos.length ?? 0) > 0 },
     {
       key: "created",
       label: "Finalizing project",
-      done: state?.birthCertificate != null,
+      done: !!state?.birthCertificate,
     },
   ];
 }
@@ -65,7 +65,7 @@ export function ProjectCreationProgress({ state }: { state: ProjectProcessorStat
   const [stalled, setStalled] = useState(false);
   useEffect(() => {
     setStalled(false);
-    if (state?.createFailure !== null && state?.createFailure !== undefined) return;
+    if (state?.createFailure) return;
     const timer = setTimeout(() => setStalled(true), STALL_AFTER_MS);
     return () => clearTimeout(timer);
   }, [doneCount, state?.createFailure]);

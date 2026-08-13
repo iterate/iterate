@@ -200,7 +200,7 @@ export class ProcessorKeepalive {
   async onAlarm(): Promise<ProcessorKeepaliveAlarmAction> {
     const now = this.#hooks.now();
     const armedAt = this.armedAtMs;
-    if (armedAt === null || now < armedAt) return "not_due";
+    if (typeof armedAt !== "number" || now < armedAt) return "not_due";
 
     // Still working (or a revival pass is still running — its safety net owns
     // the cadence, and a SECOND pass must never start underneath it): push
@@ -248,7 +248,7 @@ export class ProcessorKeepalive {
   > {
     const previous = this.#hooks.readRecord();
     const priorRevivals =
-      previous === undefined || previous.version !== this.#hooks.version ? 0 : previous.revivals;
+      !previous || previous.version !== this.#hooks.version ? 0 : previous.revivals;
     const record: KeepaliveRecord = {
       revivals: priorRevivals + 1,
       lastRevivalAt: now,
@@ -315,7 +315,7 @@ export class ProcessorKeepalive {
     if (this.#reviving) return;
     const atMs = this.#hooks.now() + KEEPALIVE_ALARM_LEAD_MS;
     const armedAt = this.armedAtMs;
-    if (armedAt !== null && armedAt <= atMs) {
+    if (typeof armedAt === "number" && armedAt <= atMs) {
       // The record says a sufficient alarm exists — but the record proves the
       // DESIRE, not the platform write (a setAlarm can fail after the KV
       // committed, and the host swallows it into "platform state unknown").
@@ -343,7 +343,7 @@ export class ProcessorKeepalive {
 
   #disarmAndReset(): void {
     const record = this.#hooks.readRecord();
-    if (record !== undefined && (record.revivals !== 0 || record.armedAtMs !== null)) {
+    if (record && (record.revivals !== 0 || Number.isFinite(record.armedAtMs))) {
       this.#hooks.writeRecord({ ...FRESH_RECORD, version: this.#hooks.version });
     }
     this.#hooks.armAlarm(null);

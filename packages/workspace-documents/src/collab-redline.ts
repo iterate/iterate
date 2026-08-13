@@ -38,10 +38,9 @@ function tooltipCard(author: string, when: string, deleted?: string): HTMLElemen
   const card = document.createElement("div");
   card.className = "cm-redline-tooltip";
   const line = document.createElement("div");
-  line.textContent =
-    deleted !== undefined
-      ? `${author} deleted${when ? ` · ${when}` : ""}`
-      : `${author} added${when ? ` · ${when}` : ""}`;
+  line.textContent = deleted
+    ? `${author} deleted${when ? ` · ${when}` : ""}`
+    : `${author} added${when ? ` · ${when}` : ""}`;
   card.appendChild(line);
   if (deleted) {
     const snippet = document.createElement("div");
@@ -211,7 +210,7 @@ export function redlineExtension(connection: CollabConnection) {
         // is already visible and the transaction has no document changes.
         const hasDelivery = hasCollabDelivery(connection);
         if (!update.docChanged && !hasDelivery) return;
-        if (this.confirmed === null) {
+        if (!this.confirmed) {
           // Pre-install: keep whatever marks exist visually anchored.
           if (update.docChanged) this.decorations = this.decorations.map(update.changes);
         } else {
@@ -235,7 +234,7 @@ export function redlineExtension(connection: CollabConnection) {
 
       /** Display = confirmed ⊕ still-unconfirmed local ops, one shared fold. */
       render(state: EditorState) {
-        if (this.confirmed === null) return;
+        if (!this.confirmed) return;
         const now = Date.now();
         let display = this.confirmed;
         for (const unconfirmed of sendableUpdates(state)) {

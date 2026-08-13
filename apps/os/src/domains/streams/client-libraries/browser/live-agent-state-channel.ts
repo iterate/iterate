@@ -73,7 +73,7 @@ export class LiveAgentStateChannel implements Disposable {
   /** Publish the writer's newest in-memory projection. Readers never persist it. */
   publish(state: AgentUiState | null): void {
     const session = this.#localSession;
-    if (session === undefined || this.#disposed) return;
+    if (!session || this.#disposed) return;
     session.sequence += 1;
     session.state = state;
     this.#activeSession = session;
@@ -87,7 +87,7 @@ export class LiveAgentStateChannel implements Disposable {
 
   /** Clear readers before relinquishing the writer lock. */
   release(): void {
-    if (this.#localSession === undefined) return;
+    if (!this.#localSession) return;
     this.publish(null);
     this.#localSession = undefined;
   }
@@ -108,10 +108,10 @@ export class LiveAgentStateChannel implements Disposable {
   #receive(raw: unknown): void {
     if (this.#disposed) return;
     const message = parseMessage(raw);
-    if (message === undefined) return;
+    if (!message) return;
 
     if (message.kind === "request") {
-      if (this.#localSession !== undefined) this.#sendSnapshot(this.#localSession);
+      if (this.#localSession) this.#sendSnapshot(this.#localSession);
       return;
     }
 
@@ -123,11 +123,7 @@ export class LiveAgentStateChannel implements Disposable {
     }
 
     const active = this.#activeSession;
-    if (
-      active === undefined ||
-      message.sessionId !== active.sessionId ||
-      message.sequence <= active.sequence
-    ) {
+    if (!active || message.sessionId !== active.sessionId || message.sequence <= active.sequence) {
       return;
     }
     active.sequence = message.sequence;
@@ -185,7 +181,7 @@ function isNewerClaim(
   candidate: Extract<LiveAgentStateMessage, { kind: "claim" }>,
   current: Pick<LiveSession, "sessionId" | "startedAtMs"> | undefined,
 ): boolean {
-  if (current === undefined) return true;
+  if (!current) return true;
   if (candidate.sessionId === current.sessionId) return false;
   if (candidate.startedAtMs !== current.startedAtMs) {
     return candidate.startedAtMs > current.startedAtMs;
@@ -194,7 +190,7 @@ function isNewerClaim(
 }
 
 function parseMessage(raw: unknown): LiveAgentStateMessage | undefined {
-  if (typeof raw !== "object" || raw === null) return undefined;
+  if (typeof raw !== "object" || !raw) return undefined;
   const value = raw as Record<string, unknown>;
   if (value.kind === "request") return { kind: "request" };
   if (
@@ -217,7 +213,7 @@ function parseMessage(raw: unknown): LiveAgentStateMessage | undefined {
     typeof value.sequence === "number" &&
     Number.isSafeInteger(value.sequence) &&
     value.sequence >= 0 &&
-    (value.state === null || (typeof value.state === "object" && value.state !== null))
+    (!value.state || (typeof value.state === "object" && value.state))
   ) {
     return {
       kind: "state",

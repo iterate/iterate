@@ -171,7 +171,7 @@ export async function acquireTypes(input: AcquireTypesInput): Promise<AcquireTyp
         }),
       ),
     );
-    const succeeded = downloaded.filter((download) => download !== null);
+    const succeeded = downloaded.filter((download) => !!download);
     packages.push({ name, version, fileCount: succeeded.length, bytes });
     const packageJsonDownload = succeeded.find((download) => download.file === packageJsonEntry);
     if (!packageJsonDownload) return [];

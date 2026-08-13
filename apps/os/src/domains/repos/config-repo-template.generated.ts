@@ -360,6 +360,24 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
+    path: "number-guards.d.ts",
+    content:
+      "// Number.isFinite / Number.isInteger as type guards. lib.es2015 types them as\n" +
+      "// `(number: unknown) => boolean`, which doesn't narrow — so guarding nullable\n" +
+      "// numbers positively (`if (Number.isFinite(x))`, the escape hatch\n" +
+      "// iterate/simple-truthiness-check suggests when 0 is meaningful) would force a\n" +
+      "// non-null assertion at every subsequent use. Merged later than the lib\n" +
+      "// declaration, so these predicate signatures win overload resolution.\n" +
+      "//\n" +
+      "// The negative branch is deliberately \"unsound\": a NaN/Infinity number narrows\n" +
+      "// away from `number` there, which matches how this codebase treats those\n" +
+      "// values — as absent.\n" +
+      "interface NumberConstructor {\n" +
+      "  isFinite(value: unknown): value is number;\n" +
+      "  isInteger(value: unknown): value is number;\n" +
+      "}\n",
+  },
+  {
     path: "package.json",
     content:
       "{\n" +
@@ -771,10 +789,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    if (agentPaths.length === 0) return;\n" +
       "    const itx = await this.itx;\n" +
       "    const file = await itx.repo.readFile({ path: \"AGENTS.md\" });\n" +
-      "    const content =\n" +
-      "      file === null\n" +
-      "        ? \"(AGENTS.md was deleted from /repos/config — no standing project notes.)\"\n" +
-      "        : `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\\n\\n${file.content}`;\n" +
+      "    const content = !file\n" +
+      "      ? \"(AGENTS.md was deleted from /repos/config — no standing project notes.)\"\n" +
+      "      : `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\\n\\n${file.content}`;\n" +
       "    const digest = await crypto.subtle.digest(\"SHA-256\", new TextEncoder().encode(content));\n" +
       "    const hash = [...new Uint8Array(digest).slice(0, 8)]\n" +
       "      .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
@@ -807,7 +824,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    // at-least-once on a throw, and the per-transition keys turn retries of\n" +
       "    // the agents that DID land into no-ops.\n" +
       "    const failed = results.find((result) => result.status === \"rejected\");\n" +
-      "    if (failed !== undefined && failed.status === \"rejected\") throw failed.reason;\n" +
+      "    if (failed && failed.status === \"rejected\") throw failed.reason;\n" +
       "  }\n" +
       "\n" +
       "  /**\n" +
@@ -825,26 +842,25 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  async #publishAgentBirthDefaults(): Promise<void> {\n" +
       "    const itx = await this.itx;\n" +
       "    const file = await itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
-      "    const birthEvents =\n" +
-      "      file === null\n" +
-      "        ? []\n" +
-      "        : [\n" +
-      "            {\n" +
-      "              type: \"events.iterate.com/agents/context-added\",\n" +
-      "              payload: {\n" +
-      "                // The platform's embedded copy of this file is newline-stripped;\n" +
-      "                // publishing the same normalization keeps \"unchanged file\" a\n" +
-      "                // byte-identical no-op.\n" +
-      "                content: file.content.replace(/\\n$/, \"\"),\n" +
-      "                key: \"agent/system-prompt\",\n" +
-      "                role: \"system\",\n" +
-      "              },\n" +
+      "    const birthEvents = !file\n" +
+      "      ? []\n" +
+      "      : [\n" +
+      "          {\n" +
+      "            type: \"events.iterate.com/agents/context-added\",\n" +
+      "            payload: {\n" +
+      "              // The platform's embedded copy of this file is newline-stripped;\n" +
+      "              // publishing the same normalization keeps \"unchanged file\" a\n" +
+      "              // byte-identical no-op.\n" +
+      "              content: file.content.replace(/\\n$/, \"\"),\n" +
+      "              key: \"agent/system-prompt\",\n" +
+      "              role: \"system\",\n" +
       "            },\n" +
-      "          ];\n" +
+      "          },\n" +
+      "        ];\n" +
       "    // Best-effort size guard (~4 chars/token): the platform's own default\n" +
       "    // prompt is budget-tested at ~4.3k tokens; warn well before a fork's\n" +
       "    // edits silently double every request's cost.\n" +
-      "    if (file !== null && file.content.length > 6_000 * 4) {\n" +
+      "    if (file && file.content.length > 6_000 * 4) {\n" +
       "      console.warn(\n" +
       "        `prompts/agent-system-prompt.md is ~${Math.round(file.content.length / 4)} tokens; ` +\n" +
       "          \"it rides every LLM request of every agent — consider trimming.\",\n" +
@@ -869,7 +885,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      case \"events.iterate.com/agent/created\": {\n" +
       "        // The birth event on the agent's own stream (copies carry\n" +
       "        // source.copiedFrom and must not re-target the collection stream).\n" +
-      "        if (event.source?.copiedFrom !== undefined) break;\n" +
+      "        if (event.source?.copiedFrom) break;\n" +
       "        await this.#syncAgentsMdContext([event.path]);\n" +
       "        break;\n" +
       "      }\n" +

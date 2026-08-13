@@ -627,6 +627,6 @@ async function waitForBarrierOrRequest({
       }),
     ]);
   } finally {
-    if (timeoutId !== undefined) clearTimeout(timeoutId);
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }

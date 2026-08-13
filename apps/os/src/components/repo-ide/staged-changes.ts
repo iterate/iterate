@@ -46,10 +46,7 @@ class WorkingTreeStore {
   setWorking(path: string, entry: FileEntry | undefined): void {
     this.#patch(path, (change) => ({
       ...change,
-      working:
-        entry !== undefined && change.staged !== undefined && entriesEqual(entry, change.staged)
-          ? undefined
-          : entry,
+      working: entry && change.staged && entriesEqual(entry, change.staged) ? undefined : entry,
     }));
   }
 
@@ -59,9 +56,7 @@ class WorkingTreeStore {
   setStaged(path: string, entry: FileEntry | undefined): void {
     this.#patch(path, (change) => ({
       working:
-        entry !== undefined && change.working !== undefined && entriesEqual(change.working, entry)
-          ? undefined
-          : change.working,
+        entry && change.working && entriesEqual(change.working, entry) ? undefined : change.working,
       staged: entry,
     }));
   }
@@ -88,8 +83,8 @@ class WorkingTreeStore {
     const next = new Map(this.#changes);
     for (const path of paths) {
       const change = next.get(path);
-      if (change === undefined) continue;
-      if (change.working === undefined) next.delete(path);
+      if (!change) continue;
+      if (!change.working) next.delete(path);
       else next.set(path, { working: change.working });
     }
     this.#commit(next);
@@ -102,20 +97,16 @@ class WorkingTreeStore {
     const next = new Map(this.#changes);
     for (const [path, entry] of committed) {
       const change = next.get(path);
-      if (change === undefined) continue;
+      if (!change) continue;
       const working =
-        change.working !== undefined && entriesEqual(change.working, entry)
-          ? undefined
-          : change.working;
+        change.working && entriesEqual(change.working, entry) ? undefined : change.working;
       const staged =
-        change.staged !== undefined && entriesEqual(change.staged, entry)
-          ? undefined
-          : change.staged;
-      if (working === undefined && staged === undefined) next.delete(path);
+        change.staged && entriesEqual(change.staged, entry) ? undefined : change.staged;
+      if (!working && !staged) next.delete(path);
       else
         next.set(path, {
-          ...(working === undefined ? {} : { working }),
-          ...(staged === undefined ? {} : { staged }),
+          ...(!working ? {} : { working }),
+          ...(!staged ? {} : { staged }),
         });
     }
     this.#commit(next);
@@ -139,11 +130,11 @@ class WorkingTreeStore {
   #patch(path: string, update: (change: FileChange) => FileChange): void {
     const next = new Map(this.#changes);
     const updated = update(next.get(path) ?? {});
-    if (updated.working === undefined && updated.staged === undefined) next.delete(path);
+    if (!updated.working && !updated.staged) next.delete(path);
     else
       next.set(path, {
-        ...(updated.working === undefined ? {} : { working: updated.working }),
-        ...(updated.staged === undefined ? {} : { staged: updated.staged }),
+        ...(!updated.working ? {} : { working: updated.working }),
+        ...(!updated.staged ? {} : { staged: updated.staged }),
       });
     this.#commit(next);
   }
@@ -221,7 +212,7 @@ export function workingTreeGitStatus(
 ): Array<{ path: string; status: "added" | "deleted" | "modified" }> {
   return [...changes].flatMap(([path, change]) => {
     const entry = effectiveEntry(change);
-    if (entry === undefined) return [];
+    if (!entry) return [];
     return [
       {
         path,
@@ -252,14 +243,14 @@ export function commitPlan(changes: WorkingTreeChanges): {
   paths: string[];
   fileChanges: RepoFileChange[];
 } {
-  const staged = [...changes].filter(([, change]) => change.staged !== undefined);
+  const staged = [...changes].filter(([, change]) => !!change.staged);
   const pick = staged.length > 0 ? staged : [...changes];
   const mode = staged.length > 0 ? ("staged" as const) : ("everything" as const);
   const fileChanges: RepoFileChange[] = [];
   const paths: string[] = [];
   for (const [path, change] of pick) {
     const entry = mode === "staged" ? change.staged : effectiveEntry(change);
-    if (entry === undefined) continue;
+    if (!entry) continue;
     paths.push(path);
     fileChanges.push(fileChangeForEntry(path, entry));
   }
@@ -279,7 +270,7 @@ function persist(key: string, changes: WorkingTreeChanges): void {
 function loadPersisted(key: string): ReadonlyMap<string, FileChange> {
   try {
     const raw = localStorage.getItem(key);
-    if (raw === null) return new Map();
+    if (!raw) return new Map();
     return new Map(JSON.parse(raw) as Array<[string, FileChange]>);
   } catch {
     return new Map();
@@ -291,7 +282,7 @@ function sweepStaleKeys(repoPrefix: string, currentKey: string): void {
     const stale: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key !== null && key.startsWith(repoPrefix) && key !== currentKey) stale.push(key);
+      if (key && key.startsWith(repoPrefix) && key !== currentKey) stale.push(key);
     }
     for (const key of stale) localStorage.removeItem(key);
   } catch {

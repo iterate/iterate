@@ -96,7 +96,7 @@ export function CommitControls({
         >
           <GitCommitVerticalIcon aria-hidden className="size-3.5" />
           Commit{dirty ? ` (${taskChanges.length})` : ""}
-          {dirty && !commitPending && autoSaveDueAt !== undefined ? (
+          {dirty && !commitPending && Number.isFinite(autoSaveDueAt) ? (
             <AutoSaveCountdown dueAt={autoSaveDueAt} />
           ) : null}
           <ChevronDownIcon aria-hidden className="size-3" />

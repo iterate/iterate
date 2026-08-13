@@ -156,7 +156,7 @@ function AgentChatApp() {
   // oxlint-enable react-doctor/query-mutation-missing-invalidation
   const messageNotice = messageIsPending
     ? "sending…"
-    : messageError != null
+    : messageError
       ? `send failed: ${messageError instanceof Error ? messageError.message : String(messageError)}`
       : "";
   const notice = [messageNotice, connection.status === "error" ? "Ctrl+R to retry" : ""]
@@ -211,7 +211,7 @@ function AgentChatApp() {
         stickyStart="bottom"
         contentOptions={{ flexDirection: "column", paddingLeft: 1, paddingRight: 1, gap: 1 }}
       >
-        {feed.items.length === 0 && feed.live == null ? (
+        {feed.items.length === 0 && !feed.live ? (
           <text fg={COLORS.textMuted}>
             No messages yet — say something to {args.agentPath.slice("/agents/".length)}.
           </text>
@@ -219,7 +219,7 @@ function AgentChatApp() {
         {feed.items.map((item) => (
           <FeedItem key={item.id} item={item} />
         ))}
-        {feed.live == null ? null : <LiveActivity activity={feed.live} />}
+        {!feed.live ? null : <LiveActivity activity={feed.live} />}
       </scrollbox>
       <box
         width="100%"
@@ -260,13 +260,7 @@ function parseArgs(argv: string[]) {
   const cliPath = readFlag(argv, "--cli-path");
   const configName = readFlag(argv, "--config-name");
 
-  if (
-    baseUrl == null ||
-    projectId == null ||
-    agentPath == null ||
-    cliPath == null ||
-    configName == null
-  ) {
+  if (!baseUrl || !projectId || !agentPath || !cliPath || !configName) {
     throw new Error(
       "Usage: bun agent-chat-terminal.tsx --base-url <url> --project-id <prj_id> --agent-path </agents/name> --cli-path <path> --config-name <name>",
     );
@@ -282,7 +276,7 @@ function readFlag(argv: string[], flagName: string) {
   const index = argv.indexOf(flagName);
   if (index === -1) return undefined;
   const value = argv[index + 1];
-  if (value == null || value.startsWith("--")) {
+  if (!value || value.startsWith("--")) {
     throw new Error(`${flagName} requires a value.`);
   }
   return value;

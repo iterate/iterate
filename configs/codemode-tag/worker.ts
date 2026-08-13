@@ -70,7 +70,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       case "events.iterate.com/agent/created": {
         // The birth event on the agent's own stream (copies carry
         // source.copiedFrom and must not re-target the collection stream).
-        if (event.source?.copiedFrom !== undefined) break;
+        if (event.source?.copiedFrom) break;
         // Agents are normally BORN converted (the birth defaults below);
         // these syncs only matter for agents created in the window before the
         // defaults event existed, and no-op otherwise.
@@ -172,9 +172,9 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       const snapshot = await itx.agents.get(path).processor.snapshot();
       if (snapshot.state.config.driver === HEADLESS_PROCESSOR_SLUG) continue;
       const busy =
-        snapshot.state.openRequest !== null ||
+        !!snapshot.state.openRequest ||
         snapshot.state.activeScriptExecutionIds.length > 0 ||
-        snapshot.state.pendingLlmRequestTrigger !== null;
+        !!snapshot.state.pendingLlmRequestTrigger;
       if (busy) continue;
       await this.#appendUnlessAlreadyRecorded(() =>
         itx.agents.get(path).append({
@@ -197,7 +197,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   async #publishAgentBirthDefaults(): Promise<void> {
     const itx = await this.itx;
     const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
-    if (file === null) return;
+    if (!file) return;
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(file.content));
     const hash = [...new Uint8Array(digest).slice(0, 8)]
       .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -245,7 +245,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
     // A deleted prompt file leaves the platform prompt standing — this
     // experiment degrades to fenced-ts prompting, never to no prompt at all.
-    if (file === null) return;
+    if (!file) return;
     const content = file.content;
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
     const hash = [...new Uint8Array(digest).slice(0, 8)]
@@ -278,7 +278,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       }),
     );
     const failed = results.find((result) => result.status === "rejected");
-    if (failed !== undefined && failed.status === "rejected") throw failed.reason;
+    if (failed && failed.status === "rejected") throw failed.reason;
   }
 
   /**
@@ -290,10 +290,9 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     if (agentPaths.length === 0) return;
     const itx = await this.itx;
     const file = await itx.repo.readFile({ path: "AGENTS.md" });
-    const content =
-      file === null
-        ? "(AGENTS.md was deleted from /repos/config — no standing project notes.)"
-        : `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\n\n${file.content}`;
+    const content = !file
+      ? "(AGENTS.md was deleted from /repos/config — no standing project notes.)"
+      : `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\n\n${file.content}`;
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
     const hash = [...new Uint8Array(digest).slice(0, 8)]
       .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -319,7 +318,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       }),
     );
     const failed = results.find((result) => result.status === "rejected");
-    if (failed !== undefined && failed.status === "rejected") throw failed.reason;
+    if (failed && failed.status === "rejected") throw failed.reason;
   }
 
   /**
@@ -368,7 +367,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       return;
     }
     if (outcome.kind === "none") {
-      if (outcome.prose === undefined) return;
+      if (!outcome.prose) return;
       const prose = outcome.prose;
       await this.#appendUnlessAlreadyRecorded(() =>
         agent.append({
@@ -389,7 +388,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     // mid-script sendMessage.
     await this.#appendUnlessAlreadyRecorded(() =>
       agent.append(
-        ...(status === undefined
+        ...(!status
           ? []
           : [
               {
@@ -409,7 +408,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
             expiresAt: Date.parse(event.createdAt) + SCRIPT_EXPIRY_MS,
           },
         },
-        ...(prose === undefined
+        ...(!prose
           ? []
           : [
               {
@@ -445,7 +444,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     };
     const executionId = payload.executionId;
     const settlement = payload.settlement;
-    if (executionId === undefined || settlement === undefined) return;
+    if (!executionId || !settlement) return;
     if (!executionId.startsWith("agent-output:")) return;
     let content: string;
     if (settlement.status === "failed") {
@@ -458,6 +457,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         `Before retrying: \`await itx.docs.typecheck({ code })\` compiles a script against this ` +
         `scope's real types, and \`await itx.docs.search({ q: "several related words" })\` finds working examples.`;
     } else {
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- a script can return null/false/0; only undefined means "no result"
       if (settlement.result === undefined) return;
       const isRawText = typeof settlement.result === "string";
       const text = isRawText

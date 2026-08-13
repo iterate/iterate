@@ -57,7 +57,7 @@ export default function ExamplesScreen() {
               <Text style={styles.description}>{example.description}</Text>
               <Pressable
                 style={[styles.button, pending && styles.buttonDisabled]}
-                disabled={pending || baseUrl === undefined}
+                disabled={pending || !baseUrl}
                 onPress={() => run.mutate(example.id)}
               >
                 <Text style={styles.buttonText}>{pending ? "Running…" : "Run"}</Text>

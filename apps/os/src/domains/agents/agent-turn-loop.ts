@@ -56,7 +56,7 @@ export class AgentTurnLoop implements AgentComponent {
         // interpreter delivering text lifted from an assistant output whose
         // raw form is ALREADY in history — mirroring would make the model
         // read its own words twice.
-        if (event.payload.llmRequestOffset !== undefined) break;
+        if (Number.isFinite(event.payload.llmRequestOffset)) break;
         const files = event.payload.files;
         blockProcessorWhile(() =>
           appendUnlessLostIdempotencyRace(append, [
@@ -65,7 +65,7 @@ export class AgentTurnLoop implements AgentComponent {
               payload: {
                 role: "assistant",
                 content: `The assistant sent this visible web-chat message: ${event.payload.message}`,
-                ...(files === undefined || files.length === 0 ? {} : { files }),
+                ...(!files || files.length === 0 ? {} : { files }),
               },
               idempotencyKey: this.#host.idempotencyKey(`render-web-response@${event.offset}`),
             },
@@ -82,7 +82,7 @@ export class AgentTurnLoop implements AgentComponent {
         // only clears a wait established at or before it (a wait the agent
         // set AFTER this input raced in survives). Blocked: per-event
         // consequence, delivered once.
-        if (state.summary.waitingFor !== undefined && contextClearsWaitingFor(payload)) {
+        if (state.summary.waitingFor && contextClearsWaitingFor(payload)) {
           blockProcessorWhile(() =>
             appendUnlessLostIdempotencyRace(append, [
               {
@@ -99,7 +99,7 @@ export class AgentTurnLoop implements AgentComponent {
         // nor schedule one — the SAME pure resolver gates it here, in the
         // codemode component, and in the fold's contextTriggerSource, so the
         // three can never disagree.
-        if (payload.role === "user" && resolveSlashCommand(payload.content) !== null) break;
+        if (payload.role === "user" && resolveSlashCommand(payload.content)) break;
         // INTERRUPT — cancellation is a property of new input, never a
         // free-standing command. Abort whatever this incarnation is running
         // and settle the open request as cancelled, carrying the streamed
@@ -108,12 +108,12 @@ export class AgentTurnLoop implements AgentComponent {
         if (
           payload.llmRequestPolicy.behaviour === "interrupt-current-request" &&
           (payload.role === "user" || payload.role === "developer") &&
-          state.openRequest !== null
+          state.openRequest
         ) {
           const open = state.openRequest;
           const partialText = this.#llm.abortInFlight(open.requestedAtOffset);
           const appends: EmittedInput<AgentProcessorContract>[] = [];
-          if (partialText !== undefined) {
+          if (partialText) {
             appends.push({
               type: "events.iterate.com/agents/context-added",
               payload: {
@@ -137,7 +137,7 @@ export class AgentTurnLoop implements AgentComponent {
               result: {
                 status: "cancelled",
                 reason: "interrupted-by-user-input",
-                ...(partialText === undefined ? {} : { partialText }),
+                ...(!partialText ? {} : { partialText }),
               },
             },
             idempotencyKey: this.#host.idempotencyKey(`settle/${open.requestedAtOffset}`),
@@ -192,7 +192,7 @@ export class AgentTurnLoop implements AgentComponent {
   #atHead(args: ProcessEventArgs<AgentProcessorContract>): undefined {
     const { state, runInBackground, append, delivery } = args;
     if (!delivery.caughtUp) return;
-    if (state.birthCertificate === null) return;
+    if (!state.birthCertificate) return;
 
     // Paused: NEW turns stay parked until fresh EXTERNAL input records the
     // resume (self-driven triggers are exactly what the breaker paused).
@@ -205,7 +205,7 @@ export class AgentTurnLoop implements AgentComponent {
     // until external input happened to resume the loop). A live incarnation
     // already drains such a request — the background attempt keeps running
     // through the pause — so a revived one must adopt it the same way.
-    if (state.paused !== null && state.pendingLlmRequestTrigger?.source === "external") {
+    if (state.paused && state.pendingLlmRequestTrigger?.source === "external") {
       const trigger = state.pendingLlmRequestTrigger;
       runInBackground(() =>
         append({
@@ -223,7 +223,7 @@ export class AgentTurnLoop implements AgentComponent {
     // the ONE place work ever starts — picks it up. Starting fresh and
     // recovering after an eviction are the same code path.
     const trigger = state.pendingLlmRequestTrigger;
-    if (state.paused === null && trigger !== null && state.openRequest === null) {
+    if (!state.paused && trigger && !state.openRequest) {
       // Agent birth and inbound input are independent distributed reactions.
       // Hold the trigger until the canonical system-prompt slot has arrived;
       // that context event's own delivery re-runs this pass over the same
@@ -294,7 +294,7 @@ export class AgentTurnLoop implements AgentComponent {
     // with the error transcribed for the next turn: answering a stale trigger
     // with a stale context snapshot is worse than admitting the miss.
     const open = state.openRequest;
-    if (open !== null && !this.#llm.isExecuting(open.requestedAtOffset)) {
+    if (open && !this.#llm.isExecuting(open.requestedAtOffset)) {
       if (this.#host.now() >= open.expiresAt) {
         runInBackground(() =>
           appendUnlessLostIdempotencyRace(append, [

@@ -63,7 +63,7 @@ function Segment({
 
 function textSegment(ctx: RenderContext, node: Nodes & { value: string }): ReactNode {
   const offsets = offsetsOf(node);
-  if (offsets === null) return node.value;
+  if (!offsets) return node.value;
   const slice = ctx.source.slice(offsets.start, offsets.end);
   if (slice === node.value) {
     return <Segment value={node.value} start={offsets.start} end={offsets.end} atomic={false} />;
@@ -74,7 +74,7 @@ function textSegment(ctx: RenderContext, node: Nodes & { value: string }): React
   // atomic unit covering the newline plus the structural prefix.
   if (node.value.includes("\n")) {
     const lineSegments = alignLines(node.value, slice, offsets.start);
-    if (lineSegments !== null) return <>{lineSegments}</>;
+    if (lineSegments) return <>{lineSegments}</>;
   }
   // Decoded text (an entity, an escape): keep the identical prefix and
   // suffix as exact segments so only the decoded core snaps atomically —
@@ -193,7 +193,7 @@ function innerSegment(
   { afterFirstLine = false }: { afterFirstLine?: boolean } = {},
 ): { segment: ReactNode } {
   const offsets = offsetsOf(node);
-  if (offsets === null) return { segment: node.value };
+  if (!offsets) return { segment: node.value };
   const slice = ctx.source.slice(offsets.start, offsets.end);
   let searchFrom = 0;
   // Indented code blocks have no fence line — only skip a real one.
@@ -228,7 +228,7 @@ function renderChildren(ctx: RenderContext, node: Parents): ReactNode[] {
 
 function blockAttrs(node: Nodes): Record<string, number> {
   const offsets = offsetsOf(node);
-  if (offsets === null) return {};
+  if (!offsets) return {};
   return { [BLOCK_START_ATTR]: offsets.start, [BLOCK_END_ATTR]: offsets.end };
 }
 
@@ -278,7 +278,7 @@ function RenderNode({ ctx, node }: { ctx: RenderContext; node: RootContent }): R
         ) : null;
       const [firstChild, ...remainingChildren] = node.children;
       const taskContent =
-        checkbox !== null && firstChild?.type === "paragraph" ? (
+        checkbox && firstChild?.type === "paragraph" ? (
           <>
             <span {...blockAttrs(firstChild)}>{renderChildren(ctx, firstChild)}</span>
             {remainingChildren.map((child, index) => (
@@ -289,7 +289,7 @@ function RenderNode({ ctx, node }: { ctx: RenderContext; node: RootContent }): R
           renderChildren(ctx, node)
         );
       return (
-        <li {...blockAttrs(node)} data-task={checkbox === null ? undefined : ""}>
+        <li {...blockAttrs(node)} data-task={!checkbox ? undefined : ""}>
           {checkbox}
           {taskContent}
         </li>
@@ -324,7 +324,7 @@ function RenderNode({ ctx, node }: { ctx: RenderContext; node: RootContent }): R
       const [head, ...rows] = node.children;
       return (
         <table {...blockAttrs(node)}>
-          {head !== undefined ? (
+          {head ? (
             <thead>
               <tr>
                 {head.children.map((cell, index) => (

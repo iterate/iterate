@@ -87,7 +87,7 @@ export default function SignInScreen() {
       // anywhere else (say prd, where the test OTP is off) must not suggest a
       // mailbox nobody can read.
       const loginHint =
-        hintedEmail !== null && recommended !== null && baseUrl === recommended.baseUrl
+        hintedEmail && recommended && baseUrl === recommended.baseUrl
           ? { loginHint: hintedEmail }
           : {};
       await signIn(baseUrl, loginHint);
@@ -113,7 +113,7 @@ export default function SignInScreen() {
   // is the one surface that offers the backend/identity switch, and this
   // screen only SUGGESTS (preselected server + login_hint) when you land on
   // it signed out anyway.
-  if (bootstrap.data?.signedIn && editedServer === null) {
+  if (bootstrap.data?.signedIn && !editedServer) {
     const last = bootstrap.data.lastProject;
     if (last) {
       return (
@@ -133,9 +133,7 @@ export default function SignInScreen() {
   // — anything else gets typed into the field.
   const serverOptions = [
     PRODUCTION_PRESET,
-    ...(recommended !== null && recommended.baseUrl !== PRODUCTION_PRESET.baseUrl
-      ? [recommended]
-      : []),
+    ...(recommended && recommended.baseUrl !== PRODUCTION_PRESET.baseUrl ? [recommended] : []),
   ];
 
   return (
@@ -152,12 +150,12 @@ export default function SignInScreen() {
         <Text style={styles.subtitle}>
           Chat with your project&apos;s agents. Pick a deployment, sign in, start talking.
         </Text>
-        {recommended !== null ? (
+        {recommended ? (
           <View style={styles.recommendation}>
             <Text style={styles.recommendationTitle}>Expected backend for this build</Text>
             <Text style={styles.recommendationBody}>
               {recommended.label}
-              {hintedEmail !== null ? ` · test sign-in as ${hintedEmail}` : ""}
+              {hintedEmail ? ` · test sign-in as ${hintedEmail}` : ""}
             </Text>
           </View>
         ) : null}

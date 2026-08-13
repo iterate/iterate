@@ -60,10 +60,9 @@ export function GlobalCommandPalette() {
     shouldThrow: false,
     select: (match) => match.context.project,
   });
-  const adminStream =
-    adminProjectId === undefined
-      ? null
-      : { projectId: adminProjectId, streamPath: streamPathFromSplatOrRoot(adminSplat) };
+  const adminStream = !adminProjectId
+    ? null
+    : { projectId: adminProjectId, streamPath: streamPathFromSplatOrRoot(adminSplat) };
   // Under /admin but before a project is chosen (the /admin/streams picker
   // page), ⌘K must stay in the admin world: picking a project opens that
   // project's admin explorer instead of dialing the org-scoped app flow.
@@ -71,9 +70,7 @@ export function GlobalCommandPalette() {
   const streamBreadcrumb = activeStreamBreadcrumb(matches);
   const routeStream =
     streamBreadcrumb ??
-    (project === undefined
-      ? null
-      : { projectId: project.id, projectSlug: project.slug, streamPath: "/" });
+    (!project ? null : { projectId: project.id, projectSlug: project.slug, streamPath: "/" });
   const activeStream =
     routeStream ??
     (pickedProject
@@ -84,10 +81,9 @@ export function GlobalCommandPalette() {
   // open dialog (back button, links outside the dialog): the tree being shown
   // belongs to the page it was opened on. The palette's own navigations
   // already close it before routing.
-  const routeStreamKey =
-    adminStream === null
-      ? routeStream && `${routeStream.projectId}:${routeStream.streamPath}`
-      : `admin:${adminStream.projectId}:${adminStream.streamPath}`;
+  const routeStreamKey = !adminStream
+    ? routeStream && `${routeStream.projectId}:${routeStream.streamPath}`
+    : `admin:${adminStream.projectId}:${adminStream.streamPath}`;
   useEffect(() => {
     setOpen(false);
     setPickedProject(null);
@@ -113,7 +109,7 @@ export function GlobalCommandPalette() {
     };
   }, []);
 
-  if (adminStream !== null) {
+  if (adminStream) {
     return open ? (
       <Suspense fallback={<p role="status">Loading stream navigation…</p>}>
         <AdminStreamIndexDialog
@@ -128,7 +124,7 @@ export function GlobalCommandPalette() {
     ) : null;
   }
 
-  if (activeStream == null) {
+  if (!activeStream) {
     return (
       <ProjectPickerDialog
         open={open}
@@ -191,7 +187,7 @@ function ProjectPickerDialog({
           <DialogDescription>Pick a project to browse its agents and streams.</DialogDescription>
         </DialogHeader>
         <div className="max-h-80 overflow-y-auto">
-          {projects == null ? (
+          {!projects ? (
             <p className="px-2 py-1.5 text-sm text-muted-foreground">Loading projects…</p>
           ) : projects.length === 0 ? (
             <p className="px-2 py-1.5 text-sm text-muted-foreground">No projects yet.</p>

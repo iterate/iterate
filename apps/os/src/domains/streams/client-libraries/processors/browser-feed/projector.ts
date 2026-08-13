@@ -184,7 +184,7 @@ export function planBrowserFeedOps(
     agent = settled.endState;
     for (const item of settled.items) {
       const existingIndex = provisionalAgentItemIndexes[item.id];
-      if (existingIndex !== undefined) {
+      if (Number.isFinite(existingIndex)) {
         ops.push({
           kind: "replace",
           localIndex: existingIndex,
@@ -195,7 +195,7 @@ export function planBrowserFeedOps(
         if (!hasInferredScriptOutcome(item)) delete provisionalAgentItemIndexes[item.id];
         continue;
       }
-      if (item.kind === "stream-woken" && lastAgentWake !== null) {
+      if (item.kind === "stream-woken" && lastAgentWake) {
         const count = lastAgentWake.count + 1;
         ops.push({
           kind: "replace",
@@ -226,7 +226,7 @@ export function planBrowserFeedOps(
 
     // 2. Raw lens: every event lands in exactly one raw row.
     const singleton = rawSingletonKind(event.type);
-    if (singleton !== null) {
+    if (singleton) {
       // Specific renderer: its own singleton row, and it closes any open group.
       ops.push({
         kind: "insert",
@@ -243,7 +243,7 @@ export function planBrowserFeedOps(
       continue;
     }
 
-    if (open !== null && open.eventType === event.type && open.eventCount < MAX_GROUP_EVENTS) {
+    if (open && open.eventType === event.type && open.eventCount < MAX_GROUP_EVENTS) {
       // Extend the open group for this event type (still under the size
       // bound). Pretty rows settled since the group opened do NOT close it —
       // the group keeps its original local_index and grows in place.
@@ -254,7 +254,7 @@ export function planBrowserFeedOps(
         eventCount: open.eventCount + 1,
         events: groupEvents,
       };
-      if (openOp === null) {
+      if (!openOp) {
         // First touch of a row that already existed before this batch: a single
         // UPDATE carrying the final state (kept in sync as more events extend it).
         openOp = {
@@ -339,13 +339,13 @@ export function isCurrentBrowserFeedState(value: unknown): value is BrowserFeedS
   }
   return (
     candidate.schemaVersion === BROWSER_FEED_SCHEMA_VERSION &&
-    (candidate.open === null || candidate.open.localIndex < nextLocalIndex) &&
-    (candidate.lastAgentWake === null || candidate.lastAgentWake.localIndex < nextLocalIndex)
+    (!candidate.open || candidate.open.localIndex < nextLocalIndex) &&
+    (!candidate.lastAgentWake || candidate.lastAgentWake.localIndex < nextLocalIndex)
   );
 }
 
 function isLastAgentWake(value: unknown): value is BrowserFeedState["lastAgentWake"] {
-  if (value === null) return true;
+  if (!value) return true;
   return (
     isRecord(value) &&
     isNonNegativeSafeInteger(value.localIndex) &&
@@ -355,7 +355,7 @@ function isLastAgentWake(value: unknown): value is BrowserFeedState["lastAgentWa
 }
 
 function isOpenGroup(value: unknown): value is OpenGroup | null {
-  if (value === null) return true;
+  if (!value) return true;
   if (!isRecord(value)) return false;
   const events = value.events;
   if (!Array.isArray(events)) return false;
@@ -386,7 +386,7 @@ function isOpenGroup(value: unknown): value is OpenGroup | null {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
@@ -400,7 +400,7 @@ function retainCurrentProvisionalIndexes(
   const retained: Record<string, number> = {};
   for (const id of Object.keys(agent.provisionalActivities)) {
     const index = indexes[id];
-    if (index !== undefined) retained[id] = index;
+    if (Number.isFinite(index)) retained[id] = index;
   }
   return retained;
 }

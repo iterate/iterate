@@ -116,7 +116,7 @@ export class PreviewE2eTelemetryArtifact {
     const laneSlots = new Set(
       this.deploymentLanes
         .map(({ previewSlot }) => previewSlot)
-        .filter((previewSlot): previewSlot is string => previewSlot !== undefined),
+        .filter((previewSlot): previewSlot is string => !!previewSlot),
     );
     const inferredSlot = laneSlots.size === 1 ? laneSlots.values().next().value : undefined;
     const previewSlot = input.slot ?? inferredSlot;

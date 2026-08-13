@@ -119,21 +119,21 @@ let explicitConfig: IterateSessionConfig | undefined;
  */
 export function configureIterateSession(config: IterateSessionConfig): void {
   const targetChanged =
-    explicitConfig !== undefined &&
+    !!explicitConfig &&
     apiWebSocketUrl(explicitConfig.baseUrl).href !== apiWebSocketUrl(config.baseUrl).href;
   explicitConfig = config;
-  if (!targetChanged || current === undefined) return;
+  if (!targetChanged || !current) return;
 
   const generation = current;
   current = undefined;
   retireGeneration(generation);
   const retiredSession = snapshot?.session;
   snapshot = undefined;
-  if (retiredSession !== undefined) disposeSession(retiredSession);
+  if (retiredSession) disposeSession(retiredSession);
   consecutiveConnectionFailures = 0;
   // Connect now so mounted hooks see one coherent target transition rather than
   // retaining the previous deployment until their next read.
-  if (firstConnect === undefined) {
+  if (!firstConnect) {
     firstConnect = Promise.withResolvers<SessionStub>();
     void firstConnect.promise.catch(() => {});
   }
@@ -269,12 +269,12 @@ const projectStubCaches = new WeakMap<SessionStub, Map<string, ProjectStub>>();
 
 export function projectStubFor(session: SessionStub, slug: string): ProjectStub {
   let cache = projectStubCaches.get(session);
-  if (cache === undefined) {
+  if (!cache) {
     cache = new Map();
     projectStubCaches.set(session, cache);
   }
   let stub = cache.get(slug);
-  if (stub === undefined) {
+  if (!stub) {
     stub = session.projects.get(slug);
     cache.set(slug, stub);
   }
@@ -286,7 +286,7 @@ export function currentSnapshot(): Snapshot {
   // `startConnectionAttempt()` sets `current` synchronously, so this fires at most once per idle
   // window (first load, or after a retry exhausted its own reconnect) — never a
   // per-render loop.
-  if (current === undefined) startConnectionAttempt();
+  if (!current) startConnectionAttempt();
   return snapshot!;
 }
 
@@ -338,7 +338,7 @@ function startConnectionAttempt(): Generation {
   // first-connect promise (see {@link firstConnect}) — never one attempt's promise
   // whose closed-before-open rejection React would replay into an error boundary.
   const priorSession = snapshot?.session;
-  if (priorSession === undefined && firstConnect === undefined) {
+  if (!priorSession && !firstConnect) {
     firstConnect = Promise.withResolvers<SessionStub>();
     void firstConnect.promise.catch(() => {});
   }
@@ -373,7 +373,7 @@ function startConnectionAttempt(): Generation {
     resolve(root);
     firstConnect?.resolve(root);
     firstConnect = undefined;
-    if (retiring !== undefined) disposeSession(retiring);
+    if (retiring) disposeSession(retiring);
   };
 
   const beginWebSocketConnection = () => {
@@ -482,7 +482,7 @@ function startConnectionAttempt(): Generation {
           firstConnect = undefined;
           const zombieSession = snapshot?.session;
           setSnapshot({ generation: id, session: undefined, connecting: promise });
-          if (zombieSession !== undefined) disposeSession(zombieSession);
+          if (zombieSession) disposeSession(zombieSession);
           retireGeneration(generation);
           return;
         }
@@ -558,7 +558,7 @@ function setSnapshot(next: Snapshot): void {
  * call from the `close` handler without re-entering it.
  */
 function disposeGeneration(generation: Generation): void {
-  if (generation.liveness !== undefined) clearInterval(generation.liveness);
+  if (generation.liveness) clearInterval(generation.liveness);
   generation.liveness = undefined;
 }
 
@@ -596,7 +596,7 @@ function retireGeneration(generation: Generation): void {
 export function reportTransportSuspicion(): void {
   const generation = current;
   // An attempt still awaiting authentication owns its connection timeout; nothing to verify.
-  if (generation?.ping === undefined) return;
+  if (!generation?.ping) return;
   void verifyTransport(generation);
 }
 
@@ -604,7 +604,7 @@ async function verifyTransport(generation: Generation): Promise<void> {
   // Single-flight PER GENERATION, not process-wide: a probe still racing on a
   // retired generation (its ping hung and never settled) must not block
   // verifying the fresh successor.
-  if (generation.verifying || current !== generation || generation.ping === undefined) return;
+  if (generation.verifying || current !== generation || !generation.ping) return;
   generation.verifying = true;
   try {
     // A probe is a STRIKE only when the transport itself failed — a timeout, or
@@ -652,7 +652,7 @@ function reconnectIfCurrent(generation: Generation): void {
  */
 export function reconnectIterateSession(): void {
   const generation = current;
-  if (generation !== undefined) {
+  if (generation) {
     current = undefined; // FIRST: the close retireGeneration triggers must not auto-reconnect
     retireGeneration(generation);
   }
@@ -682,10 +682,10 @@ export function retryFailedIterateSession(): void {
 export function disconnectIterateSession(): void {
   const generation = current;
   current = undefined;
-  if (generation !== undefined) retireGeneration(generation);
+  if (generation) retireGeneration(generation);
   const retiredSession = snapshot?.session;
   snapshot = undefined;
-  if (retiredSession !== undefined) disposeSession(retiredSession);
+  if (retiredSession) disposeSession(retiredSession);
   firstConnect?.reject(new Error("itx session disconnected"));
   firstConnect = undefined;
   consecutiveConnectionFailures = 0;

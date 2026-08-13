@@ -109,12 +109,12 @@ export function WorkspaceTaskSheet({
   onClose: () => void;
 }) {
   return (
-    <Sheet open={task !== null} onOpenChange={(open) => (open ? undefined : onClose())}>
+    <Sheet open={!!task} onOpenChange={(open) => (open ? undefined : onClose())}>
       <SheetContent
         side="right"
         className="flex w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[62vw] data-[side=right]:sm:max-w-[62vw]"
       >
-        {task !== null && (
+        {!!task && (
           <SheetBody
             key={task.path}
             task={task}
@@ -249,7 +249,7 @@ function SheetBody({
               setPathError(null);
             }
           }}
-          aria-invalid={pathError !== null}
+          aria-invalid={!!pathError}
           aria-label="Task file path"
           spellCheck={false}
           className={
@@ -257,8 +257,8 @@ function SheetBody({
             "hover:border-input focus-visible:border-input md:text-xs"
           }
         />
-        {pathError !== null && <p className="text-xs text-red-700">{pathError}</p>}
-        {task.createdBy !== null && (
+        {!!pathError && <p className="text-xs text-red-700">{pathError}</p>}
+        {!!task.createdBy && (
           <p className="text-xs text-muted-foreground">
             created by{" "}
             {task.createdBy.startsWith("/") ? (
@@ -276,7 +276,7 @@ function SheetBody({
             )}
           </p>
         )}
-        {task.agent !== null && (
+        {!!task.agent && (
           <p className="text-xs text-muted-foreground">
             assigned to{" "}
             <a
@@ -316,7 +316,7 @@ function SheetBody({
           <TagPicker value={task.labels} options={allTags} onChange={onChangeLabels} />
           <div className="ml-auto flex items-center gap-1">
             <span className="font-mono text-[11px] text-muted-foreground">{status}</span>
-            {task.agent === null && !guest && onAssignAgent !== undefined && (
+            {!task.agent && !guest && !!onAssignAgent && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -332,7 +332,7 @@ function SheetBody({
                 {assigning ? "Assigning…" : "Assign agent"}
               </Button>
             )}
-            {changeStatus === undefined ? null : (
+            {!changeStatus ? null : (
               <Button
                 variant="ghost"
                 size="sm"

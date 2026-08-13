@@ -83,7 +83,7 @@ export async function authenticateProjectRequest(input: {
   // This credential name is deliberately browser-specific. Requiring the
   // WebSocket handshake's exact Origin prevents a hostile site from using a
   // member's browser to exchange this app's ambient cookie.
-  if (input.request.headers.get("origin") === null || !isSameOriginBrowserRequest(input.request)) {
+  if (!input.request.headers.get("origin") || !isSameOriginBrowserRequest(input.request)) {
     throw new ItxAuthenticationError();
   }
 
@@ -227,7 +227,7 @@ async function redeemSession(input: {
     return invalidRequest(error);
   }
   const token = await readBoundedText(input.request, MAX_TOKEN_BYTES);
-  if (token === null) {
+  if (!token) {
     return new Response("Project auth token is too large", {
       headers: noStoreHeaders(),
       status: 413,

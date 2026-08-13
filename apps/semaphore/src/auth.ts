@@ -65,7 +65,7 @@ export async function resolveRequestPrincipal(input: {
   const authentication = await input.auth.authenticate({
     headers: input.headers,
   });
-  if (authentication.credential === null) {
+  if (!authentication.credential) {
     return {
       principal: null,
       session: null,

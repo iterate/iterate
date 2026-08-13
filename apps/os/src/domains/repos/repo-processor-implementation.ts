@@ -108,13 +108,13 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
 
     // Nothing reacts before the creation request exists, and NOTHING ever
     // reacts after a terminal creation failure — fail-closed.
-    if (state.createRequest === null && state.birthCertificate === null) return;
-    if (state.createFailure !== null) return;
+    if (!state.createRequest && !state.birthCertificate) return;
+    if (state.createFailure) return;
 
     switch (event?.type) {
       case "events.iterate.com/repo/cloudflare-artifact-event-received": {
         const push = repoArtifactPushFromEventPayload(event.payload);
-        if (push === null || state.defaultBranch === null || push.branch !== state.defaultBranch) {
+        if (!push || !state.defaultBranch || push.branch !== state.defaultBranch) {
           break;
         }
         // Head-cache projection is unconditional: every parsed default-branch
@@ -127,7 +127,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
           branch: push.branch,
         });
         const commitOid = push.afterCommitOid;
-        if (commitOid === null || commitOid === undefined) break;
+        if (!commitOid) break;
         blockProcessorWhile(() =>
           append({
             type: "events.iterate.com/repo/commit-completed",
@@ -147,9 +147,9 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         const push = repoGithubPushFromWebhookPayload(event.payload);
         const origin = event.source?.copiedFrom?.at(-1);
         if (
-          push === null ||
-          state.github === null ||
-          state.defaultBranch === null ||
+          !push ||
+          !state.github ||
+          !state.defaultBranch ||
           origin?.path !== `/integrations/github/${state.github.connection}` ||
           origin.projectId !== this.projectId ||
           origin.name !== `github-repo:${this.path}` ||
@@ -194,15 +194,11 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     // GitHub-backed creation can perform network work, so it remains a
     // background obligation re-derived from state after eviction.
     const createRequest = state.createRequest;
-    if (
-      createRequest !== null &&
-      state.birthCertificate === null &&
-      createRequest.type === "empty"
-    ) {
+    if (createRequest && !state.birthCertificate && createRequest.type === "empty") {
       blockProcessorWhile(async () => append(await this.#createRepoTerminal(createRequest)));
     } else if (
-      createRequest !== null &&
-      state.birthCertificate === null &&
+      createRequest &&
+      !state.birthCertificate &&
       !this.#longCreationAttemptedThisIncarnation
     ) {
       this.#longCreationAttemptedThisIncarnation = true;
@@ -224,7 +220,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     // The live-set entry is taken synchronously, before any await, so this
     // same pass never classifies its own attempt as undriven.
     const githubImport = state.githubImport;
-    if (githubImport !== null && !this.#liveGithubImports.has(githubImport.requestId)) {
+    if (githubImport && !this.#liveGithubImports.has(githubImport.requestId)) {
       this.#liveGithubImports.add(githubImport.requestId);
       runInBackground(() => this.#runGithubImport(args, githubImport));
     }
@@ -289,7 +285,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     if (request.type === "github-private") {
       await this.deps.linkGithub(request);
       await this.deps.syncPrivateGithub();
-    } else if (request.connection !== undefined) {
+    } else if (request.connection) {
       await this.deps.linkGithub({
         connection: request.connection,
         owner: request.owner,
@@ -359,7 +355,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         // The first request wins; a duplicate is a no-op (explicit creation
         // rejects conflicting requests at the append door — a throwing
         // reducer would only wedge the frame).
-        if (state.createRequest !== null) return state;
+        if (state.createRequest) return state;
         return {
           ...state,
           createRequest: event.payload,
@@ -370,7 +366,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         };
       case "events.iterate.com/repos/created":
         // The first certificate wins — same no-op rule as the request.
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return {
           ...state,
           birthCertificate: event.payload,

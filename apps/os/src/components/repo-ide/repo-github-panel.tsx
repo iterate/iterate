@@ -110,7 +110,7 @@ export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; re
       const agentPath = githubHistoryMergeAgentPath(repoPath);
       const agent = itx.agents.get(agentPath);
       const snapshot = await agent.processor.snapshot();
-      if (snapshot.state.birthCertificate === null) await agent.create();
+      if (!snapshot.state.birthCertificate) await agent.create();
       await agent.message(
         githubHistoryMergeAgentInstructions({
           owner: conflict.owner,
@@ -142,7 +142,7 @@ export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; re
     onError: (e) => toast.error(e instanceof Error ? e.message : "Resolve failed."),
   });
 
-  if (state === undefined) {
+  if (!state) {
     return (
       <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
         Loading…
@@ -168,7 +168,7 @@ export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; re
       </div>
     );
   }
-  if (state.github === null) {
+  if (!state.github) {
     return (
       <LinkForm
         projectId={projectId}
@@ -261,7 +261,7 @@ function LinkedPanel({
         <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           Last mirror push
         </span>
-        {lastPush === null ? (
+        {!lastPush ? (
           <span className="text-xs text-muted-foreground">None yet.</span>
         ) : lastPush.ok ? (
           <span className="text-xs text-muted-foreground">

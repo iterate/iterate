@@ -37,7 +37,7 @@ export function listOpenApiOperations(spec: Record<string, unknown>): OpenApiOpe
   const paths = (spec.paths ?? {}) as Record<string, SchemaNode>;
   const operations: OpenApiOperation[] = [];
   for (const [path, pathItem] of Object.entries(paths)) {
-    if (pathItem == null || typeof pathItem !== "object") continue;
+    if (!pathItem || typeof pathItem !== "object") continue;
     const shared = Array.isArray(pathItem.parameters) ? pathItem.parameters : [];
     for (const method of HTTP_METHODS) {
       const operation = pathItem[method] as SchemaNode | undefined;
@@ -74,8 +74,8 @@ function jsonContentSchema(
 
 export function isObjectSchema(schema: JsonSchema | undefined): schema is SchemaNode {
   return (
-    schema != null &&
+    !!schema &&
     typeof schema === "object" &&
-    (schema.type === "object" || (schema.type === undefined && schema.properties != null))
+    (schema.type === "object" || (!schema.type && !!schema.properties))
   );
 }

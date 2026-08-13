@@ -175,7 +175,7 @@ export function hasNewerSharedProcessorSchema(otherKey: string, ourKey: string):
   let strictlyNewer = false;
   for (const [processorSlug, ourVersion] of parseProcessorSchemaVersionKey(ourKey)) {
     const otherVersion = otherVersions.get(processorSlug);
-    if (otherVersion === undefined) continue;
+    if (!Number.isFinite(otherVersion)) continue;
     if (otherVersion < ourVersion) return false;
     if (otherVersion > ourVersion) strictlyNewer = true;
   }
@@ -210,7 +210,7 @@ export async function findNewerStreamDatabaseWriterLock(args: {
     (typeof navigator !== "undefined" && typeof navigator.locks?.query === "function"
       ? () => navigator.locks.query()
       : undefined);
-  if (queryLocks === undefined) return undefined;
+  if (!queryLocks) return undefined;
   let state: LocksQuerySnapshot;
   try {
     state = await queryLocks();
@@ -221,7 +221,7 @@ export async function findNewerStreamDatabaseWriterLock(args: {
   const ourName = streamDatabaseWriterLockName(args);
   for (const lock of state.held ?? []) {
     const name = lock?.name;
-    if (name == null || name === ourName || !name.startsWith(prefix)) continue;
+    if (!name || name === ourName || !name.startsWith(prefix)) continue;
     if (lock.mode === "shared") continue;
     if (hasNewerSharedProcessorSchema(name.slice(prefix.length), args.processorSchemaVersionKey)) {
       return name;

@@ -38,7 +38,7 @@ export function ProjectDashboard({
     { slug: projectId },
   ).value;
   const recent = useMemo(
-    () => (agentsState === undefined ? [] : selectRecentlyActiveAgents(agentsState)),
+    () => (!agentsState ? [] : selectRecentlyActiveAgents(agentsState)),
     [agentsState],
   );
   const nowMs = useTickingNowMs(CLOCK_TICK_MS);

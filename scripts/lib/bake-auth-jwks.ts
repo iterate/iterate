@@ -33,7 +33,7 @@ export function parseAuthSigningEs256PrivateJwk(value: string): AuthSigningEs256
     throw new Error("AUTH_FORGE_ES256_PRIVATE_JWK must be valid JSON", { cause: error });
   }
 
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+  if (typeof parsed !== "object" || !parsed || Array.isArray(parsed)) {
     throw new Error(
       "AUTH_FORGE_ES256_PRIVATE_JWK must be a private ES256 (P-256) JWK with alg, crv, d, kid, kty, x, and y",
     );

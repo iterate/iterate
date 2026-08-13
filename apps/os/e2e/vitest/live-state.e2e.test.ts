@@ -24,7 +24,7 @@ test("itx.liveState pushes a snapshot then a minimal diff; the DO-backed counter
   using subscription = await project.liveState.subscribe(track.onUpdate);
 
   // The subscribe-time frame is a full snapshot: current state IS the first paint.
-  await waitForCondition(() => track.state() !== undefined, {
+  await waitForCondition(() => !!track.state(), {
     description: "the initial live snapshot",
   });
   expect(track.state()!.liveDemo).toMatchObject({ count: expect.any(Number) });
@@ -84,7 +84,7 @@ test("itx.liveState indexes stream activity as a peer slice", async () => {
 
   const track = trackLiveState<ProjectLiveState>();
   using subscription = await project.liveState.subscribe(track.onUpdate);
-  await waitForCondition(() => track.state() !== undefined, {
+  await waitForCondition(() => !!track.state(), {
     description: "the initial snapshot",
   });
 
@@ -95,7 +95,7 @@ test("itx.liveState indexes stream activity as a peer slice", async () => {
     type: "events.iterate.test/live-index",
     payload: { marker },
   });
-  await waitForCondition(() => track.state()?.streamsIndex?.[streamPath] !== undefined, {
+  await waitForCondition(() => !!track.state()?.streamsIndex?.[streamPath], {
     description: () =>
       `the new stream in the index (have ${Object.keys(track.state()?.streamsIndex ?? {}).length})`,
     timeoutMs: 30_000,
@@ -129,7 +129,7 @@ test("stream.liveState pushes updates through the state socket without a DO-side
   const track = trackLiveState<{ coreProcessorState: { maxOffset: number } }>();
   using subscription = await stream.liveState.subscribe(track.onUpdate);
 
-  await waitForCondition(() => track.state() !== undefined, {
+  await waitForCondition(() => !!track.state(), {
     description: "the initial stream runtime snapshot",
   });
   expect(track.state()!.coreProcessorState.maxOffset).toBeGreaterThanOrEqual(first!.offset);
@@ -163,7 +163,7 @@ test("secret.liveState pushes description updates through the Live State Pager",
 
   const track = trackLiveState<{ hasMaterial: boolean; egress: { urls: string[] } }>();
   using subscription = await secret.liveState.subscribe(track.onUpdate);
-  await waitForCondition(() => track.state() !== undefined, {
+  await waitForCondition(() => !!track.state(), {
     description: "the initial secret description snapshot",
   });
   expect(track.state()).toMatchObject({ hasMaterial: true, egress: { urls: expect.any(Array) } });

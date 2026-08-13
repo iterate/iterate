@@ -145,7 +145,7 @@ function parseInitialConnectionRetry(value: string): CliInitialConnectionRetry {
     typeof parsed.failedAttempt !== "number" ||
     typeof parsed.nextAttempt !== "number" ||
     typeof parsed.startedAt !== "string" ||
-    (parsed.errorCode !== undefined && typeof parsed.errorCode !== "string")
+    (parsed.errorCode && typeof parsed.errorCode !== "string")
   ) {
     throw new Error(`Invalid CLI initial-connection retry diagnostic: ${value}`);
   }
@@ -153,18 +153,15 @@ function parseInitialConnectionRetry(value: string): CliInitialConnectionRetry {
 }
 
 function cliProcessFailure(error: unknown): unknown {
-  if (typeof error !== "object" || error === null) return error;
+  if (typeof error !== "object" || !error) return error;
   const processError = error as { stderr?: unknown; stdout?: unknown };
   const stderr = compactProcessOutput(processError.stderr);
   const stdout = compactProcessOutput(processError.stdout);
   const output = stderr ?? stdout;
-  if (output === undefined) return error;
-  return new Error(
-    `cli process failed — ${stderr === undefined ? "stdout" : "stderr"}: ${output}`,
-    {
-      cause: error,
-    },
-  );
+  if (!output) return error;
+  return new Error(`cli process failed — ${!stderr ? "stdout" : "stderr"}: ${output}`, {
+    cause: error,
+  });
 }
 
 function compactProcessOutput(output: unknown): string | undefined {

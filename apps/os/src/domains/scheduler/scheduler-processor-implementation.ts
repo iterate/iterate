@@ -70,7 +70,7 @@ export class SchedulerProcessor extends StreamProcessor<
   // ------------------------------------------------------------ processEvent
   protected override processEvent(args: ProcessEventArgs<SchedulerProcessorContract>): undefined {
     const { event, state, delivery, blockProcessorWhile } = args;
-    if (state.birthCertificate === null) return;
+    if (!state.birthCertificate) return;
 
     switch (event?.type) {
       case "events.iterate.com/scheduler/trigger-requested":
@@ -108,7 +108,7 @@ export class SchedulerProcessor extends StreamProcessor<
   }: ReduceArgs<SchedulerProcessorContract>): SchedulerProcessorState {
     switch (event.type) {
       case "events.iterate.com/scheduler/created":
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/scheduler/schedule-set": {
         const payload = event.payload;
@@ -119,7 +119,7 @@ export class SchedulerProcessor extends StreamProcessor<
             [payload.key]: {
               action: payload.action,
               definedAtOffset: event.offset,
-              ...(payload.metadata === undefined ? {} : { metadata: payload.metadata }),
+              ...(!payload.metadata ? {} : { metadata: payload.metadata }),
               path: event.path,
               nextTriggerAt: initialTriggerAtMs(payload.recurrence, Date.parse(event.createdAt)),
               recurrence: payload.recurrence,
@@ -146,7 +146,7 @@ export class SchedulerProcessor extends StreamProcessor<
           },
         };
         const entry = state.schedules[payload.key];
-        if (entry === undefined) return { ...state, pendingTriggers };
+        if (!entry) return { ...state, pendingTriggers };
         return {
           ...state,
           pendingTriggers,
@@ -166,7 +166,7 @@ export class SchedulerProcessor extends StreamProcessor<
         const entry = state.schedules[event.payload.key];
         // An exhausted one-shot leaves state once its Trigger settles. A re-set
         // between request and completion has a fresh nextTriggerAt and survives.
-        if (entry !== undefined && entry.nextTriggerAt === null && "at" in entry.recurrence) {
+        if (entry && !Number.isFinite(entry.nextTriggerAt) && "at" in entry.recurrence) {
           const { [event.payload.key]: _spent, ...schedules } = state.schedules;
           return { ...state, pendingTriggers, schedules };
         }
@@ -228,13 +228,13 @@ export class SchedulerProcessor extends StreamProcessor<
         keyed.map(({ idempotencyKey }) => this.stream.getEvent({ idempotencyKey })),
       );
       for (const [index, event] of committed.entries()) {
-        if (event === undefined) continue;
+        if (!event) continue;
         const { entry, idempotencyKey, key } = keyed[index]!;
         const payload: unknown = event.payload;
         const matches =
           event.type === "events.iterate.com/scheduler/trigger-requested" &&
           typeof payload === "object" &&
-          payload !== null &&
+          !!payload &&
           "key" in payload &&
           payload.key === key &&
           "scheduledFor" in payload &&
@@ -248,7 +248,7 @@ export class SchedulerProcessor extends StreamProcessor<
         }
       }
       const requests = keyed
-        .filter((_, index) => committed[index] === undefined)
+        .filter((_, index) => !committed[index])
         .map(({ entry, idempotencyKey, key }) => ({
           type: "events.iterate.com/scheduler/trigger-requested" as const,
           idempotencyKey,
@@ -297,7 +297,7 @@ export class SchedulerProcessor extends StreamProcessor<
     const { state } = await this.deps.reads.snapshot();
     assertSchedulerCreated(state);
     const entry = state.schedules[key];
-    if (entry === undefined) throw new Error(`no schedule under key "${key}"`);
+    if (!entry) throw new Error(`no schedule under key "${key}"`);
     const nowIso = new Date(this.deps.now()).toISOString();
     const executionId = crypto.randomUUID();
     const event = this.contract.buildEvent({
@@ -357,7 +357,7 @@ export class SchedulerProcessor extends StreamProcessor<
     await this.deps.reads.waitUntilEvent({ offset: barrierOffset, timeoutMs: 30_000 });
     const { state } = await this.deps.reads.snapshot();
     const pending = state.pendingTriggers[executionId];
-    if (pending === undefined) return; // already completed (e.g. by a raced sweep)
+    if (!pending) return; // already completed (e.g. by a raced sweep)
     const completionIdempotencyKey = this.idempotencyKey(`trigger-completed:${executionId}`);
     // A checkpoint-loss replay redelivers historical requests whose
     // completions sit in LATER catch-up pages — still pending as far as the
@@ -366,7 +366,7 @@ export class SchedulerProcessor extends StreamProcessor<
     const alreadyCompleted = await this.stream.getEvent({
       idempotencyKey: completionIdempotencyKey,
     });
-    if (alreadyCompleted !== undefined) return;
+    if (alreadyCompleted) return;
 
     // Latest-code-wins: resolve the Action NOW — a fresh committed-state
     // read, not the request-time state and not the pre-barrier read above.
@@ -378,7 +378,7 @@ export class SchedulerProcessor extends StreamProcessor<
       outcome: "succeeded" | "failed" | "skipped";
       result?: unknown;
     };
-    if (entry === undefined) {
+    if (!entry) {
       outcome = { outcome: "skipped" };
     } else {
       try {
@@ -389,7 +389,7 @@ export class SchedulerProcessor extends StreamProcessor<
               args: [
                 {
                   key: pending.key,
-                  ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
+                  ...(!entry.metadata ? {} : { metadata: entry.metadata }),
                   path: entry.path,
                   recurrence: entry.recurrence,
                   setAt: entry.setAt,
@@ -415,6 +415,7 @@ export class SchedulerProcessor extends StreamProcessor<
         outcome = {
           definedAtOffset: entry.definedAtOffset,
           outcome: "succeeded",
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- a script can return null/false/0; only undefined means "no result"
           ...(result === undefined ? {} : { result: json(result) }),
         };
       } catch (error) {
@@ -480,7 +481,7 @@ export type SchedulerProcessorDeps = {
 // -----------------------------------------------------------------------------
 
 function assertSchedulerCreated(state: SchedulerProcessorState): void {
-  if (state.birthCertificate === null) {
+  if (!state.birthCertificate) {
     throw new Error("scheduler has not been created");
   }
 }
@@ -493,14 +494,15 @@ function scheduleViewFromState(
   key: string,
 ): ScheduleView | undefined {
   const entry = state.schedules[key];
-  if (entry === undefined) return undefined;
+  if (!entry) return undefined;
   return {
     action: entry.action,
     definedAtOffset: entry.definedAtOffset,
     key,
-    ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
-    nextTriggerAt:
-      entry.nextTriggerAt === null ? null : new Date(entry.nextTriggerAt).toISOString(),
+    ...(!entry.metadata ? {} : { metadata: entry.metadata }),
+    nextTriggerAt: !Number.isFinite(entry.nextTriggerAt)
+      ? null
+      : new Date(entry.nextTriggerAt).toISOString(),
     recurrence: entry.recurrence,
     runCount: entry.runCount,
     setAt: entry.setAt,
@@ -539,6 +541,7 @@ function scheduleActionWorkerRef(script: string): StatelessDynamicWorkerRef {
 }
 
 function json(value: unknown): JsonValue {
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/''/false are real JSON values; only undefined maps to null
   if (value === undefined) return null;
   return JSON.parse(JSON.stringify(value)) as JsonValue;
 }

@@ -172,7 +172,7 @@ export async function unwrapBrowserRunQuickAction(
     result?: unknown;
     error?: unknown;
   } | null;
-  if (envelope !== null && typeof envelope === "object" && "success" in envelope) {
+  if (envelope && typeof envelope === "object" && "success" in envelope) {
     if (envelope.success !== true) {
       throw new Error(
         `Browser Run ${action} failed: ${JSON.stringify(envelope.error ?? envelope).slice(0, 500)}`,

@@ -43,7 +43,7 @@ export class WorkspaceProcessor extends StreamProcessor<WorkspaceProcessorContra
         // thrown on — a committed fact must not wedge the reduce. Pre-0.4.0
         // payloads carried the initial mount table; it is ignored — mounts
         // are derived now.
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/workspace/configured":
         return {
@@ -79,7 +79,7 @@ export function mergeWorkspaceConfigPatch(
   const mounts = Object.fromEntries(
     // `null` is the clear marker (the derived default returns); partial
     // overlays are kept as stored deviations.
-    Object.entries(merged.mounts ?? {}).filter(([, mount]) => mount !== null),
+    Object.entries(merged.mounts ?? {}).filter(([, mount]) => !!mount),
   );
   return WorkspaceProcessorContract.stateSchema.shape.config.parse({ ...merged, mounts });
 }

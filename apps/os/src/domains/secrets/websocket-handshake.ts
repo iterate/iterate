@@ -18,7 +18,7 @@ export async function withWebSocketHandshakeHeaders(
   response: Response,
 ): Promise<Response> {
   const socket = response.webSocket;
-  if (socket == null) return response;
+  if (!socket) return response;
 
   return new Response(null, {
     status: 101,
@@ -47,11 +47,11 @@ export async function downstreamHandshakeHeaders(
   headers.delete("sec-websocket-protocol");
 
   const key = request.headers.get("sec-websocket-key");
-  if (key !== null && key.length > 0) {
+  if (key && key.length > 0) {
     headers.set("sec-websocket-accept", await computeSecWebSocketAccept(key));
   }
 
-  if (selectedProtocol !== undefined && selectedProtocol !== "") {
+  if (selectedProtocol && selectedProtocol !== "") {
     const offeredProtocols = new Set(
       (request.headers.get("sec-websocket-protocol") ?? "")
         .split(",")

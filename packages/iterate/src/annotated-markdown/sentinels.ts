@@ -92,7 +92,7 @@ export function isValidCreatedAt(value: string): boolean {
  * compatibility for files born in that window; the writer emits W3C only.
  */
 export function validateAnchorSelector(value: unknown): AnchorSelector | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  if (typeof value !== "object" || !value || Array.isArray(value)) return null;
   const keys = Object.keys(value);
   if (keys.length === 1 && keys[0] === "selector") {
     return validateW3cSelectorList((value as { selector: unknown }).selector);
@@ -102,7 +102,7 @@ export function validateAnchorSelector(value: unknown): AnchorSelector | null {
   // names them as unknown members for the structural checks that follow —
   // TypeScript can't narrow an object's members through Object.keys.
   const { quote, position } = value as { quote?: unknown; position?: unknown };
-  if (typeof quote !== "object" || quote === null || Array.isArray(quote)) return null;
+  if (typeof quote !== "object" || !quote || Array.isArray(quote)) return null;
   const quoteKeys = Object.keys(quote);
   if (quoteKeys.some((k) => k !== "exact" && k !== "prefix" && k !== "suffix")) return null;
   const { exact, prefix, suffix } = quote as {
@@ -111,11 +111,11 @@ export function validateAnchorSelector(value: unknown): AnchorSelector | null {
     suffix?: unknown;
   };
   const validQuote = validateQuoteParts(exact, prefix, suffix);
-  if (validQuote === null) return null;
+  if (!validQuote) return null;
   const selector: AnchorSelector = { quote: validQuote };
-  if (position !== undefined) {
+  if (position) {
     const validPosition = validatePositionParts(position);
-    if (validPosition === null) return null;
+    if (!validPosition) return null;
     selector.position = validPosition;
   }
   return selector;
@@ -129,17 +129,17 @@ function validateQuoteParts(
   if (typeof exact !== "string" || exact.length === 0 || exact.length > MAX_QUOTE_EXACT_LENGTH) {
     return null;
   }
-  if (prefix !== undefined && typeof prefix !== "string") return null;
-  if (suffix !== undefined && typeof suffix !== "string") return null;
-  const prefixValue = prefix ?? "";
-  const suffixValue = suffix ?? "";
+  if (prefix && typeof prefix !== "string") return null;
+  if (suffix && typeof suffix !== "string") return null;
+  const prefixValue = typeof prefix === "string" ? prefix : "";
+  const suffixValue = typeof suffix === "string" ? suffix : "";
   if (prefixValue.length > MAX_QUOTE_CONTEXT_LENGTH) return null;
   if (suffixValue.length > MAX_QUOTE_CONTEXT_LENGTH) return null;
   return { exact, prefix: prefixValue, suffix: suffixValue };
 }
 
 function validatePositionParts(position: unknown): { start: number; end: number } | null {
-  if (typeof position !== "object" || position === null || Array.isArray(position)) return null;
+  if (typeof position !== "object" || !position || Array.isArray(position)) return null;
   const positionKeys = Object.keys(position);
   if (positionKeys.some((k) => k !== "start" && k !== "end")) return null;
   const { start, end } = position as { start?: unknown; end?: unknown };
@@ -155,13 +155,13 @@ function validateW3cSelectorList(list: unknown): AnchorSelector | null {
   let quote: AnchorSelector["quote"] | null = null;
   let position: { start: number; end: number } | null = null;
   for (const entry of list) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+    if (typeof entry !== "object" || !entry || Array.isArray(entry)) return null;
     // Each entry is proven a plain object above; the casts along this path
     // only name members as unknown for validation (unknown-object members
     // aren't reachable without an assertion), never assume validated shapes.
     const { type } = entry as { type?: unknown };
     if (type === "TextQuoteSelector") {
-      if (quote !== null) return null;
+      if (quote) return null;
       const entryKeys = Object.keys(entry);
       if (entryKeys.some((k) => k !== "type" && k !== "exact" && k !== "prefix" && k !== "suffix"))
         return null;
@@ -171,23 +171,23 @@ function validateW3cSelectorList(list: unknown): AnchorSelector | null {
         suffix?: unknown;
       };
       quote = validateQuoteParts(exact, prefix, suffix);
-      if (quote === null) return null;
+      if (!quote) return null;
       continue;
     }
     if (type === "TextPositionSelector") {
-      if (position !== null) return null;
+      if (position) return null;
       const entryKeys = Object.keys(entry);
       if (entryKeys.some((k) => k !== "type" && k !== "start" && k !== "end")) return null;
       const { start, end } = entry as { start?: unknown; end?: unknown };
       position = validatePositionParts({ start, end });
-      if (position === null) return null;
+      if (!position) return null;
       continue;
     }
     return null;
   }
-  if (quote === null) return null;
+  if (!quote) return null;
   const selector: AnchorSelector = { quote };
-  if (position !== null) selector.position = position;
+  if (position) selector.position = position;
   return selector;
 }
 
@@ -254,7 +254,7 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
       return { ok: false, code: "anchor-invalid", message: "anchor selector is not valid JSON" };
     }
     const selector = validateAnchorSelector(parsed);
-    if (selector === null) {
+    if (!selector) {
       return { ok: false, code: "anchor-invalid", message: "anchor selector has an invalid shape" };
     }
     return { ok: true, token: { kind: "anchor", selector } };
@@ -290,7 +290,7 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
     return entry;
   };
   const id = take("id");
-  if (id === undefined || !isValidId(id.value)) return malformed("missing or invalid `id`");
+  if (!id || !isValidId(id.value)) return malformed("missing or invalid `id`");
 
   if (mode === "end") {
     if (attrs.size > 0)
@@ -306,7 +306,7 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
 
   if (kind === "thread") {
     const status = take("status");
-    if (status === undefined || (status.value !== "open" && status.value !== "resolved")) {
+    if (!status || (status.value !== "open" && status.value !== "resolved")) {
       return malformed("thread `status` must be `open` or `resolved`");
     }
     if (attrs.size > 0)
@@ -327,22 +327,19 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
   }
 
   const author = take("author");
-  if (author === undefined || !isValidAuthor(author.value))
-    return malformed("missing or invalid `author`");
+  if (!author || !isValidAuthor(author.value)) return malformed("missing or invalid `author`");
   const created = take("created");
-  if (created === undefined || !isValidCreatedAt(created.value)) {
+  if (!created || !isValidCreatedAt(created.value)) {
     return malformed("`created` must be an ISO-8601 UTC instant like 2026-07-28T08:30:00Z");
   }
   const modified = take("modified");
-  if (modified !== undefined && !isValidCreatedAt(modified.value)) {
+  if (modified && !isValidCreatedAt(modified.value)) {
     return malformed("`modified` must be an ISO-8601 UTC instant like 2026-07-28T08:30:00Z");
   }
   const inReplyTo = take("in-reply-to");
-  if (inReplyTo !== undefined && !isValidId(inReplyTo.value))
-    return malformed("invalid `in-reply-to`");
+  if (inReplyTo && !isValidId(inReplyTo.value)) return malformed("invalid `in-reply-to`");
   const deleted = take("deleted");
-  if (deleted !== undefined && deleted.value !== "true")
-    return malformed("`deleted` may only be `true`");
+  if (deleted && deleted.value !== "true") return malformed("`deleted` may only be `true`");
   if (attrs.size > 0)
     return malformed(`unknown attribute \`${[...attrs.keys()][0]}\` on comment begin`);
   return {
@@ -353,15 +350,14 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
       author: author.value,
       createdAt: created.value,
       modifiedAt: modified?.value ?? null,
-      modifiedValueRange:
-        modified === undefined
-          ? null
-          : {
-              start: lineStart + modified.valueStart,
-              end: lineStart + modified.valueStart + modified.value.length,
-            },
+      modifiedValueRange: !modified
+        ? null
+        : {
+            start: lineStart + modified.valueStart,
+            end: lineStart + modified.valueStart + modified.value.length,
+          },
       inReplyTo: inReplyTo?.value ?? null,
-      deleted: deleted !== undefined,
+      deleted: !!deleted,
       attrsEnd,
     },
   };
@@ -388,8 +384,8 @@ export function formatCommentBegin(comment: {
   deleted?: boolean;
 }): string {
   let attrs = `id=${comment.id} author=${comment.author} created=${comment.createdAt}`;
-  if (comment.modifiedAt != null) attrs += ` modified=${comment.modifiedAt}`;
-  if (comment.inReplyTo != null) attrs += ` in-reply-to=${comment.inReplyTo}`;
+  if (comment.modifiedAt) attrs += ` modified=${comment.modifiedAt}`;
+  if (comment.inReplyTo) attrs += ` in-reply-to=${comment.inReplyTo}`;
   if (comment.deleted === true) attrs += " deleted=true";
   return `<!-- iterate-comment:v1 begin ${attrs} -->`;
 }
@@ -406,7 +402,7 @@ export function formatAnchorSentinel(selector: AnchorSelector): string {
   const canonical: { selector: Record<string, unknown>[] } = {
     selector: [{ type: "TextQuoteSelector", ...selector.quote }],
   };
-  if (selector.position !== undefined) {
+  if (selector.position) {
     canonical.selector.push({ type: "TextPositionSelector", ...selector.position });
   }
   // `--` cannot appear inside an HTML comment; JSON only produces it inside

@@ -47,13 +47,13 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
     const { event, state } = args;
     switch (event.type) {
       case "events.iterate.com/agent-collection/created": {
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return { ...state, birthCertificate: event.payload };
       }
       case "events.iterate.com/agent/created": {
         const source = receivedAgentSource(event);
-        if (source === null) return state;
-        if (state.agents[source.path] !== undefined) return state;
+        if (!source) return state;
+        if (state.agents[source.path]) return state;
         return {
           ...state,
           agents: {
@@ -68,9 +68,9 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
       }
       case "events.iterate.com/agent/summary-updated": {
         const source = receivedAgentSource(event);
-        if (source === null) return state;
+        if (!source) return state;
         const previous = state.agents[source.path];
-        if (previous === undefined) {
+        if (!previous) {
           console.error(
             `agent collection skipped ${event.type} for ${source.path}: agent/created has not been reduced`,
           );
@@ -82,11 +82,11 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
           update: event.payload,
           atOffset: source.offset,
         });
-        if (projection === undefined) return state;
+        if (!projection) return state;
         const { summary, waitingForSinceOffset } = projection;
         const activityChanged = summary.activity !== previous.summary.activity;
         const waitingForSinceOffsets = { ...state.waitingForSinceOffsets };
-        if (waitingForSinceOffset === undefined) delete waitingForSinceOffsets[source.path];
+        if (!Number.isFinite(waitingForSinceOffset)) delete waitingForSinceOffsets[source.path];
         else waitingForSinceOffsets[source.path] = waitingForSinceOffset;
         return {
           ...state,
@@ -128,7 +128,7 @@ function receivedAgentSource(event: Pick<StreamEvent, "type" | "source">): {
   offset: number;
 } | null {
   const source = event.source?.copiedFrom?.at(-1);
-  if (source === undefined) {
+  if (!source) {
     console.error(`agent collection skipped ${event.type}: missing source-stream coordinates`);
     return null;
   }

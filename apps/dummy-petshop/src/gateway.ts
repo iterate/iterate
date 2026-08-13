@@ -174,7 +174,7 @@ export async function handleGatewayMessage(
   } catch {
     return authFailure("first frame must be JSON identify");
   }
-  if (frame === null || typeof frame !== "object" || frame.op !== "identify") {
+  if (!frame || typeof frame !== "object" || frame.op !== "identify") {
     return authFailure("first frame must be an identify frame");
   }
 

@@ -91,7 +91,7 @@ function humanMessageWebhookPayload(input: {
         text: input.text ?? defaultText,
         ts: input.ts ?? "111.222",
         blocks: [{ type: "rich_text", elements: [] }],
-        ...(input.threadTs === undefined ? {} : { thread_ts: input.threadTs }),
+        ...(!input.threadTs ? {} : { thread_ts: input.threadTs }),
       },
     },
   };
@@ -147,13 +147,13 @@ function makeSlackAgentHarness(input?: {
           slackCalls.push({ body: call.body, method: call.method });
           await input?.callSlackApi?.(call);
         },
-        ...(input?.fetchSlackChannelName === undefined
+        ...(!input?.fetchSlackChannelName
           ? {}
           : { fetchSlackChannelName: input.fetchSlackChannelName }),
-        ...(input?.storeSlackFiles === undefined ? {} : { storeSlackFiles: input.storeSlackFiles }),
+        ...(!input?.storeSlackFiles ? {} : { storeSlackFiles: input.storeSlackFiles }),
       }),
     path: AGENT_PATH,
-    ...(input?.substrate === undefined ? {} : { substrate: input.substrate }),
+    ...(!input?.substrate ? {} : { substrate: input.substrate }),
   });
   return { ...harness, slackCalls };
 }

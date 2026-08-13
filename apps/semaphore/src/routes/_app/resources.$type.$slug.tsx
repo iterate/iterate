@@ -24,6 +24,7 @@ type SerializableJsonValue =
 
 function toSerializableJsonValue(value: unknown): SerializableJsonValue {
   if (
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- JSON has null but no undefined; truthiness would let undefined through
     value === null ||
     typeof value === "boolean" ||
     typeof value === "number" ||

@@ -88,7 +88,7 @@ export function useStickToBottom({
 
   useEffect(() => {
     const scroller = scrollElementRef.current;
-    if (scroller == null) return;
+    if (!scroller) return;
     const release = releaseRef.current;
 
     const restick = () => {
@@ -107,15 +107,13 @@ export function useStickToBottom({
     resizeObserverRef.current = resizeObserver;
     resizeObserver.observe(scroller);
     for (const ref of latestRefs.current.contentElementRefs) {
-      if (ref.current != null) resizeObserver.observe(ref.current);
+      if (ref.current) resizeObserver.observe(ref.current);
     }
 
     const exempt = (event: Event) => {
       const exemptElement = latestRefs.current.releaseExemptElementRef?.current;
       return (
-        exemptElement != null &&
-        event.target instanceof Node &&
-        exemptElement.contains(event.target)
+        !!exemptElement && event.target instanceof Node && exemptElement.contains(event.target)
       );
     };
     const releaseFromInput = (event: Event) => {
@@ -154,9 +152,9 @@ export function useStickToBottom({
   // target is a spec'd no-op, so this is idempotent and cheap.
   useEffect(() => {
     const resizeObserver = resizeObserverRef.current;
-    if (resizeObserver == null) return;
+    if (!resizeObserver) return;
     for (const ref of latestRefs.current.contentElementRefs) {
-      if (ref.current != null) resizeObserver.observe(ref.current);
+      if (ref.current) resizeObserver.observe(ref.current);
     }
   });
 

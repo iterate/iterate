@@ -81,7 +81,7 @@ export async function ensureApproverKeyEnrolled(
   );
   const enrolled = await projectApprovalKeys(baseUrl, projectId);
   const existing = enrolled.find((candidate) => candidate.keyId === key.keyId);
-  if (existing) return existing.revokedAt === null ? key : null;
+  if (existing) return !existing.revokedAt ? key : null;
   const project = await getProjectItx(baseUrl, projectId);
   await project.streams.get("/").append({
     type: EVENT.keyAdded,
@@ -111,7 +111,7 @@ export async function approverKeyStatus(
   if (!key) return { kind: "unenrolled" };
   const enrolled = await projectApprovalKeys(baseUrl, projectId);
   const entry = enrolled.find((candidate) => candidate.keyId === key.keyId);
-  if (entry && entry.revokedAt !== null) return { kind: "revoked", key };
+  if (entry && entry.revokedAt) return { kind: "revoked", key };
   return { kind: "enrolled", key };
 }
 

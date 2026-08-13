@@ -53,7 +53,7 @@ test("the focused cmdk input bubbles structural keys to the Command boundary", a
         value="agent:/agents/research"
         onKeyDown={(event) => {
           const target = paletteKeyboardTarget("agents", "agent:/agents/research");
-          if (target === undefined) return;
+          if (!target) return;
           action = paletteKeyboardAction({
             target,
             key: event.key,
@@ -62,7 +62,7 @@ test("the focused cmdk input bubbles structural keys to the Command boundary", a
             hasChildren: true,
             expanded: false,
           });
-          if (action !== undefined) event.preventDefault();
+          if (action) event.preventDefault();
         }}
       >
         <CommandInput aria-label="Search agents" />
@@ -74,7 +74,7 @@ test("the focused cmdk input bubbles structural keys to the Command boundary", a
   });
 
   const input = container.querySelector("input");
-  if (input === null) throw new Error("missing command input");
+  if (!input) throw new Error("missing command input");
   input.focus();
   const event = new KeyboardEvent("keydown", {
     key: "ArrowRight",
@@ -106,7 +106,7 @@ test("editing the query retargets Shift+P away from the hidden agent", async () 
         onValueChange={setSelectedValue}
         onKeyDown={(event) => {
           const target = paletteKeyboardTarget("agents", selectedValue);
-          if (target === undefined) return;
+          if (!target) return;
           const action = paletteKeyboardAction({
             target,
             key: event.key,
@@ -139,7 +139,7 @@ test("editing the query retargets Shift+P away from the hidden agent", async () 
 
   await act(async () => root.render(<Harness />));
   const input = container.querySelector("input");
-  if (input === null) throw new Error("missing command input");
+  if (!input) throw new Error("missing command input");
 
   await act(async () => {
     const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
@@ -197,7 +197,7 @@ test("tab and footer keys cannot act on the selected cmdk row", async () => {
   const footer = [...container.querySelectorAll("button")].find(
     (element) => element.textContent === "Open or create stream",
   );
-  if (tab === undefined || footer === undefined) throw new Error("missing keyboard controls");
+  if (!tab || !footer) throw new Error("missing keyboard controls");
 
   for (const control of [tab, footer]) {
     control.focus();

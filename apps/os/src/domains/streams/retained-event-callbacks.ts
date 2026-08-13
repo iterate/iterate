@@ -71,7 +71,7 @@ export function retainProcessEventBatch<Batch extends StreamEventBatch>(
 function retainPulledCall<In, Out>(
   callback: ((input: In) => Out | Promise<Out>) | undefined,
 ): (((input: In) => Out | Promise<Out>) & Disposable) | undefined {
-  if (callback === undefined || typeof callback !== "function") return undefined;
+  if (!callback || typeof callback !== "function") return undefined;
   const retained = retainCallback<In>(callback);
   return Object.assign(
     (input: In) => {
@@ -97,7 +97,7 @@ export function retainGetProcessorRuntimeState(
   getRuntimeState: GetProcessorRuntimeState | undefined,
 ): (GetProcessorRuntimeState & Disposable) | undefined {
   const retained = retainPulledCall<void, ProcessorRuntimeState>(getRuntimeState);
-  if (retained === undefined) return undefined;
+  if (!retained) return undefined;
   return Object.assign(() => retained(undefined), {
     [Symbol.dispose]: () => retained[Symbol.dispose](),
   });
@@ -158,7 +158,7 @@ export function retainProcessorWakeResponse(args: {
         firstError ??= error;
       }
     }
-    if (firstError !== undefined) throw firstError;
+    if (firstError) throw firstError;
   };
 
   let ownershipTransferred = false;
@@ -183,7 +183,7 @@ export function retainProcessorWakeResponse(args: {
   } finally {
     if (!ownershipTransferred) {
       try {
-        if (processEventBatch === undefined) releaseRetained();
+        if (!processEventBatch) releaseRetained();
         else processEventBatch[Symbol.dispose]();
       } finally {
         releaseOriginal();

@@ -28,13 +28,13 @@ const pathForestCache = new WeakMap<Record<string, AgentRecord>, AgentPathTreeNo
  * peers, so the model does not assume that all agents live below `/agents`. */
 export function buildAgentPathForest(records: Record<string, AgentRecord>): AgentPathTreeNode[] {
   const cached = pathForestCache.get(records);
-  if (cached !== undefined) return cached;
+  if (cached) return cached;
 
   const nodes = new Map<string, AgentPathTreeNode>();
   for (const agent of Object.values(records)) {
     for (const path of absolutePathPrefixes(agent.path)) {
       let node = nodes.get(path);
-      if (node === undefined) {
+      if (!node) {
         node = emptyPathNode(path);
         nodes.set(path, node);
       }
@@ -45,7 +45,7 @@ export function buildAgentPathForest(records: Record<string, AgentRecord>): Agen
   const roots: AgentPathTreeNode[] = [];
   for (const node of nodes.values()) {
     const parent = nodes.get(parentPath(node.path));
-    if (parent === undefined) roots.push(node);
+    if (!parent) roots.push(node);
     else parent.children.push(node);
   }
 
@@ -61,7 +61,7 @@ export function agentPathNodeRuntime(
   node: Pick<AgentPathTreeNode, "agent" | "aggregateRuntime">,
   liveRuntime?: AgentRuntime,
 ): AgentRuntime {
-  if (node.agent === undefined || liveRuntime === undefined) return node.aggregateRuntime;
+  if (!node.agent || !liveRuntime) return node.aggregateRuntime;
   return addRuntime(
     subtractRuntime(node.aggregateRuntime, node.agent.runtime ?? ZERO_AGENT_RUNTIME),
     liveRuntime,
@@ -95,9 +95,8 @@ function finalizePathNode(node: AgentPathTreeNode): void {
   const waiting = emptyWaitingAggregate();
   addWaiting(waiting, node.agent?.summary.waitingFor);
   let lastWorkAt = node.agent?.timestamps.lastWorkAt ?? "";
-  let agentCount = node.agent === undefined ? 0 : 1;
-  let activeCount =
-    node.agent === undefined || deriveAgentDisplayState(node.agent.runtime) === "idle" ? 0 : 1;
+  let agentCount = !node.agent ? 0 : 1;
+  let activeCount = !node.agent || deriveAgentDisplayState(node.agent.runtime) === "idle" ? 0 : 1;
 
   for (const child of node.children) {
     finalizePathNode(child);

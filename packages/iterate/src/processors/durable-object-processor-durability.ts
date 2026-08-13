@@ -38,7 +38,7 @@ export const processorKeepaliveKey = (name: string) => `stream-processor:${name}
 type StreamKeepaliveRecord = KeepaliveRecord & { streamId: string };
 
 function isStreamKeepaliveRecord(value: unknown): value is StreamKeepaliveRecord {
-  if (typeof value !== "object" || value === null) return false;
+  if (typeof value !== "object" || !value) return false;
   const candidate = value as Partial<StreamKeepaliveRecord>;
   return (
     Number.isInteger(candidate.revivals) &&
@@ -47,7 +47,7 @@ function isStreamKeepaliveRecord(value: unknown): value is StreamKeepaliveRecord
     Number.isFinite(candidate.lastRevivalAt) &&
     typeof candidate.version === "string" &&
     candidate.version.trim().length > 0 &&
-    (candidate.armedAtMs === null ||
+    (!Number.isFinite(candidate.armedAtMs) ||
       (typeof candidate.armedAtMs === "number" && Number.isFinite(candidate.armedAtMs))) &&
     typeof candidate.streamId === "string" &&
     candidate.streamId.trim().length > 0
@@ -109,7 +109,7 @@ export function durableObjectProgressStore<State>(args: {
       // re-running effects that were durably acknowledged. Only an explicit
       // revision-bumping cursor rewind may move acked backward.
       if (
-        persisted !== undefined &&
+        persisted &&
         progress.processing.acknowledgedThroughOffset <
           persisted.processing.acknowledgedThroughOffset &&
         progress.processing.cursorRevision <= persistedRevision
@@ -208,7 +208,7 @@ export function durableObjectRecovery(args: {
 
   const readStoredRecord = (context: string): StreamKeepaliveRecord | undefined => {
     const value = args.storage.kv.get<unknown>(recordKey);
-    if (value === undefined) return undefined;
+    if (!value) return undefined;
     if (!isStreamKeepaliveRecord(value)) {
       discardStoredRecord(`invalid record found while ${context}`);
       return undefined;
@@ -218,7 +218,7 @@ export function durableObjectRecovery(args: {
 
   const requireProgressStreamId = (): string => {
     const streamId = readProgress()?.streamId;
-    if (streamId === undefined || streamId.trim().length === 0) {
+    if (!streamId || streamId.trim().length === 0) {
       throw new Error(
         `stream processor "${args.name}" cannot arm recovery before its stream lifetime is bound`,
       );
@@ -238,7 +238,7 @@ export function durableObjectRecovery(args: {
 
   const readCurrentStoredRecord = (context: string): StreamKeepaliveRecord | undefined => {
     const record = readStoredRecord(context);
-    if (record === undefined) return undefined;
+    if (!record) return undefined;
     const progressStreamId = readProgress()?.streamId;
     if (progressStreamId !== record.streamId) {
       discardStoredRecord(
@@ -290,7 +290,7 @@ export function durableObjectRecovery(args: {
       writeRecord: (record) => {
         assertProgressStreamId(streamId);
         const persisted = readStoredRecord("arming recovery");
-        if (persisted !== undefined && persisted.streamId !== streamId) {
+        if (persisted && persisted.streamId !== streamId) {
           throw new StreamIdMismatchError(
             `stream processor "${args.name}" cannot arm recovery for stream ID ${streamId} ` +
               `over the record for ${persisted.streamId}`,
@@ -309,7 +309,7 @@ export function durableObjectRecovery(args: {
       discardFailedRevival: (error, record) => {
         if (!isStreamIdMismatchError(error)) return false;
         const stored = readStoredRecord("discarding a stale revival");
-        if (stored === undefined) {
+        if (!stored) {
           args.armAlarm(null);
         } else if (sameKeepaliveAttempt(stored, streamId, record)) {
           discardStoredRecord(`stream ID ${streamId} was replaced`);
@@ -352,7 +352,7 @@ export function durableObjectRecovery(args: {
       // armed time, so a fire belonging to another slice of the shared DO
       // alarm is a no-op here — route every fire to every runner.
       const record = readCurrentStoredRecord("handling an alarm");
-      if (record === undefined) return;
+      if (!record) return;
       await keepaliveFor(record.streamId).onAlarm();
     },
   };
@@ -361,7 +361,7 @@ export function durableObjectRecovery(args: {
   // fresh incarnation restores — and RE-ISSUES — the persisted alarm desire,
   // so a lost platform alarm heals when the host next opens instead of never.
   const persisted = readCurrentStoredRecord("booting");
-  if (persisted !== undefined && persisted.armedAtMs !== null) {
+  if (persisted && Number.isFinite(persisted.armedAtMs)) {
     args.armAlarm(persisted.armedAtMs);
   }
 

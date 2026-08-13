@@ -17,7 +17,7 @@ type MeasuredJson =
 
 function serialize(value: unknown): string {
   const serialized = JSON.stringify(value);
-  if (serialized === undefined) {
+  if (!serialized) {
     throw new TypeError("Value must be JSON-serializable");
   }
   return serialized;
@@ -28,6 +28,7 @@ function serializedBytes(serialized: string): number {
 }
 
 function primitiveJsonBytes(value: Exclude<JsonPrimitive, string>): number {
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- byte-counting JSON primitives: null (4 bytes), 0 (1), and false (5) are distinct values
   if (value === null) return 4;
   if (typeof value === "boolean") return value ? 4 : 5;
   // Oversized inputs are measured after a JSON stringify/parse round trip, so
@@ -46,7 +47,7 @@ function measureJson(value: JsonValue): MeasuredJson {
   if (typeof value === "string") {
     return { bytes: jsonStringBytes(value), kind: "string", value };
   }
-  if (value === null || typeof value !== "object") {
+  if (!value || typeof value !== "object") {
     return { bytes: primitiveJsonBytes(value), kind: "primitive", value };
   }
   if (Array.isArray(value)) {
@@ -150,7 +151,7 @@ function largestChild(node: Extract<MeasuredJson, { kind: "array" | "object" }>)
   const children = node.kind === "array" ? node.items : node.entries.map((entry) => entry.value);
   let largest: { index: number; value: MeasuredJson } | null = null;
   for (const [index, value] of children.entries()) {
-    if (largest === null || value.bytes > largest.value.bytes) largest = { index, value };
+    if (!largest || value.bytes > largest.value.bytes) largest = { index, value };
   }
   return largest;
 }
@@ -185,7 +186,7 @@ function truncateArray(node: Extract<MeasuredJson, { kind: "array" }>, maxBytes:
     length: node.items.length,
     maxBytes,
   });
-  if (kept === null) {
+  if (!Number.isFinite(kept)) {
     return { bytes: minimumTruncatedBytes, value: MINIMUM_TRUNCATED_VALUE };
   }
   return {
@@ -213,7 +214,7 @@ function truncateObject(node: Extract<MeasuredJson, { kind: "object" }>, maxByte
     length: node.entries.length,
     maxBytes,
   });
-  if (kept === null) {
+  if (!Number.isFinite(kept)) {
     return { bytes: minimumTruncatedBytes, value: MINIMUM_TRUNCATED_VALUE };
   }
   return {
@@ -237,7 +238,7 @@ function truncateMeasuredJson(
 
   const largest = largestChild(node);
   const overflow = node.bytes - maxBytes;
-  if (largest !== null && largest.value.bytes - minimumTruncatedBytes >= overflow) {
+  if (largest && largest.value.bytes - minimumTruncatedBytes >= overflow) {
     const replacement = truncateMeasuredJson(largest.value, largest.value.bytes - overflow);
     if (node.kind === "array") {
       const value = node.items.map((item, index) =>

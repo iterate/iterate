@@ -71,7 +71,7 @@ function humanMessageWebhookPayload(input: {
         chat: { id: input.chatId ?? CHAT_ID, type: input.chatType ?? "private" },
         date: input.date ?? 1_760_000_000,
         text: input.text ?? "hello agent",
-        ...(input.replyToMessage === undefined ? {} : { reply_to_message: input.replyToMessage }),
+        ...(!input.replyToMessage ? {} : { reply_to_message: input.replyToMessage }),
       },
     },
   };
@@ -108,7 +108,7 @@ function makeRouterHarness(substrate?: HarnessSubstrate & { network: MemoryStrea
         ...deps,
         sendTelegramMessage: async (input) => {
           const failure = notificationFailures.shift();
-          if (failure !== undefined) throw failure;
+          if (failure) throw failure;
           telegramCalls.push(input);
         },
         telegramAccessSettingsUrl: async () => SETTINGS_URL,

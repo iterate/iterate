@@ -161,7 +161,7 @@ function significantLines(content: string, path: string) {
     const sourceMap: unknown = JSON.parse(transpiled.sourceMapText);
     if (
       typeof sourceMap !== "object" ||
-      sourceMap === null ||
+      !sourceMap ||
       !("mappings" in sourceMap) ||
       typeof sourceMap.mappings !== "string"
     ) {

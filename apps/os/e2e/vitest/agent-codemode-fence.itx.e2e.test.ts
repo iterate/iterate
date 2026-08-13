@@ -49,7 +49,7 @@ test(
           limit: 100,
         });
         const completion = events.find((event) => event.payload?.executionId === executionId);
-        if (completion === undefined) return false;
+        if (!completion) return false;
         settlement = ScriptExecutionSettlement.parse(completion.payload?.settlement);
         return true;
       },

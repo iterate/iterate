@@ -33,7 +33,7 @@ export const getCloudflareContainerDashboardTarget: (input: {
     if (!principal) throw new Error("Authentication is required to inspect a sandbox container.");
 
     const auth = itxAuthFromPrincipal(principal, {
-      allowDirectoryFallback: context.operatorSession == null,
+      allowDirectoryFallback: !context.operatorSession,
     });
     await auth.ensureCanAccessProject?.(data.projectId);
     auth.assertCanAccessProject(data.projectId);

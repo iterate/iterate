@@ -174,7 +174,7 @@ export const replaceWithInheritedProcess = (input: {
 
   const env = Object.fromEntries(
     Object.entries({ ...process.env, ...input.env }).filter(
-      (entry): entry is [string, string] => entry[1] !== undefined,
+      (entry): entry is [string, string] => !!entry[1],
     ),
   );
   const executablePath = resolveExecutablePath(input.command, env.PATH);
@@ -327,7 +327,7 @@ const disposeRpc = (stub: { [Symbol.dispose]?: () => void } | undefined) => {
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 const headersRecord = (headers: HeadersInit | undefined): Record<string, string> | undefined => {
-  if (headers === undefined) return undefined;
+  if (!headers) return undefined;
   return Object.fromEntries(new Headers(headers).entries());
 };
 

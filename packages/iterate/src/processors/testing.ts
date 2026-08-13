@@ -93,20 +93,19 @@ export class MemoryStream implements ProcessorStream {
       // yields one — `JSON.parse` just types as `any` and cannot say so.
       const detachedInput: StreamEventInput = {
         ...input,
-        ...(input.payload === undefined
+        ...(!input.payload
           ? {}
           : { payload: JSON.parse(JSON.stringify(input.payload)) as Record<string, unknown> }),
-        ...(input.metadata === undefined
+        ...(!input.metadata
           ? {}
           : { metadata: JSON.parse(JSON.stringify(input.metadata)) as Record<string, unknown> }),
       };
-      const existing =
-        detachedInput.idempotencyKey === undefined
-          ? undefined
-          : [...this.events, ...staged].find(
-              (event) => event.idempotencyKey === detachedInput.idempotencyKey,
-            );
-      if (existing !== undefined && detachedInput.idempotencyKey !== undefined) {
+      const existing = !detachedInput.idempotencyKey
+        ? undefined
+        : [...this.events, ...staged].find(
+            (event) => event.idempotencyKey === detachedInput.idempotencyKey,
+          );
+      if (existing && detachedInput.idempotencyKey) {
         // The Stream DO's predicate, SHARED: a same-key append with a
         // DIFFERENT body is REJECTED, not deduplicated. Key-only dedup here
         // once masked exactly that production rejection from a test.
@@ -141,7 +140,7 @@ export class MemoryStream implements ProcessorStream {
   }
 
   at(path?: string): MemoryStream {
-    return path === undefined || this.network === undefined ? this : this.network.get(path);
+    return !path || !this.network ? this : this.network.get(path);
   }
 
   async getEvent(
@@ -159,7 +158,7 @@ export class MemoryStream implements ProcessorStream {
       .filter((event) => event.offset < beforeOffset)
       .filter(
         (event) =>
-          input.eventTypes === undefined ||
+          !input.eventTypes ||
           input.eventTypes.includes("*") ||
           input.eventTypes.includes(event.type),
       )
@@ -195,9 +194,9 @@ export class MemoryStream implements ProcessorStream {
     const deadline = Date.now() + input.timeoutMs;
     while (Date.now() < deadline) {
       for (const event of this.events) {
-        if (input.afterOffset !== undefined && event.offset <= input.afterOffset) continue;
-        if (input.eventTypes !== undefined && !input.eventTypes.includes(event.type)) continue;
-        if (input.predicate !== undefined && !(await input.predicate(event))) continue;
+        if (Number.isFinite(input.afterOffset) && event.offset <= input.afterOffset) continue;
+        if (input.eventTypes && !input.eventTypes.includes(event.type)) continue;
+        if (input.predicate && !(await input.predicate(event))) continue;
         return event;
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -232,7 +231,7 @@ export class MemoryStreamNetwork {
 
   get(path: string): MemoryStream {
     let stream = this.streams.get(path);
-    if (stream === undefined) {
+    if (!stream) {
       stream = new MemoryStream(path);
       stream.network = this;
       stream.now = this.now;
@@ -407,11 +406,9 @@ export function makeProcessorHarness<
   const clock = args.substrate?.clock ?? { now: 1_000_000 };
   const stream = args.substrate?.stream ?? new MemoryStream(path);
   stream.now = () => clock.now;
-  const inheritedDurability =
-    args.substrate === undefined
-      ? undefined
-      : (durabilitySubstrates.get(args.substrate) ??
-        progressSubstrates.get(args.substrate.progress));
+  const inheritedDurability = !args.substrate
+    ? undefined
+    : (durabilitySubstrates.get(args.substrate) ?? progressSubstrates.get(args.substrate.progress));
   const durability = inheritedDurability ?? makeDurabilitySubstrate();
 
   // The substrate stores progress as `<unknown>` so one substrate type serves
@@ -465,7 +462,7 @@ export function makeProcessorHarness<
       stream,
       version: "test-harness",
       armAlarm: (atMs) => {
-        if (atMs === null) void durability.storage.deleteAlarm();
+        if (!Number.isFinite(atMs)) void durability.storage.deleteAlarm();
         else void durability.storage.setAlarm(atMs);
       },
       waitUntil: keepAlive,
@@ -490,12 +487,12 @@ export function makeProcessorHarness<
     // direction is assignable without the assertion pair).
     progress: progress as ProcessorProgressStore<unknown>,
   };
-  if (args.substrate !== undefined) durabilitySubstrates.set(args.substrate, durability);
+  if (args.substrate) durabilitySubstrates.set(args.substrate, durability);
   durabilitySubstrates.set(substrate, durability);
   progressSubstrates.set(substrate.progress, durability);
 
   const startDelivery = () => {
-    if (deliveryAttempt !== undefined) return;
+    if (deliveryAttempt) return;
     const deliveryIncarnation = incarnation;
     const attempt = runner.catchUp();
     deliveryAttempt = attempt;
@@ -521,7 +518,7 @@ export function makeProcessorHarness<
       const releasedSleeps = releaseDueSleeps();
       if (deliveryEnabled) startDelivery();
       await new Promise((resolve) => setTimeout(resolve, 0));
-      if (deliveryError !== undefined) {
+      if (deliveryError) {
         const error = deliveryError;
         deliveryError = undefined;
         throw error;
@@ -536,7 +533,7 @@ export function makeProcessorHarness<
       // is armed, that parked attempt is a stable scenario boundary.
       if (
         quietRounds === 3 &&
-        (!deliveryEnabled || deliveryAttempt === undefined || durability.alarm.at !== null)
+        (!deliveryEnabled || !deliveryAttempt || Number.isFinite(durability.alarm.at))
       ) {
         return;
       }
@@ -561,7 +558,7 @@ export function makeProcessorHarness<
 
   const advanceTime = async (ms: number) => {
     const target = clock.now + ms;
-    while (durability.alarm.at !== null && durability.alarm.at <= target) {
+    while (Number.isFinite(durability.alarm.at) && durability.alarm.at <= target) {
       clock.now = Math.max(clock.now, durability.alarm.at);
       durability.alarm.at = null;
       await recovery.handleAlarm();
@@ -599,7 +596,7 @@ export function makeProcessorHarness<
     // type's contract payload — committed rows are trusted, not re-parsed,
     // exactly like production reads.
     events: ((type?: string) =>
-      type === undefined
+      !type
         ? [...stream.events]
         : stream.events.filter((row) => row.type === type)) as ProcessorHarness<
       Contract,

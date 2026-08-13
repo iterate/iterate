@@ -53,7 +53,7 @@ function ReplSessionResolver() {
     query: (itx) => itx.streams.list(),
   });
   const latest = newestReplSessionPath(streams);
-  if (latest !== null) {
+  if (latest) {
     return (
       <Navigate
         params={{ projectSlug: project.slug, _splat: replSessionSlug(latest) }}

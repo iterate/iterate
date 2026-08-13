@@ -153,7 +153,7 @@ export function defaultModeForStream(streamPath: string): StreamViewMode {
  */
 export function streamViewMode(search: StreamViewSearch, streamPath: string): StreamViewMode {
   const requested = search.mode;
-  if (requested == null) return defaultModeForStream(streamPath);
+  if (!requested) return defaultModeForStream(streamPath);
   const offered = modesForStream(streamPath);
   // Non-agent streams have no mode tabs — only `raw` is valid (implicit).
   if (offered.length === 0) return "raw";
@@ -250,11 +250,10 @@ export function useStreamViewPanels(): {
   const inspectedScriptExecutionId = search.scriptExecution ?? null;
   const focusedProcessorKey = search.processor ?? null;
   const inspectorOpen =
-    inspectedOffset != null ||
-    inspectedLlmRequestOffset != null ||
-    inspectedScriptExecutionId != null;
-  const processorsPanelOpen =
-    !inspectorOpen && (search.panel === true || focusedProcessorKey != null);
+    Number.isFinite(inspectedOffset) ||
+    Number.isFinite(inspectedLlmRequestOffset) ||
+    !!inspectedScriptExecutionId;
+  const processorsPanelOpen = !inspectorOpen && (search.panel === true || !!focusedProcessorKey);
   // The agent details sheet exists only on agent chat pages and the Events
   // sheet only on full-panel layouts, so the two can never render together;
   // `agent` therefore must not suppress `events` (a stray ?agent=true on a

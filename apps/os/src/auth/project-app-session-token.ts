@@ -43,7 +43,7 @@ export function localProjectAppSessionValidator(secret: string) {
     token: string;
   }): Promise<{ expiresAt: number; userId: string } | null> => {
     const claims = await verifyProjectAppSessionToken(input.token, secret);
-    if (claims === null) return null;
+    if (!claims) return null;
     if (claims.audience !== input.audience || claims.projectId !== input.projectId) return null;
     return { expiresAt: claims.exp, userId: claims.userId };
   };
@@ -74,7 +74,7 @@ export async function verifyProjectAppSessionToken(
   secret: string,
 ): Promise<ProjectAppSessionClaims | null> {
   const [headerSegment, payloadSegment, signatureSegment, extra] = token.split(".");
-  if (!headerSegment || !payloadSegment || !signatureSegment || extra !== undefined) return null;
+  if (!headerSegment || !payloadSegment || !signatureSegment || extra) return null;
 
   const signature = decodeBase64Url(signatureSegment);
   const headerBytes = decodeBase64Url(headerSegment);

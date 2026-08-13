@@ -57,7 +57,7 @@ async function issue(
 
 function tamperGrantSignature(token: string): string {
   const [payload, signature, extra] = token.split(".");
-  if (payload === undefined || signature === undefined || extra !== undefined || signature === "")
+  if (!payload || !signature || extra || signature === "")
     throw new Error("Expected a signed operator grant.");
   const firstCharacter = signature[0] === "A" ? "B" : "A";
   return `${payload}.${firstCharacter}${signature.slice(1)}`;

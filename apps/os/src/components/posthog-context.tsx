@@ -21,7 +21,7 @@ export function PosthogContextSync() {
   const capturedPageviewHref = useRef<string | null>(null);
 
   useEffect(() => {
-    if (session === null || href !== resolvedHref || (projectRouteMatched && !project)) return;
+    if (!session || href !== resolvedHref || (projectRouteMatched && !project)) return;
     const context = osPosthogContext(session, project ?? null);
     if (capturedPageviewHref.current === href) syncPosthogContext(context);
     else {

@@ -27,7 +27,7 @@ process.on("uncaughtException", (error) => {
 });
 
 const [cmd, wsBase, path, ...rest] = process.argv.slice(2);
-if (cmd === undefined || wsBase === undefined || path === undefined) {
+if (!cmd || !wsBase || !path) {
   console.error("usage: bench-stream.mts <state|rtt|burst|read> <wsBase> <path> [...]");
   process.exit(1);
 }

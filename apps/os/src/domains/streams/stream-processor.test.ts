@@ -248,7 +248,7 @@ describe("StreamProcessor provenance stamping", () => {
       appendTo,
       blockProcessorWhile,
     }: Parameters<StreamProcessor<typeof EchoContract>["processEvent"]>[0]): undefined {
-      if (event === null) return; // event-less caught-up call: no per-event echo
+      if (!event) return; // event-less caught-up call: no per-event echo
       const echo = {
         type: "events.iterate.com/test/echoed" as const,
         idempotencyKey: this.idempotencyKey("echo", event),

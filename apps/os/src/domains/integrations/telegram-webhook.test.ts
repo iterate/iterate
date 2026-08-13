@@ -110,31 +110,29 @@ describe("fetchTelegramWebhook", () => {
       update: updateBody,
     }) => {
       const { fetchWebhook, routed } = setup(claimed === false ? { claimed } : {});
-      const request =
-        path !== undefined
-          ? new Request(`https://os.example.test${path}`, { body: "{}", method: "POST" })
-          : await webhookRequest({
-              rawBody,
-              secretToken:
-                secretTokenForBotId === undefined
-                  ? secretToken
-                  : await telegramWebhookSecretToken({
-                      botId: secretTokenForBotId,
-                      keyMaterial: SECRET_ENCRYPTION_KEY,
-                    }),
-              update: updateBody,
-            });
+      const request = path
+        ? new Request(`https://os.example.test${path}`, { body: "{}", method: "POST" })
+        : await webhookRequest({
+            rawBody,
+            secretToken: !secretTokenForBotId
+              ? secretToken
+              : await telegramWebhookSecretToken({
+                  botId: secretTokenForBotId,
+                  keyMaterial: SECRET_ENCRYPTION_KEY,
+                }),
+            update: updateBody,
+          });
 
       const response = await fetchWebhook({ config: config(), request });
 
-      if (expectedStatus === null) {
+      if (!Number.isFinite(expectedStatus)) {
         expect(response).toBeNull();
       } else {
         expect(response?.status).toBe(expectedStatus);
         expect(await response?.json()).toEqual(expectedBody);
       }
       expect(routed).toHaveLength(expectedRoutedCount);
-      if (expectedRouted !== undefined) {
+      if (expectedRouted) {
         expect(routed[0]).toMatchObject(expectedRouted);
       }
     },
@@ -190,15 +188,14 @@ async function webhookRequest(input: {
   secretToken?: string | null;
   update?: Record<string, unknown>;
 }) {
-  const secretToken =
-    input.secretToken === undefined
-      ? await telegramWebhookSecretToken({ botId: BOT_ID, keyMaterial: SECRET_ENCRYPTION_KEY })
-      : input.secretToken;
+  const secretToken = !input.secretToken
+    ? await telegramWebhookSecretToken({ botId: BOT_ID, keyMaterial: SECRET_ENCRYPTION_KEY })
+    : input.secretToken;
   return new Request(`https://os.example.test/api/integrations/telegram/webhook/${BOT_ID}`, {
     body: input.rawBody ?? JSON.stringify(input.update),
     headers: {
       "content-type": "application/json",
-      ...(secretToken === null ? {} : { "x-telegram-bot-api-secret-token": secretToken }),
+      ...(!secretToken ? {} : { "x-telegram-bot-api-secret-token": secretToken }),
     },
     method: "POST",
   });

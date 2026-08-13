@@ -37,7 +37,7 @@ export function resolveTestLoginRequest(input: {
   }
 
   const rawProject = input.url.searchParams.get("project");
-  if (rawProject !== null && (rawProject.length > 50 || !PROJECT_SLUG_PATTERN.test(rawProject))) {
+  if (rawProject && (rawProject.length > 50 || !PROJECT_SLUG_PATTERN.test(rawProject))) {
     return {
       ok: false,
       status: 400,
@@ -49,7 +49,7 @@ export function resolveTestLoginRequest(input: {
   const projectSlug = rawProject || slugify(email.split("@")[0]!.replace(/\+test$/, ""));
 
   const rawReturnTo = input.url.searchParams.get("return_to");
-  if (rawReturnTo === null || rawReturnTo === "") {
+  if (!rawReturnTo || rawReturnTo === "") {
     return { ok: true, email, projectSlug, returnTo: "/" };
   }
   // Same-origin paths: parse-and-verify like login.tsx's safeRedirectPath

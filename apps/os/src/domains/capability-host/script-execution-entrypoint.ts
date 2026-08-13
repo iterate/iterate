@@ -137,6 +137,7 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
     const serializedResult = serializeScriptResult(result);
     return {
       status: "succeeded",
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- a script can return null/false/0; only undefined means "no result"
       ...(serializedResult === undefined ? {} : { result: serializedResult }),
     };
   }
@@ -159,13 +160,12 @@ export function scriptWorkerRef(input: {
   // symbols and the script still closes over them.
   const scriptModule = input.emittedJs;
   const preambleJs = input.preambleJs;
-  const fnSource =
-    scriptModule !== undefined
-      ? `scriptModule`
-      : preambleJs === undefined || preambleJs === ""
-        ? input.code
-        : `await (async () => {\n${preambleJs}\nreturn (${input.code});\n})()`;
-  const importLine = scriptModule === undefined ? "" : `import scriptModule from "./script.js";`;
+  const fnSource = scriptModule
+    ? `scriptModule`
+    : !preambleJs || preambleJs === ""
+      ? input.code
+      : `await (async () => {\n${preambleJs}\nreturn (${input.code});\n})()`;
+  const importLine = !scriptModule ? "" : `import scriptModule from "./script.js";`;
   const sandboxExecTimeoutSource = sandboxExecTimeout.toString();
   const source = `
     import { WorkerEntrypoint } from "cloudflare:workers";
@@ -283,10 +283,9 @@ export function scriptWorkerRef(input: {
         bundle: false,
         entryPoint: "main.js",
         files: {
-          files:
-            scriptModule === undefined
-              ? { "main.js": source }
-              : { "main.js": source, "script.js": scriptModule },
+          files: !scriptModule
+            ? { "main.js": source }
+            : { "main.js": source, "script.js": scriptModule },
           type: "inline",
         },
       },

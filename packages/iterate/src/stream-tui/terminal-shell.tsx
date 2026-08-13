@@ -27,7 +27,7 @@ export class TerminalErrorBoundary extends Component<
   };
 
   render() {
-    if (this.state.message != null) {
+    if (this.state.message) {
       return <TerminalFailure message={this.state.message} onRetry={this.retry} />;
     }
     return this.props.children;

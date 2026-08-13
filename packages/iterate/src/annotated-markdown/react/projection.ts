@@ -46,7 +46,7 @@ export function buildProjection(root: HTMLElement): SourceProjection {
     // may split it (React text updates), so walk all of them in order.
     let sourceCursor = start;
     const walker = span.ownerDocument.createTreeWalker(span, NodeFilter.SHOW_TEXT);
-    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       // SHOW_TEXT guarantees every visited node is a Text node; the walker's
       // return type is just the general Node.
       const text = node as Text;
@@ -71,7 +71,7 @@ export function buildProjection(root: HTMLElement): SourceProjection {
   const pointToSource = (node: Node, offset: number, affinity: "start" | "end"): number | null => {
     if (node.nodeType === Node.TEXT_NODE) {
       const segment = segmentOf(node);
-      if (segment !== undefined) {
+      if (segment) {
         if (segment.atomic) {
           // Interior offsets have no honest mapping; snap to the unit's edge.
           if (offset <= 0) return segment.sourceStart;
@@ -91,17 +91,17 @@ export function buildProjection(root: HTMLElement): SourceProjection {
       if (affinity === "start") {
         for (let i = offset; i < children.length; i++) {
           const child = children[i];
-          if (child === undefined) break;
+          if (!child) break;
           const first = firstSegmentWithin(child);
-          if (first !== null) return first.sourceStart;
+          if (first) return first.sourceStart;
         }
         return elementPointToSource(node, "start");
       }
       for (let i = offset - 1; i >= 0; i--) {
         const child = children[i];
-        if (child === undefined) break;
+        if (!child) break;
         const last = lastSegmentWithin(child);
-        if (last !== null) return last.sourceEnd;
+        if (last) return last.sourceEnd;
       }
       return elementPointToSource(node, "end");
     }
@@ -121,18 +121,18 @@ export function buildProjection(root: HTMLElement): SourceProjection {
     if (node.nodeType !== Node.ELEMENT_NODE) return null;
     for (let i = segments.length - 1; i >= 0; i--) {
       const segment = segments[i];
-      if (segment !== undefined && node.contains(segment.text)) return segment;
+      if (segment && node.contains(segment.text)) return segment;
     }
     return null;
   };
 
   const elementPointToSource = (node: Node | null, affinity: "start" | "end"): number | null => {
-    if (node === null || !(node instanceof Element)) return null;
+    if (!node || !(node instanceof Element)) return null;
     const scope =
       node.closest(`[${BLOCK_START_ATTR}]`) ?? node.closest("[data-annotated-markdown-root]");
-    if (scope === null) return null;
+    if (!scope) return null;
     const segment = affinity === "start" ? firstSegmentWithin(scope) : lastSegmentWithin(scope);
-    if (segment === null) return null;
+    if (!segment) return null;
     return affinity === "start" ? segment.sourceStart : segment.sourceEnd;
   };
 
@@ -142,7 +142,7 @@ export function buildProjection(root: HTMLElement): SourceProjection {
     domRangeToSource(range) {
       const start = pointToSource(range.startContainer, range.startOffset, "start");
       const end = pointToSource(range.endContainer, range.endOffset, "end");
-      if (start === null || end === null || end <= start) return null;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
       return { start, end };
     },
 
@@ -168,7 +168,7 @@ export function buildProjection(root: HTMLElement): SourceProjection {
     blockRangeOf(node) {
       const element = node instanceof Element ? node : node.parentElement;
       const block = element?.closest(`[${BLOCK_START_ATTR}]`);
-      if (block == null) return null;
+      if (!block) return null;
       const start = Number(block.getAttribute(BLOCK_START_ATTR));
       const end = Number(block.getAttribute(BLOCK_END_ATTR));
       if (!Number.isInteger(start) || !Number.isInteger(end)) return null;
@@ -200,11 +200,11 @@ export function sourceOffsetAtPoint(
     caretRangeFromPoint?: (x: number, y: number) => Range | null;
   };
   const position = caretDocument.caretPositionFromPoint?.(x, y);
-  if (position != null) {
+  if (position) {
     return projection.domPointToSource(position.offsetNode, position.offset, "start");
   }
   const range = caretDocument.caretRangeFromPoint?.(x, y);
-  if (range != null) {
+  if (range) {
     return projection.domPointToSource(range.startContainer, range.startOffset, "start");
   }
   return null;

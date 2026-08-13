@@ -42,7 +42,7 @@ export function TodoClient() {
 
   const add = async (event: FormEvent) => {
     event.preventDefault();
-    if (api === undefined || title.trim().length === 0) return;
+    if (!api || title.trim().length === 0) return;
     const next = title;
     setTitle("");
     await run(() => api.add(next));
@@ -62,7 +62,7 @@ export function TodoClient() {
           type="text"
           value={title}
         />
-        <button disabled={api === undefined || mutating} type="submit">
+        <button disabled={!api || mutating} type="submit">
           Add
         </button>
       </form>
@@ -71,8 +71,8 @@ export function TodoClient() {
           Saving…
         </p>
       )}
-      {error !== undefined && <p role="alert">{error}</p>}
-      {state === undefined ? (
+      {!!error && <p role="alert">{error}</p>}
+      {!state ? (
         <p>Loading…</p>
       ) : todos.length === 0 ? (
         <p>No todos yet.</p>
@@ -86,7 +86,7 @@ export function TodoClient() {
                 disabled={mutating}
                 onChange={(event) => {
                   const done = event.currentTarget.checked;
-                  if (api === undefined) return;
+                  if (!api) return;
                   void run(() => api.setDone(todo.id, done));
                 }}
                 type="checkbox"
@@ -95,7 +95,7 @@ export function TodoClient() {
               <button
                 disabled={mutating}
                 onClick={() => {
-                  if (api === undefined) return;
+                  if (!api) return;
                   void run(() => api.remove(todo.id));
                 }}
                 type="button"
@@ -111,7 +111,7 @@ export function TodoClient() {
 }
 
 const root = document.getElementById("root");
-if (root === null) throw new Error("missing #root");
+if (!root) throw new Error("missing #root");
 createRoot(root).render(
   <CapnWebProvider makeConnection={makeConnection}>
     <TodoClient />

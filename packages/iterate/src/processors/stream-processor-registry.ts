@@ -421,18 +421,18 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
    */
   function reconcileAlarm(): Promise<void> {
     const step = alarmChain.then(async () => {
-      if (platformAlarmAtMs === undefined) {
+      if (typeof platformAlarmAtMs !== "number") {
         const existing = await ctx.storage.getAlarm();
         platformAlarmAtMs = existing;
-        if (existing !== null) alarmSlices.set(INHERITED_ALARM_SLICE, existing);
+        if (typeof existing === "number") alarmSlices.set(INHERITED_ALARM_SLICE, existing);
       }
       let earliest: number | null = null;
       for (const atMs of alarmSlices.values()) {
-        if (earliest === null || atMs < earliest) earliest = atMs;
+        if (typeof earliest !== "number" || atMs < earliest) earliest = atMs;
       }
       if (earliest === platformAlarmAtMs) return;
       platformAlarmAtMs = earliest;
-      if (earliest === null) await ctx.storage.deleteAlarm();
+      if (typeof earliest !== "number") await ctx.storage.deleteAlarm();
       else await ctx.storage.setAlarm(earliest);
     });
     alarmChain = step.catch((error: unknown) => {
@@ -443,14 +443,14 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     return step;
   }
   function setAlarmSlice(name: string, atMs: number | null): Promise<void> {
-    if (atMs === null) alarmSlices.delete(name);
+    if (typeof atMs !== "number") alarmSlices.delete(name);
     else alarmSlices.set(name, atMs);
     return reconcileAlarm();
   }
 
   function requireEntry(name: string): RegistryEntry {
     const entry = entries.get(name);
-    if (entry === undefined) {
+    if (!entry) {
       throw new Error(
         `Unknown stream processor name "${name}" on this registry (registered: ${[...entries.keys()].join(", ") || "none"})`,
       );
@@ -479,7 +479,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
    */
   function resolveProcessorName(args: StreamProcessorWakeRequest): string {
     const named = entries.get(args.name);
-    if (named === undefined) {
+    if (!named) {
       throw new Error(
         `wakeStreamProcessor for unknown name "${args.name}" — ` +
           `subscribe by registered name (registered: ${[...entries.keys()].join(", ") || "none"})`,
@@ -571,7 +571,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
             storage: ctx.storage,
             name,
           }),
-          ...(recovery === undefined ? {} : { recovery }),
+          ...(!recovery ? {} : { recovery }),
         },
         // Recovery-less runners still keep the incarnation alive while their
         // registered work runs; they just get no post-eviction alarm (see the
@@ -656,7 +656,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
           if (atMs <= firedAt) alarmSlices.delete(name);
         }
         span.setAttribute("iterate.alarm.kind", "processor_keepalive");
-        if (alarmInfo !== undefined) {
+        if (alarmInfo) {
           span.setAttribute("iterate.alarm.is_retry", alarmInfo.isRetry);
           span.setAttribute("iterate.alarm.retry_count", alarmInfo.retryCount);
         }

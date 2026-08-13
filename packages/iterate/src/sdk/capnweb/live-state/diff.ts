@@ -35,12 +35,13 @@ export function diff(prev: unknown, next: unknown): LiveStatePatch | undefined {
   const fields: [string, LiveStatePatch][] = [];
   const drop: string[] = [];
   for (const key of Object.keys(next)) {
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- falsy field values (0, '', false, null) are kept; only undefined reads as removed
     if (next[key] === undefined) {
       if (Object.hasOwn(prev, key)) drop.push(key); // a key set to `undefined` reads as removed
       continue;
     }
     const childPatch = diff(Object.hasOwn(prev, key) ? prev[key] : undefined, next[key]);
-    if (childPatch !== undefined) fields.push([key, childPatch]);
+    if (childPatch) fields.push([key, childPatch]);
   }
   for (const key of Object.keys(prev)) {
     if (!Object.hasOwn(next, key)) drop.push(key);
@@ -95,7 +96,7 @@ export function applyPatch<State>(prev: State, patch: LiveStatePatch): State {
  * `diff` docstring) — they are leaves, replaced wholesale.
  */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null) return false;
+  if (typeof value !== "object" || !value) return false;
   const proto: unknown = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
+  return proto === Object.prototype || !proto;
 }

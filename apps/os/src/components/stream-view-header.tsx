@@ -104,10 +104,10 @@ export function StreamViewHeader({
   // every browser tab that ever visited.
   const connectedPresence = presence.filter((entry) => entry.connected);
   const toolsOpen = search.filter === true;
-  const showFilterToggle = eventsToggle == null && caps.filters;
+  const showFilterToggle = !eventsToggle && caps.filters;
   const filtersActive = feedFiltersActive(search, streamPath);
-  const showOverflowMenu = agentPause != null || isMobile;
-  const latencyLabel = metrics.transportRttMs === null ? "—" : `${metrics.transportRttMs.last}ms`;
+  const showOverflowMenu = !!agentPause || isMobile;
+  const latencyLabel = !metrics.transportRttMs ? "—" : `${metrics.transportRttMs.last}ms`;
 
   return (
     <header className="flex min-w-0 shrink-0 items-center gap-2 overflow-x-hidden px-3 pb-1 pt-2.5 sm:gap-3 sm:px-4">
@@ -152,7 +152,7 @@ export function StreamViewHeader({
           </div>
         )}
         {isMobile ? null : <StreamStateButton metrics={metrics} />}
-        {eventsToggle != null ? (
+        {eventsToggle ? (
           <Button
             variant="outline"
             size="sm"
@@ -163,7 +163,7 @@ export function StreamViewHeader({
           >
             <HistoryIcon className="size-3.5" />
             <span className="hidden sm:inline">Events</span>
-            {eventsToggle.eventCount == null ? null : (
+            {!Number.isFinite(eventsToggle.eventCount) ? null : (
               <span className="font-mono text-[10px] text-muted-foreground">
                 {eventsToggle.eventCount.toLocaleString()}
               </span>
@@ -202,7 +202,7 @@ export function StreamViewHeader({
             latencyLabel={latencyLabel}
             metrics={metrics}
             onFocusPresence={focusProcessor}
-            onOpenAgentDetails={agentPause == null ? undefined : openAgentDetails}
+            onOpenAgentDetails={!agentPause ? undefined : openAgentDetails}
             onOpenStreamState={openProcessorsOverview}
             pause={agentPause}
           />
@@ -218,7 +218,7 @@ export function StreamViewHeader({
  */
 export function StreamStateButton({ metrics }: { metrics: BrowserStreamMetricsView }) {
   const { openProcessorsOverview } = useStreamViewPanels();
-  const latencyLabel = metrics.transportRttMs === null ? "—" : `${metrics.transportRttMs.last}ms`;
+  const latencyLabel = !metrics.transportRttMs ? "—" : `${metrics.transportRttMs.last}ms`;
   return (
     <Button
       variant="ghost"
@@ -397,12 +397,12 @@ function StreamOverflowMenu({
             )}
           </>
         ) : null}
-        {pause == null || kill == null ? null : (
+        {!pause || !kill ? null : (
           <>
             {isMobile ? <DropdownMenuSeparator /> : null}
             <DropdownMenuGroup>
               <DropdownMenuLabel>Agent actions</DropdownMenuLabel>
-              {onOpenAgentDetails == null ? null : (
+              {!onOpenAgentDetails ? null : (
                 <DropdownMenuItem closeOnClick onClick={onOpenAgentDetails}>
                   <BotIcon />
                   Agent details

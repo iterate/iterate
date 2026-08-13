@@ -49,7 +49,7 @@ export function toBoardTask(path: string, source: string): BoardTask {
 /** Where the heading-derived title starts in the source, for highlighting. */
 function titleOffset(source: string, title: string): number | null {
   const heading = /^#\s+(.+?)\s*#*\s*$/m.exec(source);
-  if (heading === null || heading[1] !== title) return null;
+  if (!heading || heading[1] !== title) return null;
   return heading.index + heading[0].indexOf(heading[1]!);
 }
 
@@ -71,7 +71,7 @@ export function taskPathInFolder(path: string, folder: string): string {
 
 function taskSummary(source: string): { text: string; from: number } {
   const frontmatter = /^---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(source);
-  const bodyOffset = frontmatter === null ? 0 : frontmatter[0].length;
+  const bodyOffset = !frontmatter ? 0 : frontmatter[0].length;
   const body = source.slice(bodyOffset);
   let lineOffset = 0;
   for (const line of body.split("\n")) {
@@ -100,7 +100,7 @@ export function changeAfterWrite(
   // Recreating a deleted file: it existed at base, so the live copy is a
   // modification again — never a lingering deleted badge.
   if (current === "deleted") return "modified";
-  if (current !== undefined) return current;
+  if (current) return current;
   return known ? "modified" : "added";
 }
 

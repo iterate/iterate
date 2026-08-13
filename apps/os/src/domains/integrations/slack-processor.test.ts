@@ -54,7 +54,7 @@ function humanMessageWebhookPayload(input: {
         text: input.text ?? "<@UBOT> hello agent",
         ts: input.ts ?? "111.222",
         blocks: [{ type: "rich_text", elements: [] }],
-        ...(input.threadTs === undefined ? {} : { thread_ts: input.threadTs }),
+        ...(!input.threadTs ? {} : { thread_ts: input.threadTs }),
       },
     },
   };

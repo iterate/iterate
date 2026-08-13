@@ -88,7 +88,7 @@ function ProjectsIndexPage() {
       const session = await connectIterateSession();
       await session.projects.get(project.slug).create({
         projectId: project.id,
-        ...(organizationSlug === undefined ? {} : { organizationSlug }),
+        ...(!organizationSlug ? {} : { organizationSlug }),
       });
     },
     onSuccess: async () => {

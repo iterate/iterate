@@ -54,7 +54,7 @@ test("workspace lens board demo", async ({ page }) => {
   await waitForAgentReply(docsLink, "a docs review link");
   const threadUrl = page.url();
   const docsHref = await docsLink.getAttribute("href");
-  if (docsHref === null) throw new Error("the agent's reply carried no docs link");
+  if (!docsHref) throw new Error("the agent's reply carried no docs link");
 
   // 2. Open the review link and leave feedback in the document editor.
   await page.goto(docsHref);
@@ -88,7 +88,7 @@ test("workspace lens board demo", async ({ page }) => {
   const boardLink = page.locator('a[href*="docs--lens-demo-live"][href*="/w?"]').first();
   await waitForAgentReply(boardLink, "a task board link");
   const boardHref = await boardLink.getAttribute("href");
-  if (boardHref === null) throw new Error("the agent's reply carried no board link");
+  if (!boardHref) throw new Error("the agent's reply carried no board link");
 
   // 4. The board: a GUEST lens on the agent's workspace — hierarchy
   // breadcrumbs, the agent's uncommitted joke tasks, no Commit control.

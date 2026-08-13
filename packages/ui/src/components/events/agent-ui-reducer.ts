@@ -148,15 +148,16 @@ export function formatAgentUiActivitySummary(
   parts.push(`${summary.requestCount} request${summary.requestCount === 1 ? "" : "s"}`);
   if (summary.outcome === "interrupted") {
     parts.push(
-      summary.interruptedWithPartialResponse && options.interruptedPartialHint != null
+      summary.interruptedWithPartialResponse && options.interruptedPartialHint
         ? `interrupted (${options.interruptedPartialHint})`
         : "interrupted",
     );
   }
   if (summary.outcome === "failed") parts.push("failed");
-  const totalMs =
-    activity.endedAtMs == null ? null : Math.max(0, activity.endedAtMs - activity.startedAtMs);
-  if (totalMs != null && totalMs > 0) parts.push(formatAgentUiDuration(totalMs));
+  const totalMs = !Number.isFinite(activity.endedAtMs)
+    ? null
+    : Math.max(0, activity.endedAtMs - activity.startedAtMs);
+  if (Number.isFinite(totalMs) && totalMs > 0) parts.push(formatAgentUiDuration(totalMs));
   return parts.join(" · ");
 }
 
@@ -181,7 +182,7 @@ export function groupActivityRounds(steps: readonly AgentUiStep[]) {
     const current = rounds.at(-1);
     if (step.kind === "llm") {
       rounds.push({ llm: step, code: null });
-    } else if (current !== undefined && current.code === null) {
+    } else if (current && !current.code) {
       current.code = step;
     } else {
       rounds.push({ llm: null, code: step });
@@ -199,7 +200,7 @@ export function formatAgentUiDuration(durationMs: number): string {
 
 export function isAgentRuntimeVisiblyActive(runtime: AgentRuntime | undefined): boolean {
   return (
-    runtime !== undefined &&
+    !!runtime &&
     (runtime.triggers.runnable > 0 ||
       runtime.llmRequests.scheduled > 0 ||
       runtime.llmRequests.requested > 0 ||
@@ -213,7 +214,7 @@ export function isAgentUiActivityWorking(
   runtime?: AgentRuntime,
 ): boolean {
   return (
-    activity != null &&
+    !!activity &&
     (isAgentRuntimeVisiblyActive(runtime) ||
       activity.steps.some((step) => step.status === "running"))
   );
@@ -378,7 +379,7 @@ const AgentUiLlmStepSchema = z
     errorMessage: z.string().optional(),
     startedAtMs: z.number().finite(),
   })
-  .refine((step) => step.cancelReason == null || step.outcome === "cancelled", {
+  .refine((step) => !step.cancelReason || step.outcome === "cancelled", {
     message: "cancelReason requires a cancelled outcome",
     path: ["cancelReason"],
   }) satisfies z.ZodType<AgentUiLlmStep>;
@@ -637,13 +638,13 @@ function reduceAgentUiEvent(
     case AGENT_CONTEXT_ADDED: {
       const role = readString(event, "role");
       const text = readString(event, "content");
-      if (text == null) return state;
+      if (!text) return state;
       let contextState = state;
       const compaction = readRecord(event, "compaction");
       if (
         typeof compaction?.replacesHistoryThrough === "number" &&
         compaction.replacesHistoryThrough < event.offset &&
-        state.tokenUsage.lastReport !== null
+        state.tokenUsage.lastReport
       ) {
         contextState = {
           ...state,
@@ -653,7 +654,7 @@ function reduceAgentUiEvent(
 
       if (role === "assistant") {
         const llmRequestOffset = readLlmRequestOffset(event);
-        if (llmRequestOffset == null) return contextState;
+        if (!Number.isFinite(llmRequestOffset)) return contextState;
         return updateLlmStep(contextState, llmRequestOffset, (step) =>
           step.status === "running"
             ? { ...step, responseText: text, assistantEventOffset: event.offset }
@@ -700,7 +701,7 @@ function reduceAgentUiEvent(
           text: rendersFromRawEvent ? "" : text,
           ...(files.length === 0 ? {} : { files }),
           timestampMs,
-          via: { service: actorType, ...(sender === undefined ? {} : { sender }) },
+          via: { service: actorType, ...(!sender ? {} : { sender }) },
         });
       }
       return contextState;
@@ -708,15 +709,14 @@ function reduceAgentUiEvent(
 
     case "events.iterate.com/agents/web-message-sent": {
       const text = readString(event, "message");
-      if (text == null) return state;
+      if (!text) return state;
       // An llmRequestOffset marks the message as EXTRACTED from that request's
       // response (a userland response interpreter) — the raw response text is
       // now redundant in pretty rendering.
       const extractedFromRequest = readLlmRequestOffset(event);
-      const marked =
-        extractedFromRequest == null
-          ? state
-          : updateLlmStep(state, extractedFromRequest, (step) => ({ ...step, interpreted: true }));
+      const marked = !Number.isFinite(extractedFromRequest)
+        ? state
+        : updateLlmStep(state, extractedFromRequest, (step) => ({ ...step, interpreted: true }));
       const files = readFileAttachments(event);
       const item: AgentUiMessageItem = {
         kind: "assistant",
@@ -732,7 +732,7 @@ function reduceAgentUiEvent(
       const base =
         state.queuedUserMessages.length === 0 ? state : settleLive(state, timestampMs, items);
       const ready =
-        base.live === null &&
+        !base.live &&
         (base.deferredAssistantMessages.length > 0 || base.queuedUserMessages.length > 0)
           ? flushDeferredMessages(base, items)
           : base;
@@ -743,7 +743,7 @@ function reduceAgentUiEvent(
         id: `llm-${event.offset}`,
         llmRequestOffset: event.offset,
         status: "running",
-        ...(model == null ? {} : { model }),
+        ...(!model ? {} : { model }),
         thinkingText: "",
         responseText: "",
         startedAtMs: timestampMs,
@@ -754,7 +754,7 @@ function reduceAgentUiEvent(
     case AGENT_LLM_RESPONSE_CHUNK: {
       const llmRequestOffset = readLlmRequestOffset(event);
       const chunk = readPayloadRecord(event)?.chunk;
-      if (llmRequestOffset == null) return state;
+      if (!Number.isFinite(llmRequestOffset)) return state;
       const { responseDelta, thinkingDelta } = extractCloudflareChunkDeltas(chunk);
       if (responseDelta === "" && thinkingDelta === "") return state;
       return updateLlmStep(state, llmRequestOffset, (step) => ({
@@ -771,7 +771,7 @@ function reduceAgentUiEvent(
       // pointing back at the requested event's offset via `requestOffset`.
       const payload = readPayloadRecord(event);
       const requestOffset = payload?.requestOffset;
-      if (payload == null || typeof requestOffset !== "number") return state;
+      if (!payload || typeof requestOffset !== "number") return state;
       const result = isRecord(payload.result) ? payload.result : undefined;
       const status = typeof result?.status === "string" ? result.status : "succeeded";
       const usage = readUsageTokens(result?.usage);
@@ -784,24 +784,23 @@ function reduceAgentUiEvent(
       // empty responseText — the settled fact fills it in.
       const partialText = typeof result?.partialText === "string" ? result.partialText : null;
       return updateLlmStep(state, requestOffset, (step) =>
-        step.outcome != null
+        step.outcome
           ? step
           : {
               ...step,
               status: "done",
               outcome:
                 status === "succeeded" ? "completed" : status === "failed" ? "failed" : "cancelled",
-              ...(partialText !== null &&
-                step.responseText === "" && { responseText: partialText }),
+              ...(!!partialText && step.responseText === "" && { responseText: partialText }),
               ...(typeof payload.durationMs === "number"
                 ? { durationMs: payload.durationMs }
                 : status === "cancelled"
                   ? { durationMs: Math.max(0, timestampMs - step.startedAtMs) }
                   : {}),
-              ...(usage.input == null ? {} : { inputTokens: usage.input }),
-              ...(usage.output == null ? {} : { outputTokens: usage.output }),
-              ...(errorMessage == null ? {} : { errorMessage }),
-              ...(cancelReason == null ? {} : { cancelReason }),
+              ...(!Number.isFinite(usage.input) ? {} : { inputTokens: usage.input }),
+              ...(!Number.isFinite(usage.output) ? {} : { outputTokens: usage.output }),
+              ...(!errorMessage ? {} : { errorMessage }),
+              ...(!cancelReason ? {} : { cancelReason }),
             },
       );
     }
@@ -812,8 +811,8 @@ function reduceAgentUiEvent(
       const code = typeof payload?.code === "string" ? payload.code : null;
       const expiresAtMs = payload?.expiresAt;
       if (
-        executionId == null ||
-        code == null ||
+        !executionId ||
+        !code ||
         typeof expiresAtMs !== "number" ||
         !Number.isSafeInteger(expiresAtMs) ||
         expiresAtMs <= 0
@@ -824,10 +823,9 @@ function reduceAgentUiEvent(
       // marks that response's llm step interpreted: the Script tab now carries
       // the code, so pretty rendering can fold the raw response away.
       const extractedFromAssistantOffset = /^agent-output:(\d+)$/.exec(executionId);
-      const interpretedState =
-        extractedFromAssistantOffset === null
-          ? state
-          : markLlmStepInterpretedByAssistantOffset(state, Number(extractedFromAssistantOffset[1]));
+      const interpretedState = !extractedFromAssistantOffset
+        ? state
+        : markLlmStepInterpretedByAssistantOffset(state, Number(extractedFromAssistantOffset[1]));
       const live = ensureLive(interpretedState, event.offset, timestampMs);
       const step: AgentUiCodeStep = {
         kind: "code",
@@ -839,20 +837,20 @@ function reduceAgentUiEvent(
         expiresAtMs,
         // Inherit the stream's summary status from birth, so live headers and
         // inferred (deadline/idle) closes carry it — not only durable settles.
-        ...(state.summaryActivity == null ? {} : { activitySummary: state.summaryActivity }),
+        ...(!state.summaryActivity ? {} : { activitySummary: state.summaryActivity }),
       };
       return { ...interpretedState, live: { ...live, steps: [...live.steps, step] } };
     }
 
     case SCRIPT_EXECUTION_COMPLETED: {
       const payload = readPayloadRecord(event);
-      if (payload == null) return state;
+      if (!payload) return state;
       const executionId = typeof payload.executionId === "string" ? payload.executionId : null;
       // Completion identity is mandatory in the current contract. Guessing
       // the last running step can stamp one script's result onto another.
-      if (executionId == null) return state;
+      if (!executionId) return state;
       const outcome = readCodeOutcome(payload);
-      if (state.live == null) {
+      if (!state.live) {
         return correctProvisionalCodeStep(state, executionId, outcome, timestampMs, items);
       }
       const steps = [...state.live.steps];
@@ -860,14 +858,14 @@ function reduceAgentUiEvent(
         (step) => step.kind === "code" && step.executionId === executionId,
       );
       const step = steps[index];
-      if (step == null || step.kind !== "code") {
+      if (!step || step.kind !== "code") {
         return correctProvisionalCodeStep(state, executionId, outcome, timestampMs, items);
       }
       steps[index] = {
         ...applyDurableCodeOutcome(step, outcome, timestampMs),
         // The stream's summary status as of this round — inherited from an
         // earlier round when this one's script didn't update it.
-        ...(state.summaryActivity == null ? {} : { activitySummary: state.summaryActivity }),
+        ...(!state.summaryActivity ? {} : { activitySummary: state.summaryActivity }),
       };
       const next = { ...state, live: { ...state.live, steps } };
       // A visible reply the script sent was deferred while its step ran (see
@@ -887,11 +885,11 @@ function reduceAgentUiEvent(
 
     case AGENT_SUMMARY_UPDATED: {
       const activity = readString(event, "activity");
-      if (activity == null || activity === "") return state;
+      if (!activity || activity === "") return state;
       // Summaries are usually appended by the running script itself, so the
       // running code step picks the new text up immediately (live rounds show
       // it before the settle stamp lands).
-      if (state.live != null) {
+      if (state.live) {
         const steps = state.live.steps.map((step) =>
           step.kind === "code" && step.status === "running"
             ? { ...step, activitySummary: activity }
@@ -907,7 +905,12 @@ function reduceAgentUiEvent(
       const maxContextTokens = readNumber(event, "maxContextTokens");
       const inputTokens = readNumber(event, "inputTokens");
       const outputTokens = readNumber(event, "outputTokens");
-      if (model == null || maxContextTokens == null || inputTokens == null || outputTokens == null)
+      if (
+        !model ||
+        !Number.isFinite(maxContextTokens) ||
+        !Number.isFinite(inputTokens) ||
+        !Number.isFinite(outputTokens)
+      )
         return state;
       const usage = state.tokenUsage;
       return {
@@ -926,7 +929,7 @@ function reduceAgentUiEvent(
 
     case SLACK_WEBHOOK_RECEIVED: {
       const message = readSlackWebhookMessage(event);
-      if (message == null) return state;
+      if (!message) return state;
       const item: AgentUiMessageItem = {
         kind: message.kind,
         id: `slack-${event.offset}`,
@@ -934,7 +937,7 @@ function reduceAgentUiEvent(
         timestampMs,
         via: {
           service: "slack",
-          ...(message.sender == null ? {} : { sender: message.sender }),
+          ...(!message.sender ? {} : { sender: message.sender }),
         },
       };
       // Our bot's echoes land mid-turn (it posts from inside a code step), so
@@ -949,7 +952,7 @@ function reduceAgentUiEvent(
       // Always a user bubble: Telegram never delivers the bot's own messages
       // through the webhook (the outbound side renders from send-requested).
       const message = readTelegramWebhookMessage(event);
-      if (message == null) return state;
+      if (!message) return state;
       return emitUserMessageItem(state, items, {
         kind: "user",
         id: `telegram-${event.offset}`,
@@ -957,7 +960,7 @@ function reduceAgentUiEvent(
         timestampMs,
         via: {
           service: "telegram",
-          ...(message.sender == null ? {} : { sender: message.sender }),
+          ...(!message.sender ? {} : { sender: message.sender }),
         },
       });
     }
@@ -967,7 +970,7 @@ function reduceAgentUiEvent(
       // processor is obliged to deliver it and Telegram won't echo it back),
       // so it renders as the assistant bubble.
       const text = readString(event, "text");
-      if (text == null || text === "") return state;
+      if (!text || text === "") return state;
       return emitAssistantMessageItem(state, items, {
         kind: "assistant",
         id: `telegram-send-${event.offset}`,
@@ -979,10 +982,10 @@ function reduceAgentUiEvent(
 
     case STREAM_CONNECTION_OPENED: {
       const payload = readPayloadRecord(event);
-      if (payload == null) return state;
+      if (!payload) return state;
       const connectionKey =
         typeof payload.connectionKey === "string" ? payload.connectionKey : null;
-      if (connectionKey == null) return state;
+      if (!connectionKey) return state;
       const connectionKind = payload.kind === "hosted" ? "hosted" : "session";
       const openedBy = isRecord(payload.openedBy) ? payload.openedBy : undefined;
       const announcement = readProcessorAnnouncement(openedBy?.processor);
@@ -1001,8 +1004,8 @@ function reduceAgentUiEvent(
         connectionKind,
         connected: true,
         ...(typeof openedBy?.description === "string" && { description: openedBy.description }),
-        ...(user === undefined ? {} : { user }),
-        ...(announcement == null ? {} : { processor: announcement }),
+        ...(!user ? {} : { user }),
+        ...(!announcement ? {} : { processor: announcement }),
       };
       const existingIndex = state.presence.findIndex(
         (candidate) => candidate.connectionKey === connectionKey,
@@ -1016,7 +1019,7 @@ function reduceAgentUiEvent(
 
     case STREAM_CONNECTION_CLOSED: {
       const connectionKey = readString(event, "connectionKey");
-      if (connectionKey == null) return state;
+      if (!connectionKey) return state;
       return {
         ...state,
         presence: state.presence.map((entry) =>
@@ -1054,15 +1057,15 @@ function reduceAgentUiEvent(
       return emitItem(state, items, {
         kind: "processor-revived",
         id: `processor-revived-${event.offset}`,
-        ...(processorSlug === undefined ? {} : { processorSlug }),
-        ...(revivals === undefined ? {} : { revivals }),
+        ...(!processorSlug ? {} : { processorSlug }),
+        ...(!Number.isFinite(revivals) ? {} : { revivals }),
         timestampMs,
       });
     }
 
     case STREAM_CHILD_STREAM_CREATED: {
       const childPath = readString(event, "childPath");
-      if (childPath == null) return state;
+      if (!childPath) return state;
       return emitItem(state, items, {
         kind: "child-stream-created",
         id: `child-stream-created-${event.offset}`,
@@ -1105,7 +1108,7 @@ function reduceAgentUiEvent(
 
 function ensureLive(state: AgentUiState, offset: number, startedAtMs: number): AgentUiActivity {
   // Multiple simultaneous steps render as one live activity.
-  if (state.live != null) return { ...state.live, status: "running" };
+  if (state.live) return { ...state.live, status: "running" };
   return {
     kind: "activity",
     id: `activity-${offset}`,
@@ -1142,7 +1145,7 @@ const SCRIPT_IDLE_WITHOUT_COMPLETION_ERROR =
  * the uncertain side-effect outcome and close the UI step explicitly.
  */
 function expireOverdueCodeSteps(state: AgentUiState, boundaryAtMs: number): AgentUiState {
-  if (state.live == null) return state;
+  if (!state.live) return state;
   let changed = false;
   const steps = state.live.steps.map((step): AgentUiStep => {
     if (step.kind !== "code" || step.status !== "running" || boundaryAtMs < step.expiresAtMs) {
@@ -1179,7 +1182,7 @@ function settleActivityAtBoundary(
 
 /** Closes the live activity (if any) and emits it as a settled item. */
 function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]): AgentUiState {
-  if (state.live == null) return state;
+  if (!state.live) return state;
   if (state.live.steps.length === 0) return { ...state, live: null };
   const settled: AgentUiActivity = {
     ...state.live,
@@ -1211,7 +1214,7 @@ function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]
     provisionalActivities[settled.id] = settled;
     while (Object.keys(provisionalActivities).length > AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT) {
       const oldestId = Object.keys(provisionalActivities)[0];
-      if (oldestId === undefined) break;
+      if (!oldestId) break;
       delete provisionalActivities[oldestId];
     }
   }
@@ -1252,7 +1255,7 @@ function emitUserMessageItem(
   if (isAgentUiActivityWorking(settled.live, undefined)) {
     return { ...settled, queuedUserMessages: [...settled.queuedUserMessages, item] };
   }
-  const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
+  const flushed = !settled.live ? flushDeferredMessages(settled, items) : settled;
   return emitItem(flushed, items, item);
 }
 
@@ -1273,7 +1276,7 @@ function emitAssistantMessageItem(
       deferredAssistantMessages: [...settled.deferredAssistantMessages, item],
     };
   }
-  const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
+  const flushed = !settled.live ? flushDeferredMessages(settled, items) : settled;
   return emitItem(flushed, items, item);
 }
 
@@ -1292,7 +1295,7 @@ function correctProvisionalCodeStep(
         step.outcomeSource === "inferred",
     ),
   );
-  if (activity == null) return state;
+  if (!activity) return state;
   const steps = activity.steps.map((step): AgentUiStep => {
     if (step.kind !== "code" || step.executionId !== executionId) return step;
     return applyDurableCodeOutcome(step, outcome, completedAtMs);
@@ -1335,11 +1338,11 @@ function markLlmStepInterpretedByAssistantOffset(
   state: AgentUiState,
   assistantEventOffset: number,
 ): AgentUiState {
-  if (state.live == null) return state;
+  if (!state.live) return state;
   const match = state.live.steps.find(
     (step) => step.kind === "llm" && step.assistantEventOffset === assistantEventOffset,
   );
-  if (match == null || match.kind !== "llm") return state;
+  if (!match || match.kind !== "llm") return state;
   return updateLlmStep(state, match.llmRequestOffset, (step) => ({ ...step, interpreted: true }));
 }
 
@@ -1348,12 +1351,12 @@ function updateLlmStep(
   llmRequestOffset: number,
   update: (step: AgentUiLlmStep) => AgentUiLlmStep,
 ): AgentUiState {
-  if (state.live == null) return state;
+  if (!state.live) return state;
   const index = state.live.steps.findIndex(
     (step) => step.kind === "llm" && step.llmRequestOffset === llmRequestOffset,
   );
   const step = state.live.steps[index];
-  if (step == null || step.kind !== "llm") return state;
+  if (!step || step.kind !== "llm") return state;
   const steps = [...state.live.steps];
   steps[index] = update(step);
   return { ...state, live: { ...state.live, steps } };
@@ -1465,12 +1468,12 @@ function readTelegramWebhookMessage(event: Event): { text: string; sender?: stri
     : isRecord(body?.channel_post)
       ? body.channel_post
       : null;
-  if (message == null) return null;
+  if (!message) return null;
   const from = isRecord(message.from) ? message.from : null;
   if (from?.is_bot === true) return null;
   const caption = typeof message.caption === "string" ? message.caption : "";
   const rawText = typeof message.text === "string" ? message.text : caption;
-  const placeholders = TELEGRAM_MEDIA_PLACEHOLDERS.filter(([key]) => message[key] != null)
+  const placeholders = TELEGRAM_MEDIA_PLACEHOLDERS.filter(([key]) => !!message[key])
     .map(([, placeholder]) => placeholder)
     .join(" ");
   const text = [rawText, rawText === caption ? "" : "", placeholders]
@@ -1513,14 +1516,14 @@ function readSlackWebhookMessage(
   const body = readRecord(event, "body");
   if (body?.type !== "event_callback") return null;
   const slackEvent = isRecord(body.event) ? body.event : null;
-  if (slackEvent == null || slackEvent.type !== "message") return null;
+  if (!slackEvent || slackEvent.type !== "message") return null;
   const subtype = typeof slackEvent.subtype === "string" ? slackEvent.subtype : null;
-  if (subtype != null && subtype !== "bot_message" && subtype !== "file_share") return null;
+  if (subtype && subtype !== "bot_message" && subtype !== "file_share") return null;
   const text = typeof slackEvent.text === "string" ? slackEvent.text : "";
   if (text === "") return null;
   const botProfile = isRecord(slackEvent.bot_profile) ? slackEvent.bot_profile : null;
   const fromBot =
-    subtype === "bot_message" || typeof slackEvent.bot_id === "string" || botProfile != null;
+    subtype === "bot_message" || typeof slackEvent.bot_id === "string" || !!botProfile;
   const botName = typeof botProfile?.name === "string" ? botProfile.name : "";
   const username = typeof slackEvent.username === "string" ? slackEvent.username : "";
   const userId = typeof slackEvent.user === "string" ? slackEvent.user : "";
@@ -1558,11 +1561,11 @@ function isOwnSlackBotMessage(
         : null;
 
   let compared = false;
-  if (authBotId != null && messageBotId != null) {
+  if (authBotId && messageBotId) {
     compared = true;
     if (messageBotId === authBotId) return true;
   }
-  if (authUserId != null && messageUserId != null) {
+  if (authUserId && messageUserId) {
     compared = true;
     if (messageUserId === authUserId) return true;
   }
@@ -1595,7 +1598,7 @@ function readFileAttachments(event: Event): AgentUiFileAttachment[] {
     const path = typeof item.path === "string" ? item.path : null;
     const size = typeof item.size === "number" && Number.isFinite(item.size) ? item.size : null;
     const url = typeof item.url === "string" ? item.url : null;
-    if (contentType == null || filename == null || path == null || size == null || url == null) {
+    if (!contentType || !filename || !path || !Number.isFinite(size) || !url) {
       return [];
     }
     return [{ contentType, filename, path, size, url }];
@@ -1609,7 +1612,7 @@ function readString(event: Event, key: string): string | null {
 
 function readOptionalReason(event: Event): { reason: string } | Record<string, never> {
   const reason = readString(event, "reason");
-  return reason == null ? {} : { reason };
+  return !reason ? {} : { reason };
 }
 
 function readNumber(event: Event, key: string): number | null {
@@ -1632,5 +1635,5 @@ function readPayloadRecord(event: Event): Record<string, unknown> | null {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return value != null && typeof value === "object" && !Array.isArray(value);
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }

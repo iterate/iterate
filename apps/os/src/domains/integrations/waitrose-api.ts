@@ -113,7 +113,7 @@ function waitroseClient(options: {
         `waitrose graphql errors: ${body.errors.map((e) => e.message ?? "unknown").join(", ")}`,
       );
     }
-    if (body.data === undefined) throw new Error("waitrose graphql answered no data");
+    if (!body.data) throw new Error("waitrose graphql answered no data");
     return body.data;
   }
 
@@ -197,7 +197,7 @@ function waitroseClient(options: {
       };
       const products = (raw.componentsAndProducts ?? [])
         .map((entry) => entry.searchProduct)
-        .filter((product): product is Record<string, unknown> => product !== undefined)
+        .filter((product): product is Record<string, unknown> => !!product)
         .map((product) => ({
           displayPrice: product.displayPrice as string | undefined,
           lineNumber: String(product.lineNumber),

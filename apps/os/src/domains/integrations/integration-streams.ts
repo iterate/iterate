@@ -107,7 +107,7 @@ export function foldConnectionDirectory(
     if (event.type === "events.iterate.com/integration/connection-claimed") {
       if (typeof payload.connection !== "string") continue;
       const existingClaim = claims.get(key);
-      if (existingClaim === undefined || existingClaim.projectId === payload.projectId) {
+      if (!existingClaim || existingClaim.projectId === payload.projectId) {
         claims.set(key, { connection: payload.connection, projectId: payload.projectId });
       }
     } else if (
@@ -169,13 +169,11 @@ export async function routeIntegrationWebhook(input: {
   slug: string;
 }): Promise<RouteIntegrationWebhookResult> {
   const claim = await lookupConnectionClaim(input.slug, input.externalId);
-  if (claim === null) return { ignored: "external-id-not-claimed", ok: true };
+  if (!claim) return { ignored: "external-id-not-claimed", ok: true };
   const streamPath = integrationConnectionStreamPath(input.slug, claim.connection);
   if (
-    input.routerCreatedEventType !== undefined &&
-    (await latestStreamEventOfTypes(claim.projectId, streamPath, [
-      input.routerCreatedEventType,
-    ])) === null
+    input.routerCreatedEventType &&
+    !(await latestStreamEventOfTypes(claim.projectId, streamPath, [input.routerCreatedEventType]))
   ) {
     throw new Error(
       `${input.slug} router ${claim.connection} for project ${claim.projectId} has not been created`,

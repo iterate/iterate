@@ -130,7 +130,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   #assembleLive(): void {
     const reduced = this.#lastReduced;
-    if (reduced === undefined) return;
+    if (!reduced) return;
     // Reconcile any catalog stream missing an index row (cheap when none are),
     // so newly-created quiet streams show up in ⌘K without waiting for events.
     this.#streamDatabase.seedMissing(reduced.streams);
@@ -201,9 +201,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // this same fetch serves egress requests whose headers user scripts
     // control, and a request wearing the internal header must not egress.
     const liveStateUpgrade = await this.#liveStatePagers.acceptUpgrade(request);
-    if (liveStateUpgrade !== undefined) return liveStateUpgrade;
+    if (liveStateUpgrade) return liveStateUpgrade;
     const taken = takeStreamContext(request);
-    if (this.#egressInterceptor !== undefined) {
+    if (this.#egressInterceptor) {
       // Egress interceptors run before secret substitution. They must never
       // receive raw secret material, only getSecret(...) placeholders.
       return await this.#egressInterceptor.value(taken.request);
@@ -244,7 +244,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     const secretPaths = scanned.problems.length === 0 ? scanned.paths : [];
 
     const rule = matchEgressRule(rules, { method: request.method, url: request.url, secretPaths });
-    if (rule === undefined) return this.#egress(request);
+    if (!rule) return this.#egress(request);
     if (rule.verdict === "deny") {
       return approvalGateResponse({
         code: "egress_denied",
@@ -252,7 +252,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         ruleKey: rule.ruleKey,
       });
     }
-    if (scanned.problems[0] !== undefined) return this.#egress(request);
+    if (scanned.problems[0]) return this.#egress(request);
     return this.#holdForHumanApproval({ request, rule, secretPaths, streamContext });
   }
 
@@ -264,7 +264,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
    * acceptable.)
    */
   async #egressRules(): Promise<readonly EgressRule[]> {
-    if (this.#lastReduced === undefined || Date.now() - this.#egressRulesFreshAt > 5_000) {
+    if (!this.#lastReduced || Date.now() - this.#egressRulesFreshAt > 5_000) {
       await this.#refreshReducedState();
       this.#egressRulesFreshAt = Date.now();
     }
@@ -298,15 +298,14 @@ export class ProjectDurableObject extends DurableObject<Env> {
     const { request, rule } = input;
     // Buffer the body up front: hashing consumes the stream, and the released
     // request is re-built from these bytes after the human answers.
-    const bodyBytes = request.body === null ? null : new Uint8Array(await request.arrayBuffer());
+    const bodyBytes = !request.body ? null : new Uint8Array(await request.arrayBuffer());
     const entry: PendingHoldEntry = {
       bodyBytes,
       held: {
         method: request.method,
         url: request.url,
         headers: Object.fromEntries(request.headers),
-        body:
-          bodyBytes === null ? null : approvalRequestBody(bodyBytes, await sha256Hex(bodyBytes)),
+        body: !bodyBytes ? null : approvalRequestBody(bodyBytes, await sha256Hex(bodyBytes)),
         secretPaths: input.secretPaths,
       },
       redirect: request.redirect,
@@ -320,7 +319,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
     const executionId =
       input.streamContext.kind === "script-execution" ? input.streamContext.executionId : null;
-    if (rule.debounceMs === null || executionId === null) {
+    if (!Number.isFinite(rule.debounceMs) || !executionId) {
       void this.#flushHoldBatch({
         entries: [entry],
         flushAtMs: Date.now(),
@@ -338,7 +337,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // never span rules, so mixed hold policies are structurally impossible.
     const batchKey = `${executionId}\u0000${rule.ruleKey}`;
     let batch = this.#pendingHoldBatches.get(batchKey);
-    if (batch === undefined) {
+    if (!batch) {
       batch = {
         entries: [],
         flushAtMs: 0,
@@ -357,8 +356,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // A capped arrival cannot advance the fire time, so the armed timer
     // stands — without this, a sub-tick drip could keep replacing an
     // already-due timer and starve the flush.
-    if (batch.timer !== null && flushAt <= batch.flushAtMs) return response;
-    if (batch.timer !== null) clearTimeout(batch.timer);
+    if (batch.timer && flushAt <= batch.flushAtMs) return response;
+    if (batch.timer) clearTimeout(batch.timer);
     batch.flushAtMs = flushAt;
     const committed = batch;
     batch.timer = setTimeout(
@@ -447,7 +446,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
                 reason: decision.reason,
                 detail:
                   `A human rejected this request (rule "${rule.ruleKey}")` +
-                  (decision.reason === undefined ? "." : `: ${decision.reason}`),
+                  (!decision.reason ? "." : `: ${decision.reason}`),
                 ruleKey: rule.ruleKey,
               }),
             );
@@ -550,7 +549,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       availabilityBackoffMs = 200;
       cursor = event.offset;
       const decision = await this.#judgeDecision(event, input);
-      if (decision !== null) return decision;
+      if (decision) return decision;
     }
 
     // Expiry sweep: a decision appended in the last chunk's shadow must still
@@ -567,7 +566,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         if (Date.parse(event.createdAt) > input.deadline) return "expired";
         cursor = event.offset;
         const decision = await this.#judgeDecision(event, input);
-        if (decision !== null) return decision;
+        if (decision) return decision;
       }
     }
   }
@@ -669,7 +668,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // Placeholders live in the request envelope: headers, the URL path, or an
     // explicitly marked JSON body.
     const { paths: secretPaths, problems } = await secretReferencePathsFromRequest(request);
-    if (problems[0] !== undefined) return secretErrorResponse(problems[0].code);
+    if (problems[0]) return secretErrorResponse(problems[0].code);
     const platformReferences = platformReferencesFromHeaders(request.headers);
     if (request.headers.has(SECRET_JSON_TEMPLATE_HEADER) && secretPaths.length === 0) {
       return secretErrorResponse("secret_reference_required");
@@ -718,7 +717,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // provenance and the secret audit cannot silently change between transports.
     if (isOpenAiPublicApiRequest(request)) {
       const routed = await this.#egressOpenAiViaAiGateway(request);
-      if (routed !== null) return routed;
+      if (routed) return routed;
       // Fall through when accountId/gateway config is missing (local/dev edge).
     }
 
@@ -737,10 +736,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
     const config = parseConfig(this.env);
     const routing = openAiAiGatewayRoutingFromConfig(config);
-    if (routing === null) return null;
+    if (!routing) return null;
 
     const gateway = this.env.AI?.gateway?.(routing.gatewayId);
-    if (gateway === undefined) return null;
+    if (!gateway) return null;
 
     const endpoint = openAiGatewayBindingEndpoint(request.url);
     if (endpoint.replace(/\?.*$/, "").length === 0) return null;
@@ -774,7 +773,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     if (typeof handler !== "function")
       throw new Error("project egress interceptor must be a function");
     const retained = deepRetainRpcStubs(handler);
-    if (this.#egressInterceptor !== undefined) {
+    if (this.#egressInterceptor) {
       console.warn("project egress interceptor overwritten", { projectId: this.#name.projectId });
       this.#egressInterceptor[Symbol.dispose]();
     }

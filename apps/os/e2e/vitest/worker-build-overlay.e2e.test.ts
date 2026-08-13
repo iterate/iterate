@@ -38,7 +38,7 @@ test(
     };
 
     const healthy = await pollHome(
-      ({ commitOid, response }) => response.status === 200 && commitOid !== null,
+      ({ commitOid, response }) => response.status === 200 && !!commitOid,
       "a successful worker build",
     );
     const homepage = await healthy.response.text();

@@ -79,7 +79,7 @@ test("subscribes once to the project index and navigates root and deep rows", as
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => root.render(Layout === undefined ? null : <Layout />));
+  await act(async () => root.render(!Layout ? null : <Layout />));
 
   expect(mocks.useLiveState).toHaveBeenCalledWith(
     expect.any(Function),
@@ -116,7 +116,7 @@ test("keeps the global namespace inert because it has no project index", async (
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => root.render(Layout === undefined ? null : <Layout />));
+  await act(async () => root.render(!Layout ? null : <Layout />));
 
   expect(mocks.useLiveState).toHaveBeenCalledWith(
     expect.any(Function),

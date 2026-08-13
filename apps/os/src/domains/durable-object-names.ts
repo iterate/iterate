@@ -147,14 +147,14 @@ function stringifyDurableObjectName(
   { projectId, path, props = {} }: DurableObjectAddressInput,
   options?: Partial<AllowNullProjectIdOptions>,
 ) {
-  if (projectId === null && !options?.allowNullProjectId) {
+  if (!projectId && !options?.allowNullProjectId) {
     throw new Error(
       "Durable Object name must have a projectId; pass allowNullProjectId for shared resources.",
     );
   }
 
   const hostPrefix = projectId ?? GLOBAL_DURABLE_OBJECT_HOST;
-  if (projectId !== null) assertProjectId(projectId);
+  if (projectId) assertProjectId(projectId);
 
   const base = `${hostPrefix}${DURABLE_OBJECT_HOST_SUFFIX}${normalizePath(path)}`;
   const query = new URLSearchParams(props).toString();
@@ -184,8 +184,8 @@ function parseDurableObjectName(
 
   const hostPrefix = host.slice(0, -DURABLE_OBJECT_HOST_SUFFIX.length);
   const projectId = hostPrefix === GLOBAL_DURABLE_OBJECT_HOST ? null : hostPrefix;
-  if (projectId !== null) assertProjectId(projectId);
-  if (projectId === null && !options?.allowNullProjectId) {
+  if (projectId) assertProjectId(projectId);
+  if (!projectId && !options?.allowNullProjectId) {
     throw new Error(
       `Durable Object name must have a projectId; pass allowNullProjectId for shared resources. Got global name "${name}".`,
     );

@@ -26,7 +26,7 @@ export function projectRepoSeedFiles(config: {
 }): Array<{ content: string; path: string }> {
   const ref = config.iterateRepoPkgRef;
   const specOverrides = config.iterateRepoPkgSpecOverrides || {};
-  if (ref === undefined && Object.keys(specOverrides).length === 0) {
+  if (!ref && Object.keys(specOverrides).length === 0) {
     return PROJECT_REPO_INITIAL_FILES;
   }
 
@@ -41,14 +41,14 @@ export function projectRepoSeedFiles(config: {
       if (!dependencies) continue;
       for (const [name, spec] of Object.entries(dependencies)) {
         let next = spec;
-        if (ref !== undefined) {
+        if (ref) {
           const pinned = pinIterateRepoPkgRef(spec, ref);
-          if (pinned !== null) {
+          if (pinned) {
             next = pinned;
             refPinned += 1;
           }
         }
-        if (specOverrides[name] !== undefined) {
+        if (specOverrides[name]) {
           next = specOverrides[name];
           unmatchedOverrides.delete(name);
         }
@@ -65,7 +65,7 @@ export function projectRepoSeedFiles(config: {
   // Fail loudly: a knob that matched nothing would make every preview e2e
   // project (or local dev build) quietly test against main's published
   // packages again.
-  if (ref !== undefined && refPinned === 0) {
+  if (ref && refPinned === 0) {
     throw new Error(
       `iterateRepoPkgRef ${JSON.stringify(ref)} pinned nothing — no template package.json carries an iterate/iterate pkg.pr.new spec (see src/pkg-pr-new.ts).`,
     );
@@ -89,7 +89,7 @@ export function templateIterateRepoPkgSpecs(): string[] {
     const manifest = JSON.parse(file.content) as Record<string, Record<string, string> | undefined>;
     for (const field of PACKAGE_DEPENDENCY_FIELDS) {
       for (const spec of Object.values(manifest[field] || {})) {
-        if (parseIterateRepoPkgSpec(spec) !== null) specs.add(spec);
+        if (parseIterateRepoPkgSpec(spec)) specs.add(spec);
       }
     }
   }

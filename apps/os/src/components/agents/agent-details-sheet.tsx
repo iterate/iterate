@@ -51,7 +51,7 @@ export function AgentDetailsSheet({
   const navigate = useNavigate();
   const presentedAgents = useMemo(() => {
     const selected = agents[path];
-    if (selected === undefined || runtimeTransition === undefined) return agents;
+    if (!selected || !runtimeTransition) return agents;
     return {
       ...agents,
       [path]: {
@@ -67,20 +67,20 @@ export function AgentDetailsSheet({
   const forest = useMemo(() => buildAgentForest(presentedAgents), [presentedAgents]);
   const node = useMemo(() => findAgentNode(forest, path), [forest, path]);
   const childRows = useMemo(
-    () => (node === undefined ? [] : flattenVisibleAgentRows(node.children, expandedPaths)),
+    () => (!node ? [] : flattenVisibleAgentRows(node.children, expandedPaths)),
     [expandedPaths, node],
   );
   const visibleChildRows = childRows.slice(0, VISIBLE_CHILD_LIMIT);
-  const descendantCount = node === undefined ? 0 : node.aggregateAgentCount - 1;
+  const descendantCount = !node ? 0 : node.aggregateAgentCount - 1;
 
   return (
     <Sheet open={agentDetailsOpen} onOpenChange={(open) => (open ? null : closeAgentDetails())}>
       <SheetContent side="right" className="w-full gap-0 overflow-y-auto sm:max-w-md">
         <SheetHeader className="sr-only">
-          <SheetTitle>{node === undefined ? "Agent details" : agentTitle(node.agent)}</SheetTitle>
+          <SheetTitle>{!node ? "Agent details" : agentTitle(node.agent)}</SheetTitle>
           <SheetDescription>Agent state, runtime facts, and subagents.</SheetDescription>
         </SheetHeader>
-        {node === undefined ? (
+        {!node ? (
           <p className="p-4 text-sm text-muted-foreground">Waiting for this agent's record…</p>
         ) : (
           // pr-10 keeps the card's pencil/star clear of the sheet's close X.

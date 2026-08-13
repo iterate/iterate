@@ -74,6 +74,7 @@ export function retainedScriptResult(input: {
           : `${settlement.error.slice(0, RETAINED_ERROR_LIMIT)}…`,
     };
   }
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- a script can return null/false/0; only undefined means "no result"
   if (settlement.result === undefined) return null;
   const resultJson = JSON.stringify(settlement.result);
   if (typeof resultJson !== "string") return null;

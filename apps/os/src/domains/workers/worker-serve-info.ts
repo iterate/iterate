@@ -20,7 +20,7 @@ export function withWorkerCommit(response: Response, commitOid: string | undefin
   if (response.status === 101 || response.webSocket) return response;
   const stamped = new Response(response.body, response);
   stamped.headers.delete(WORKER_SERVE_HEADER);
-  if (commitOid !== undefined) stamped.headers.set(WORKER_SERVE_HEADER, commitOid);
+  if (commitOid) stamped.headers.set(WORKER_SERVE_HEADER, commitOid);
   if (Symbol.dispose in response) {
     Object.defineProperty(stamped, Symbol.dispose, {
       value: () => disposeIgnoredRpcResult(response),

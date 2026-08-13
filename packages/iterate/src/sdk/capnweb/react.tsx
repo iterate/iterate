@@ -93,7 +93,7 @@ function useCapnWebConnection<Root extends CapnWebRoot>(
       failureSource.current = makeConnection;
       failures.current = 0;
     }
-    if (!enabled || makeConnection === undefined) {
+    if (!enabled || !makeConnection) {
       failures.current = 0;
       setSnapshot((current) => ({
         enabled,
@@ -194,7 +194,7 @@ type InternalConnectionSnapshot<Root extends CapnWebRoot> = Omit<ConnectionSnaps
 /** The current provider root, undefined while its connection is being replaced. */
 export function useCapnWebRoot<Root extends CapnWebRoot>(): Root | undefined {
   const connection = useContext(CapnWebContext);
-  if (connection === undefined) {
+  if (!connection) {
     throw new Error("useCapnWebRoot must be rendered under <CapnWebProvider>.");
   }
   return connection.root as Root | undefined;
@@ -221,14 +221,14 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
   value: Selected | undefined;
 } {
   const provider = useContext(CapnWebContext);
-  const hasRootOverride = options !== undefined && Object.hasOwn(options, "root");
+  const hasRootOverride = !!options && Object.hasOwn(options, "root");
   const connectionFactory = hasRootOverride ? undefined : options?.makeConnection;
   const owned = useCapnWebConnection(
     connectionFactory,
     !hasRootOverride && (options?.enabled ?? true),
   );
-  const hasConnectionOverride = connectionFactory !== undefined;
-  if (!hasRootOverride && !hasConnectionOverride && provider === undefined) {
+  const hasConnectionOverride = !!connectionFactory;
+  if (!hasRootOverride && !hasConnectionOverride && !provider) {
     throw new Error(
       "useLiveState needs <CapnWebProvider>, a makeConnection option, or an explicit { root } override.",
     );
@@ -274,7 +274,7 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
     let watchdog: ReturnType<typeof setInterval> | undefined;
     const release = () => {
       stale = true;
-      if (handle === undefined) return;
+      if (!handle) return;
       releaseLiveStateSubscription(handle);
       handle = undefined;
     };
@@ -284,7 +284,7 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
       status: "connecting",
       store,
     });
-    if (enabled && root !== undefined) {
+    if (enabled && root) {
       const report = (cause: unknown, shouldRetry = false) => {
         if (disposed || stale) return;
         release();
@@ -328,7 +328,7 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
               store,
             });
             watchdog = setInterval(() => {
-              if (handle === undefined) return;
+              if (!handle) return;
               void Promise.race([
                 Promise.resolve(handle.ping()),
                 new Promise<boolean>((resolve) => {
@@ -372,6 +372,7 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
   const getSelected = () => {
     const state = store.getState();
     if (Object.is(selected.current.state, state)) return selected.current.value;
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- live state may be any JSON value, falsy included; only undefined means "no state yet"
     const value = state === undefined ? undefined : selectorRef.current(state);
     selected.current = { state, value };
     return value;
@@ -396,12 +397,11 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
       providerError ??
       (connectionIsConnecting || !enabled ? undefined : activeSubscriptionState.error),
     refresh: !hasRootOverride && connection?.status === "error" ? connection.reconnect : refresh,
-    status:
-      providerError !== undefined
-        ? "error"
-        : connectionIsConnecting || !enabled
-          ? "connecting"
-          : activeSubscriptionState.status,
+    status: providerError
+      ? "error"
+      : connectionIsConnecting || !enabled
+        ? "connecting"
+        : activeSubscriptionState.status,
     value,
   };
 }

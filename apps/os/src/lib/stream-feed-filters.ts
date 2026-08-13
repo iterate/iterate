@@ -47,7 +47,7 @@ export function feedFiltersActive(search: StreamViewSearch, streamPath: string):
     (caps.search && hasQuery) ||
     (caps.rawEventTypes && (search.types?.length ?? 0) > 0) ||
     (caps.rawComponents && (search.components?.length ?? 0) > 0) ||
-    (caps.rawOffsets && (search.from != null || search.to != null))
+    (caps.rawOffsets && (Number.isFinite(search.from) || Number.isFinite(search.to)))
   );
 }
 
@@ -78,23 +78,23 @@ type SqlFilter = { whereSql: string; params: SqlValue[] };
 export function buildFeedItemsFilter(input: FeedItemsFilterInput): SqlFilter | null {
   const clauses: string[] = [];
   const params: SqlValue[] = [];
-  if (input.eventTypes != null && input.eventTypes.length > 0) {
+  if (input.eventTypes && input.eventTypes.length > 0) {
     clauses.push(`${FEED_TYPE_EXPRESSION} IN (${input.eventTypes.map(() => "?").join(", ")})`);
     params.push(...input.eventTypes);
   }
-  if (input.components != null && input.components.length > 0) {
+  if (input.components && input.components.length > 0) {
     clauses.push(`kind IN (${input.components.map(() => "?").join(", ")})`);
     params.push(...input.components);
   }
-  if (input.searchQuery != null) {
+  if (input.searchQuery) {
     clauses.push(`json(data) LIKE ?`);
     params.push(`%${input.searchQuery}%`);
   }
-  if (input.offsetFrom != null) {
+  if (Number.isFinite(input.offsetFrom)) {
     clauses.push(`last_offset >= ?`);
     params.push(input.offsetFrom);
   }
-  if (input.offsetTo != null) {
+  if (Number.isFinite(input.offsetTo)) {
     clauses.push(`first_offset <= ?`);
     params.push(input.offsetTo);
   }
@@ -120,24 +120,24 @@ export type StreamFeedQueryInput = {
  */
 export function buildStreamFeedWhere(input: StreamFeedQueryInput): SqlFilter {
   const sides: SqlFilter[] = [];
-  if (input.agent != null) {
+  if (input.agent) {
     const clauses = [`kind LIKE '${AGENT_KIND_PREFIX}%'`];
     const params: SqlValue[] = [];
     if (!input.agent.showDebug) {
       clauses.push(`kind NOT IN (${AGENT_DEBUG_KINDS.map(() => "?").join(", ")})`);
       params.push(...AGENT_DEBUG_KINDS);
     }
-    if (input.agent.searchQuery != null && input.agent.searchQuery !== "") {
+    if (input.agent.searchQuery && input.agent.searchQuery !== "") {
       clauses.push(`json(data) LIKE ?`);
       params.push(`%${input.agent.searchQuery}%`);
     }
     sides.push({ whereSql: clauses.join(" AND "), params });
   }
-  if (input.raw != null) {
+  if (input.raw) {
     const rawFilter = buildFeedItemsFilter(input.raw);
     const clauses = [`kind LIKE '${RAW_KIND_PREFIX}%'`];
     const params: SqlValue[] = [];
-    if (rawFilter != null) {
+    if (rawFilter) {
       clauses.push(rawFilter.whereSql);
       params.push(...rawFilter.params);
     }

@@ -34,7 +34,7 @@ export function useLiveEvents(input: {
       const existing = queryClient.getQueryData<StreamEvent[]>(input.queryKey) || [];
       return await itx.streams.get(input.streamPath).openConnection({
         replayAfterOffset: existing.reduce((max, event) => Math.max(max, event.offset), 0),
-        ...(input.eventTypes === undefined ? {} : { eventTypes: input.eventTypes }),
+        ...(!input.eventTypes ? {} : { eventTypes: input.eventTypes }),
         processEventBatch: (batch: StreamEventBatch) => {
           queryClient.setQueryData<StreamEvent[]>(input.queryKey, (current) =>
             mergeEventsByOffset(current || [], batch.events),
@@ -54,7 +54,7 @@ export function useLiveEvents(input: {
     // generic result cannot express the connection half of that union, so
     // retain the runtime invariant explicitly.
     error: error!,
-    isError: error !== undefined,
+    isError: !!error,
     refetch: () => {
       connection.refresh();
       return query.refetch();

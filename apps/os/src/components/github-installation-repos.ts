@@ -29,7 +29,7 @@ export function githubRepoCreateRequest(
  * selections before committing a durable saga request rather than leaving a
  * seeded repo whose GitHub adoption can never complete. */
 export function assertInstallationRepoCanBeCreated(repo: InstallationRepo): void {
-  if (repo.pushedAt === null) {
+  if (!repo.pushedAt) {
     throw new Error(
       `${repo.fullName} has no commits yet. Create its first commit on GitHub first.`,
     );

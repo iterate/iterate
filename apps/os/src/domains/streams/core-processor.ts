@@ -79,12 +79,12 @@ export function assertCoreProcessorCheckpointGrowthFits(args: {
 }): void {
   const batchGrowsRetainedState = args.events.some((event) => {
     const hop = event.source?.copiedFrom?.at(-1);
-    if (hop === undefined) return CHECKPOINT_GROWTH_EVENT_TYPES.has(event.type);
+    if (!hop) return CHECKPOINT_GROWTH_EVENT_TYPES.has(event.type);
     // A copied event's only reducer mutation is its passive inbound record.
     // Updating an existing record touches bounded fields; creating one
     // retains the stamp's path and subscription-name strings, which no other
     // limit has measured yet.
-    return args.before.subscriptions.inbound.bySourcePath[hop.path]?.[hop.name] === undefined;
+    return !args.before.subscriptions.inbound.bySourcePath[hop.path]?.[hop.name];
   });
   if (!batchGrowsRetainedState) {
     return;
@@ -174,7 +174,7 @@ export class StreamCoreProcessor {
     // this stream's own commands. Preserve its historical body verbatim: the
     // receiver-side provenance is what makes it inert, even when its payload
     // no longer matches the current first-hand control-event schema.
-    if (event.source?.copiedFrom !== undefined) return event;
+    if (event.source?.copiedFrom) return event;
     if (!Object.hasOwn(CoreProcessorContract.events, event.type)) return event;
     return CoreProcessorContract.parseEventInput(event as never) as StreamEventInput;
   }
@@ -192,7 +192,7 @@ export class StreamCoreProcessor {
       throw new Error("iterate-internal idempotency keys are platform-authored");
     }
 
-    const isFirstHand = args.event.source?.copiedFrom === undefined;
+    const isFirstHand = !args.event.source?.copiedFrom;
     if (!isFirstHand && args.authority !== "copy") {
       throw new Error("copy source information is platform-authored");
     }
@@ -215,13 +215,13 @@ export class StreamCoreProcessor {
       // names are first-class, so replacing by the generated name works).
       if (
         requestedName?.startsWith("subscription:") === true &&
-        args.state.subscriptions.outbound.byName[requestedName] === undefined
+        !args.state.subscriptions.outbound.byName[requestedName]
       ) {
         throw new Error(
           `subscription name "${requestedName}" uses the generated-name namespace but does not name an existing subscription`,
         );
       }
-      if (event.payload.receiver.action === "webhook-post" && this.#projectId === null) {
+      if (event.payload.receiver.action === "webhook-post" && !this.#projectId) {
         throw new Error("webhook subscriptions require a project-scoped stream");
       }
       if (
@@ -238,7 +238,7 @@ export class StreamCoreProcessor {
       if (
         event.payload.receiver.action !== "facet-processor" &&
         event.payload.receiver.action !== "wake-processor" &&
-        event.payload.receiver.jsonataTransform !== undefined
+        event.payload.receiver.jsonataTransform
       ) {
         compileJsonataExpression(event.payload.receiver.jsonataTransform);
       }
@@ -248,7 +248,7 @@ export class StreamCoreProcessor {
           args.state.subscriptions.outbound.byName,
         ).filter(
           ([name, configured]) =>
-            (event.payload.name === undefined || name !== event.payload.name) &&
+            (!event.payload.name || name !== event.payload.name) &&
             configured.configuration.receiver.action === "copy-to-stream" &&
             configured.configuration.receiver.receivingStreamPath === receivingStreamPath,
         ).length;
@@ -270,7 +270,7 @@ export class StreamCoreProcessor {
         "events.iterate.com/stream/subscription-cursor-set",
       );
       const configured = args.state.subscriptions.outbound.byName[event.payload.name];
-      if (configured === undefined) {
+      if (!configured) {
         throw new Error(`subscription "${event.payload.name}" does not exist`);
       }
       if (
@@ -297,10 +297,10 @@ export class StreamCoreProcessor {
         "events.iterate.com/stream/subscription-delivery-resumed",
       );
       const configured = args.state.subscriptions.outbound.byName[event.payload.name];
-      if (configured === undefined) {
+      if (!configured) {
         throw new Error(`subscription "${event.payload.name}" does not exist`);
       }
-      if (configured.deliveryHalted === undefined) {
+      if (!configured.deliveryHalted) {
         throw new Error(`subscription "${event.payload.name}" is not halted`);
       }
     }
@@ -314,7 +314,7 @@ export class StreamCoreProcessor {
         throw new Error("requested subscription removals must come from a public command");
       }
       const configured = args.state.subscriptions.outbound.byName[event.payload.name];
-      if (configured === undefined) {
+      if (!configured) {
         throw new Error(`subscription "${event.payload.name}" does not exist`);
       }
       // A hosted processor's subscription is part of its birth contract. Its
@@ -356,7 +356,7 @@ export class StreamCoreProcessor {
     }
 
     const state = this.#reduceState(args);
-    return args.event.source?.copiedFrom === undefined &&
+    return !args.event.source?.copiedFrom &&
       CIRCUIT_BREAKER_FREE_CONTROL_EVENT_TYPES.has(args.event.type)
       ? state
       : this.#reduceCircuitBreaker({ event: args.event, state });
@@ -373,16 +373,16 @@ export class StreamCoreProcessor {
     // delivery stamp on the last `source.copiedFrom` hop, so replaying the
     // log reconstructs the fence coordinates and counters identically.
     const hop = args.event.source?.copiedFrom?.at(-1);
-    if (hop !== undefined) {
+    if (hop) {
       const byKey = next.subscriptions.inbound.bySourcePath[hop.path] ?? {};
       const recorded = byKey[hop.name];
       const sameLifetime =
-        recorded !== undefined &&
+        !!recorded &&
         recorded.streamId === hop.streamId &&
         recorded.streamCreatedAt === hop.streamCreatedAt;
       // Append-time validation rejects strictly-older stamps, so a replayed
       // log never regresses a record; skip defensively if one somehow would.
-      if (recorded === undefined || compareSourceStamp(hop, recorded) >= 0) {
+      if (!recorded || compareSourceStamp(hop, recorded) >= 0) {
         const bySourcePath = {
           ...next.subscriptions.inbound.bySourcePath,
           [hop.path]: {
@@ -403,18 +403,14 @@ export class StreamCoreProcessor {
             inbound: {
               ...next.subscriptions.inbound,
               // Only a NEW record can push the registry over its cap.
-              bySourcePath:
-                recorded === undefined ? evictInboundRecordsOverCap(bySourcePath) : bySourcePath,
+              bySourcePath: !recorded ? evictInboundRecordsOverCap(bySourcePath) : bySourcePath,
             },
           },
         };
       }
     }
 
-    if (
-      args.event.type.startsWith("events.iterate.com/stream/") &&
-      args.event.source?.copiedFrom !== undefined
-    ) {
+    if (args.event.type.startsWith("events.iterate.com/stream/") && args.event.source?.copiedFrom) {
       return next;
     }
 
@@ -459,7 +455,7 @@ export class StreamCoreProcessor {
       case "events.iterate.com/stream/configured": {
         const event = parseCoreEvent(args.event, "events.iterate.com/stream/configured");
         const circuitBreaker = event.payload.config.circuitBreaker;
-        if (circuitBreaker === undefined) return next;
+        if (!circuitBreaker) return next;
         return {
           ...next,
           circuitBreaker: {
@@ -524,7 +520,7 @@ export class StreamCoreProcessor {
           "events.iterate.com/stream/subscription-delivery-halted",
         );
         const existing = next.subscriptions.outbound.byName[event.payload.name];
-        if (existing === undefined) {
+        if (!existing) {
           return next;
         }
         return {
@@ -541,7 +537,7 @@ export class StreamCoreProcessor {
                     reason: event.payload.reason,
                     afterOffset: event.payload.afterOffset,
                     attempts: event.payload.attempts,
-                    ...(event.payload.error === undefined ? {} : { error: event.payload.error }),
+                    ...(!event.payload.error ? {} : { error: event.payload.error }),
                   },
                 },
               },
@@ -555,7 +551,7 @@ export class StreamCoreProcessor {
           "events.iterate.com/stream/subscription-delivery-resumed",
         );
         const existing = next.subscriptions.outbound.byName[event.payload.name];
-        if (existing === undefined) {
+        if (!existing) {
           return next;
         }
         const { deliveryHalted: _cleared, ...resumed } = existing;
@@ -579,7 +575,7 @@ export class StreamCoreProcessor {
           "events.iterate.com/stream/subscription-cursor-set",
         );
         const existing = next.subscriptions.outbound.byName[event.payload.name];
-        if (existing === undefined) {
+        if (!existing) {
           return next;
         }
         return {
@@ -604,11 +600,11 @@ export class StreamCoreProcessor {
       }
       case "events.iterate.com/stream/child-stream-created": {
         const event = parseCoreEvent(args.event, "events.iterate.com/stream/child-stream-created");
-        if (next.path === undefined) {
+        if (!next.path) {
           return next;
         }
         const childPath = immediateChildPath(next.path, event.payload.childPath);
-        if (childPath === null || next.childPaths.includes(childPath)) {
+        if (!childPath || next.childPaths.includes(childPath)) {
           return next;
         }
         return { ...next, childPaths: [...next.childPaths, childPath] };
@@ -627,10 +623,9 @@ export class StreamCoreProcessor {
   }): CoreProcessorState {
     const timestampMs = Date.parse(args.event.createdAt);
     if (!Number.isFinite(timestampMs)) return args.state;
-    const elapsedMs =
-      args.state.circuitBreaker.lastRefillAtMs === null
-        ? 0
-        : Math.max(0, timestampMs - args.state.circuitBreaker.lastRefillAtMs);
+    const elapsedMs = !Number.isFinite(args.state.circuitBreaker.lastRefillAtMs)
+      ? 0
+      : Math.max(0, timestampMs - args.state.circuitBreaker.lastRefillAtMs);
     const tokens =
       Math.min(
         args.state.circuitBreaker.burstCapacity,
@@ -644,7 +639,9 @@ export class StreamCoreProcessor {
         availableTokens: tokens,
         lastRefillAtMs: timestampMs,
         trippedAtOffset:
-          tokens < 0 && !args.state.paused && args.state.circuitBreaker.trippedAtOffset === null
+          tokens < 0 &&
+          !args.state.paused &&
+          !Number.isFinite(args.state.circuitBreaker.trippedAtOffset)
             ? args.event.offset
             : args.state.circuitBreaker.trippedAtOffset,
       },
@@ -714,6 +711,6 @@ function immediateChildPath(parentPath: string, announcedPath: string): string |
   const parentPrefix = parentPath === "/" ? "/" : `${parentPath}/`;
   if (!announcedPath.startsWith(parentPrefix)) return null;
   const [firstSegment] = announcedPath.slice(parentPrefix.length).split("/").filter(Boolean);
-  if (firstSegment === undefined) return null;
+  if (!firstSegment) return null;
   return parentPath === "/" ? `/${firstSegment}` : `${parentPath}/${firstSegment}`;
 }

@@ -350,22 +350,17 @@ async function measurePreviewDeployRun<T>(
 }
 
 function previewOperationWasSkipped(result: unknown) {
-  return (
-    typeof result === "object" && result !== null && "skipped" in result && result.skipped === true
-  );
+  return typeof result === "object" && !!result && "skipped" in result && result.skipped === true;
 }
 
 function previewResultSlot(result: unknown): string | undefined {
-  if (typeof result !== "object" || result === null || !("state" in result)) return undefined;
+  if (typeof result !== "object" || !result || !("state" in result)) return undefined;
   const state = result.state;
-  if (typeof state !== "object" || state === null || !("environmentConfigLease" in state)) {
+  if (typeof state !== "object" || !state || !("environmentConfigLease" in state)) {
     return undefined;
   }
   const lease = state.environmentConfigLease;
-  return typeof lease === "object" &&
-    lease !== null &&
-    "slug" in lease &&
-    typeof lease.slug === "string"
+  return typeof lease === "object" && lease && "slug" in lease && typeof lease.slug === "string"
     ? lease.slug
     : undefined;
 }
@@ -474,7 +469,7 @@ async function deployPreviewApps({
             ...selectedApps.map((app) => app.slug),
             ...Object.keys(current.state.apps).filter(
               (appSlug): appSlug is CloudflarePreviewAppSlugType =>
-                cloudflarePreviewApps[appSlug as CloudflarePreviewAppSlugType] != null,
+                !!cloudflarePreviewApps[appSlug as CloudflarePreviewAppSlugType],
             ),
           ]),
         ]).map((appSlug) => cloudflarePreviewApps[appSlug])
@@ -689,10 +684,10 @@ function resolvePreviewTestBaseUrlEnvironment({
     const entry = apps[appSlug];
     if (
       !entry?.publicUrl ||
-      (requiredDeploymentHeadSha != null && entry.headSha !== requiredDeploymentHeadSha)
+      (requiredDeploymentHeadSha && entry.headSha !== requiredDeploymentHeadSha)
     ) {
       throw new Error(
-        requiredDeploymentHeadSha == null
+        !requiredDeploymentHeadSha
           ? `Cannot test ${app.slug}: ${environmentVariable} requires a recorded ${appSlug} deployment. Re-run preview deploy.`
           : `Cannot test ${app.slug}: ${environmentVariable} requires ${appSlug} deployed at head ${requiredDeploymentHeadSha.slice(0, 7)}. Re-run preview deploy.`,
       );
@@ -765,14 +760,13 @@ function resolvePreviewTestWorkerVersionOverrides(input: {
         input.dopplerConfig,
       ).workerName;
       if (
-        entry == null ||
-        (input.requiredDeploymentHeadSha != null &&
-          entry.headSha !== input.requiredDeploymentHeadSha) ||
+        !entry ||
+        (input.requiredDeploymentHeadSha && entry.headSha !== input.requiredDeploymentHeadSha) ||
         entry.deployedWorkerName !== expectedWorkerName ||
         !entry.deployedWorkerVersion
       ) {
         throw new Error(
-          input.requiredDeploymentHeadSha == null
+          !input.requiredDeploymentHeadSha
             ? `Cannot test ${appSlug}: its exact ${expectedWorkerName} deployment identity is missing. Re-run preview deploy.`
             : `Cannot test ${appSlug}: its exact ${expectedWorkerName} deployment identity is missing or stale for head ${input.requiredDeploymentHeadSha.slice(0, 7)}. Re-run preview deploy.`,
         );
@@ -1062,7 +1056,7 @@ async function testPreviewApps({
       updatedAt: new Date().toISOString(),
     } satisfies CloudflarePreviewAppEntry);
   });
-  const entries = maybeEntries.filter((entry): entry is CloudflarePreviewAppEntry => entry != null);
+  const entries = maybeEntries.filter((entry): entry is CloudflarePreviewAppEntry => !!entry);
 
   const ok = !entries.some((entry) => entry.status === "tests-failed");
   logPreview(
@@ -1537,7 +1531,7 @@ function selectExpiredLeasesForGc(
 ): ExpiredLeaseForGc[] {
   const expired: ExpiredLeaseForGc[] = [];
   for (const resource of resources) {
-    if (resource.leaseState !== "leased" || resource.leasedUntil === null) continue;
+    if (resource.leaseState !== "leased" || !Number.isFinite(resource.leasedUntil)) continue;
     if (resource.leasedUntil > now) continue;
     expired.push({
       slug: resource.slug,
@@ -3113,10 +3107,10 @@ function renderPreviewAppTableRow(entry: z.infer<typeof CloudflarePreviewAppEntr
     entry.shortSha ? `\`${entry.shortSha}\`` : "",
     entry.publicUrl ? `[${entry.publicUrl}](${entry.publicUrl})` : "",
     renderWorkerSizeCell(entry.workerGzipKib, entry.mainWorkerGzipKib),
-    entry.deployDurationMs != null ? formatDurationMs(entry.deployDurationMs) : "",
-    entry.testDurationMs != null ? formatDurationMs(entry.testDurationMs) : "",
+    Number.isFinite(entry.deployDurationMs) ? formatDurationMs(entry.deployDurationMs) : "",
+    Number.isFinite(entry.testDurationMs) ? formatDurationMs(entry.testDurationMs) : "",
     entry.testRetries ?? "",
-    entry.cleanupDurationMs != null ? formatDurationMs(entry.cleanupDurationMs) : "",
+    Number.isFinite(entry.cleanupDurationMs) ? formatDurationMs(entry.cleanupDurationMs) : "",
     entry.runUrl ? `[Workflow run](${entry.runUrl})` : "",
     entry.updatedAt,
     summary || "",
@@ -3163,7 +3157,7 @@ function warnIfOverBudget(
   actualMs: number,
   budgetMs: number | undefined,
 ) {
-  if (budgetMs == null || actualMs <= budgetMs) return;
+  if (!Number.isFinite(budgetMs) || actualMs <= budgetMs) return;
   const over = formatDurationMs(actualMs - budgetMs);
   console.log(
     `::warning title=Preview ${phase} over budget::${slug} ${phase} took ${formatDurationMs(actualMs)}, ` +
@@ -3422,7 +3416,7 @@ async function reconcileEnvironmentConfigLeaseResources(input: {
       });
     }
 
-    if (dopplerConfig !== null) {
+    if (dopplerConfig) {
       for (const project of previewManagedDopplerProjects) {
         const configCheck = await checkDopplerConfig({
           commandEnvironment: input.commandEnvironment,
@@ -3441,7 +3435,7 @@ async function reconcileEnvironmentConfigLeaseResources(input: {
       }
 
       const previewNumber = parsePreviewConfigNumber(dopplerConfig);
-      if (previewNumber === null) {
+      if (!Number.isFinite(previewNumber)) {
         issues.push({
           check: "resource-data",
           resourceSlug: resource.slug,
@@ -3487,8 +3481,9 @@ async function reconcileEnvironmentConfigLeaseResources(input: {
       domains,
       issues,
       leaseState: resource.leaseState,
-      leasedUntil:
-        resource.leasedUntil === null ? null : new Date(resource.leasedUntil).toISOString(),
+      leasedUntil: !Number.isFinite(resource.leasedUntil)
+        ? null
+        : new Date(resource.leasedUntil).toISOString(),
       slug: resource.slug,
     });
   }
@@ -3513,7 +3508,7 @@ async function reconcileEnvironmentConfigLeaseResources(input: {
 
 function parsePreviewConfigNumber(config: string) {
   const match = /^preview_(\d+)$/.exec(config);
-  if (!match || match[1] == null) return null;
+  if (!match || !match[1]) return null;
   return Number.parseInt(match[1], 10);
 }
 
@@ -4068,7 +4063,7 @@ async function cleanupPreviewForPullRequest(
   let latestState = current.state;
   const appsToCleanUp = (Object.keys(current.state.apps) as CloudflarePreviewAppSlugType[])
     .map((appSlug) => cloudflarePreviewApps[appSlug])
-    .filter((app): app is PreviewAppRuntime => app != null);
+    .filter((app): app is PreviewAppRuntime => !!app);
   const cleanupBatches = [...orderPreviewDeployBatches(appsToCleanUp)].reverse();
   // Same stale-read guard as deploy: keep every batch's entries in each write.
   const accumulatedEntries: Record<string, CloudflarePreviewAppEntry> = {};
@@ -4300,7 +4295,7 @@ async function deployPreviewApp(input: {
   const existingEntry = input.existingEntry;
   let deployReuseProofDurationMs: number | undefined;
   if (
-    fingerprint !== null &&
+    fingerprint &&
     existingEntry?.status === "deployed" &&
     existingEntry.publicUrl === appConfig.baseUrl &&
     existingEntry.deployedFingerprint === fingerprint &&
@@ -4550,7 +4545,7 @@ async function describeEnvironmentConfigLeases(semaphore: PreviewSemaphoreResour
   const resources = await semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
   return resources
     .map((resource) => {
-      if (resource.leaseState !== "leased" || resource.leasedUntil === null) {
+      if (resource.leaseState !== "leased" || !Number.isFinite(resource.leasedUntil)) {
         return `  ${resource.slug}  available`;
       }
 
@@ -4678,7 +4673,10 @@ function classifyLeaseForReclaim(input: {
     // hold as active rather than implying that an operator should reclaim it.
     return "active";
   }
-  if (input.lastAcquiredAt !== null && input.now - input.lastAcquiredAt >= input.minIdleMs) {
+  if (
+    Number.isFinite(input.lastAcquiredAt) &&
+    input.now - input.lastAcquiredAt >= input.minIdleMs
+  ) {
     return "idle";
   }
 
@@ -4721,7 +4719,9 @@ function diagnosePreviewFleetCapacity(input: {
     (pullRequest) => !holdersWithOpenPrs.includes(pullRequest.number),
   );
   const closedHolders = leased.filter((slot) => slot.pullRequestState === "closed");
-  const nonPrHolders = leased.filter((slot) => parsePullRequestHolder(slot.holder) === null);
+  const nonPrHolders = leased.filter(
+    (slot) => !Number.isFinite(parsePullRequestHolder(slot.holder)),
+  );
 
   const reasons: string[] = [];
   if (available.length === 0 && leased.length > 0) {
@@ -4795,7 +4795,7 @@ function diagnosePreviewFleetCapacity(input: {
     nextLeaseExpiryAt:
       leased
         .map((slot) => slot.leasedUntil)
-        .filter((value): value is string => value != null)
+        .filter((value): value is string => !!value)
         .sort()[0] ?? null,
     reasons,
     reclaimCommands,
@@ -4858,14 +4858,15 @@ async function classifyEnvironmentConfigLeases(input: {
         holder,
         pullRequestUrl: holderPullRequestUrl(holder),
         pullRequestState: holderPullRequestState,
-        leasedUntil:
-          resource.leasedUntil === null ? null : new Date(resource.leasedUntil).toISOString(),
-        lastUsedAt:
-          resource.lastAcquiredAt === null ? null : new Date(resource.lastAcquiredAt).toISOString(),
-        lastUsedAgo:
-          resource.lastAcquiredAt === null
-            ? null
-            : `${formatDurationMs(now - resource.lastAcquiredAt)} ago`,
+        leasedUntil: !Number.isFinite(resource.leasedUntil)
+          ? null
+          : new Date(resource.leasedUntil).toISOString(),
+        lastUsedAt: !Number.isFinite(resource.lastAcquiredAt)
+          ? null
+          : new Date(resource.lastAcquiredAt).toISOString(),
+        lastUsedAgo: !Number.isFinite(resource.lastAcquiredAt)
+          ? null
+          : `${formatDurationMs(now - resource.lastAcquiredAt)} ago`,
       };
     }),
   );
@@ -5600,7 +5601,7 @@ async function selectRecordedGreenAppsNotServing(params: {
   for (const entry of Object.values(params.previousState.apps)) {
     const app = cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType];
     if (
-      app == null ||
+      !app ||
       params.alreadySelectedSlugs.has(app.slug) ||
       !entry.publicUrl ||
       !["awaiting-tests", "deployed"].includes(entry.status)
@@ -5774,11 +5775,9 @@ function selectPreviewAppsForTesting(
   apps: Partial<Record<string, CloudflarePreviewAppEntry>>,
 ): PreviewAppRuntime[] {
   return Object.values(apps)
-    .filter(
-      (entry): entry is CloudflarePreviewAppEntry => entry != null && canRunPreviewTests(entry),
-    )
+    .filter((entry): entry is CloudflarePreviewAppEntry => !!entry && canRunPreviewTests(entry))
     .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType])
-    .filter((app): app is PreviewAppRuntime => app != null);
+    .filter((app): app is PreviewAppRuntime => !!app);
 }
 
 function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlugType[]) {
@@ -6270,7 +6269,8 @@ async function withGithubRetry<T>(
       return await call();
     } catch (error) {
       const status = (error as { status?: number } | null)?.status;
-      const transient = status != null && (status >= 500 || status === 429 || status === 408);
+      const transient =
+        Number.isFinite(status) && (status >= 500 || status === 429 || status === 408);
       lastError = error;
       if (!transient || attempt === attempts) throw error;
       const delayMs = baseDelayMs * 2 ** (attempt - 1);
@@ -6317,7 +6317,7 @@ function makeDefaultWorkflowRunUrl(env: NodeJS.ProcessEnv) {
 }
 
 function requireValue<T>(value: T | null | undefined, message: string): T {
-  if (value === null || value === undefined || value === "") {
+  if (!value) {
     throw new Error(message);
   }
 

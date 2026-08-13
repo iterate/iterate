@@ -146,7 +146,7 @@ function toolCallFromCapabilityPath(path: string[], args: unknown[]): McpToolCal
 
 function toolArgumentsFromRpcArgs(args: unknown[]) {
   const [firstArg] = args;
-  return firstArg != null && typeof firstArg === "object" && !Array.isArray(firstArg)
+  return firstArg && typeof firstArg === "object" && !Array.isArray(firstArg)
     ? (firstArg as Record<string, unknown>)
     : {};
 }
@@ -184,7 +184,7 @@ function mcpResultToItxValue(result: CallToolResult) {
     throw new Error(message);
   }
 
-  if (result.structuredContent !== undefined) return result.structuredContent;
+  if (result.structuredContent) return result.structuredContent;
 
   const textParts = textContent(result);
   if (textParts.length === 0) return result;

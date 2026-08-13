@@ -68,10 +68,9 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     if (agentPaths.length === 0) return;
     const itx = await this.itx;
     const file = await itx.repo.readFile({ path: "AGENTS.md" });
-    const content =
-      file === null
-        ? "(AGENTS.md was deleted from /repos/config — no standing project notes.)"
-        : `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\n\n${file.content}`;
+    const content = !file
+      ? "(AGENTS.md was deleted from /repos/config — no standing project notes.)"
+      : `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\n\n${file.content}`;
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
     const hash = [...new Uint8Array(digest).slice(0, 8)]
       .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -104,7 +103,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     // at-least-once on a throw, and the per-transition keys turn retries of
     // the agents that DID land into no-ops.
     const failed = results.find((result) => result.status === "rejected");
-    if (failed !== undefined && failed.status === "rejected") throw failed.reason;
+    if (failed && failed.status === "rejected") throw failed.reason;
   }
 
   /**
@@ -122,26 +121,25 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   async #publishAgentBirthDefaults(): Promise<void> {
     const itx = await this.itx;
     const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
-    const birthEvents =
-      file === null
-        ? []
-        : [
-            {
-              type: "events.iterate.com/agents/context-added",
-              payload: {
-                // The platform's embedded copy of this file is newline-stripped;
-                // publishing the same normalization keeps "unchanged file" a
-                // byte-identical no-op.
-                content: file.content.replace(/\n$/, ""),
-                key: "agent/system-prompt",
-                role: "system",
-              },
+    const birthEvents = !file
+      ? []
+      : [
+          {
+            type: "events.iterate.com/agents/context-added",
+            payload: {
+              // The platform's embedded copy of this file is newline-stripped;
+              // publishing the same normalization keeps "unchanged file" a
+              // byte-identical no-op.
+              content: file.content.replace(/\n$/, ""),
+              key: "agent/system-prompt",
+              role: "system",
             },
-          ];
+          },
+        ];
     // Best-effort size guard (~4 chars/token): the platform's own default
     // prompt is budget-tested at ~4.3k tokens; warn well before a fork's
     // edits silently double every request's cost.
-    if (file !== null && file.content.length > 6_000 * 4) {
+    if (file && file.content.length > 6_000 * 4) {
       console.warn(
         `prompts/agent-system-prompt.md is ~${Math.round(file.content.length / 4)} tokens; ` +
           "it rides every LLM request of every agent — consider trimming.",
@@ -166,7 +164,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       case "events.iterate.com/agent/created": {
         // The birth event on the agent's own stream (copies carry
         // source.copiedFrom and must not re-target the collection stream).
-        if (event.source?.copiedFrom !== undefined) break;
+        if (event.source?.copiedFrom) break;
         await this.#syncAgentsMdContext([event.path]);
         break;
       }

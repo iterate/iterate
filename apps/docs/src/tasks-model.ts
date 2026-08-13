@@ -154,10 +154,10 @@ export function newTaskFile(input: {
   const state = input.state?.trim() || DEFAULT_TASK_STATE;
   const document = parseDocument("");
   document.set("state", state);
-  if (input.author !== undefined && input.author.trim() !== "") {
+  if (input.author && input.author.trim() !== "") {
     document.set("author", input.author.trim());
   }
-  if (input.createdBy !== undefined && input.createdBy.trim() !== "") {
+  if (input.createdBy && input.createdBy.trim() !== "") {
     document.set("created-by", input.createdBy.trim());
   }
   const yaml = document.toString().trimEnd();
@@ -175,7 +175,7 @@ export function newTaskFile(input: {
  */
 export function taskPathForTitle(title: string, suffix?: string): string {
   const base = slugify(title, MAX_TASK_FILENAME_SLUG_LENGTH) || "task";
-  if (suffix === undefined) return `tasks/${base}.md`;
+  if (!suffix) return `tasks/${base}.md`;
   const suffixText = `-${suffix}`;
   const collisionBase =
     base
@@ -261,7 +261,7 @@ function parseMarkdownFrontmatter(content: string): {
   invalid: boolean;
 } {
   const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(content);
-  if (match === null) {
+  if (!match) {
     return { body: content, document: parseDocument(""), exists: false, invalid: false };
   }
   const document = parseDocument(match[1] ?? "");
@@ -276,7 +276,7 @@ function parseMarkdownFrontmatter(content: string): {
 function markdownFrontmatterRecord(document: Document): Record<string, unknown> {
   try {
     const value: unknown = document.toJS();
-    return typeof value === "object" && value !== null && !Array.isArray(value)
+    return typeof value === "object" && value && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : {};
   } catch {

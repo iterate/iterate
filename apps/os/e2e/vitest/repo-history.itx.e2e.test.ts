@@ -16,7 +16,7 @@ test("log, commitDetails and pinned readFile over a few commits", async () => {
   await waitForCondition(
     async () => {
       const read = await project.repo.readFile({ path: "package.json" }).catch(() => null);
-      return read !== null;
+      return !!read;
     },
     { description: "project repo to be seeded", intervalMs: 1_000, timeoutMs: 60_000 },
   );

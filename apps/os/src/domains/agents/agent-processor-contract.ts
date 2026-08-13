@@ -842,8 +842,8 @@ function agentContextItemSchema() {
         }),
     })
     .superRefine((payload, ctx) => {
-      if (payload.role !== "developer" || payload.compaction === undefined) return;
-      if (payload.key !== undefined) {
+      if (payload.role !== "developer" || !payload.compaction) return;
+      if (payload.key) {
         ctx.addIssue({
           code: "custom",
           path: ["key"],

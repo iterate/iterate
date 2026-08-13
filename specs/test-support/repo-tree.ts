@@ -34,14 +34,14 @@ export async function openRepoTreeFile(page: Page, path: string) {
               for (const child of root.querySelectorAll("*")) {
                 const el = child as HTMLElement;
                 if (scrolls(el)) return el;
-                const inner = el.shadowRoot === null ? null : findScroller(el.shadowRoot);
-                if (inner !== null) return inner;
+                const inner = el.shadowRoot ? findScroller(el.shadowRoot) : null;
+                if (inner) return inner;
               }
               return null;
             };
             const findAncestorScroller = (start: Element): HTMLElement | null => {
               let el: Element | null = start;
-              while (el !== null) {
+              while (el) {
                 if (el instanceof HTMLElement && scrolls(el)) return el;
                 el =
                   el.parentElement ??
@@ -54,7 +54,7 @@ export async function openRepoTreeFile(page: Page, path: string) {
               findScroller(node) ??
               findScroller(node.getRootNode() as ShadowRoot | Document) ??
               findAncestorScroller(node);
-            if (scroller !== null) {
+            if (scroller) {
               const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
               scroller.scrollTop = atEnd ? 0 : scroller.scrollTop + scroller.clientHeight;
             }

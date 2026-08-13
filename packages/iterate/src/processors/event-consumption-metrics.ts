@@ -101,7 +101,10 @@ export class EventConsumptionMetrics {
     this.#eventsIngested += args.eventCount;
     this.#ingestedThroughOffset = Math.max(this.#ingestedThroughOffset, args.ingestedThroughOffset);
     this.#ingest.record(args.atMs - args.ingestStartedAtMs, args.atMs);
-    if (args.newestEventCreatedAtMs !== undefined && Number.isFinite(args.newestEventCreatedAtMs)) {
+    if (
+      typeof args.newestEventCreatedAtMs === "number" &&
+      Number.isFinite(args.newestEventCreatedAtMs)
+    ) {
       const hostNowOnStreamClock = args.atMs - (this.#clockOffsetMs ?? 0);
       this.#deliveryAge.record(hostNowOnStreamClock - args.newestEventCreatedAtMs, args.atMs);
     }

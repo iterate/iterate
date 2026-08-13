@@ -44,7 +44,7 @@ export async function serveProjectResponse({
 }): Promise<{ outcome: ProjectServeOutcome | null; response: Response }> {
   const urlPrefix = request.headers.get("x-iterate-url-prefix") ?? "";
   const favicon = workerDefaultFaviconResponse(request);
-  if (favicon !== null) return { outcome: null, response: favicon };
+  if (favicon) return { outcome: null, response: favicon };
   try {
     const response = await fetchWorker(
       buildBudgetForRequest(request, PROJECT_HOST_BUILD_BUDGET_MS),
@@ -59,7 +59,7 @@ export async function serveProjectResponse({
     return { outcome, response: applyProjectWorkerOverlay(request, response) };
   } catch (error) {
     const buildStatus = workerBuildStatus(error, urlPrefix);
-    if (buildStatus !== null) return buildStatus;
+    if (buildStatus) return buildStatus;
     onError(error);
     return { outcome: "worker_serve_error", response: workerServeErrorResponse(urlPrefix) };
   }

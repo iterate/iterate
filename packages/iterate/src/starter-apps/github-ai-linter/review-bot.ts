@@ -57,9 +57,9 @@ export class ReviewBotProcessor extends StreamProcessor<
   protected override processEvent(args: ProcessEventArgs<ReviewBotProcessorContract>): undefined {
     const { blockProcessorWhile, event } = args;
     if (
-      event === null ||
+      !event ||
       event.type !== "events.iterate.com/github/webhook-received" ||
-      event.source?.copiedFrom !== undefined ||
+      event.source?.copiedFrom ||
       !mightWakePullRequestAgent(event)
     ) {
       return;
@@ -116,7 +116,7 @@ export async function handleGithubPullRequestWebhook(
   const webhook = parsedWebhook.data;
   const number = webhook.associations.pullRequest?.number;
   const repository = webhook.associations.repository;
-  if (number === undefined || repository === undefined) return;
+  if (!Number.isFinite(number) || !repository) return;
 
   const action = webhook.body.action;
   const appSlug = webhook.appSlug;
@@ -136,7 +136,7 @@ export async function handleGithubPullRequestWebhook(
   }
   const mention =
     typeof appSlug === "string" &&
-    author !== undefined &&
+    !!author &&
     author.login.length > 0 &&
     author.type !== "Bot" &&
     ["OWNER", "MEMBER", "COLLABORATOR"].includes(author.association) &&
@@ -159,8 +159,8 @@ export async function handleGithubPullRequestWebhook(
     pullRequest?.number === number &&
     pullRequest.state === "open" &&
     pullRequest.draft !== true &&
-    headSha !== undefined &&
-    baseSha !== undefined;
+    !!headSha &&
+    !!baseSha;
 
   // The router turns the few webhooks which require work into explicit agent
   // context or linter events below. The normal PR agent can read GitHub when
@@ -172,12 +172,12 @@ export async function handleGithubPullRequestWebhook(
     (await githubPullRequests.loadLinkedRepos?.()) ?? (await loadLinkedGithubRepos(itx));
   const linkedRepo = linkedRepos.find(
     ({ route }) =>
-      route !== null &&
+      !!route &&
       event.path === `/integrations/github/${route.connection}` &&
       webhook.installationId === route.installationId &&
       repository.id === route.repositoryId,
   );
-  if (linkedRepo === undefined || linkedRepo.route === null) return;
+  if (!linkedRepo || !linkedRepo.route) return;
   const { path: repoPath, route } = linkedRepo;
 
   const agentPath = `/agents${repoPath}/pr/${number}`;
@@ -203,7 +203,7 @@ export async function handleGithubPullRequestWebhook(
   // These are the only companion agent events which should trigger work.
   const agentEvents: StreamEventInput[] = [];
 
-  if (mention && author !== undefined && typeof requestBody === "string") {
+  if (mention && author && typeof requestBody === "string") {
     agentEvents.push(
       {
         type: "events.iterate.com/agents/context-added",
@@ -224,7 +224,7 @@ export async function handleGithubPullRequestWebhook(
         payload: {
           actor: { type: "github", login: author.login, senderType: author.type },
           content: [
-            `@${author.login} wrote on ${repository.owner}/${repository.repo}#${number}${requestUrl === undefined ? "" : ` at ${requestUrl}`}:`,
+            `@${author.login} wrote on ${repository.owner}/${repository.repo}#${number}${!requestUrl ? "" : ` at ${requestUrl}`}:`,
             requestBody,
           ].join("\n\n"),
           llmRequestPolicy: { behaviour: "after-current-request" },
@@ -272,7 +272,7 @@ export async function handleGithubPullRequestWebhook(
     ...agentEvents,
   );
 
-  if (!analysisLifecycleEvent || headSha === undefined || baseSha === undefined) return;
+  if (!analysisLifecycleEvent || !headSha || !baseSha) return;
 
   const rulesSnapshot = await githubPullRequests.loadRules();
   const linterPath = `${agentPath}/ai-linter`;
@@ -370,7 +370,7 @@ export async function handleGithubPullRequestWebhook(
     },
   });
   const [analysisRequest] = await linter.stream.append(analysisInput);
-  if (analysisRequest === undefined) {
+  if (!analysisRequest) {
     throw new Error(`Analysis request append returned no event for ${linterPath}`);
   }
 

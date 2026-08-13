@@ -94,7 +94,7 @@ export async function revokeEnrolledPushDevices(baseUrl: string): Promise<void> 
 export async function routeInitialNotification(): Promise<void> {
   if (Platform.OS === "web") return;
   const response = await Notifications.getLastNotificationResponseAsync();
-  if (response === null) return;
+  if (!response) return;
   await handlePushNotificationResponse(response);
   await Notifications.clearLastNotificationResponseAsync();
 }
@@ -103,7 +103,7 @@ async function handlePushNotificationResponse(response: Notifications.Notificati
   const raw = response.notification.request.content.data;
   const data = raw as PushNotificationData;
   const route = pushNotificationRoute(data);
-  if (route === null || typeof data.projectId !== "string") return;
+  if (!route || typeof data.projectId !== "string") return;
   const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
   router.push(route);
   if (typeof data.requestOffset === "number") {
@@ -141,13 +141,13 @@ async function runPushLifecycle<T>(operation: () => Promise<T>): Promise<T> {
 
 async function readPushEnrollments(): Promise<Array<{ baseUrl: string; projectId: string }>> {
   const stored = await AsyncStorage.getItem(PUSH_ENROLLMENTS_KEY);
-  if (stored === null) return [];
+  if (!stored) return [];
   const parsed: unknown = JSON.parse(stored);
   if (!Array.isArray(parsed)) throw new Error("Stored push enrollments are malformed.");
   return parsed.map((entry) => {
     if (
       typeof entry !== "object" ||
-      entry === null ||
+      !entry ||
       !("baseUrl" in entry) ||
       typeof entry.baseUrl !== "string" ||
       !("projectId" in entry) ||

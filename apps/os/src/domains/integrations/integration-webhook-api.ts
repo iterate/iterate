@@ -30,7 +30,7 @@ export async function handleIntegrationWebhookApiRequest(input: {
 }): Promise<Response | null> {
   for (const handler of WEBHOOK_HANDLERS) {
     const response = await handler(input);
-    if (response !== null) return response;
+    if (response) return response;
   }
   return null;
 }

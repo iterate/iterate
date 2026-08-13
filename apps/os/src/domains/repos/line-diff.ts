@@ -79,20 +79,18 @@ export function diffFileMaps(
     const oldBytes = oldFiles.get(path);
     const newBytes = newFiles.get(path);
 
-    if (oldBytes !== undefined && newBytes !== undefined && bytesEqual(oldBytes, newBytes)) {
+    if (oldBytes && newBytes && bytesEqual(oldBytes, newBytes)) {
       continue;
     }
     const binary =
-      (oldBytes !== undefined && isBinaryBytes(oldBytes)) ||
-      (newBytes !== undefined && isBinaryBytes(newBytes));
+      (!!oldBytes && isBinaryBytes(oldBytes)) || (!!newBytes && isBinaryBytes(newBytes));
     const counts = binary
       ? { additions: 0, deletions: 0 }
       : computeLineDiffStats(
-          oldBytes === undefined ? "" : decoder.decode(oldBytes),
-          newBytes === undefined ? "" : decoder.decode(newBytes),
+          !oldBytes ? "" : decoder.decode(oldBytes),
+          !newBytes ? "" : decoder.decode(newBytes),
         );
-    const status =
-      oldBytes === undefined ? "added" : newBytes === undefined ? "deleted" : "modified";
+    const status = !oldBytes ? "added" : !newBytes ? "deleted" : "modified";
     stats.push({ path, status, binary, ...counts });
   }
   return stats;

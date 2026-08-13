@@ -25,7 +25,7 @@ export function osPosthogContext(
   };
   if (session.user.name) personProperties.name = session.user.name;
   if (session.user.role) personProperties.role = session.user.role;
-  if (session.user.emailVerified !== undefined) {
+  if (typeof session.user.emailVerified === "boolean") {
     personProperties.email_verified = session.user.emailVerified;
   }
 

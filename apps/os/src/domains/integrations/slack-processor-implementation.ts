@@ -56,11 +56,11 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
     switch (event?.type) {
       case "events.iterate.com/slack/webhook-received": {
         const connection = state.birthCertificate?.config.connection;
-        if (connection === undefined) return; // unborn: nothing routes yet
+        if (!connection) return; // unborn: nothing routes yet
         const route = slackRouteFromWebhookBody(event.payload.body, connection);
-        if (route === null) return; // not keyable as channel:thread_ts — not ours to forward
+        if (!route) return; // not keyable as channel:thread_ts — not ours to forward
         const streamPath = state.routes[route.key] ?? route.streamPath;
-        if (streamPath == null) return; // item-keyed (reaction etc.) with no learned route
+        if (!streamPath) return; // item-keyed (reaction etc.) with no learned route
 
         // Best-effort fast ack, independent of the forwarding appends below so
         // the user-visible 👀 races ahead of (possibly cold) stream creation
@@ -79,7 +79,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
           payload: event.payload,
         };
 
-        if (state.routes[route.key] == null && route.canCreateRoute) {
+        if (!state.routes[route.key] && route.canCreateRoute) {
           // First contact with this thread: record the route here AND birth
           // the routed stream with [creation batch, route, webhook]. The
           // route event stays on `/integrations/slack/{connection}` — it is
@@ -96,7 +96,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
           };
           blockProcessorWhile(async () => {
             await append(routeEvent);
-            if (this.projectId === null) {
+            if (!this.projectId) {
               throw new Error("Slack router cannot create a project agent without a project id");
             }
             await appendTo(
@@ -132,7 +132,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
   }: ReduceArgs<SlackProcessorContract>): SlackProcessorState {
     switch (event.type) {
       case "events.iterate.com/slack/created":
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/slack/thread-route-configured":
         return {
@@ -258,7 +258,7 @@ function slackRouteFromEvent(
   // forward to an existing route but must never create one: a reaction on an
   // unrouted message says nothing about wanting an agent there.
   const item = readRecord(slackEvent.item);
-  if (item != null && typeof item.channel === "string" && typeof item.ts === "string") {
+  if (item && typeof item.channel === "string" && typeof item.ts === "string") {
     return {
       canCreateRoute: false,
       channel: item.channel,
@@ -271,16 +271,16 @@ function slackRouteFromEvent(
 
   const message = readRecord(slackEvent.message);
   let slackThreadTs: string | undefined;
-  if (message != null && typeof message.thread_ts === "string") {
+  if (message && typeof message.thread_ts === "string") {
     slackThreadTs = message.thread_ts;
   }
-  if (slackThreadTs == null && typeof slackEvent.thread_ts === "string") {
+  if (!slackThreadTs && typeof slackEvent.thread_ts === "string") {
     slackThreadTs = slackEvent.thread_ts;
   }
-  if (slackThreadTs == null && typeof slackEvent.ts === "string") {
+  if (!slackThreadTs && typeof slackEvent.ts === "string") {
     slackThreadTs = slackEvent.ts;
   }
-  if (slackThreadTs == null) return null;
+  if (!slackThreadTs) return null;
 
   return routeFromChannelAndThread({
     canCreateRoute: true,
@@ -294,7 +294,7 @@ function slackRouteFromEvent(
  * thread coordinates on the message/container instead of an event record. */
 function slackRouteFromInteraction(body: unknown, connection: string): SlackRoute | null {
   const interaction = readRecord(body);
-  if (interaction == null) return null;
+  if (!interaction) return null;
 
   const channel = readString(readRecord(interaction.channel)?.id);
   const message = readRecord(interaction.message);
@@ -304,7 +304,7 @@ function slackRouteFromInteraction(body: unknown, connection: string): SlackRout
     readString(container?.thread_ts) ??
     readString(message?.ts) ??
     readString(container?.message_ts);
-  if (channel == null || threadTs == null) return null;
+  if (!channel || !threadTs) return null;
 
   return routeFromChannelAndThread({
     canCreateRoute: true,

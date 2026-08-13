@@ -75,9 +75,9 @@ export class StreamDatabase {
    */
   touch({ path, at, type, maxOffset }: TouchInput): void {
     const prev = this.#projection[path];
-    const advancesRecency = prev === undefined || at > prev.lastActivityAt;
+    const advancesRecency = !prev || at > prev.lastActivityAt;
     const eventCount = Math.max(prev?.eventCount ?? 0, maxOffset);
-    if (prev !== undefined && !advancesRecency && eventCount === prev.eventCount) return;
+    if (prev && !advancesRecency && eventCount === prev.eventCount) return;
     const row: StreamIndexRow = {
       path,
       createdAt: prev?.createdAt ?? at,
@@ -103,7 +103,7 @@ export class StreamDatabase {
   seedMissing(catalog: readonly { path: string; createdAt: string }[]): void {
     let next = this.#projection;
     for (const stream of catalog) {
-      if (next[stream.path] !== undefined) continue;
+      if (next[stream.path]) continue;
       const row: StreamIndexRow = {
         path: stream.path,
         createdAt: stream.createdAt,

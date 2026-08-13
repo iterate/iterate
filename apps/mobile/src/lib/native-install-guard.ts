@@ -31,7 +31,7 @@ export async function resetChannelOverrideForNewInstall(): Promise<string | null
   const seen = await AsyncStorage.getItem(LAST_SEEN_INSTALL_KEY);
   if (seen === id) return null;
   await AsyncStorage.setItem(LAST_SEEN_INSTALL_KEY, id);
-  if (seen === null) return null;
+  if (!seen) return null;
   const override = await getPreviewChannelOverride();
   if (!override) return null;
   await setPreviewChannelOverride(null);

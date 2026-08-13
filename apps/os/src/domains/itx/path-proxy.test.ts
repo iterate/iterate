@@ -230,7 +230,7 @@ describe("prototype-chain dynamic fallback", () => {
     installPrototypeInvokeCapabilityFallback(LateHost, {
       invokerFor: (instance) => {
         const host = (instance as LateHost).host;
-        if (host === undefined) throw new Error("invoker resolved before construction finished");
+        if (!host) throw new Error("invoker resolved before construction finished");
         return host;
       },
     });

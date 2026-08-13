@@ -130,7 +130,7 @@ export function SerializedObjectCodeBlock({
 
     const frame = window.requestAnimationFrame(() => {
       const scrollContainer = scrollContainerRef.current;
-      if (scrollContainer == null) {
+      if (!scrollContainer) {
         return;
       }
 
@@ -243,11 +243,12 @@ export function SerializedObjectCodeBlock({
 
 function serializeData(data: unknown, format: SerializedFormat) {
   try {
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/''/false/null must serialize as themselves, not display as "undefined"
     if (data === undefined) {
       return format === "yaml" ? "undefined" : '"undefined"';
     }
 
-    if (data === null) {
+    if (!data) {
       return "null";
     }
 

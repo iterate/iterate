@@ -33,7 +33,7 @@ export async function awaitKeepAliveBacked<T>(
   keepAliveWhile: ((work: () => Promise<unknown>) => void) | undefined,
   work: () => Promise<T>,
 ): Promise<T> {
-  if (keepAliveWhile === undefined) return await work();
+  if (!keepAliveWhile) return await work();
 
   return await new Promise<T>((resolve, reject) => {
     keepAliveWhile(async () => {
@@ -413,7 +413,7 @@ export abstract class StreamProcessor<
       contract: this.contract,
       eventType: event.type,
     });
-    if (eventDefinition === undefined) {
+    if (!eventDefinition) {
       throw new Error(`Unresolved stream processor emits event type "${event.type}".`);
     }
     return getEventInputSchema({
@@ -459,7 +459,7 @@ export abstract class StreamProcessor<
       // `"*"` must not sweep in ephemeral events; naming the type is the opt-in.
       ephemeral: event.ephemeral,
     });
-    if (eventDefinition === undefined) return { ok: false };
+    if (!eventDefinition) return { ok: false };
     // Rebuilding the parser from the catalog key and payload schema keeps replay
     // and live delivery on the same validation path. Cached: constructing the
     // zod wrapper per event cost ~20µs on the hot reduce path.
@@ -491,7 +491,7 @@ export abstract class StreamProcessor<
     state: ProcessorState<Contract>;
   }): ReducedEvent<Contract> | ConsumedEventParseFailure | undefined {
     const parsed = this.#parseConsumedEvent(args.event);
-    if (!parsed.ok) return parsed.error === undefined ? undefined : { parseError: parsed.error };
+    if (!parsed.ok) return !parsed.error ? undefined : { parseError: parsed.error };
     const event = parsed.event;
 
     const state = this.reduce({ event, state: args.state }) ?? args.state;
@@ -553,7 +553,7 @@ export abstract class StreamProcessor<
     whileProcessing?: Pick<StreamEvent, "offset" | "path">,
   ): string {
     const base = `${this.contract.slug}/${key}`;
-    if (whileProcessing === undefined) return base;
+    if (!whileProcessing) return base;
     return `${base}@${whileProcessing.path}:${whileProcessing.offset}`;
   }
 
@@ -568,7 +568,7 @@ export abstract class StreamProcessor<
       slug: this.contract.slug,
       version: this.contract.version,
       stream: { path: this.path, projectId: this.projectId, streamId },
-      ...(whileProcessing === undefined
+      ...(!whileProcessing
         ? {}
         : { whileProcessing: { offset: whileProcessing.offset, type: whileProcessing.type } }),
     };
@@ -625,7 +625,7 @@ export abstract class StreamProcessor<
     // meaning from event types or reduced processor state, never key spelling.
     if (args.targetPath !== this.path) {
       events = events.map((event) =>
-        event.idempotencyKey === undefined
+        !event.idempotencyKey
           ? event
           : {
               ...event,

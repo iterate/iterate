@@ -26,7 +26,7 @@ function domPointAt(
 ): { node: Text; offset: number } {
   const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let seen = 0;
-  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const text = node as Text;
     let index = text.data.indexOf(needle);
     while (index !== -1) {

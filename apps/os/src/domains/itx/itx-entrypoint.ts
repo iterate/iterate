@@ -29,7 +29,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
       purpose === "stream-delivery"
         ? streamDeliveryAuthContext(projectId)
         : trustedInternalAuthContext();
-    if (projectId === null) {
+    if (!projectId) {
       // The deployment-global scope: what a GLOBAL (projectId: null) stream's
       // delivery dial evaluates expressions against. It is the same root a
       // trusted-internal session sees — deployment-wide repos/streams — so a
@@ -64,14 +64,14 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
       if (!(error instanceof SyntaxError || error instanceof ZodError)) throw error;
       return new Response("invalid x-iterate-worker-dispatch header", { status: 400 });
     }
-    if (taken === null) {
+    if (!taken) {
       return new Response(
         "env.ITX.fetch requires the x-iterate-worker-dispatch header naming a worker ref",
         { status: 400 },
       );
     }
     const { projectId, streamContext } = scopeFromItxEntrypointProps(this.ctx.props);
-    if (projectId === null) {
+    if (!projectId) {
       return new Response("the global itx scope has no workers to dispatch to", { status: 400 });
     }
     // A worker reached through this lane runs in the itx scope of its own
@@ -100,7 +100,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
         error,
         taken.request.headers.get("x-iterate-url-prefix") ?? "",
       );
-      if (buildStatus !== null) return buildStatus.response;
+      if (buildStatus) return buildStatus.response;
       throw error;
     }
   }

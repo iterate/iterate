@@ -12,7 +12,7 @@ export function createSchemaEnsurer(args: {
   return async (sql: SqlClient) => {
     if (schemaReady.has(sql)) return;
     const existing = schemaPromises.get(sql);
-    if (existing !== undefined) return existing;
+    if (existing) return existing;
 
     const schemaPromise = args
       .run(sql)

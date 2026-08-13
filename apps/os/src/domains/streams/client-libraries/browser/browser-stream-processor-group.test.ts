@@ -98,7 +98,7 @@ function makeProcessor(
     protected override processEvent({
       event,
     }: Parameters<StreamProcessor<typeof contract>["processEvent"]>[0]): undefined {
-      if (event === null) return;
+      if (!event) return;
       opts.order?.push(slug);
       applied.push(event.offset);
       if (behavior.throwAtOffset === event.offset) {

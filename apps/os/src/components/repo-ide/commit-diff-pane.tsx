@@ -37,11 +37,11 @@ export function CommitDiffPane({
   const sides = useItxQuery({
     key: ["repo-commit-file", projectId, repoPath, commitOid, path],
     query: async (itx) => {
-      if (kind.kind !== "text" || file === undefined) return null;
+      if (kind.kind !== "text" || !file) return null;
       const repo = itx.repos.get(repoPath);
       const [before, after] = await Promise.all([
         // Content BEFORE the commit: absent for added files and root commits.
-        parentOid === null || file.status === "added"
+        !parentOid || file.status === "added"
           ? null
           : repo.readFile({ path, commitOid: parentOid }),
         // Content AT the commit: absent for deleted files.
@@ -53,7 +53,7 @@ export function CommitDiffPane({
 
   const diffExtensions = useMemo(
     () =>
-      sides === null
+      !sides
         ? []
         : [
             unifiedMergeView({
@@ -66,7 +66,7 @@ export function CommitDiffPane({
   );
 
   const suffix = `(${commitOid.slice(0, 7)})`;
-  if (file === undefined) {
+  if (!file) {
     return (
       <FileChrome path={path} suffix={suffix} readonly>
         <EmptyPane label={`This file did not change in ${commitOid.slice(0, 7)}.`} />
@@ -74,7 +74,7 @@ export function CommitDiffPane({
     );
   }
 
-  if (kind.kind !== "text" || file.binary || sides === null) {
+  if (kind.kind !== "text" || file.binary || !sides) {
     return (
       <FileChrome path={path} suffix={suffix} readonly status={file.status}>
         <EmptyPane label={`Binary file ${file.status} in ${commitOid.slice(0, 7)}.`} />

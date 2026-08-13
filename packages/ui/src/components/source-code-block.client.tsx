@@ -110,12 +110,12 @@ function CodeMirror({
     });
 
     viewRef.current = view;
-    if (preserved !== null && preserved.state.doc.eq(view.state.doc)) {
+    if (preserved && preserved.state.doc.eq(view.state.doc)) {
       view.dispatch({ selection: preserved.state.selection, scrollIntoView: true });
       if (preserved.hadFocus) view.focus();
     }
     if (
-      latestSelectAllSignalRef.current !== undefined &&
+      Number.isFinite(latestSelectAllSignalRef.current) &&
       latestSelectAllSignalRef.current !== initialSelectAllSignalRef.current
     ) {
       selectAll(view);
@@ -148,7 +148,7 @@ function CodeMirror({
     return () => {
       view.dom.removeEventListener("keydown", handleKeyDown);
       const current = viewRef.current;
-      if (current !== null) {
+      if (current) {
         // Stash for the rebuild that may immediately follow (see above).
         preservedViewStateRef.current = { state: current.state, hadFocus: current.hasFocus };
       }
@@ -183,7 +183,7 @@ function CodeMirror({
   }, [value]);
 
   useEffect(() => {
-    if (selectAllSignal === undefined || selectAllSignal === selectAllSignalRef.current) {
+    if (!Number.isFinite(selectAllSignal) || selectAllSignal === selectAllSignalRef.current) {
       return;
     }
     selectAllSignalRef.current = selectAllSignal;

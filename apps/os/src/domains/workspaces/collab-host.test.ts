@@ -548,7 +548,7 @@ describe("open seed race", () => {
     const host = new CollabHost({ fs, store });
     const opening = host.open(PATH);
     // Wait until the seed read is parked, then land the write and release.
-    while (gate.release === undefined) await new Promise((r) => setTimeout(r, 1));
+    while (!gate.release) await new Promise((r) => setTimeout(r, 1));
     files.set(PATH, "second");
     gate.release();
     await opening;
@@ -579,7 +579,7 @@ describe("open unwind windows", () => {
     };
     const host = new CollabHost({ fs, store });
     const opening = host.open(PATH);
-    while (gate.release === undefined) await new Promise((r) => setTimeout(r, 1));
+    while (!gate.release) await new Promise((r) => setTimeout(r, 1));
     host.endSessions([PATH]);
     gate.release();
     await expect(opening).rejects.toThrow(/deleted while the session was opening/);

@@ -32,7 +32,7 @@ export function AppDrawerButton() {
 
 function DrawerButton({ project }: { project: { projectId: string; projectSlug: string } | null }) {
   const queryClient = useQueryClient();
-  const drawerKey = ["project-drawer", project === null ? "app" : project.projectId];
+  const drawerKey = ["project-drawer", !project ? "app" : project.projectId];
   const drawer = useQuery({
     queryKey: drawerKey,
     queryFn: async () => false,
@@ -78,7 +78,7 @@ function DrawerButton({ project }: { project: { projectId: string; projectSlug: 
     () => {
       // Only rendered inside the project !== null branch below; the guard is
       // for the type system, not a reachable path.
-      if (project === null) return;
+      if (!project) return;
       router.push({
         pathname,
         params: { projectId: project.projectId, slug: project.projectSlug },
@@ -127,7 +127,7 @@ function DrawerButton({ project }: { project: { projectId: string; projectSlug: 
                 <Image source={require("../../assets/images/icon.png")} style={styles.logo} />
                 <View style={styles.brandCopy}>
                   <Text style={styles.brandName}>Iterate</Text>
-                  {project !== null ? (
+                  {project ? (
                     <Text numberOfLines={1} style={styles.projectSlug}>
                       {project.projectSlug}
                     </Text>
@@ -144,7 +144,7 @@ function DrawerButton({ project }: { project: { projectId: string; projectSlug: 
               </View>
 
               <View style={styles.items}>
-                {project !== null ? (
+                {project ? (
                   <>
                     <DrawerItem
                       label="/agents"

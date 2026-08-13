@@ -93,7 +93,7 @@ export class HibernatablePagers<Attachment> {
   /** Accept the relay's internal WebSocket upgrade through the DO's real fetch(). */
   acceptUpgrade(request: Request): Response {
     const rawHeader = request.headers.get(this.#options.headerName);
-    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket" || rawHeader === null) {
+    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket" || !rawHeader) {
       return Response.json(
         { error: `${this.#options.lane} accepts only hibernatable Pager upgrades` },
         { status: 400 },
@@ -142,9 +142,9 @@ export class HibernatablePagers<Attachment> {
       // handshake is still in progress. It no longer owns a usable Pager.
       if (ws.readyState !== WebSocket.OPEN) continue;
       const attachment = this.attachment(ws);
-      if (attachment === undefined) continue;
+      if (!attachment) continue;
       const binding = this.#options.bindingOf(attachment);
-      if (pagerKey !== undefined && binding.pagerKey !== pagerKey) continue;
+      if (pagerKey && binding.pagerKey !== pagerKey) continue;
       entries.push({ attachment, binding, ws });
     }
     return entries;
@@ -171,7 +171,7 @@ export class HibernatablePagers<Attachment> {
     let claimed: HibernatablePagerSocketEntry<Attachment> | undefined;
     for (const entry of this.entries(binding.pagerKey)) {
       if (entry.binding.pagerId === binding.pagerId) {
-        if (claimed !== undefined) this.close(claimed.ws, 1000, "superseded");
+        if (claimed) this.close(claimed.ws, 1000, "superseded");
         claimed = entry;
       } else {
         this.close(entry.ws, 1000, "superseded");
@@ -245,7 +245,7 @@ export async function dialHibernatablePager(input: {
     },
   });
   const socket = upgrade.webSocket;
-  if (socket === null) {
+  if (!socket) {
     throw new Error(`hibernatable Pager upgrade returned ${upgrade.status} without a WebSocket`);
   }
   socket.accept();

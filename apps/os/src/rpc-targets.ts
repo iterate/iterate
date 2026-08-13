@@ -755,7 +755,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     const result = await this.#read("getEvent", () =>
       Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].getEvent(args)),
     ).catch(rethrowStreamUnavailable);
-    if (result === undefined) return undefined;
+    if (!result) return undefined;
     return detachPlainRpcResult(result);
   }
 
@@ -823,7 +823,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     // head and replay from it on every incarnation instead. Acquiring that
     // head is itself sliced under the same public deadline: a silent orphan
     // cannot wedge recovery before the first wait is even armed.
-    while (replayAfterOffset === undefined && Date.now() < deadline) {
+    while (!Number.isFinite(replayAfterOffset) && Date.now() < deadline) {
       const attemptDeadline = Math.min(deadline, Date.now() + STREAM_WAIT_REACQUIRE_MS);
       let head: Promise<number>;
       try {
@@ -894,7 +894,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     throw new Error(
       `${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}Timed out waiting for stream event after ${args.timeoutMs}ms ` +
         "(the public deadline expired while recovery re-armed one-shot waits).",
-      lastSliceTimeout === undefined ? undefined : { cause: lastSliceTimeout },
+      !lastSliceTimeout ? undefined : { cause: lastSliceTimeout },
     );
   }
 
@@ -903,7 +903,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     const result = await this.#read("getProcessorRuntimeState", () =>
       Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].getProcessorRuntimeState(args)),
     ).catch(rethrowStreamUnavailable);
-    return result === null ? null : detachPlainRpcResult(result);
+    return !result ? null : detachPlainRpcResult(result);
   }
 
   /**
@@ -1108,7 +1108,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       type: "events.iterate.com/stream/subscription-cursor-set",
       payload: args,
     });
-    if (event === undefined) throw new Error("stream did not commit the cursor change");
+    if (!event) throw new Error("stream did not commit the cursor change");
     return event;
   }
 
@@ -1118,7 +1118,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       type: "events.iterate.com/stream/subscription-delivery-resumed",
       payload: args,
     });
-    if (event === undefined) throw new Error("stream did not commit the subscription resume");
+    if (!event) throw new Error("stream did not commit the subscription resume");
     return event;
   }
 
@@ -1137,7 +1137,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         payload: { name: args.name },
       },
     );
-    if (cursorSet === undefined || resumed === undefined) {
+    if (!cursorSet || !resumed) {
       throw new Error("stream did not commit the subscription seek and resume");
     }
     return { cursorSet, resumed };
@@ -1200,17 +1200,15 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     });
     const result = await source[STREAM_DURABLE_OBJECT_STUB]
       .setCopySubscription({
-        ...(args.idempotencyKey === undefined ? {} : { idempotencyKey: args.idempotencyKey }),
+        ...(!args.idempotencyKey ? {} : { idempotencyKey: args.idempotencyKey }),
         configuration: {
-          ...(args.name === undefined ? {} : { name: args.name }),
+          ...(!args.name ? {} : { name: args.name }),
           ...(args.description?.trim() && { description: args.description.trim() }),
-          ...(args.filter === undefined ? {} : { filter: args.filter }),
+          ...(!args.filter ? {} : { filter: args.filter }),
           receiver: {
             action: "copy-to-stream",
             receivingStreamPath,
-            ...(args.jsonataTransform === undefined
-              ? {}
-              : { jsonataTransform: args.jsonataTransform }),
+            ...(!args.jsonataTransform ? {} : { jsonataTransform: args.jsonataTransform }),
             delivery: {
               start,
               onFailingEvent: "halt",
@@ -1366,7 +1364,7 @@ class StreamSubscriptionRpcTarget extends IterateRpcTarget<"StreamSubscription">
     // StreamSubscriptionDescription (or null); detachPlainRpcResult copies
     // the plain data off the disposable-augmented RPC result, and the cast
     // restores the method's declared type.
-    return result === null ? null : (detachPlainRpcResult(result) as StreamSubscriptionDescription);
+    return !result ? null : (detachPlainRpcResult(result) as StreamSubscriptionDescription);
   }
 
   /**
@@ -1528,7 +1526,7 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
       parseScheduleSetPayload({
         action: { kind: "itx-script", script: input.script },
         key: input.key,
-        ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+        ...(!input.metadata ? {} : { metadata: input.metadata }),
         recurrence: canonicalRecurrence(input.recurrence, Date.now()),
       }),
     );
@@ -1680,14 +1678,14 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     // subtree's uncommitted workspace state to a different repository —
     // a transition no guard can fence after the fact. Door-level check:
     // two racing creates can slip past it, but the common path fails loudly.
-    if (this.props.projectId !== null) {
+    if (this.props.projectId) {
       const existing = (await projectProcessorState(this.props.projectId)).repos.map(
         (repo) => repo.path,
       );
       const nested = existing.find(
         (other) => other !== path && (other.startsWith(`${path}/`) || path.startsWith(`${other}/`)),
       );
-      if (nested !== undefined) {
+      if (nested) {
         throw new Error(
           `repo path "${path}" nests with the existing repo "${nested}" — repo paths must not contain one another`,
         );
@@ -1894,7 +1892,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   // GitHub connections are project-scoped (their secrets and streams live in
   // a project), so a global repo has nothing to link through.
   #requireProjectId(): string {
-    if (this.props.projectId === null) {
+    if (!this.props.projectId) {
       throw new Error("GitHub-backed repos require a project-scoped repo.");
     }
     return this.props.projectId;
@@ -2058,9 +2056,7 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
       }),
       ctx: this.props.ctx,
       projectId: this.props.projectId,
-      ...(this.props.sourceScopePath === undefined
-        ? {}
-        : { sourceScopePath: this.props.sourceScopePath }),
+      ...(!this.props.sourceScopePath ? {} : { sourceScopePath: this.props.sourceScopePath }),
     });
   }
 
@@ -2155,9 +2151,9 @@ async function agentBirthDefaultsForProject(props: {
       projectId: props.projectId,
     }).snapshot();
     const defaults = state.agentBirthDefaults;
-    if (defaults === null) return {};
+    if (!defaults) return {};
     const pathPrefix = defaults.matches?.pathPrefix;
-    if (pathPrefix !== undefined && !props.agentPath.startsWith(pathPrefix)) return {};
+    if (pathPrefix && !props.agentPath.startsWith(pathPrefix)) return {};
     return { defaults };
   } catch (error) {
     console.warn("[agent] agent birth defaults read failed; using platform defaults", {
@@ -2172,18 +2168,18 @@ async function agentBootProjectFacts(
   projectId: string,
 ): Promise<{ project?: { name: string; slug: string; workerUrl?: string } }> {
   const record = await readProjectById(env.PROJECT_DIRECTORY, projectId).catch(() => null);
-  if (record === null) return {};
+  if (!record) return {};
   const config = parseConfig(env);
   const workerUrl = buildProjectWorkerUrl({
     projectSlug: record.slug,
     projectHostnameBases: config.projectHostnameBases,
-    ...(config.baseUrl === undefined ? {} : { appBaseUrl: config.baseUrl }),
+    ...(!config.baseUrl ? {} : { appBaseUrl: config.baseUrl }),
   });
   return {
     project: {
       name: record.name,
       slug: record.slug,
-      ...(workerUrl === null ? {} : { workerUrl }),
+      ...(!workerUrl ? {} : { workerUrl }),
     },
   };
 }
@@ -2220,7 +2216,7 @@ class SandboxRpcTarget extends IterateRpcTarget<"Sandbox"> {
     const event = await this.#catalogue.getEvent({
       idempotencyKey: sandboxCreateClaimKey(this.props.path),
     });
-    if (event === undefined) return undefined;
+    if (!event) return undefined;
     return {
       instanceType: SandboxInstanceType.parse(
         (event.payload as { instanceType: string }).instanceType,
@@ -2230,7 +2226,7 @@ class SandboxRpcTarget extends IterateRpcTarget<"Sandbox"> {
 
   async #claimedStub() {
     const claim = await this.#claim();
-    if (claim === undefined) {
+    if (!claim) {
       throw new Error(
         `sandbox "${this.props.path}" does not exist — create it with itx.sandboxes.get(${JSON.stringify(this.props.path)}).create({})`,
       );
@@ -2246,7 +2242,7 @@ class SandboxRpcTarget extends IterateRpcTarget<"Sandbox"> {
 
   async __describe(): Promise<Description> {
     const claim = await this.#claim();
-    if (claim === undefined) {
+    if (!claim) {
       return describeNode({
         instructions: `A not-yet-created sandbox handle at "${this.props.path}". Call create({ instanceType?, sleepAfter?, keepAlive?, env? }) before using the Cloudflare Sandbox SDK surface.`,
         children: { create: "Create this sandbox and return this handle." },
@@ -2264,7 +2260,7 @@ class SandboxRpcTarget extends IterateRpcTarget<"Sandbox"> {
     const requestedClaim = sandboxCreateClaimEvent({ create: input, path: this.props.path });
     const instanceType = requestedClaim.payload.instanceType;
     const [claim] = await this.#catalogue.append(requestedClaim);
-    if (claim === undefined) {
+    if (!claim) {
       throw new Error(`sandbox "${this.props.path}": the catalogue append returned no event`);
     }
     const parsedClaim = SandboxProcessorContract.parseEvent(claim);
@@ -2283,15 +2279,11 @@ class SandboxRpcTarget extends IterateRpcTarget<"Sandbox"> {
         `sandbox "${this.props.path}" was already requested as instance type "${parsedClaim.payload.instanceType}" — names are unique per project; pick a new path`,
       );
     }
-    const claimedEnv =
-      parsedClaim.payload.env === undefined
-        ? undefined
-        : Object.fromEntries(
-            Object.entries(parsedClaim.payload.env).map(([key, value]) => [
-              key,
-              value ?? undefined,
-            ]),
-          );
+    const claimedEnv = !parsedClaim.payload.env
+      ? undefined
+      : Object.fromEntries(
+          Object.entries(parsedClaim.payload.env).map(([key, value]) => [key, value ?? undefined]),
+        );
     await this.#stub(instanceType).create({
       env: claimedEnv,
       instanceType,
@@ -2358,7 +2350,7 @@ class SandboxRpcTarget extends IterateRpcTarget<"Sandbox"> {
     sessionId?: string;
   }> {
     return this.invokeCapability({
-      args: options === undefined ? [command] : [command, options],
+      args: !options ? [command] : [command, options],
       path: ["exec"],
     }) as Promise<{
       success: boolean;
@@ -2528,7 +2520,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   async create(
     input: { mounts?: Record<string, WorkspaceMountOverlay> } = {},
   ): Promise<WorkspaceRpcTarget> {
-    if (input.mounts !== undefined) {
+    if (input.mounts) {
       // Same guards as the configure door, judged against the derived table:
       // every supplied overlay must form a COMPLETE effective mount (an
       // incomplete one would be stored then silently dropped from the live
@@ -2547,7 +2539,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
             `mount "${key}" does not produce a complete mount — new mounts need { repoPath, policy }`,
           );
         }
-        if (overlay?.repoPath !== undefined && !repoPaths.includes(overlay.repoPath)) {
+        if (overlay?.repoPath && !repoPaths.includes(overlay.repoPath)) {
           throw new Error(
             `mount "${key}" names "${overlay.repoPath}", which is not a repo in this project — create it first (itx.repos.get(path).create(...))`,
           );
@@ -2558,7 +2550,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     // subscription, which a public append may not configure.
     const committed = await this.#stream.append(
       ...workspaceCreationEvents({
-        ...(input.mounts === undefined ? {} : { mounts: input.mounts }),
+        ...(!input.mounts ? {} : { mounts: input.mounts }),
         path: this.props.path,
         projectId: this.props.projectId,
       }),
@@ -2910,7 +2902,7 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
       ...new Set(
         input.egress.urls.map((url) => {
           const parsed = URL.canParse(url) ? new URL(url) : null;
-          if (parsed === null || !/^https?:$/.test(parsed.protocol)) {
+          if (!parsed || !/^https?:$/.test(parsed.protocol)) {
             throw new Error(
               `collectFromUser egress URLs must be absolute http(s) URLs; got ${JSON.stringify(url)}.`,
             );
@@ -2931,7 +2923,7 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
     // Unlike read-only viewer links, this link WRITES a secret — never fall
     // back to a default host that could belong to a different deployment.
     const baseUrl = parseConfig(env).baseUrl;
-    if (baseUrl === undefined) {
+    if (!baseUrl) {
       throw new Error("collectFromUser needs APP_CONFIG_BASE_URL to build the page URL.");
     }
     const scopePath = this.props.scopePath;
@@ -2941,7 +2933,7 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
       search: {
         path,
         egress: egressOrigins,
-        ...(input.description === undefined ? {} : { description: input.description }),
+        ...(!input.description ? {} : { description: input.description }),
         ...(scopePath.startsWith("/agents/") && { notify: scopePath }),
       },
     });
@@ -3240,7 +3232,7 @@ class FileHandleRpcTarget extends IterateRpcTarget<"FileHandle"> {
   /** The file's bytes. Throws when no file exists at this path. */
   async bytes(): Promise<Uint8Array> {
     const file = await readProjectFile({ path: this.props.path, projectId: this.props.projectId });
-    if (file === null) throw new Error(`No file at ${this.props.path}.`);
+    if (!file) throw new Error(`No file at ${this.props.path}.`);
     return file.bytes;
   }
 
@@ -3334,7 +3326,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T> {
     const gateway = options?.gateway ?? this.props.gateway;
-    const merged = gateway === undefined ? options : { ...options, gateway };
+    const merged = !gateway ? options : { ...options, gateway };
     return env.AI.run(
       model,
       body as Record<string, unknown>,
@@ -3515,12 +3507,11 @@ class CfVideosCapabilityRpcTarget extends IterateRpcTarget<"CfVideosCapability">
   /** Transform a video stream and return a Response (video, frame, spritesheet, or audio). */
   async transform(input: CfVideoTransformInput): Promise<Response> {
     const media = env.MEDIA.input(input.video);
-    const result =
-      input.transform === undefined
-        ? media.output(input.output as MediaTransformationOutputOptions)
-        : media
-            .transform(input.transform as MediaTransformationInputOptions)
-            .output(input.output as MediaTransformationOutputOptions);
+    const result = !input.transform
+      ? media.output(input.output as MediaTransformationOutputOptions)
+      : media
+          .transform(input.transform as MediaTransformationInputOptions)
+          .output(input.output as MediaTransformationOutputOptions);
     return await result.response();
   }
 }
@@ -3584,7 +3575,7 @@ function describeConnectionSdk(input: {
       input.grammar,
     ].join("\n"),
     parent: `the integrations collection (itx.integrations.${input.slug})`,
-    ...(input.types === undefined ? {} : { types: input.types }),
+    ...(!input.types ? {} : { types: input.types }),
   });
 }
 
@@ -3631,7 +3622,7 @@ class IntegrationFamilyRpcTarget extends RpcTarget {
   }
 
   get(connection?: string): IntegrationConnectionRpcTarget {
-    if (connection !== undefined && connection.trim() === "") {
+    if (connection && connection.trim() === "") {
       throw new Error(
         `itx.integrations.${this.props.slug}.get(connection) requires a non-empty slug.`,
       );
@@ -3806,14 +3797,14 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       );
     }
     const connection = args[0];
-    if (connection !== undefined && typeof connection !== "string") {
+    if (connection && typeof connection !== "string") {
       throw new Error(`itx.integrations.${slug}.get(connection) expects a string connection slug.`);
     }
-    return this.#family(slug).get(connection);
+    return this.#family(slug).get(typeof connection === "string" ? connection : undefined);
   }
 
   async #resolveConnection(slug: string, requested: string | undefined): Promise<string | null> {
-    if (requested !== undefined) return requested;
+    if (requested) return requested;
 
     const providerSlug = slug === "gmail" ? "google" : slug;
     const candidates = (await this.list()).filter((entry) => entry.integration === slug);
@@ -3821,11 +3812,11 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // A Waitrose connection is its session secret, not a lifecycle journal;
       // appearing in list() is therefore the connected-state proof.
       if (providerSlug === "waitrose") {
-        const first = candidates.find((entry) => entry.connection !== null);
+        const first = candidates.find((entry) => !!entry.connection);
         if (first) return first.connection;
       }
       for (const entry of candidates) {
-        if (entry.connection === null) continue;
+        if (!entry.connection) continue;
         const status = await getConnectionStatus({
           connection: entry.connection,
           projectId: this.props.projectId,
@@ -3838,7 +3829,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       );
     }
 
-    const first = candidates.find((entry) => entry.connection !== null);
+    const first = candidates.find((entry) => !!entry.connection);
     if (first) return first.connection;
     throw new Error(
       `No concrete ${slug} integration connection is available. Mount one under ["integrations", "${slug}", "<connection-slug>"] or pass an exact slug to .get("<connection-slug>").`,
@@ -4033,7 +4024,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     }
     return await this.#capabilityHost.invokeCapability({
       args,
-      path: ["integrations", slug, ...(connection === null ? [] : [connection]), ...method],
+      path: ["integrations", slug, ...(!connection ? [] : [connection]), ...method],
     });
   }
 
@@ -4052,7 +4043,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     // same collection so list() and no-argument get() retain one meaning.
     const waitroseConnections = projectState.secrets.flatMap((secret) => {
       const match = /^\/secrets\/integrations\/waitrose\/([^/]+)\/session$/.exec(secret.path);
-      return match?.[1] === undefined
+      return !match?.[1]
         ? []
         : [
             {
@@ -4207,7 +4198,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       payload: { allowedUserIds },
     });
     const configured = configuredEvents[0];
-    if (configured === undefined) {
+    if (!configured) {
       throw new Error("Telegram access policy append returned no configured event.");
     }
     await this.#telegramProcessor(input.connection).waitUntilProcessed({
@@ -4447,7 +4438,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       request: {
         ...input,
         attachments,
-        ...(thread !== null && input.replyTo === undefined && { replyTo: thread.replyTo }),
+        ...(!!thread && !input.replyTo && { replyTo: thread.replyTo }),
       },
     });
     const { from, messageId } = await this.#deliver({
@@ -4455,8 +4446,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       audit: {
         subject: input.subject,
         to: input.to,
-        ...(input.inReplyTo === undefined ? {} : { inReplyTo: input.inReplyTo }),
-        ...(thread === null ? {} : { threadId: thread.threadId }),
+        ...(!input.inReplyTo ? {} : { inReplyTo: input.inReplyTo }),
+        ...(!thread ? {} : { threadId: thread.threadId }),
         attachments,
       },
     });
@@ -4478,7 +4469,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
     attachments?: EmailAttachmentInput[];
   }): Promise<{ from: string; to: string; messageId: string | null }> {
     const threadId = await this.#threadIdFromBirthCertificate();
-    if (threadId === null) {
+    if (!threadId) {
       throw new Error(
         `email.reply needs an agent scope with a bound email thread (an email thread agent, or any agent that has sent/received project email); this scope is "${this.props.scopePath}". Use email.send for new mail.`,
       );
@@ -4488,13 +4479,13 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
     }
     const identity = await this.#senderIdentity();
     const inbound = await this.#lastReceivedOnThread();
-    if (inbound === null) {
+    if (!inbound) {
       throw new Error("email.reply found no inbound email on this thread to reply to.");
     }
     // THE shared reply-target chain (emailCounterpart): Reply-To → header
     // From → the SMTP envelope from ingress authenticated.
     const to = emailCounterpart(inbound);
-    if (to === null) {
+    if (!to) {
       throw new Error("email.reply could not determine the thread counterpart address.");
     }
     const inReplyTo = inbound.message.messageId ?? undefined;
@@ -4505,8 +4496,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       request: {
         to,
         subject: input.subject ?? replySubject(inbound.message.subject),
-        ...(input.text === undefined ? {} : { text: input.text }),
-        ...(input.html === undefined ? {} : { html: input.html }),
+        ...(!input.text ? {} : { text: input.text }),
+        ...(!input.html ? {} : { html: input.html }),
         attachments,
         // The thread's own reply address: replies to this mail route straight
         // back to the thread stream, without depending on client headers.
@@ -4515,11 +4506,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
           domain: identity.domain,
           threadId,
         }),
-        ...(inReplyTo === undefined ? {} : { inReplyTo }),
-        references: [
-          ...inbound.message.references,
-          ...(inReplyTo === undefined ? [] : [inReplyTo]),
-        ],
+        ...(!inReplyTo ? {} : { inReplyTo }),
+        references: [...inbound.message.references, ...(!inReplyTo ? [] : [inReplyTo])],
       },
     });
     const { from, messageId } = await this.#deliver({
@@ -4528,7 +4516,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
         subject: message.subject,
         to,
         threadId,
-        ...(inReplyTo === undefined ? {} : { inReplyTo }),
+        ...(!inReplyTo ? {} : { inReplyTo }),
         attachments,
       },
     });
@@ -4564,7 +4552,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       payload: {
         threadId,
         streamPath: scopePath,
-        ...(firstRecipient === undefined ? {} : { counterpart: firstRecipient }),
+        ...(!firstRecipient ? {} : { counterpart: firstRecipient }),
         subject: input.request.subject,
       },
     };
@@ -4608,7 +4596,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       eventTypes: ["events.iterate.com/email-agent/created"],
       limit: 1,
     });
-    if (event === undefined) return null;
+    if (!event) return null;
     return EmailProcessorContract.events[
       "events.iterate.com/email-agent/created"
     ].payloadSchema.parse(event.payload).config.threadId;
@@ -4623,7 +4611,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
   async #resolveAttachments(
     inputs: EmailAttachmentInput[] | undefined,
   ): Promise<OutboundEmailAttachment[]> {
-    if (inputs === undefined || inputs.length === 0) return [];
+    if (!inputs || inputs.length === 0) return [];
     return await Promise.all(
       inputs.map(async (input): Promise<OutboundEmailAttachment> => {
         if ("path" in input) {
@@ -4631,7 +4619,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
             path: input.path,
             projectId: this.props.projectId,
           });
-          if (file === null) {
+          if (!file) {
             throw new Error(`email attachment not found: no project file at "${input.path}".`);
           }
           return {
@@ -4710,8 +4698,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
           projectId: this.props.projectId,
           subject: input.audit.subject,
           to: input.audit.to,
-          ...(input.audit.threadId === undefined ? {} : { threadId: input.audit.threadId }),
-          ...(input.audit.inReplyTo === undefined ? {} : { inReplyTo: input.audit.inReplyTo }),
+          ...(!input.audit.threadId ? {} : { threadId: input.audit.threadId }),
+          ...(!input.audit.inReplyTo ? {} : { inReplyTo: input.audit.inReplyTo }),
           ...(attachments.length === 0 ? {} : { attachments }),
         },
       });
@@ -4787,7 +4775,7 @@ async function assertAgentCreated(input: {
   projectId: string;
 }): Promise<void> {
   const { state } = await agentProcessorRelay(input).snapshot();
-  if (state.birthCertificate === null) {
+  if (!state.birthCertificate) {
     throw new Error(`agent at "${input.path}" has not been created`);
   }
 }
@@ -4842,7 +4830,7 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
     const trimmed = message.trim();
     if (trimmed === "") throw new Error("itx.chat.sendMessage requires a non-empty message.");
     const files =
-      options?.files === undefined || options.files.length === 0
+      !options?.files || options.files.length === 0
         ? undefined
         : await storeAgentFileAttachments({
             agentPath: this.props.path,
@@ -4852,7 +4840,7 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
           });
     const [event] = await this.stream.append({
       type: "events.iterate.com/agents/web-message-sent",
-      payload: { message: trimmed, ...(files === undefined ? {} : { files }) },
+      payload: { message: trimmed, ...(!files ? {} : { files }) },
     });
     return event;
   }
@@ -5007,7 +4995,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const creation = agentCreationForPath({
       agentPath: this.#path,
       projectId: this.#props.projectId,
-      ...(payload === undefined ? {} : { payload }),
+      ...(!payload ? {} : { payload }),
       ...(await agentBootProjectFacts(this.#props.projectId)),
       // Project-level birth defaults (driver, prompt, extra processor
       // subscriptions) apply to every agent born through this generic door;
@@ -5103,7 +5091,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         : { message: input.message, files: input.files };
     const actor = this.#contextActor();
     const files =
-      fileInputs === undefined || fileInputs.length === 0
+      !fileInputs || fileInputs.length === 0
         ? undefined
         : await storeAgentFileAttachments({
             agentPath: actor.type === "agent" ? actor.path : this.#path,
@@ -5117,7 +5105,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         role: actor.type === "agent" ? "developer" : "user",
         content: message,
         actor,
-        ...(files === undefined ? {} : { files }),
+        ...(!files ? {} : { files }),
       },
     });
     return event;
@@ -5131,7 +5119,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     | { type: "agent"; path: string }
     | { type: "user"; origin: "web"; userId: string } {
     const source = this.#props.sourceScopePath;
-    return source !== undefined && source.startsWith("/agents/")
+    return source && source.startsWith("/agents/")
       ? { type: "agent", path: source }
       : { type: "user", origin: "web", userId: this.#props.auth.principal };
   }
@@ -5211,9 +5199,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         content:
           input.message ?? `[Files attached: ${files.map((file) => file.filename).join(", ")}]`,
         files,
-        ...(input.llmRequestPolicy === undefined
-          ? {}
-          : { llmRequestPolicy: input.llmRequestPolicy }),
+        ...(!input.llmRequestPolicy ? {} : { llmRequestPolicy: input.llmRequestPolicy }),
       },
     });
     return { event, files };
@@ -5451,7 +5437,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   /** Arm (ms timestamp) or disarm (null) the stateful worker's durable alarm —
    * see {@link DynamicWorkerCapability.setAlarm} for the full contract. */
   async setAlarm(atMs: number | null): Promise<void> {
-    if (atMs !== null && !Number.isFinite(atMs)) {
+    if (Number.isFinite(atMs) && !Number.isFinite(atMs)) {
       throw new Error("Dynamic worker setAlarm() requires a finite ms timestamp or null.");
     }
     await this.#runner.setAlarm(this.#statefulRef("setAlarm"), atMs);
@@ -5543,7 +5529,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       directory: env.PROJECT_DIRECTORY,
       identifier: idOrSlug,
     });
-    if (projectId === null) {
+    if (!projectId) {
       return new ProjectRpcTarget({
         auth: this.props.auth,
         ctx: this.props.ctx,
@@ -5609,7 +5595,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       directory: env.PROJECT_DIRECTORY,
       identifier: idOrSlug,
     });
-    if (projectId === null) {
+    if (!projectId) {
       throw new Error(`cannot connect a client to unknown project "${idOrSlug}"`);
     }
     await this.props.auth.ensureCanAccessProject?.(projectId);
@@ -5634,7 +5620,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
     });
     const ownedDisposables: Disposable[] = [];
-    if (opts.capabilities !== undefined) {
+    if (opts.capabilities) {
       // The provision handle rides the returned itx as an OWNED disposable:
       // when this session ends (politely or by socket death), capnweb
       // disposes its exports, the project handle disposes the provision, the
@@ -5861,7 +5847,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       ...capabilityHostCreationEvents({
         path: this.#props.path,
         projectId: this.#props.projectId,
-        ...(payload === undefined ? {} : { payload }),
+        ...(!payload ? {} : { payload }),
       }),
     );
     // append() preserves INPUT order, including idempotency hits at their old
@@ -6113,7 +6099,7 @@ function projectAppSessionValidator(): (
   input: ValidateProjectAppSessionInput,
 ) => Promise<ValidatedProjectAppSession | null> {
   const secret = parseConfig(env).projectAppSessionSecret;
-  if (secret === undefined) return (input) => env.AUTH.validateProjectAppSession(input);
+  if (!secret) return (input) => env.AUTH.validateProjectAppSession(input);
   return localProjectAppSessionValidator(secret.exposeSecret());
 }
 /**
@@ -6302,10 +6288,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     options?: { waitUntilCreated?: boolean },
   ): Promise<ProjectRpcTarget> {
     const projectCreateDeadline = Date.now() + PROJECT_CREATE_TIMEOUT_MS;
-    const explicitConfigRepoTemplate =
-      args.configRepoTemplate === undefined
-        ? undefined
-        : normalizeConfigRepoTemplateReference(args.configRepoTemplate);
+    const explicitConfigRepoTemplate = !args.configRepoTemplate
+      ? undefined
+      : normalizeConfigRepoTemplateReference(args.configRepoTemplate);
     if ("projectId" in this.#props && this.#capabilityHost.path !== "/") {
       throw new Error("project create() is only available on the project-root handle");
     }
@@ -6319,10 +6304,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         "auth-register",
         () =>
           this.#registerProject({
-            ...(args.organizationSlug === undefined
-              ? {}
-              : { organizationSlug: args.organizationSlug }),
-            ...(args.projectId === undefined ? {} : { projectId: args.projectId }),
+            ...(!args.organizationSlug ? {} : { organizationSlug: args.organizationSlug }),
+            ...(!args.projectId ? {} : { projectId: args.projectId }),
             slug: prospective.prospectiveSlug,
           }),
       );
@@ -6351,7 +6334,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       existing.auth.assertCanAccessProject(existing.projectId);
       this.#props = existing;
     } else {
-      if (args.projectId !== undefined && args.projectId !== this.#projectId) {
+      if (args.projectId && args.projectId !== this.#projectId) {
         throw new Error(
           `project create() received id "${args.projectId}" for handle "${this.#projectId}"`,
         );
@@ -6368,10 +6351,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     // covers creates that never see a template field — the auth app's
     // first-run form and the welcome page's ?ensureBirth retry. An explicit
     // arg always wins and skips the convention entirely.
-    const configRepoTemplate =
-      explicitConfigRepoTemplate !== undefined
-        ? explicitConfigRepoTemplate
-        : await resolveSlugConventionTemplate(registered.slug);
+    const configRepoTemplate = explicitConfigRepoTemplate
+      ? explicitConfigRepoTemplate
+      : await resolveSlugConventionTemplate(registered.slug);
 
     const timing = { projectId: registered.projectId };
     const creatorEmail = userPrincipalOf(this.#props.auth)?.email;
@@ -6388,8 +6370,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
             config: {
               onboardingActive: true,
               slug: registered.slug,
-              ...(creatorEmail === undefined ? {} : { creatorEmail }),
-              ...(configRepoTemplate === undefined ? {} : { configRepoTemplate }),
+              ...(!creatorEmail ? {} : { creatorEmail }),
+              ...(!configRepoTemplate ? {} : { configRepoTemplate }),
             },
           },
         }),
@@ -6487,7 +6469,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         organizationSlug,
         name: args.slug,
         slug: args.slug,
-        ...(args.projectId === undefined ? {} : { id: args.projectId }),
+        ...(!args.projectId ? {} : { id: args.projectId }),
       });
       if (!result.ok) throw new Error(result.message);
       return {
@@ -6499,12 +6481,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     if (!this.#props.auth.isAdmin()) {
       throw new Error(`principal "${this.#props.auth.principal}" cannot create projects`);
     }
-    if (args.organizationSlug !== undefined) {
+    if (args.organizationSlug) {
       const result = await env.AUTH.createProjectForOrganization({
         organizationSlug: args.organizationSlug,
         name: args.slug,
         slug: args.slug,
-        ...(args.projectId === undefined ? {} : { id: args.projectId }),
+        ...(!args.projectId ? {} : { id: args.projectId }),
       });
       if (!result.ok) throw new Error(result.message);
       return {
@@ -6513,7 +6495,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         slug: result.project.slug,
       };
     }
-    if (args.projectId !== undefined) {
+    if (args.projectId) {
       return { organizationId: null, projectId: args.projectId, slug: args.slug };
     }
     const minted = await env.AUTH.mintProjectId();
@@ -6533,7 +6515,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     const record =
       (await readProjectById(env.PROJECT_DIRECTORY, this.#projectId)) ??
       (await readProjectById(env.PROJECT_DIRECTORY, this.#projectId));
-    if (record == null) {
+    if (!record) {
       throw new Error(`Project ${this.#projectId} is missing from the project directory.`);
     }
     return {
@@ -6555,9 +6537,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     const projectUrl = buildProjectWorkerUrl({
       projectSlug: identity.slug,
       projectHostnameBases: config.projectHostnameBases,
-      ...(config.baseUrl === undefined ? {} : { appBaseUrl: config.baseUrl }),
+      ...(!config.baseUrl ? {} : { appBaseUrl: config.baseUrl }),
     });
-    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(appSlug) || projectUrl === null) {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(appSlug) || !projectUrl) {
       throw new Error(
         `Cannot build app URL for ${JSON.stringify(appSlug)} in project ${JSON.stringify(identity.slug)}.`,
       );
@@ -6596,7 +6578,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       type: "events.iterate.com/project/custom-domain-configured",
       payload: { hostname, kind: "direct" },
     });
-    if (observed === undefined) {
+    if (!observed) {
       throw new Error(`Direct hostname "${hostname}" append returned no event.`);
     }
     await this.processor.waitUntilProcessed({ offset: observed.offset });
@@ -6640,7 +6622,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       type: "events.iterate.com/project/custom-domain-add-requested",
       payload: { hostname },
     });
-    if (requested === undefined) {
+    if (!requested) {
       throw new Error(`Cloudflare hostname "${hostname}" append returned no event.`);
     }
     const terminal = await rootStream({
@@ -6725,12 +6707,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         "events.iterate.com/project/create-failed",
       ],
       predicate: (event) =>
-        parseProjectCreationTerminal({
+        !!parseProjectCreationTerminal({
           event,
           projectId: this.#projectId,
           request: createRequest,
           requestOffset: request.offset,
-        }) !== null,
+        }),
       // The default covers the complete project birth saga, including the
       // config repository's bounded Artifacts tail. Healthy calls still
       // resolve in seconds; tasks/os-cold-create-latency.md tracks reducing
@@ -6750,7 +6732,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       request: createRequest,
       requestOffset: request.offset,
     });
-    if (settled === null) {
+    if (!settled) {
       throw new Error("Project creation terminal event changed while it was being processed.");
     }
     if (settled.type === "events.iterate.com/project/create-failed") {
@@ -6817,14 +6799,13 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       Promise.resolve(parseConfig(env)),
     ]);
     const streamPath = this.#capabilityHost.path;
-    const streamUrl =
-      project?.slug == null
-        ? (config.baseUrl ?? "https://os.iterate.com")
-        : buildProjectStreamViewerUrl({
-            baseUrl: config.baseUrl,
-            projectSlug: project.slug,
-            streamPath,
-          });
+    const streamUrl = !project?.slug
+      ? (config.baseUrl ?? "https://os.iterate.com")
+      : buildProjectStreamViewerUrl({
+          baseUrl: config.baseUrl,
+          projectSlug: project.slug,
+          streamPath,
+        });
 
     return [
       `*Debug:* <${streamUrl}|open stream>`,
@@ -7177,7 +7158,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** Index the stream events contained in one committed delivery. */
   async #indexCommittedBatchFacts(batch: StreamDeliveryBatch): Promise<void> {
     const last = batch.events.at(-1);
-    if (last === undefined) return;
+    if (!last) return;
 
     await this.#projectDo.indexCommittedBatchFacts({
       stream: {
@@ -7248,7 +7229,7 @@ export function itxForScope(props: {
     ctx: props.ctx,
     streamContext: props.streamContext,
     projectId: props.projectId,
-    ...(props.ownedDisposables === undefined ? {} : { ownedDisposables: props.ownedDisposables }),
+    ...(!props.ownedDisposables ? {} : { ownedDisposables: props.ownedDisposables }),
   });
 }
 
@@ -7424,7 +7405,7 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
           directory: env.PROJECT_DIRECTORY,
           identifier: projectIdentifier,
         });
-        if (projectId === null) return null;
+        if (!projectId) return null;
         const verified = await env.SECRET.getByName(
           DurableObjectNameCodec.stringify({
             projectId,
@@ -7438,9 +7419,9 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
       // at mint time and the token's 15-minute TTL bounds revocation lag.
       verifyProjectAppSession: async (token) => {
         const secret = this.props.config.projectAppSessionSecret;
-        if (secret === undefined) return null;
+        if (!secret) return null;
         const claims = await verifyProjectAppSessionToken(token, secret.exposeSecret());
-        return claims === null ? null : { projectId: claims.projectId, userId: claims.userId };
+        return !claims ? null : { projectId: claims.projectId, userId: claims.userId };
       },
     });
     return new SessionRpcTarget({ auth, config: this.props.config, ctx: this.props.ctx });
@@ -7490,7 +7471,7 @@ class StreamEventPagerRpcTarget extends IterateRpcTarget<"StreamEventPager"> {
       afterOffset: this.#afterOffset,
     });
     const lastOffset = page.at(-1)?.offset;
-    if (lastOffset !== undefined) this.#afterOffset = lastOffset;
+    if (Number.isFinite(lastOffset)) this.#afterOffset = lastOffset;
     return page;
   }
 
@@ -7559,7 +7540,7 @@ export class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityPr
 
   /** @internal Whether this relay still owns the mount behind its Capability Provider Pager. */
   __capabilityProviderPagerActive(): boolean {
-    return this.#revokePromise === undefined && this.#isActive();
+    return !this.#revokePromise && this.#isActive();
   }
 
   /** Remove exactly this mount (never a newer mount at the same path). */
@@ -7788,9 +7769,7 @@ export class StreamProcessorRpcTarget<State, PublicState = State>
     // PublicState = State (projection-less call sites pin the two type
     // parameters together); the double assertion exists only because the
     // class body cannot see that per-call-site equality.
-    return this.#publicState === undefined
-      ? (state as unknown as PublicState)
-      : this.#publicState(state);
+    return !this.#publicState ? (state as unknown as PublicState) : this.#publicState(state);
   }
 
   async snapshot(): Promise<ProcessorSnapshot<PublicState>> {
@@ -8068,7 +8047,7 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
     const caseInsensitive = [...ITX_API_DECLARATIONS_BY_NAME.keys()].find(
       (name) => name.toLowerCase() === input.name.toLowerCase(),
     );
-    if (caseInsensitive !== undefined) {
+    if (caseInsensitive) {
       return typeSlice({
         declarations: ITX_API_DECLARATIONS_BY_NAME,
         rootName: caseInsensitive,
@@ -8193,9 +8172,7 @@ export class ProcessorRelayRpcTarget<
     // PublicState = State (projection-less call sites pin the two type
     // parameters together); the double assertion exists only because the
     // class body cannot see that per-call-site equality.
-    return this.#publicState === undefined
-      ? (state as unknown as PublicState)
-      : this.#publicState(state);
+    return !this.#publicState ? (state as unknown as PublicState) : this.#publicState(state);
   }
 
   async #processor(): Promise<StreamProcessorRpc<State>> {
@@ -8224,7 +8201,7 @@ export class ProcessorRelayRpcTarget<
     expiresAt?: number,
   ): Promise<DeadlineOutcome<Result>> {
     const settle = <Value>(promise: Promise<Value>): Promise<DeadlineOutcome<Value>> =>
-      expiresAt === undefined
+      !Number.isFinite(expiresAt)
         ? promise.then<DeadlineOutcome<Value>, DeadlineOutcome<Value>>(
             (value) => ({ status: "fulfilled", value }),
             (error: unknown) => ({ status: "rejected", error }),
@@ -8253,7 +8230,7 @@ export class ProcessorRelayRpcTarget<
       }
 
       processor = acquired.value;
-      if (expiresAt !== undefined && Date.now() >= expiresAt) {
+      if (Number.isFinite(expiresAt) && Date.now() >= expiresAt) {
         // Acquisition won the promise race but consumed the complete slice.
         // Do not schedule a call on a facade that cleanup must now release.
         this.#disposeProcessor(processor);
@@ -8301,10 +8278,7 @@ export class ProcessorRelayRpcTarget<
     try {
       snapshot = await this.#callProcessor((processor) => processor.snapshot());
     } catch (error) {
-      if (
-        this.#initialStateWhenUnconfigured === undefined ||
-        !isUnconfiguredSubscriptionError(error)
-      ) {
+      if (!this.#initialStateWhenUnconfigured || !isUnconfiguredSubscriptionError(error)) {
         throw error;
       }
       // Stream offsets are one-based: offset 0 is the honest snapshot of an
@@ -8326,7 +8300,7 @@ export class ProcessorRelayRpcTarget<
   }
 
   async waitUntilProcessed(input: { offset: number; timeoutMs?: number }) {
-    if (input.timeoutMs === undefined) {
+    if (!Number.isFinite(input.timeoutMs)) {
       return await this.#callProcessor((processor) => processor.waitUntilProcessed(input));
     }
 
@@ -8469,15 +8443,14 @@ class LiveStateRelayRpcTarget<State extends object>
     super();
     this.#stub = stub;
     this.#label = pagerLane?.label;
-    this.#relay =
-      pagerLane === undefined
-        ? undefined
-        : openRelayedLiveState<State>({
-            dialPager: pagerLane.dialPager ?? (async () => dialLiveStatePager(await this.#stub())),
-            readSnapshot: () => this.#transientGet(),
-            pagerFailureDegrade: "reject",
-            label: pagerLane.label,
-          });
+    this.#relay = !pagerLane
+      ? undefined
+      : openRelayedLiveState<State>({
+          dialPager: pagerLane.dialPager ?? (async () => dialLiveStatePager(await this.#stub())),
+          readSnapshot: () => this.#transientGet(),
+          pagerFailureDegrade: "reject",
+          label: pagerLane.label,
+        });
   }
 
   /**
@@ -8516,7 +8489,7 @@ class LiveStateRelayRpcTarget<State extends object>
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
-    if (this.#relay !== undefined) {
+    if (this.#relay) {
       try {
         return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
       } catch (error) {
@@ -8616,7 +8589,7 @@ function facetProcessorRelay<State = unknown, PublicState = State>(
   input: FacetProcessorRelayInput<State, PublicState>,
 ): ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState> {
   const contract = input.contract;
-  const name = contract === undefined ? input.name : contract.slug;
+  const name = !contract ? input.name : contract.slug;
   return new ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState>({
     auth: input.auth,
     host: () =>
@@ -8626,10 +8599,8 @@ function facetProcessorRelay<State = unknown, PublicState = State>(
         projectId: input.projectId,
       }),
     processorFacade: (host) => Promise.resolve(host),
-    ...(contract === undefined
-      ? {}
-      : { initialStateWhenUnconfigured: () => contract.stateSchema.parse({}) }),
-    ...(input.publicState === undefined ? {} : { publicState: input.publicState }),
+    ...(!contract ? {} : { initialStateWhenUnconfigured: () => contract.stateSchema.parse({}) }),
+    ...(!input.publicState ? {} : { publicState: input.publicState }),
   });
 }
 
@@ -8793,13 +8764,14 @@ class KvRpcTarget extends IterateRpcTarget<"Kv"> {
 
   /** Store a JSON-serializable value (≤64KiB) under a key (≤512 chars). */
   async set(key: string, value: unknown): Promise<void> {
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/''/false are storable values; only nullish is rejected
     if (value === undefined || value === null) {
       throw new Error("kv.set requires a value; use kv.delete to remove a key");
     }
     const serialized = JSON.stringify(value);
     // NaN/Infinity stringify to the literal "null", which would make get()
     // indistinguishable from an absent key while list() still shows it.
-    if (serialized === undefined || serialized === "null") {
+    if (!serialized || serialized === "null") {
       throw new Error("kv values must be JSON-serializable (null, NaN, and Infinity are not)");
     }
     const serializedBytes = new TextEncoder().encode(serialized).length;
@@ -8826,7 +8798,7 @@ class KvRpcTarget extends IterateRpcTarget<"Kv"> {
       const listed = await env.PROJECT_DIRECTORY.list({ prefix, limit: 1000, cursor });
       for (const entry of listed.keys) names.push(entry.name.slice(namespacePrefix.length));
       cursor = listed.list_complete ? undefined : listed.cursor;
-    } while (cursor !== undefined);
+    } while (cursor);
     return names;
   }
 }
@@ -8924,7 +8896,7 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
    * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.
    */
   get exa(): McpClientRpc {
-    const hasPlatformKey = parseConfig(env).integrations.exa !== undefined;
+    const hasPlatformKey = !!parseConfig(env).integrations.exa;
     return McpClientRpcTarget.createLazyClient(
       { url: EXA_MCP_URL, ...(hasPlatformKey && { headers: EXA_PLATFORM_KEY_HEADER }) },
       {
@@ -9158,7 +9130,7 @@ async function executeOperation(args: {
 }): Promise<unknown> {
   const { operation, props, spec } = args;
   const input =
-    args.input != null && typeof args.input === "object" && !Array.isArray(args.input)
+    args.input && typeof args.input === "object" && !Array.isArray(args.input)
       ? { ...(args.input as Record<string, unknown>) }
       : {};
 
@@ -9167,6 +9139,7 @@ async function executeOperation(args: {
   for (const parameter of operation.parameters) {
     const value = input[parameter.name];
     if (parameter.in === "path") {
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/false are real path-param values; only nullish means "missing"
       if (value == null) {
         throw new Error(`Operation "${operation.operationId}" needs "${parameter.name}".`);
       }
@@ -9176,11 +9149,13 @@ async function executeOperation(args: {
       );
       delete input[parameter.name];
     } else if (parameter.in === "query") {
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/false are real query-param values; only nullish means "missing"
       if (value == null && parameter.required) {
         throw new Error(
           `Operation "${operation.operationId}" needs query parameter "${parameter.name}".`,
         );
       }
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/false serialize to real query params; only nullish is omitted
       if (value != null) query.push([parameter.name, String(value)]);
       delete input[parameter.name];
     }
@@ -9215,7 +9190,7 @@ async function executeOperation(args: {
     body = JSON.stringify(single ? input.body : input);
   }
   const headers = new Headers(props.headers ?? {});
-  if (body !== undefined && !headers.has("content-type")) {
+  if (body && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
 

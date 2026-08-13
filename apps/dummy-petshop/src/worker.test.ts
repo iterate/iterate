@@ -294,7 +294,7 @@ describe("token exchange", () => {
       clientSecret: client.clientSecret,
       body: body(location.searchParams.get("code") ?? ""),
     });
-    if (expectedStatus !== undefined) {
+    if (Number.isFinite(expectedStatus)) {
       expect(response.status).toBe(expectedStatus);
     }
     expect(await response.json()).toMatchObject({ error: expectedError });

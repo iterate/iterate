@@ -13,7 +13,7 @@ export const browserCapability = {
     }
 
     const tab = await chrome.tabs.create({ active: true, url: target.href });
-    if (tab.id === undefined) {
+    if (!Number.isFinite(tab.id)) {
       throw new Error("Chrome opened the page without returning a tab ID.");
     }
 

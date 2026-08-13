@@ -80,9 +80,9 @@ export function PresenceAvatar({
         />
       </TooltipTrigger>
       <TooltipContent side="bottom" className="max-w-80">
-        {entry.user == null ? (
+        {!entry.user ? (
           <span>
-            {entry.processor == null ? `${label} callback` : `${entry.processor.slug} processor`}
+            {!entry.processor ? `${label} callback` : `${entry.processor.slug} processor`}
           </span>
         ) : (
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-left">
@@ -219,18 +219,17 @@ export function StreamStatePanel({
     (state): StreamRuntimeDebugState => state,
     [streamPath],
     {
-      enabled: open && projectId !== null,
-      ...(projectId === null ? {} : { slug: projectId }),
+      enabled: open && !!projectId,
+      ...(!projectId ? {} : { slug: projectId }),
     },
   );
   const deploymentStreamRuntime = useIterateSessionLiveState(
     (session) => session.streams.get(streamPath).liveState,
     (state): StreamRuntimeDebugState => state,
     [streamPath],
-    { enabled: open && projectId === null },
+    { enabled: open && !projectId },
   );
-  const streamRuntimeLiveState =
-    projectId === null ? deploymentStreamRuntime : projectStreamRuntime;
+  const streamRuntimeLiveState = !projectId ? deploymentStreamRuntime : projectStreamRuntime;
   const streamRuntime = streamRuntimeLiveState.value;
   const streamRuntimeError = streamRuntimeLiveState.error;
   const streamRuntimeFetching = streamRuntimeLiveState.status === "connecting";
@@ -243,10 +242,9 @@ export function StreamStatePanel({
   // A stale or never-configured key (e.g. after a reconnect) falls back to the
   // overview rather than a blank detail pane.
   const focusedSubscription = subscriptionRows.find((row) => row.name === focusedKey) ?? null;
-  const focusedConnection =
-    focusedSubscription == null
-      ? (connectionRows.find((row) => row.key === focusedKey) ?? null)
-      : null;
+  const focusedConnection = !focusedSubscription
+    ? (connectionRows.find((row) => row.key === focusedKey) ?? null)
+    : null;
   const focusedCore = focusedKey === CORE_STATE_KEY;
 
   const [runtimeStateLoad, setRuntimeStateLoad] = useState<ProcessorRuntimeStateLoad>({
@@ -255,15 +253,15 @@ export function StreamStatePanel({
   const [refreshKey, setRefreshKey] = useState(0);
   const focusedProcessorName =
     focusedSubscription?.kind === "processor-wake" ? focusedSubscription.name : null;
-  const focusedWakeFeedOpen = focusedSubscription?.connection !== undefined;
+  const focusedWakeFeedOpen = !!focusedSubscription?.connection;
   const coreRuntimeStateLoad = useMemo<ProcessorRuntimeStateLoad>(() => {
     // Error first: the LiveState hook deliberately keeps its last value through
     // reconnects, but a drill-in must still surface the transport failure
     // instead of silently presenting that retained value as current.
-    if (streamRuntimeError !== undefined) {
+    if (streamRuntimeError) {
       return { status: "error", name: CORE_STATE_KEY, message: streamRuntimeError };
     }
-    if (streamRuntime !== undefined) {
+    if (streamRuntime) {
       const coreState = streamRuntime.coreProcessorState;
       return {
         status: "loaded",
@@ -277,14 +275,14 @@ export function StreamStatePanel({
     return { status: "loading", name: CORE_STATE_KEY };
   }, [streamRuntime, streamRuntimeError]);
   const focusedRuntimeStateLoad = useMemo<ProcessorRuntimeStateLoad>(() => {
-    if (focusedProcessorName == null) return { status: "idle" };
+    if (!focusedProcessorName) return { status: "idle" };
     return runtimeStateLoad.status !== "idle" && runtimeStateLoad.name === focusedProcessorName
       ? runtimeStateLoad
       : { status: "loading", name: focusedProcessorName };
   }, [focusedProcessorName, runtimeStateLoad]);
 
   useEffect(() => {
-    if (!open || focusedProcessorName == null) return;
+    if (!open || !focusedProcessorName) return;
 
     // A sleeping processor holds no wake feed; do not wake it from a debug
     // panel just to read a snapshot.
@@ -334,9 +332,9 @@ export function StreamStatePanel({
         <SheetTitle className="sr-only">
           {focusedCore
             ? "Stream reduced state"
-            : focusedSubscription != null
+            : focusedSubscription
               ? `Subscription ${focusedSubscription.name}`
-              : focusedConnection != null
+              : focusedConnection
                 ? `Connection ${connectionLabel(focusedConnection)}`
                 : "Stream state"}
         </SheetTitle>
@@ -348,7 +346,7 @@ export function StreamStatePanel({
             onBack={onBack}
             onClose={onClose}
           />
-        ) : focusedSubscription != null ? (
+        ) : focusedSubscription ? (
           <SubscriptionDetailPane
             row={focusedSubscription}
             runtimeStateLoad={focusedRuntimeStateLoad}
@@ -357,7 +355,7 @@ export function StreamStatePanel({
             onBack={onBack}
             onClose={onClose}
           />
-        ) : focusedConnection != null ? (
+        ) : focusedConnection ? (
           <ConnectionDetailPane
             row={focusedConnection}
             busy={busy}
@@ -434,8 +432,7 @@ function StreamOverview({
   const eventConsumption = metrics.eventConsumption;
   const throughputSnapshot = streamRuntime?.runtime.metrics;
   const throughputReportedAtMs = Date.parse(throughputSnapshot?.reportedAt ?? "");
-  const canAgeThroughput =
-    throughputSnapshot !== undefined && Number.isFinite(throughputReportedAtMs);
+  const canAgeThroughput = !!throughputSnapshot && Number.isFinite(throughputReportedAtMs);
   const throughputNowMs = useTickingNowMs(
     1_000,
     canAgeThroughput,
@@ -443,7 +440,7 @@ function StreamOverview({
   );
   const throughput = useMemo(
     () =>
-      throughputSnapshot === undefined
+      !throughputSnapshot
         ? undefined
         : ageStreamThroughputMetrics(throughputSnapshot, throughputNowMs),
     [throughputNowMs, throughputSnapshot],
@@ -455,7 +452,7 @@ function StreamOverview({
   const storageSizeBytes = streamRuntime?.runtime.storageSizeBytes;
   const ephemeralEvents = streamRuntime?.runtime.ephemeralEvents;
   const latencyPoints = sparklinePoints(metrics.spark, 368, 44);
-  const agentTokens = tokenUsage == null ? null : readAgentTokenUsageVitals(tokenUsage);
+  const agentTokens = !tokenUsage ? null : readAgentTokenUsageVitals(tokenUsage);
 
   return (
     <>
@@ -482,28 +479,30 @@ function StreamOverview({
               label="events"
               title="Durable events reduced into the stream's core state"
               value={
-                serverEventCount === null ? `${eventCount}` : serverEventCount.toLocaleString()
+                !Number.isFinite(serverEventCount)
+                  ? `${eventCount}`
+                  : serverEventCount.toLocaleString()
               }
             />
             <MetricStat
               label="head"
               title="Stream head offset"
-              value={headOffset === null ? `#${eventCount}` : `#${headOffset}`}
+              value={!Number.isFinite(headOffset) ? `#${eventCount}` : `#${headOffset}`}
             />
             <MetricStat
               label="storage"
               title="Stream Durable Object SQLite size (event log + sending cursors)"
-              value={storageSizeBytes === undefined ? "—" : formatFileSize(storageSizeBytes)}
+              value={!Number.isFinite(storageSizeBytes) ? "—" : formatFileSize(storageSizeBytes)}
             />
             <MetricStat
               label="ephemeral memory"
               title={
-                ephemeralEvents === undefined
+                !ephemeralEvents
                   ? "Memory-only ephemeral events in the current Stream Durable Object incarnation"
                   : `Memory-only ephemeral events in the current Stream Durable Object incarnation; FIFO limit ${formatFileSize(ephemeralEvents.maxBytes)}`
               }
               value={
-                ephemeralEvents === undefined
+                !ephemeralEvents
                   ? "—"
                   : `${ephemeralEvents.eventCount.toLocaleString()} · ${formatFileSize(ephemeralEvents.bytes)}`
               }
@@ -512,7 +511,7 @@ function StreamOverview({
               label="ephemeral evicted"
               title="Memory-only ephemeral events forgotten by FIFO eviction since this Stream Durable Object incarnation began"
               value={
-                ephemeralEvents === undefined
+                !ephemeralEvents
                   ? "—"
                   : `${ephemeralEvents.evictedEventCount.toLocaleString()} · ${formatFileSize(ephemeralEvents.evictedBytes)}`
               }
@@ -520,26 +519,18 @@ function StreamOverview({
             <MetricStat
               label="in · 5s"
               title="Bytes appended per second, trailing 5s"
-              value={
-                throughput === undefined
-                  ? "—"
-                  : formatBytesPerSecond(throughput.ingress.bytesPerSecond5s)
-              }
+              value={!throughput ? "—" : formatBytesPerSecond(throughput.ingress.bytesPerSecond5s)}
             />
             <MetricStat
               label="out · 5s"
               title="Bytes sent through all connections and subscriptions per second, trailing 5s"
-              value={
-                throughput === undefined
-                  ? "—"
-                  : formatBytesPerSecond(throughput.egress.bytesPerSecond5s)
-              }
+              value={!throughput ? "—" : formatBytesPerSecond(throughput.egress.bytesPerSecond5s)}
             />
             <MetricStat
               label="append · last"
               title="Most recent append call → commit acknowledged (this browser's own appends)"
               value={
-                eventConsumption?.appendRoundTripMs == null
+                !eventConsumption?.appendRoundTripMs
                   ? "—"
                   : `${eventConsumption.appendRoundTripMs.last}ms`
               }
@@ -548,7 +539,7 @@ function StreamOverview({
               label="own loop · last"
               title="Most recent append call → this browser's event connection received the committed event"
               value={
-                eventConsumption?.consumeOwnAppendMs == null
+                !eventConsumption?.consumeOwnAppendMs
                   ? "—"
                   : `${eventConsumption.consumeOwnAppendMs.last}ms`
               }
@@ -556,13 +547,13 @@ function StreamOverview({
             <MetricStat
               label="measuring"
               title={
-                throughput === undefined
+                !throughput
                   ? "Metrics are in-memory and reset when the stream Durable Object restarts"
                   : `Since ${throughput.measuredSince} (in-memory; resets on stream restart)`
               }
-              value={throughput === undefined ? "—" : sinceLabel(throughput.measuredSince)}
+              value={!throughput ? "—" : sinceLabel(throughput.measuredSince)}
             />
-            {agentTokens == null ? null : (
+            {!agentTokens ? null : (
               <>
                 <MetricStat
                   label="context"
@@ -601,25 +592,25 @@ function StreamOverview({
             <span className="font-mono text-[10px] text-muted-foreground/70">
               {graphMode === "throughput"
                 ? "appends (area) · deliveries (dashed) · 1s buckets · last 60s"
-                : `this browser's RTT · measured RPCs · p50 ${rtt === null ? "—" : `${rtt.p50}ms`} · p95 ${rtt === null ? "—" : `${rtt.p95}ms`}`}
+                : `this browser's RTT · measured RPCs · p50 ${!rtt ? "—" : `${rtt.p50}ms`} · p95 ${!rtt ? "—" : `${rtt.p95}ms`}`}
             </span>
           </div>
           <div className="mt-2 flex items-end gap-3">
             <span className="font-mono text-2xl font-semibold leading-none">
               {graphMode === "throughput" ? (
                 <>
-                  {throughput === undefined ? "—" : formatRate(throughput.ingress.perSecond5s)}
+                  {!throughput ? "—" : formatRate(throughput.ingress.perSecond5s)}
                   <span className="text-xs text-muted-foreground">ev/s · 5s</span>
                 </>
               ) : (
                 <>
-                  {rtt === null ? "—" : rtt.last}
+                  {!rtt ? "—" : rtt.last}
                   <span className="text-xs text-muted-foreground">ms</span>
                 </>
               )}
             </span>
             {graphMode === "throughput" ? (
-              throughput === undefined ? (
+              !throughput ? (
                 <span className="flex-1 pb-1 text-xs text-muted-foreground/70">measuring…</span>
               ) : (
                 <ThroughputGraph
@@ -681,7 +672,7 @@ function StreamOverview({
               Could not clear local client data.
             </div>
           ) : null}
-          {streamRuntimeError === undefined ? null : (
+          {!streamRuntimeError ? null : (
             <div className="mt-2 text-right text-xs text-red-600 dark:text-red-400">
               {streamRuntimeError}
             </div>
@@ -758,7 +749,7 @@ function buildSubscriptionRows(
   return Object.entries(byName)
     .flatMap(([name, value]) => {
       const row = readSubscriptionRow(name, value, streamRuntime);
-      return row == null ? [] : [row];
+      return !row ? [] : [row];
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -791,7 +782,7 @@ function readSubscriptionRow(
   const haltedAfterOffset = readNumber(haltedRecord, "afterOffset");
   const haltedAttempts = readNumber(haltedRecord, "attempts");
   const halted: SubscriptionRow["halted"] =
-    haltedAfterOffset !== null && haltedAttempts !== null
+    Number.isFinite(haltedAfterOffset) && Number.isFinite(haltedAttempts)
       ? {
           afterOffset: haltedAfterOffset,
           attempts: haltedAttempts,
@@ -852,21 +843,21 @@ function readSubscriptionRow(
     facet,
     // Durable facts (reduced from committed events) outrank the mirrored
     // runtime row, which may not have loaded yet.
-    status: halted !== undefined ? "halted" : (progress?.status ?? "active"),
-    backoff: progress?.nextAttemptAt != null,
-    ...(configuredAtOffset === undefined ? {} : { configuredAtOffset }),
-    ...(description === undefined ? {} : { description }),
-    ...(deliveryLabel === undefined ? {} : { deliveryLabel }),
-    ...(destinationStream === undefined ? {} : { destinationStream }),
-    ...(eventTypes === undefined ? {} : { eventTypes }),
-    ...(jsonataCondition === undefined ? {} : { jsonataCondition }),
-    ...(jsonataTransform === undefined ? {} : { jsonataTransform }),
-    ...(start === undefined ? {} : { start }),
-    ...(onFailingEvent === undefined ? {} : { onFailingEvent }),
-    ...(webhookUrl === undefined ? {} : { webhookUrl }),
-    ...(halted === undefined ? {} : { halted }),
-    ...(progress === undefined ? {} : { progress }),
-    ...(connection === undefined ? {} : { connection }),
+    status: halted ? "halted" : (progress?.status ?? "active"),
+    backoff: Number.isFinite(progress?.nextAttemptAt),
+    ...(!Number.isFinite(configuredAtOffset) ? {} : { configuredAtOffset }),
+    ...(!description ? {} : { description }),
+    ...(!deliveryLabel ? {} : { deliveryLabel }),
+    ...(!destinationStream ? {} : { destinationStream }),
+    ...(!eventTypes ? {} : { eventTypes }),
+    ...(!jsonataCondition ? {} : { jsonataCondition }),
+    ...(!jsonataTransform ? {} : { jsonataTransform }),
+    ...(!start ? {} : { start }),
+    ...(!onFailingEvent ? {} : { onFailingEvent }),
+    ...(!webhookUrl ? {} : { webhookUrl }),
+    ...(!halted ? {} : { halted }),
+    ...(!progress ? {} : { progress }),
+    ...(!connection ? {} : { connection }),
   };
 }
 
@@ -886,11 +877,11 @@ function buildConnectionRows(
       // The pushed runtime table is authoritative once it has loaded. Before
       // that first snapshot, keep the reduced presence entry visible instead
       // of making every open session disappear from the panel.
-      connected: streamRuntime === undefined ? entry.connected : runtime !== undefined,
-      ...(entry.description === undefined ? {} : { description: entry.description }),
-      ...(entry.processor === undefined ? {} : { processor: entry.processor }),
-      ...(entry.user === undefined ? {} : { user: entry.user }),
-      ...(runtime === undefined ? {} : { runtime }),
+      connected: !streamRuntime ? entry.connected : !!runtime,
+      ...(!entry.description ? {} : { description: entry.description }),
+      ...(!entry.processor ? {} : { processor: entry.processor }),
+      ...(!entry.user ? {} : { user: entry.user }),
+      ...(!runtime ? {} : { runtime }),
     });
   }
 
@@ -908,8 +899,8 @@ function buildConnectionRows(
       ...(runtime.kind === "hosted" && { subscriptionName: runtime.name }),
       connected: true,
       ...(typeof openedBy?.description === "string" && { description: openedBy.description }),
-      ...(user === undefined ? {} : { user }),
-      ...(announcement == null ? {} : { processor: announcement }),
+      ...(!user ? {} : { user }),
+      ...(!announcement ? {} : { processor: announcement }),
       runtime,
     });
   }
@@ -971,7 +962,7 @@ function SubscriptionRowButton({
         <span className={cn("block text-xs", subscriptionStatusTone(row))}>
           {subscriptionStatusLabel(row)}
         </span>
-        {lastError == null ? null : (
+        {!lastError ? null : (
           <span className="block truncate text-[11px] text-destructive" title={lastError}>
             {lastError}
           </span>
@@ -981,11 +972,11 @@ function SubscriptionRowButton({
       <span
         className={cn(
           "pt-0.5 text-right font-mono text-xs",
-          lag == null || lag === 0 ? "text-muted-foreground" : "text-amber-600",
+          !Number.isFinite(lag) || lag === 0 ? "text-muted-foreground" : "text-amber-600",
         )}
         title="head − confirmed"
       >
-        {lag == null ? "—" : String(lag)}
+        {!Number.isFinite(lag) ? "—" : String(lag)}
       </span>
     </button>
   );
@@ -1037,15 +1028,15 @@ function ConnectionRowButton({
         </span>
       </span>
       <span className="pt-0.5 text-right font-mono text-xs text-muted-foreground">
-        {rttMs == null ? "—" : `${rttMs}ms`}
+        {!Number.isFinite(rttMs) ? "—" : `${rttMs}ms`}
       </span>
       <span
         className={cn(
           "pt-0.5 text-right font-mono text-xs",
-          lag == null || lag === 0 ? "text-muted-foreground" : "text-amber-600",
+          !Number.isFinite(lag) || lag === 0 ? "text-muted-foreground" : "text-amber-600",
         )}
       >
-        {lag == null ? "—" : String(lag)}
+        {!Number.isFinite(lag) ? "—" : String(lag)}
       </span>
     </button>
   );
@@ -1056,7 +1047,7 @@ function subscriptionLastError(row: SubscriptionRow): string | null {
 }
 
 function subscriptionKindLabel(row: SubscriptionRow): string {
-  const slug = row.processorSlug == null ? "" : ` · ${row.processorSlug}`;
+  const slug = !row.processorSlug ? "" : ` · ${row.processorSlug}`;
   const placement = row.facet ? " · facet" : "";
   return `${row.kind}${slug}${placement}`;
 }
@@ -1071,7 +1062,7 @@ function SubscriptionStatusBadge({ row }: { row: SubscriptionRow }) {
             className: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
           }
         : null;
-  if (badge == null) return null;
+  if (!badge) return null;
   return (
     <span
       className={cn(
@@ -1090,10 +1081,11 @@ function SubscriptionStatusBadge({ row }: { row: SubscriptionRow }) {
  * not stopped yet.
  */
 function subscriptionStatusLabel(row: SubscriptionRow): string {
-  const configured =
-    row.configuredAtOffset == null ? "configured" : `configured #${row.configuredAtOffset}`;
+  const configured = !Number.isFinite(row.configuredAtOffset)
+    ? "configured"
+    : `configured #${row.configuredAtOffset}`;
   if (row.status === "halted") {
-    return row.halted == null
+    return !row.halted
       ? `${configured} · halted`
       : `${configured} · halted after #${row.halted.afterOffset} (${row.halted.attempts} attempts)`;
   }
@@ -1101,11 +1093,11 @@ function subscriptionStatusLabel(row: SubscriptionRow): string {
     return `${configured} · retry backoff (attempt ${row.progress?.attempt ?? 0})`;
   }
   if (row.kind === "processor-wake") {
-    return row.connection === undefined
+    return !row.connection
       ? `${configured} · woken when events are waiting`
       : `${configured} · wake feed open`;
   }
-  if (row.progress != null) {
+  if (row.progress) {
     return row.progress.lag === 0 ? `${configured} · confirmed to head` : `${configured} · sending`;
   }
   return configured;
@@ -1114,7 +1106,7 @@ function subscriptionStatusLabel(row: SubscriptionRow): string {
 function subscriptionStatusTone(row: SubscriptionRow): string {
   if (row.status === "halted") return "text-destructive";
   if (row.backoff) return "text-amber-600";
-  if (row.connection !== undefined) return "text-emerald-600";
+  if (row.connection) return "text-emerald-600";
   return "text-muted-foreground";
 }
 
@@ -1125,33 +1117,28 @@ function subscriptionStatusTone(row: SubscriptionRow): string {
  */
 function ConfiguredFilterSummary({ row }: { row: SubscriptionRow }) {
   const hasEventFilter =
-    row.eventTypes != null && row.eventTypes.length > 0 && !row.eventTypes.includes("*");
+    !!row.eventTypes && row.eventTypes.length > 0 && !row.eventTypes.includes("*");
   const hasExtra =
-    row.description !== undefined ||
-    row.destinationStream !== undefined ||
-    hasEventFilter ||
-    row.jsonataCondition !== undefined;
+    !!row.description || !!row.destinationStream || hasEventFilter || !!row.jsonataCondition;
   if (!hasExtra) return null;
 
   const eventTypes = hasEventFilter
     ? row.eventTypes!
-    : row.destinationStream !== undefined ||
-        row.jsonataCondition !== undefined ||
-        row.description !== undefined
+    : row.destinationStream || row.jsonataCondition || row.description
       ? null // "all event types" shown as text, not chips
       : undefined;
 
   return (
     <span className="mt-1.5 flex flex-col gap-1 text-[11px] leading-snug text-muted-foreground">
-      {row.description == null ? null : (
+      {!row.description ? null : (
         <span className="text-[11px] leading-snug text-foreground/75">{row.description}</span>
       )}
-      {row.destinationStream == null ? null : (
+      {!row.destinationStream ? null : (
         <ConfiguredFilterLine label="to">
           <span className="break-all font-mono text-foreground/80">{row.destinationStream}</span>
         </ConfiguredFilterLine>
       )}
-      {eventTypes === undefined ? null : eventTypes == null ? (
+      {!eventTypes ? null : !eventTypes ? (
         <ConfiguredFilterLine label="types">
           <span className="text-foreground/70">all event types</span>
         </ConfiguredFilterLine>
@@ -1170,7 +1157,7 @@ function ConfiguredFilterSummary({ row }: { row: SubscriptionRow }) {
           </span>
         </ConfiguredFilterLine>
       )}
-      {row.jsonataCondition == null ? null : (
+      {!row.jsonataCondition ? null : (
         <ConfiguredFilterLine label="when">
           <span className="break-all font-mono text-foreground/80">
             {row.jsonataCondition.length > 80
@@ -1197,12 +1184,12 @@ function ConfiguredFilterLine({ label, children }: { label: string; children: Re
 function readAnnouncement(value: unknown): AgentUiProcessorAnnouncement | null {
   const processor = readRuntimeRecord(value);
   const announcement = readRuntimeRecord(processor?.announcement);
-  if (announcement == null) return null;
+  if (!announcement) return null;
   const slug = typeof announcement.slug === "string" ? announcement.slug : null;
   const version = typeof announcement.version === "string" ? announcement.version : null;
   const description =
     typeof announcement.description === "string" ? announcement.description : null;
-  if (slug == null || version == null || description == null) return null;
+  if (!slug || !version || !description) return null;
   const consumes = Array.isArray(announcement.consumes)
     ? announcement.consumes.filter((item): item is string => typeof item === "string")
     : [];
@@ -1302,7 +1289,7 @@ function MetricStat({
   valueClassName?: string;
 }) {
   return (
-    <div {...(title === undefined ? {} : { title })}>
+    <div {...(!title ? {} : { title })}>
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{label}</div>
       <div className={cn("mt-0.5 font-mono text-sm", valueClassName)}>{value}</div>
     </div>
@@ -1418,8 +1405,8 @@ function ConnectionDetailPane({
         onClose={onClose}
       />
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5 pt-2">
-        {row.user == null ? null : <SubscriberUserDetail user={row.user} />}
-        {processor == null ? (
+        {!row.user ? null : <SubscriberUserDetail user={row.user} />}
+        {!processor ? (
           <p className="text-sm leading-relaxed text-muted-foreground">
             {row.description ?? "This connection owner did not announce a processor contract."}
           </p>
@@ -1437,7 +1424,7 @@ function ConnectionDetailPane({
                   {processor.ownedEvents.map((owned) => (
                     <div key={owned.type} className="rounded-xl bg-muted/40 px-3 py-2">
                       <div className="truncate font-mono text-xs">{shortEventType(owned.type)}</div>
-                      {owned.description == null ? null : (
+                      {!owned.description ? null : (
                         <div className="truncate text-xs text-muted-foreground">
                           {owned.description}
                         </div>
@@ -1520,13 +1507,12 @@ function SubscriptionConfigDetail({ row }: { row: SubscriptionRow }) {
         : row.kind === "itx-call"
           ? "ITX-expression receiver"
           : "Hosted processor";
-  const eventTypes = row.eventTypes == null || row.eventTypes.includes("*") ? null : row.eventTypes;
-  const startLabel =
-    row.start === undefined
-      ? null
-      : row.start === "beginning"
-        ? "beginning (all history)"
-        : "now (from configure time)";
+  const eventTypes = !row.eventTypes || row.eventTypes.includes("*") ? null : row.eventTypes;
+  const startLabel = !row.start
+    ? null
+    : row.start === "beginning"
+      ? "beginning (all history)"
+      : "now (from configure time)";
   const genericBlurb =
     row.kind === "copy-to-stream"
       ? "Matching events are appended to the destination stream in order with source provenance."
@@ -1545,44 +1531,44 @@ function SubscriptionConfigDetail({ row }: { row: SubscriptionRow }) {
         <p className="text-sm leading-relaxed text-foreground/70">
           {row.description ?? genericBlurb}
         </p>
-        {row.description == null ? null : (
+        {!row.description ? null : (
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{genericBlurb}</p>
         )}
       </div>
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {row.deliveryLabel == null ? null : (
+        {!row.deliveryLabel ? null : (
           <DetailField label="delivers to" mono>
             {row.deliveryLabel}
           </DetailField>
         )}
-        {row.processorSlug == null ? null : (
+        {!row.processorSlug ? null : (
           <DetailField label="contract" mono>
             {row.processorSlug}
           </DetailField>
         )}
-        {row.destinationStream == null ? null : (
+        {!row.destinationStream ? null : (
           <DetailField label="destination stream" mono>
             {row.destinationStream}
           </DetailField>
         )}
-        {row.webhookUrl == null || row.deliveryLabel != null ? null : (
+        {!row.webhookUrl || row.deliveryLabel ? null : (
           <DetailField label="url" mono>
             {row.webhookUrl}
           </DetailField>
         )}
-        {startLabel == null ? null : <DetailField label="starts from">{startLabel}</DetailField>}
-        {row.onFailingEvent == null ? null : (
+        {!startLabel ? null : <DetailField label="starts from">{startLabel}</DetailField>}
+        {!row.onFailingEvent ? null : (
           <DetailField label="on failing event">{row.onFailingEvent}</DetailField>
         )}
       </div>
 
       <div>
         <SectionHeading>Receives these events</SectionHeading>
-        {eventTypes == null ? (
+        {!eventTypes ? (
           <span className="text-xs text-muted-foreground">
             All event types
-            {row.jsonataCondition == null ? "" : " matching the condition below"}
+            {!row.jsonataCondition ? "" : " matching the condition below"}
           </span>
         ) : (
           <div className="flex flex-wrap gap-1.5">
@@ -1599,7 +1585,7 @@ function SubscriptionConfigDetail({ row }: { row: SubscriptionRow }) {
         )}
       </div>
 
-      {row.jsonataCondition == null ? null : (
+      {!row.jsonataCondition ? null : (
         <div>
           <SectionHeading>Condition</SectionHeading>
           <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs leading-relaxed text-foreground/80 break-all whitespace-pre-wrap">
@@ -1611,7 +1597,7 @@ function SubscriptionConfigDetail({ row }: { row: SubscriptionRow }) {
         </div>
       )}
 
-      {row.jsonataTransform == null ? null : (
+      {!row.jsonataTransform ? null : (
         <div>
           <SectionHeading>Transform</SectionHeading>
           <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs leading-relaxed text-foreground/80 break-all whitespace-pre-wrap">
@@ -1661,12 +1647,12 @@ function SubscriptionDeliveryStats({ row }: { row: SubscriptionRow }) {
         />
         <RuntimeStateStat
           label="confirmed"
-          value={progress == null ? "—" : `#${progress.confirmedOffset}`}
+          value={!progress ? "—" : `#${progress.confirmedOffset}`}
         />
-        <RuntimeStateStat label="lag" value={progress == null ? "—" : String(progress.lag)} />
+        <RuntimeStateStat label="lag" value={!progress ? "—" : String(progress.lag)} />
         <RuntimeStateStat
           label="sent"
-          value={progress?.bytesSent == null ? "—" : formatFileSize(progress.bytesSent)}
+          value={!Number.isFinite(progress?.bytesSent) ? "—" : formatFileSize(progress.bytesSent)}
         />
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -1674,35 +1660,35 @@ function SubscriptionDeliveryStats({ row }: { row: SubscriptionRow }) {
           label="settle"
           value={(() => {
             const stats = progress?.completionLatencyMs;
-            return stats == null ? "—" : `${stats.last}ms · p95 ${stats.p95}ms`;
+            return !stats ? "—" : `${stats.last}ms · p95 ${stats.p95}ms`;
           })()}
         />
         <RuntimeStateStat
           label="call rtt"
           value={(() => {
             const stats = progress?.deliveryDurationMs;
-            return stats == null ? "—" : `${stats.last}ms · p95 ${stats.p95}ms`;
+            return !stats ? "—" : `${stats.last}ms · p95 ${stats.p95}ms`;
           })()}
         />
       </div>
-      {row.configuredAtOffset == null &&
-      row.halted == null &&
-      progress?.nextAttemptAt == null &&
-      lastError == null ? null : (
+      {!Number.isFinite(row.configuredAtOffset) &&
+      !row.halted &&
+      !Number.isFinite(progress?.nextAttemptAt) &&
+      !lastError ? null : (
         <div className="mt-2 rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-          {row.configuredAtOffset == null ? null : (
+          {!Number.isFinite(row.configuredAtOffset) ? null : (
             <div>configured at #{row.configuredAtOffset}</div>
           )}
-          {row.halted == null ? null : (
+          {!row.halted ? null : (
             <div className="text-destructive">
               halted after #{row.halted.afterOffset} after {row.halted.attempts} attempts
             </div>
           )}
-          {progress?.nextAttemptAt == null ? null : (
+          {!Number.isFinite(progress?.nextAttemptAt) ? null : (
             <div>next attempt {new Date(progress.nextAttemptAt).toLocaleString()}</div>
           )}
-          {lastError == null ? null : <div className="mt-1 text-destructive">{lastError}</div>}
-          {progress?.bytesSent == null && row.kind !== "processor-wake" ? (
+          {!lastError ? null : <div className="mt-1 text-destructive">{lastError}</div>}
+          {!Number.isFinite(progress?.bytesSent) && row.kind !== "processor-wake" ? (
             <div className="mt-1 text-muted-foreground/80">
               Delivery volume (bytes) resets when this stream Durable Object restarts — there is no
               durable delivery-volume counter.
@@ -1716,7 +1702,7 @@ function SubscriptionDeliveryStats({ row }: { row: SubscriptionRow }) {
 
 /** Live channel metrics for one open connection. */
 function ConnectionStats({ runtime }: { runtime: ConnectionRuntime | undefined }) {
-  if (runtime == null) return null;
+  if (!runtime) return null;
   return (
     <div>
       <SectionHeading>Channel</SectionHeading>
@@ -1726,7 +1712,7 @@ function ConnectionStats({ runtime }: { runtime: ConnectionRuntime | undefined }
         <RuntimeStateStat
           label="ping rtt"
           value={
-            runtime.pingRttMs == null
+            !runtime.pingRttMs
               ? "—"
               : `${runtime.pingRttMs.last}ms · p95 ${runtime.pingRttMs.p95}ms`
           }
@@ -1734,7 +1720,7 @@ function ConnectionStats({ runtime }: { runtime: ConnectionRuntime | undefined }
         <RuntimeStateStat
           label="settle"
           value={
-            runtime.completionLatencyMs == null
+            !runtime.completionLatencyMs
               ? "—"
               : `${runtime.completionLatencyMs.last}ms · p95 ${runtime.completionLatencyMs.p95}ms`
           }
@@ -1768,7 +1754,7 @@ function ProcessorRuntimeStateView({
   const runtimeState = runtimeStateLoad.status === "loaded" ? runtimeStateLoad.runtimeState : null;
   const snapshot = runtimeState?.snapshot;
   const lag =
-    snapshot == null || streamMaxOffset == null
+    !snapshot || !Number.isFinite(streamMaxOffset)
       ? null
       : Math.max(0, streamMaxOffset - snapshot.offset);
   const isAgent = processorSlug === "agent";
@@ -1781,7 +1767,7 @@ function ProcessorRuntimeStateView({
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <SectionHeading>Reduced state</SectionHeading>
         <div className="flex items-center gap-1">
-          {snapshot == null ? null : (
+          {!snapshot ? null : (
             <Button
               variant="ghost"
               size="sm"
@@ -1808,11 +1794,11 @@ function ProcessorRuntimeStateView({
         <RuntimeStateMessage>Loading reduced state…</RuntimeStateMessage>
       ) : runtimeStateLoad.status === "error" ? (
         <RuntimeStateMessage tone="error">{runtimeStateLoad.message}</RuntimeStateMessage>
-      ) : runtimeState == null ? (
+      ) : !runtimeState ? (
         <RuntimeStateMessage>
           The processor is asleep (no wake feed is open), so there is no live snapshot to read.
         </RuntimeStateMessage>
-      ) : snapshot == null ? (
+      ) : !snapshot ? (
         <RuntimeStateMessage>Runtime state did not include a snapshot.</RuntimeStateMessage>
       ) : (
         <div className="flex flex-col gap-2">
@@ -1829,7 +1815,7 @@ function ProcessorRuntimeStateView({
           ) : (
             <AgentPrettyState state={snapshot.state} />
           )}
-          {runtimeState.runtime == null ? null : (
+          {!runtimeState.runtime ? null : (
             <div>
               <SectionHeading>Runtime</SectionHeading>
               <SerializedObjectCodeBlock className="max-h-60" data={runtimeState.runtime} />

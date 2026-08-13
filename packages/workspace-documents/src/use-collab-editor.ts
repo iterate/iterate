@@ -111,15 +111,14 @@ export function useCollabEditor(input: {
     const redlines = (on: boolean): Extension => (on ? redlineExtension(connection) : []);
 
     let reflectTimer: ReturnType<typeof setTimeout> | null = null;
-    const liveReflector =
-      onLiveContent === undefined
-        ? []
-        : EditorView.updateListener.of((update) => {
-            if (!update.docChanged) return;
-            // Debounced: reflecting every keystroke reparses the whole board.
-            if (reflectTimer) clearTimeout(reflectTimer);
-            reflectTimer = setTimeout(() => onLiveContent(path, update.state.doc.toString()), 200);
-          });
+    const liveReflector = !onLiveContent
+      ? []
+      : EditorView.updateListener.of((update) => {
+          if (!update.docChanged) return;
+          // Debounced: reflecting every keystroke reparses the whole board.
+          if (reflectTimer) clearTimeout(reflectTimer);
+          reflectTimer = setTimeout(() => onLiveContent(path, update.state.doc.toString()), 200);
+        });
 
     const buildState = (content: string, version: number, redlines: Extension) =>
       EditorState.create({
@@ -140,7 +139,7 @@ export function useCollabEditor(input: {
     };
 
     connection.onReseed = (snapshot, unsynced) => {
-      if (cancelled || view === null) return;
+      if (cancelled || !view) return;
       connection.reseed(snapshot);
       // Layers ride the rebuilt state atomically — no undecorated frame.
       view.setState(buildState(snapshot.content, snapshot.version, redlines(redlineRef.current)));
@@ -153,13 +152,13 @@ export function useCollabEditor(input: {
     void connection
       .open()
       .then((opened) => {
-        if (cancelled || host.current === null) return;
+        if (cancelled || !host.current) return;
         onLiveContent?.(path, opened.content);
         view = new EditorView({
           parent: host.current,
           state: buildState(opened.content, opened.version, redlines(redlineRef.current)),
         });
-        if (apiRef !== undefined) {
+        if (apiRef) {
           const live = view;
           apiRef.current = {
             applyTransform: (transform) => {
@@ -196,7 +195,7 @@ export function useCollabEditor(input: {
             source: () => live.state.doc.toString(),
           };
         }
-        if (focusHeadline !== undefined) {
+        if (focusHeadline) {
           if (typeof focusHeadline === "object") {
             // Body typing across a rename remount: put the caret back.
             view.dispatch({
@@ -205,7 +204,7 @@ export function useCollabEditor(input: {
             });
           } else {
             const heading = /^#\s+(.*)$/m.exec(opened.content);
-            if (heading !== null) {
+            if (heading) {
               const end = heading.index + heading[0].length;
               const start = end - (heading[1]?.length ?? 0);
               view.dispatch({
@@ -231,12 +230,12 @@ export function useCollabEditor(input: {
         clearTimeout(reflectTimer);
         // Flush, don't drop: the final keystrokes must reach the board even
         // though the debounce hadn't fired.
-        if (view !== null && onLiveContent !== undefined) {
+        if (view && onLiveContent) {
           onLiveContent(path, view.state.doc.toString());
         }
       }
       toggleRef.current = null;
-      if (apiRef !== undefined) apiRef.current = null;
+      if (apiRef) apiRef.current = null;
       view?.destroy();
     };
   }, [

@@ -51,7 +51,7 @@ function event(offset: number, type = "example.com/tick", ephemeral?: boolean): 
     type,
     createdAt: "2026-08-03T12:00:00.000Z",
     path: "/t",
-    ...(ephemeral === undefined ? {} : { ephemeral }),
+    ...(typeof ephemeral === "boolean" && { ephemeral }),
   } as StreamEvent;
 }
 

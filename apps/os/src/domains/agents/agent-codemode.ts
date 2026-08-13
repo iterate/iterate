@@ -56,7 +56,7 @@ export class AgentCodemode implements AgentComponent {
         // through to the model untouched.
         if (payload.role === "user") {
           const slashCommand = resolveSlashCommand(payload.content);
-          if (slashCommand !== null) {
+          if (slashCommand) {
             const executionId = `${SLASH_COMMAND_EXECUTION_PREFIX}${slashCommand.command}:${event.offset}`;
             blockProcessorWhile(() =>
               appendUnlessLostIdempotencyRace(append, [
@@ -88,7 +88,7 @@ export class AgentCodemode implements AgentComponent {
         // with it.
         if (
           payload.role === "assistant" &&
-          payload.llmRequestOffset !== undefined &&
+          Number.isFinite(payload.llmRequestOffset) &&
           payload.llmRequestOffset === state.openRequest?.requestedAtOffset
         ) {
           const outcome = this.#format.parse(payload.content);
@@ -191,7 +191,7 @@ export class AgentCodemode implements AgentComponent {
             historyLimit: state.config.scriptResultHistoryLimit,
             writeWorkspaceFile: this.#host.deps.writeWorkspaceFile,
           });
-          if (content === null) return;
+          if (!content) return;
           await appendUnlessLostIdempotencyRace(append, [
             {
               type: "events.iterate.com/agents/context-added",
@@ -252,6 +252,7 @@ async function renderScriptSettlement(input: {
       `\`await itx.docs.search({ q: "several related words" })\` finds working examples.`
     );
   }
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- a script can return null/false/0; only undefined means "no result"
   if (settlement.result === undefined) return null;
   const text = stringifyScriptResult(settlement.result);
   // The preamble binding this exact result got: the SAME compact-JSON split
@@ -270,7 +271,7 @@ async function renderScriptSettlement(input: {
   // file's extension, and the read-it-back recipe all say so honestly.
   const isRawText = typeof settlement.result === "string";
   const fence = isRawText ? "```" : "```json";
-  if (text.length > historyLimit && writeWorkspaceFile !== undefined) {
+  if (text.length > historyLimit && writeWorkspaceFile) {
     try {
       const spilledPath = await spillScriptResult({
         executionId,
@@ -383,8 +384,8 @@ function renderOversizedJsonResult(input: {
     previewText = `${input.text.slice(0, Math.min(OVERSIZED_JSON_PREVIEW_MAX_BYTES, input.historyLimit))}\n… (cut mid-document)`;
   }
   return [
-    `Your script returned ${input.text.length.toLocaleString("en-US")} chars of JSON — over the ~${input.historyLimit.toLocaleString("en-US")}-char inline limit.${typeText === null ? "" : " Inferred type:"}`,
-    ...(typeText === null ? [] : ["```ts", `type Result = ${typeText}`, "```"]),
+    `Your script returned ${input.text.length.toLocaleString("en-US")} chars of JSON — over the ~${input.historyLimit.toLocaleString("en-US")}-char inline limit.${!typeText ? "" : " Inferred type:"}`,
+    ...(!typeText ? [] : ["```ts", `type Result = ${typeText}`, "```"]),
     "Preview (long arrays/strings elided):",
     "```json",
     previewText,

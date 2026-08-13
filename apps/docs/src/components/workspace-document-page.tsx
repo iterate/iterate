@@ -100,7 +100,7 @@ export function WorkspaceDocumentPage({
   const onTransform = useCallback(
     async (transform: (current: string) => string): Promise<boolean> => {
       const editor = editorApiRef.current;
-      if (editor === null || !editor.isLive()) return false;
+      if (!editor || !editor.isLive()) return false;
       editor.applyTransform(transform);
       return true;
     },
@@ -124,10 +124,10 @@ export function WorkspaceDocumentPage({
     });
   };
 
-  if (loadError !== null) {
+  if (loadError) {
     return <DocumentError workspacePath={workspacePath} path={path} message={loadError} />;
   }
-  if (loaded === null) {
+  if (!loaded) {
     return (
       <div className="relative grid min-h-svh place-items-center bg-muted/20">
         <SidebarTrigger className="absolute top-3 left-3 md:hidden" />
@@ -303,7 +303,7 @@ export function WorkspaceDocumentPage({
  * author color — with the display name decoded from each session's clientId.
  */
 function DocumentPresence({ peers }: { peers: { self: string; clientIds: string[] } | null }) {
-  if (peers === null) return null;
+  if (!peers) return null;
   const everyone = [peers.self, ...peers.clientIds.filter((clientId) => clientId !== peers.self)];
   return (
     <div className="mr-1 flex items-center -space-x-1.5">

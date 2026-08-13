@@ -22,7 +22,7 @@ import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts"
 
 const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
 
-test.skipIf(deployedBaseUrl() === null)(
+test.skipIf(!deployedBaseUrl())(
   "is MITM-intercepted and routed through project egress with secret substitution",
   { timeout: 180_000 },
   async () => {

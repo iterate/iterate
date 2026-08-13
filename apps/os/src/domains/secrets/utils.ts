@@ -99,10 +99,10 @@ export async function secretReferencesFromRequest(
     request.headers.forEach((value) => collectSecretReferences(byKey, value));
     collectSecretReferences(byKey, decodedUrl(request.url));
     const jsonTemplate = await inspectSecretJsonTemplate(request);
-    if (jsonTemplate.problem !== undefined) {
+    if (jsonTemplate.problem) {
       return { problems: [jsonTemplate.problem], references: [...byKey.values()] };
     }
-    if (jsonTemplate.value !== undefined) collectJsonSecretReferences(byKey, jsonTemplate.value);
+    if (jsonTemplate.value) collectJsonSecretReferences(byKey, jsonTemplate.value);
     return { problems: [], references: [...byKey.values()] };
   } catch (error) {
     if (
@@ -132,7 +132,7 @@ function collectSecretReferences(byKey: Map<string, SecretReference>, value: str
     for (const match of candidate.matchAll(SECRET_REFERENCE)) {
       const path = normalizeSecretPath(match[1]!);
       const field = match[2];
-      byKey.set(`${path} ${field ?? ""}`, field === undefined ? { path } : { field, path });
+      byKey.set(`${path} ${field ?? ""}`, !field ? { path } : { field, path });
     }
   }
 }
@@ -140,17 +140,17 @@ function collectSecretReferences(byKey: Map<string, SecretReference>, value: str
 function collectJsonSecretReferences(byKey: Map<string, SecretReference>, value: unknown): void {
   if (typeof value === "string") {
     const match = EXACT_SECRET_REFERENCE.exec(value);
-    if (match === null) return;
+    if (!match) return;
     const path = normalizeSecretPath(match[1]!);
     const field = match[2];
-    byKey.set(`${path} ${field || ""}`, field === undefined ? { path } : { field, path });
+    byKey.set(`${path} ${field || ""}`, !field ? { path } : { field, path });
     return;
   }
   if (Array.isArray(value)) {
     for (const item of value) collectJsonSecretReferences(byKey, item);
     return;
   }
-  if (typeof value !== "object" || value === null) return;
+  if (typeof value !== "object" || !value) return;
   for (const item of Object.values(value)) collectJsonSecretReferences(byKey, item);
 }
 
@@ -164,7 +164,7 @@ function collectJsonSecretReferences(byKey: Map<string, SecretReference>, value:
  */
 function headerValuesForSecretScan(value: string): string[] {
   const decoded = decodeBasicAuthorizationCredential(value);
-  return decoded === null ? [value] : [value, decoded.credential];
+  return !decoded ? [value] : [value, decoded.credential];
 }
 
 /**
@@ -177,7 +177,7 @@ function decodeBasicAuthorizationCredential(
   value: string,
 ): { prefix: string; encoded: string; suffix: string; credential: string } | null {
   const match = /^(\s*[Bb]asic\s+)([A-Za-z0-9+/]+=*)(\s*)$/.exec(value);
-  if (match === null) return null;
+  if (!match) return null;
   try {
     return {
       prefix: match[1]!,
@@ -197,9 +197,7 @@ function substituteSecretPlaceholdersInText(
 ): string {
   return value.replaceAll(SECRET_REFERENCE, (_match, path: string, field: string | undefined) =>
     resolve(
-      field === undefined
-        ? { path: normalizeSecretPath(path) }
-        : { field, path: normalizeSecretPath(path) },
+      !field ? { path: normalizeSecretPath(path) } : { field, path: normalizeSecretPath(path) },
     ),
   );
 }
@@ -215,7 +213,7 @@ function substituteSecretPlaceholdersInHeaderValue(
   resolve: (reference: SecretReference) => string,
 ): string {
   const basic = decodeBasicAuthorizationCredential(value);
-  if (basic !== null) {
+  if (basic) {
     const substituted = substituteSecretPlaceholdersInText(basic.credential, resolve);
     if (substituted !== basic.credential) {
       return `${basic.prefix}${btoa(substituted)}${basic.suffix}`;
@@ -279,7 +277,7 @@ function substitutePlatformPlaceholdersInHeaderValue(
   resolve: (reference: PlatformReference) => string,
 ): string {
   const basic = decodeBasicAuthorizationCredential(value);
-  if (basic !== null) {
+  if (basic) {
     const substituted = substitutePlatformPlaceholdersInText(basic.credential, resolve);
     if (substituted !== basic.credential) {
       return `${basic.prefix}${btoa(substituted)}${basic.suffix}`;
@@ -296,7 +294,7 @@ function substitutePlatformPlaceholdersInHeaderValue(
  * header.
  */
 export function selectSecretField(material: unknown, field?: string): string {
-  if (field === undefined) {
+  if (!field) {
     if (typeof material !== "string") {
       throw new SecretSubstitutionError("secret_material_not_a_string");
     }
@@ -304,7 +302,7 @@ export function selectSecretField(material: unknown, field?: string): string {
   }
   let value: unknown = material;
   for (const segment of field.split(".")) {
-    if (typeof value !== "object" || value === null || !(segment in value)) {
+    if (typeof value !== "object" || !value || !(segment in value)) {
       throw new SecretSubstitutionError("secret_reference_field_not_found");
     }
     value = (value as Record<string, unknown>)[segment];
@@ -355,9 +353,10 @@ export async function substituteSecretRequest(
   resolve: (reference: SecretReference) => string,
 ): Promise<Request> {
   const inspectedJsonTemplate = await inspectSecretJsonTemplate(request);
-  if (inspectedJsonTemplate.problem !== undefined) throw inspectedJsonTemplate.problem;
+  if (inspectedJsonTemplate.problem) throw inspectedJsonTemplate.problem;
   const jsonTemplate = inspectedJsonTemplate.value;
   let substituted = substituteSecretHeaders(request, resolve);
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- any present template (falsy JSON included) must be substituted and its header stripped
   if (jsonTemplate !== undefined) {
     const headers = new Headers(substituted.headers);
     headers.delete(SECRET_JSON_TEMPLATE_HEADER);
@@ -375,7 +374,7 @@ export async function substituteSecretRequest(
     ["password", url.password],
     ["host", url.host],
   ] as const) {
-    if (decodedUrl(value).match(SECRET_REFERENCE) !== null) {
+    if (decodedUrl(value).match(SECRET_REFERENCE)) {
       throw new SecretSubstitutionError(
         "secret_reference_outside_url_path",
         `getSecret(...) placeholders in a request URL are only substituted in the path; found one in the ${part}`,
@@ -388,9 +387,7 @@ export async function substituteSecretRequest(
     (_match, path: string, field: string | undefined) => {
       pathHasPlaceholder = true;
       return resolve(
-        field === undefined
-          ? { path: normalizeSecretPath(path) }
-          : { field, path: normalizeSecretPath(path) },
+        !field ? { path: normalizeSecretPath(path) } : { field, path: normalizeSecretPath(path) },
       );
     },
   );
@@ -403,7 +400,7 @@ async function inspectSecretJsonTemplate(
   request: Request,
 ): Promise<{ problem?: SecretSubstitutionError; value?: unknown }> {
   const mode = request.headers.get(SECRET_JSON_TEMPLATE_HEADER);
-  if (mode === null) return {};
+  if (!mode) return {};
   if (mode !== "json") {
     return { problem: new SecretSubstitutionError("secret_json_template_invalid_mode") };
   }
@@ -412,7 +409,7 @@ async function inspectSecretJsonTemplate(
     return { problem: new SecretSubstitutionError("secret_json_template_invalid_content_type") };
   }
   const inspectedBody = await readSecretJsonTemplateBody(request);
-  if (inspectedBody.problem !== undefined) return inspectedBody;
+  if (inspectedBody.problem) return inspectedBody;
   try {
     return { value: JSON.parse(inspectedBody.body) as unknown };
   } catch {
@@ -426,7 +423,7 @@ async function readSecretJsonTemplateBody(
   { body: string; problem?: undefined } | { body?: undefined; problem: SecretSubstitutionError }
 > {
   const stream = request.clone().body;
-  if (stream === null) return { body: "" };
+  if (!stream) return { body: "" };
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let body = "";
@@ -449,13 +446,13 @@ function substituteSecretJsonValues(
 ): unknown {
   if (typeof value === "string") {
     const match = EXACT_SECRET_REFERENCE.exec(value);
-    if (match === null) return value;
+    if (!match) return value;
     const path = normalizeSecretPath(match[1]!);
     const field = match[2];
-    return resolve(field === undefined ? { path } : { field, path });
+    return resolve(!field ? { path } : { field, path });
   }
   if (Array.isArray(value)) return value.map((item) => substituteSecretJsonValues(item, resolve));
-  if (typeof value !== "object" || value === null) return value;
+  if (typeof value !== "object" || !value) return value;
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [key, substituteSecretJsonValues(item, resolve)]),
   );
@@ -559,7 +556,7 @@ export class SecretSubstitutionError extends Error {
   readonly code: SecretErrorCode;
 
   constructor(code: SecretErrorCode, detail?: string) {
-    super(detail === undefined ? code : `${code}: ${detail}`);
+    super(!detail ? code : `${code}: ${detail}`);
     this.code = code;
     this.name = "SecretSubstitutionError";
   }

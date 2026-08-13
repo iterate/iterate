@@ -108,7 +108,7 @@ class ProofProcessor extends StreamProcessor<typeof ProofContract, ProofDeps> {
 
   protected override processEvent(args: ProcessEventArgs<typeof ProofContract>): undefined {
     const { event } = args;
-    if (event === null) return undefined;
+    if (!event) return undefined;
     if (event.type === "test/noted") {
       const note = event.payload.note;
       // Blocking: the per-event consequence that must not be lost — the effect
@@ -175,9 +175,9 @@ class KvStream implements ProcessorStream {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
     const out: StreamEvent[] = [];
     for (const input of events) {
-      if (input.idempotencyKey !== undefined) {
+      if (input.idempotencyKey) {
         const existing = this.#kv.get<number>(`fs:k:${input.idempotencyKey}`);
-        if (existing !== undefined) {
+        if (Number.isFinite(existing)) {
           out.push(this.#get(existing)!);
           continue;
         }
@@ -194,7 +194,7 @@ class KvStream implements ProcessorStream {
       };
       this.#kv.put(`fs:e:${pad(offset)}`, event);
       this.#kv.put("fs:max", offset);
-      if (input.idempotencyKey !== undefined) this.#kv.put(`fs:k:${input.idempotencyKey}`, offset);
+      if (input.idempotencyKey) this.#kv.put(`fs:k:${input.idempotencyKey}`, offset);
       out.push(event);
     }
     return Promise.resolve(out);
@@ -217,11 +217,11 @@ class KvStream implements ProcessorStream {
     const limit = args?.limit ?? 500;
     const max = this.#max();
     const events: StreamEvent[] = [];
-    const wantAll = args?.eventTypes === undefined || args.eventTypes.includes("*");
+    const wantAll = !args?.eventTypes || args.eventTypes.includes("*");
     for (let offset = Math.min(after, max) + 1; offset <= max && events.length < limit; offset++) {
-      if (before !== null && before !== undefined && offset >= before) break;
+      if (Number.isFinite(before) && offset >= before) break;
       const event = this.#get(offset);
-      if (event === undefined) continue;
+      if (!event) continue;
       if (!wantAll && !args!.eventTypes!.includes(event.type)) continue;
       events.push(event);
     }
@@ -235,9 +235,9 @@ class KvStream implements ProcessorStream {
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
-    if (args.offset !== undefined) return Promise.resolve(this.#get(args.offset));
+    if (Number.isFinite(args.offset)) return Promise.resolve(this.#get(args.offset));
     const offset = this.#kv.get<number>(`fs:k:${args.idempotencyKey}`);
-    return Promise.resolve(offset === undefined ? undefined : this.#get(offset));
+    return Promise.resolve(!Number.isFinite(offset) ? undefined : this.#get(offset));
   }
 
   readEvents(args?: StreamEventReadInput): ProcessorStreamPager {
@@ -312,7 +312,7 @@ export class ProofProcessorFacet extends ProcessorFacet<Env> {
     if (args?.includeEvents !== false) {
       for (let offset = 1; offset <= max; offset++) {
         const event = this.ctx.storage.kv.get<StreamEvent>(`fs:e:${pad(offset)}`);
-        if (event !== undefined) events.push(event);
+        if (event) events.push(event);
       }
     }
     return { streamId: FACET_STREAM_ID, maxOffset: max, events };
@@ -501,7 +501,7 @@ export class FacetTestParent extends DurableObject<Env> {
    * retention shape). Also exercises the response's getRuntimeState capability
    * once before releasing the rest of the response. */
   async wake(_args: Record<string, never>) {
-    if (this.#wake !== undefined) {
+    if (this.#wake) {
       try {
         this.#wake.call[Symbol.dispose]();
       } catch {
@@ -523,7 +523,7 @@ export class FacetTestParent extends DurableObject<Env> {
     let runtimeState: unknown = null;
     try {
       const result = response.getRuntimeState?.();
-      runtimeState = result === undefined ? null : await result;
+      runtimeState = !result ? null : await result;
       disposeIgnoredRpcResult(runtimeState);
       runtimeState = JSON.parse(JSON.stringify(runtimeState ?? null));
     } catch (error) {
@@ -557,7 +557,7 @@ export class FacetTestParent extends DurableObject<Env> {
     timeoutMs?: number;
   }) {
     const wake = this.#wake;
-    if (wake === undefined) throw new Error("wake() first — no retained processEventBatch");
+    if (!wake) throw new Error("wake() first — no retained processEventBatch");
     const timeoutMs = args.timeoutMs ?? 10_000;
     return await new Promise<
       StreamWakeDeliveryResult | { outcome: "timeout" } | { outcome: "call-threw"; error: string }
@@ -603,7 +603,7 @@ export class FacetTestParent extends DurableObject<Env> {
   }
 
   abortFacet(args?: { reason?: string }) {
-    if (this.#wake !== undefined) {
+    if (this.#wake) {
       try {
         this.#wake.call[Symbol.dispose]();
       } catch {

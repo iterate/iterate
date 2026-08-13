@@ -19,7 +19,7 @@ export function fakeSessionStore() {
   const store: CollabSessionStore = {
     append: async (path, epoch, batch) => {
       const session = sessions.get(path);
-      if (session === undefined || session.epoch !== epoch) {
+      if (!session || session.epoch !== epoch) {
         throw new Error(`stale collab session for ${path} — reopen`);
       }
       ops.set(path, [...(ops.get(path) ?? []), ...structuredClone(batch)]);
@@ -29,7 +29,7 @@ export function fakeSessionStore() {
     putSnapshot: async (path, snapshot, opts) => {
       if (opts?.birth !== true) {
         const session = sessions.get(path);
-        if (session === undefined || session.epoch !== snapshot.epoch) {
+        if (!session || session.epoch !== snapshot.epoch) {
           throw new Error(`stale collab session for ${path} — reopen`);
         }
       }
@@ -57,12 +57,12 @@ export function fakeSessionStore() {
     hasSession: (path) => sessions.has(path),
     markFlushed: (path, version, epoch) => {
       const row = sessions.get(path);
-      if (row && (epoch === undefined || row.epoch === epoch)) row.overlay = version;
+      if (row && (!epoch || row.epoch === epoch)) row.overlay = version;
     },
     setBases: (files) => {
       for (const file of files) {
         const row = sessions.get(file.path);
-        if (row === undefined || row.epoch !== file.epoch) continue;
+        if (!row || row.epoch !== file.epoch) continue;
         bases.set(file.path, { content: file.content, version: file.version });
         prune(file.path);
       }

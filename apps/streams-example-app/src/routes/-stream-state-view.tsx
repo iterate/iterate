@@ -34,7 +34,7 @@ export function StreamStateView({ streamView }: { streamView: StreamViewSearch }
       }
 
       const poll = async () => {
-        if (disposed || connection === undefined) return;
+        if (disposed || !connection) return;
         try {
           const runtimeState = await connection.stream.runtimeState();
           if (!disposed) {
@@ -51,7 +51,7 @@ export function StreamStateView({ streamView }: { streamView: StreamViewSearch }
 
     return () => {
       disposed = true;
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       connection?.[Symbol.dispose]();
     };
   }, [streamView.projectId, streamView.path]);
@@ -71,7 +71,7 @@ export function StreamStateView({ streamView }: { streamView: StreamViewSearch }
             {status}
           </output>
         </div>
-        {error !== undefined ? (
+        {error ? (
           <p
             className="border-b border-[#fecdca] bg-[#fff4f2] px-2.5 py-2 text-xs text-[#912018]"
             data-testid="stream-state-error"

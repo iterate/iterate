@@ -38,8 +38,7 @@ const network = vi.hoisted(() => {
             return stored
               .filter(
                 (event) =>
-                  event.offset > afterOffset &&
-                  (eventTypes === undefined || eventTypes.includes(event.type)),
+                  event.offset > afterOffset && (!eventTypes || eventTypes.includes(event.type)),
               )
               .slice(0, limit);
           },

@@ -48,7 +48,7 @@ type RunOptions = {
 /** Run an itx script body against a deployed OS worker over Cap'n Web. */
 export async function run(options: RunOptions) {
   const code = options.eval ?? (options.file ? await readFile(options.file, "utf8") : undefined);
-  if (code === undefined || (options.eval !== undefined && options.file !== undefined)) {
+  if (!code || (options.eval && options.file)) {
     throw new Error("Pass exactly one of -e/--eval or --file.");
   }
 
@@ -89,6 +89,7 @@ export async function run(options: RunOptions) {
 export function formatScriptError(error: unknown): string {
   if (!(error instanceof Error)) return `itx script failed: ${JSON.stringify(error)}\n`;
   const extras = Object.entries(error)
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- falsy error extras (exitCode: 0, '') are informative; only undefined is noise
     .filter(([, value]) => value !== undefined)
     .map(([key, value]) => `  ${key}: ${JSON.stringify(value)}\n`);
   const stack = error.stack?.startsWith(`${error.name}: ${error.message}`)
@@ -244,7 +245,7 @@ function initialConnectionRetryLog(retry: ItxInitialConnectionRetry) {
     attemptDurationMs: Math.round(retry.attemptDurationMs),
     delayMs: retry.delayMs,
     error: retry.error.message,
-    ...(code === undefined ? {} : { errorCode: code }),
+    ...(!code ? {} : { errorCode: code }),
     failedAttempt: retry.failedAttempt,
     nextAttempt: retry.nextAttempt,
     startedAt: retry.startedAt,
@@ -261,7 +262,7 @@ function parseVars(raw: string | undefined): Record<string, unknown> {
       `--vars must be a JSON object: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+  if (typeof parsed !== "object" || !parsed || Array.isArray(parsed)) {
     throw new Error("--vars must be a JSON object.");
   }
   return parsed as Record<string, unknown>;

@@ -30,6 +30,7 @@ const MAX_INFER_DEPTH = 32;
 
 function inferShape(value: unknown, depth: number): Shape {
   if (depth >= MAX_INFER_DEPTH) return { kind: "unknown" };
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/''/false must infer their real JSON types, not "null"
   if (value === null || value === undefined) return { kind: "null" };
   if (typeof value === "boolean") return { kind: "boolean" };
   if (typeof value === "number") return { kind: "number" };
@@ -44,7 +45,7 @@ function inferShape(value: unknown, depth: number): Shape {
     let element: Shape | null = null;
     for (const item of value) {
       const itemShape = inferShape(item, depth + 1);
-      element = element === null ? itemShape : mergeShapes(element, itemShape);
+      element = !element ? itemShape : mergeShapes(element, itemShape);
     }
     return { kind: "array", element, minLength: value.length, maxLength: value.length };
   }
@@ -52,6 +53,7 @@ function inferShape(value: unknown, depth: number): Shape {
     // undefined-valued keys are dropped, matching what JSON.stringify writes
     // to the spill file — they surface as optional fields after merging, not
     // as `| null` branches that the file would contradict.
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- falsy JSON values (0, '', false, null) are real fields; only undefined is dropped
     const entries = Object.entries(value).filter(([, child]) => child !== undefined);
     const fields = new Map(
       entries.map(([key, child]) => [key, { shape: inferShape(child, depth + 1), seen: 1 }]),
@@ -70,13 +72,13 @@ function maybeRecord(shape: Extract<Shape, { kind: "object" }>, keyCount: number
   if (keyCount < RECORD_KEY_THRESHOLD) return shape;
   let merged: Shape | null = null;
   for (const field of shape.fields.values()) {
-    merged = merged === null ? field.shape : mergeShapes(merged, field.shape);
+    merged = !merged ? field.shape : mergeShapes(merged, field.shape);
     if (merged.kind === "unknown") return shape;
     // A union of struct-ish shapes means the values genuinely differ — keep
     // the object rendering (the char budget will trim it if oversized).
     if (merged.kind === "union" && merged.branches.length >= MAX_UNION_BRANCHES) return shape;
   }
-  if (merged === null) return shape;
+  if (!merged) return shape;
   return { kind: "record", value: merged, keys: keyCount };
 }
 
@@ -85,7 +87,7 @@ function mergeShapes(a: Shape, b: Shape): Shape {
   if (a.kind === b.kind) {
     if (a.kind === "string" && b.kind === "string") {
       let distinct: Set<string> | null = null;
-      if (a.distinct !== null && b.distinct !== null) {
+      if (a.distinct && b.distinct) {
         distinct = new Set([...a.distinct, ...b.distinct]);
         // Stop tracking once clearly not an enum-ish field; keeps memory flat.
         if (distinct.size > MAX_TRACKED_STRINGS) distinct = null;
@@ -93,12 +95,11 @@ function mergeShapes(a: Shape, b: Shape): Shape {
       return { kind: "string", distinct, maxLength: Math.max(a.maxLength, b.maxLength) };
     }
     if (a.kind === "array" && b.kind === "array") {
-      const element =
-        a.element === null
-          ? b.element
-          : b.element === null
-            ? a.element
-            : mergeShapes(a.element, b.element);
+      const element = !a.element
+        ? b.element
+        : !b.element
+          ? a.element
+          : mergeShapes(a.element, b.element);
       return {
         kind: "array",
         element,
@@ -112,7 +113,7 @@ function mergeShapes(a: Shape, b: Shape): Shape {
         const existing = fields.get(key);
         fields.set(
           key,
-          existing === undefined
+          !existing
             ? incoming
             : {
                 shape: mergeShapes(existing.shape, incoming.shape),
@@ -171,7 +172,7 @@ function renderShape(shape: Shape, indent: string, options: RenderOptions, depth
     case "unknown":
       return "unknown";
     case "string": {
-      if (shape.distinct !== null && shape.distinct.size <= MAX_TRACKED_STRINGS) {
+      if (shape.distinct && shape.distinct.size <= MAX_TRACKED_STRINGS) {
         return [...shape.distinct].map((value) => JSON.stringify(value)).join(" | ");
       }
       if (shape.maxLength >= LONG_STRING_COMMENT_THRESHOLD) {
@@ -184,7 +185,7 @@ function renderShape(shape: Shape, indent: string, options: RenderOptions, depth
         shape.minLength === shape.maxLength
           ? `/* ${shape.minLength} item${shape.minLength === 1 ? "" : "s"} */`
           : `/* ${shape.minLength}–${shape.maxLength} items each */`;
-      if (shape.element === null) return `unknown[] ${lengthComment}`;
+      if (!shape.element) return `unknown[] ${lengthComment}`;
       const element = renderShape(shape.element, indent, options, depth + 1);
       const rendered =
         element.includes("\n") || element.includes(" | ") ? `Array<${element}>` : `${element}[]`;

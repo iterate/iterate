@@ -66,7 +66,7 @@ export function ExampleEventsPanel({
                     <div className="truncate font-mono text-sm">
                       {event.type.replace("events.iterate.com/", "")}
                     </div>
-                    {event.description == null ? null : (
+                    {!event.description ? null : (
                       <div className="mt-0.5 truncate text-sm text-muted-foreground">
                         {event.description}
                       </div>
@@ -88,7 +88,7 @@ function buildGroups(presence: readonly AgentUiPresenceEntry[]): ExampleGroup[] 
   for (const entry of presence) {
     const announcement = entry.processor;
     const slug = announcement?.slug;
-    if (announcement == null || slug == null || seen.has(slug)) continue;
+    if (!announcement || !slug || seen.has(slug)) continue;
     seen.add(slug);
     if (announcement.ownedEvents.length === 0) continue;
     groups.push({ slug, events: announcement.ownedEvents });

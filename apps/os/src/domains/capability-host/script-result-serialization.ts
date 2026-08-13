@@ -10,7 +10,7 @@ import type { JsonValue } from "../workers/schemas.ts";
  */
 function errorLike(value: unknown): { name?: unknown; message: string; stack?: unknown } | null {
   if (value instanceof Error) return value;
-  if (typeof value !== "object" || value === null) return null;
+  if (typeof value !== "object" || !value) return null;
   const candidate = value as { message?: unknown; stack?: unknown; name?: unknown };
   if (typeof candidate.message !== "string") return null;
   /* A bare `{message}` is data, not an error. A stack or a name alongside it is
@@ -64,10 +64,11 @@ interface SerializedError {
 }
 
 export function serializeScriptResult(result: unknown): JsonValue | undefined {
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- a script can return null/false/0; only undefined means "no result"
   if (result === undefined) return undefined;
   const json = JSON.stringify(result, (_key, value: unknown) => {
     const error = errorLike(value);
-    if (error === null) return value;
+    if (!error) return value;
     const serialized: SerializedError = {
       message: error.message,
       name: typeof error.name === "string" ? error.name : "Error",
@@ -79,5 +80,5 @@ export function serializeScriptResult(result: unknown): JsonValue | undefined {
    * `JSON.stringify(undefined)` is itself undefined — reachable when a script
    * returns something that serializes away, such as a bare function.
    */
-  return json === undefined ? undefined : (JSON.parse(json) as JsonValue);
+  return !json ? undefined : (JSON.parse(json) as JsonValue);
 }

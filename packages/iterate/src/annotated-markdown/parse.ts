@@ -86,17 +86,12 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
   let frontmatter: Frontmatter | null = null;
   let bodyStart = bomOffset;
   let firstBodyLineIndex = 0;
-  const openContent =
-    lines[0] === undefined ? null : raw.slice(lines[0].start + bomOffset, lines[0].contentEnd);
-  if (
-    lines[0] !== undefined &&
-    openContent !== null &&
-    openContent.replace(/[ \t]+$/, "") === "---"
-  ) {
+  const openContent = !lines[0] ? null : raw.slice(lines[0].start + bomOffset, lines[0].contentEnd);
+  if (lines[0] && openContent && openContent.replace(/[ \t]+$/, "") === "---") {
     let closeIndex = -1;
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i];
-      if (line !== undefined && isFence(raw.slice(line.start, line.contentEnd)) !== null) {
+      if (line && isFence(raw.slice(line.start, line.contentEnd))) {
         closeIndex = i;
         break;
       }
@@ -109,7 +104,7 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
       });
     }
     const closeLine = lines[closeIndex];
-    if (closeLine === undefined) throw new Error("unreachable: closeIndex points at a line");
+    if (!closeLine) throw new Error("unreachable: closeIndex points at a line");
     const contentRange: SourceRange = { start: lines[0].end, end: closeLine.start };
     const contentText = raw.slice(contentRange.start, contentRange.end);
     if (contentText.length > MAX_FRONTMATTER_LENGTH) {
@@ -168,32 +163,32 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
     let index = 0;
     let headingLine: Line | null = null;
     const first = contentLines[0];
-    if (first !== undefined && raw.startsWith("#### ", first.start)) {
+    if (first && raw.startsWith("#### ", first.start)) {
       headingLine = first;
       index = 1;
     }
     while (index < contentLines.length) {
       const line = contentLines[index];
-      if (line === undefined || raw.slice(line.start, line.contentEnd).trim() !== "") break;
+      if (!line || raw.slice(line.start, line.contentEnd).trim() !== "") break;
       index++;
     }
     let last = contentLines.length - 1;
     while (last >= index) {
       const line = contentLines[last];
-      if (line === undefined || raw.slice(line.start, line.contentEnd).trim() !== "") break;
+      if (!line || raw.slice(line.start, line.contentEnd).trim() !== "") break;
       last--;
     }
     const firstBody = contentLines[index];
     const lastBody = contentLines[last];
     const bodyRange: SourceRange =
-      firstBody !== undefined && lastBody !== undefined && index <= last
+      firstBody && lastBody && index <= last
         ? { start: firstBody.start, end: lastBody.contentEnd }
         : (() => {
-            const at = headingLine !== null ? headingLine.end : contentStart;
+            const at = headingLine ? headingLine.end : contentStart;
             return { start: at, end: at };
           })();
     let displayName: string | null = null;
-    if (headingLine !== null) {
+    if (headingLine) {
       const headingText = raw.slice(headingLine.start + "#### ".length, headingLine.contentEnd);
       const separator = headingText.lastIndexOf(" · ");
       const name = (separator === -1 ? headingText : headingText.slice(0, separator)).trim();
@@ -214,14 +209,13 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
   };
 
   const finishThread = (thread: OpenThread, endLine: Line): Thread => {
-    const preambleEnd =
-      thread.firstCommentLine !== null ? thread.firstCommentLine.start : endLine.start;
+    const preambleEnd = thread.firstCommentLine ? thread.firstCommentLine.start : endLine.start;
     let label: string | null = null;
     for (const line of lines) {
       if (line.start < thread.beginLine.end) continue;
       if (line.end > preambleEnd) break;
       const match = THREAD_HEADING.exec(raw.slice(line.start, line.contentEnd));
-      if (match !== null) {
+      if (match) {
         label = match[1] ?? null;
         break;
       }
@@ -238,7 +232,7 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
 
   for (let i = firstBodyLineIndex; i < lines.length; i++) {
     const line = lines[i];
-    if (line === undefined) continue;
+    if (!line) continue;
     const content = raw.slice(line.start, line.contentEnd);
     if (!isSentinelLine(content)) continue;
     const parsed = parseSentinelLine(content, line.start);
@@ -248,20 +242,20 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
     const token = parsed.token;
 
     if (token.kind === "store") {
-      if (storeLine !== null) {
+      if (storeLine) {
         return plain({
           code: "store-duplicate",
           message: "more than one iterate-annotations store",
           range: lineRange(line),
         });
       }
-      if (openThread !== null || openComment !== null) {
+      if (openThread || openComment) {
         throw new Error("unreachable: store sentinel seen before the first store");
       }
       storeLine = line;
       continue;
     }
-    if (storeLine === null) {
+    if (!storeLine) {
       return plain({
         code: "sentinel-outside-store",
         message: `${token.kind} sentinel before the iterate-annotations store`,
@@ -269,7 +263,7 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
       });
     }
 
-    if (openComment !== null) {
+    if (openComment) {
       if (token.kind === "comment-end") {
         if (token.id !== openComment.id) {
           return plain({
@@ -278,10 +272,9 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
             range: lineRange(line),
           });
         }
-        if (openThread === null) throw new Error("unreachable: comment open outside a thread");
+        if (!openThread) throw new Error("unreachable: comment open outside a thread");
         openThread.comments.push(finishComment(openComment, line));
-        if (openThread.firstCommentLine === null)
-          openThread.firstCommentLine = openComment.beginLine;
+        if (!openThread.firstCommentLine) openThread.firstCommentLine = openComment.beginLine;
         openComment = null;
         continue;
       }
@@ -292,7 +285,7 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
       });
     }
 
-    if (openThread !== null) {
+    if (openThread) {
       if (token.kind === "comment-begin") {
         commentCount++;
         if (commentCount > MAX_COMMENTS) {
@@ -310,7 +303,7 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
         continue;
       }
       if (token.kind === "anchor") {
-        if (openThread.anchor !== null || openThread.firstCommentLine !== null) {
+        if (openThread.anchor || openThread.firstCommentLine) {
           return plain({
             code: "anchor-misplaced",
             message: "anchor sentinel must appear once, before the thread's first comment",
@@ -363,10 +356,10 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
     });
   }
 
-  if (openComment !== null || openThread !== null) {
+  if (openComment || openThread) {
     return plain({
       code: "sentinel-unterminated",
-      message: `end of file inside an open ${openComment !== null ? "comment" : "thread"}`,
+      message: `end of file inside an open ${openComment ? "comment" : "thread"}`,
     });
   }
 
@@ -396,7 +389,7 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
   for (const thread of threads) {
     const commentIds = new Set(thread.comments.map((c) => c.id));
     for (const comment of thread.comments) {
-      if (comment.inReplyTo === null) continue;
+      if (!comment.inReplyTo) continue;
       if (comment.inReplyTo === comment.id || !commentIds.has(comment.inReplyTo)) {
         return plain({
           code: "invalid-reply",
@@ -407,15 +400,14 @@ export function parseAnnotatedMarkdown(raw: string): ParseResult {
     }
   }
 
-  const bodyEnd = storeLine !== null ? storeLine.start : raw.length;
+  const bodyEnd = storeLine ? storeLine.start : raw.length;
   return {
     kind: "structured",
     raw,
     frontmatter,
     body: raw.slice(bodyStart, bodyEnd),
     bodyRange: { start: bodyStart, end: bodyEnd },
-    discussion:
-      storeLine !== null ? { range: { start: storeLine.start, end: raw.length }, threads } : null,
+    discussion: storeLine ? { range: { start: storeLine.start, end: raw.length }, threads } : null,
     diagnostics: [],
   };
 }

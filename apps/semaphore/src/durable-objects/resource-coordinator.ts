@@ -362,7 +362,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
       .filter(
         (resource) =>
           !activeLeases.has(resource.slug) &&
-          (allowedSlugSet === null || allowedSlugSet.has(resource.slug)),
+          (!allowedSlugSet || allowedSlugSet.has(resource.slug)),
       )
       .sort((left, right) => (left.lastReleasedAt ?? 0) - (right.lastReleasedAt ?? 0));
     if (candidates.length === 0) {

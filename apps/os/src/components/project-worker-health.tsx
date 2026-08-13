@@ -51,7 +51,7 @@ export function ProjectWorkerHealthWarning({ projectId }: { projectId: string | 
       runtime: state.runtime.subscriptions,
     }),
     [projectId],
-    { slug: projectId ?? "", enabled: projectId !== null },
+    { slug: projectId ?? "", enabled: !!projectId },
   ).value;
   const struggling = useMemo(
     () => selectStrugglingSubscriptions(subscriptionState),
@@ -210,7 +210,7 @@ function StrugglingSubscriptionsSheet({
                       <Button
                         size="sm"
                         onClick={() => run("resume", subscription)}
-                        disabled={pending !== null}
+                        disabled={!!pending}
                       >
                         {pending === `${subscription.name}:resume`
                           ? "Resuming…"
@@ -222,7 +222,7 @@ function StrugglingSubscriptionsSheet({
                         size="sm"
                         variant="outline"
                         onClick={() => run("skip", subscription)}
-                        disabled={pending !== null}
+                        disabled={!!pending}
                       >
                         {pending === `${subscription.name}:skip`
                           ? "Skipping…"

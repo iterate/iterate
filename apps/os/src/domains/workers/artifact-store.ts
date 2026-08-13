@@ -83,7 +83,7 @@ export function workerBuildArtifactSizes(artifact: WorkerBuildArtifact): WorkerB
     let bucket = bucketForPath(moduleName);
     for (const line of code.split("\n")) {
       const section = /^\s*\/\/ (\S+\.(?:m?[jt]sx?|json))$/.exec(line);
-      if (section !== null) bucket = bucketForPath(section[1]!);
+      if (section) bucket = bucketForPath(section[1]!);
       attribute(bucket, byteLength(line) + 1);
     }
     attribute(bucket, -1); // the split added one newline the text doesn't end with
@@ -99,7 +99,7 @@ export function workerBuildArtifactSizes(artifact: WorkerBuildArtifact): WorkerB
       attributeCode(name, text);
       moduleBytes += byteLength(text);
     }
-    if (typeof module !== "string" && module.json !== undefined) {
+    if (typeof module !== "string" && module.json) {
       const data = JSON.stringify(module.json);
       attribute(bucketForPath(name), byteLength(data));
       moduleBytes += byteLength(data);

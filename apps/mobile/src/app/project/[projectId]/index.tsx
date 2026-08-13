@@ -52,7 +52,7 @@ export default function ChatListScreen() {
     queryFn: async () => {
       const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
       const key = await ensureApproverKeyEnrolled(baseUrl, projectId);
-      if (key !== null) {
+      if (key) {
         queryClient.setQueryData(["approver-key-status", projectId, baseUrl], {
           kind: "enrolled",
           key,

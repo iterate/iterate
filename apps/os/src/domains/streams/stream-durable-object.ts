@@ -199,7 +199,7 @@ export class StreamAlarmArmer {
 
   armNoLaterThan(atMs: number): void {
     const previous = this.#armedForMs;
-    if (previous !== null && previous <= atMs) return;
+    if (Number.isFinite(previous) && previous <= atMs) return;
     this.#armedForMs = atMs;
     try {
       // Deliberately not awaited or caught: the native output gate owns the
@@ -461,7 +461,7 @@ function createSubscriptionReceiverCalls(deps: {
     },
 
     async deliverToWebhook(url: string, delivery: StreamWebhookDelivery) {
-      if (deps.projectId === null) {
+      if (!deps.projectId) {
         throw new Error("webhook subscriptions require a project-scoped stream");
       }
       webhookEgress ??= projectEgressFetcher(
@@ -633,7 +633,7 @@ class StreamProcessorFacadeRpcTarget extends RpcTarget {
   // reconciliation, live-mount retirement, and the control-plane serialization
   // all engage. #requireCapabilityHost enforces that invariant.
   #requireCapabilityHost(): CapabilityHostFacadeWiring {
-    if (this.#capabilityHost === undefined) {
+    if (!this.#capabilityHost) {
       throw new Error("capability door dialed on a facade without capability-host wiring");
     }
     return this.#capabilityHost;
@@ -733,7 +733,7 @@ type HostedProcessorReceiver = Extract<
  * lifetime must not leak into the caller's Cap'n Web session.
  */
 function detachExpressionReadResult<T>(value: unknown, operation: string): T {
-  if (value === null || typeof value !== "object") return value as T;
+  if (!value || typeof value !== "object") return value as T;
   const detached: unknown = Array.isArray(value) ? [...value] : { ...value };
   Reflect.deleteProperty(detached as object, Symbol.dispose);
   disposeAcknowledgedRpcResult(value, operation);
@@ -949,7 +949,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         // delete here would strand the facet's revival until the next append
         // (reopening the exact zero-lag wedge the keepalive exists to close).
         const facetDesire = this.#readFacetAlarmAtMs();
-        if (facetDesire !== null) {
+        if (Number.isFinite(facetDesire)) {
           this.#alarmArmer.armNoLaterThan(facetDesire);
           return;
         }
@@ -1013,7 +1013,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #facetLiveStateLane(name: string): LiveStatePagers {
     let lane = this.#facetLiveStateLanes.get(name);
-    if (lane === undefined) {
+    if (!lane) {
       // The cache the flusher reads (readState must be synchronous — the
       // flusher sends what it read with no await in between). Pulls are
       // chained so a slower OLDER pull can never overwrite a newer one — the
@@ -1060,7 +1060,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   #createEventDeliveryAuthorityRoot(): unknown {
     const auth = streamDeliveryAuthContext(this.name.projectId);
-    return this.name.projectId === null
+    return !this.name.projectId
       ? deploymentItxForInternal({ auth, ctx: this.ctx })
       : itxForScope({
           auth,
@@ -1104,7 +1104,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     for (const ws of this.ctx.getWebSockets()) {
       for (const tag of this.ctx.getTags(ws)) {
         const lane = parseLiveStatePagerLaneTag(tag);
-        if (lane !== undefined) this.#facetLiveStateLane(lane);
+        if (lane) this.#facetLiveStateLane(lane);
       }
     }
 
@@ -1112,7 +1112,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // normally survives eviction, but a crash between markFired and the
     // re-arm could otherwise strand a persisted facet desire forever.
     const facetAlarmAtMs = this.#readFacetAlarmAtMs();
-    if (facetAlarmAtMs !== null) this.#alarmArmer.armNoLaterThan(facetAlarmAtMs);
+    if (Number.isFinite(facetAlarmAtMs)) this.#alarmArmer.armNoLaterThan(facetAlarmAtMs);
 
     // The first boot appends the stream's birth certificate; every wake
     // (fetch, RPC, alarm) appends a `woken` event, whose post-commit sends are
@@ -1138,7 +1138,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       // The standalone streams playground reuses this DO without hosting a
       // project worker. Do not invent a fake callback owner there: OS's PROJECT
       // binding is the capability that makes this feed real.
-      if (this.name.projectId !== null && "PROJECT" in this.env) {
+      if (this.name.projectId && "PROJECT" in this.env) {
         if (this.name.path !== "/") {
           this.append({
             type: "events.iterate.com/stream/subscription-configured",
@@ -1164,7 +1164,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }
-    if (this.#invalidCheckpointError !== undefined) {
+    if (this.#invalidCheckpointError) {
       console.error("stream core-state checkpoint was invalid; rebuilt from the event log", {
         path: this.name.path,
         stateVersion: CORE_STATE_VERSION,
@@ -1225,7 +1225,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   #requireHostedProcessorSubscription(name: string): HostedProcessorReceiver {
     const configured = this.#coreProcessorState.subscriptions.outbound.byName[name];
-    if (configured === undefined) {
+    if (!configured) {
       throw unconfiguredSubscriptionError(name);
     }
     const receiver = configured.configuration.receiver;
@@ -1275,7 +1275,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     })) as unknown as ProcessorFacetStub;
     if (!this.#configuredProcessorFacets.has(name)) {
       const parentName = this.ctx.id.name;
-      if (parentName === undefined) {
+      if (!parentName) {
         throw new Error("Stream Durable Object must be addressed by name.");
       }
       await facet.configure({
@@ -1295,7 +1295,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   #abortFacetOnVersionChange(name: string, version: string): void {
     const versionKey = `${FACET_SOURCE_VERSION_KV_PREFIX}${name}`;
     const previous = this.ctx.storage.kv.get<string>(versionKey);
-    if (previous !== undefined && previous !== version) {
+    if (previous && previous !== version) {
       this.ctx.facets.abort(name, `facet source changed for ${name}`);
       this.#configuredProcessorFacets.delete(name);
     }
@@ -1312,7 +1312,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     const facetClass = (this.ctx.exports as Record<string, unknown>).ProcessorFacet as
       | DurableObjectClass
       | undefined;
-    if (facetClass === undefined) {
+    if (!facetClass) {
       throw new Error(
         'facet-processor subscriptions require the OS worker to export the "ProcessorFacet" entrypoint',
       );
@@ -1344,7 +1344,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     ref: StatefulDynamicWorkerRef,
   ): Promise<{ class: DurableObjectClass; version: string }> {
     const projectId = this.name.projectId;
-    if (projectId === null) {
+    if (!projectId) {
       throw new Error(`userspace facet "${name}" requires a project stream`);
     }
     const loaded = await this.#workerRunnerForFacets(projectId).loadStatefulClass(ref);
@@ -1362,7 +1362,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** Merge a desire into the shared slot at the EARLIEST time and arm the real alarm. */
   #mergeFacetAlarmDesire(atMs: number): void {
     const existing = this.#readFacetAlarmAtMs();
-    const merged = existing === null ? atMs : Math.min(existing, atMs);
+    const merged = !Number.isFinite(existing) ? atMs : Math.min(existing, atMs);
     this.ctx.storage.kv.put(FACET_ALARM_KV_KEY, merged);
     this.#alarmArmer.armNoLaterThan(merged);
   }
@@ -1402,7 +1402,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   #fireDueFacetAlarms(alarmInfo?: AlarmInvocationInfo): void {
     const dueAtMs = this.#readFacetAlarmAtMs();
-    if (dueAtMs === null) return;
+    if (!Number.isFinite(dueAtMs)) return;
     if (dueAtMs > Date.now()) {
       // A fresh incarnation's armer memory is empty; keep the slot armed.
       this.#alarmArmer.armNoLaterThan(dueAtMs);
@@ -1417,14 +1417,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
     // Plain copy: the platform's AlarmInvocationInfo host object does not
     // serialize across the facet hop.
-    const info: AlarmInvocationInfo | undefined =
-      alarmInfo === undefined
-        ? undefined
-        : {
-            isRetry: alarmInfo.isRetry,
-            retryCount: alarmInfo.retryCount,
-            scheduledTime: alarmInfo.scheduledTime,
-          };
+    const info: AlarmInvocationInfo | undefined = !alarmInfo
+      ? undefined
+      : {
+          isRetry: alarmInfo.isRetry,
+          retryCount: alarmInfo.retryCount,
+          scheduledTime: alarmInfo.scheduledTime,
+        };
     for (const facet of facetNames) {
       this.#runInBackground(async () => {
         try {
@@ -1621,7 +1620,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       await facet.revokeCapability(input);
       if (
         record?.type === "live" &&
-        (input.providedAtOffset === undefined || input.providedAtOffset === record.providedAtOffset)
+        (!Number.isFinite(input.providedAtOffset) ||
+          input.providedAtOffset === record.providedAtOffset)
       ) {
         this.#capabilityProviderPagers.removeMount(record);
       }
@@ -1639,7 +1639,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       (candidate): candidate is Extract<CapabilityRecord, { type: "live" }> =>
         candidate.type === "live" && candidate.providedAtOffset === input.providedAtOffset,
     );
-    if (record === undefined) return undefined;
+    if (!record) return undefined;
     return this.#capabilityProviderPagers.activate(input, record);
   }
 
@@ -1693,7 +1693,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   async #ensureCapabilityProviderPagersReconciled(): Promise<void> {
     const active = this.#capabilityProviderPagerStartup;
-    if (active !== undefined) return await active;
+    if (active) return await active;
     const startup = this.#reconcileMissingCapabilityProviderPagers();
     this.#capabilityProviderPagerStartup = startup;
     try {
@@ -1784,9 +1784,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           action: receiver.action,
           ...(receiver.action === "facet-processor" && { placement: "facet" as const }),
           configuredAtOffset: entry.configuredAtOffset,
-          status:
-            row?.status ??
-            (entry.deliveryHalted !== undefined ? ("halted" as const) : ("active" as const)),
+          status: row?.status ?? (entry.deliveryHalted ? ("halted" as const) : ("active" as const)),
           lag: Math.max(0, head - confirmedOffset),
           confirmedOffset,
           lastError: row?.lastError ?? null,
@@ -1799,14 +1797,14 @@ export class StreamDurableObject extends DurableObject<Env> {
    * durable confirmed cursor and retry state. */
   describeSubscription(args: { name: string }): StreamSubscriptionDescription | null {
     const entry = this.#coreProcessorState.subscriptions.outbound.byName[args.name];
-    if (entry === undefined) return null;
+    if (!entry) return null;
     const row = this.#subscriptionCursorStore.get(args.name);
     const confirmedOffset = row?.confirmedOffset ?? 0;
     return {
       name: args.name,
       configuration: entry.configuration,
       configuredAtOffset: entry.configuredAtOffset,
-      status: row?.status ?? (entry.deliveryHalted !== undefined ? "halted" : "active"),
+      status: row?.status ?? (entry.deliveryHalted ? "halted" : "active"),
       lag: Math.max(0, this.#coreProcessorState.maxOffset - confirmedOffset),
       confirmedOffset,
       attempt: row?.attempt ?? 0,
@@ -1903,20 +1901,19 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (canonical.receiver.action !== "copy-to-stream") {
       throw new Error("setCopySubscription requires a copy action");
     }
-    if (canonical.name === undefined && args.idempotencyKey === undefined) {
+    if (!canonical.name && !args.idempotencyKey) {
       throw new Error(
         "a nameless copy subscription requires idempotencyKey so setup is safe to retry",
       );
     }
 
     const explicitName = canonical.name;
-    const existing =
-      explicitName === undefined
-        ? undefined
-        : this.#coreProcessorState.subscriptions.outbound.byName[explicitName];
+    const existing = !explicitName
+      ? undefined
+      : this.#coreProcessorState.subscriptions.outbound.byName[explicitName];
 
     let configuredEvent: StreamEvent;
-    if (existing !== undefined && jsonValuesEqual(existing.configuration, canonical)) {
+    if (existing && jsonValuesEqual(existing.configuration, canonical)) {
       const event = this.getEvent({ offset: existing.configuredAtOffset });
       if (event?.type !== "events.iterate.com/stream/subscription-configured") {
         throw new Error(
@@ -1932,7 +1929,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       configuredEvent = this.#append({ authority: "public" }, [
         {
           type: "events.iterate.com/stream/subscription-configured",
-          ...(args.idempotencyKey === undefined ? {} : { idempotencyKey: args.idempotencyKey }),
+          ...(!args.idempotencyKey ? {} : { idempotencyKey: args.idempotencyKey }),
           payload: canonical,
         },
       ])[0]!;
@@ -1979,7 +1976,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     const expectedReceiverPath = canonicalizeStreamPath(args.expectedReceiverPath);
     const configured = this.#coreProcessorState.subscriptions.outbound.byName[name];
     if (
-      configured === undefined ||
+      !configured ||
       configured.configuration.receiver.action !== "copy-to-stream" ||
       configured.configuration.receiver.receivingStreamPath !== expectedReceiverPath
     ) {
@@ -2028,13 +2025,13 @@ export class StreamDurableObject extends DurableObject<Env> {
         throw new Error("iterate-internal idempotency keys are platform-authored");
       }
 
-      if (body.idempotencyKey !== undefined) {
+      if (body.idempotencyKey) {
         // Same-batch idempotency should behave like already-persisted idempotency.
         const existing =
           idempotencyHitsInBatch.get(body.idempotencyKey) ??
           this.getEvent({ idempotencyKey: body.idempotencyKey });
-        if (existing !== undefined) {
-          if (expectedOffset !== undefined && expectedOffset !== existing.offset) {
+        if (existing) {
+          if (Number.isFinite(expectedOffset) && expectedOffset !== existing.offset) {
             throw new Error(`idempotency hit at offset ${existing.offset}, got ${expectedOffset}`);
           }
           if (options.authority === "copy") {
@@ -2042,10 +2039,9 @@ export class StreamDurableObject extends DurableObject<Env> {
             // source hop. The receiver's own drop-audit records have no hop;
             // their deterministic body and internal key are the complete
             // identity.
-            const isSameCopyAppend =
-              body.source?.copiedFrom?.at(-1) === undefined
-                ? sameIdempotentEvent(existing, body)
-                : sameCopiedEventIdentity(existing, body);
+            const isSameCopyAppend = !body.source?.copiedFrom?.at(-1)
+              ? sameIdempotentEvent(existing, body)
+              : sameCopiedEventIdentity(existing, body);
             if (isSameCopyAppend) {
               events.push(existing);
               continue;
@@ -2075,14 +2071,14 @@ export class StreamDurableObject extends DurableObject<Env> {
         createdAt: new Date().toISOString(),
         path: this.name.path,
       };
-      if (expectedOffset !== undefined && expectedOffset !== committed.offset) {
+      if (Number.isFinite(expectedOffset) && expectedOffset !== committed.offset) {
         throw new StreamOffsetConflictError(
           streamOffsetConflictMessage(expectedOffset, committed.offset),
         );
       }
       if (
         options.authority === "public" &&
-        committed.source?.copiedFrom === undefined &&
+        !committed.source?.copiedFrom &&
         committed.type === "events.iterate.com/stream/subscription-configured"
       ) {
         const configured = parseCommittedCoreEvent(
@@ -2101,7 +2097,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
       events.push(committed);
       newEvents.push(committed);
-      if (committed.idempotencyKey !== undefined) {
+      if (committed.idempotencyKey) {
         idempotencyHitsInBatch.set(committed.idempotencyKey, committed);
       }
     }
@@ -2166,8 +2162,9 @@ export class StreamDurableObject extends DurableObject<Env> {
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): StreamEvent | undefined {
-    if (args.idempotencyKey !== undefined)
+    if (typeof args.idempotencyKey === "string") {
       return this.#log.getByIdempotencyKey(args.idempotencyKey);
+    }
     return this.#ephemeralEvents.getByOffset(args.offset) ?? this.#log.getByOffset(args.offset);
   }
 
@@ -2212,10 +2209,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     } = {},
   ): StreamEvent[] {
     const limit = args.limit;
-    if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+    if (Number.isFinite(limit) && (!Number.isInteger(limit) || limit <= 0)) {
       throw new Error("getEvents limit must be a positive integer.");
     }
-    if (limit !== undefined && limit > MAX_GET_EVENTS_LIMIT) {
+    if (Number.isFinite(limit) && limit > MAX_GET_EVENTS_LIMIT) {
       throw new Error(`getEvents limit must be at most ${MAX_GET_EVENTS_LIMIT}.`);
     }
     return this.#readEventsSized({
@@ -2242,7 +2239,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     } = {},
   ): { streamId: string; streamMaxOffset: number; events: StreamEvent[] } {
     const streamId = this.#coreProcessorState.streamId;
-    if (streamId === undefined) {
+    if (!streamId) {
       throw new Error("stream identity is unavailable after stream creation");
     }
     return {
@@ -2325,7 +2322,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #appendOwedCircuitBreakerPause(): void {
     const tripOffset = this.#coreProcessorState.circuitBreaker.trippedAtOffset;
-    if (tripOffset === null || this.#coreProcessorState.paused) return;
+    if (!Number.isFinite(tripOffset) || this.#coreProcessorState.paused) return;
     this.#append({ authority: "core-event" }, [
       {
         type: "events.iterate.com/stream/paused",
@@ -2339,7 +2336,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   #announceToAncestors(): void {
     if (this.#ancestorsAnnouncedThisIncarnation || this.#ancestorAnnouncementInFlight) return;
     const path = this.#coreProcessorState.path;
-    if (path === undefined || path === "/") {
+    if (!path || path === "/") {
       this.#ancestorsAnnouncedThisIncarnation = true;
       return;
     }
@@ -2415,7 +2412,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // State persisted by a reducer of a different version is incomplete (it
     // was reduced before newer derived fields existed), so it is discarded and
     // rebuilt from the event log rather than trusted.
-    if (stored !== undefined && storedVersion === CORE_STATE_VERSION) {
+    if (stored && storedVersion === CORE_STATE_VERSION) {
       const parsed = CoreProcessorContract.stateSchema.safeParse(stored);
       if (parsed.success) {
         this.#deleteCoreStateRebuildCheckpoint();
@@ -2542,7 +2539,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     let next = state;
     while (next.maxOffset < highestOffset) {
       const reduced = this.#reduceNextCoreProcessorPage(next, highestOffset);
-      if (reduced === undefined) break;
+      if (!reduced) break;
       next = reduced;
     }
     return this.#applyHighestAssignedOffset(next);
@@ -2564,7 +2561,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     let pagesReduced = 0;
     while (state.maxOffset < highestOffset) {
       const reduced = this.#reduceNextCoreProcessorPage(state, highestOffset);
-      if (reduced === undefined) break;
+      if (!reduced) break;
       state = reduced;
       pagesReduced += 1;
       if (pagesReduced % CORE_STATE_REBUILD_CHECKPOINT_EVERY_PAGES === 0) {
@@ -2602,7 +2599,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #readCoreStateRebuildCheckpoint(): CoreProcessorState | undefined {
     const raw = this.ctx.storage.kv.get<unknown>(CORE_STATE_REBUILD_KEY);
-    if (raw === undefined) return undefined;
+    if (!raw) return undefined;
     const version = z.object({ stateVersion: z.number().int() }).safeParse(raw);
     if (version.success && version.data.stateVersion !== CORE_STATE_VERSION) {
       // Expected deploy residue: a staged replay has exactly the same reducer
@@ -2617,7 +2614,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       let creationMatches = false;
       try {
         const firstEvent = this.#log.getByOffset(1);
-        if (firstEvent !== undefined) {
+        if (firstEvent) {
           const created = parseCommittedCoreEvent(firstEvent, "events.iterate.com/stream/created");
           creationMatches =
             created.payload.projectId === this.name.projectId &&
@@ -2647,7 +2644,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #deleteCoreStateRebuildCheckpoint(): void {
-    if (this.ctx.storage.kv.get(CORE_STATE_REBUILD_KEY) === undefined) return;
+    if (!this.ctx.storage.kv.get(CORE_STATE_REBUILD_KEY)) return;
     this.ctx.storage.kv.delete(CORE_STATE_REBUILD_KEY);
   }
 
@@ -2692,11 +2689,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     relay?: { subscriberPagerId: string },
   ): StreamConnectionHandle {
     const connectionKey = args.connectionKey?.trim() || crypto.randomUUID();
-    if (this.#coreProcessorState.subscriptions.outbound.byName[connectionKey] !== undefined) {
+    if (this.#coreProcessorState.subscriptions.outbound.byName[connectionKey]) {
       throw new Error(`connectionKey "${connectionKey}" is reserved by a subscription`);
     }
     if (
-      args.replayAfterOffset !== undefined &&
+      Number.isFinite(args.replayAfterOffset) &&
       (!Number.isSafeInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
     ) {
       // NaN binds as SQL NULL downstream (`offset > NULL` matches nothing), so
@@ -2704,27 +2701,23 @@ export class StreamDurableObject extends DurableObject<Env> {
       // silently delivers nothing forever.
       throw new Error(`replayAfterOffset must be a non-negative integer`);
     }
-    if (
-      args.expectedStreamId !== undefined &&
-      args.expectedStreamId !== null &&
-      args.expectedStreamId.trim().length === 0
-    ) {
+    if (args.expectedStreamId && args.expectedStreamId.trim().length === 0) {
       throw new Error(`expectedStreamId must be null or a non-empty string`);
     }
     if (
-      args.maxReplayOffsetGap !== undefined &&
+      Number.isFinite(args.maxReplayOffsetGap) &&
       (!Number.isSafeInteger(args.maxReplayOffsetGap) || args.maxReplayOffsetGap < 0)
     ) {
       throw new Error(`maxReplayOffsetGap must be a non-negative integer`);
     }
     if (
-      args.maxDeliveryEvents !== undefined &&
+      Number.isFinite(args.maxDeliveryEvents) &&
       (!Number.isSafeInteger(args.maxDeliveryEvents) || args.maxDeliveryEvents < 1)
     ) {
       throw new Error(`maxDeliveryEvents must be a positive integer`);
     }
     if (
-      args.maxDeliveryBytes !== undefined &&
+      Number.isFinite(args.maxDeliveryBytes) &&
       (!Number.isSafeInteger(args.maxDeliveryBytes) || args.maxDeliveryBytes < 1)
     ) {
       throw new Error(`maxDeliveryBytes must be a positive integer`);
@@ -2742,16 +2735,15 @@ export class StreamDurableObject extends DurableObject<Env> {
     // of a deep core-contract failure.
     // The live `getRuntimeState` capability rides as a SIBLING argument (the
     // same position the processor wake response gives it), never inside the descriptor.
-    const openedBy =
-      args.openedBy === undefined
-        ? undefined
-        : ConnectionOpenerDescriptorSchema.parse(args.openedBy);
+    const openedBy = !args.openedBy
+      ? undefined
+      : ConnectionOpenerDescriptorSchema.parse(args.openedBy);
 
     // One filter shape everywhere: `eventTypes` is sugar for the filter's
     // type list (compileEventFilter also validates any condition upfront).
     const filterSpec: EventFilter = {
       ...args.filter,
-      ...(args.eventTypes === undefined ? {} : { eventTypes: [...args.eventTypes] }),
+      ...(!args.eventTypes ? {} : { eventTypes: [...args.eventTypes] }),
     };
     const filter = compileEventFilter(filterSpec);
 
@@ -2799,14 +2791,14 @@ export class StreamDurableObject extends DurableObject<Env> {
    * should call again with the same `afterOffset`.
    */
   async waitForEvent(args: Parameters<Stream["waitForEvent"]>[0]): Promise<StreamEvent> {
-    if (args.eventTypes === undefined && args.predicate === undefined) {
+    if (!args.eventTypes && !args.predicate) {
       throw new Error("waitForEvent requires eventTypes or predicate.");
     }
     if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
       throw new Error("waitForEvent timeoutMs must be a positive number.");
     }
     if (
-      args.afterOffset !== undefined &&
+      Number.isFinite(args.afterOffset) &&
       (!Number.isSafeInteger(args.afterOffset) || args.afterOffset < 0)
     ) {
       throw new Error("waitForEvent afterOffset must be a non-negative safe integer.");
@@ -2909,7 +2901,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error("waitUntilProcessed timeoutMs must be a positive number.");
     }
     const configured = this.#coreProcessorState.subscriptions.outbound.byName[trimmedName];
-    if (configured === undefined) {
+    if (!configured) {
       throw unconfiguredSubscriptionError(trimmedName);
     }
 
@@ -2935,13 +2927,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     const waiter = {
       check: () => {
         if (settled) return;
-        if (this.#coreProcessorState.subscriptions.outbound.byName[trimmedName] === undefined) {
+        if (!this.#coreProcessorState.subscriptions.outbound.byName[trimmedName]) {
           settled = true;
           confirmed.reject(new Error(`subscription "${trimmedName}" was removed while waiting`));
           return;
         }
         const row = this.#subscriptionCursorStore.get(trimmedName);
-        if (row !== undefined && row.confirmedOffset >= args.offset) {
+        if (row && row.confirmedOffset >= args.offset) {
           settled = true;
           confirmed.resolve();
         }
@@ -2956,7 +2948,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         new Error(
           `${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}subscription "${trimmedName}" confirmed ` +
             `${row?.confirmedOffset ?? 0} < ${args.offset} after ${timeoutMs}ms` +
-            `${row === undefined ? "" : ` (status: ${row.status})`}`,
+            `${!row ? "" : ` (status: ${row.status})`}`,
         ),
       );
     }, timeoutMs);
@@ -3036,7 +3028,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * Pager upgrades — nothing else. */
   async fetch(request: Request): Promise<Response> {
     const lane = liveStatePagerLaneKey(request);
-    if (lane !== undefined) {
+    if (lane) {
       // A socket upgrade is a read: it must not create a lane (whose pulls
       // dial the named facet) for a caller-chosen key the committed catalog
       // does not place under facet placement. Same gate as processorFacade.
@@ -3059,7 +3051,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         )
       );
     }
-    if (request.headers.get(CAPABILITY_PROVIDER_PAGER_HEADER) !== null) {
+    if (request.headers.get(CAPABILITY_PROVIDER_PAGER_HEADER)) {
       // Same catalog gate as the facet liveState lanes: a Pager may only
       // attach to a stream whose committed catalog places the capability-host
       // subscription under facet placement (the host create batch configures
@@ -3101,13 +3093,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     // A closed Capability Provider Pager is its provider's real departure:
     // journal the disconnect so reduction retires every mount it owned.
     const connectedAtOffset = this.#capabilityProviderPagers.connectedAtOffset(ws);
-    if (connectedAtOffset !== undefined) {
+    if (Number.isFinite(connectedAtOffset)) {
       await this.#ensureCapabilityProviderPagersReconciled();
       await this.#disconnectCapabilityProviderPager(connectedAtOffset);
       return;
     }
     const departed = this.#subscriberPagers.departedOnClose(ws);
-    if (departed === undefined) return;
+    if (!departed) return;
     try {
       this.#append({ authority: "core-event" }, [
         {

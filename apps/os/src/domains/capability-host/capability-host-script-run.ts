@@ -59,7 +59,7 @@ export async function runCapabilityHostScript(input: {
     eventTypes: [CREATED],
     limit: 1,
   });
-  if (created === undefined) {
+  if (!created) {
     throw new Error(`capability host at ${path} has not been created`);
   }
 
@@ -70,7 +70,7 @@ export async function runCapabilityHostScript(input: {
       payload: command,
     }),
   );
-  if (requested === undefined) {
+  if (!requested) {
     throw new Error(`Script execution "${command.executionId}" committed no request event.`);
   }
 
@@ -85,7 +85,7 @@ export async function runCapabilityHostScript(input: {
     const committedSettlement = await stream.getEvent({
       idempotencyKey: settlementIdempotencyKey,
     });
-    if (committedSettlement === undefined) {
+    if (!committedSettlement) {
       throw new Error(
         `Script execution "${command.executionId}" did not settle before its absolute deadline.`,
       );

@@ -78,10 +78,10 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
    * the lane the extension calls for. Rename fuel. */
   const resolveEntry = async (path: string): Promise<FileEntry> => {
     const current = effectiveEntry(changes.get(path) ?? {});
-    if (current !== undefined && current.type !== "delete") return current;
+    if (current && current.type !== "delete") return current;
     const lane = isBinaryRepoPath(path) ? "base64" : "utf8";
     const read = await itx.repos.get(repoPath).readFile({ path, encoding: lane });
-    if (read === null) throw new Error(`Repo file does not exist: "${path}".`);
+    if (!read) throw new Error(`Repo file does not exist: "${path}".`);
     return lane === "base64"
       ? { type: "write-base64", contentBase64: read.content }
       : { type: "write", content: read.content };
@@ -155,11 +155,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           // INSIDE a renamed folder, which would otherwise show its old
           // path's deletion state.
           if (selectedPath === fromPath) selectFile(toPath);
-          else if (
-            isFolder &&
-            selectedPath !== undefined &&
-            selectedPath.startsWith(`${fromPath}/`)
-          )
+          else if (isFolder && selectedPath && selectedPath.startsWith(`${fromPath}/`))
             selectFile(`${toPath}${selectedPath.slice(fromPath.length)}`);
         } catch (error) {
           toast.error(error instanceof Error ? error.message : "Could not rename.");
@@ -385,7 +381,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
         </ResizablePanel>
         <ResizableHandle />
         <ResizablePanel className="flex min-w-0 flex-col">
-          {selectedPath === undefined ? (
+          {!selectedPath ? (
             <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
               Select a file to view or edit it.
             </div>
@@ -400,7 +396,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                 </div>
               }
             >
-              {history && expandedCommitOid !== undefined ? (
+              {history && expandedCommitOid ? (
                 <CommitDiffPane
                   key={`${selectedPath}:${expandedCommitOid}`}
                   projectId={projectId}
@@ -438,7 +434,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                   onOpenWorking={() =>
                     patchSearch({ staged: undefined, diff: undefined, preview: undefined })
                   }
-                  stagedView={stagedView && changes.get(selectedPath)?.staged !== undefined}
+                  stagedView={stagedView && !!changes.get(selectedPath)?.staged}
                   onRestore={() => dropChange(selectedPath)}
                 />
               )}
@@ -484,8 +480,8 @@ function GitPanel({
         ? ("modified" as const)
         : ("added" as const);
 
-  const staged = [...changes].filter(([, change]) => change.staged !== undefined);
-  const working = [...changes].filter(([, change]) => change.working !== undefined);
+  const staged = [...changes].filter(([, change]) => !!change.staged);
+  const working = [...changes].filter(([, change]) => !!change.working);
   const plan = commitPlan(changes);
 
   const row = (

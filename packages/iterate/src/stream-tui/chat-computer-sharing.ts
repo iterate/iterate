@@ -110,7 +110,7 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
         if (exitIsExplained) return;
         publish({
           status: "error",
-          notice: `itx.${input.name} stopped unexpectedly (exit ${exitCode === null ? "unknown" : exitCode})`,
+          notice: `itx.${input.name} stopped unexpectedly (exit ${!Number.isFinite(exitCode) ? "unknown" : exitCode})`,
         });
       };
       launched.on("error", (error) => {
@@ -156,7 +156,7 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
         let event: ProviderEvent;
         try {
           const parsed: unknown = JSON.parse(line);
-          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          if (typeof parsed !== "object" || !parsed || Array.isArray(parsed)) {
             throw new Error("not an event object");
           }
           event = parsed as ProviderEvent;

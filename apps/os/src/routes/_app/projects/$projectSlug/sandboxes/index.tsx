@@ -81,11 +81,11 @@ function ProjectSandboxesIndexContent() {
             <Button
               variant="outline"
               size="sm"
-              nativeButton={dashboardUrl === null}
-              disabled={dashboardUrl === null}
-              title={dashboardUrl === null ? "Cloudflare account ID is not configured." : undefined}
+              nativeButton={!dashboardUrl}
+              disabled={!dashboardUrl}
+              title={!dashboardUrl ? "Cloudflare account ID is not configured." : undefined}
               render={
-                dashboardUrl === null ? undefined : (
+                !dashboardUrl ? undefined : (
                   <a
                     href={dashboardUrl}
                     target="_blank"
@@ -101,7 +101,7 @@ function ProjectSandboxesIndexContent() {
           </div>
         </div>
 
-        {sandboxes === undefined ? (
+        {!sandboxes ? (
           <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
             Loading sandboxes…
           </div>

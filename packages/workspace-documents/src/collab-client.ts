@@ -70,7 +70,7 @@ export class CollabConnection {
   }
 
   hasDeliveredOps(): boolean {
-    return this.#deliveredOps !== null;
+    return !!this.#deliveredOps;
   }
 
   takeDeliveredOps(): { changes: unknown; clientId: string }[] | null {
@@ -134,7 +134,7 @@ export class CollabConnection {
     const result = await this.transport.run((lane) =>
       lane.wait(this.filePath, this.epoch, afterVersion, this.clientId, this.presenceGeneration),
     );
-    if (result.status === "ops" && result.presence !== undefined) {
+    if (result.status === "ops" && result.presence) {
       this.presenceGeneration = result.presence.generation;
       this.onPresence?.(result.presence.clients);
       this.onPeers?.(result.presence.clients);

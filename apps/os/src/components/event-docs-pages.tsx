@@ -30,7 +30,7 @@ const MAX_FIELD_DEPTH = 5;
 const PAYLOAD_PREVIEW_MAX_LENGTH = 88;
 
 function asSchemaObject(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  if (typeof value !== "object" || !value || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
 }
 
@@ -43,7 +43,7 @@ function schemaVariants(schema: Record<string, unknown>): unknown[] | null {
 
 /** Compact TypeScript-flavored type label for one schema node. */
 function schemaTypeLabel(value: unknown): string {
-  if (value === true || value === undefined) return "any";
+  if (value === true || !value) return "any";
   const schema = asSchemaObject(value);
   if (!schema) return "any";
   if ("const" in schema) return JSON.stringify(schema.const);
@@ -68,12 +68,12 @@ function schemaTypeLabel(value: unknown): string {
   }
   if (
     type === "object" ||
-    (type === undefined && ("properties" in schema || "additionalProperties" in schema))
+    (!type && ("properties" in schema || "additionalProperties" in schema))
   ) {
     const properties = asSchemaObject(schema.properties);
     if (properties && Object.keys(properties).length > 0) return "object";
     const additional = schema.additionalProperties;
-    if (additional !== undefined && additional !== false) {
+    if (additional) {
       return `Record<string, ${schemaTypeLabel(additional === true ? undefined : additional)}>`;
     }
     return "object";
@@ -114,7 +114,7 @@ function schemaChildRows(value: unknown, depth: number): SchemaFieldRow[] {
       .map(asSchemaObject)
       .filter(
         (variant): variant is Record<string, unknown> =>
-          variant != null && asSchemaObject(variant.properties) != null,
+          !!variant && !!asSchemaObject(variant.properties),
       );
     if (objectVariants.length === 0) {
       const nonNull = variants.filter((variant) => asSchemaObject(variant)?.type !== "null");
@@ -179,8 +179,7 @@ function payloadPreview(value: unknown): string {
   if (properties) {
     const names = Object.keys(properties);
     if (names.length === 0) {
-      const loose =
-        schema.additionalProperties !== undefined && schema.additionalProperties !== false;
+      const loose = !!schema.additionalProperties;
       return loose ? "{ …any }" : "{}";
     }
     const required = new Set(Array.isArray(schema.required) ? schema.required : []);
@@ -527,7 +526,7 @@ function EventReferenceList(input: {
     <div className="divide-y rounded-md border">
       {input.events.map((event) => {
         const ownedElsewhere =
-          event.ownerContractSlug != null && event.ownerContractSlug !== input.ownContractSlug;
+          !!event.ownerContractSlug && event.ownerContractSlug !== input.ownContractSlug;
         const body = (
           <>
             <span className="block break-all font-mono text-sm">
@@ -615,10 +614,7 @@ function SchemaView({ schema }: { schema: unknown }) {
   const rows = schemaFieldRows(schema);
   // zod's `.loose()` objects emit `additionalProperties: {}` (any schema
   // other than `false` means extra keys are accepted).
-  const allowsAdditionalProperties =
-    schemaObject != null &&
-    schemaObject.additionalProperties !== undefined &&
-    schemaObject.additionalProperties !== false;
+  const allowsAdditionalProperties = !!schemaObject && !!schemaObject.additionalProperties;
 
   return (
     <div className="space-y-3">

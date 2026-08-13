@@ -190,7 +190,7 @@ class ItxAuthContext implements ItxAuth {
   }
 
   assertCanAccessProject(projectId: string | null): void {
-    if (projectId === null) {
+    if (!projectId) {
       if (!this.isAdmin()) {
         throw new Error(`principal "${this.#principal}" cannot access the platform project`);
       }
@@ -240,10 +240,10 @@ const streamDeliveryAuthContexts = new WeakSet<ItxAuthContext>();
  * to receiver-only methods without widening the ordinary project boundary. */
 export function streamDeliveryAuthContext(projectId: string | null): ItxAuthContext {
   const auth = new ItxAuthContext({
-    isAdmin: projectId === null,
+    isAdmin: !projectId,
     origin: "internal",
     principal: "trusted-internal",
-    ...(projectId === null ? {} : { projectIds: [projectId] }),
+    ...(!projectId ? {} : { projectIds: [projectId] }),
   });
   streamDeliveryAuthContexts.add(auth);
   return auth;
@@ -320,9 +320,9 @@ export async function resolveItxAuth(input: {
   }
 
   if (credentials.type === "project-secret") {
-    if (input.verifyProjectSecret === undefined) throw new ItxAuthenticationError();
-    const hasProjectId = credentials.projectId !== undefined;
-    const hasProjectSlug = credentials.projectSlug !== undefined;
+    if (!input.verifyProjectSecret) throw new ItxAuthenticationError();
+    const hasProjectId = !!credentials.projectId;
+    const hasProjectSlug = !!credentials.projectSlug;
     if (hasProjectId === hasProjectSlug || credentials.secret.length === 0) {
       throw new ItxAuthenticationError();
     }
@@ -332,7 +332,7 @@ export async function resolveItxAuth(input: {
       projectIdentifier,
       secret: credentials.secret,
     });
-    if (projectId === null) throw new ItxAuthenticationError();
+    if (!projectId) throw new ItxAuthenticationError();
     // Exactly one project, no admin, no user identity — and no directory
     // fallback: the credential IS the project scope; there is nothing to
     // widen into.
@@ -345,10 +345,10 @@ export async function resolveItxAuth(input: {
   }
 
   if (credentials.type === "project-app-session") {
-    if (input.verifyProjectAppSession === undefined) throw new ItxAuthenticationError();
+    if (!input.verifyProjectAppSession) throw new ItxAuthenticationError();
     if (credentials.token.length === 0) throw new ItxAuthenticationError();
     const claims = await input.verifyProjectAppSession(credentials.token);
-    if (claims === null) throw new ItxAuthenticationError();
+    if (!claims) throw new ItxAuthenticationError();
     // One user on one project, exactly as minted — no admin, no directory
     // fallback. The principal names the human so audit trails show who acted
     // through the proxied app.

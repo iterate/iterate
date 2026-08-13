@@ -34,7 +34,7 @@ export function CorePrettyState({
   runtime: Record<string, unknown> | undefined;
 }) {
   const core = asCoreState(state);
-  if (core == null) {
+  if (!core) {
     return <SerializedObjectCodeBlock className="max-h-[28rem]" data={state} />;
   }
 
@@ -85,7 +85,7 @@ export function CorePrettyState({
         />
       </div>
 
-      {core.path == null && core.projectId == null ? null : (
+      {!core.path && !core.projectId ? null : (
         <div className="rounded-xl bg-muted/40 px-3 py-2">
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">Stream</div>
           <div className="mt-1 break-all font-mono text-xs">
@@ -97,12 +97,12 @@ export function CorePrettyState({
         </div>
       )}
 
-      {paused || trippedAtOffset != null ? (
+      {paused || Number.isFinite(trippedAtOffset) ? (
         <div className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
           {paused ? (
             <div>Paused{typeof core.pauseReason === "string" ? `: ${core.pauseReason}` : ""}</div>
           ) : null}
-          {trippedAtOffset == null ? null : (
+          {!Number.isFinite(trippedAtOffset) ? null : (
             <div>Circuit breaker tripped at #{trippedAtOffset}</div>
           )}
         </div>
@@ -121,13 +121,12 @@ export function CorePrettyState({
               const lag = readNumber(subscriptionProgress, "lag");
               // Durable facts outrank the mirrored runtime row; halted vs
               // plain retry stay visibly distinct.
-              const status =
-                configured?.deliveryHalted !== undefined
-                  ? "halted"
-                  : typeof subscriptionProgress?.status === "string" &&
-                      subscriptionProgress.status !== "active"
-                    ? subscriptionProgress.status
-                    : null;
+              const status = configured?.deliveryHalted
+                ? "halted"
+                : typeof subscriptionProgress?.status === "string" &&
+                    subscriptionProgress.status !== "active"
+                  ? subscriptionProgress.status
+                  : null;
               const filter = readRuntimeRecord(payload?.filter);
               const eventTypes = Array.isArray(filter?.eventTypes)
                 ? filter.eventTypes.filter((t): t is string => typeof t === "string")
@@ -155,8 +154,8 @@ export function CorePrettyState({
                       }
                     >
                       {kind}
-                      {status == null ? "" : ` · ${status}`}
-                      {lag == null ? "" : ` · lag ${lag}`}
+                      {!status ? "" : ` · ${status}`}
+                      {!Number.isFinite(lag) ? "" : ` · lag ${lag}`}
                     </div>
                   </div>
                   {typeof payload?.description !== "string" ||
@@ -165,12 +164,12 @@ export function CorePrettyState({
                       {payload.description.trim()}
                     </div>
                   )}
-                  {deliveryHint == null ? null : (
+                  {!deliveryHint ? null : (
                     <div className="mt-1 break-all font-mono text-[11px] text-foreground/70">
                       {deliveryHint}
                     </div>
                   )}
-                  {eventTypes.length === 0 && condition == null ? null : (
+                  {eventTypes.length === 0 && !condition ? null : (
                     <div className="mt-1 text-[11px] text-muted-foreground">
                       {/* `*` anywhere means "all types" — same convention as EventFilter. */}
                       {eventTypes.length === 0 || eventTypes.includes("*")
@@ -178,7 +177,7 @@ export function CorePrettyState({
                         : eventTypes
                             .map((type) => type.replace("events.iterate.com/", ""))
                             .join(", ")}
-                      {condition == null
+                      {!condition
                         ? ""
                         : ` when ${condition.length > 48 ? `${condition.slice(0, 45)}…` : condition}`}
                     </div>
@@ -243,7 +242,7 @@ export function CorePrettyState({
 }
 
 function asCoreState(state: unknown): Record<string, unknown> | null {
-  if (state == null || typeof state !== "object") return null;
+  if (!state || typeof state !== "object") return null;
   const record = state as Record<string, unknown>;
   if (!("maxOffset" in record) && !("subscriptions" in record)) {
     return null;
@@ -254,19 +253,19 @@ function asCoreState(state: unknown): Record<string, unknown> | null {
 /** Pretty renderer for the agent processor reduced state (status machine). */
 export function AgentPrettyState({ state }: { state: unknown }) {
   const agent = asAgentState(state);
-  if (agent == null) {
+  if (!agent) {
     return <SerializedObjectCodeBlock className="max-h-[28rem]" data={state} />;
   }
 
   const openRequest =
-    agent.openRequest != null && typeof agent.openRequest === "object"
+    agent.openRequest && typeof agent.openRequest === "object"
       ? (agent.openRequest as Record<string, unknown>)
       : null;
   const paused =
-    agent.paused != null && typeof agent.paused === "object"
+    agent.paused && typeof agent.paused === "object"
       ? (agent.paused as Record<string, unknown>)
       : null;
-  const phase = paused != null ? "paused" : openRequest == null ? "idle" : "requested";
+  const phase = paused ? "paused" : !openRequest ? "idle" : "requested";
   const config = readRuntimeRecord(agent.config);
   const llm = readRuntimeRecord(config?.llm);
   const contextItems = Array.isArray(agent.contextItems) ? agent.contextItems : [];
@@ -274,7 +273,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
   const system = contextItems.filter(isSystem);
   const history = contextItems.filter((item) => !isSystem(item));
   const lastMessage = history.length > 0 ? history[history.length - 1] : null;
-  const lastPreview = lastMessage == null ? null : previewProjectedItem(lastMessage);
+  const lastPreview = !lastMessage ? null : previewProjectedItem(lastMessage);
   const scripts = Array.isArray(agent.activeScriptExecutionIds)
     ? agent.activeScriptExecutionIds
     : [];
@@ -288,7 +287,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
         <RuntimeStateStat label="failures" value={String(agent.consecutiveLlmFailures ?? 0)} />
       </div>
 
-      {openRequest == null ? null : (
+      {!openRequest ? null : (
         <div className="rounded-xl bg-muted/40 px-3 py-2">
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
             Open request
@@ -297,7 +296,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
         </div>
       )}
 
-      {paused == null ? null : (
+      {!paused ? null : (
         <div className="rounded-xl bg-amber-500/10 px-3 py-2">
           <div className="text-[10px] uppercase tracking-wide text-amber-700/80 dark:text-amber-300/80">
             Paused
@@ -331,7 +330,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
           </div>
           <div className="font-mono text-xs text-muted-foreground">{history.length} items</div>
         </div>
-        {lastPreview == null ? (
+        {!lastPreview ? (
           <div className="mt-1 text-xs text-muted-foreground">No messages yet.</div>
         ) : (
           <div className="mt-1 text-xs text-foreground/80">
@@ -364,7 +363,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
 }
 
 function asAgentState(state: unknown): Record<string, unknown> | null {
-  if (state == null || typeof state !== "object") return null;
+  if (!state || typeof state !== "object") return null;
   const record = state as Record<string, unknown>;
   // Agent state is recognized by its provider-neutral context projection
   // (`contextItems`) plus its config.
@@ -377,15 +376,13 @@ function asAgentState(state: unknown): Record<string, unknown> | null {
 /** A projected context item is `{ offset, payload }`; the model-visible fields
  * (role, content, key) live on the payload. */
 function readItemPayload(item: unknown): Record<string, unknown> | null {
-  if (item == null || typeof item !== "object") return null;
+  if (!item || typeof item !== "object") return null;
   const payload = (item as Record<string, unknown>).payload;
-  return payload != null && typeof payload === "object"
-    ? (payload as Record<string, unknown>)
-    : null;
+  return payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
 }
 
 function renderProjectedContextItem(item: unknown): string {
-  if (item == null || typeof item !== "object") return String(item);
+  if (!item || typeof item !== "object") return String(item);
   const record = item as Record<string, unknown>;
   const payload = readItemPayload(item) ?? {};
   const fields = [
@@ -393,13 +390,13 @@ function renderProjectedContextItem(item: unknown): string {
     typeof payload.key === "string" ? `key=${JSON.stringify(payload.key)}` : null,
     typeof record.updatesOffset === "number" ? `updates=@${record.updatesOffset}` : null,
     typeof payload.role === "string" ? `role=${payload.role}` : null,
-  ].filter((field): field is string => field !== null);
+  ].filter((field): field is string => !!field);
   return `${fields.join(" ")}\n${String(payload.content ?? "")}`;
 }
 
 function previewProjectedItem(item: unknown): { role: string; text: string } | null {
   const payload = readItemPayload(item);
-  return payload == null ? null : previewChatMessage(payload);
+  return !payload ? null : previewChatMessage(payload);
 }
 
 function previewChatMessage(message: Record<string, unknown>): { role: string; text: string } {
@@ -411,7 +408,7 @@ function previewChatMessage(message: Record<string, unknown>): { role: string; t
     text = content
       .map((part) => {
         if (typeof part === "string") return part;
-        if (part != null && typeof part === "object" && "text" in part) {
+        if (part && typeof part === "object" && "text" in part) {
           return String((part as { text?: unknown }).text ?? "");
         }
         return "";

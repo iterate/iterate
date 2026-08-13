@@ -64,7 +64,7 @@ test("a near-future schedule triggers, runs its itx script, and records the outc
       completed = events.find(
         (event) => event.type === COMPLETED_TYPE && (event.payload as { key?: string }).key === key,
       );
-      return completed !== undefined;
+      return !!completed;
     },
     () => `trigger-completed for ${key} on ${SCHEDULER_STREAM_PATH}`,
   );
@@ -167,7 +167,7 @@ test("manual trigger runs a far-future schedule now; cancel removes it", async (
           event.type === COMPLETED_TYPE &&
           (event.payload as { executionId?: string }).executionId === executionId,
       );
-      return completed !== undefined;
+      return !!completed;
     },
     () => `manual trigger-completed ${executionId} for ${key}`,
   );

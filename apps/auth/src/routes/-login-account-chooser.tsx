@@ -83,24 +83,22 @@ export function AccountChooser({
                 user={account.user}
                 isDisabled={isAccountActionPending}
                 isBusy={
-                  token !== null &&
-                  setActiveSession.isPending &&
-                  setActiveSession.variables === token
+                  !!token && setActiveSession.isPending && setActiveSession.variables === token
                 }
                 isRevoking={
-                  token === null
+                  !token
                     ? signOutCurrentSession.isPending
                     : revokeSession.isPending && revokeSession.variables === token
                 }
                 onContinue={() => {
-                  if (isCurrent || token === null) {
+                  if (isCurrent || !token) {
                     continueWithAccount();
                   } else {
                     setActiveSession.mutate(token);
                   }
                 }}
                 onSignOut={() => {
-                  if (token === null) {
+                  if (!token) {
                     signOutCurrentSession.mutate();
                   } else {
                     revokeSession.mutate(token);

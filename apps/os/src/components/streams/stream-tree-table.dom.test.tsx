@@ -85,7 +85,7 @@ function PassiveDisclosureHarness() {
     query: "",
   });
   const row = table.getRowModel().rows[0];
-  if (row === undefined) return null;
+  if (!row) return null;
   return (
     <div role="option" aria-selected="false">
       <StreamTreeRowContent row={row} />

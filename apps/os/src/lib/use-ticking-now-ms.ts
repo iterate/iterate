@@ -13,7 +13,7 @@ function createTickingClock(intervalMs: number) {
   let timer: ReturnType<typeof setInterval> | undefined;
 
   function ensureTimer() {
-    if (timer != null || listeners.size === 0) return;
+    if (timer || listeners.size === 0) return;
     timer = setInterval(() => {
       now = Date.now();
       for (const listener of listeners) listener();
@@ -21,7 +21,7 @@ function createTickingClock(intervalMs: number) {
   }
 
   function maybeStopTimer() {
-    if (timer == null || listeners.size > 0) return;
+    if (!timer || listeners.size > 0) return;
     clearInterval(timer);
     timer = undefined;
   }
@@ -52,7 +52,7 @@ const clocks = new Map<number, ReturnType<typeof createTickingClock>>();
 
 function clockFor(intervalMs: number) {
   let clock = clocks.get(intervalMs);
-  if (clock == null) {
+  if (!clock) {
     clock = createTickingClock(intervalMs);
     clocks.set(intervalMs, clock);
   }
@@ -90,10 +90,10 @@ export function useTickingNowMs(
       let unsubscribe = () => {};
       const notifyUntilBoundary = () => {
         onStoreChange();
-        if (stopAtMs != null && clock.getSnapshot() >= stopAtMs) unsubscribe();
+        if (Number.isFinite(stopAtMs) && clock.getSnapshot() >= stopAtMs) unsubscribe();
       };
       unsubscribe = clock.subscribe(notifyUntilBoundary);
-      if (stopAtMs != null && clock.getSnapshot() >= stopAtMs) unsubscribe();
+      if (Number.isFinite(stopAtMs) && clock.getSnapshot() >= stopAtMs) unsubscribe();
       return unsubscribe;
     },
     [clock, enabled, stopAtMs],

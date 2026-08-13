@@ -164,11 +164,10 @@ export function replayLlmRequest(input: {
       event.offset === input.llmRequestOffset &&
       event.type === "events.iterate.com/agent/llm-request-requested",
   );
-  const requested =
-    requestedEvent === undefined
-      ? undefined
-      : RequestedPayloadSlice.safeParse(requestedEvent.payload);
-  if (requestedEvent === undefined || requested === undefined || !requested.success) return null;
+  const requested = !requestedEvent
+    ? undefined
+    : RequestedPayloadSlice.safeParse(requestedEvent.payload);
+  if (!requestedEvent || !requested || !requested.success) return null;
 
   const body = buildAgentLlmRequestBody({ events, llmRequestOffset: input.llmRequestOffset });
   return {
@@ -247,7 +246,7 @@ function replayResponse(input: {
     thinkingText += thinkingDelta;
   }
 
-  if (outputText != null) return { text: outputText, thinkingText, source: "output" };
+  if (outputText) return { text: outputText, thinkingText, source: "output" };
   if (streamedText !== "" || thinkingText !== "") {
     return { text: streamedText, thinkingText, source: "chunks" };
   }
@@ -287,8 +286,7 @@ function replayStats(input: {
     return parsed.success && parsed.data.requestOffset === input.llmRequestOffset;
   });
   const settledAt = timestampOf(settledEvent);
-  const settled =
-    settledEvent === undefined ? undefined : SettledPayloadSlice.safeParse(settledEvent.payload);
+  const settled = !settledEvent ? undefined : SettledPayloadSlice.safeParse(settledEvent.payload);
 
   const chunks = input.chunkEvents.filter((event) => {
     if (event.type !== LLM_RESPONSE_CHUNK_EVENT_TYPE) return false;
@@ -317,14 +315,16 @@ function replayStats(input: {
   // separate dial event, so this window includes any pre-dial delay before
   // the transport connected, not just streaming latency.
   const timeToFirstChunkMs =
-    requestedAt != null && firstChunkAt != null ? Math.max(0, firstChunkAt - requestedAt) : null;
+    Number.isFinite(requestedAt) && Number.isFinite(firstChunkAt)
+      ? Math.max(0, firstChunkAt - requestedAt)
+      : null;
   const generationEndAt = settledAt ?? lastChunkAt;
   const generationMs =
-    firstChunkAt != null && generationEndAt != null
+    Number.isFinite(firstChunkAt) && Number.isFinite(generationEndAt)
       ? Math.max(0, generationEndAt - firstChunkAt)
       : null;
   const outputTokensPerSecond =
-    tokens != null && generationMs != null && generationMs > 0
+    tokens && Number.isFinite(generationMs) && generationMs > 0
       ? Math.round((tokens.outputTokens / (generationMs / 1000)) * 10) / 10
       : null;
 
@@ -347,7 +347,7 @@ function replayStats(input: {
 }
 
 function timestampOf(event: StreamEvent | undefined): number | null {
-  if (event === undefined) return null;
+  if (!event) return null;
   const parsed = Date.parse(event.createdAt);
   return Number.isNaN(parsed) ? null : parsed;
 }

@@ -102,7 +102,7 @@ export default function PreviewChannelScreen() {
   // imminent reload would throw the read away.
   const phoneState = useQuery({
     queryKey: ["qr-phone-state", recommendedServer?.baseUrl || null],
-    enabled: alreadyOnTarget && recommendedServer !== null,
+    enabled: alreadyOnTarget && !!recommendedServer,
     queryFn: async () => {
       const serverBaseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
       const email = await getSignedInEmail(serverBaseUrl);
@@ -155,7 +155,7 @@ export default function PreviewChannelScreen() {
         <Row label="Target" value={channel} />
         {/* Only once the channel matches: pre-switch, the running (old)
             bundle's expectation says nothing about the target channel. */}
-        {alreadyOnTarget && recommendedServer !== null ? (
+        {alreadyOnTarget && recommendedServer ? (
           <Row label="Expected backend" value={recommendedServer.label} />
         ) : null}
         <Row
@@ -220,7 +220,7 @@ export default function PreviewChannelScreen() {
           let a tap route away with the switch never made (running the old
           channel's JS against the new backend). The post-switch reload
           re-opens this deep link, and the card appears then. */}
-      {alreadyOnTarget && recommendedServer !== null && mismatches.length > 0 ? (
+      {alreadyOnTarget && recommendedServer && mismatches.length > 0 ? (
         <>
           <Text style={styles.mismatchHeading}>This bundle expects a different setup</Text>
           <View style={styles.card}>
@@ -240,7 +240,7 @@ export default function PreviewChannelScreen() {
               ),
             )}
           </View>
-          {plan !== null ? (
+          {plan ? (
             // The fix rides Continue below rather than being its own button —
             // "run this PR's JS" and "against its backend, as its identity"
             // are one intent, so both happen on one tap unless unticked.
@@ -262,7 +262,7 @@ export default function PreviewChannelScreen() {
           ) : null}
           {applyPlan.error ? <Text style={styles.errorNote}>{String(applyPlan.error)}</Text> : null}
         </>
-      ) : alreadyOnTarget && recommendedServer !== null && phoneState.isSuccess ? (
+      ) : alreadyOnTarget && recommendedServer && phoneState.isSuccess ? (
         <Text style={styles.note}>Backend and sign-in match what this bundle expects.</Text>
       ) : null}
       {alreadyOnTarget ? (
@@ -272,13 +272,13 @@ export default function PreviewChannelScreen() {
         // when Continue would actually start that flow.)
         <Pressable
           accessibilityRole="button"
-          disabled={applyPlan.isPending || (reloadImminent && plan !== null && applyPlanOnContinue)}
+          disabled={applyPlan.isPending || (reloadImminent && !!plan && applyPlanOnContinue)}
           onPress={() =>
-            plan !== null && applyPlanOnContinue ? applyPlan.mutate(plan) : router.replace("/")
+            plan && applyPlanOnContinue ? applyPlan.mutate(plan) : router.replace("/")
           }
           style={[
             styles.button,
-            (applyPlan.isPending || (reloadImminent && plan !== null && applyPlanOnContinue)) &&
+            (applyPlan.isPending || (reloadImminent && !!plan && applyPlanOnContinue)) &&
               styles.buttonDisabled,
           ]}
         >

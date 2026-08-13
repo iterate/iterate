@@ -24,11 +24,11 @@ export async function callGmailApi(input: {
       new Request(url, {
         method,
         headers: {
-          ...(input.request.body === undefined ? {} : { "content-type": "application/json" }),
+          ...(!input.request.body ? {} : { "content-type": "application/json" }),
           ...(input.request.headers ?? {}),
           authorization: input.authorization,
         },
-        ...(input.request.body === undefined || method === "GET" || method === "HEAD"
+        ...(!input.request.body || method === "GET" || method === "HEAD"
           ? {}
           : { body: JSON.stringify(input.request.body) }),
       }),
@@ -63,6 +63,7 @@ function gmailUrl(input: GmailRequestInput) {
     : new URL(path.startsWith("/") ? `${base}${path}` : `${base}/${path}`);
 
   for (const [key, value] of Object.entries(input.query ?? {})) {
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/false are real query-param values; only nullish means "omit"
     if (value == null) continue;
     url.searchParams.set(key, String(value));
   }

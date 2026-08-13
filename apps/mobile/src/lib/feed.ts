@@ -64,7 +64,7 @@ export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed 
     }
   }
   const working = isAgentUiActivityWorking(state.live);
-  if (state.live !== null && !working) {
+  if (state.live && !working) {
     const completed: AgentUiActivity = { ...state.live, status: "done" };
     const correctionIndex = settled.findIndex((item) => item.id === completed.id);
     if (correctionIndex === -1) settled.push(completed);
@@ -119,12 +119,12 @@ export function summarizeActivity(activity: AgentUiActivity): string {
     .reverse()
     .flatMap((step) => (step.kind === "code" && step.activitySummary ? [step.activitySummary] : []))
     .at(0);
-  if (label == null || summary.outcome !== "clean") {
-    return `${label == null ? "" : `${label} · `}${formatAgentUiActivitySummary(activity)}`;
+  if (!label || summary.outcome !== "clean") {
+    return `${!label ? "" : `${label} · `}${formatAgentUiActivitySummary(activity)}`;
   }
   return [
     label,
-    ...(activity.endedAtMs == null
+    ...(!Number.isFinite(activity.endedAtMs)
       ? []
       : [formatAgentUiDuration(Math.max(0, activity.endedAtMs - activity.startedAtMs))]),
   ].join(" · ");

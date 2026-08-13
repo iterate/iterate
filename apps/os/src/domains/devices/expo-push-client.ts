@@ -70,7 +70,7 @@ export async function getExpoPushReceipt(
   if (!response.ok) throw new Error(`Expo push receipt lookup failed with HTTP ${response.status}`);
   const body = z.object({ data: z.record(z.string(), ExpoReceipt) }).parse(await response.json());
   const receipt = body.data[ticketId];
-  if (receipt === undefined) return { status: "pending" };
+  if (!receipt) return { status: "pending" };
   return receipt.status === "ok"
     ? { status: "accepted-by-push-service" }
     : {

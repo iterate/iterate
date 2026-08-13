@@ -169,7 +169,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     owner: string;
     repo: string;
   }): Promise<void> {
-    if (this.#name.projectId === null) {
+    if (!this.#name.projectId) {
       throw new Error("GitHub-backed repos require a project-scoped repo.");
     }
     await linkRepoToGithub(
@@ -278,12 +278,9 @@ export class RepoDurableObject extends DurableObject<Env> {
   ): Promise<{ commitOid: string; files: Record<string, string> }> {
     const branch = input.branch ?? REPO_DEFAULT_BRANCH;
     const cacheable =
-      branch === REPO_DEFAULT_BRANCH &&
-      input.commitOid === undefined &&
-      input.exclude === undefined &&
-      input.include === undefined;
+      branch === REPO_DEFAULT_BRANCH && !input.commitOid && !input.exclude && !input.include;
     if (cacheable) {
-      if (input.paths !== undefined) {
+      if (input.paths) {
         // Scoped head reads serve from the lazy snapshot — manifest lookups
         // plus verified store bytes, no clone, no whole-tree materialization
         // anywhere. This is the workspace mount-read lane: a big repo's board
@@ -296,7 +293,7 @@ export class RepoDurableObject extends DurableObject<Env> {
           const decoder = new TextDecoder();
           paths.forEach((path, index) => {
             const content = bytes[index];
-            if (content !== null && content !== undefined) files[path] = decoder.decode(content);
+            if (content) files[path] = decoder.decode(content);
           });
           return { commitOid: head.commitOid, files };
         } catch (error) {
@@ -316,11 +313,11 @@ export class RepoDurableObject extends DurableObject<Env> {
           return decideHeadResolution(this.#branchAuthority(branch), snapshot.commitOid).cache;
         },
       );
-      if (input.paths === undefined) return snapshot;
+      if (!input.paths) return snapshot;
       const files: Record<string, string> = {};
       for (const path of input.paths) {
         const content = snapshot.files[path];
-        if (content !== undefined) files[path] = content;
+        if (content) files[path] = content;
       }
       return { commitOid: snapshot.commitOid, files };
     }
@@ -346,10 +343,10 @@ export class RepoDurableObject extends DurableObject<Env> {
       exclude: input.exclude,
       include: input.include,
     });
-    const wanted = input.paths === undefined ? null : new Set(input.paths);
+    const wanted = !input.paths ? null : new Set(input.paths);
     const files: Record<string, string> = {};
     for (const path of selected) {
-      if (wanted !== null && !wanted.has(path)) continue;
+      if (wanted && !wanted.has(path)) continue;
       files[path] = await readCheckoutTextFile(filesystem, `${REPO_DIR}/${path}`);
     }
     return { commitOid: head.oid, files };
@@ -384,7 +381,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // reason a branch read serves the previous head. The authority is re-read
     // each attempt so an observation landing mid-retry is honored.
 
-    if (input.commitOid !== undefined) {
+    if (input.commitOid) {
       for (let attempt = 1; ; attempt++) {
         // Pinned commits need history: a shallow clone only contains the
         // branch tip. Project repos are small; correctness beats depth tuning.
@@ -527,7 +524,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   #lazyReaderInstance: ReturnType<typeof createLazyRepoReader> | null = null;
 
   #lazyReader(): ReturnType<typeof createLazyRepoReader> {
-    if (this.#lazyReaderInstance === null) {
+    if (!this.#lazyReaderInstance) {
       // Tokens are minted per gitAccess() call, so the transport dials fresh
       // credentials per operation instead of pinning one at construction.
       const dial = async (): Promise<GitWireTransport> => {
@@ -560,10 +557,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const branch = REPO_DEFAULT_BRANCH;
     const reader = this.#lazyReader();
     const stored = reader.head();
-    if (
-      stored !== null &&
-      decideHeadResolution(this.#branchAuthority(branch), stored.commitOid).cache
-    ) {
+    if (stored && decideHeadResolution(this.#branchAuthority(branch), stored.commitOid).cache) {
       return stored;
     }
     let candidate: string | undefined;
@@ -582,9 +576,9 @@ export class RepoDurableObject extends DurableObject<Env> {
       // install-failed-commit window and the first lazy read after
       // clone-lane history (cold store, floor set).
       const floor = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch));
-      if (floor !== undefined && floor !== stored?.commitOid) {
+      if (floor && floor !== stored?.commitOid) {
         target = floor;
-      } else if (stored !== null) {
+      } else if (stored) {
         return stored; // our endorsed snapshot is not worse — serve once
       } else {
         throw new Error(
@@ -677,9 +671,9 @@ export class RepoDurableObject extends DurableObject<Env> {
    */
   async #readHeadTreeBytesVerified(path: string): Promise<Uint8Array | null> {
     const stat = await this.#headTreeCache.stat(`/${path}`);
-    if (stat === null || stat.type === "directory") return null;
+    if (!stat || stat.type === "directory") return null;
     const bytes = await this.#headTreeCache.readFileBytes(`/${path}`);
-    if (bytes === null || bytes.byteLength !== stat.size) {
+    if (!bytes || bytes.byteLength !== stat.size) {
       throw new Error(
         `head-tree cache lost the bytes of "${path}" (stat ${stat.size}, read ${bytes?.byteLength ?? "null"})`,
       );
@@ -853,7 +847,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // maintenance: degrade, log, and still return "completed" — never
     // re-run the mutation.
     try {
-      if (outcome.localInstallError !== undefined) {
+      if (outcome.localInstallError) {
         // The remote HAS the commit but our snapshot could not install it;
         // the next read re-syncs from the remote.
         console.warn(
@@ -1006,7 +1000,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     branch: string;
     commitOid: string;
   }): void {
-    if (this.ctx.storage.kv.get<unknown>(PENDING_COMMIT_COMPLETED_KV_KEY) !== undefined) {
+    if (this.ctx.storage.kv.get<unknown>(PENDING_COMMIT_COMPLETED_KV_KEY)) {
       throw new Error("Cannot replace an unappended repo/commit-completed event.");
     }
     this.ctx.storage.kv.put(
@@ -1021,7 +1015,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   async #flushPendingCommitCompleted(): Promise<void> {
     const pending = this.ctx.storage.kv.get<unknown>(PENDING_COMMIT_COMPLETED_KV_KEY);
-    if (pending === undefined) return;
+    if (!pending) return;
     // The runtime parser accepts unknown input; its generic signature keeps
     // typed callers' discriminated return type, so this storage boundary must
     // widen the unknown value only for the parser call.
@@ -1046,13 +1040,18 @@ export class RepoDurableObject extends DurableObject<Env> {
     let observedPushes: ObservedPush[];
     if (Array.isArray(rawObserved)) {
       observedPushes = rawObserved.filter(isObservedPushRecord);
-    } else if (typeof rawObserved === "string" || rawObserved === null) {
+    } else if (typeof rawObserved === "string" || !rawObserved) {
       // One-time migration from the pre-frontier scheme, which stored the
       // LAST observed after-oid bare (null = deletion). That observation is
       // still evidence — and a durable head record showing anything else may
       // be exactly the stale pin the old scheme failed to evict. Invalidate
       // it NOW: no new push may ever arrive to do it later.
-      observedPushes = [{ afterCommitOid: rawObserved, beforeCommitOid: null }];
+      observedPushes = [
+        {
+          afterCommitOid: typeof rawObserved === "string" ? rawObserved : null,
+          beforeCommitOid: null,
+        },
+      ];
       this.ctx.storage.kv.put(repoObservedPushesStorageKey(branch), observedPushes);
       const record = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
       if (isRepoHeadRecord(record) && record.commitOid !== rawObserved) {
@@ -1075,7 +1074,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     } else {
       this.ctx.storage.kv.put(repoObservedPushesStorageKey(branch), authority.observedPushes);
     }
-    if (authority.pushedFloor === undefined) {
+    if (!authority.pushedFloor) {
       this.ctx.storage.kv.delete(repoPushedHeadStorageKey(branch));
     } else {
       this.ctx.storage.kv.put(repoPushedHeadStorageKey(branch), authority.pushedFloor);
@@ -1095,8 +1094,8 @@ export class RepoDurableObject extends DurableObject<Env> {
     commitOid?: string;
   }): Promise<{ commitOid: string; content: string; path: string } | null> {
     const path = normalizeRepoFilePath(input.path);
-    if (input.commitOid !== undefined) assertCommitOid(input.commitOid);
-    if (input.commitOid === undefined) {
+    if (input.commitOid) assertCommitOid(input.commitOid);
+    if (!input.commitOid) {
       // HEAD reads serve from the lazy snapshot: manifest lookup + verified
       // store bytes, no clone anywhere. Failures fall through to the
       // clone-backed byte-tree lane below, loudly.
@@ -1105,7 +1104,7 @@ export class RepoDurableObject extends DurableObject<Env> {
         // Head label and bytes come from ONE reader observation — an
         // interleaved install can never mix snapshots inside this response.
         const { bytes, head } = await this.#lazyReader().readHeadPaths([path]);
-        if (bytes[0] === null || bytes[0] === undefined) return null;
+        if (!bytes[0]) return null;
         const content =
           input.encoding === "base64"
             ? bytesToBase64(bytes[0])
@@ -1119,7 +1118,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       try {
         return await this.#withHeadTree(async (commitOid) => {
           const bytes = await this.#readHeadTreeBytesVerified(path);
-          if (bytes === null) return null;
+          if (!bytes) return null;
           const content =
             input.encoding === "base64" ? bytesToBase64(bytes) : new TextDecoder().decode(bytes);
           return { commitOid, content, path };
@@ -1147,7 +1146,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // in a filename must not change what this reads.
     const { commitOid, files } = await this.getFilesSnapshot({ commitOid: input.commitOid });
     const content = files[path];
-    return content === undefined ? null : { commitOid, content, path };
+    return !content ? null : { commitOid, content, path };
   }
 
   /** All committed file paths at HEAD (served from the lazy snapshot's manifest). */
@@ -1223,7 +1222,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     await git.checkout({ ref: entry.oid, force: true });
     const commitFiles = await readCheckoutBytes(filesystem, REPO_DIR);
     let parentFiles = new Map<string, Uint8Array>();
-    if (parentOid !== null) {
+    if (parentOid) {
       await git.checkout({ ref: parentOid, force: true });
       parentFiles = await readCheckoutBytes(filesystem, REPO_DIR);
     }
@@ -1246,7 +1245,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   /** The current GitHub link, or null when this repo is not linked. */
   getGithubLink(): GithubRepoLink | null {
     const stored = this.ctx.storage.kv.get<unknown>(GITHUB_LINK_KV_KEY);
-    if (stored === undefined) return null;
+    if (!stored) return null;
     if (isGithubLinkRecord(stored)) return stored;
     throw new Error("Stored GitHub link does not satisfy GithubRepoLink.");
   }
@@ -1270,7 +1269,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   /** Remove the GitHub link; returns the removed link or null when unlinked. */
   async removeGithubLink(): Promise<GithubRepoLink | null> {
     const link = this.getGithubLink();
-    if (link === null) return null;
+    if (!link) return null;
     await this.#stream.append({
       type: "events.iterate.com/repo/github-unlinked",
       payload: {
@@ -1420,10 +1419,9 @@ export class RepoDurableObject extends DurableObject<Env> {
     }
     let transferDepth = input.depth;
     if (input.force !== true) {
-      const comparison =
-        previousCommitOid === null
-          ? { aheadBy: 0, status: "unrelated" }
-          : await this.#githubCompareStatus({ base: previousCommitOid, branch, link, token });
+      const comparison = !previousCommitOid
+        ? { aheadBy: 0, status: "unrelated" }
+        : await this.#githubCompareStatus({ base: previousCommitOid, branch, link, token });
       if (comparison.status !== "ahead") {
         throw new Error(
           `syncFromGithub is not a fast-forward (GitHub says "${comparison.status}" relative to this repo's head ${previousCommitOid ?? "(none)"}). Pass force: true to discard local-only history and adopt GitHub's head.`,
@@ -1615,7 +1613,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     try {
       await git.clone({
         branch: args.branch,
-        ...(args.depth === undefined ? {} : { depth: args.depth }),
+        ...(!Number.isFinite(args.depth) ? {} : { depth: args.depth }),
         noCheckout: true,
         singleBranch: true,
         url: githubRemoteUrl(args.link),
@@ -1661,7 +1659,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   #requireGithubLink(): GithubRepoLink {
     const link = this.getGithubLink();
-    if (link === null) {
+    if (!link) {
       throw new Error(`Repo "${this.#name.path}" is not linked to GitHub (use linkGithub first).`);
     }
     return link;
@@ -1675,7 +1673,7 @@ export class RepoDurableObject extends DurableObject<Env> {
    * pipeline cannot produce.
    */
   async #mintGithubToken(link: GithubRepoLink): Promise<string> {
-    if (this.#name.projectId === null) {
+    if (!this.#name.projectId) {
       throw new Error("GitHub-backed repos require a project-scoped repo.");
     }
     const github = parseConfig(this.env).integrations.github;
@@ -1765,7 +1763,7 @@ export class RepoDurableObject extends DurableObject<Env> {
    * self-heals the mirror.
    */
   #scheduleGithubMirrorPush(branch: string): void {
-    if (branch !== REPO_DEFAULT_BRANCH || this.getGithubLink() === null) return;
+    if (branch !== REPO_DEFAULT_BRANCH || !this.getGithubLink()) return;
     const push = this.#serializeWrite(() => this.#pushToGithub({}));
     this.ctx.waitUntil(
       push.catch((error: unknown) => {
@@ -1782,7 +1780,7 @@ export class RepoDurableObject extends DurableObject<Env> {
         this.requireArtifacts(),
         {
           branch: REPO_DEFAULT_BRANCH,
-          ...(input.depth === undefined ? {} : { depth: input.depth }),
+          ...(!Number.isFinite(input.depth) ? {} : { depth: input.depth }),
           name: artifactName,
           owner: input.owner,
           repo: input.repo,
@@ -1820,7 +1818,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // A prior push is authoritative evidence that an existing Artifact is
     // already seeded. Recovery only needs to journal repos/created; cloning the
     // whole repo to rediscover that fact can exceed a Repo DO's memory limit.
-    if (artifact.lastPushAt !== null) return { artifactName, defaultBranch, remote };
+    if (artifact.lastPushAt) return { artifactName, defaultBranch, remote };
 
     const files = await loadFiles();
 
@@ -2037,7 +2035,7 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
     try {
       cloned = await clone();
       if (
-        input.expectedCommitOid === undefined ||
+        !input.expectedCommitOid ||
         cloned.head.oid === input.expectedCommitOid ||
         (await gitBranchContainsCommit({
           branch: input.branch,
@@ -2056,7 +2054,7 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
         `repo mutation clone does not contain the last push (saw ${cloned.head.oid}, pushed ${input.expectedCommitOid}); retry ${attempt + 1}`,
       );
     } catch (error) {
-      if (input.expectedCommitOid === undefined || attempt >= ARTIFACT_HEAD_VISIBILITY_RETRIES) {
+      if (!input.expectedCommitOid || attempt >= ARTIFACT_HEAD_VISIBILITY_RETRIES) {
         throw error;
       }
       console.warn(
@@ -2155,7 +2153,7 @@ function redactGitCredentials(text: string): string {
 }
 
 function isGithubLinkRecord(value: unknown): value is GithubRepoLink {
-  if (value === null || typeof value !== "object") return false;
+  if (!value || typeof value !== "object") return false;
   const record = value as Partial<GithubRepoLink>;
   return (
     typeof record.connection === "string" &&
@@ -2169,7 +2167,7 @@ function isGithubLinkRecord(value: unknown): value is GithubRepoLink {
 }
 
 function isRepoHeadRecord(value: unknown): value is { commitOid: string; contentHash: string } {
-  if (value === null || typeof value !== "object") return false;
+  if (!value || typeof value !== "object") return false;
   const record = value as { commitOid?: unknown; contentHash?: unknown };
   return (
     typeof record.commitOid === "string" &&
@@ -2195,13 +2193,13 @@ const REPO_LOG_DEFAULT_LIMIT = 20;
 const REPO_LOG_MAX_LIMIT = 200;
 
 function assertGithubHistoryDepth(depth: number | undefined, method: string): void {
-  if (depth !== undefined && (!Number.isInteger(depth) || depth <= 0)) {
+  if (Number.isFinite(depth) && (!Number.isInteger(depth) || depth <= 0)) {
     throw new Error(`${method} depth must be a positive integer.`);
   }
 }
 
 function parseLogLimit(limit: number | undefined): number {
-  if (limit === undefined) return REPO_LOG_DEFAULT_LIMIT;
+  if (!Number.isFinite(limit)) return REPO_LOG_DEFAULT_LIMIT;
   if (!Number.isInteger(limit) || limit < 1 || limit > REPO_LOG_MAX_LIMIT) {
     throw new Error(`log limit must be an integer between 1 and ${REPO_LOG_MAX_LIMIT}.`);
   }
@@ -2224,13 +2222,10 @@ function parseCommitFilesInput(input: CommitRepoFilesInput): CommitRepoFilesInpu
   if (!Array.isArray(input.changes) || input.changes.length === 0) {
     throw new Error("commitFiles changes must be a non-empty array.");
   }
-  if (
-    input.branch !== undefined &&
-    (typeof input.branch !== "string" || input.branch.trim() === "")
-  ) {
+  if (input.branch && (typeof input.branch !== "string" || input.branch.trim() === "")) {
     throw new Error("commitFiles branch must be a non-empty string.");
   }
-  if (input.author !== undefined) {
+  if (input.author) {
     if (
       typeof input.author.name !== "string" ||
       input.author.name.trim() === "" ||
@@ -2267,13 +2262,10 @@ function parseEditRepoFileInput(input: EditRepoFileInput): EditRepoFileInput {
   if (typeof input.message !== "string" || input.message.trim() === "") {
     throw new Error("edit message must be a non-empty string.");
   }
-  if (
-    input.branch !== undefined &&
-    (typeof input.branch !== "string" || input.branch.trim() === "")
-  ) {
+  if (input.branch && (typeof input.branch !== "string" || input.branch.trim() === "")) {
     throw new Error("edit branch must be a non-empty string.");
   }
-  if (input.author !== undefined) {
+  if (input.author) {
     if (
       typeof input.author.name !== "string" ||
       input.author.name.trim() === "" ||
@@ -2289,7 +2281,7 @@ function parseEditRepoFileInput(input: EditRepoFileInput): EditRepoFileInput {
   if (typeof input.newString !== "string") {
     throw new Error("edit newString must be a string.");
   }
-  if (input.replaceAll !== undefined && typeof input.replaceAll !== "boolean") {
+  if ("replaceAll" in input && typeof input.replaceAll !== "boolean") {
     throw new Error("edit replaceAll must be a boolean.");
   }
 

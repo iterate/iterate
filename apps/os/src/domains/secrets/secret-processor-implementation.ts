@@ -73,33 +73,31 @@ export class SecretProcessor extends StreamProcessor<SecretProcessorContract> {
         // The first created event wins; a duplicate is a no-op (the Secret DO
         // rejects conflicting births at the create door — a throwing reducer
         // would only wedge the frame).
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return {
           ...state,
           birthCertificate: event.payload,
           egress: event.payload.config.egress,
-          encryptedMaterial:
-            event.payload.config.encryptedMaterial === undefined
-              ? null
-              : { ...event.payload.config.encryptedMaterial, offset: event.offset },
+          encryptedMaterial: !event.payload.config.encryptedMaterial
+            ? null
+            : { ...event.payload.config.encryptedMaterial, offset: event.offset },
           refresh: event.payload.config.refresh,
           updatedOffset: event.offset,
         };
       case "events.iterate.com/secret/updated":
         return {
           ...state,
-          ...(event.payload.egress === undefined ? {} : { egress: event.payload.egress }),
+          ...(!event.payload.egress ? {} : { egress: event.payload.egress }),
           // An update is a complete material decision: omission destroys the
           // retained value. The committed offset is reducer-owned context for
           // AES-GCM authentication, so replaying this blob at another offset
           // cannot make it decrypt.
-          encryptedMaterial:
-            event.payload.encryptedMaterial === undefined
-              ? null
-              : { ...event.payload.encryptedMaterial, offset: event.offset },
+          encryptedMaterial: !event.payload.encryptedMaterial
+            ? null
+            : { ...event.payload.encryptedMaterial, offset: event.offset },
           updatedOffset: event.offset,
           // `refresh` present (incl. null-to-clear) replaces; omitted leaves it.
-          ...(event.payload.refresh === undefined ? {} : { refresh: event.payload.refresh }),
+          ...(!event.payload.refresh ? {} : { refresh: event.payload.refresh }),
         };
       case "events.iterate.com/secret/used":
         // The audit mirrors the NEWEST used fact exactly — an event without
@@ -110,8 +108,8 @@ export class SecretProcessor extends StreamProcessor<SecretProcessorContract> {
           audit: {
             usedCount: state.audit.usedCount + 1,
             lastUsedAt: event.payload.usedAt,
-            ...(event.payload.usedBy === undefined ? {} : { lastUsedBy: event.payload.usedBy }),
-            ...(event.payload.url === undefined ? {} : { lastUsedUrl: event.payload.url }),
+            ...(!event.payload.usedBy ? {} : { lastUsedBy: event.payload.usedBy }),
+            ...(!event.payload.url ? {} : { lastUsedUrl: event.payload.url }),
           },
         };
       default:

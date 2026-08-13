@@ -36,7 +36,7 @@ export function InstallationRepoPicker({
         value={filter}
         onChange={(e) => setFilter(e.currentTarget.value)}
       />
-      {error !== null && repos.length === 0 ? (
+      {error && repos.length === 0 ? (
         <p className="break-words text-xs text-red-600">{error}</p>
       ) : repos.length === 0 ? (
         <p className="text-xs text-muted-foreground">No repositories on this installation.</p>
@@ -58,7 +58,7 @@ export function InstallationRepoPicker({
           )}
         </div>
       )}
-      {error !== null && repos.length > 0 ? (
+      {error && repos.length > 0 ? (
         <p className="text-xs text-red-600">Partial list: {error}</p>
       ) : repos.length < totalCount ? (
         <p className="text-xs text-muted-foreground">
@@ -92,7 +92,7 @@ export function InstallationRepoList({
     return q === "" ? repos : repos.filter((r) => r.fullName.toLowerCase().includes(q));
   }, [filter, repos]);
 
-  if (error !== null && repos.length === 0) {
+  if (error && repos.length === 0) {
     return <div className="break-words rounded-md border p-3 text-sm text-red-600">{error}</div>;
   }
   if (repos.length === 0) {
@@ -125,7 +125,7 @@ export function InstallationRepoList({
           ))
         )}
       </div>
-      {error !== null ? (
+      {error ? (
         <p className="break-words text-xs text-red-600">Partial list: {error}</p>
       ) : repos.length < totalCount ? (
         <p className="text-xs text-muted-foreground">

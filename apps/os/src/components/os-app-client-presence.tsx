@@ -23,8 +23,8 @@ async function tabConnectionKey(): Promise<string> {
   // probe: BroadcastChannel delivers across channel objects within the same
   // document too, so probing would hear our own holder answer and mistake
   // this tab for a duplicate, churning identity every reconnect.
-  if (stored !== null && stored === heldTabKey) return stored;
-  if (stored !== null && !(await keyHeldByAnotherTab(stored))) {
+  if (stored && stored === heldTabKey) return stored;
+  if (stored && !(await keyHeldByAnotherTab(stored))) {
     holdTabKey(stored);
     return stored;
   }
@@ -64,7 +64,7 @@ let holderChannel: BroadcastChannel | undefined;
  */
 function holdTabKey(key: string): void {
   heldTabKey = key;
-  if (holderChannel !== undefined) return;
+  if (holderChannel) return;
   holderChannel = new BroadcastChannel(TAB_KEY_CHANNEL);
   holderChannel.onmessage = (event) => {
     if (event.data?.type === "probe" && event.data.key === heldTabKey) {

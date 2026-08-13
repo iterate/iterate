@@ -246,7 +246,7 @@ export class CollabEngine {
     const file = await this.#live(path);
     const run = file.writeChain.then(async () => {
       const changes = compute(file.doc);
-      if (changes === null) return { version: file.version };
+      if (!changes) return { version: file.version };
       const result = await this.#accept(path, file, [
         // Version doubles as the seq: this lane writes at head, so uniqueness
         // is guaranteed and retries are the caller's concern.
@@ -358,7 +358,7 @@ export class CollabEngine {
     if (epoch !== file.epoch || afterVersion < floor) {
       return {
         snapshot: {
-          ackedSeq: clientId === undefined ? -1 : (file.clientSeqs.get(clientId) ?? -1),
+          ackedSeq: !clientId ? -1 : (file.clientSeqs.get(clientId) ?? -1),
           content: file.doc.toString(),
           epoch: file.epoch,
           version: file.version,
@@ -378,7 +378,7 @@ export class CollabEngine {
   /** The live head, or null when no engine is in memory for the path. */
   head(path: string): { content: string; epoch: string; version: number } | null {
     const file = this.#files.get(path);
-    if (file === undefined || file instanceof Promise) return null;
+    if (!file || file instanceof Promise) return null;
     return { content: file.doc.toString(), epoch: file.epoch, version: file.version };
   }
 
@@ -391,7 +391,7 @@ export class CollabEngine {
 
   async #live(path: string): Promise<FileEngine> {
     const file = this.#files.get(path);
-    if (file === undefined) throw new Error(`no live session for ${path} — open first`);
+    if (!file) throw new Error(`no live session for ${path} — open first`);
     return await file;
   }
 
@@ -402,7 +402,7 @@ export class CollabEngine {
     // The in-flight promise IS the map entry: concurrent opens join one boot
     // (racing boots would mint two epochs and collide on version PKs).
     const existing = this.#files.get(path);
-    if (existing !== undefined) return await existing;
+    if (existing) return await existing;
     const generation = this.#discards.get(path) ?? 0;
     const booting = this.#boot(path, seed, generation);
     this.#files.set(path, booting);
@@ -428,7 +428,7 @@ export class CollabEngine {
     generation: number,
   ): Promise<FileEngine> {
     const snapshot = await this.#store.getSnapshot(path);
-    if (snapshot === null) {
+    if (!snapshot) {
       const seeded = await seed();
       // A discard landed while the seed was in flight: persisting the birth
       // now would RESURRECT durable rows the destruction just deleted

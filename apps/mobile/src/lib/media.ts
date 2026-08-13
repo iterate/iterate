@@ -152,7 +152,7 @@ export function extendedSinceIso(
   nowMs: number,
 ): string {
   const chosen = nowMs - windowDays * 86_400_000;
-  const existing = existingSinceIso === null ? Infinity : new Date(existingSinceIso).getTime();
+  const existing = !existingSinceIso ? Infinity : new Date(existingSinceIso).getTime();
   return new Date(Math.min(chosen, existing)).toISOString();
 }
 
@@ -291,7 +291,7 @@ export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
     if (event.type === MEDIA_PROCESSED_EVENT_TYPE) {
       const payload = event.payload as MediaProcessedPayload;
       // Explicit undefined check — `||` would swallow a legitimate 0.
-      const requestOffset = payload.requestOffset === undefined ? null : payload.requestOffset;
+      const requestOffset = !Number.isFinite(payload.requestOffset) ? null : payload.requestOffset;
       const prior = appliedSettlement.get(payload.stableKey);
       // Settlements apply MONOTONICALLY by requestOffset (lockstep with the
       // server fold's guard): one answering an older request than an
@@ -299,12 +299,12 @@ export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
       // never un-settle a row or resurrect stale content. Legacy
       // settlements carry no requestOffset — they always apply and never
       // advance the floor.
-      if (requestOffset !== null && requestOffset < (prior?.floor || 0)) continue;
+      if (Number.isFinite(requestOffset) && requestOffset < (prior?.floor || 0)) continue;
       appliedSettlement.set(payload.stableKey, {
         payload,
         offset: event.offset,
         requestOffset,
-        floor: requestOffset === null ? prior?.floor || 0 : requestOffset,
+        floor: !Number.isFinite(requestOffset) ? prior?.floor || 0 : requestOffset,
       });
       if (!payload.error) latestSuccessful.set(payload.stableKey, payload);
     }
@@ -355,13 +355,13 @@ export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
     // server fold applies the same stale-result guard. Legacy settlements
     // carry no requestOffset and settle whatever was asked.
     const settles =
-      processed !== undefined &&
-      (processed.requestOffset === null || processed.requestOffset >= requestOffset);
+      !!processed &&
+      (!Number.isFinite(processed.requestOffset) || processed.requestOffset >= requestOffset);
     const settledOffset = settles ? processed.offset : 0;
     const analysis: MediaAnalysisState =
       requestOffset > settledOffset
         ? { status: "pending", error: null }
-        : processed !== undefined && processed.payload.error
+        : processed && processed.payload.error
           ? { status: "failed", error: processed.payload.error }
           : { status: "done", error: null };
     items.push({ offset: event.offset, capturedAt: event.createdAt, payload, analysis });
@@ -457,23 +457,23 @@ export function deriveMediaFeed(input: {
   for (const card of input.cards) {
     const awaitingRow =
       card.status === "waiting" || card.status === "uploading" || card.status === "done";
-    if (awaitingRow && card.stableKey !== null && resolvedKeys.has(card.stableKey)) continue;
+    if (awaitingRow && card.stableKey && resolvedKeys.has(card.stableKey)) continue;
     if (
       card.status === "done" &&
-      card.uploadedOffset !== null &&
+      Number.isFinite(card.uploadedOffset) &&
       card.uploadedOffset <= input.wipedThroughOffset
     ) {
       // The wipe erased this card's committed event along with every row —
       // nothing will ever arrive for it.
       continue;
     }
-    const parsed = card.capturedAt === null ? NaN : Date.parse(card.capturedAt);
+    const parsed = !card.capturedAt ? NaN : Date.parse(card.capturedAt);
     // The stableKey key is what carries the mounted component across the
     // card→row morph; pre-hash and terminal cards key on their preview, as
     // does a duplicate-hash straggler (two concurrent captures of identical
     // bytes must not collide on one FlatList key).
     const key =
-      awaitingRow && card.stableKey !== null && !cardKeys.has(card.stableKey)
+      awaitingRow && card.stableKey && !cardKeys.has(card.stableKey)
         ? card.stableKey
         : `pending:${card.previewUri}`;
     cardKeys.add(key);

@@ -41,7 +41,7 @@ function RootStack() {
     queryKey: ["native-install-guard"],
     queryFn: async () => {
       const cleared = await resetChannelOverrideForNewInstall();
-      if (cleared !== null) {
+      if (cleared) {
         Alert.alert(
           "New build installed",
           `Cleared the preview-channel override "${cleared}" — this install runs its own default channel. Scan a PR's QR to point it at a preview channel again.`,

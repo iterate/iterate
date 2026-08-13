@@ -8,7 +8,7 @@ import { formatTokens } from "~/lib/feed-format.ts";
  */
 export function readAgentTokenUsageVitals(tokenUsage: AgentUiTokenUsage) {
   const last = tokenUsage.lastReport;
-  if (last == null) return null;
+  if (!last) return null;
   const contextTokens = last.inputTokens + last.outputTokens;
   const contextPercent = Math.min(100, Math.round((contextTokens / last.maxContextTokens) * 100));
   return {

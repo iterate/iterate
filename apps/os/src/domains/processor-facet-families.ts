@@ -37,7 +37,7 @@ export function facetProcessorFamilyForPath(input: {
   projectId: string | null;
 }): FacetProcessorFamily {
   const { path, projectId } = input;
-  if (projectId === null) return "repo";
+  if (!projectId) return "repo";
   if (path === "/") return "project-root";
   if (path === AGENT_COLLECTION_PATH) return "agent-collection";
   if (path.startsWith("/agents/")) return "agent";

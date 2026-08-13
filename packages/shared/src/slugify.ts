@@ -13,7 +13,7 @@ export function slugify(input: string, options: SlugifyOptions = {}) {
     .replace(/^-+|-+$/g, "");
   const resolved = normalized || fallback;
 
-  if (options.maxLength == null) {
+  if (!Number.isFinite(options.maxLength)) {
     return resolved;
   }
 

@@ -56,8 +56,8 @@ export default async function start(options: StartOptions = {}) {
   if (live && (await evictIfMemoryPressured(live))) {
     evictedPort = live.port;
   }
-  if (live && evictedPort === undefined) {
-    if (requestedPort !== undefined && live.port !== requestedPort) {
+  if (live && !Number.isFinite(evictedPort)) {
+    if (Number.isFinite(requestedPort) && live.port !== requestedPort) {
       throw new Error(
         `A dev server is already running on port ${live.port} (pid ${live.pid}) but port ` +
           `${requestedPort} was requested — kill it or use restart.`,

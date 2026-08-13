@@ -139,7 +139,7 @@ export default async function eraseData(options: {
     let failed = 0;
     await Promise.all(
       Array.from({ length: 10 }, async () => {
-        for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
+        for (let item = queue.shift(); item; item = queue.shift()) {
           if (Date.now() > input.deadline) return;
           // Per-item isolation: one transient DELETE failure must not abort
           // the whole wipe (live preview_1 run: a single object error skipped

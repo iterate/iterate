@@ -157,7 +157,7 @@ function extractTextContent(content: unknown) {
   if (!Array.isArray(content)) return [];
 
   return content.flatMap((item) =>
-    item != null &&
+    item &&
     typeof item === "object" &&
     "type" in item &&
     item.type === "text" &&

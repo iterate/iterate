@@ -104,7 +104,7 @@ describe("stream capnweb protocol", () => {
     expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeGreaterThan(2 * 1024 * 1024);
 
     const [appended] = await stream.stream.append(event);
-    if (appended === undefined) throw new Error("append returned no event");
+    if (!appended) throw new Error("append returned no event");
     expect(appended).toMatchObject({
       type: "test.stream.capnweb-large-row",
       offset: 3, // after the standalone birth certificate
@@ -113,7 +113,7 @@ describe("stream capnweb protocol", () => {
     expectLargePayload(appended, body.length);
 
     const byOffset = await stream.stream.getEvent({ offset: appended.offset });
-    if (byOffset === undefined) throw new Error("large event was not readable by offset");
+    if (!byOffset) throw new Error("large event was not readable by offset");
     expect(byOffset.offset).toBe(appended.offset);
     expectLargePayload(byOffset, body.length);
 
@@ -457,7 +457,7 @@ describe("stream capnweb protocol", () => {
       type: "test.stream.capnweb-anon-sub",
       payload: { path },
     });
-    if (appended === undefined) throw new Error("append returned no event");
+    if (!appended) throw new Error("append returned no event");
     // Each openConnection call also appends a connection-opened presence fact, and
     // every connection gets an initial state callback — batch counts are not
     // stable here, so wait for the content instead.
@@ -476,7 +476,7 @@ describe("stream capnweb protocol", () => {
       type: "test.stream.capnweb-anonymous-connection-after-close",
       payload: { path },
     });
-    if (afterClose === undefined) throw new Error("append returned no event");
+    if (!afterClose) throw new Error("append returned no event");
     await waitFor(() => received(callbackB, afterClose.offset), 1_000);
     expect(callbackA.batches.length).toBe(callbackABatchesBeforeClose);
   });
@@ -532,7 +532,7 @@ describe("stream capnweb protocol", () => {
       payload: { path },
     };
     const [appended] = await publisher.stream.append(input);
-    if (appended === undefined) throw new Error("append returned no event");
+    if (!appended) throw new Error("append returned no event");
     // Calls before the published event: the connection's initial state update
     // (events: []) and/or its own connection-opened presence fact (offset 3,
     // appended while opening) — wait for content.
@@ -635,10 +635,10 @@ function isPushFrame(value: unknown) {
 }
 
 function expectLargePayload(event: StreamEvent | undefined, expectedBodyLength: number) {
-  if (event === undefined) throw new Error("expected event to be defined");
+  if (!event) throw new Error("expected event to be defined");
   const payload = event.payload;
   if (
-    payload === null ||
+    !payload ||
     typeof payload !== "object" ||
     !("body" in payload) ||
     typeof payload.body !== "string"

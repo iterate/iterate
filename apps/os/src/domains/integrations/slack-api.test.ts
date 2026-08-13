@@ -143,10 +143,10 @@ describe("connectionSlackClient", () => {
       fallbackTeamId,
       primaryResult,
     }) => {
-      if (primaryResult !== undefined) mocks.primaryResult = primaryResult;
-      if (fallbackTeamId !== undefined) mocks.fallbackTeamId = fallbackTeamId;
+      if (primaryResult) mocks.primaryResult = primaryResult;
+      if (fallbackTeamId) mocks.fallbackTeamId = fallbackTeamId;
 
-      if (expectedRejection === undefined) {
+      if (!expectedRejection) {
         const result = await act();
         expect(result.ok).toBe(true);
       } else {
@@ -223,7 +223,7 @@ describe("normalizeSlackError", () => {
     },
   ])("$name", ({ connection, error, expectedContains, expectedMessage }) => {
     const err = normalizeSlackError(error, connection);
-    if (expectedMessage !== undefined) {
+    if (expectedMessage) {
       expect(err.message).toBe(expectedMessage);
     }
     for (const needle of expectedContains ?? []) {

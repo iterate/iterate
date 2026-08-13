@@ -133,17 +133,17 @@ export function useWorkspaceBoard(address: BoardAddress) {
         lane((ws) => ws.boardViewers()).catch(() => null),
       ])
         .then(async ([rawVersions, status, presence, board]) => {
-          if (presence !== null && generation.current === mine) {
+          if (presence && generation.current === mine) {
             setViewers(
               new Map(Object.entries(presence).map(([path, ids]) => [boardKey(path), ids])),
             );
           }
-          if (board !== null && generation.current === mine) {
+          if (board && generation.current === mine) {
             setBoardClients(Object.entries(board).map(([clientId, name]) => ({ clientId, name })));
           }
           if (generation.current !== mine) return;
           const changes = changesRef.current;
-          const next = status === null ? changes : changeMap(status, repoPath);
+          const next = !status ? changes : changeMap(status, repoPath);
           const versions = Object.fromEntries(
             Object.entries(rawVersions).map(([path, version]) => [boardKey(path), version]),
           );
@@ -156,7 +156,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
           for (const path of Object.keys(versionsRef.current)) {
             if (!(path in versions)) moved.add(path);
           }
-          if (status !== null) {
+          if (status) {
             for (const [path, kind] of next) if (changes.get(path) !== kind) moved.add(path);
             for (const path of changes.keys()) if (!next.has(path)) moved.add(path);
           }
@@ -179,14 +179,14 @@ export function useWorkspaceBoard(address: BoardAddress) {
           // transitions, the counter covers the whole window.
           if (mutationEpoch.current !== epochBefore || pendingMutations.current > 0) return;
           versionsRef.current = versions;
-          if (status !== null) setChanges(next);
+          if (status) setChanges(next);
           setFiles((current) => {
-            if (current === null) return current;
+            if (!current) return current;
             const merged = { ...current };
             for (const [path, content] of fetched) {
               // A keystroke landed on this path mid-poll: its fetch is stale.
               if (pathEpochs.current.get(path) !== pathEpochsBefore.get(path)) continue;
-              if (content === null) delete merged[path];
+              if (!content) delete merged[path];
               else merged[path] = content;
             }
             return merged;
@@ -235,8 +235,8 @@ export function useWorkspaceBoard(address: BoardAddress) {
       .catch(() => {});
     return () => {
       stopped = true;
-      if (timer !== null) clearInterval(timer);
-      if (clientId !== null) void lane((ws) => ws.boardPresent(clientId!, null)).catch(() => {});
+      if (timer) clearInterval(timer);
+      if (clientId) void lane((ws) => ws.boardPresent(clientId!, null)).catch(() => {});
     };
   }, [lane]);
 
@@ -245,13 +245,13 @@ export function useWorkspaceBoard(address: BoardAddress) {
   // react-doctor-disable-next-line react-doctor/rerender-lazy-ref-init -- empty-container allocation per render is the rule's concern; trivial here, and the ??= lazy idiom trips exhaustive-deps instead
   const parseCache = useRef(new Map<string, { source: string; task: BoardTask }>());
   const tasks = useMemo<BoardTask[]>(() => {
-    if (files === null) return [];
+    if (!files) return [];
     const cache = parseCache.current;
     const next: BoardTask[] = [];
     for (const [path, source] of Object.entries(files)) {
       if (!isTaskFilePath(path)) continue;
       const cached = cache.get(path);
-      if (cached !== undefined && cached.source === source) {
+      if (cached && cached.source === source) {
         next.push(cached.task);
         continue;
       }
@@ -260,7 +260,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
       next.push(task);
     }
     if (cache.size > next.length * 2) {
-      for (const key of cache.keys()) if (files[key] === undefined) cache.delete(key);
+      for (const key of cache.keys()) if (!files[key]) cache.delete(key);
     }
     return next.sort((left, right) => left.path.localeCompare(right.path));
   }, [files]);
@@ -283,8 +283,8 @@ export function useWorkspaceBoard(address: BoardAddress) {
         mutationEpoch.current++;
         setError(cause instanceof Error ? cause.message : String(cause));
         setFiles((current) => {
-          if (current === null) return current;
-          if (priorContent === undefined) {
+          if (!current) return current;
+          if (!priorContent) {
             const { [path]: _gone, ...rest } = current;
             return rest;
           }
@@ -292,7 +292,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
         });
         setChanges((current) => {
           const next = new Map(current);
-          if (priorChange === undefined) next.delete(path);
+          if (!priorChange) next.delete(path);
           else next.set(path, priorChange);
           return next;
         });
@@ -322,12 +322,9 @@ export function useWorkspaceBoard(address: BoardAddress) {
         // react-doctor-disable-next-line react-doctor/no-impure-state-updater, react-doctor/no-side-effect-in-state-updater-function
         setChanges((changes) => {
           priorChange = changes.get(path);
-          return new Map(changes).set(
-            path,
-            changeAfterWrite(changes.get(path), current?.[path] !== undefined),
-          );
+          return new Map(changes).set(path, changeAfterWrite(changes.get(path), !!current?.[path]));
         });
-        return current === null ? current : { ...current, [path]: content };
+        return !current ? current : { ...current, [path]: content };
       });
       return tracked(lane((ws) => ws.write(`/${path}`, content))).then(
         () => {
@@ -354,7 +351,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
       // Same deliberate apply-time capture as writeTask.
       // react-doctor-disable-next-line react-doctor/no-impure-state-updater
       setFiles((current) => {
-        if (current === null) return current;
+        if (!current) return current;
         priorContent = current[path];
         const { [path]: _gone, ...rest } = current;
         return rest;
@@ -366,7 +363,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
         priorChange = current.get(path);
         const next = new Map(current);
         const transitioned = changeAfterDelete(current.get(path));
-        if (transitioned === null) next.delete(path);
+        if (!transitioned) next.delete(path);
         else next.set(path, transitioned);
         return next;
       });
@@ -392,15 +389,14 @@ export function useWorkspaceBoard(address: BoardAddress) {
     setFiles((current) => {
       // Reflect only onto paths the mirror still holds — an unmount flush
       // arriving after a rename/delete must not resurrect a phantom card.
-      if (current === null || current[path] === undefined || current[path] === content)
-        return current;
+      if (!current || !current[path] || current[path] === content) return current;
       // A live edit IS dirtiness: commit controls must arm on the first
       // keystroke, not on the next status poll.
       // react-doctor-disable-next-line react-doctor/no-side-effect-in-state-updater-function
       setChanges((changes) =>
         changes.has(path)
           ? changes
-          : new Map(changes).set(path, changeAfterWrite(undefined, current[path] !== undefined)),
+          : new Map(changes).set(path, changeAfterWrite(undefined, !!current[path])),
       );
       return { ...current, [path]: content };
     });
@@ -445,12 +441,12 @@ export function useWorkspaceBoard(address: BoardAddress) {
         const next = new Map(current);
         next.set(toPath, changeAfterWrite(current.get(toPath), false));
         const transitioned = changeAfterDelete(current.get(fromPath));
-        if (transitioned === null) next.delete(fromPath);
+        if (!transitioned) next.delete(fromPath);
         else next.set(fromPath, transitioned);
         return next;
       });
       setFiles((current) => {
-        if (current === null) return current;
+        if (!current) return current;
         const { [fromPath]: _gone, ...rest } = current;
         return { ...rest, [toPath]: content };
       });
@@ -462,14 +458,12 @@ export function useWorkspaceBoard(address: BoardAddress) {
         await onWritten?.();
         try {
           const final = await lane((ws) => ws.read(`/${fromPath}`));
-          if (final !== null && final !== baseline) {
+          if (final && final !== baseline) {
             const carried = carry(final);
             if (carried !== content) {
               await lane((ws) => ws.write(`/${toPath}`, carried));
               mutationEpoch.current++;
-              setFiles((current) =>
-                current === null ? current : { ...current, [toPath]: carried },
-              );
+              setFiles((current) => (!current ? current : { ...current, [toPath]: carried }));
             }
           }
         } catch {
@@ -497,10 +491,9 @@ export function useWorkspaceBoard(address: BoardAddress) {
         .map(([path, status]) => ({
           path,
           status,
-          title:
-            files?.[path] !== undefined
-              ? parseTaskCard(path, files[path]).title
-              : (path.split("/").at(-1) ?? path),
+          title: files?.[path]
+            ? parseTaskCard(path, files[path]).title
+            : (path.split("/").at(-1) ?? path),
         }))
         .sort((left, right) => left.path.localeCompare(right.path)),
     [changes, files],
@@ -518,9 +511,9 @@ export function useWorkspaceBoard(address: BoardAddress) {
         mutationEpoch.current++;
         const content = await ws.read(`/${path}`);
         setFiles((current) => {
-          if (current === null) return current;
+          if (!current) return current;
           const merged = { ...current };
-          if (content === null) delete merged[path];
+          if (!content) delete merged[path];
           else merged[path] = content;
           return merged;
         });
@@ -590,7 +583,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
     files,
     refresh,
     subscribeEvents,
-    ready: files !== null,
+    ready: !!files,
     readTask,
     reflectLiveContent,
     renameTask,

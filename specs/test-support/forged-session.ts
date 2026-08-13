@@ -198,7 +198,7 @@ async function recordInitialConnectionRetry(retry: ItxInitialConnectionRetry) {
     attemptDurationMs: Math.round(retry.attemptDurationMs),
     delayMs: retry.delayMs,
     error: retry.error.message,
-    ...(code === undefined ? {} : { errorCode: code }),
+    ...(code && { errorCode: code }),
     failedAttempt: retry.failedAttempt,
     nextAttempt: retry.nextAttempt,
     startedAt: retry.startedAt,

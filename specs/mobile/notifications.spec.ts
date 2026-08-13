@@ -147,8 +147,8 @@ test("the approval push is suppressed in the watched thread and sent when you're
       predicate: (event) => {
         const context = event.payload?.streamContext;
         return (
+          !!context &&
           typeof context === "object" &&
-          context !== null &&
           "executionId" in context &&
           context.executionId === orphanStarted.payload?.executionId
         );
@@ -257,8 +257,8 @@ test("the approval push is suppressed in the watched thread and sent when you're
       predicate: (event) => {
         const context = event.payload?.streamContext;
         return (
+          !!context &&
           typeof context === "object" &&
-          context !== null &&
           "executionId" in context &&
           context.executionId === elsewhereStarted.payload?.executionId
         );

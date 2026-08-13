@@ -107,7 +107,7 @@ async function handleOAuthCallback(input: {
 
   // Browser callbacks remain bound to the signed-in user who started the flow.
   const userId = input.auth?.type === "user" ? input.auth.userId : null;
-  if (userId === null) return new Response("OAuth callback user mismatch.", { status: 403 });
+  if (!userId) return new Response("OAuth callback user mismatch.", { status: 403 });
 
   // The state has already been verified above; completeConnect verifies it
   // again at the storage boundary before exchanging or recording credentials.
@@ -168,7 +168,7 @@ async function handleMcpOAuthCallback(input: {
     if (input.auth?.type !== "user") return redirectWithError(null, "mcp_oauth_sign_in_required");
     try {
       itxAuthFromPrincipal(input.auth, {
-        allowDirectoryFallback: input.context.operatorSession == null,
+        allowDirectoryFallback: !input.context.operatorSession,
       }).assertCanAccessProject(state.projectId);
     } catch {
       return redirectWithError(null, "mcp_oauth_not_a_member");

@@ -43,10 +43,9 @@ export function reduceAgentEvent(input: {
   const runtime: AgentRuntime = deriveAgentRuntime(state, "agent/system-prompt");
   // Genesis zero stays absent. Every later count change is significant,
   // including changes which retain the same compact display state.
-  const changed =
-    state.runtimeChange === undefined
-      ? !isAgentRuntimeZero(runtime)
-      : !agentRuntimesEqual(state.runtimeChange.runtime, runtime);
+  const changed = !state.runtimeChange
+    ? !isAgentRuntimeZero(runtime)
+    : !agentRuntimesEqual(state.runtimeChange.runtime, runtime);
   if (!changed) return state;
   return {
     ...state,
@@ -65,7 +64,7 @@ function reduceAgentEventCore(input: {
   const { event, state } = input;
   switch (event.type) {
     case "events.iterate.com/agent/created":
-      if (state.birthCertificate !== null) return state;
+      if (state.birthCertificate) return state;
       return { ...state, birthCertificate: { createdAtOffset: event.offset } };
     case "events.iterate.com/agent/configured":
       // Deep-merge the patch (omitted keys keep their values), then
@@ -83,7 +82,7 @@ function reduceAgentEventCore(input: {
       // Fail closed on a raw malformed append: a summary can replace only
       // history that existed before the summary itself (the payload schema
       // cannot compare a field with the containing event's envelope offset).
-      if (payload.role === "developer" && payload.compaction !== undefined) {
+      if (payload.role === "developer" && payload.compaction) {
         const cutoff = payload.compaction.replacesHistoryThrough;
         if (cutoff >= event.offset) return state;
         return {
@@ -115,7 +114,7 @@ function reduceAgentEventCore(input: {
       // included.
       if (
         payload.role === "assistant" &&
-        payload.llmRequestOffset !== undefined &&
+        Number.isFinite(payload.llmRequestOffset) &&
         payload.llmRequestOffset !== state.openRequest?.requestedAtOffset
       ) {
         return state;
@@ -126,7 +125,7 @@ function reduceAgentEventCore(input: {
         item: { offset: event.offset, payload },
       });
       const trigger = contextTriggerSource(payload);
-      if (trigger === null) return { ...state, contextItems };
+      if (!trigger) return { ...state, contextItems };
       return {
         ...state,
         contextItems,
@@ -151,11 +150,7 @@ function reduceAgentEventCore(input: {
       // sibling intent already won, or the agent paused meanwhile — reduces
       // to nothing, a harmless stream fact. THIS is what makes the delayed
       // append safe without any timer bookkeeping or cancellation.
-      if (
-        state.pendingLlmRequestTrigger === null ||
-        state.openRequest !== null ||
-        state.paused !== null
-      ) {
+      if (!state.pendingLlmRequestTrigger || state.openRequest || state.paused) {
         return state;
       }
       return {
@@ -221,14 +216,14 @@ function reduceAgentEventCore(input: {
         update: event.payload,
         atOffset: event.offset,
       });
-      return projection === undefined ? state : { ...state, ...projection };
+      return !projection ? state : { ...state, ...projection };
     }
     case "events.iterate.com/agent/paused":
       // The breaker consequence is appended in the background. If external
       // input landed after its causal trigger but before the pause fact, that
       // input already started a fresh budget and the delayed pause is stale.
       if (
-        event.payload.triggerOffset !== undefined &&
+        Number.isFinite(event.payload.triggerOffset) &&
         event.payload.triggerOffset < state.latestExternalTriggerOffset
       ) {
         return state;
@@ -241,7 +236,7 @@ function reduceAgentEventCore(input: {
       return {
         ...state,
         paused: {
-          ...(event.payload.reason === undefined ? {} : { reason: event.payload.reason }),
+          ...(!event.payload.reason ? {} : { reason: event.payload.reason }),
           atOffset: event.offset,
         },
         pendingLlmRequestTrigger:
@@ -263,14 +258,13 @@ function reduceAgentEventCore(input: {
         // resume time instead of a possibly long-stale trigger time (a
         // pause longer than llmRequestExpiryMs would otherwise open a
         // request that instantly settles expired).
-        pendingLlmRequestTrigger:
-          state.pendingLlmRequestTrigger === null
-            ? null
-            : {
-                offset: event.offset,
-                atMs: Date.parse(event.createdAt),
-                source: state.pendingLlmRequestTrigger.source,
-              },
+        pendingLlmRequestTrigger: !state.pendingLlmRequestTrigger
+          ? null
+          : {
+              offset: event.offset,
+              atMs: Date.parse(event.createdAt),
+              source: state.pendingLlmRequestTrigger.source,
+            },
       };
     case "events.iterate.com/capability-host/script-run-requested": {
       const source = event.source?.processor;
@@ -319,7 +313,7 @@ function reduceAgentEvents(events: readonly StreamEvent[]): AgentProcessorState 
       contract: AgentProcessorContract,
       eventType: event.type,
     });
-    if (definition === undefined) continue;
+    if (!definition) continue;
     const parsed = cachedEventSchema({
       type: event.type,
       payloadSchema: definition.payloadSchema,
@@ -352,12 +346,10 @@ function contextTriggerSource(payload: AgentContextAddedPayload): "external" | "
     // event handler appends the script request from the SAME pure resolver)
     // — the model's turn comes later, driven by the script result's context
     // append.
-    return resolveSlashCommand(payload.content) === null ? "external" : null;
+    return !resolveSlashCommand(payload.content) ? "external" : null;
   }
   const actorType = payload.actor?.type;
-  return actorType === undefined || actorType === "agent" || actorType === "script"
-    ? "agent-loop"
-    : "external";
+  return !actorType || actorType === "agent" || actorType === "script" ? "agent-loop" : "external";
 }
 
 /** A later external input wakes the agent and retires its prior "waiting for
@@ -369,8 +361,8 @@ export function contextClearsWaitingFor(payload: AgentContextAddedPayload): bool
   // A resolving slash command is a side-band action, not an answer — the
   // agent is still waiting for the human's actual reply (same pure resolver
   // as contextTriggerSource, so the two derivations can never disagree).
-  if (payload.role === "user") return resolveSlashCommand(payload.content) === null;
-  return payload.actor !== undefined && payload.actor.type !== "script";
+  if (payload.role === "user") return !resolveSlashCommand(payload.content);
+  return !!payload.actor && payload.actor.type !== "script";
 }
 
 /**
@@ -386,7 +378,7 @@ export function projectContextAdded(args: {
   item: AgentProcessorState["contextItems"][number];
 }): AgentProcessorState["contextItems"] {
   const key = args.item.payload.key;
-  if (key !== undefined) {
+  if (key) {
     const slotIndex = args.items.findLastIndex((existing) => existing.payload.key === key);
     if (slotIndex >= 0 && args.items[slotIndex]!.offset > args.lastLlmRequestOffset) {
       const replaced = [...args.items];
@@ -404,11 +396,10 @@ function retainLatestKeyedOccurrences(
 ): AgentProcessorState["contextItems"] {
   const latestIndexByKey = new Map<string, number>();
   for (const [index, item] of items.entries()) {
-    if (item.payload.key !== undefined) latestIndexByKey.set(item.payload.key, index);
+    if (item.payload.key) latestIndexByKey.set(item.payload.key, index);
   }
   return items.filter(
-    (item, index) =>
-      item.payload.key === undefined || latestIndexByKey.get(item.payload.key) === index,
+    (item, index) => !item.payload.key || latestIndexByKey.get(item.payload.key) === index,
   );
 }
 
@@ -459,7 +450,7 @@ export function buildAgentLlmRequestBody(input: {
     messages: [
       { role: "system", content: AGENT_CONTEXT_PROTOCOL_PROMPT },
       ...state.contextItems.map(renderProjectedContextItem),
-      ...(requestedAt === undefined
+      ...(!requestedAt
         ? []
         : [
             {
@@ -480,9 +471,9 @@ function renderProjectedContextItem(
   const actor = payload.actor;
   const fields = [
     `@${item.offset}`,
-    ...(payload.key === undefined ? [] : [`key=${JSON.stringify(payload.key)}`]),
-    ...(actor === undefined ? [] : [`actor=${renderContextActor(actor)}`]),
-    ...(payload.refs === undefined || payload.refs.length === 0
+    ...(!payload.key ? [] : [`key=${JSON.stringify(payload.key)}`]),
+    ...(!actor ? [] : [`actor=${renderContextActor(actor)}`]),
+    ...(!payload.refs || payload.refs.length === 0
       ? []
       : [`refs=[${payload.refs.map(renderContextRef).join(",")}]`]),
   ];
@@ -493,7 +484,7 @@ function renderProjectedContextItem(
   return {
     role: modelRoleForContextItem(payload),
     content: `${fields.join(" ")}\n${replyInstruction}${payload.content}`,
-    ...(payload.files === undefined || payload.files.length === 0 ? {} : { files: payload.files }),
+    ...(!payload.files || payload.files.length === 0 ? {} : { files: payload.files }),
   };
 }
 
@@ -507,11 +498,9 @@ function renderProjectedContextItem(
  * or its own script. */
 function modelRoleForContextItem(payload: AgentContextAddedPayload): AgentChatMessage["role"] {
   if (payload.role !== "developer") return payload.role;
-  if (payload.compaction !== undefined) return "user";
+  if (payload.compaction) return "user";
   const actorType = payload.actor?.type;
-  return actorType === undefined || actorType === "agent" || actorType === "script"
-    ? "developer"
-    : "user";
+  return !actorType || actorType === "agent" || actorType === "script" ? "developer" : "user";
 }
 
 function renderContextActor(actor: NonNullable<AgentContextAddedPayload["actor"]>): string {

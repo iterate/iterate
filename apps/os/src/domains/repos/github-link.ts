@@ -127,7 +127,7 @@ export async function linkRepoToGithub(
     projectId: input.projectId,
     provider: "github",
   });
-  if (!status.connected || status.externalId === null) {
+  if (!status.connected || !status.externalId) {
     throw new Error(
       `GitHub connection "${input.connection}" is not connected; use itx.integrations.list() to see connections.`,
     );
@@ -201,7 +201,7 @@ export async function linkRepoToGithub(
   // exact subscription (the previous link carries everything needed to
   // rebuild it), so the old link never sits unrouted. Same connection needs
   // nothing: the subscription-configured below replaces by name.
-  if (previous !== null && previous.connection !== input.connection) {
+  if (previous && previous.connection !== input.connection) {
     await removeGithubWebhookSubscription(
       integrationStreamStub(
         input.projectId,
@@ -249,7 +249,7 @@ export async function linkRepoToGithub(
         `removing the new webhook subscription "${subscriptionName}" from connection "${input.connection}" failed (${String(rollbackError)})`,
       );
     }
-    if (previous !== null) {
+    if (previous) {
       try {
         await configureGithubWebhookSubscription(
           integrationStreamStub(
@@ -303,7 +303,7 @@ export async function unlinkRepoFromGithub(input: {
   const repoPath = canonicalizeStreamPath(input.repoPath);
   const repoStub = repoDurableObjectStub(input.projectId, repoPath);
   const link = await repoStub.getGithubLink();
-  if (link === null) return { unlinked: false };
+  if (!link) return { unlinked: false };
 
   // Subscription removal first, link removal last — the same ordering as linkRepoToGithub:
   // the link is the commit point, so a failure anywhere leaves the link in
@@ -317,7 +317,7 @@ export async function unlinkRepoFromGithub(input: {
     { repoPath, subscriptionName: githubRepoSubscriptionName(repoPath) },
   );
   const removed = await repoStub.removeGithubLink();
-  return { unlinked: removed !== null };
+  return { unlinked: !!removed };
 }
 
 function repoDurableObjectStub(projectId: string, repoPath: string) {

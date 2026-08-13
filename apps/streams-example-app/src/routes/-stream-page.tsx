@@ -177,7 +177,7 @@ function useStreamProcessor(args: { streamPath: string; streamProjectId?: string
     () =>
       acquireStreamRuntime({
         streamPath,
-        ...(streamProjectId === undefined ? {} : { projectId: streamProjectId }),
+        ...(!streamProjectId ? {} : { projectId: streamProjectId }),
         createStreamClient: createCapnwebStreamClient,
         processors: BROWSER_STREAM_PROCESSORS,
       }),
@@ -771,7 +771,7 @@ function EventRows({
             <span>
               {eventTypeFilter !== ""
                 ? "SQLite is ready; no events match the selected event type"
-                : snapshot.connectionError === undefined
+                : !snapshot.connectionError
                   ? snapshot.connectionStatus === "receiving-events"
                     ? "SQLite is ready; no events are stored locally yet"
                     : `SQLite is ready; stream connection is ${snapshot.connectionStatus}`
@@ -846,7 +846,7 @@ function EventRows({
                     // Direct DOM write: lands at the exact bottom, and the
                     // scroll event it fires re-engages the stick (≤2px).
                     const scroller = parentRef.current;
-                    if (scroller != null) scroller.scrollTop = scroller.scrollHeight;
+                    if (scroller) scroller.scrollTop = scroller.scrollHeight;
                   }}
                 >
                   <span className="text-base leading-none">↓</span>
@@ -922,7 +922,7 @@ function StreamRuntimeNotice({
   eventCount: number;
   snapshot: StreamBrowserSnapshot;
 }) {
-  if (snapshot.connectionError !== undefined) {
+  if (snapshot.connectionError) {
     return (
       <div
         className="grid gap-[3px] border-b border-[#fecdca] bg-[#fff4f2] py-[9px] pr-4 text-xs text-[#912018]"
@@ -1014,7 +1014,7 @@ function EventRowWindow({
     for (const row of rowQueryResult.data) {
       const event = streamEventRowFromSql(row);
       if (
-        event !== undefined &&
+        event &&
         row.query_event_type === eventTypeFilter &&
         typeof row.virtual_index === "number"
       ) {
@@ -1032,7 +1032,7 @@ function EventRowWindow({
 
   return virtualItems.map((virtualItem) => {
     const event = rowsByLocalIndex.get(virtualItem.index);
-    const isExpanded = event !== undefined && expandedOffsets.has(event.offset);
+    const isExpanded = !!event && expandedOffsets.has(event.offset);
     const isLastEventRow = virtualItem.index === eventCount - 1;
 
     return (
@@ -1049,7 +1049,7 @@ function EventRowWindow({
         // measurement cache, so unmeasured pending rows would never be placed.
         ref={measureElement}
       >
-        {event === undefined ? (
+        {!event ? (
           <article
             className="box-border h-8 rounded-md border border-[#e1e5eb]"
             data-testid="event-row-pending"
@@ -1100,7 +1100,7 @@ function streamEventRowFromSql(row: Record<string, unknown>): StreamEventRow | u
     typeof row.created_at !== "string" ||
     typeof row.inserted_at !== "string" ||
     typeof row.raw_json !== "string" ||
-    !(row.idempotency_key === null || typeof row.idempotency_key === "string")
+    !(!row.idempotency_key || typeof row.idempotency_key === "string")
   ) {
     return undefined;
   }
@@ -1108,7 +1108,7 @@ function streamEventRowFromSql(row: Record<string, unknown>): StreamEventRow | u
     local_index: row.local_index,
     offset: row.offset,
     type: row.type,
-    idempotency_key: row.idempotency_key,
+    idempotency_key: typeof row.idempotency_key === "string" ? row.idempotency_key : null,
     created_at: row.created_at,
     inserted_at: row.inserted_at,
     raw_json: row.raw_json,
@@ -1135,7 +1135,7 @@ function StreamSidebar({
   return (
     <aside
       className={
-        className === undefined
+        !className
           ? "w-[252px] flex-[0_0_252px] shrink-0 overflow-y-auto border-r border-[#e8ebf0] bg-white p-4 max-[760px]:order-first max-[760px]:max-h-[50dvh] max-[760px]:w-auto max-[760px]:flex-none max-[760px]:border-b max-[760px]:border-r-0"
           : `w-[252px] flex-[0_0_252px] shrink-0 overflow-y-auto border-r border-[#e8ebf0] bg-white p-4 max-[760px]:order-first max-[760px]:max-h-[50dvh] max-[760px]:w-auto max-[760px]:flex-none max-[760px]:border-b max-[760px]:border-r-0 ${className}`
       }
@@ -1228,7 +1228,7 @@ function BrowserEventCopyTool({
             </output>
           </dd>
         </div>
-        {snapshot.connectionError === undefined ? null : (
+        {!snapshot.connectionError ? null : (
           <div title="The most recent WebSocket or event-callback error, if any.">
             <dt>Error</dt>
             <dd>
@@ -1404,7 +1404,7 @@ function useStreamRuntimeState(streamStore: StreamBrowserStore, connectionStatus
 
     return () => {
       disposed = true;
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer) clearTimeout(timer);
     };
   }, [connectionStatus, streamStore]);
 
@@ -1417,7 +1417,7 @@ function useStreamRuntimeState(streamStore: StreamBrowserStore, connectionStatus
  * `Stream` capability, so the sidebar parses out just what it renders.
  */
 function parseGateState(core: unknown): { paused: boolean; pauseReason: string | null } {
-  if (core === null || typeof core !== "object") return { paused: false, pauseReason: null };
+  if (!core || typeof core !== "object") return { paused: false, pauseReason: null };
   const { paused, pauseReason } = core as { paused?: unknown; pauseReason?: unknown };
   return {
     paused: paused === true,
@@ -1473,9 +1473,8 @@ function StreamControlTool({
     }
   }
 
-  const gateLabel = runtimeState === undefined ? "…" : paused ? "Paused" : "Active";
-  const gateClass =
-    runtimeState === undefined ? "text-[#667085]" : paused ? "text-[#b42318]" : "text-[#067647]";
+  const gateLabel = !runtimeState ? "…" : paused ? "Paused" : "Active";
+  const gateClass = !runtimeState ? "text-[#667085]" : paused ? "text-[#b42318]" : "text-[#067647]";
 
   return (
     <section className="grid gap-2 border-t border-[#eef1f5] py-4">
@@ -1494,7 +1493,7 @@ function StreamControlTool({
             </output>
           </dd>
         </div>
-        {pauseReason === null ? null : (
+        {!pauseReason ? null : (
           <div title="Why the stream was paused, from the latest stream/paused event.">
             <dt>Pause reason</dt>
             <dd>
@@ -1526,7 +1525,7 @@ function StreamControlTool({
           data-testid="stream-pause-button"
           disabled={
             controlAction === "pausing" ||
-            runtimeState === undefined ||
+            !runtimeState ||
             snapshot.connectionStatus !== "receiving-events"
           }
           title="Append events.iterate.com/stream/paused — ordinary appends are rejected until the stream is resumed."
@@ -1536,7 +1535,7 @@ function StreamControlTool({
           Pause stream
         </button>
       )}
-      {pollError === undefined ? null : (
+      {!pollError ? null : (
         <output
           className="font-mono text-[11px] text-[#b42318]"
           data-testid="stream-control-error"
@@ -1781,7 +1780,7 @@ function InsertEventsTool({
       >
         {insertState.insertState}
       </output>
-      {insertError == null ? null : (
+      {!insertError ? null : (
         <p className="m-0 break-words font-mono text-xs text-[#b42318]" data-testid="insert-error">
           {insertError}
         </p>
@@ -1902,7 +1901,7 @@ function StreamComposer({ streamStore }: { streamStore: StreamBrowserStore }) {
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
-    if (textarea === null) return;
+    if (!textarea) return;
     const maxHeight = Math.floor(window.innerHeight * 0.35);
     textarea.style.height = "auto";
     textarea.style.maxHeight = `${maxHeight}px`;

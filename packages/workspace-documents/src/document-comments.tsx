@@ -106,22 +106,22 @@ export function DocumentComments({
   const resolutions = useMemo(() => {
     const map = new Map<string, AnchorResolution>();
     for (const thread of threads) {
-      if (thread.anchor === null) continue;
+      if (!thread.anchor) continue;
       map.set(thread.id, resolveThreadAnchor(body, thread.id, thread.anchor.selector));
     }
     return map;
   }, [body, threads]);
   const byPosition = (a: Thread, b: Thread) => {
-    const kindA = a.anchor !== null ? 0 : 1;
-    const kindB = b.anchor !== null ? 0 : 1;
+    const kindA = a.anchor ? 0 : 1;
+    const kindB = b.anchor ? 0 : 1;
     if (kindA !== kindB) return kindA - kindB;
     const positionA = resolutions.get(a.id)?.range?.start ?? Number.MAX_SAFE_INTEGER;
     const positionB = resolutions.get(b.id)?.range?.start ?? Number.MAX_SAFE_INTEGER;
     return positionA - positionB;
   };
   const openThreads = threads.filter((thread) => thread.status === "open").sort(byPosition);
-  const openDocumentThreads = openThreads.filter((thread) => thread.anchor === null);
-  const openSelectionThreads = openThreads.filter((thread) => thread.anchor !== null);
+  const openDocumentThreads = openThreads.filter((thread) => !thread.anchor);
+  const openSelectionThreads = openThreads.filter((thread) => !!thread.anchor);
   const resolvedThreads = threads.filter((thread) => thread.status === "resolved");
   const commentTotal = threads.reduce(
     (total, thread) => total + thread.comments.filter((comment) => !comment.deleted).length,
@@ -209,8 +209,8 @@ export function DocumentComments({
             id="document-comment-composer"
             className="shrink-0 border-t bg-muted/20 px-4 py-3 focus-within:ring-2 focus-within:ring-inset focus-within:ring-primary/25"
           >
-            {opError !== null && <p className="pb-1 text-xs text-red-700">{opError}</p>}
-            {identity === null ? (
+            {!!opError && <p className="pb-1 text-xs text-red-700">{opError}</p>}
+            {!identity ? (
               <p className="text-xs text-muted-foreground">
                 Sign-in identity unavailable — comments are read-only.
               </p>
@@ -285,16 +285,16 @@ function ThreadBlock({
         selected && "rounded-md ring-1 ring-primary/30",
       )}
     >
-      {thread.label !== null && (
+      {!!thread.label && (
         <p className="pb-1 font-mono text-[10px] text-muted-foreground">
           {thread.label}
           {resolved ? " · resolved" : ""}
         </p>
       )}
-      {quote !== null && (
+      {!!quote && (
         <button
           type="button"
-          onClick={onSelect === undefined ? undefined : () => onSelect(thread.id)}
+          onClick={!onSelect ? undefined : () => onSelect(thread.id)}
           className="mb-1.5 block w-full truncate border-l-2 pl-2 text-left text-xs text-muted-foreground italic hover:text-foreground"
           style={{ borderColor: authorColor(thread.comments[0]?.author ?? "someone", 0.8) }}
           title={quote}
@@ -302,7 +302,7 @@ function ThreadBlock({
           {quote}
         </button>
       )}
-      {resolution !== null && resolution.state !== "attached" && (
+      {!!resolution && resolution.state !== "attached" && (
         <p className="mb-1 text-[10px] font-medium tracking-wide text-amber-700 uppercase">
           {resolution.state === "needs_review" ? "anchor needs review" : "anchor lost"}
         </p>
@@ -311,12 +311,12 @@ function ThreadBlock({
         <CommentRow
           key={comment.id}
           comment={comment}
-          mine={identity !== null && comment.author === identity.author}
+          mine={!!identity && comment.author === identity.author}
           apply={apply}
         />
       ))}
       <div className="flex items-center gap-2 pt-0.5 pl-8">
-        {identity !== null && !resolved && !replyOpen ? (
+        {identity && !resolved && !replyOpen ? (
           <button
             type="button"
             onClick={() => setReplyOpen(true)}
@@ -325,7 +325,7 @@ function ThreadBlock({
             Reply
           </button>
         ) : null}
-        {identity !== null ? (
+        {identity ? (
           <button
             type="button"
             onClick={() =>
@@ -345,7 +345,7 @@ function ThreadBlock({
           </button>
         ) : null}
       </div>
-      {replyOpen && identity !== null ? (
+      {replyOpen && identity ? (
         <div className="pt-1.5 pl-8">
           <CommentComposer
             placeholder="Reply…"
@@ -379,7 +379,7 @@ function CommentRow({
   const [editing, setEditing] = useState<string | null>(null);
   const name = comment.displayName ?? comment.author;
   return (
-    <div className={cn("group flex gap-2 py-1.5", comment.inReplyTo !== null && "pl-6")}>
+    <div className={cn("group flex gap-2 py-1.5", !!comment.inReplyTo && "pl-6")}>
       <span
         aria-hidden
         className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white"
@@ -397,7 +397,7 @@ function CommentRow({
           >
             {relativeTime(comment.createdAt)}
           </time>
-          {comment.modifiedAt !== null && !comment.deleted ? (
+          {comment.modifiedAt && !comment.deleted ? (
             <span
               className="text-[10px] text-muted-foreground/70"
               title={`edited ${formatUtcTimestamp(comment.modifiedAt)}`}
@@ -428,7 +428,7 @@ function CommentRow({
         </p>
         {comment.deleted ? (
           <p className="text-xs text-muted-foreground italic">Deleted.</p>
-        ) : editing !== null ? (
+        ) : editing ? (
           <CommentComposer
             placeholder="Edit comment…"
             submitLabel="Save"
@@ -515,7 +515,7 @@ export function CommentComposer({
             event.preventDefault();
             submit();
           }
-          if (event.key === "Escape" && onCancel !== undefined) {
+          if (event.key === "Escape" && onCancel) {
             event.stopPropagation();
             onCancel();
           }
@@ -523,7 +523,7 @@ export function CommentComposer({
         className="min-h-0 resize-none text-sm"
       />
       <div className="flex items-center gap-2 self-end">
-        {onCancel !== undefined && (
+        {!!onCancel && (
           <Button variant="ghost" size="sm" onClick={onCancel}>
             Cancel
           </Button>

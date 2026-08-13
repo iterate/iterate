@@ -21,13 +21,13 @@ function highlightApi(): HighlightApi | null {
   // so an environment without them returns null instead of crashing.
   const cssGlobal = globalThis.CSS as (typeof CSS & { highlights?: HighlightRegistry }) | undefined;
   const highlightCtor = (globalThis as { Highlight?: HighlightApi["Highlight"] }).Highlight;
-  if (cssGlobal?.highlights === undefined || highlightCtor === undefined) return null;
+  if (!cssGlobal?.highlights || !highlightCtor) return null;
   return { registry: cssGlobal.highlights, Highlight: highlightCtor };
 }
 
 /** True when the runtime can paint (Baseline browsers; not jsdom). */
 export function canPaintHighlights(): boolean {
-  return highlightApi() !== null;
+  return !!highlightApi();
 }
 
 /**
@@ -40,7 +40,7 @@ export function paintHighlights(
   groups: { key: string; ranges: Range[] }[],
 ): boolean {
   const api = highlightApi();
-  if (api === null) return false;
+  if (!api) return false;
   clearHighlights(prefix);
   for (const group of groups) {
     if (group.ranges.length === 0) continue;
@@ -51,7 +51,7 @@ export function paintHighlights(
 
 export function clearHighlights(prefix: string): void {
   const api = highlightApi();
-  if (api === null) return;
+  if (!api) return;
   for (const name of [...api.registry.keys()]) {
     if (name.startsWith(`${prefix}-`)) api.registry.delete(name);
   }

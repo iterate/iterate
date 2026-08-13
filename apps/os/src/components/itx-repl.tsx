@@ -93,7 +93,7 @@ export function ItxRepl({
   });
   const runButtonLabel = typeScriptExtensions.loading ? "Loading..." : "Run";
   const bottomRef = useRef<HTMLDivElement>(null);
-  const entryCount = entries.length + (pendingCode === null ? 0 : 1);
+  const entryCount = entries.length + (!pendingCode ? 0 : 1);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
@@ -109,7 +109,7 @@ export function ItxRepl({
                 <p>
                   <span className="text-foreground">Run TypeScript as real project scripts.</span>{" "}
                   Scripts execute server-side in this session&apos;s stream (
-                  {scopePath === null ? (
+                  {!scopePath ? (
                     "created on your first Run"
                   ) : (
                     <>
@@ -151,7 +151,7 @@ export function ItxRepl({
             {entries.map((entry, index) => (
               <ReplEntryRow key={entry.executionId} entry={entry} index={index} />
             ))}
-            {pendingCode === null ? null : (
+            {!pendingCode ? null : (
               <ReplEntryRow
                 entry={{
                   code: pendingCode,
@@ -189,7 +189,7 @@ export function ItxRepl({
                   showLineNumbers={false}
                 />
               </div>
-              {runError === null ? null : (
+              {!runError ? null : (
                 <p
                   className="font-mono text-xs whitespace-pre-wrap text-destructive"
                   data-testid="itx-repl-run-error"
@@ -289,6 +289,7 @@ function ReplEntryRow({ entry, index }: { entry: ReplRunEntry; index: number }) 
       </ReplPromptRow>
       <ReplCodeBlock code={entry.code} language="typescript" />
       {entry.status === "success" ? (
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- null is a value a script can return; undefined means no value came back
         entry.result === undefined ? (
           // Returned nothing — deliberately NOT rendered as null (null is a
           // value a script can return; undefined means no value came back).

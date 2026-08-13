@@ -183,8 +183,7 @@ async function resolveRequestAuth(input: {
     logAuthSessionVerificationFailure({ context: input.context, error: authError });
 
   return {
-    principal:
-      authentication.credential === null ? null : principalFromIdentity(authentication.identity),
+    principal: !authentication.credential ? null : principalFromIdentity(authentication.identity),
     session: authentication.credential === "session" ? authentication.session : null,
     error,
     operatorSession: null,
@@ -205,7 +204,7 @@ function logAuthSessionVerificationFailure(input: {
     clientId: diagnosticIdentifier(input.context.config.iterateAuth?.clientId),
     jwksKeyIds: input.context.config.iterateAuth?.jwks?.keys
       ?.map((key) => diagnosticIdentifier(key.kid))
-      .filter((kid) => kid !== undefined)
+      .filter((kid) => typeof kid === "string")
       .slice(0, 20),
   };
 

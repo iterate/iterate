@@ -39,7 +39,7 @@ export const GithubAiLinter = {
               async ({ path }) => (await itx.repos.get(path).processor.snapshot()).state.github,
             ),
           );
-          connections = links.flatMap((link) => (link === null ? [] : [link.connection]));
+          connections = links.flatMap((link) => (!link ? [] : [link.connection]));
         }
         await Promise.all(
           [...new Set(connections)].map(async (connection) => {
@@ -60,7 +60,7 @@ export const GithubAiLinter = {
             // Later config-worker updates preserve that boundary so a refresh
             // cannot skip webhooks that arrived since the bot was installed.
             const startAfterOffset =
-              existingCutoff !== null && Number.isSafeInteger(existingCutoff)
+              Number.isFinite(existingCutoff) && Number.isSafeInteger(existingCutoff)
                 ? existingCutoff
                 : runtime.coreProcessorState.maxOffset;
             await connectionStream.append(

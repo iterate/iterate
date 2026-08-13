@@ -46,7 +46,7 @@ export function Board({
   onOpen: (path: string) => void;
 }) {
   const { rowField, rows, columns, filterActive } = projection;
-  const hasGroupBars = rowField !== null && rows.length > 1;
+  const hasGroupBars = !!rowField && rows.length > 1;
   // The centered content's exact width: columns + gaps + wrapper padding.
   // Group-bar labels use it to align with the leftmost column's edge.
   const contentWidth = `calc(${columns.length * 18}rem + ${(columns.length - 1) * 0.5}rem + 1rem)`;
@@ -72,15 +72,11 @@ export function Board({
         // Dropping into another tag row re-tags the task (no-tag row clears).
         const labels =
           rowField === "label" && source.rowKey !== target.rowKey
-            ? row.value === null
+            ? !row.value
               ? []
               : [row.value]
             : undefined;
-        if (
-          taskColumnState(task.state) !== target.state ||
-          task.folder !== folder ||
-          labels !== undefined
-        ) {
+        if (taskColumnState(task.state) !== target.state || task.folder !== folder || labels) {
           onMove(task, target.state, folder, labels);
         }
       }}
@@ -283,7 +279,7 @@ function BoardCard({
   });
   const changeWord =
     changeStatus === "added" ? "New" : changeStatus === "modified" ? "Edited" : undefined;
-  const hoverLines = [changeWord].filter((line): line is string => line !== undefined);
+  const hoverLines = [changeWord].filter((line): line is string => !!line);
   const card = (
     <button
       type="button"

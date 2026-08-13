@@ -16,9 +16,9 @@ export type ProjectDeploymentStatus = "created" | "creating" | "failed" | "missi
 export function deploymentStatusFromState(
   state: Pick<ProjectProcessorState, "birthCertificate" | "createFailure" | "createRequest">,
 ): Exclude<ProjectDeploymentStatus, "unknown"> {
-  if (state.birthCertificate !== null) return "created";
-  if (state.createFailure !== null) return "failed";
-  if (state.createRequest !== null) return "creating";
+  if (state.birthCertificate) return "created";
+  if (state.createFailure) return "failed";
+  if (state.createRequest) return "creating";
   return "missing";
 }
 

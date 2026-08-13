@@ -242,11 +242,7 @@ export class CollabHost {
         this.#store.endSession(path);
         throw new Error(`${path} was deleted while the session was opening — retry to reopen`);
       }
-      if (
-        settled !== null &&
-        settled !== opened.content &&
-        this.#engine.head(path)?.version === 0
-      ) {
+      if (settled && settled !== opened.content && this.#engine.head(path)?.version === 0) {
         await this.#engine.applyExternal(path, (doc) => minimalSplice(doc, settled));
       }
       // Return the LIVE head — a gateway write may have advanced the session
@@ -295,7 +291,7 @@ export class CollabHost {
     // map attached whenever its generation moved — piggybacked on ops
     // deliveries, or alone when only cursors moved.
     const withPresence = (pull: CollabPull): CollabPull => {
-      if (pull.status !== "ops" || afterPresence === undefined) return pull;
+      if (pull.status !== "ops" || !Number.isFinite(afterPresence)) return pull;
       const generation = this.#presenceGeneration.get(path) ?? 0;
       return generation > afterPresence ? { ...pull, presence: this.#presenceFor(path) } : pull;
     };
@@ -319,7 +315,10 @@ export class CollabHost {
       finish(); // release OUR registration only — no spurious wake of peers
       return withPresence(first);
     }
-    if (afterPresence !== undefined && (this.#presenceGeneration.get(path) ?? 0) > afterPresence) {
+    if (
+      Number.isFinite(afterPresence) &&
+      (this.#presenceGeneration.get(path) ?? 0) > afterPresence
+    ) {
       finish(); // cursor news is already waiting — no park needed
       return withPresence(first);
     }
@@ -343,7 +342,7 @@ export class CollabHost {
     this.#lastActivity.set(path, Date.now());
     const clients = this.#presence.get(path) ?? new Map();
     this.#presence.set(path, clients);
-    if (selection === null) clients.delete(clientId);
+    if (!selection) clients.delete(clientId);
     else clients.set(clientId, { anchor: selection.anchor, at: Date.now(), head: selection.head });
     this.#presenceGeneration.set(path, (this.#presenceGeneration.get(path) ?? 0) + 1);
     if (!this.#presenceWake.has(path)) {
@@ -374,7 +373,7 @@ export class CollabHost {
   #presenceFor(path: string): CollabPresence {
     const clients = this.#presence.get(path);
     const now = Date.now();
-    if (clients !== undefined) {
+    if (clients) {
       for (const [clientId, cursor] of clients) {
         if (now - cursor.at > PRESENCE_STALE_MS) clients.delete(clientId);
       }
@@ -403,7 +402,7 @@ export class CollabHost {
 
   async readFileBytes(path: string): Promise<Uint8Array | null> {
     const content = await this.readFile(path);
-    return content === null ? null : new TextEncoder().encode(content);
+    return !content ? null : new TextEncoder().encode(content);
   }
 
   /** Apply a whole-content write as a head-relative splice. False = not live. */
@@ -480,7 +479,7 @@ export class CollabHost {
     for (const session of this.#store.sessions()) {
       if (session.headVersion > session.overlayVersion) {
         const file = await this.#flush(session.path);
-        if (file !== null) settled.push(file);
+        if (file) settled.push(file);
         continue;
       }
       const head = await this.#opened(session.path);
@@ -516,7 +515,7 @@ export class CollabHost {
     return this.#exclusive(async () => {
       const settled = await this.#settleAll();
       const result = await runCommit();
-      if (result.mount !== undefined) {
+      if (result.mount) {
         const mount = result.mount;
         this.#store.setBases(settled.filter((file) => ownsPath(file.path, mount)));
       }
@@ -541,7 +540,7 @@ export class CollabHost {
     this.#assertLive(path);
     const head = await this.#opened(path);
     const base = this.#store.getBase(path);
-    if (base === null) throw new Error(`no redline base recorded for ${path}`);
+    if (!base) throw new Error(`no redline base recorded for ${path}`);
     const ops = await this.#store.readOps(path, head.epoch, base.version - 1);
     const segments = attributedChanges(Text.of(base.content.split("\n")), ops);
     // Two plain arrays on the wire (a union array breaks the generated
@@ -593,7 +592,7 @@ export class CollabHost {
       this.#presence.delete(path);
       this.#presenceGeneration.delete(path);
       const pendingWake = this.#presenceWake.get(path);
-      if (pendingWake !== undefined) clearTimeout(pendingWake);
+      if (pendingWake) clearTimeout(pendingWake);
       this.#presenceWake.delete(path);
       if (!this.isLive(path)) continue;
       this.#engine.discard(path);
@@ -617,7 +616,7 @@ export class CollabHost {
   async #sweep(now: number): Promise<void> {
     for (const path of this.livePaths()) {
       const idleSince = this.#lastActivity.get(path);
-      if (idleSince === undefined) {
+      if (!Number.isFinite(idleSince)) {
         // A fresh incarnation has no activity memory: treat every durable
         // session as just-seen, or the first touch after a deploy would
         // "idle out" (and durably END) everyone else's live session.
@@ -689,7 +688,7 @@ export class CollabHost {
 
   #isDirty(path: string): boolean {
     const session = this.#store.sessions().find((candidate) => candidate.path === path);
-    return session !== undefined && session.headVersion > session.overlayVersion;
+    return !!session && session.headVersion > session.overlayVersion;
   }
 
   #assertLive(path: string): void {
@@ -702,7 +701,7 @@ export class CollabHost {
    * Typed and loud — never silent unbounded growth. */
   #assertQuota(path: string, headVersion: number): void {
     const base = this.#store.getBase(path);
-    if (base !== null && headVersion - base.version >= MAX_UNCOMMITTED_OPS) {
+    if (base && headVersion - base.version >= MAX_UNCOMMITTED_OPS) {
       throw new Error(
         `retention quota: ${path} has ${headVersion - base.version} uncommitted ops — commit to continue`,
       );

@@ -105,7 +105,7 @@ export default function ChatScreen() {
         throw error;
       }
     },
-    enabled: baseUrl !== undefined,
+    enabled: !!baseUrl,
     eventTypes: undefined,
     projectId,
     streamPath: path,
@@ -124,7 +124,7 @@ export default function ChatScreen() {
       const project = await getProjectItx(baseUrl!, projectId);
       return await readAllApprovalEvents(project.streams.get("/"));
     },
-    enabled: baseUrl !== undefined,
+    enabled: !!baseUrl,
     eventTypes: APPROVAL_STREAM_EVENT_TYPES,
     projectId,
     streamPath: "/",
@@ -137,7 +137,7 @@ export default function ChatScreen() {
   const approverKey = useQuery({
     queryKey: ["approver-key-status", projectId, baseUrl],
     queryFn: () => approverKeyStatus(baseUrl!, projectId),
-    enabled: baseUrl !== undefined,
+    enabled: !!baseUrl,
   });
 
   const [draft, setDraft] = useState("");
@@ -260,7 +260,7 @@ export default function ChatScreen() {
       ) : viewMode === "chat" ? (
         <FeedList
           approvals={
-            baseUrl === undefined
+            !baseUrl
               ? null
               : threadBatches.map((batch) => (
                   <InThreadApprovalCard
@@ -438,7 +438,7 @@ function FeedItem({
     case "processor-revived":
       return (
         <Text style={styles.wakeMarker}>
-          — {item.processorSlug == null ? "processor" : `${item.processorSlug} processor`} revived —
+          — {!item.processorSlug ? "processor" : `${item.processorSlug} processor`} revived —
         </Text>
       );
     case "child-stream-created":
@@ -447,7 +447,7 @@ function FeedItem({
     case "stream-resumed":
       return (
         <Text style={styles.wakeMarker}>
-          — {item.reason == null ? item.text : `${item.text}: ${item.reason}`} —
+          — {!item.reason ? item.text : `${item.text}: ${item.reason}`} —
         </Text>
       );
     case "user":

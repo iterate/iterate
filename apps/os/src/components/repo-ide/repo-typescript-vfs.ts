@@ -77,7 +77,7 @@ export function desiredRepoVfs(
   for (const [path, change] of changes) {
     if (!isTypeScriptSeedPath(path)) continue;
     const entry = effectiveEntry(change);
-    if (entry === undefined) continue;
+    if (!entry) continue;
     if (entry.type === "write") desired.set(path, entry.content);
     else if (entry.type === "delete") desired.delete(path);
     // write-base64 entries are binary uploads — nothing for the program.

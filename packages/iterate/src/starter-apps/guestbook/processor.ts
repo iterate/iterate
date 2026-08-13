@@ -82,7 +82,7 @@ export class GuestbookProcessor extends StreamProcessor<GuestbookProcessorContra
       case "events.iterate.com/guestbook/created":
         // Idempotency-keyed at the source, but a duplicate that slips through
         // folds to a no-op rather than wedging the frame.
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/guestbook/entry-signed":
         return {

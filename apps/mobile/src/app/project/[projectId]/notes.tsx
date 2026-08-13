@@ -70,7 +70,7 @@ export default function NotesScreen() {
         .get(NOTES_WORKSPACE_PATH)
         .getEvents({ eventTypes: NOTE_EVENT_TYPES });
     },
-    enabled: baseUrl !== undefined,
+    enabled: !!baseUrl,
     eventTypes: NOTE_EVENT_TYPES,
     projectId,
     streamPath: NOTES_WORKSPACE_PATH,
@@ -81,7 +81,7 @@ export default function NotesScreen() {
   // shows up here even though it appends no fact, on the next refetch).
   const files = useQuery({
     queryKey: ["note-files", baseUrl || "pending", projectId, factOffset],
-    enabled: baseUrl !== undefined,
+    enabled: !!baseUrl,
     placeholderData: (previous: any) => previous,
     queryFn: async (): Promise<Record<string, string | null>> => {
       const project = await getProjectItx(baseUrl!, projectId);
@@ -164,7 +164,7 @@ export default function NotesScreen() {
         onRequestClose={() => setViewer(null)}
         statusBarTranslucent
         transparent
-        visible={viewer !== null}
+        visible={!!viewer}
       >
         {viewer ? (
           <MediaViewer
@@ -226,7 +226,7 @@ function NoteRow({
       cache.setQueriesData(
         { queryKey: ["note-files"] },
         (files: Record<string, string | null> | undefined) =>
-          files === undefined ? files : { ...files, [item.path]: null },
+          !files ? files : { ...files, [item.path]: null },
       );
     },
   });
@@ -257,7 +257,7 @@ function NoteRow({
       onPress={() => {
         // While editing, a row tap must not collapse the row — that would
         // strand the editor with its Save/Cancel hidden.
-        if (editDraft === null) setExpanded(!expanded);
+        if (!editDraft) setExpanded(!expanded);
       }}
       style={styles.row}
     >
@@ -265,7 +265,7 @@ function NoteRow({
         <Text numberOfLines={expanded ? undefined : 1} style={styles.rowTitle}>
           {item.displayTitle || "(empty note)"}
         </Text>
-        {editDraft !== null ? (
+        {editDraft ? (
           <TextInput
             value={editDraft}
             onChangeText={setEditDraft}
@@ -305,7 +305,7 @@ function NoteRow({
             {item.capturedAt ? new Date(item.capturedAt).toLocaleString() : ""}
           </Text>
         </View>
-        {expanded && editDraft !== null ? (
+        {expanded && editDraft ? (
           <View style={styles.actions}>
             <Pressable
               accessibilityRole="button"
@@ -408,7 +408,7 @@ function NoteThumb({
   return (
     <Pressable
       accessibilityLabel={`View ${attachment.filename}`}
-      disabled={imageUrl.data === undefined}
+      disabled={!imageUrl.data}
       onPress={() => imageUrl.data && onViewImage(imageUrl.data)}
     >
       {imageUrl.data ? (

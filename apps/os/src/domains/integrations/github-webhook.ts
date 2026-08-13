@@ -54,7 +54,7 @@ export async function fetchGithubWebhook(input: {
     event: {
       idempotencyKey: `github-webhook:${delivery}`,
       payload: {
-        ...(input.config.integrations.github?.appSlug === undefined
+        ...(!input.config.integrations.github?.appSlug
           ? {}
           : { appSlug: input.config.integrations.github.appSlug }),
         associations: githubWebhookAssociations({ id: delivery, name: eventName, payload }),
@@ -95,7 +95,7 @@ async function verifyGithubWebhook(input: {
  */
 function githubWebhookExternalId(payload: Record<string, unknown>): string | null {
   const installation = payload.installation;
-  if (installation !== null && typeof installation === "object" && !Array.isArray(installation)) {
+  if (installation && typeof installation === "object" && !Array.isArray(installation)) {
     const id = (installation as { id?: unknown }).id;
     if (typeof id === "number" || typeof id === "string") return String(id);
   }

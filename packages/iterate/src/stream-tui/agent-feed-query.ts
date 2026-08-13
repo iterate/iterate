@@ -13,7 +13,7 @@ type AgentReadinessHandle = {
 /** Birth a fresh generic agent before its history becomes the feed's durable seed. */
 export async function ensureAgentFeedReady(agent: AgentReadinessHandle): Promise<void> {
   const snapshot = await agent.processor.snapshot();
-  if (snapshot.state.birthCertificate === null) await agent.create();
+  if (!snapshot.state.birthCertificate) await agent.create();
 }
 
 /**

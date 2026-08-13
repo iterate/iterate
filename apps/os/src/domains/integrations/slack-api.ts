@@ -66,7 +66,7 @@ function slackEgressAdapter(input: {
     const raw =
       typeof config.headers?.toJSON === "function" ? config.headers.toJSON() : config.headers;
     for (const [key, value] of Object.entries((raw ?? {}) as Record<string, unknown>)) {
-      if (value != null && typeof value !== "object") headers.set(key, String(value));
+      if (value && typeof value !== "object") headers.set(key, String(value));
     }
     const method = (config.method ?? "post").toUpperCase();
     const buildRequest = (placeholder: string) => {
@@ -304,10 +304,10 @@ async function retrySlackRequestWithDeploymentCredential(input: {
     connection: input.connection,
     projectId: input.projectId,
   }).catch(() => null);
-  if (expectedTeamId === null) return input.primaryResponse;
+  if (!expectedTeamId) return input.primaryResponse;
 
   const deploymentToken = readDeploymentSlackBotToken();
-  if (deploymentToken === null) return input.primaryResponse;
+  if (!deploymentToken) return input.primaryResponse;
   const authTestResponse = await fetchWithDeploymentSlackToken(
     new Request("https://slack.com/api/auth.test", {
       body: "{}",
@@ -316,7 +316,7 @@ async function retrySlackRequestWithDeploymentCredential(input: {
     }),
     deploymentToken,
   ).catch(() => null);
-  if (authTestResponse === null) return input.primaryResponse;
+  if (!authTestResponse) return input.primaryResponse;
   const authTest = (await authTestResponse.json().catch(() => null)) as {
     ok?: boolean;
     team_id?: string;
@@ -423,7 +423,7 @@ async function parseSlackWebApiResponse(
   method: string,
 ): Promise<SlackWebApiResult> {
   const result = (await response.json().catch(() => null)) as SlackWebApiResult | null;
-  if (result === null) {
+  if (!result) {
     throw new Error(`Slack Web API ${method} failed: HTTP ${response.status} (non-JSON body)`);
   }
   if (!response.ok || result.ok === false) {

@@ -279,7 +279,7 @@ export function acquireStreamRuntime(
   const projectId = args.projectId ?? DEFAULT_STREAM_PROJECT_ID;
   const key = `${projectId} ${args.streamPath}`;
   const existing = runtimeRegistry.get(key);
-  if (existing !== undefined) {
+  if (existing) {
     // The runtime outlives the render that created it; a stale factory here is
     // a permanent wedge once its captured transport dies. Re-acquires always
     // hand over the current transport WHOLESALE (connection factory + evictor are one value;
@@ -500,7 +500,7 @@ function createStreamRuntime(
   // instead of throwing "disposed" (B2).
   function whenStreamReady(timeoutMs = 10_000): Promise<void> {
     if (disposed) return Promise.reject(new Error("stream runtime is disposed"));
-    if (stream !== undefined) return Promise.resolve();
+    if (stream) return Promise.resolve();
     return new Promise<void>((resolve, reject) => {
       const waiter = {
         resolve: () => {
@@ -588,7 +588,7 @@ function createStreamRuntime(
   }
 
   function refreshDatabaseInfoSoon() {
-    if (disposed || databaseInfoTimer !== undefined) return;
+    if (disposed || databaseInfoTimer) return;
     databaseInfoTimer = setTimeout(() => {
       databaseInfoTimer = undefined;
       refreshDatabaseInfo();
@@ -596,7 +596,7 @@ function createStreamRuntime(
   }
 
   function notifyDatabaseChangedSoon() {
-    if (disposed || databaseChangeTimer !== undefined) return;
+    if (disposed || databaseChangeTimer) return;
     databaseChangeTimer = setTimeout(() => {
       databaseChangeTimer = undefined;
       streamDatabase.notifyChanged();
@@ -632,7 +632,7 @@ function createStreamRuntime(
     stream = undefined;
     snapshot = { ...snapshot, connectionError, connectionStatus: "reconnecting" };
     emitSnapshot();
-    if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
       reconnectTimer = undefined;
       connect();
@@ -644,11 +644,11 @@ function createStreamRuntime(
   }
 
   function reconnectNow() {
-    if (connectTimer !== undefined) {
+    if (connectTimer) {
       clearTimeout(connectTimer);
       connectTimer = undefined;
     }
-    if (reconnectTimer !== undefined) {
+    if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
     }
@@ -951,7 +951,7 @@ function createStreamRuntime(
     await discardBrowserProcessorProjection({
       sql,
       processorSlug: processorConfig.slug,
-      ...(streamId === undefined ? {} : { streamId }),
+      ...(!streamId ? {} : { streamId }),
       tables: processorConfig.tables,
       ensureProjectionSchema: (client) => processorConfig.ensureProjectionSchema(client),
     });
@@ -1005,20 +1005,19 @@ function createStreamRuntime(
   let connectPendingEpoch: number | undefined;
 
   function connect() {
-    if (stream !== undefined || disposed) return;
+    if (stream || disposed) return;
     if (connectPendingEpoch === connectionEpoch) return;
     connectStartedAt = Date.now();
-    const streamUrl =
-      args.streamUrl === undefined
-        ? undefined
-        : new URL(
-            resolveStreamUrl({
-              projectId: args.projectId,
-              streamPath: args.streamPath,
-              streamUrl: args.streamUrl,
-            }),
-            window.location.href,
-          );
+    const streamUrl = !args.streamUrl
+      ? undefined
+      : new URL(
+          resolveStreamUrl({
+            projectId: args.projectId,
+            streamPath: args.streamPath,
+            streamUrl: args.streamUrl,
+          }),
+          window.location.href,
+        );
     // Identity for THIS connect attempt. A late callback from a superseded
     // connection compares against this and bails if it no longer matches (B1).
     connectionEpoch += 1;
@@ -1115,7 +1114,7 @@ function createStreamRuntime(
     liveAgentStateChannel.request();
 
     const readerTimeout = setTimeout(() => {
-      if (!disposed && eventConnection === undefined) {
+      if (!disposed && !eventConnection) {
         snapshot = { ...snapshot, databaseRole: "reader" };
         emitSnapshot();
         liveAgentStateChannel.request();
@@ -1176,7 +1175,7 @@ function createStreamRuntime(
           processorSchemaVersionKey: processorSchemaKey,
         });
         if (!ownsRuntime()) return undefined;
-        if (supersedingLock !== undefined) {
+        if (supersedingLock) {
           // Resign: give up writership (keeping the connection — a reader
           // still appends and reads runtimeState) and let the newer tab own
           // the shared cache; its writes reach this tab's reactive queries
@@ -1365,7 +1364,7 @@ function createStreamRuntime(
             return { streamId: page.streamId, maxOffset: page.streamMaxOffset };
           },
         });
-        if (caughtUp === undefined || !ownsRuntime()) return undefined;
+        if (!caughtUp || !ownsRuntime()) return undefined;
         const replayAfterOffset = caughtUp.replayAfterOffset;
         lastDeliveredOffset = replayAfterOffset;
         // The live capabilities ride as SIBLINGS of the serializable
@@ -1382,7 +1381,7 @@ function createStreamRuntime(
           snapshot: () => processor.snapshot(),
           oneWayEstimateMs: () => {
             const rtt = transportRtt.stats();
-            return rtt === null ? undefined : rtt.p50 / 2;
+            return !rtt ? undefined : rtt.p50 / 2;
           },
         });
         return {
@@ -1394,7 +1393,7 @@ function createStreamRuntime(
             processor: {
               announcement: announceContract(processor.contract),
             },
-            ...(subscriberUser === undefined ? {} : { user: subscriberUser }),
+            ...(!subscriberUser ? {} : { user: subscriberUser }),
           },
           getRuntimeState: capabilities.getRuntimeState,
           ping: capabilities.ping,
@@ -1414,7 +1413,7 @@ function createStreamRuntime(
         };
       })
       .then(async (ready) => {
-        if (ready === undefined || !ownsRuntime()) return undefined;
+        if (!ready || !ownsRuntime()) return undefined;
         // Claim the volatile relay immediately before the atomic live open.
         // Any old writer's overlay disappears even if it crashed without a
         // release message; state published below belongs to this session only.
@@ -1439,7 +1438,7 @@ function createStreamRuntime(
         return { handle, processor: ready.processor, streamId: ready.streamId };
       })
       .then((opened) => {
-        if (opened === undefined) return;
+        if (!opened) return;
         const { handle, processor, streamId: openedStreamId } = opened;
         if (!ownsRuntime()) {
           closeWithoutWaiting(handle);
@@ -1630,7 +1629,7 @@ function createStreamRuntime(
         }).then((stillSuperseding) => {
           if (disposed || newerWriterWatch !== watch) return;
           newerWriterWatch = undefined;
-          if (stillSuperseding !== undefined) {
+          if (stillSuperseding) {
             watchNewerWriter(stillSuperseding);
             return;
           }
@@ -1649,7 +1648,7 @@ function createStreamRuntime(
     writerRole = undefined;
     newerWriterWatch?.release();
     newerWriterWatch = undefined;
-    if (newerWriterRecheckTimer !== undefined) {
+    if (newerWriterRecheckTimer) {
       clearTimeout(newerWriterRecheckTimer);
       newerWriterRecheckTimer = undefined;
     }
@@ -1679,7 +1678,7 @@ function createStreamRuntime(
   // unhandledrejection per teardown. Same wrapper useStreamConnection's
   // dispose uses.
   function closeWithoutWaiting(handle: { close(): void } | undefined) {
-    if (handle === undefined) return;
+    if (!handle) return;
     void Promise.resolve()
       .then(() => handle.close())
       .catch(() => {
@@ -1711,13 +1710,13 @@ function createStreamRuntime(
   // check racing a cold DO would strike a healthy attempt.
   function onResume() {
     if (disposed || !started) return;
-    if (stream === undefined || reconnectTimer !== undefined) {
+    if (!stream || reconnectTimer) {
       // pageshow fires on every NORMAL load too, right after start() began the
       // first connection attempt — leave a young in-flight attempt alone instead of bumping
       // its epoch and reconnecting (one wasted round trip per page load).
-      if (stream === undefined && Date.now() - connectStartedAt < 5_000) return;
+      if (!stream && Date.now() - connectStartedAt < 5_000) return;
       reconnectNow();
-    } else if (eventConnection !== undefined || snapshot.databaseRole === "reader") {
+    } else if (eventConnection || snapshot.databaseRole === "reader") {
       void verifyDelivery("resume check");
     }
   }
@@ -1797,7 +1796,7 @@ function createStreamRuntime(
   ): Promise<void> {
     const requireRealArrival = opts?.requireRealArrival ?? false;
     const connection = stream;
-    if (connection === undefined || disposed) return;
+    if (!connection || disposed) return;
     if (verifyInFlight) {
       verifyRerun = {
         reason,
@@ -1840,7 +1839,7 @@ function createStreamRuntime(
       // on the first hit.
       const coreProcessorState = parseBrowserCoreProcessorState(result.coreProcessorState);
       if (disposed || stream !== connection) return;
-      if (eventConnection === undefined) return; // transport answered — all a reader needs
+      if (!eventConnection) return; // transport answered — all a reader needs
       if (coreProcessorState.streamId !== connectionStreamId) {
         throw new Error(
           `stream ID changed (${connectionStreamId} -> ${coreProcessorState.streamId}); event callback is no longer open on the server`,
@@ -1866,7 +1865,7 @@ function createStreamRuntime(
       // would reconnect a healthy, caught-up callback.
       if (coreProcessorState.maxOffset <= lastDeliveredOffset) return;
       if (
-        lastDeliveryArrivalAt !== undefined &&
+        Number.isFinite(lastDeliveryArrivalAt) &&
         checkStartedAt - lastDeliveryArrivalAt <= LIVENESS_PROBE_INTERVAL_MS
       ) {
         // REAL arrival within the probe interval ending when this check began
@@ -1877,7 +1876,7 @@ function createStreamRuntime(
       }
       if (
         !requireRealArrival &&
-        lastDeliveryArrivalAt === undefined &&
+        !Number.isFinite(lastDeliveryArrivalAt) &&
         checkStartedAt - arrivalBaselineAt <= LIVENESS_PROBE_INTERVAL_MS + DELIVERY_GRACE_MS
       ) {
         // Fresh callback with no arrivals: too early for the paced probe (or
@@ -1889,7 +1888,7 @@ function createStreamRuntime(
       }
       throw new Error(
         `server is at offset ${coreProcessorState.maxOffset} but ${
-          lastDeliveryArrivalAt === undefined
+          !Number.isFinite(lastDeliveryArrivalAt)
             ? `no event batch has arrived since the callback opened ${Date.now() - arrivalBaselineAt}ms ago`
             : `no delivery arrived in the ${LIVENESS_PROBE_INTERVAL_MS}ms before this check began (last arrival ${Date.now() - lastDeliveryArrivalAt}ms ago)`
         } (applied through ${lastDeliveredOffset}); event callback is no longer sending`,
@@ -1909,7 +1908,7 @@ function createStreamRuntime(
       verifyInFlight = false;
       const rerun = verifyRerun;
       verifyRerun = undefined;
-      if (rerun !== undefined && !disposed) {
+      if (rerun && !disposed) {
         void verifyDelivery(rerun.reason, { requireRealArrival: rerun.requireRealArrival });
       }
     }
@@ -1936,7 +1935,7 @@ function createStreamRuntime(
   }
 
   function stopLivenessProbe() {
-    if (livenessTimer !== undefined) {
+    if (livenessTimer) {
       clearInterval(livenessTimer);
       livenessTimer = undefined;
     }
@@ -1952,7 +1951,7 @@ function createStreamRuntime(
   // disconnected is a no-op (reconnect is already the path that heals that
   // state).
   async function nudge(): Promise<void> {
-    if (stream === undefined || eventConnection === undefined) {
+    if (!stream || !eventConnection) {
       // Not the writer (or not connected): we cannot reopen the callback, but say so —
       // a silently inert nudge made reader-side stalls undiagnosable. Once
       // per state though: a reader tab nudges on EVERY composer submit, and
@@ -1960,7 +1959,7 @@ function createStreamRuntime(
       if (!nudgeSkipWarned) {
         nudgeSkipWarned = true;
         console.warn(
-          `[stream ${args.streamPath} ${slug}] nudge skipped: ${stream === undefined ? "no stream connection" : `no event callback (cache role ${snapshot.databaseRole})`}`,
+          `[stream ${args.streamPath} ${slug}] nudge skipped: ${!stream ? "no stream connection" : `no event callback (cache role ${snapshot.databaseRole})`}`,
         );
       }
       return;
@@ -1980,7 +1979,7 @@ function createStreamRuntime(
       window.removeEventListener("pageshow", onResume);
     }
     for (const timer of [connectTimer, reconnectTimer, databaseInfoTimer, databaseChangeTimer]) {
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer) clearTimeout(timer);
     }
     connectTimer = reconnectTimer = databaseInfoTimer = databaseChangeTimer = undefined;
     stopLivenessProbe();
@@ -2008,13 +2007,13 @@ function createStreamRuntime(
     connectFailuresSinceSuccess,
     guardedTimeoutStrikes,
     ledgerGeneration,
-    strikeFollowUpProbeInFlight: strikeFollowUpProbe !== undefined,
+    strikeFollowUpProbeInFlight: !!strikeFollowUpProbe,
     connectionStreamId,
     started,
     disposed,
-    hasConnection: stream !== undefined,
-    hasEventConnection: eventConnection !== undefined,
-    hasHostedProcessor: activeProcessorGroup !== undefined,
+    hasConnection: !!stream,
+    hasEventConnection: !!eventConnection,
+    hasHostedProcessor: !!activeProcessorGroup,
     metrics: readMetrics(),
     listeners: listeners.size,
   }));
@@ -2023,7 +2022,7 @@ function createStreamRuntime(
     listeners.clear();
     debugRegistry.delete(`${args.projectId} ${args.streamPath} ${slug}`);
     if (disposed) return;
-    if (disposeTimer !== undefined) {
+    if (disposeTimer) {
       clearTimeout(disposeTimer);
       disposeTimer = undefined;
     }
@@ -2054,17 +2053,17 @@ function createStreamRuntime(
     // direct call — defeating the escalating connect backoff and the
     // failing-batch ingest pacing exactly when a user hammers retry — and
     // superseded a mid-flight connection attempt and election per call.
-    if (stream === undefined && reconnectTimer === undefined && connectTimer === undefined) {
+    if (!stream && !reconnectTimer && !connectTimer) {
       connect();
     }
     const ready = stream;
-    if (ready !== undefined) {
+    if (ready) {
       return Object.assign(guardedCall("stream call", ready, call), { [Symbol.dispose]() {} });
     }
     const promise = (async () => {
       await whenStreamReady();
       const reconnected = stream;
-      if (reconnected === undefined) throw new Error("stream runtime is disposed");
+      if (!reconnected) throw new Error("stream runtime is disposed");
       return await guardedCall("stream call", reconnected, call);
     })();
     return Object.assign(promise, { [Symbol.dispose]() {} });
@@ -2083,9 +2082,7 @@ function createStreamRuntime(
       // Combined with callWhenReady's reconnect-wait, an appendBatch caller
       // survives a stream DO eviction mid-blast with zero loss and zero dupes.
       const events = appendArgs.events.map((event) =>
-        event.idempotencyKey === undefined
-          ? { ...event, idempotencyKey: crypto.randomUUID() }
-          : event,
+        !event.idempotencyKey ? { ...event, idempotencyKey: crypto.randomUUID() } : event,
       );
       const promise = (async () => {
         // Real consume-own-append measurement: t0 is when the CALLER asked
@@ -2177,7 +2174,7 @@ function createStreamRuntime(
         );
         return () => {};
       }
-      if (disposeTimer !== undefined) {
+      if (disposeTimer) {
         clearTimeout(disposeTimer);
         disposeTimer = undefined;
       }
@@ -2194,7 +2191,7 @@ function createStreamRuntime(
   };
 
   function scheduleIdleDispose() {
-    if (disposeTimer !== undefined) clearTimeout(disposeTimer);
+    if (disposeTimer) clearTimeout(disposeTimer);
     disposeTimer = setTimeout(() => {
       disposeTimer = undefined;
       if (listeners.size === 0) dispose();

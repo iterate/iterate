@@ -117,7 +117,7 @@ export function threadContextForScriptRun(
       // harmless: it simply never matches, leaving the fold unbounded.
       (event.payload as { executionId?: string } | undefined)?.executionId === run.executionId,
   );
-  const statusBound = settle === undefined ? Infinity : settle.offset;
+  const statusBound = !settle ? Infinity : settle.offset;
   let title: string | null = null;
   let activity: string | null = null;
   for (const event of ordered) {
@@ -125,14 +125,16 @@ export function threadContextForScriptRun(
     const payload = (event.payload || {}) as { title?: unknown; activity?: unknown };
     // Per field: a string sets ("" clears via ||), an explicit null clears,
     // anything else — absent or malformed — preserves the standing value.
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- explicit null clears; other falsy junk (0/false) must preserve the standing value
     if (typeof payload.title === "string" || payload.title === null) title = payload.title || null;
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- explicit null clears; other falsy junk (0/false) must preserve the standing value
     if (typeof payload.activity === "string" || payload.activity === null) {
       activity = payload.activity || null;
     }
   }
   return {
-    settled: settle !== undefined,
-    status: title !== null || activity !== null ? { title, activity } : null,
+    settled: !!settle,
+    status: title || activity ? { title, activity } : null,
   };
 }
 

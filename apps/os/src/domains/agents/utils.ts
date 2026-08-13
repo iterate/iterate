@@ -23,7 +23,7 @@ export function resolveAgentPath(
   sourceScopePath: string | undefined,
 ): AgentPathValue {
   if (path.startsWith("/")) return parseAgentPath(path);
-  if (sourceScopePath === undefined || !sourceScopePath.startsWith("/agents/")) {
+  if (!sourceScopePath || !sourceScopePath.startsWith("/agents/")) {
     throw new Error(
       `relative agent path ${JSON.stringify(path)} needs an agent scope to resolve against — use an absolute "/agents/..." path`,
     );

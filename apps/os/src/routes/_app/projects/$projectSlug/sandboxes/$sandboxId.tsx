@@ -75,11 +75,11 @@ function ProjectSandboxDetailContent() {
   // ProjectStreamView opens the addressed stream. Wait until the catalogue-
   // guarded live-state lookup proves this sandbox exists so a typed typo can
   // never materialize a phantom /sandboxes/<name> stream.
-  if (sandboxState.value === undefined) {
+  if (!sandboxState.value) {
     return (
       <div
         className="rounded-lg border p-4 text-sm text-muted-foreground"
-        data-spinner={sandboxState.error === undefined ? "true" : undefined}
+        data-spinner={!sandboxState.error ? "true" : undefined}
       >
         {sandboxState.error ?? "Loading sandbox…"}
       </div>
@@ -317,22 +317,21 @@ function SandboxSshInstructions({
   state: SandboxProcessorState;
 }) {
   const instanceType = state.birthCertificate?.config.instanceType;
-  const containerClass =
-    instanceType === undefined
-      ? "Sandbox<Type>DurableObject"
-      : SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className;
+  const containerClass = !instanceType
+    ? "Sandbox<Type>DurableObject"
+    : SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className;
   const durableObjectName = DurableObjectNameCodec.stringify({ path: sandboxPath, projectId });
   const workerName = routeConfig.cloudflareWorkerName ?? "os";
   const dopplerConfig = inferOsDopplerConfigForWorkerName(workerName);
   const dashboardTargetQuery = useQuery({
     queryKey: ["cloudflare-container-dashboard-target", projectId, sandboxPath, instanceType],
     queryFn: () =>
-      instanceType === undefined
+      !instanceType
         ? null
         : getCloudflareContainerDashboardTarget({
             data: { instanceType, projectId, sandboxPath },
           }),
-    enabled: instanceType !== undefined,
+    enabled: !!instanceType,
     retry: 1,
     staleTime: Infinity,
   });
@@ -347,16 +346,15 @@ function SandboxSshInstructions({
       })
     : null;
   const dashboardUrl =
-    exactDashboardUrl ??
-    (instanceType === undefined || dashboardTarget === null ? containersDashboardUrl : null);
+    exactDashboardUrl ?? (!instanceType || !dashboardTarget ? containersDashboardUrl : null);
   let dashboardTitle: string | undefined;
-  if (instanceType !== undefined && dashboardTargetQuery.isPending) {
+  if (instanceType && dashboardTargetQuery.isPending) {
     dashboardTitle = "Resolving this sandbox's Cloudflare container page…";
   } else if (dashboardTargetQuery.error instanceof Error) {
     dashboardTitle = dashboardTargetQuery.error.message;
-  } else if (dashboardUrl === null) {
+  } else if (!dashboardUrl) {
     dashboardTitle = "Cloudflare container dashboard details are not configured.";
-  } else if (dashboardTarget === null) {
+  } else if (!dashboardTarget) {
     dashboardTitle = "This local environment has no deployed Cloudflare container application.";
   }
   const commandPrefix = `doppler run --config ${dopplerConfig} --project os -- pnpm exec wrangler`;
@@ -389,11 +387,11 @@ function SandboxSshInstructions({
         <Button
           variant="outline"
           size="sm"
-          nativeButton={dashboardUrl === null}
-          disabled={dashboardUrl === null}
+          nativeButton={!dashboardUrl}
+          disabled={!dashboardUrl}
           title={dashboardTitle}
           render={
-            dashboardUrl === null ? undefined : (
+            !dashboardUrl ? undefined : (
               <a
                 href={dashboardUrl}
                 target="_blank"
@@ -404,7 +402,7 @@ function SandboxSshInstructions({
           }
         >
           <ExternalLinkIcon data-icon="inline-start" />
-          {dashboardTarget === null ? "Containers" : "Container page"}
+          {!dashboardTarget ? "Containers" : "Container page"}
         </Button>
       </div>
 

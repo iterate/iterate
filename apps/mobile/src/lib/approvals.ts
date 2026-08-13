@@ -76,9 +76,10 @@ export function approvalBodyForDisplay(request: HeldRequest): {
   text: string;
   truncated: boolean;
 } | null {
-  if (request.body === null || request.body === undefined) return null;
-  const originalByteLength =
-    request.body.originalByteLength === undefined ? null : request.body.originalByteLength;
+  if (!request.body) return null;
+  const originalByteLength = !Number.isFinite(request.body.originalByteLength)
+    ? null
+    : request.body.originalByteLength;
   if (request.body.encoding === "base64") {
     return {
       language: "text",
@@ -114,7 +115,7 @@ export function scriptCodeForApproval(
     throw new Error("This approval was not triggered by a codemode script.");
   }
   if (
-    event === undefined ||
+    !event ||
     event.type !== "events.iterate.com/capability-host/script-run-requested" ||
     event.path !== streamContext.streamPath ||
     event.offset !== streamContext.scriptRunRequestedEventOffset ||
@@ -173,7 +174,7 @@ export async function decide(input: {
   reason?: string;
   sign: ((message: Uint8Array) => Promise<{ keyId: string; signature: string }>) | null;
 }): Promise<void> {
-  const signs = input.sign !== null && input.verdicts.includes("approve");
+  const signs = !!input.sign && input.verdicts.includes("approve");
   const signed = signs
     ? await input.sign!(messageFor(input.projectId, input.offset, input.payload, input.verdicts))
     : null;
@@ -262,7 +263,7 @@ export function deriveRecentResolvedBatches(
     const outcomes = decision.verdicts.map((verdict, index) => {
       if (verdict !== "approve") return null;
       const settle = settles.get(offset)?.get(index);
-      return settle === undefined ? null : settle;
+      return !settle ? null : settle;
     });
     const approved = decision.verdicts.filter((verdict) => verdict === "approve").length;
     const rejected = decision.verdicts.length - approved;
@@ -312,14 +313,14 @@ export function deriveBatchDetail(
       payload: resolved.payload,
       resolved,
       complete: resolved.verdicts.every(
-        (verdict, index) => verdict === "reject" || resolved.outcomes[index] !== null,
+        (verdict, index) => verdict === "reject" || !!resolved.outcomes[index],
       ),
     };
   }
   const requested = events.find(
     (event) => event.offset === offset && event.type === EVENT.requested,
   );
-  if (requested === undefined) return null;
+  if (!requested) return null;
   return { payload: requestedPayload(requested), resolved: null, complete: false };
 }
 
@@ -367,7 +368,7 @@ export function deriveBatchesForExecution(
         offset: event.offset,
         payload,
         resolved,
-        expired: resolved === null && Date.parse(payload.expiresAt) <= nowMs,
+        expired: !resolved && Date.parse(payload.expiresAt) <= nowMs,
       };
     });
 }
@@ -388,7 +389,7 @@ export function summarizeBatchOutcomes(
 } {
   const counts = { open: 0, approved: 0, rejected: 0, mixed: 0 };
   for (const batch of batches) {
-    if (batch.resolved === null) {
+    if (!batch.resolved) {
       // An expired-undecided batch counts where the door's imminent expiry
       // decision (all-reject, decidedBy "expiry") will land it, so the ✗
       // glyph is already right and doesn't flip when that event arrives —

@@ -32,6 +32,7 @@ export type SemaphoreJsonObject = Record<string, unknown>;
 
 function isJsonValue(value: unknown): boolean {
   if (
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- JSON has null but no undefined/NaN; the validator must not admit those
     value === null ||
     typeof value === "string" ||
     typeof value === "boolean" ||

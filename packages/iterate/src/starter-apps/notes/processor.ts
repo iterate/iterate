@@ -223,7 +223,7 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
         const obligationKey = `${event.payload.path}:${event.payload.requestOffset}`;
         // A settlement for an unknown obligation (already settled, or
         // superseded by a later capture/edit/delete) folds to a no-op.
-        if (state.pendingAnalyses[obligationKey] === undefined) return state;
+        if (!state.pendingAnalyses[obligationKey]) return state;
         const { [obligationKey]: _settled, ...pendingAnalyses } = state.pendingAnalyses;
         return { pendingAnalyses };
       }
@@ -325,14 +325,14 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
    * written). Idempotent-by-overwrite on redelivery. */
   async #attemptAnalysis(path: string): Promise<z.infer<typeof AnalysisResult>> {
     const content = await this.deps.workspace.readFile(path);
-    if (content === null) {
+    if (!content) {
       return { status: "superseded", reason: "note file no longer exists" };
     }
     const note = parseNoteFile(content);
     const analysis = await this.deps.analyze({ text: note.body });
 
     const current = await this.deps.workspace.readFile(path);
-    if (current === null) {
+    if (!current) {
       return { status: "superseded", reason: "note file deleted during analysis" };
     }
     const currentNote = parseNoteFile(current);
@@ -354,10 +354,9 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
    * subject line. */
   async #commitMessage(dirtyPaths: string[]): Promise<string> {
     const [first] = dirtyPaths;
-    const content = first === undefined ? null : await this.deps.workspace.readFile(first);
+    const content = !first ? null : await this.deps.workspace.readFile(first);
     const stem = (first || "").split("/").at(-1)?.replace(/\.md$/, "") || "notes";
-    const label =
-      content === null ? `remove ${stem}` : noteDisplayTitle(parseNoteFile(content)) || stem;
+    const label = !content ? `remove ${stem}` : noteDisplayTitle(parseNoteFile(content)) || stem;
     const rest = dirtyPaths.length - 1;
     return `notes: ${label}${rest > 0 ? ` (+${rest} more)` : ""}`.slice(0, 100);
   }

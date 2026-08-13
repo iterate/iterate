@@ -74,7 +74,7 @@ export async function callProjectTelegramBotApi(input: {
     }
   }
   const result = (await response.json().catch(() => null)) as TelegramBotApiResult | null;
-  if (result === null) {
+  if (!result) {
     throw new Error(
       `Telegram Bot API ${input.method} failed: HTTP ${response.status} (non-JSON body)`,
     );

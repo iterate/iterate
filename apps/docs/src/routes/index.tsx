@@ -17,7 +17,7 @@ export const Route = createFileRoute("/")({
 
 function DocumentPage() {
   const search = Route.useSearch();
-  if (search.workspace === undefined || search.path === undefined) {
+  if (!search.workspace || !search.path) {
     // Workspace without document: the sidebar switcher lands here — the
     // picker opens scoped to that workspace, choosing a document is next.
     return <DeepLinkEmptyState workspacePath={search.workspace} />;

@@ -24,7 +24,7 @@ export function parseNoteFile(content: string): NoteFile {
   if (!match) return { frontmatter: {}, body: content };
   try {
     const parsed = YAML.parse(match[1]!);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return { frontmatter: {}, body: content };
     }
     return { frontmatter: parsed as Record<string, unknown>, body: content.slice(match[0].length) };

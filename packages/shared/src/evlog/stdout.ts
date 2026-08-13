@@ -94,7 +94,9 @@ function formatDeltaBetweenTimestamps(
 }
 
 function formatInlineValue(value: unknown): string {
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/''/false must format as themselves, not as nullish
   if (value === null) return "null";
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/''/false must format as themselves, not as nullish
   if (value === undefined) return "undefined";
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
@@ -109,7 +111,7 @@ function formatInlineValue(value: unknown): string {
     return Object.entries(value)
       .map(([key, nestedValue]) => {
         const serialized =
-          typeof nestedValue === "object" && nestedValue !== null
+          typeof nestedValue === "object" && nestedValue
             ? JSON.stringify(nestedValue)
             : formatInlineValue(nestedValue);
 
@@ -128,6 +130,7 @@ function formatStructuredLines(options: {
 }): string[] {
   const prefix = " ".repeat(options.indent);
 
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/''/false are loggable values that must recurse below, not print inline as nullish
   if (options.value === null || options.value === undefined) {
     return options.label ? [`${prefix}${options.label}: ${formatInlineValue(options.value)}`] : [];
   }
@@ -143,12 +146,13 @@ function formatStructuredLines(options: {
 
   const lines = options.label ? [`${prefix}${options.label}:`] : [];
   for (const [key, nestedValue] of entries) {
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/''/false are loggable values; only undefined fields are dropped from log lines
     if (nestedValue === undefined) {
       continue;
     }
 
     if (
-      nestedValue !== null &&
+      nestedValue &&
       typeof nestedValue === "object" &&
       !Array.isArray(nestedValue) &&
       Object.keys(nestedValue).length > 0
@@ -194,7 +198,7 @@ function createBodyEntries(event: AppStdoutEvent) {
     entries.push(`${ansi.cyan}rpc:${ansi.reset} ${formatInlineValue(event.rpc)}`);
   }
 
-  if (event.error !== undefined) {
+  if (event.error) {
     entries.push(`${ansi.cyan}error:${ansi.reset} ${formatErrorValue(event.error)}`);
   }
 
@@ -226,6 +230,7 @@ function createBodyEntries(event: AppStdoutEvent) {
   ]);
 
   for (const [key, value] of Object.entries(event)) {
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- 0/''/false are loggable values; only undefined fields are dropped from log lines
     if (topLevelExcludedKeys.has(key) || value === undefined) {
       continue;
     }
@@ -249,7 +254,7 @@ function createBodyEntries(event: AppStdoutEvent) {
     const lastLogTs =
       lastLog && typeof lastLog.timestamp === "string" ? lastLog.timestamp : undefined;
 
-    if (endTimestamp !== undefined && totalDurationMs !== undefined && lastLogTs !== undefined) {
+    if (endTimestamp && Number.isFinite(totalDurationMs) && lastLogTs) {
       deltas.push(formatDeltaBetweenTimestamps(lastLogTs, endTimestamp));
     }
 
@@ -267,7 +272,7 @@ function createBodyEntries(event: AppStdoutEvent) {
       );
     }
 
-    if (endTimestamp !== undefined && totalDurationMs !== undefined && lastLogTs !== undefined) {
+    if (endTimestamp && Number.isFinite(totalDurationMs) && lastLogTs) {
       const syntheticDelta = deltas[logs.length] ?? "+0ms";
       const endedMessage = `Request ended at ${formatClockTime(endTimestamp)} after ${formatCompactDuration(totalDurationMs)}`;
       entries.push(
@@ -306,7 +311,7 @@ export function renderPrettyStdoutEvent(event: AppStdoutEvent) {
     }
 
     const totalDurationMs = resolveDurationMs(event);
-    if (totalDurationMs !== undefined) {
+    if (Number.isFinite(totalDurationMs)) {
       headerParts.push(`in ${formatCompactDuration(totalDurationMs)}`);
     } else if (typeof event.duration === "string") {
       headerParts.push(`in ${event.duration}`);
@@ -354,7 +359,7 @@ export function createRawStdoutDrain(
 function isEvlogWideEventLike(value: unknown): value is AppStdoutEvent {
   return (
     typeof value === "object" &&
-    value !== null &&
+    !!value &&
     "timestamp" in value &&
     typeof value.timestamp === "string" &&
     "level" in value &&

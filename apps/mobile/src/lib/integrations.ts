@@ -103,7 +103,7 @@ export async function listMobileIntegrations(project: ProjectStub): Promise<Mobi
   };
   const accountEntries = secrets.flatMap((secret) => {
     const match = /^\/secrets\/integrations\/([^/]+)\/([^/]+)\/session$/.exec(secret.path);
-    if (match === null) return [];
+    if (!match) return [];
     return [
       {
         connection: match[2]!,

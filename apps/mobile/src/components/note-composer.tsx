@@ -157,7 +157,7 @@ async function appendNoteToProject(
     composeNoteFile(
       {
         capturedAt: note.capturedOnDeviceAt,
-        ...(attachments.length > 0 ? { attachments } : {}),
+        ...(attachments.length > 0 && { attachments }),
       },
       note.text,
     ),
@@ -241,7 +241,7 @@ export function NoteCaptureOverlay() {
           height: file.height,
         })),
       };
-      if (!inProject || baseUrl === undefined) {
+      if (!inProject || !baseUrl) {
         await addPendingNote(AsyncStorage, note);
         return "pending";
       }
@@ -288,7 +288,7 @@ export function NoteCaptureOverlay() {
   // the imperative dialog out of render without an effect hook.
   useQuery({
     queryKey: ["pending-notes-drain", projectId, drainGeneration.data],
-    enabled: inProject && baseUrl !== undefined && pendingCount > 0,
+    enabled: inProject && !!baseUrl && pendingCount > 0,
     staleTime: Infinity,
     retry: false,
     queryFn: async () => {
@@ -311,7 +311,7 @@ export function NoteCaptureOverlay() {
         );
         void cache.invalidateQueries({ queryKey: ["pending-notes"] });
         void cache.invalidateQueries({ queryKey: ["note-events"] });
-        if (result.error !== null) {
+        if (result.error) {
           Alert.alert(
             "Some notes stayed pending",
             `${result.stored} stored, ${result.remaining} still pending: ${result.error}`,
@@ -457,7 +457,7 @@ export function NoteCaptureOverlay() {
             onPress={() =>
               router.push({
                 pathname: "/project/[projectId]/notes",
-                params: { projectId, ...(params.slug ? { slug: params.slug } : {}) },
+                params: { projectId, ...(params.slug && { slug: params.slug }) },
               })
             }
           >
@@ -465,7 +465,7 @@ export function NoteCaptureOverlay() {
               Note saved — <Text style={styles.feedbackLink}>view in /notes</Text>
             </Text>
           </Pressable>
-        ) : feedback !== null ? (
+        ) : feedback ? (
           <Text style={styles.feedback}>{feedback}</Text>
         ) : null}
       </View>

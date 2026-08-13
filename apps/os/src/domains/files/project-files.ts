@@ -88,7 +88,7 @@ export async function readProjectFile(input: {
   projectId: string;
 }): Promise<{ bytes: Uint8Array; contentType: string; size: number } | null> {
   const object = await itxEnv.FILES_BUCKET.get(fileObjectKey(input));
-  if (object === null) return null;
+  if (!object) return null;
   const bytes = new Uint8Array(await object.arrayBuffer());
   return {
     bytes,
@@ -113,7 +113,7 @@ export async function mintProjectFileUrl(input: {
   projectId: string;
 }): Promise<string> {
   const object = await itxEnv.FILES_BUCKET.head(fileObjectKey(input));
-  if (object === null) throw new Error(`Cannot mint a file URL: no file at ${input.path}.`);
+  if (!object) throw new Error(`Cannot mint a file URL: no file at ${input.path}.`);
 
   const record = await readProjectById(itxEnv.PROJECT_DIRECTORY, input.projectId);
   const identifier = record?.slug ?? input.projectId;
@@ -202,7 +202,7 @@ export async function serveProjectFileRequest(input: {
   const object = await itxEnv.FILES_BUCKET.get(
     fileObjectKey({ path: check.path, projectId: input.projectId }),
   );
-  if (object === null || object.version !== check.version) {
+  if (!object || object.version !== check.version) {
     return new Response("not found", { status: 404 });
   }
 

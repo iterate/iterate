@@ -22,7 +22,7 @@ vi.mock("../../env.ts", () => ({
           captured.projectDurableObjectName = name;
           captured.request = request;
           captured.requestCount += 1;
-          if (captured.responseStatus !== undefined) {
+          if (Number.isFinite(captured.responseStatus)) {
             return Response.json(
               { message: "transient GitHub failure" },
               { status: captured.responseStatus },
@@ -90,10 +90,10 @@ describe("normalizeGithubError", () => {
     },
   ])("$name", ({ error, expectedContains, expectedMessage }) => {
     const normalized = normalizeGithubError(error, "acme");
-    if (expectedMessage !== undefined) {
+    if (expectedMessage) {
       expect(normalized.message).toBe(expectedMessage);
     }
-    if (expectedContains !== undefined) {
+    if (expectedContains) {
       expect(normalized.message).toContain(expectedContains);
     }
   });

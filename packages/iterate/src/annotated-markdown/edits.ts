@@ -58,7 +58,7 @@ const fail = (code: EditErrorCode, message: string): never => {
 
 export function formatUtcTimestamp(iso: string): string {
   const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/.exec(iso);
-  if (match === null) return iso;
+  if (!match) return iso;
   return `${match[1]} ${match[2]}:${match[3]} UTC`;
 }
 
@@ -176,7 +176,7 @@ function requireComment(
 ): { thread: Thread; comment: ThreadComment } {
   for (const thread of doc.discussion?.threads ?? []) {
     const comment = thread.comments.find((c) => c.id === commentId);
-    if (comment !== undefined) return { thread, comment };
+    if (comment) return { thread, comment };
   }
   return fail("unknown-comment", `no comment with id ${commentId}`);
 }
@@ -233,8 +233,8 @@ function commentBlockLines(input: {
 function nextThreadLabel(doc: StructuredDocument): string {
   let max = 0;
   for (const thread of doc.discussion?.threads ?? []) {
-    const match = thread.label === null ? null : /^T(\d+)$/.exec(thread.label);
-    if (match?.[1] !== undefined) max = Math.max(max, Number(match[1]));
+    const match = !thread.label ? null : /^T(\d+)$/.exec(thread.label);
+    if (match?.[1]) max = Math.max(max, Number(match[1]));
   }
   return `T${max + 1}`;
 }
@@ -266,9 +266,9 @@ export function addThread(doc: StructuredDocument, options: AddThreadOptions): A
     return fail("invalid-label", "label must be a short single-line string without `·`");
   }
   let anchor: AnchorSelector | undefined;
-  if (options.anchor !== undefined) {
+  if (options.anchor) {
     const validated = validateAnchorSelector(options.anchor);
-    if (validated === null) return fail("invalid-anchor", "anchor selector has an invalid shape");
+    if (!validated) return fail("invalid-anchor", "anchor selector has an invalid shape");
     anchor = validated;
   }
 
@@ -278,7 +278,7 @@ export function addThread(doc: StructuredDocument, options: AddThreadOptions): A
     `<a id="thread-${threadId}"></a>`,
     `### ${label} · Open`,
     "",
-    ...(anchor !== undefined ? [formatAnchorSentinel(anchor), ""] : []),
+    ...(anchor ? [formatAnchorSentinel(anchor), ""] : []),
     ...commentBlockLines({ id: commentId, ...options, bodyLines }),
     "",
     formatThreadEnd(threadId),
@@ -289,12 +289,12 @@ export function addThread(doc: StructuredDocument, options: AddThreadOptions): A
   // and the stable splice sort must put the marker beside the quote, not
   // after the freshly created store.
   const splices: Splice[] = [];
-  if (anchor !== undefined && options.insertMarker !== false) {
+  if (anchor && options.insertMarker !== false) {
     const resolved = resolveThreadAnchor(doc.body, threadId, anchor);
-    if (resolved.state === "attached" && resolved.range !== null) {
+    if (resolved.state === "attached" && resolved.range) {
       const at = doc.bodyRange.start + resolved.range.end;
       const before = doc.raw[at - 1];
-      const space = before !== undefined && /\s/.test(before) ? "" : " ";
+      const space = before && /\s/.test(before) ? "" : " ";
       splices.push({
         range: { start: at, end: at },
         insert: `${space}[${label}](#thread-${threadId})`,
@@ -302,8 +302,7 @@ export function addThread(doc: StructuredDocument, options: AddThreadOptions): A
     }
   }
   const insertAt = doc.raw.length;
-  const storePreamble =
-    doc.discussion === null ? [formatStoreSentinel(), "", "## Discussion", ""] : [];
+  const storePreamble = !doc.discussion ? [formatStoreSentinel(), "", "## Discussion", ""] : [];
   splices.push({
     range: { start: insertAt, end: insertAt },
     insert:
@@ -325,7 +324,7 @@ export interface AddCommentResult extends EditResult {
 export function addComment(doc: StructuredDocument, options: AddCommentOptions): AddCommentResult {
   const thread = requireThread(doc, options.threadId);
   const { id: commentId, bodyLines } = validateNewComment(doc, options);
-  if (options.inReplyTo !== undefined && !thread.comments.some((c) => c.id === options.inReplyTo)) {
+  if (options.inReplyTo && !thread.comments.some((c) => c.id === options.inReplyTo)) {
     return fail("invalid-reply-target", `thread ${thread.id} has no comment ${options.inReplyTo}`);
   }
   const eol = dominantEol(doc.raw);
@@ -354,13 +353,14 @@ export function setThreadStatus(
 
   // Keep a `### T1 · Open` presentation heading in sync when one exists.
   const firstComment = thread.comments[0];
-  const preambleEnd =
-    firstComment !== undefined ? firstComment.range.start : startOfLastLine(doc.raw, thread.range);
+  const preambleEnd = firstComment
+    ? firstComment.range.start
+    : startOfLastLine(doc.raw, thread.range);
   let cursor = beginLine.end;
   while (cursor < preambleEnd) {
     const line = lineAt(doc.raw, cursor);
     const match = /^### (?:.+?) · (Open|Resolved)$/.exec(line.content);
-    if (match !== null) {
+    if (match) {
       const word = status === "open" ? "Open" : "Resolved";
       const wordStart = cursor + line.content.length - (match[1]?.length ?? 0);
       splices.push({
@@ -390,7 +390,7 @@ export function editComment(
       ? bodyLines.join(eol) + eol
       : bodyLines.join(eol);
   const splices: Splice[] = [];
-  if (options.modifiedAt !== undefined) {
+  if (options.modifiedAt) {
     if (!isValidCreatedAt(options.modifiedAt)) {
       return fail(
         "invalid-created",
@@ -403,7 +403,7 @@ export function editComment(
       throw new Error("unreachable: structured comment has an unparsable begin sentinel");
     }
     splices.push(
-      parsed.token.modifiedValueRange !== null
+      parsed.token.modifiedValueRange
         ? { range: parsed.token.modifiedValueRange, insert: options.modifiedAt }
         : {
             range: { start: parsed.token.attrsEnd, end: parsed.token.attrsEnd },
@@ -451,7 +451,7 @@ export function deleteComment(doc: StructuredDocument, commentId: string): EditR
 export function removeThread(doc: StructuredDocument, threadId: string): EditResult {
   const thread = requireThread(doc, threadId);
   const discussion = doc.discussion;
-  if (discussion === null) throw new Error("unreachable: thread without a discussion store");
+  if (!discussion) throw new Error("unreachable: thread without a discussion store");
   const splices: Splice[] = [{ range: withTrailingBlankLine(doc.raw, thread.range), insert: "" }];
 
   // Drop inline markers pointing at the removed thread, with one preceding
@@ -460,7 +460,7 @@ export function removeThread(doc: StructuredDocument, threadId: string): EditRes
   const markerPattern = new RegExp(`\\[[^\\]\\n]*\\]\\(#thread-${escapedId}\\)`, "g");
   for (const match of doc.body.matchAll(markerPattern)) {
     const index = match.index;
-    if (index === undefined) continue;
+    if (!Number.isFinite(index)) continue;
     let start = doc.bodyRange.start + index;
     if (doc.raw[start - 1] === " ") start--;
     splices.push({
@@ -506,23 +506,20 @@ export function setThreadAnchor(
 ): EditResult {
   const thread = requireThread(doc, threadId);
   const eol = dominantEol(doc.raw);
-  if (selector !== null) {
+  if (selector) {
     const validated = validateAnchorSelector(selector);
-    if (validated === null) return fail("invalid-anchor", "anchor selector has an invalid shape");
+    if (!validated) return fail("invalid-anchor", "anchor selector has an invalid shape");
     const line = formatAnchorSentinel(validated);
-    if (thread.anchor !== null) {
+    if (thread.anchor) {
       return finish(doc, [{ range: thread.anchor.range, insert: line + eol }]);
     }
     const firstComment = thread.comments[0];
-    const at =
-      firstComment !== undefined
-        ? firstComment.range.start
-        : startOfLastLine(doc.raw, thread.range);
+    const at = firstComment ? firstComment.range.start : startOfLastLine(doc.raw, thread.range);
     return finish(doc, [
       { range: { start: at, end: at }, insert: blockPadding(doc.raw, at, eol) + line + eol + eol },
     ]);
   }
-  if (thread.anchor === null) return { doc, raw: doc.raw, splices: [] };
+  if (!thread.anchor) return { doc, raw: doc.raw, splices: [] };
   return finish(doc, [{ range: withTrailingBlankLine(doc.raw, thread.anchor.range), insert: "" }]);
 }
 

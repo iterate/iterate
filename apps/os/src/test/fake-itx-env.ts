@@ -100,10 +100,9 @@ export function createFakeItxEnv(options?: {
     appendBatches.push({ name, types: inputs.map((input) => input.type) });
     return inputs.map((input) => {
       options?.onAppend?.({ event: input, name });
-      const existing =
-        input.idempotencyKey === undefined
-          ? undefined
-          : stored.find((event) => event.idempotencyKey === input.idempotencyKey);
+      const existing = !input.idempotencyKey
+        ? undefined
+        : stored.find((event) => event.idempotencyKey === input.idempotencyKey);
       if (existing) return existing;
       const event: FakeStreamEvent = {
         ...input,
@@ -172,10 +171,7 @@ export function createFakeItxEnv(options?: {
           ) {
             const appended = appendStored(name, inputs);
             const streamAppendHook = streamAppendHooks.shift();
-            if (
-              streamAppendHook !== undefined &&
-              (await streamAppendHook({ events: inputs, name })) === false
-            ) {
+            if (streamAppendHook && (await streamAppendHook({ events: inputs, name })) === false) {
               streamAppendHooks.unshift(streamAppendHook);
             }
             return appended;
@@ -186,7 +182,7 @@ export function createFakeItxEnv(options?: {
           }) {
             const { configuration } = input;
             const requestedName = configuration.name;
-            if (requestedName !== undefined && typeof requestedName !== "string") {
+            if (requestedName && typeof requestedName !== "string") {
               throw new Error("fake subscription name must be a string when supplied");
             }
             const receiver = configuration.receiver as FakeCopyReceiver;
@@ -199,15 +195,12 @@ export function createFakeItxEnv(options?: {
             const existing =
               typeof requestedName === "string" ? activeSubscription(name, requestedName) : null;
             const subscriptionConfiguredEvent =
-              existing !== null &&
-              JSON.stringify(existing.payload) === JSON.stringify(configuration)
+              existing && JSON.stringify(existing.payload) === JSON.stringify(configuration)
                 ? existing.event
                 : appendStored(name, [
                     {
                       type: "events.iterate.com/stream/subscription-configured",
-                      ...(input.idempotencyKey === undefined
-                        ? {}
-                        : { idempotencyKey: input.idempotencyKey }),
+                      ...(!input.idempotencyKey ? {} : { idempotencyKey: input.idempotencyKey }),
                       payload: configuration,
                     },
                   ])[0]!;
@@ -223,7 +216,7 @@ export function createFakeItxEnv(options?: {
           },
           async removeCopySubscription(input: { expectedReceiverPath: string; name: string }) {
             const active = activeSubscription(name, input.name);
-            if (active === null) return { status: "already-absent" as const };
+            if (!active) return { status: "already-absent" as const };
             const receiver = active.payload.receiver as FakeCopyReceiver;
             if (
               receiver.action !== "copy-to-stream" ||
@@ -254,7 +247,7 @@ export function createFakeItxEnv(options?: {
                 (event) =>
                   event.offset > afterOffset &&
                   event.offset < beforeOffset &&
-                  (eventTypes === undefined || eventTypes.includes(event.type)),
+                  (!eventTypes || eventTypes.includes(event.type)),
               )
               .slice(0, limit);
           },

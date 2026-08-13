@@ -55,7 +55,7 @@ export function ItxActivityTail({ path = PROJECT_CONTEXT_PATH }: { path?: string
             // Re-subscribing replays from "start"; offsets dedupe the overlap.
             const lastOffset = previous.at(-1)?.offset;
             const fresh = batch.events.filter(
-              (event) => lastOffset === undefined || event.offset > lastOffset,
+              (event) => !Number.isFinite(lastOffset) || event.offset > lastOffset,
             );
             return fresh.length === 0
               ? previous
@@ -98,7 +98,7 @@ export function ItxActivityTail({ path = PROJECT_CONTEXT_PATH }: { path?: string
           <ol className="space-y-1">
             {rows.slice(-100).map(({ event, text }) => (
               <li key={event.offset} className="font-mono text-xs">
-                {text === null ? (
+                {!text ? (
                   <RawEventRow event={event} />
                 ) : (
                   <FriendlyEventRow event={event} text={text} />

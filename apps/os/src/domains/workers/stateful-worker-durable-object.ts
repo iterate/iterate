@@ -62,7 +62,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
    */
   async fetch(request: Request): Promise<Response> {
     const taken = takeWorkerFetchDispatch(request);
-    if (taken === null) {
+    if (!taken) {
       return new Response("stateful worker fetch requires the worker dispatch header", {
         status: 400,
       });
@@ -87,7 +87,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
         error,
         taken.request.headers.get("x-iterate-url-prefix") ?? "",
       );
-      if (buildStatus !== null) return buildStatus.response;
+      if (buildStatus) return buildStatus.response;
       throw error;
     }
     if (!loaded.ok) {
@@ -153,7 +153,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
    */
   async setAlarm({ atMs, ref }: { atMs: number | null; ref: StatefulDynamicWorkerRef }) {
     this.#assertRefMatchesName(ref);
-    if (atMs === null) {
+    if (!Number.isFinite(atMs)) {
       await this.ctx.storage.deleteAlarm();
       this.ctx.storage.kv.delete(ALARM_REF_STORAGE_KEY);
       return;
@@ -173,13 +173,12 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     const ref = this.ctx.storage.kv.get<StatefulDynamicWorkerRef>(ALARM_REF_STORAGE_KEY);
     // No armed ref (disarmed after the fire was scheduled) — a stray
     // platform fire is a no-op.
-    if (ref === undefined) return;
+    if (!ref) return;
     // Plain copy: AlarmInvocationInfo is a host object and does not
     // serialize across the facet RPC hop (DataCloneError).
-    const info =
-      alarmInfo === undefined
-        ? undefined
-        : { isRetry: alarmInfo.isRetry, retryCount: alarmInfo.retryCount };
+    const info = !alarmInfo
+      ? undefined
+      : { isRetry: alarmInfo.isRetry, retryCount: alarmInfo.retryCount };
     const loaded = await this.#facet(ref);
     if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
     try {
@@ -251,7 +250,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     }
 
     return {
-      ...(resolved.commitOid === undefined ? {} : { commitOid: resolved.commitOid }),
+      ...(!resolved.commitOid ? {} : { commitOid: resolved.commitOid }),
       ok: true,
       target,
     };
@@ -259,7 +258,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
 
   #assertRefMatchesName(ref: StatefulDynamicWorkerRef) {
     const durableWorkerKey = this.#name.props.durableWorkerKey;
-    if (durableWorkerKey === undefined) {
+    if (!durableWorkerKey) {
       throw new Error("Stateful worker Durable Object name requires durableWorkerKey query prop.");
     }
     if (ref.path !== this.#name.path || ref.durableWorkerKey !== durableWorkerKey) {

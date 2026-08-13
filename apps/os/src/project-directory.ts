@@ -82,7 +82,7 @@ export async function readProjectBySlug(
   slug: string,
 ): Promise<ProjectDirectoryRecord | null> {
   const memoized = slugMemo.get(slug);
-  if (memoized && memoized.expiresAt > Date.now() && memoized.record !== null) {
+  if (memoized && memoized.expiresAt > Date.now() && memoized.record) {
     return memoized.record;
   }
 

@@ -70,13 +70,13 @@ export function useTaskCommit({
   // re-renders on ticks.
   const fireAutoSave = useEffectEvent(() => void commitTasks());
   useEffect(() => {
-    if (autoSaveDueAt === undefined) return;
+    if (!Number.isFinite(autoSaveDueAt)) return;
     const timer = setTimeout(fireAutoSave, Math.max(0, autoSaveDueAt - Date.now()));
     return () => clearTimeout(timer);
   }, [autoSaveDueAt]);
 
   const writeCommitMessage = useCallback(async () => {
-    if (taskChanges.length === 0 || generatingMessage || api === null) return;
+    if (taskChanges.length === 0 || generatingMessage || !api) return;
     setGeneratingMessage(true);
     try {
       const generated = await api.generateCommitMessage({

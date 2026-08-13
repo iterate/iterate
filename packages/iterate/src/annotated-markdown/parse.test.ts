@@ -195,7 +195,7 @@ describe("structured documents without discussions", () => {
     const doc = expectStructured(content);
     expect(doc.discussion).toBeNull();
     expect(doc.body).toBe(body);
-    if (frontmatter === null) expect(doc.frontmatter).toBeNull();
+    if (!frontmatter) expect(doc.frontmatter).toBeNull();
     else expect(doc.frontmatter?.data).toEqual(frontmatter);
   });
 });

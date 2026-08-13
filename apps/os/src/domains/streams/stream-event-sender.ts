@@ -420,14 +420,12 @@ export class StreamEventSender {
    * storage round trip.
    */
   sendDue(justCommittedEvents?: SizedStreamEvent[]): boolean {
-    if (justCommittedEvents !== undefined && justCommittedEvents.length > 0)
+    if (justCommittedEvents && justCommittedEvents.length > 0)
       this.#justCommittedEvents = justCommittedEvents;
     try {
       const state = this.#hooks.coreState();
       this.connections.closeStaleHosted((connectionKey) =>
-        state.subscriptions.outbound.byName[connectionKey] === undefined
-          ? "subscription-removed"
-          : "replaced",
+        !state.subscriptions.outbound.byName[connectionKey] ? "subscription-removed" : "replaced",
       );
       this.connections.sendQueued();
       if (this.connections.isTearingDown) {
@@ -437,7 +435,7 @@ export class StreamEventSender {
         this.#consecutiveSendStartFailures = 0;
         return true;
       }
-      if (justCommittedEvents !== undefined && justCommittedEvents.length > 0) {
+      if (justCommittedEvents && justCommittedEvents.length > 0) {
         this.#hooks.pageDormantSubscribers(justCommittedEvents);
       }
       this.#sendDueSubscriptions();
@@ -514,10 +512,10 @@ export class StreamEventSender {
       // rewind a newer cursor generation.
       let row = this.#hooks.store.get(name);
       if (
-        entry.cursorSet !== undefined &&
+        entry.cursorSet &&
         config.receiver.action !== "facet-processor" &&
         config.receiver.action !== "wake-processor" &&
-        row !== undefined &&
+        row &&
         row.cursorChangedAtOffset < entry.cursorSet.setAtSourceOffset
       ) {
         this.#hooks.store.setCursor(
@@ -531,21 +529,20 @@ export class StreamEventSender {
       // Mirror the reduced-state delivery status onto the row, level-triggered:
       // halted is event-sourced (the fold is authoritative); the row's copy
       // exists so cursor-row readers see one self-describing record.
-      const desiredStatus =
-        entry.deliveryHalted !== undefined ? ("halted" as const) : ("active" as const);
-      if (row !== undefined && row.status !== desiredStatus) {
+      const desiredStatus = entry.deliveryHalted ? ("halted" as const) : ("active" as const);
+      if (row && row.status !== desiredStatus) {
         this.#hooks.store.setStatus(name, desiredStatus);
         row = this.#hooks.store.get(name);
       }
 
-      if (entry.deliveryHalted !== undefined) continue;
+      if (entry.deliveryHalted) continue;
 
-      if (row === undefined) continue; // unreachable after ensure; defensive
-      if (row.inFlightDeadlineAt !== null) {
+      if (!row) continue; // unreachable after ensure; defensive
+      if (Number.isFinite(row.inFlightDeadlineAt)) {
         this.#hooks.armAlarm(row.inFlightDeadlineAt);
         continue;
       }
-      if (row.nextAttemptAt !== null && row.nextAttemptAt > now) continue; // alarm owns it
+      if (Number.isFinite(row.nextAttemptAt) && row.nextAttemptAt > now) continue; // alarm owns it
       if (
         config.receiver.action === "facet-processor" ||
         config.receiver.action === "wake-processor"
@@ -553,7 +550,7 @@ export class StreamEventSender {
         if (this.connections.has(name) || this.#hostedWakesInFlight.has(name)) {
           continue;
         }
-        if (row.nextAttemptAt === null) {
+        if (!Number.isFinite(row.nextAttemptAt)) {
           if (row.confirmedOffset >= state.maxOffset) continue;
 
           // The hosted cursor is the complete dormancy record. Idle teardown
@@ -610,7 +607,7 @@ export class StreamEventSender {
     expectedDelivery: ExpectedHostedDeliveryState,
   ): void {
     const state = this.#hooks.coreState();
-    if (state.projectId === undefined || state.path === undefined || state.streamId === undefined) {
+    if (!state.projectId || !state.path || !state.streamId) {
       throw new Error("Cannot wake a hosted processor before stream identity is initialized.");
     }
     const request: StreamProcessorWakeRequest = {
@@ -675,10 +672,9 @@ export class StreamEventSender {
         }
         let openedBy: ConnectionOpenerDescriptor | undefined;
         try {
-          openedBy =
-            response.openedBy === undefined
-              ? undefined
-              : ConnectionOpenerDescriptorSchema.parse(response.openedBy);
+          openedBy = !response.openedBy
+            ? undefined
+            : ConnectionOpenerDescriptorSchema.parse(response.openedBy);
         } catch (error) {
           // Reject the malformed descriptor WITHOUT leaking the processEventBatch retained
           // moments earlier (round-1 finding 4.2 / round-2 blocker 4a).
@@ -690,8 +686,9 @@ export class StreamEventSender {
         // of event types the callback says it can handle.
         const consumes = openedBy?.processor?.announcement.consumes;
         const configuredFilter = compileEventFilter(current.configuration.filter);
-        const announcedFilter =
-          consumes === undefined ? undefined : compileEventFilter({ eventTypes: [...consumes] });
+        const announcedFilter = !consumes
+          ? undefined
+          : compileEventFilter({ eventTypes: [...consumes] });
         /*
          * NAMING THE TYPE IS THE OPT-IN, and it is the only one.
          *
@@ -716,7 +713,7 @@ export class StreamEventSender {
             matches(event) {
               if (!configuredFilter.matches(event)) return false;
               if (event.ephemeral === true) return explicitlyConsumed.has(event.type);
-              return announcedFilter === undefined || announcedFilter.matches(event);
+              return !announcedFilter || announcedFilter.matches(event);
             },
           },
           openedBy,
@@ -767,15 +764,15 @@ export class StreamEventSender {
         for (;;) {
           const state = this.#hooks.coreState();
           const entry = state.subscriptions.outbound.byName[name];
-          if (entry === undefined || entry.deliveryHalted !== undefined) {
+          if (!entry || entry.deliveryHalted) {
             return;
           }
           const config = entry.configuration;
           const receiver = config.receiver;
           if (receiver.action === "facet-processor" || receiver.action === "wake-processor") return;
           const row = this.#hooks.store.get(name);
-          if (row === undefined) return;
-          if (row.nextAttemptAt !== null && row.nextAttemptAt > this.#hooks.now()) return;
+          if (!row) return;
+          if (Number.isFinite(row.nextAttemptAt) && row.nextAttemptAt > this.#hooks.now()) return;
           const expectedDelivery = {
             configuredAtOffset: entry.configuredAtOffset,
             cursorChangedAtOffset: row.cursorChangedAtOffset,
@@ -805,7 +802,7 @@ export class StreamEventSender {
             byteLimit: DELIVERY_BATCH_BYTE_LIMIT,
           });
           const lastOffset = sized.at(-1)?.event.offset;
-          if (lastOffset === undefined) {
+          if (!Number.isFinite(lastOffset)) {
             // The allocator's maximum offset can be greater than the last surviving row after
             // ephemeral eviction. An empty range read proves that whole suffix
             // contains no durable work, so advance the durable cursor through
@@ -854,7 +851,7 @@ export class StreamEventSender {
             expectedDelivery,
             deliverable,
           );
-          if (filterFailure !== undefined && matched.length === 0) {
+          if (filterFailure && matched.length === 0) {
             if (!this.#hooks.appendDeliveryEvent(filterFailure.eventToAppend)) {
               // The filter decision is not allowed to outrun its durable
               // explanation. Lifecycle teardown can interrupt append after
@@ -894,12 +891,7 @@ export class StreamEventSender {
             ? filterFailure.event.offset - 1
             : lastOffset;
 
-          if (
-            state.projectId === undefined ||
-            state.path === undefined ||
-            state.streamId === undefined ||
-            state.createdAt === undefined
-          ) {
+          if (!state.projectId || !state.path || !state.streamId || !state.createdAt) {
             throw new Error(`subscription "${name}" exists on an uninitialized stream`);
           }
           const streamId = state.streamId;
@@ -928,7 +920,7 @@ export class StreamEventSender {
           this.#armInFlightWatchdog();
           try {
             if (receiver.action === "webhook-post") {
-              if (state.projectId === null) return; // unreachable: rejected at append (egress attribution)
+              if (!state.projectId) return; // unreachable: rejected at append (egress attribution)
               await withDeliveryTimeout(
                 this.#hooks.receiverCalls.deliverToWebhook(receiver.url, {
                   projectId: state.projectId,
@@ -971,7 +963,7 @@ export class StreamEventSender {
                 // ordinary delivery-failure ladder, respecting onFailingEvent
                 // and the straight-to-1 isolation.
                 events:
-                  receiver.action === "itx-call" && receiver.jsonataTransform !== undefined
+                  receiver.action === "itx-call" && receiver.jsonataTransform
                     ? matched.map((event) =>
                         applyJsonataTransform("itx", name, receiver.jsonataTransform, event),
                       )
@@ -1057,9 +1049,9 @@ export class StreamEventSender {
         // an active row forever with neither an alarm nor a halted event.
         const entry = this.#hooks.coreState().subscriptions.outbound.byName[name];
         if (
-          activeDeliveryState !== undefined &&
+          activeDeliveryState &&
           this.#deliveryStillMatches(name, activeDeliveryState) &&
-          entry !== undefined &&
+          entry &&
           entry.configuration.receiver.action !== "facet-processor" &&
           entry.configuration.receiver.action !== "wake-processor"
         ) {
@@ -1266,7 +1258,7 @@ export class StreamEventSender {
       }
       // Step over the confirmed failing event and reset the read window +
       // failure streak: the receiver is alive, it just cannot digest that one.
-      if (row === undefined) return "stop";
+      if (!row) return "stop";
       this.#hooks.store.ackFailingEventSkipped(
         name,
         failingEvent.offset,
@@ -1309,11 +1301,11 @@ export class StreamEventSender {
   #failExpiredHostedDeliveries(): void {
     const now = this.#hooks.now();
     for (const row of this.#hooks.store.list()) {
-      if (row.inFlightDeadlineAt === null || row.inFlightDeadlineAt > now) continue;
+      if (!Number.isFinite(row.inFlightDeadlineAt) || row.inFlightDeadlineAt > now) continue;
       const entry = this.#hooks.coreState().subscriptions.outbound.byName[row.name];
       if (
-        entry === undefined ||
-        entry.deliveryHalted !== undefined ||
+        !entry ||
+        entry.deliveryHalted ||
         entry.configuredAtOffset !== row.configuredAtOffset ||
         (entry.configuration.receiver.action !== "facet-processor" &&
           entry.configuration.receiver.action !== "wake-processor")
@@ -1345,7 +1337,7 @@ export class StreamEventSender {
       attempt,
       nextAttemptAt,
       error: errorMessage(error),
-      ...(failingEvent === undefined ? {} : { failingEvent }),
+      ...(!failingEvent ? {} : { failingEvent }),
     });
     this.#hooks.armAlarm(nextAttemptAt);
   }
@@ -1362,7 +1354,7 @@ export class StreamEventSender {
     // key derived from the cursor would swallow it and the subscription would
     // retry forever without ever turning red again). Duplicate dropping
     // comes from the fold: while halted, the send loop never runs this path.
-    if (this.#hooks.coreState().subscriptions.outbound.byName[name]?.deliveryHalted !== undefined) {
+    if (this.#hooks.coreState().subscriptions.outbound.byName[name]?.deliveryHalted) {
       return;
     }
     const row = this.#hooks.store.get(name);
@@ -1374,7 +1366,7 @@ export class StreamEventSender {
         reason: "delivery-failed",
         afterOffset: row?.confirmedOffset ?? 0,
         attempts,
-        ...(terminalError === undefined ? {} : { error: terminalError }),
+        ...(!terminalError ? {} : { error: terminalError }),
       },
     });
     if (!recorded) {
@@ -1396,7 +1388,7 @@ export class StreamEventSender {
     // subscription. Clear the backoff, keep the cursor (the halted event carries
     // the attempts + error for the audit trail); an equal-offset ack is a
     // no-move under the monotonic max.
-    if (row !== undefined) this.#hooks.store.ack(name, row.confirmedOffset);
+    if (row) this.#hooks.store.ack(name, row.confirmedOffset);
     this.#limitNextReadToOne.delete(name);
   }
 
@@ -1411,15 +1403,15 @@ export class StreamEventSender {
     for (const row of this.#hooks.store.list()) {
       const key = row.name;
       const configured = state.subscriptions.outbound.byName[key];
-      if (configured === undefined) {
+      if (!configured) {
         this.#hooks.store.delete(key);
         continue;
       }
-      if (configured.deliveryHalted !== undefined) {
+      if (configured.deliveryHalted) {
         continue;
       }
-      if (row.inFlightDeadlineAt !== null) {
-        if (next === null || row.inFlightDeadlineAt < next) next = row.inFlightDeadlineAt;
+      if (Number.isFinite(row.inFlightDeadlineAt)) {
+        if (!Number.isFinite(next) || row.inFlightDeadlineAt < next) next = row.inFlightDeadlineAt;
         continue;
       }
       if (this.#sourceOwnedSendsInFlight.has(key) || this.#hostedWakesInFlight.has(key)) {
@@ -1428,10 +1420,10 @@ export class StreamEventSender {
         // call cannot strand a quiet subscription with no future wake.
         const watchdogAt =
           this.#hooks.now() + DEFAULT_DELIVERY_TIMEOUT_MS + LIFECYCLE_RETRY_DELAY_MS;
-        if (next === null || watchdogAt < next) next = watchdogAt;
+        if (!Number.isFinite(next) || watchdogAt < next) next = watchdogAt;
         continue;
       }
-      if (row.nextAttemptAt === null) {
+      if (!Number.isFinite(row.nextAttemptAt)) {
         // A non-halted row lagging the head with NOTHING scheduled is the
         // lifecycle-retry state: an interrupted audit/settlement append armed
         // a bare short-delay alarm without touching the row (deliberately —
@@ -1440,9 +1432,9 @@ export class StreamEventSender {
         if (row.confirmedOffset < state.maxOffset) lagWithoutSchedule = true;
         continue;
       }
-      if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
+      if (!Number.isFinite(next) || row.nextAttemptAt < next) next = row.nextAttemptAt;
     }
-    if (next !== null) this.#hooks.armAlarm(next);
+    if (Number.isFinite(next)) this.#hooks.armAlarm(next);
     this.connections.rearmIdleAlarm();
     // Nothing durable needs a future turn and no idle deadline is pending:
     // delete the alarm outright, or the last send's in-flight watchdog
@@ -1452,7 +1444,7 @@ export class StreamEventSender {
     // completion is what finds the quiet state. A later armNoLaterThan in
     // the same turn re-arms after the delete.
     if (
-      next === null &&
+      !Number.isFinite(next) &&
       !lagWithoutSchedule &&
       !this.connections.hasPendingIdleDeadline &&
       this.#sourceOwnedSendsInFlight.size === 0 &&
@@ -1494,7 +1486,7 @@ export class StreamEventSender {
 
   #subscriptionMetricsFor(name: string) {
     let metrics = this.#subscriptionMetrics.get(name);
-    if (metrics === undefined) {
+    if (!metrics) {
       metrics = {
         completionLatency: new LatencyRing(),
         deliveryDuration: new LatencyRing(),
@@ -1529,9 +1521,9 @@ export class StreamEventSender {
             nextAttemptAt: row?.nextAttemptAt ?? null,
             inFlightDeadlineAt: row?.inFlightDeadlineAt ?? null,
             lastError: row?.lastError ?? null,
-            ...(metrics === undefined ? {} : { bytesSent: metrics.bytesSent }),
-            ...(completionLatencyMs === null ? {} : { completionLatencyMs }),
-            ...(deliveryDurationMs === null ? {} : { deliveryDurationMs }),
+            ...(!metrics ? {} : { bytesSent: metrics.bytesSent }),
+            ...(!completionLatencyMs ? {} : { completionLatencyMs }),
+            ...(!deliveryDurationMs ? {} : { deliveryDurationMs }),
           },
         ];
       }),
@@ -1617,8 +1609,8 @@ function capSessionDelivery(
   maxEvents: number | undefined,
   maxBytes: number | undefined,
 ): SizedStreamEvent[] {
-  let capped = maxEvents !== undefined ? matched.slice(0, maxEvents) : matched;
-  if (maxBytes !== undefined && capped.length > 1) {
+  let capped = Number.isFinite(maxEvents) ? matched.slice(0, maxEvents) : matched;
+  if (Number.isFinite(maxBytes) && capped.length > 1) {
     let bytes = 0;
     for (let index = 0; index < capped.length; index += 1) {
       bytes += capped[index]!.byteLength;
@@ -1694,7 +1686,7 @@ function deliveryErrorDiagnostics(error: unknown): {
   let errorName = "NonErrorThrowable";
   let itxCallId: string | undefined;
   try {
-    if (typeof error === "object" && error !== null) {
+    if (typeof error === "object" && error) {
       const candidateName: unknown = Reflect.get(error, "name");
       const candidateItxCallId: unknown = Reflect.get(error, "itxCallId");
       if (typeof candidateName === "string" && candidateName.length > 0) {
@@ -1717,8 +1709,8 @@ function deliveryErrorDiagnostics(error: unknown): {
   return {
     errorName,
     errorMessage,
-    ...(itxCallId === undefined ? {} : { itxCallId }),
-    ...(cloudflareErrorReference === undefined ? {} : { cloudflareErrorReference }),
+    ...(!itxCallId ? {} : { itxCallId }),
+    ...(!cloudflareErrorReference ? {} : { cloudflareErrorReference }),
   };
 }
 
@@ -1763,7 +1755,7 @@ export class StreamConnections {
     for (const [connectionKey, connection] of this.#connections) {
       if (
         connection.kind !== "hosted" ||
-        connection.expectedHostedDelivery === undefined ||
+        !connection.expectedHostedDelivery ||
         this.#hooks.hostedDeliveryStillMatches(connectionKey, connection.expectedHostedDelivery)
       ) {
         continue;
@@ -1776,11 +1768,7 @@ export class StreamConnections {
     const now = this.#hooks.now();
     for (const [connectionKey, connection] of this.#connections) {
       const deadlineAt = connection.pendingDeliveryDeadlineAtMs();
-      if (
-        deadlineAt === null ||
-        deadlineAt > now ||
-        connection.expectedHostedDelivery === undefined
-      ) {
+      if (!Number.isFinite(deadlineAt) || deadlineAt > now || !connection.expectedHostedDelivery) {
         continue;
       }
       this.onHostedDeliveryError(
@@ -1791,19 +1779,19 @@ export class StreamConnections {
         connection.expectedHostedDelivery,
       );
     }
-    if (this.#idleTeardownAtMs !== null && this.#idleTeardownAtMs <= this.#hooks.now()) {
+    if (Number.isFinite(this.#idleTeardownAtMs) && this.#idleTeardownAtMs <= this.#hooks.now()) {
       return this.runIdleTeardownNow();
     }
     return [];
   }
 
   rearmIdleAlarm(): void {
-    if (this.#idleTeardownAtMs !== null) this.#hooks.armAlarm(this.#idleTeardownAtMs);
+    if (Number.isFinite(this.#idleTeardownAtMs)) this.#hooks.armAlarm(this.#idleTeardownAtMs);
   }
 
   /** Whether an idle-teardown deadline is pending (the alarm must stay armed for it). */
   get hasPendingIdleDeadline(): boolean {
-    return this.#idleTeardownAtMs !== null;
+    return Number.isFinite(this.#idleTeardownAtMs);
   }
 
   openSession(args: {
@@ -1860,7 +1848,7 @@ export class StreamConnections {
   ): void {
     const connection = this.#connections.get(connectionKey);
     if (
-      connection === undefined ||
+      !connection ||
       connection.expectedHostedDelivery?.connectionGeneration !==
         expectedDelivery.connectionGeneration ||
       !this.#hooks.hostedDeliveryStillMatches(connectionKey, expectedDelivery)
@@ -1883,13 +1871,13 @@ export class StreamConnections {
       connectionGeneration: expectedDelivery.connectionGeneration,
       deliveredThroughOffset: connection.deliveredThroughOffset,
       streamMaxOffset: state.maxOffset,
-      ...(pendingDeliveryStartedAtMs === null
+      ...(!Number.isFinite(pendingDeliveryStartedAtMs)
         ? {}
         : { pendingDeliveryStartedAt: new Date(pendingDeliveryStartedAtMs).toISOString() }),
-      ...(pendingDeliveryDeadlineAtMs === null
+      ...(!Number.isFinite(pendingDeliveryDeadlineAtMs)
         ? {}
         : { pendingDeliveryDeadlineAt: new Date(pendingDeliveryDeadlineAtMs).toISOString() }),
-      ...(processorAnnouncement === undefined
+      ...(!processorAnnouncement
         ? {}
         : {
             processorSlug: processorAnnouncement.slug,
@@ -1916,7 +1904,7 @@ export class StreamConnections {
   samplePingsSoon(): void {
     const now = this.#hooks.now();
     if (
-      this.#lastPingRoundAtMs !== null &&
+      Number.isFinite(this.#lastPingRoundAtMs) &&
       now - this.#lastPingRoundAtMs < PING_ROUND_MIN_INTERVAL_MS
     ) {
       return;
@@ -1924,7 +1912,7 @@ export class StreamConnections {
     this.#lastPingRoundAtMs = now;
     for (const connection of this.#connections.values()) {
       const ping = connection.ping;
-      if (ping === undefined) continue;
+      if (!ping) continue;
       const t0 = this.#hooks.now();
       const work = (async () => {
         try {
@@ -1975,11 +1963,11 @@ export class StreamConnections {
             bytesSent: connection.bytesSent,
             lastDeliveredAt: connection.lastDeliveredAt,
             hasPendingDelivery: connection.hasPendingDelivery(),
-            ...(pendingDeliveryDeadlineAtMs === null
+            ...(!Number.isFinite(pendingDeliveryDeadlineAtMs)
               ? {}
               : {
                   pendingDeliveryDeadlineAt: new Date(pendingDeliveryDeadlineAtMs).toISOString(),
-                  ...(pendingDeliveryStartedAtMs === null
+                  ...(!Number.isFinite(pendingDeliveryStartedAtMs)
                     ? {}
                     : {
                         pendingDeliveryStartedAt: new Date(
@@ -1987,9 +1975,9 @@ export class StreamConnections {
                         ).toISOString(),
                       }),
                 }),
-            ...(completionLatencyMs === null ? {} : { completionLatencyMs }),
-            ...(pingRttMs === null ? {} : { pingRttMs }),
-            ...(connection.openedBy === undefined ? {} : { openedBy: connection.openedBy }),
+            ...(!completionLatencyMs ? {} : { completionLatencyMs }),
+            ...(!pingRttMs ? {} : { pingRttMs }),
+            ...(!connection.openedBy ? {} : { openedBy: connection.openedBy }),
           },
         ];
       }),
@@ -2024,7 +2012,7 @@ export class StreamConnections {
     let lastActivityMs = 0;
     for (const connectionKey of idleCandidates) {
       const connection = this.#connections.get(connectionKey);
-      if (connection === undefined) continue;
+      if (!connection) continue;
       const activityMs = Date.parse(connection.lastDeliveredAt ?? connection.startedAt);
       if (Number.isFinite(activityMs) && activityMs > lastActivityMs) lastActivityMs = activityMs;
     }
@@ -2095,36 +2083,29 @@ export class StreamConnections {
     const deliverEvents = args.events !== false;
     const coreState = this.#hooks.coreState();
     const openedAtOffset = coreState.maxOffset;
-    if (kind === "hosted" && args.expectedHostedDelivery === undefined) {
+    if (kind === "hosted" && !args.expectedHostedDelivery) {
       processEventBatch[Symbol.dispose]();
       throw new Error("hosted processor connections require the expected delivery state");
     }
     if (
-      args.replayAfterOffset !== undefined &&
+      Number.isFinite(args.replayAfterOffset) &&
       (!Number.isSafeInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
     ) {
       processEventBatch[Symbol.dispose]();
       throw new Error("replayAfterOffset must be a non-negative safe integer");
     }
-    if (
-      args.expectedStreamId !== undefined &&
-      args.expectedStreamId !== null &&
-      args.expectedStreamId.trim().length === 0
-    ) {
+    if (args.expectedStreamId && args.expectedStreamId.trim().length === 0) {
       processEventBatch[Symbol.dispose]();
       throw new Error("expectedStreamId must be null or a non-empty string");
     }
-    if (
-      args.expectedStreamId !== undefined &&
-      (coreState.streamId ?? null) !== args.expectedStreamId
-    ) {
+    if (args.expectedStreamId && (coreState.streamId ?? null) !== args.expectedStreamId) {
       processEventBatch[Symbol.dispose]();
       throw new Error(
         `stream ID changed (${String(args.expectedStreamId)} -> ${String(coreState.streamId ?? null)})`,
       );
     }
     if (
-      args.maxReplayOffsetGap !== undefined &&
+      Number.isFinite(args.maxReplayOffsetGap) &&
       (!Number.isSafeInteger(args.maxReplayOffsetGap) || args.maxReplayOffsetGap < 0)
     ) {
       processEventBatch[Symbol.dispose]();
@@ -2141,7 +2122,7 @@ export class StreamConnections {
     }
     if (
       deliverEvents &&
-      args.maxReplayOffsetGap !== undefined &&
+      Number.isFinite(args.maxReplayOffsetGap) &&
       openedAtOffset - deliveredThroughOffset > args.maxReplayOffsetGap
     ) {
       processEventBatch[Symbol.dispose]();
@@ -2157,7 +2138,7 @@ export class StreamConnections {
         payload: {
           connectionKey,
           kind,
-          ...(args.openedBy === undefined ? {} : { openedBy: args.openedBy }),
+          ...(!args.openedBy ? {} : { openedBy: args.openedBy }),
         },
       });
       if (!openedRecorded) {
@@ -2199,7 +2180,7 @@ export class StreamConnections {
               kind === "hosted" ? HOSTED_SCAN_EVENT_LIMIT : DELIVERY_BATCH_LIMIT,
             );
             const lastOffset = readEvents.at(-1)?.event.offset;
-            if (lastOffset === undefined) {
+            if (!Number.isFinite(lastOffset)) {
               const currentMaxOffset = this.#hooks.coreState().maxOffset;
               if (currentMaxOffset <= deliveredThroughOffset && !initialBatchPending) return;
               deliveredThroughOffset = Math.max(deliveredThroughOffset, currentMaxOffset);
@@ -2211,10 +2192,9 @@ export class StreamConnections {
               // always received them — they own no durable cursor, so a hole
               // costs them nothing.
               const visible = readEvents;
-              const matched =
-                args.filter === undefined
-                  ? visible
-                  : visible.filter((entry) => args.filter!.matches(entry.event));
+              const matched = !args.filter
+                ? visible
+                : visible.filter((entry) => args.filter!.matches(entry.event));
               const delivered =
                 kind === "hosted"
                   ? matched.slice(0, HOSTED_CALLBACK_EVENT_LIMIT)
@@ -2225,7 +2205,7 @@ export class StreamConnections {
               // preceding non-matches have still been skipped durably.
               const lastDeliveredOffset = delivered.at(-1)?.event.offset;
               deliveredThroughOffset =
-                delivered.length < matched.length && lastDeliveredOffset !== undefined
+                delivered.length < matched.length && Number.isFinite(lastDeliveredOffset)
                   ? lastDeliveredOffset
                   : lastOffset;
               events = delivered.map((entry) => entry.event);
@@ -2257,11 +2237,7 @@ export class StreamConnections {
           connection.lastDeliveredAt = new Date(this.#hooks.now()).toISOString();
           this.#hooks.recordEgress(events.length, deliveredBytes);
           const currentState = this.#hooks.coreState();
-          if (
-            currentState.projectId === undefined ||
-            currentState.path === undefined ||
-            currentState.streamId === undefined
-          ) {
+          if (!currentState.projectId || !currentState.path || !currentState.streamId) {
             throw new Error("Cannot deliver stream batch before stream identity is initialized.");
           }
           const newestCreatedAtMs =
@@ -2325,7 +2301,7 @@ export class StreamConnections {
                   // The batch's pre-armed watchdog is now moot; let the full
                   // recomputation decide whether anything still needs a turn.
                   this.#hooks.reconcileAlarm();
-                  if (newestCreatedAtMs !== undefined && Number.isFinite(newestCreatedAtMs)) {
+                  if (Number.isFinite(newestCreatedAtMs) && Number.isFinite(newestCreatedAtMs)) {
                     const completedAtMs = this.#hooks.now();
                     connection.completionLatency.record(
                       completedAtMs - newestCreatedAtMs,
@@ -2357,7 +2333,7 @@ export class StreamConnections {
           await Promise.resolve();
         }
       } catch (error) {
-        if (kind === "hosted" && args.expectedHostedDelivery !== undefined) {
+        if (kind === "hosted" && args.expectedHostedDelivery) {
           this.onHostedDeliveryError(connectionKey, error, args.expectedHostedDelivery);
         } else {
           const details = { connectionKey, error };
@@ -2375,11 +2351,11 @@ export class StreamConnections {
 
     connection = {
       kind,
-      ...(args.expectedHostedDelivery === undefined
+      ...(!args.expectedHostedDelivery
         ? {}
         : { expectedHostedDelivery: args.expectedHostedDelivery }),
       startedAt: new Date(this.#hooks.now()).toISOString(),
-      ...(args.openedBy === undefined ? {} : { openedBy: args.openedBy }),
+      ...(!args.openedBy ? {} : { openedBy: args.openedBy }),
       getProcessorRuntimeState: retainGetProcessorRuntimeState(args.getRuntimeState),
       ping: retainConnectionPing(args.ping),
       get deliveredThroughOffset() {
@@ -2416,7 +2392,7 @@ export class StreamConnections {
         // opened/closed events, remains authoritative for "open now".
         void this.#hooks.appendDeliveryEvent({
           type: "events.iterate.com/stream/connection-closed",
-          payload: { connectionKey, reason, ...(error === undefined ? {} : { error }) },
+          payload: { connectionKey, reason, ...(!error ? {} : { error }) },
         });
         if (reason === "rpc-broken" || reason === "delivery-failed") {
           this.#hooks.sendDueSubscriptions();
@@ -2439,7 +2415,7 @@ export class StreamConnections {
     // fire — an unarmmed idle deadline would pin this connection forever.
     this.armOrClearIdleAlarm();
     processEventBatch.onRpcBroken?.((error) => {
-      if (kind === "hosted" && args.expectedHostedDelivery !== undefined) {
+      if (kind === "hosted" && args.expectedHostedDelivery) {
         this.onHostedDeliveryError(connectionKey, error, args.expectedHostedDelivery, "rpc-broken");
       } else {
         connection.close("rpc-broken", connectionError(error));

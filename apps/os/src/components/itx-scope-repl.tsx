@@ -159,7 +159,7 @@ function ItxScopeReplConnected({
       // BIRTH must not: bornPaths is only recorded after create() resolves,
       // so a birth failure stays on the unborn page with the mutation error
       // visible.
-      if (scopePath === null && bornPathsRef.current.has(variables.path)) {
+      if (!scopePath && bornPathsRef.current.has(variables.path)) {
         onSessionEstablished(variables.path);
       }
     },
@@ -173,7 +173,7 @@ function ItxScopeReplConnected({
   const [events, setEvents] = useState<readonly StreamEvent[]>([]);
   const activeScopePath = scopePath || (run.variables ? run.variables.path : null);
   const born =
-    activeScopePath !== null &&
+    !!activeScopePath &&
     (events.length > 0 ||
       bornPaths.includes(activeScopePath) ||
       (knownStreams.data || []).some((stream) => stream.path === activeScopePath));
@@ -195,7 +195,7 @@ function ItxScopeReplConnected({
           setEvents((previous) => {
             const lastOffset = previous.at(-1)?.offset;
             const fresh = scriptEvents.filter(
-              (event) => lastOffset === undefined || event.offset > lastOffset,
+              (event) => !Number.isFinite(lastOffset) || event.offset > lastOffset,
             );
             return fresh.length === 0
               ? previous
@@ -229,15 +229,14 @@ function ItxScopeReplConnected({
   const entries = useMemo(() => deriveReplEntries(events), [events]);
   const pendingRun = run.isPending ? run.variables : undefined;
   const pendingCode =
-    pendingRun !== undefined && !pendingRunVisibleInEntries(entries, pendingRun)
-      ? pendingRun.body
-      : null;
-  const runErrorMessage =
-    run.error === null ? null : run.error instanceof Error ? run.error.message : String(run.error);
+    pendingRun && !pendingRunVisibleInEntries(entries, pendingRun) ? pendingRun.body : null;
+  const runErrorMessage = !run.error
+    ? null
+    : run.error instanceof Error
+      ? run.error.message
+      : String(run.error);
   const runError =
-    runErrorMessage !== null &&
-    !run.isPending &&
-    !runErrorAlreadyJournaled(entries, runErrorMessage)
+    runErrorMessage && !run.isPending && !runErrorAlreadyJournaled(entries, runErrorMessage)
       ? runErrorMessage
       : null;
 
@@ -280,7 +279,7 @@ function ItxScopeReplConnected({
       </div>
       {/* The tail rides the session stream too, so it must stay lazy: mounting
           it opens a connection, and a connection wakes (births) the stream. */}
-      {born && activeScopePath !== null ? (
+      {born && activeScopePath ? (
         <div className="flex max-h-56 min-h-0 flex-col">
           <ItxActivityTail key={`${projectId}:${activeScopePath}`} path={activeScopePath} />
         </div>

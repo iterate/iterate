@@ -130,13 +130,13 @@ export async function openRelayedStreamConnection(input: {
         // Fresh plain arrows, NOT the retained objects: the retained wrappers
         // carry Symbol.dispose, and the DO releasing one leg's stub must not
         // cascade into disposing the session-lifetime Cap'n Web callbacks.
-        getRuntimeState: getRuntimeState === undefined ? undefined : () => getRuntimeState(),
-        ping: ping === undefined ? undefined : (pingInput: StreamPingInput) => ping(pingInput),
+        getRuntimeState: !getRuntimeState ? undefined : () => getRuntimeState(),
+        ping: !ping ? undefined : (pingInput: StreamPingInput) => ping(pingInput),
       },
       // Internal plumbing rides a separate parameter, never the public arg
       // bag: with the spread above, anything merged into `args`'s shape would
       // be client-spoofable by default.
-      subscriberPager === undefined ? undefined : { subscriberPagerId },
+      !subscriberPager ? undefined : { subscriberPagerId },
     );
 
   const probeLeg = (handle: StreamConnectionHandle) =>
@@ -148,11 +148,11 @@ export async function openRelayedStreamConnection(input: {
   const teardown = (args2: { reason: string; socketCode: number; warn?: unknown }) => {
     if (!active) return;
     active = false;
-    if (args2.warn !== undefined || !closedByOwner) {
+    if (args2.warn || !closedByOwner) {
       console.warn("stream connection relay closed", {
         connectionKey,
         reason: args2.reason,
-        ...(args2.warn === undefined ? {} : { error: args2.warn }),
+        ...(!args2.warn ? {} : { error: args2.warn }),
       });
     }
     try {
@@ -162,7 +162,7 @@ export async function openRelayedStreamConnection(input: {
     }
     const handle = currentHandle;
     currentHandle = undefined;
-    if (handle !== undefined) {
+    if (handle) {
       // Always attempt the prompt DO-side close, whatever ended the relay: a
       // teardown triggered by a transient probe failure can hold a HEALTHY
       // leg, and merely disposing it would leave a zombie connection —
@@ -195,7 +195,7 @@ export async function openRelayedStreamConnection(input: {
   subscriberPager?.addEventListener("message", (event) => {
     if (!active) return;
     const page = parseHibernatablePage(event.data, StreamSubscriberPage);
-    if (page === undefined) return;
+    if (!page) return;
     if (page.type === "idle") {
       // The DO idle-closed the RPC leg. Dropping this handle stub releases
       // the relay's last live reference into the DO's isolate, which is what
@@ -211,7 +211,7 @@ export async function openRelayedStreamConnection(input: {
     void (async () => {
       try {
         const previous = currentHandle;
-        if (previous !== undefined) {
+        if (previous) {
           // A Page while a leg exists is either stale — sent in the gap
           // between socket accept and openConnection binding it, when the DO
           // saw an unstamped, connection-absent socket, and delivered after
@@ -250,7 +250,7 @@ export async function openRelayedStreamConnection(input: {
       // dead Pager while dormant means Pages can no longer arrive —
       // break, and the owner's watchdog re-subscribes.
       const handle = currentHandle;
-      const live = handle === undefined ? false : await probeLeg(handle);
+      const live = !handle ? false : await probeLeg(handle);
       if (live !== true) {
         teardown({ reason: "Subscriber Pager closed while dormant", socketCode: 1000 });
       }
@@ -311,7 +311,7 @@ export async function openRelayedStreamConnection(input: {
       if (!active) return false;
       const handle = currentHandle;
       // Dormant: the Pager carries liveness (its close breaks the relay).
-      if (handle === undefined) return true;
+      if (!handle) return true;
       return probeLeg(handle).then((live) => {
         if (live === true || currentHandle !== handle) return active;
         // A gone leg with the Pager still open is dormancy, not death —
@@ -319,7 +319,7 @@ export async function openRelayedStreamConnection(input: {
         // connection is absent, stamped or not).
         currentHandle = undefined;
         disposeStub(handle);
-        if (subscriberPager === undefined) {
+        if (!subscriberPager) {
           teardown({ reason: "rpc leg gone with no Subscriber Pager", socketCode: 1000 });
         }
         return active;

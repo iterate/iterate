@@ -44,7 +44,7 @@ export function StreamTreeRowContent({
       <span
         className={cn("ml-auto text-[11px] tabular-nums text-foreground/70", EVENTS_COLUMN_CLASS)}
       >
-        {node.indexRow === undefined ? null : formatEventCount(node.indexRow.eventCount)}
+        {!node.indexRow ? null : formatEventCount(node.indexRow.eventCount)}
       </span>
     </>
   );
@@ -53,7 +53,7 @@ export function StreamTreeRowContent({
     <>
       <span style={{ width: Math.min(row.depth, 8) * 12 }} className="shrink-0" aria-hidden />
       <span className="flex w-4 shrink-0 justify-center">
-        {hasChildren && onToggleExpanded !== undefined ? (
+        {hasChildren && onToggleExpanded ? (
           <button
             type="button"
             aria-label={row.getIsExpanded() ? `Collapse ${node.path}` : `Expand ${node.path}`}
@@ -81,7 +81,7 @@ export function StreamTreeRowContent({
           </span>
         ) : null}
       </span>
-      {onOpen === undefined ? (
+      {!onOpen ? (
         <span className="flex min-w-0 flex-1 items-center gap-2">{label}</span>
       ) : (
         <button

@@ -28,9 +28,9 @@ export function mergeProcessorConfig(base: unknown, patch: unknown): unknown {
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  if (typeof value !== "object" || !value || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+  return prototype === Object.prototype || !prototype;
 }
 
 // =============================================================================
@@ -489,7 +489,7 @@ function rejectEphemeralIdempotency(
   event: { ephemeral?: unknown; idempotencyKey?: unknown },
   context: z.RefinementCtx,
 ): void {
-  if (event.ephemeral === true && event.idempotencyKey !== undefined) {
+  if (event.ephemeral === true && event.idempotencyKey) {
     context.addIssue({
       code: "custom",
       message: "ephemeral events cannot have an idempotencyKey",
@@ -557,12 +557,12 @@ function cachedSchema(
   args: { type: string; payloadSchema: z.ZodType; ephemeral?: boolean },
 ): z.ZodType {
   let byType = cache.get(args.payloadSchema);
-  if (byType === undefined) {
+  if (!byType) {
     byType = new Map();
     cache.set(args.payloadSchema, byType);
   }
   let schema = byType.get(args.type);
-  if (schema === undefined) {
+  if (!schema) {
     schema = build(args);
     byType.set(args.type, schema);
   }
@@ -626,8 +626,8 @@ function parseResolvedEventInput(
     contract,
     eventType: event.type,
   });
-  if (eventDefinition === undefined) {
-    const owner = contract.slug == null ? "contract" : `processor "${contract.slug}"`;
+  if (!eventDefinition) {
+    const owner = !contract.slug ? "contract" : `processor "${contract.slug}"`;
     throw new Error(`${owner} cannot build unresolved event "${event.type}".`);
   }
   return getEventInputSchema({
@@ -687,7 +687,7 @@ export function defineProcessorContract<
 export function defineProcessorContract(contract: unknown): unknown {
   assertNoLocalProcessorDepEventConflicts(contract);
   assertDefaultStateSchema(contract);
-  if (typeof contract !== "object" || contract === null) {
+  if (typeof contract !== "object" || !contract) {
     throw new Error("Processor contract must be an object.");
   }
   for (const method of [
@@ -737,14 +737,14 @@ function makeContractConsumedInputParser(contract: {
       contract,
       eventType: event.type,
     });
-    if (eventDefinition === undefined) {
+    if (!eventDefinition) {
       throw new Error(
         `Processor "${getProcessorSlug(contract)}" does not consume event "${event.type}".`,
       );
     }
 
     let schema = parserCache.get(event.type);
-    if (schema === undefined) {
+    if (!schema) {
       schema = getEventInputSchema({
         type: event.type,
         payloadSchema: eventDefinition.payloadSchema,
@@ -772,7 +772,7 @@ function makeContractEventParser(
   return (event: { type: string }) => {
     const eventType = event.type;
     const eventDefinition = getResolvedEventDefinition({ contract, eventType });
-    if (eventDefinition == null) {
+    if (!eventDefinition) {
       throw new Error(
         `Processor "${getProcessorSlug(contract)}" cannot parse unresolved event "${eventType}".`,
       );
@@ -781,7 +781,7 @@ function makeContractEventParser(
     // turn (core policy validation), where per-call schema construction was
     // measurable.
     let schema = parserCache.get(eventType);
-    if (schema === undefined) {
+    if (!schema) {
       schema = schemaFor({
         type: eventType,
         payloadSchema: eventDefinition.payloadSchema,
@@ -798,14 +798,14 @@ function makeContractEventParser(
  * state slices can evolve safely and hooks never branch on primitive state).
  */
 export function assertObjectProcessorState(args: { processorSlug: string; value: unknown }) {
-  if (typeof args.value === "object" && args.value !== null && !Array.isArray(args.value)) {
+  if (typeof args.value === "object" && args.value && !Array.isArray(args.value)) {
     return;
   }
   throw new Error(`Processor "${args.processorSlug}" state must be an object.`);
 }
 
 function assertDefaultStateSchema(contract: unknown): void {
-  if (typeof contract !== "object" || contract === null) {
+  if (typeof contract !== "object" || !contract) {
     throw new Error("Processor contract must be an object.");
   }
   const processorSlug = getProcessorSlug(contract);
@@ -857,7 +857,7 @@ export function getConsumedEventDefinition(args: {
     return undefined;
   }
   const eventDefinition = getResolvedEventDefinition(args);
-  if (eventDefinition == null) {
+  if (!eventDefinition) {
     throw new Error(`Unresolved stream processor consumes event type "${args.eventType}".`);
   }
   /*
@@ -885,11 +885,11 @@ export function getResolvedEventDefinition(args: {
   eventType: string;
 }): EventDefinition | undefined {
   const localEventDefinition = args.contract.events[args.eventType];
-  if (localEventDefinition != null) return localEventDefinition;
+  if (localEventDefinition) return localEventDefinition;
 
   for (const dependency of args.contract.processorDeps ?? []) {
     const dependencyEventDefinition = getDependencyEvents(dependency)?.[args.eventType];
-    if (dependencyEventDefinition != null) return dependencyEventDefinition;
+    if (dependencyEventDefinition) return dependencyEventDefinition;
   }
 
   return undefined;
@@ -899,7 +899,7 @@ function getDependencyEvents(dependency: unknown): EventCatalog | undefined {
   if (isEventCatalog(dependency)) return dependency;
   if (
     typeof dependency === "object" &&
-    dependency !== null &&
+    dependency &&
     "events" in dependency &&
     isEventCatalog(dependency.events)
   ) {
@@ -909,7 +909,7 @@ function getDependencyEvents(dependency: unknown): EventCatalog | undefined {
 }
 
 function assertNoLocalProcessorDepEventConflicts(contract: unknown): void {
-  if (typeof contract !== "object" || contract === null || !("events" in contract)) return;
+  if (typeof contract !== "object" || !contract || !("events" in contract)) return;
   if (!isEventCatalog(contract.events)) return;
 
   const processorDeps =
@@ -919,7 +919,7 @@ function assertNoLocalProcessorDepEventConflicts(contract: unknown): void {
 
   for (const dependency of processorDeps) {
     const dependencyEvents = getDependencyEvents(dependency);
-    if (dependencyEvents === undefined) continue;
+    if (!dependencyEvents) continue;
 
     for (const type of Object.keys(contract.events)) {
       if (!Object.prototype.hasOwnProperty.call(dependencyEvents, type)) continue;
@@ -931,33 +931,30 @@ function assertNoLocalProcessorDepEventConflicts(contract: unknown): void {
 }
 
 function isEventCatalog(value: unknown): value is EventCatalog {
-  if (typeof value !== "object" || value === null) return false;
+  if (typeof value !== "object" || !value) return false;
   return Object.values(value).every(isEventDefinition);
 }
 
 function isEventDefinition(value: unknown): value is EventDefinition {
   return (
     typeof value === "object" &&
-    value !== null &&
+    !!value &&
     "payloadSchema" in value &&
     typeof value.payloadSchema === "object" &&
-    value.payloadSchema !== null
+    !!value.payloadSchema
   );
 }
 
 function isZodSchema(value: unknown): value is z.ZodType {
   return (
-    typeof value === "object" &&
-    value !== null &&
-    "parse" in value &&
-    typeof value.parse === "function"
+    typeof value === "object" && !!value && "parse" in value && typeof value.parse === "function"
   );
 }
 
 function getProcessorSlug(contract: unknown): string {
   if (
     typeof contract === "object" &&
-    contract !== null &&
+    contract &&
     "slug" in contract &&
     typeof contract.slug === "string"
   ) {

@@ -56,7 +56,7 @@ export function createAgentFeedModel(): AgentFeedModel {
         state = step.endState;
         if (step.items.length > 0) settledItems = [...(settledItems ?? []), ...step.items];
       }
-      if (settledItems != null) items = [...items, ...settledItems];
+      if (settledItems) items = [...items, ...settledItems];
       snapshot = { items, live: state.live, eventCount: state.eventCount, lastOffset };
       return true;
     },

@@ -88,11 +88,11 @@ const PLATFORM_CLIENT_CREDS: Record<
 };
 
 function petshopOrigins(config: AppConfig): readonly string[] {
-  if (config.integrations.petshop === undefined) return [];
-  if (config.integrations.petshop.baseUrl !== undefined) {
+  if (!config.integrations.petshop) return [];
+  if (config.integrations.petshop.baseUrl) {
     return [new URL(config.integrations.petshop.baseUrl).origin];
   }
-  if (config.baseUrl === undefined) return [];
+  if (!config.baseUrl) return [];
   const provider = new URL(config.baseUrl);
   provider.hostname = provider.hostname.replace(/^os\./, "dummy-petshop.");
   return [provider.origin];
@@ -113,9 +113,9 @@ export function substitutePlatformApiKeyReferences(input: {
     assertPlatformApiKeyReferencesAllowed([reference], input.request.url);
     const { platform } = reference;
     const entry = PLATFORM_API_KEYS[platform];
-    if (entry === undefined) throw new SecretSubstitutionError("secret_not_found");
+    if (!entry) throw new SecretSubstitutionError("secret_not_found");
     const value = entry.value(input.config);
-    if (value === undefined) throw new SecretSubstitutionError("secret_not_found");
+    if (!value) throw new SecretSubstitutionError("secret_not_found");
     return value;
   });
 }
@@ -128,7 +128,7 @@ export function assertPlatformApiKeyReferencesAllowed(
   const origin = new URL(url).origin;
   for (const { platform } of references) {
     const entry = PLATFORM_API_KEYS[platform];
-    if (entry === undefined) throw new SecretSubstitutionError("secret_not_found");
+    if (!entry) throw new SecretSubstitutionError("secret_not_found");
     if (!entry.origins.includes(origin)) {
       throw new SecretSubstitutionError("secret_not_allowed_for_origin");
     }
@@ -144,9 +144,9 @@ export function resolvePlatformClientCreds(input: {
   tokenEndpoint: string;
 }): { clientId: string; clientSecret: string } {
   const entry = PLATFORM_CLIENT_CREDS[input.ref.platform];
-  if (entry === undefined) throw new SecretSubstitutionError("secret_not_found");
+  if (!entry) throw new SecretSubstitutionError("secret_not_found");
   const creds = entry.creds(input.config);
-  if (creds === undefined) throw new SecretSubstitutionError("secret_not_found");
+  if (!creds) throw new SecretSubstitutionError("secret_not_found");
   assertOriginsAllowed([input.tokenEndpoint], entry.tokenOrigins(input.config));
   assertOriginsAllowed(input.secretEgressUrls, entry.egressOrigins(input.config));
   return creds;
@@ -166,9 +166,9 @@ export function resolvePlatformGithubAppKey(input: {
     throw new SecretSubstitutionError("secret_not_found");
   }
   const github = input.config.integrations.github;
-  if (github === undefined) throw new SecretSubstitutionError("secret_not_found");
+  if (!github) throw new SecretSubstitutionError("secret_not_found");
   const privateKey = github.privateKey?.exposeSecret();
-  if (privateKey === undefined || github.appId === undefined) {
+  if (!privateKey || !github.appId) {
     throw new SecretSubstitutionError("secret_not_found");
   }
   if (input.appId !== github.appId) {

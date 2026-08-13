@@ -12,12 +12,12 @@ function resolveRef(ref: string, root: JsonSchema): JsonSchema | undefined {
   if (!ref.startsWith("#/")) return undefined;
   let current: unknown = root;
   for (const segment of ref.slice(2).split("/")) {
-    if (current == null || typeof current !== "object") return undefined;
+    if (!current || typeof current !== "object") return undefined;
     current = (current as Record<string, unknown>)[
       segment.replaceAll("~1", "/").replaceAll("~0", "~")
     ];
   }
-  return typeof current === "boolean" || (current != null && typeof current === "object")
+  return typeof current === "boolean" || (current && typeof current === "object")
     ? (current as JsonSchema)
     : undefined;
 }
