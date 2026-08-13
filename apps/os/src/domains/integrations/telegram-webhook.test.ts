@@ -188,8 +188,8 @@ async function webhookRequest(input: {
   secretToken?: string | null;
   update?: Record<string, unknown>;
 }) {
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- tri-state: undefined = "use the valid derived token", null = "omit the header entirely"
   const secretToken =
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- tri-state: undefined = "use the valid derived token", null = "omit the header entirely"
     input.secretToken === undefined
       ? await telegramWebhookSecretToken({ botId: BOT_ID, keyMaterial: SECRET_ENCRYPTION_KEY })
       : input.secretToken;
