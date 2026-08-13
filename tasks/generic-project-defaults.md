@@ -8,7 +8,9 @@ branch: generic-project-defaults
 
 ## Status summary
 
-POC in progress. Spec fleshed out, implementation not started.
+Implementation done and pushed; typecheck/lint/knip/format green, test suite
+run pending confirmation. Remaining: review + (optionally) a preview-slot
+live check of the two templates publishing the new event.
 
 ## Motivation
 
@@ -55,25 +57,33 @@ store; move all interpretation to the consuming domain's read site.
 
 ## Checklist
 
-- [ ] Project contract: replace the agent-named event + `agentBirthDefaults`
+- [x] Project contract: replace the agent-named event + `agentBirthDefaults`
       slot with `project/defaults-configured` + generic `defaults` record;
       drop the `AgentBirthDefaults` import; add legacy-event shim
-- [ ] Project implementation: generic per-key fold (no validation), legacy
-      case folds to the agents key
-- [ ] agent-defaults.ts: export `AGENT_BIRTH_DEFAULTS_KEY`; keep
-      schema/validation as-is
-- [ ] rpc-targets.ts `agentBirthDefaultsForProject`: read
+      _no agent imports remain in projects/; legacy event keeps a loose
+      record schema_
+- [x] Project implementation: generic per-key fold (no validation), legacy
+      case folds to the agents key _two switch cases, both raw stores_
+- [x] agent-defaults.ts: export `AGENT_BIRTH_DEFAULTS_KEY`; keep
+      schema/validation as-is _constant + doc updates only_
+- [x] rpc-targets.ts `agentBirthDefaultsForProject`: read
       `state.defaults[AGENT_BIRTH_DEFAULTS_KEY]`, `safeParse` +
       `validateAgentBirthEvents` at the door, degrade-to-none on any failure
-- [ ] configs/default + configs/codemode-tag workers: publish the new event
-      shape (new idempotency-key prefix)
-- [ ] Regenerate config-repo-template.generated.ts and itx api generated
-      files (`pnpm lint:fix` / codegen scripts)
-- [ ] Tests: project-processor.test.ts (generic fold + legacy shim),
-      config-repo-template.test.ts (new published shape), agent-defaults
-      birth-list tests should pass unmodified; add a door-level test that a
-      malformed stored value degrades to platform defaults
+      _warns and returns {} on schema or vocabulary failure_
+- [x] configs/default + configs/codemode-tag workers: publish the new event
+      shape (new idempotency-key prefix) _`iterate/config/defaults:…` and
+      `codemode-tag/defaults:…` prefixes_
+- [x] Regenerate config-repo-template.generated.ts and itx api generated
+      files _`pnpm lint:fix` + `pnpm generate:itx-api`_
+- [x] Tests: project-processor.test.ts (generic fold + legacy shim + two
+      keys coexisting), config-repo-template.test.ts (new published shape),
+      agent-defaults birth-list tests pass unmodified. ~~door-level test for
+      malformed stored value~~ _`agentBirthDefaultsForProject` is
+      module-private in rpc-targets.ts; the degrade posture is covered by the
+      builder-level "invalid list degrades" test plus validate tests —
+      restructuring rpc-targets for testability is out of POC scope_
 - [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
+      _typecheck/lint/knip/format green; full test suite running_
 
 ## Assumptions (made while Misha is AFK-ish; flag on review)
 

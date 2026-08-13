@@ -424,9 +424,11 @@ import {
 } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import {
+  AGENT_BIRTH_DEFAULTS_KEY,
+  AgentBirthDefaults,
   agentCollectionCreationEvents,
   agentCreationForPath,
-  type AgentBirthDefaults,
+  validateAgentBirthEvents,
   type AgentCreateInput,
 } from "./domains/agents/agent-defaults.ts";
 import { ChatReplyNotifyProcessorContract } from "./domains/notifications/chat-reply-notify-contract.ts";
@@ -2135,12 +2137,15 @@ class ClientsRpcTarget extends IterateRpcTarget<"Clients"> {
  * record yet — never a birth blocker.
  */
 /**
- * The project's agent birth defaults, read from the project processor's fold
- * (`state.agentBirthDefaults` — the LATEST defaults event, already validated
- * event-by-event against the agent-consumed vocabulary at fold time). Absent,
- * non-matching, or unreadable → no defaults — a broken or missing defaults
- * declaration must degrade to platform-default births, never break agent
- * creation.
+ * The project's agent birth defaults, read from the generic per-key defaults
+ * store on the project processor's fold (`state.defaults` — raw latest value
+ * per key; the project holds it opaquely). THIS is where the agents domain
+ * interprets its key: schema parse plus the agent-vocabulary/allowlist check,
+ * both at the read site so the project contract never learns what an agent
+ * is. Absent, malformed, non-matching, or unreadable → no defaults — a
+ * broken or missing defaults declaration must degrade to platform-default
+ * births, never break agent creation (and never fall back to a stale
+ * predecessor: the raw latest is all the fold keeps).
  */
 async function agentBirthDefaultsForProject(props: {
   agentPath: string;
@@ -2154,11 +2159,27 @@ async function agentBirthDefaultsForProject(props: {
       path: "/",
       projectId: props.projectId,
     }).snapshot();
-    const defaults = state.agentBirthDefaults;
-    if (defaults === null) return {};
-    const pathPrefix = defaults.matches?.pathPrefix;
+    const raw = state.defaults[AGENT_BIRTH_DEFAULTS_KEY];
+    if (raw === undefined) return {};
+    const parsed = AgentBirthDefaults.safeParse(raw);
+    if (!parsed.success) {
+      console.warn("[agent] ignoring malformed agent birth defaults; using platform defaults", {
+        error: parsed.error.message,
+        projectId: props.projectId,
+      });
+      return {};
+    }
+    const check = validateAgentBirthEvents(parsed.data.birthEvents);
+    if (!check.ok) {
+      console.warn("[agent] ignoring invalid agent birth defaults; using platform defaults", {
+        error: check.error,
+        projectId: props.projectId,
+      });
+      return {};
+    }
+    const pathPrefix = parsed.data.matches?.pathPrefix;
     if (pathPrefix !== undefined && !props.agentPath.startsWith(pathPrefix)) return {};
-    return { defaults };
+    return { defaults: parsed.data };
   } catch (error) {
     console.warn("[agent] agent birth defaults read failed; using platform defaults", {
       error: String(error),

@@ -120,20 +120,24 @@ test("project lifecycle cases directly install and handle the default heartbeat"
   );
   expect(configured.script).toContain("payload: { scheduleKey: schedule.key }");
 
-  // The same case publishes the repo's prompt file as birth defaults: one
-  // prompt-slot event, newline-stripped (matching the platform's embedded
-  // copy), under a content-hash key — an unchanged file republishes the SAME
-  // occurrence, so redeliveries dedupe server-side.
+  // The same case publishes the repo's prompt file as birth defaults under
+  // the generic per-key defaults event: one prompt-slot event,
+  // newline-stripped (matching the platform's embedded copy), under a
+  // content-hash key — an unchanged file republishes the SAME occurrence, so
+  // redeliveries dedupe server-side.
   expect(append).toHaveBeenCalledTimes(2);
   expect(append.mock.calls[0]![0]).toMatchObject({
-    type: "events.iterate.com/project/agent-birth-defaults-configured",
+    type: "events.iterate.com/project/defaults-configured",
     payload: {
-      birthEvents: [
-        {
-          type: "events.iterate.com/agents/context-added",
-          payload: { content: "PROMPT TEXT", key: "agent/system-prompt", role: "system" },
-        },
-      ],
+      key: "agents/birth-defaults",
+      value: {
+        birthEvents: [
+          {
+            type: "events.iterate.com/agents/context-added",
+            payload: { content: "PROMPT TEXT", key: "agent/system-prompt", role: "system" },
+          },
+        ],
+      },
     },
   });
   expect(append.mock.calls[1]![0]).toEqual(append.mock.calls[0]![0]);

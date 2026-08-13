@@ -108,16 +108,18 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   }
 
   /**
-   * THE PROJECT'S PROMPT, published as data: the platform's generic
-   * agent-creation door folds the LATEST agent-birth-defaults event on the
-   * project root into every agent birth batch, so agents in this project are
-   * BORN with this repo's prompts/agent-system-prompt.md as their system
-   * prompt. Edit that file and commit to change it — the content-hash key
-   * re-publishes and the newest event wins; no platform deploy. Deleting the
-   * file publishes an EMPTY list, which restores the platform's embedded
-   * fallback prompt (identical text until you fork the file). Rough token
-   * budget: prompts ride every LLM request, so a much larger file mostly
-   * buys latency and cost — keep it lean.
+   * THE PROJECT'S PROMPT, published as data: the project root's generic
+   * defaults store (`project/defaults-configured`, latest occurrence wins
+   * per key) holds this repo's birth events under the "agents/birth-defaults"
+   * key, and the platform's agent-creation door folds them into every agent
+   * birth batch — so agents in this project are BORN with this repo's
+   * prompts/agent-system-prompt.md as their system prompt. Edit that file
+   * and commit to change it — the content-hash key re-publishes and the
+   * newest event wins; no platform deploy. Deleting the file publishes an
+   * EMPTY list, which restores the platform's embedded fallback prompt
+   * (identical text until you fork the file). Rough token budget: prompts
+   * ride every LLM request, so a much larger file mostly buys latency and
+   * cost — keep it lean.
    */
   async #publishAgentBirthDefaults(): Promise<void> {
     const itx = await this.itx;
@@ -153,9 +155,12 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       .map((byte) => byte.toString(16).padStart(2, "0"))
       .join("");
     await itx.streams.get("/").append({
-      type: "events.iterate.com/project/agent-birth-defaults-configured",
-      idempotencyKey: `iterate/config/agent-birth-defaults:${hash}`,
-      payload: { birthEvents },
+      type: "events.iterate.com/project/defaults-configured",
+      // New prefix on purpose: the stream rejects same-key-different-body
+      // appends, so the generic event must not reuse the legacy
+      // `iterate/config/agent-birth-defaults:` keys.
+      idempotencyKey: `iterate/config/defaults:agents/birth-defaults:${hash}`,
+      payload: { key: "agents/birth-defaults", value: { birthEvents } },
     });
   }
 
