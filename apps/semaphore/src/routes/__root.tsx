@@ -59,6 +59,7 @@ function RootComponent() {
   return (
     <AppProviders
       config={config}
+      posthog={{ appStage: config?.workerName }}
       devtools={
         <TanStackDevtools
           config={{ position: "bottom-left" }}
