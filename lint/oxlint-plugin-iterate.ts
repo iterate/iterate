@@ -314,6 +314,53 @@ function needsParensInsideLogicalAnd(node: any) {
   );
 }
 
+const EQUALITY_OPERATORS = new Set(["==", "!=", "===", "!=="]);
+/** Expression types safe to prefix with `!` (or drop bare into a condition)
+ * without changing how they parse. Anything else gets wrapping parens —
+ * extra parens are removed by the formatter, missing ones flip precedence
+ * (`!a + b`) or are a SyntaxError (`a ?? b` inside `&&`). */
+const BANG_SAFE_EXPRESSION_TYPES = new Set([
+  "Identifier",
+  "MemberExpression",
+  "CallExpression",
+  "ChainExpression",
+  "ThisExpression",
+  "Literal",
+  "TemplateLiteral",
+  "TaggedTemplateExpression",
+  "MetaProperty",
+  "NewExpression",
+  "ArrayExpression",
+]);
+
+function getNullishComparandKind(node: any): "null" | "undefined" | "NaN" | undefined {
+  if (node.type === "Literal" && node.value === null && !node.regex) return "null";
+  if (node.type === "Identifier" && node.name === "undefined") return "undefined";
+  if (node.type === "Identifier" && node.name === "NaN") return "NaN";
+  return undefined;
+}
+
+/** True when the expression's value only ever feeds a boolean decision (an
+ * if/while/ternary test or a `!`), directly or through `&&`/`||` operands.
+ * There a bare truthiness operand reads best; elsewhere the boolean VALUE is
+ * consumed (assigned, returned, compared) and needs `!!`. */
+function isBooleanContext(node: any): boolean {
+  const parent = node.parent;
+  if (!parent) return false;
+  if (parent.type === "UnaryExpression") return parent.operator === "!";
+  if (parent.type === "LogicalExpression" && parent.operator !== "??") {
+    return isBooleanContext(parent);
+  }
+  return (
+    (parent.type === "IfStatement" ||
+      parent.type === "ConditionalExpression" ||
+      parent.type === "WhileStatement" ||
+      parent.type === "DoWhileStatement" ||
+      parent.type === "ForStatement") &&
+    parent.test === node
+  );
+}
+
 function findVariableInScopeChain(scope: Scope.Scope | null, name: string) {
   for (let current = scope; current; current = current.upper) {
     const variable = current.variables.find((v: any) => v.name === name);
@@ -818,6 +865,124 @@ const plugin: StrictPlugin = {
                   fixer.replaceText(node, `${wrap(test)} && ${wrap(consequent)}`),
               }),
             });
+          },
+        };
+      },
+    },
+    "simple-truthiness-check": {
+      meta: {
+        type: "suggestion",
+        hasSuggestions: true,
+        docs: {
+          description:
+            "Don't compare directly to null, undefined, or NaN. Trust the types and use a " +
+            "simple truthiness check; when 0 is a meaningful value, use a positive number " +
+            "guard like Number.isFinite.",
+        },
+      },
+      create(context) {
+        // Suggestion-only on purpose: the rewrite is only equivalent under this
+        // repo's conventions (null ≈ undefined ≈ '', and 0 usually distinct),
+        // which needs a human to confirm per site — especially for numbers.
+        type Comparison = {
+          kind: "null" | "undefined" | "NaN";
+          operand: any;
+          negated: boolean;
+        };
+        const getComparison = (node: any): Comparison | undefined => {
+          if (node?.type !== "BinaryExpression" || !EQUALITY_OPERATORS.has(node.operator)) {
+            return undefined;
+          }
+          const leftKind = getNullishComparandKind(node.left);
+          const rightKind = getNullishComparandKind(node.right);
+          // Exactly one side must be the nullish literal (`null === undefined`
+          // is dead code, not a truthiness check in disguise).
+          if (!leftKind === !rightKind) return undefined;
+          return {
+            kind: (leftKind || rightKind)!,
+            operand: leftKind ? node.right : node.left,
+            negated: node.operator.startsWith("!"),
+          };
+        };
+        const operandText = (comparison: Comparison, options: { bang: boolean }) => {
+          const text = context.sourceCode.getText(comparison.operand);
+          if (!options.bang) return text; // call-argument position never needs parens
+          return BANG_SAFE_EXPRESSION_TYPES.has(comparison.operand.type) ? text : `(${text})`;
+        };
+        const report = (node: any, comparison: Comparison) => {
+          if (comparison.kind === "NaN") {
+            const replacement = `${comparison.negated ? "!" : ""}Number.isNaN(${operandText(comparison, { bang: false })})`;
+            context.report({
+              node,
+              message:
+                "Don't compare directly to NaN — it is never equal to anything, itself included. " +
+                `Use ${replacement}.`,
+              suggest: [
+                {
+                  desc: `Replace with ${replacement}`,
+                  fix: (fixer: Rule.RuleFixer) => fixer.replaceText(node, replacement),
+                },
+              ],
+            });
+            return;
+          }
+          const truthy = comparison.negated
+            ? isBooleanContext(node)
+              ? operandText(comparison, { bang: false })
+              : `!!${operandText(comparison, { bang: true })}`
+            : `!${operandText(comparison, { bang: true })}`;
+          const numeric = `${comparison.negated ? "" : "!"}Number.isFinite(${operandText(comparison, { bang: false })})`;
+          context.report({
+            node,
+            message:
+              `Don't compare directly to ${comparison.kind}. Trust the types and use a ` +
+              `truthiness check (\`${truthy}\`) — null, undefined, and '' almost always mean ` +
+              `the same thing here. If 0 is a meaningful value, use a positive number guard ` +
+              `(\`${numeric}\`).`,
+            suggest: [
+              {
+                desc: `Use truthiness: ${truthy}`,
+                fix: (fixer: Rule.RuleFixer) => fixer.replaceText(node, truthy),
+              },
+              {
+                desc: `0 is meaningful here: ${numeric}`,
+                fix: (fixer: Rule.RuleFixer) => fixer.replaceText(node, numeric),
+              },
+            ],
+          });
+        };
+        return {
+          BinaryExpression(node: any) {
+            const comparison = getComparison(node);
+            if (!comparison) return;
+
+            // The dual check `x !== null && x !== undefined` (or its `=== ||`
+            // mirror) is one truthiness check split in two: report it once,
+            // with a fix spanning the whole logical expression, so applying
+            // the suggestion yields `x` rather than `x && x`.
+            const parent = node.parent;
+            if (
+              parent?.type === "LogicalExpression" &&
+              (parent.operator === "&&" || parent.operator === "||") &&
+              comparison.kind !== "NaN" &&
+              comparison.negated === (parent.operator === "&&")
+            ) {
+              const sibling = parent.left === node ? parent.right : parent.left;
+              const siblingComparison = getComparison(sibling);
+              if (
+                siblingComparison &&
+                siblingComparison.kind !== "NaN" &&
+                siblingComparison.negated === comparison.negated &&
+                context.sourceCode.getText(siblingComparison.operand) ===
+                  context.sourceCode.getText(comparison.operand)
+              ) {
+                if (parent.right === node) return; // the left half reports for the pair
+                report(parent, comparison);
+                return;
+              }
+            }
+
+            report(node, comparison);
           },
         };
       },

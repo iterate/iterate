@@ -123,6 +123,7 @@
     "iterate/colocate-single-use-types": "error",
     "iterate/no-single-use-types": "error",
     "iterate/prefer-logical-and-spread": "error",
+    "iterate/simple-truthiness-check": "error",
     "iterate/typed-no-floating-promises": "off",
     "iterate/mechanical-class-impl": "off",
     "prefer-const": "off",
