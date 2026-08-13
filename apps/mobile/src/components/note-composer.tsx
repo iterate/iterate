@@ -157,7 +157,7 @@ async function appendNoteToProject(
     composeNoteFile(
       {
         capturedAt: note.capturedOnDeviceAt,
-        ...(attachments.length > 0 ? { attachments } : {}),
+        ...(attachments.length > 0 && { attachments }),
       },
       note.text,
     ),
@@ -457,7 +457,7 @@ export function NoteCaptureOverlay() {
             onPress={() =>
               router.push({
                 pathname: "/project/[projectId]/notes",
-                params: { projectId, ...(params.slug ? { slug: params.slug } : {}) },
+                params: { projectId, ...(params.slug && { slug: params.slug }) },
               })
             }
           >
