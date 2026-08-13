@@ -55,14 +55,15 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // spinner-waiter never sees it), and the popup only opens after signIn's
     // three sequential auth round trips (issuer discovery -> OIDC config ->
     // client registration; measured >1s against a cold local dev worker).
-    // Cross-server waits get 15s in this repo's timeout taxonomy.
+    // Cross-server waits get a 15s timeout — no spinner-waiter covers them.
     const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
     await page.getByRole("button", { name: "Sign in" }).click();
     const popup = await popupPromise;
     const emailLoginButton = popup.getByTestId("email-login-button");
     // The popup event fires before its cross-server auth navigation mounts
     // the login choices. Wait for that durable UI fact, then keep the click
-    // itself under the normal 1s action budget.
+    // itself under the normal 1s action budget. The popup is a raw Page —
+    // no spinner-waiter middleware — so the timeout must be explicit.
     await emailLoginButton.waitFor({ state: "visible", timeout: 15_000 });
     await emailLoginButton.click();
     await signUpWithEmailOtp(popup, {
@@ -74,8 +75,15 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // separate Page outside the plugged middleware (no spinner-waiter to
     // extend), and these clicks land after auth-worker navigations that run
     // cold on fresh preview deploys — CI-proven >1s.
-    await popup.getByRole("button", { name: "Continue" }).click({ timeout: 15_000 });
-    await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
+    // A fresh signup re-enters the authorize flow after onboarding, and
+    // re-entries can skip the /project-access "Continue" step (postLogin's
+    // shouldRedirect only fires on the initial authorize) — click it when it
+    // renders, then land on consent's "Allow access" either way.
+    const continueButton = popup.getByRole("button", { name: "Continue" });
+    const allowAccessButton = popup.getByRole("button", { name: "Allow access" });
+    await continueButton.or(allowAccessButton).first().waitFor({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
+    if (await continueButton.isVisible()) await continueButton.click();
+    await allowAccessButton.click({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
 
     // Opening the project auto-enrolls this browser's approval key — no
     // manual enroll step anywhere below. The first project list rides a COLD
@@ -174,7 +182,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       name: "Approve all 3 (Face ID)",
       page,
     });
-    await decideBatch(page, "Approve all 3 (Face ID)", (dialog) => dialog.accept());
+    await decideBatch(page, "Approve all 3 (Face ID)", "approved", (dialog) => dialog.accept());
 
     // Run 1 must SETTLE before lane 2's command goes in: the settle event
     // is the upper bound of batch 1's thread-context fold (asserted on the
@@ -210,7 +218,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       name: "Reject all",
       page,
     });
-    await decideBatch(page, "Reject all", (dialog) => dialog.accept(reason));
+    await decideBatch(page, "Reject all", "rejected", (dialog) => dialog.accept(reason));
 
     // ── Asserted from the protocol: each script narrated its outcomes into
     // the thread — the approved burst with 200s, the rejected one with 403s
@@ -366,21 +374,22 @@ function waitForBatchCardButton(input: {
 }
 
 /**
- * Press a batch-card decision button and see the card OUT of the thread (the
- * decided event rides the live root-stream connection back, so departure is
- * an append round-trip plus a push). Retried because RN-web's Pressable
- * occasionally drops a synthesized press outright — no handler call at all —
- * and a decision must not silently not-happen. `answerDialog` re-arms per
- * attempt: each press summons a fresh Face ID confirm / reason prompt.
- *
- * The click's own errors are swallowed — departure of the button is the one
- * honest success signal. The dialog handler is removed after every attempt:
- * a stale armed handler would win the race for the NEXT lane's dialog and
- * answer it with the wrong response.
+ * Press a batch-card decision button and see the card's approval glyph land —
+ * the ✓/✗ on the activity card's header (visible collapsed or expanded, so it
+ * survives the card folding up when the run settles). The decided event rides
+ * the live root-stream connection back, an append round-trip plus a push;
+ * the button's "Signing…"/"Deciding…"/"Recording decision…" copy is live
+ * loading UI the whole way, so the spinner-waiter keeps the glyph wait open.
+ * Retried because RN-web's Pressable occasionally drops a synthesized press
+ * outright — no handler call at all — and a decision must not silently
+ * not-happen. `answerDialog` re-arms per attempt: each press summons a fresh
+ * Face ID confirm / reason prompt; the handler is removed after every attempt
+ * so a stale one cannot answer the NEXT lane's dialog with the wrong response.
  */
 async function decideBatch(
   page: Page,
   buttonName: string,
+  outcome: "approved" | "rejected",
   answerDialog: (dialog: import("@playwright/test").Dialog) => Promise<void> | void,
 ) {
   const button = page.getByRole("button", { name: buttonName });
@@ -390,8 +399,7 @@ async function decideBatch(
     page.once("dialog", handler);
     try {
       await button.click().catch(() => {});
-      // detached decide button is the only landed-decision signal — the decided batch vanishes with no replacement UI
-      await button.waitFor({ state: "detached" });
+      await page.getByLabel(outcome, { exact: true }).waitFor();
       return;
     } catch {
       // Press lost or decision not landed — re-arm and press again. The
@@ -400,7 +408,7 @@ async function decideBatch(
       page.off("dialog", handler);
     }
   }
-  throw new Error(`The "${buttonName}" decision never left the thread after 3 presses.`);
+  throw new Error(`The "${buttonName}" decision never showed a ${outcome} glyph after 3 presses.`);
 }
 
 /** The OS deployment the mobile app should sign into: the same target the

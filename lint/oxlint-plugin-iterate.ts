@@ -1328,6 +1328,18 @@ const plugin: StrictPlugin = {
                 if (expr.type === "AwaitExpression") break;
               }
               if (!expr) return;
+              // expect(locator).toBeVisible() / .toContainText() are
+              // middlewright/prefer-locator-waits' territory (same verdict,
+              // plus an autofix) — skip them so one mistake reports once.
+              const matcher = node.parent;
+              if (
+                matcher?.type === "MemberExpression" &&
+                matcher.property.type === "Identifier" &&
+                (matcher.property.name === "toBeVisible" ||
+                  matcher.property.name === "toContainText")
+              ) {
+                return;
+              }
               context.report({
                 node,
                 message: `Use locators, not expect. Locators are configured to wait for loading UI to complete, so allow for faster failures and more reliable assertions. For example: page.getByText("...").waitFor() instead of expect(page.getByText("...")).toBeVisible(). If you can't use a locator and must use polling, expect.poll is acceptable.`,

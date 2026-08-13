@@ -53,11 +53,11 @@ test("agent replies to a browser chat message in the feed", async ({ helpers, pa
     const composer = page.getByPlaceholder("Message this agent");
     // This is route readiness, not an LLM wait; bound it explicitly before
     // interacting with the deliberately tight default action budget.
-    await composer.waitFor({ timeout: 30_000 });
+    await composer.waitFor({ timeout: 30_000 }); // timeout: manual — spinner-waiter is disabled for this block
     await composer.fill(message);
-    await page.getByRole("button", { name: "Send message" }).click({ timeout: 30_000 });
+    await page.getByRole("button", { name: "Send message" }).click({ timeout: 30_000 }); // timeout: manual — spinner-waiter is disabled for this block
 
-    await page.locator(userMessage).getByText(marker).waitFor({ timeout: 30_000 });
+    await page.locator(userMessage).getByText(marker).waitFor({ timeout: 30_000 }); // timeout: manual — spinner-waiter is disabled for this block
 
     await agent.stream.waitForEvent({
       afterOffset,
@@ -72,6 +72,6 @@ test("agent replies to a browser chat message in the feed", async ({ helpers, pa
       .locator(assistantMessage)
       .filter({ hasText: marker })
       .first()
-      .waitFor({ timeout: 30_000 });
+      .waitFor({ timeout: 30_000 }); // timeout: manual — spinner-waiter is disabled for this block
   });
 });

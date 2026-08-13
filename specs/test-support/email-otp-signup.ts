@@ -58,9 +58,10 @@ export async function signUpWithEmailOtp(
   // that navigation wait out of the global 1s action budget, then keep the
   // actual fill under the normal budget once the durable UI boundary exists.
   const emailOtpInput = page.getByTestId("email-otp-input");
+  // timeout: the auth app renders no spinner-waiter-visible loading UI across this navigation
   await emailOtpInput.waitFor({ state: "visible", timeout: 15_000 });
   await emailOtpInput.fill("424242");
-  await page.getByTestId("email-verify-button").click({ timeout: 15_000 });
+  await page.getByTestId("email-verify-button").click({ timeout: 15_000 }); // timeout: auth-server round trip, no spinner-waiter-visible loading UI
 
   // A brand-new user has no organization, so the OAuth post-login flow parks
   // on the auth app's first-run onboarding — organization name and first
@@ -69,11 +70,12 @@ export async function signUpWithEmailOtp(
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
     await page
       .getByLabel("Organization name")
+      // timeout: manual budget — spinner-waiter is disabled for this block
       .fill(`Playwright ${input.email.split("@")[0]}`, { timeout: 30_000 });
-    await page.getByLabel("Project slug").fill(input.projectSlug, { timeout: 15_000 });
+    await page.getByLabel("Project slug").fill(input.projectSlug, { timeout: 15_000 }); // timeout: manual budget — spinner-waiter disabled
     await waitForPreviewRolloutBeforeProjectCreation({
       beforeWait: (waitMs) => input.testInfo.setTimeout(input.testInfo.timeout + waitMs),
     });
-    await page.getByRole("button", { name: "Get started" }).click({ timeout: 15_000 });
+    await page.getByRole("button", { name: "Get started" }).click({ timeout: 15_000 }); // timeout: manual budget — spinner-waiter disabled
   });
 }

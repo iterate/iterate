@@ -333,9 +333,18 @@ export function ApprovalBatchActions({
         >
           <Text style={styles.approveText}>
             {respond.isPending
-              ? "Signing…"
+              ? // "Deciding…" while a reject is in flight: rejections never
+                // sign, so "Signing…" would misdescribe them. Both forms match
+                // the anythinging… loading convention.
+                respond.variables === "approve"
+                ? "Signing…"
+                : "Deciding…"
               : decided
-                ? "Decided"
+                ? // Still in-progress copy on purpose: the decision landed but
+                  // the authoritative record hasn't ridden the stream back yet
+                  // (that's when the outcome badge takes this button's place).
+                  // The anythinging… form marks the wait as live progress.
+                  "Recording decision…"
                 : enrolledKey === null
                   ? "Enroll to approve"
                   : single

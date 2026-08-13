@@ -9,9 +9,11 @@
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import {
   deriveOpenBatches,
+  deriveRecentResolvedBatches,
   EVENT as APPROVAL_EVENT,
   hostBreakdown,
   safeHost,
+  type RequestedPayload,
 } from "./approvals.ts";
 import type { PushNotificationData } from "./notification-routing.ts";
 
@@ -149,7 +151,7 @@ export type NotificationListRow =
       body: string;
       /** ISO createdAt of the batch's requested event. */
       requestedAt: string;
-      status: { kind: "needs-approval"; label: string };
+      status: { kind: "needs-approval" | "decided"; label: string };
     };
 
 /**
@@ -167,10 +169,18 @@ export type NotificationListRow =
  * lives only on real device rows, where they exist — same as the retired
  * screen's Recent list, which also showed nothing device-independent
  * forever.
+ *
+ * One exception: `sessionDecidedOffsets` — batches the human decided from
+ * THIS screen instance. A row must not vanish under the finger that just
+ * decided it, so those linger with their outcome ("Rejected", "Approved")
+ * instead of leaving when deriveOpenBatches closes them. The set is
+ * session-scoped UI state, so the no-device-independent-history rule above
+ * still holds on the next visit.
  */
 export function deriveNotificationListRows(
   deviceRows: readonly DeviceNotificationRow[],
   rootApprovalEvents: readonly StreamEvent[],
+  sessionDecidedOffsets: ReadonlySet<number>,
 ): NotificationListRow[] {
   const journaled = new Set(
     deviceRows.flatMap((row) =>
@@ -182,21 +192,25 @@ export function deriveNotificationListRows(
       .filter((event) => event.type === APPROVAL_EVENT.requested)
       .map((event) => [event.offset, event.createdAt]),
   );
-  const synthetic = deriveOpenBatches(rootApprovalEvents)
+  const pushCopy = (payload: RequestedPayload) => ({
+    // Mirrors the server's push copy (notification-processor-implementation
+    // .ts's approvalPushBody) so a synthetic row reads like the row the
+    // push WOULD have made.
+    title: payload.requests.length === 1 ? "Approval needed" : "Approvals needed",
+    body:
+      payload.requests.length === 1
+        ? `${payload.requests[0]!.method} ${safeHost(payload.requests[0]!.url)} is waiting for approval.`
+        : `Script run waiting: ${payload.requests.length} requests (${hostBreakdown(payload.requests)})`,
+  });
+  const open = deriveOpenBatches(rootApprovalEvents);
+  const openOffsets = new Set(open.map((batch) => batch.offset));
+  const openRows = open
     .filter((batch) => !journaled.has(batch.offset))
-    .sort((left, right) => right.offset - left.offset)
-    .map((batch): NotificationListRow => {
+    .map((batch): Extract<NotificationListRow, { kind: "needs-approval" }> => {
       return {
         kind: "needs-approval",
         approvalRequestEventOffset: batch.offset,
-        // Mirrors the server's push copy (notification-processor-implementation
-        // .ts's approvalPushBody) so a synthetic row reads like the row the
-        // push WOULD have made.
-        title: batch.payload.requests.length === 1 ? "Approval needed" : "Approvals needed",
-        body:
-          batch.payload.requests.length === 1
-            ? `${batch.payload.requests[0]!.method} ${safeHost(batch.payload.requests[0]!.url)} is waiting for approval.`
-            : `Script run waiting: ${batch.payload.requests.length} requests (${hostBreakdown(batch.payload.requests)})`,
+        ...pushCopy(batch.payload),
         // deriveOpenBatches only yields batches whose requested event is in
         // the input, so the lookup cannot miss.
         requestedAt: requestedAtByOffset.get(batch.offset)!,
@@ -208,6 +222,25 @@ export function deriveNotificationListRows(
         },
       };
     });
+  const decidedRows = deriveRecentResolvedBatches(rootApprovalEvents, rootApprovalEvents.length)
+    .filter(
+      (batch) =>
+        sessionDecidedOffsets.has(batch.offset) &&
+        !openOffsets.has(batch.offset) &&
+        !journaled.has(batch.offset),
+    )
+    .map((batch): Extract<NotificationListRow, { kind: "needs-approval" }> => {
+      return {
+        kind: "needs-approval",
+        approvalRequestEventOffset: batch.offset,
+        ...pushCopy(batch.payload),
+        requestedAt: requestedAtByOffset.get(batch.offset)!,
+        status: { kind: "decided", label: batch.decisionSummary },
+      };
+    });
+  const synthetic = [...openRows, ...decidedRows].sort(
+    (left, right) => right.approvalRequestEventOffset - left.approvalRequestEventOffset,
+  );
   return [...synthetic, ...deviceRows.map((row) => ({ kind: "device" as const, ...row }))];
 }
 

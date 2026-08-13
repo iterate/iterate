@@ -83,10 +83,12 @@ test.describe("itx REPL catalogue examples", () => {
             // Both branches swallow their own rejection (the loser's timeout must
             // not surface as an unhandled rejection after the winner settles).
             const outcome = await Promise.race([
+              // timeout: the step's success budget rides both race branches — past any spinner-waiter ceiling
               entry.waitFor({ timeout: budgetMs }).then(
                 () => "success" as const,
                 () => "timeout" as const,
               ),
+              // timeout: same shared race budget as the success branch — past any spinner-waiter ceiling
               errorEntry.waitFor({ timeout: budgetMs }).then(
                 () => "error" as const,
                 () => "timeout" as const,

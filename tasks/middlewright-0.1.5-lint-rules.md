@@ -7,11 +7,13 @@ pr: https://github.com/iterate/iterate/pull/2492
 
 # middlewright 0.1.5 + lint rules
 
-Status: implementation complete, awaiting review. Bumped from the pkg.pr.new
-pin to released 0.1.5 (patch retained — not upstreamed), all three lint rules
-on for specs with a 20-file require-timeout-comment legacy exclusion
-(burn-down: tasks/require-timeout-comment-ratchet.md). Lint/typecheck/knip/
-format/tests green; signup spec passed live against the bump.
+Status: review feedback addressed. Bumped from the pkg.pr.new pin to released
+0.1.5 (patch retained — not upstreamed), all three lint rules on for specs
+with NO exclusions: every one of the ~91 pre-existing require-timeout-comment
+violations fixed properly (Misha rejected the config exclusion-list ratchet).
+Review also drove real product work: decided approval batches now linger in
+the mobile notifications list with their outcome instead of vanishing, and
+spec helpers wait on the outcome badge (positive UI) rather than detachment.
 
 ## Context
 
@@ -36,15 +38,22 @@ format/tests green; signup spec passed live against the bump.
       (drop the 4-file `require-timeout-comment` override in favour of the
       spec-wide one) — _added to the `specs/**/*.ts` override_
 - [x] fix resulting lint violations — _3 `prefer-locator-waits` hits were
-      intentional expect().toBeVisible() workarounds already carrying
-      `iterate/spec-restricted-syntax` disables; extended those disables. 3
-      `prefer-positive-waits` hits (decideBatch/rejectFromExpansion retry
-      loops, orphan-row removal) got the rule's escape-hatch comments —
-      detachment genuinely is the only signal there_
-- [x] `require-timeout-comment` pre-existing violations — _91 across 20 legacy
-      files; annotating all with invented reasons would be noise and removing
-      timeouts unvalidated is risky, so those files are excluded via a config
-      override; burn-down: tasks/require-timeout-comment-ratchet.md_
+      intentional expect().toBeVisible() workarounds: their disables now name
+      only the middlewright rule, and `iterate/spec-restricted-syntax` skips
+      toBeVisible/toContainText so each mistake reports once (with autofix)_
+- [x] ~~`require-timeout-comment` exclusion-list ratchet~~ — _rejected in
+      review ("don't hard-code file-by-file progress into the lint config");
+      instead all ~91 violations were fixed: 6 repo-ide tab-click timeouts
+      REMOVED (validated by running those specs), the rest annotated with the
+      real reason each timeout exists (poll budgets outside spinner-waiter's
+      reach, spinner-waiter-disabled blocks, popup pages without middleware,
+      >30s cold-build/LLM budgets past the spinner ceiling)_
+- [x] review: positive UI instead of detached waits — _decided batches now
+      linger in the notifications list with their outcome (session-scoped,
+      so device-independent history still doesn't accumulate); outcome badges
+      got `approval-decision-badge` testIDs; decideBatch/rejectFromExpansion
+      wait for the badge; the misleading "Signing…" label during rejects
+      became "Deciding…"_
 - [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format` green — _all
       pass, plus full `pnpm test` (2780 tests); lint fix includes 2
       pre-existing prefer-logical-and-spread errors on main in

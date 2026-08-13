@@ -25,7 +25,7 @@
 // status is "Delivery uncertain" — it may have accepted the push, so the
 // processor never retries. A real phone would normally read Sent/Delivered.
 
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { connectItxReady } from "iterate/node";
 import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { withTunnel } from "../../apps/os/e2e/test-support/tunnel.ts";
@@ -60,14 +60,15 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // spinner-waiter never sees it), and the popup only opens after signIn's
     // three sequential auth round trips (issuer discovery -> OIDC config ->
     // client registration; measured >1s against a cold local dev worker).
-    // Cross-server waits get 15s in this repo's timeout taxonomy.
+    // Cross-server waits get a 15s timeout — no spinner-waiter covers them.
     const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
     await page.getByRole("button", { name: "Sign in" }).click();
     const popup = await popupPromise;
     const emailLoginButton = popup.getByTestId("email-login-button");
     // The popup event fires before its cross-server auth navigation mounts
     // the login choices. Wait for that durable UI fact, then keep the click
-    // itself under the normal 1s action budget.
+    // itself under the normal 1s action budget. The popup is a raw Page —
+    // no spinner-waiter middleware — so the timeout must be explicit.
     await emailLoginButton.waitFor({ state: "visible", timeout: 15_000 });
     await emailLoginButton.click();
     await signUpWithEmailOtp(popup, {
@@ -79,8 +80,15 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // separate Page outside the plugged middleware (no spinner-waiter to
     // extend), and these clicks land after auth-worker navigations that run
     // cold on fresh preview deploys — CI-proven >1s.
-    await popup.getByRole("button", { name: "Continue" }).click({ timeout: 15_000 });
-    await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
+    // A fresh signup re-enters the authorize flow after onboarding, and
+    // re-entries can skip the /project-access "Continue" step (postLogin's
+    // shouldRedirect only fires on the initial authorize) — click it when it
+    // renders, then land on consent's "Allow access" either way.
+    const continueButton = popup.getByRole("button", { name: "Continue" });
+    const allowAccessButton = popup.getByRole("button", { name: "Allow access" });
+    await continueButton.or(allowAccessButton).first().waitFor({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
+    if (await continueButton.isVisible()) await continueButton.click();
+    await allowAccessButton.click({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
     await page.getByText(projectSlug).click();
     await page.getByText("New chat").waitFor();
     const projectId = new URL(page.url()).pathname.split("/")[2]!;
@@ -315,41 +323,39 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // open batch gets DECIDED. Tapping the sent push's row unfolds the held
     // request still awaiting its decision, with Reject / Approve right
     // there.
-    await page
-      .getByTestId(/^notification-row-/)
-      .filter({ hasText: sendStatus })
-      .click();
+    const deviceRow = page.getByTestId(/^notification-row-/).filter({ hasText: sendStatus });
+    await deviceRow.click();
     await page.getByText("Awaiting decision").waitFor();
     await page.getByText("egress-echo?elsewhere=1").waitFor();
 
     // Reject it from the expansion with a typed reason (the web build's
-    // window.prompt stands in for the native reason sheet). Departure of
-    // the buttons is the success signal: the decision refetches the batch,
-    // the actions unmount, and the historical record takes their place —
+    // window.prompt stands in for the native reason sheet). The outcome
+    // badge is the success signal: the decision refetches the batch, the
+    // actions retire, and the historical record takes their place —
     // verdict, the human's reason, and the #2372 thread-context line.
     const reason = "not while the spec is watching";
-    await rejectFromExpansion(page, reason);
+    await rejectFromExpansion(page, deviceRow, reason);
     await page.getByText(`Rejected because: ${reason}`).waitFor();
     await page.getByText("Sending the launch webhook").waitFor();
 
     // ── The orphan lane's payoff: the batch that predates enrollment
     // expands into the SAME detail and decide actions as a journaled row.
-    // Reject it right there; once decided the synthetic row vanishes
-    // entirely — all-reject is terminal, and an orphan has no device
-    // history to keep a row alive (decided history lives on real device
-    // rows, where they exist).
+    // Reject it right there; the decided row lingers with its outcome for
+    // this session (it must not vanish under the deciding finger) — the
+    // Rejected status and reason record ARE the acknowledgment. Next visit
+    // it's gone: an orphan has no device history to keep a row alive.
     const orphanRow = page.getByTestId(/^needs-approval-row-/);
     await orphanRow.click();
     await page.getByText("Awaiting decision").waitFor();
     await page.getByText("egress-echo?orphan=1").waitFor();
-    await rejectFromExpansion(page, "orphans get decided here too");
-    // detached is the payoff: all-reject removes the synthetic row and no positive UI replaces it
-    await orphanRow.waitFor({ state: "detached" });
+    await rejectFromExpansion(page, orphanRow, "orphans get decided here too");
+    await page.getByText("Rejected because: orphans get decided here too").waitFor();
 
     // The chat deep-link lives INSIDE the expansion now — its "Open thread"
     // lands in the thread that caused the push, where tapping the real push
-    // would have gone.
-    await page.getByRole("link", { name: "Open thread" }).click();
+    // would have gone. Scoped to the device row: the lingering rejected
+    // orphan's expansion carries its own thread link now.
+    await deviceRow.getByRole("link", { name: "Open thread" }).click();
     // The heading, specifically: expo-router keeps the Notifications screen
     // mounted-but-hidden behind the chat, and its thread-context line also
     // says "elsewhere-thread" — a bare text locator finds that hidden copy.
@@ -389,23 +395,23 @@ function waitForBatchCardButton(input: {
 }
 
 /**
- * Press the expansion's Reject and answer the reason prompt — the retried
- * press + button-departure success signal of approvals.spec.ts's
- * decideBatch, for the notification surface: RN-web's Pressable
- * occasionally drops a synthesized press outright, and a decision must not
- * silently not-happen. The armed dialog handler is removed after every
- * attempt so a stale one cannot answer a later prompt.
+ * Press a row expansion's Reject and answer the reason prompt — the retried
+ * press + outcome-badge success signal of approvals.spec.ts's decideBatch,
+ * for the notification surface: RN-web's Pressable occasionally drops a
+ * synthesized press outright, and a decision must not silently not-happen.
+ * The armed dialog handler is removed after every attempt so a stale one
+ * cannot answer a later prompt. Scoped to the row: an earlier rejection's
+ * badge elsewhere on the screen must not vouch for this one.
  */
-async function rejectFromExpansion(page: Page, reason: string) {
-  const button = page.getByRole("button", { name: "Reject" });
+async function rejectFromExpansion(page: Page, row: Locator, reason: string) {
+  const button = row.getByRole("button", { name: "Reject" });
   for (let attempt = 0; attempt < 3; attempt++) {
     const handler = (dialog: import("@playwright/test").Dialog) =>
       void Promise.resolve(dialog.accept(reason)).catch(() => {});
     page.once("dialog", handler);
     try {
       await button.click().catch(() => {});
-      // detached Reject button is the only landed-decision signal — the decided row vanishes with no replacement UI
-      await button.waitFor({ state: "detached" });
+      await row.getByTestId("approval-decision-badge").filter({ hasText: "Rejected" }).waitFor();
       return;
     } catch {
       // Press lost or decision not landed — re-arm and press again. The
@@ -414,7 +420,7 @@ async function rejectFromExpansion(page: Page, reason: string) {
       page.off("dialog", handler);
     }
   }
-  throw new Error("The Reject decision never left the expansion after 3 presses.");
+  throw new Error("The Reject decision never showed a Rejected badge after 3 presses.");
 }
 
 /** Same helper as specs/mobile/approvals.spec.ts. */

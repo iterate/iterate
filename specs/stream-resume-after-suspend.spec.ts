@@ -175,6 +175,7 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
     await expect
       .poll(async () => (await readSuspendTimerEvidence(page)).maxTimerGapMs, {
         message: "the armed page timer should remain suspended for the stimulus window",
+        // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
         timeout: 5_000,
       })
       .toBeGreaterThanOrEqual(SUSPEND_EVIDENCE_MIN_GAP_MS);
@@ -268,8 +269,8 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
       await page
         .locator('[data-testid="agent-feed-message"][data-kind="assistant"]')
         .first()
-        .waitFor({ timeout: 90_000 });
-      await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 });
+        .waitFor({ timeout: 90_000 }); // timeout: manual, see the cold-preview note above — spinner-waiter is disabled for this step
+      await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 }); // timeout: manual, same cold-preview lane — spinner-waiter is disabled for this step
     });
   });
 
@@ -315,7 +316,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
               window as unknown as { __mutedApiSocketsStillOpen: () => number }
             ).__mutedApiSocketsStillOpen(),
           ),
-        { timeout: 30_000 },
+        { timeout: 30_000 }, // timeout: poll budget spanning two 10s probe strikes — outside the spinner-waiter's reach
       )
       .toBe(0);
   });
@@ -365,13 +366,13 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
           landed || enabled,
           "the mid-outage send never settled — stranded on a ghost session",
         ).toBe(true);
-      }).toPass({ timeout: 60_000, intervals: [1_000] });
+      }).toPass({ timeout: 60_000, intervals: [1_000] }); // timeout: toPass poll budget — outside the spinner-waiter's reach
       if (!(await sentRow.isVisible())) {
         // The stranded call rejected; the composer kept the draft — resend on
         // the recovered transport.
         await sendButton.click();
       }
-      await sentRow.waitFor({ timeout: 30_000 });
+      await sentRow.waitFor({ timeout: 30_000 }); // timeout: manual — spinner-waiter is disabled for this step
     });
   });
 
@@ -388,7 +389,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
             window as unknown as { __mutedApiSocketsStillOpen: () => number }
           ).__mutedApiSocketsStillOpen(),
         ),
-      { timeout: 20_000 },
+      { timeout: 20_000 }, // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
     )
     .toBe(0);
   await expect
@@ -397,7 +398,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
         page.evaluate(() =>
           (window as unknown as { __countLiveApiSockets: () => number }).__countLiveApiSockets(),
         ),
-      { timeout: 10_000 },
+      { timeout: 10_000 }, // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
     )
     .toBeLessThanOrEqual(socketsBaseline);
 });
