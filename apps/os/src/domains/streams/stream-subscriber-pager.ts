@@ -229,8 +229,8 @@ export class StreamSubscriberPagerRegistry {
         v: 1,
         connectionKey: args.connectionKey,
         pagerId: claimed.attachment.pagerId,
-        ...(hasFilter ? { filter: args.filter } : {}),
-        ...(args.events === false ? { events: false as const } : {}),
+        ...(hasFilter && { filter: args.filter }),
+        ...(args.events === false && { events: false as const }),
       });
     }
   }

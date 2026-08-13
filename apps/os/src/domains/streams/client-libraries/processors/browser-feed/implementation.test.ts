@@ -46,7 +46,7 @@ function event(
     payload,
     path: "/tests/live-feed",
     createdAt: new Date(offset * 1_000).toISOString(),
-    ...(ephemeral ? { ephemeral: true as const } : {}),
+    ...(ephemeral && { ephemeral: true as const }),
   };
 }
 

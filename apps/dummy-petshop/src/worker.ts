@@ -321,7 +321,7 @@ async function mintCodeRedirect(
     clientId: params.clientId,
     redirectUri: params.redirectUri,
     exp: nowSeconds() + CODE_TTL_SECONDS,
-    ...(params.codeChallenge ? { codeChallenge: params.codeChallenge } : {}),
+    ...(params.codeChallenge && { codeChallenge: params.codeChallenge }),
   };
   const target = new URL(params.redirectUri);
   target.searchParams.set("code", await seal(payload, deps.sealKey));
@@ -383,7 +383,7 @@ async function registerOAuthClient(request: Request, deps: PetshopDeps): Promise
   const isPublic = body.token_endpoint_auth_method === "none";
   const { clientId, clientSecret } = await deps.state.createClient({
     redirectUris,
-    ...(isPublic ? { public: true } : {}),
+    ...(isPublic && { public: true }),
   });
   return json(
     {
@@ -1084,9 +1084,10 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
         tokenExpiresInSeconds: grant.exp - nowSeconds(),
         // An installation token names which GitHub-App installation it acts as,
         // so the OS side can assert it minted the token it expected (§9 P4).
-        ...(grant.t === "installation"
-          ? { installationId: grant.installationId, appId: grant.appId }
-          : {}),
+        ...(grant.t === "installation" && {
+          installationId: grant.installationId,
+          appId: grant.appId,
+        }),
       });
     }
     return json({ owner: grant.sub, pets: deps.pets });

@@ -105,7 +105,7 @@ it("binds local OS to the selected auth worker's default entrypoint", () => {
   expect(auth).toEqual({
     binding: "AUTH",
     service: selected.authWorkerName,
-    ...(selected.authRemote ? { remote: true } : {}),
+    ...(selected.authRemote && { remote: true }),
   });
 });
 

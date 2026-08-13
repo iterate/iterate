@@ -1469,9 +1469,9 @@ export class StreamDurableObject extends DurableObject<Env> {
         // the parent-held Capability Provider Pager wiring — that is the one
         // facet whose live mounts have runtime state (sockets, provider legs)
         // living on this parent.
-        ...(name === CapabilityHostProcessorContract.slug
-          ? { capabilityHost: this.#capabilityHostFacadeWiring() }
-          : {}),
+        ...(name === CapabilityHostProcessorContract.slug && {
+          capabilityHost: this.#capabilityHostFacadeWiring(),
+        }),
       });
     }
     return new ExpressionProcessorFacadeRpcTarget({
@@ -1782,7 +1782,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         return {
           name,
           action: receiver.action,
-          ...(receiver.action === "facet-processor" ? { placement: "facet" as const } : {}),
+          ...(receiver.action === "facet-processor" && { placement: "facet" as const }),
           configuredAtOffset: entry.configuredAtOffset,
           status:
             row?.status ??

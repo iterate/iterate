@@ -831,7 +831,7 @@ export class StreamProcessorRunner<
       const newestEventCreatedAtMs = Date.parse(committedEvents.at(-1)!.createdAt);
       this.hooks.noteBatchIngested({
         ingestedThroughOffset: next.processing.acknowledgedThroughOffset,
-        ...(Number.isFinite(newestEventCreatedAtMs) ? { newestEventCreatedAtMs } : {}),
+        ...(Number.isFinite(newestEventCreatedAtMs) && { newestEventCreatedAtMs }),
         eventCount: committedEvents.length,
         ingestStartedAtMs: ctx.ingestStartedAtMs,
         atMs: this.now(),

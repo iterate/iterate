@@ -19,7 +19,7 @@ export function createEmailOtpPlugin(options: EmailOtpPluginOptions) {
     // Browser e2e shares one runner IP and deliberately signs up several
     // unique fixed-code users at once. Keep that non-production lane bounded
     // without applying Better Auth's human-facing three-per-minute ceiling.
-    ...(options.fixedTestOtpEnabled ? { rateLimit: { window: 60, max: 100 } } : {}),
+    ...(options.fixedTestOtpEnabled && { rateLimit: { window: 60, max: 100 } }),
     generateOTP: ({ email }) => {
       if (shouldUseTestOtp({ email, fixedTestOtpEnabled: options.fixedTestOtpEnabled })) {
         return TEST_OTP_CODE;

@@ -127,7 +127,7 @@ export async function signIn(baseUrl: string, options: { loginHint?: string } = 
       // see the /test-login wrap below — but the hint stays on the authorize
       // request so the fallback (endpoint missing on a stale deployment) is
       // the prefilled login page, not a blank one.
-      ...(options.loginHint ? { login_hint: options.loginHint } : {}),
+      ...(options.loginHint && { login_hint: options.loginHint }),
     },
   });
   const discovery = { authorizationEndpoint: config.authorization_endpoint };

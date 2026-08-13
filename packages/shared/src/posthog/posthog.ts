@@ -30,6 +30,6 @@ export async function proxyPosthogRequest(options: ProxyPosthogRequestOptions): 
     body,
     redirect: options.request.redirect,
     // Node's fetch requires this for stream bodies; Workers harmlessly ignore it.
-    ...(body ? { duplex: "half" as const } : {}),
+    ...(body && { duplex: "half" as const }),
   });
 }

@@ -139,13 +139,11 @@ function reduceAgentEventCore(input: {
         },
         // Fresh external input is a fresh start: the autonomous-turn budget
         // and the failure streak both reset.
-        ...(trigger === "external"
-          ? {
-              autonomousTurnCount: 0,
-              consecutiveLlmFailures: 0,
-              latestExternalTriggerOffset: event.offset,
-            }
-          : {}),
+        ...(trigger === "external" && {
+          autonomousTurnCount: 0,
+          consecutiveLlmFailures: 0,
+          latestExternalTriggerOffset: event.offset,
+        }),
       };
     }
     case "events.iterate.com/agent/llm-request-requested": {
@@ -192,17 +190,15 @@ function reduceAgentEventCore(input: {
         // Under the retry cap the failure itself is the next trigger — the
         // retry is pure reduce arithmetic, no wake event, no rendered nudge.
         // At the cap the conversation waits for fresh input.
-        ...(failures < state.config.llmRequestRetryPolicy.maxAttempts
-          ? {
-              pendingLlmRequestTrigger: {
-                offset: event.offset,
-                atMs: Date.parse(event.createdAt),
-                // as const: inside the conditional spread the literal would
-                // widen to string and fall out of the trigger-source union.
-                source: "agent-loop" as const,
-              },
-            }
-          : {}),
+        ...(failures < state.config.llmRequestRetryPolicy.maxAttempts && {
+          pendingLlmRequestTrigger: {
+            offset: event.offset,
+            atMs: Date.parse(event.createdAt),
+            // as const: inside the conditional spread the literal would
+            // widen to string and fall out of the trigger-source union.
+            source: "agent-loop" as const,
+          },
+        }),
       };
     }
     case "events.iterate.com/agent/token-usage-reported":

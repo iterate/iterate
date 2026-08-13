@@ -228,8 +228,8 @@ export function normalizeTestTelemetryError(
   const candidate = error as { message?: unknown; name?: unknown; stack?: unknown };
   return {
     message: typeof candidate.message === "string" ? candidate.message : fallbackMessage,
-    ...(typeof candidate.name === "string" ? { name: candidate.name } : {}),
-    ...(typeof candidate.stack === "string" ? { stack: candidate.stack } : {}),
+    ...(typeof candidate.name === "string" && { name: candidate.name }),
+    ...(typeof candidate.stack === "string" && { stack: candidate.stack }),
   };
 }
 
@@ -359,39 +359,37 @@ export function ciTelemetrySourceFromEnvironment(
   const runId = environment.GITHUB_RUN_ID ?? fallbackRunId;
   return {
     repository,
-    ...(environment.TEST_TELEMETRY_HEAD_SHA || environment.GITHUB_SHA
-      ? { headSha: environment.TEST_TELEMETRY_HEAD_SHA || environment.GITHUB_SHA }
-      : {}),
-    ...(environment.TEST_TELEMETRY_BRANCH ||
-    environment.GITHUB_HEAD_REF ||
-    environment.GITHUB_REF_NAME
-      ? {
-          branch:
-            environment.TEST_TELEMETRY_BRANCH ||
-            environment.GITHUB_HEAD_REF ||
-            environment.GITHUB_REF_NAME,
-        }
-      : {}),
+    ...((environment.TEST_TELEMETRY_HEAD_SHA || environment.GITHUB_SHA) && {
+      headSha: environment.TEST_TELEMETRY_HEAD_SHA || environment.GITHUB_SHA,
+    }),
+    ...((environment.TEST_TELEMETRY_BRANCH ||
+      environment.GITHUB_HEAD_REF ||
+      environment.GITHUB_REF_NAME) && {
+      branch:
+        environment.TEST_TELEMETRY_BRANCH ||
+        environment.GITHUB_HEAD_REF ||
+        environment.GITHUB_REF_NAME,
+    }),
     ...optionalPullRequestNumber(
       environment.TEST_TELEMETRY_PULL_REQUEST_NUMBER,
       environment.GITHUB_REF,
     ),
-    ...(environment.GITHUB_WORKFLOW ? { workflowName: environment.GITHUB_WORKFLOW } : {}),
+    ...(environment.GITHUB_WORKFLOW && { workflowName: environment.GITHUB_WORKFLOW }),
     workflowRunId: runId,
     workflowRunAttempt: environment.GITHUB_RUN_ATTEMPT ?? "1",
-    ...(environment.GITHUB_SERVER_URL && environment.GITHUB_REPOSITORY && environment.GITHUB_RUN_ID
-      ? {
-          workflowRunUrl: `${environment.GITHUB_SERVER_URL}/${environment.GITHUB_REPOSITORY}/actions/runs/${environment.GITHUB_RUN_ID}`,
-        }
-      : {}),
-    ...(environment.GITHUB_JOB ? { jobName: environment.GITHUB_JOB } : {}),
+    ...(environment.GITHUB_SERVER_URL &&
+      environment.GITHUB_REPOSITORY &&
+      environment.GITHUB_RUN_ID && {
+        workflowRunUrl: `${environment.GITHUB_SERVER_URL}/${environment.GITHUB_REPOSITORY}/actions/runs/${environment.GITHUB_RUN_ID}`,
+      }),
+    ...(environment.GITHUB_JOB && { jobName: environment.GITHUB_JOB }),
     workspaceRoot: environment.GITHUB_WORKSPACE ?? process.cwd(),
     runnerProvider: environment.DEPOT_JOB_URL
       ? "depot"
       : environment.GITHUB_RUN_ID
         ? "github-actions"
         : "local",
-    ...(environment.DEPOT_JOB_URL ? { depotJobUrl: environment.DEPOT_JOB_URL } : {}),
+    ...(environment.DEPOT_JOB_URL && { depotJobUrl: environment.DEPOT_JOB_URL }),
     executionContext: environment.GITHUB_RUN_ID ? "ci" : "local",
   };
 }

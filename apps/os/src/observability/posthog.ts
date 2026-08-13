@@ -79,7 +79,7 @@ async function capturePosthogException(
   const removeErrorListener = client.on("error", reportDeliveryFailure);
   const properties: Record<string, unknown> = {
     $environment: input.config.cloudflare.workerName ?? "os-local",
-    ...(input.projectId ? { $groups: { project: input.projectId } } : {}),
+    ...(input.projectId && { $groups: { project: input.projectId } }),
     ...requestProperties(input.request),
     ...input.properties,
   };
@@ -113,6 +113,6 @@ function requestProperties(request?: Request) {
   return {
     $current_url: `${url.origin}${url.pathname}`,
     http_method: request.method,
-    ...(request.headers.get("cf-ray") ? { cf_ray: request.headers.get("cf-ray") } : {}),
+    ...(request.headers.get("cf-ray") && { cf_ray: request.headers.get("cf-ray") }),
   };
 }

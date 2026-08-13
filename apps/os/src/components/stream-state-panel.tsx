@@ -795,7 +795,7 @@ function readSubscriptionRow(
       ? {
           afterOffset: haltedAfterOffset,
           attempts: haltedAttempts,
-          ...(typeof haltedRecord?.error === "string" ? { error: haltedRecord.error } : {}),
+          ...(typeof haltedRecord?.error === "string" && { error: haltedRecord.error }),
         }
       : undefined;
 
@@ -848,7 +848,7 @@ function readSubscriptionRow(
   return {
     name,
     kind,
-    ...(kind === "processor-wake" ? { processorSlug: name } : {}),
+    ...(kind === "processor-wake" && { processorSlug: name }),
     facet,
     // Durable facts (reduced from committed events) outrank the mirrored
     // runtime row, which may not have loaded yet.
@@ -882,7 +882,7 @@ function buildConnectionRows(
     rows.set(entry.connectionKey, {
       key: entry.connectionKey,
       kind: runtime?.kind ?? entry.connectionKind ?? "session",
-      ...(runtime?.kind === "hosted" ? { subscriptionName: runtime.name } : {}),
+      ...(runtime?.kind === "hosted" && { subscriptionName: runtime.name }),
       // The pushed runtime table is authoritative once it has loaded. Before
       // that first snapshot, keep the reduced presence entry visible instead
       // of making every open session disappear from the panel.
@@ -905,9 +905,9 @@ function buildConnectionRows(
     rows.set(key, {
       key,
       kind: runtime.kind,
-      ...(runtime.kind === "hosted" ? { subscriptionName: runtime.name } : {}),
+      ...(runtime.kind === "hosted" && { subscriptionName: runtime.name }),
       connected: true,
-      ...(typeof openedBy?.description === "string" ? { description: openedBy.description } : {}),
+      ...(typeof openedBy?.description === "string" && { description: openedBy.description }),
       ...(user === undefined ? {} : { user }),
       ...(announcement == null ? {} : { processor: announcement }),
       runtime,
@@ -1216,9 +1216,7 @@ function readAnnouncement(value: unknown): AgentUiProcessorAnnouncement | null {
           ? [
               {
                 type: event.type,
-                ...(typeof event.description === "string"
-                  ? { description: event.description }
-                  : {}),
+                ...(typeof event.description === "string" && { description: event.description }),
               },
             ]
           : [];
@@ -1231,10 +1229,10 @@ function readSubscriberUser(value: unknown): AgentUiPresenceEntry["user"] {
   const user = readRuntimeRecord(value);
   if (typeof user?.email !== "string") return undefined;
   return {
-    ...(typeof user.id === "string" ? { id: user.id } : {}),
+    ...(typeof user.id === "string" && { id: user.id }),
     email: user.email,
-    ...(typeof user.name === "string" ? { name: user.name } : {}),
-    ...(typeof user.picture === "string" ? { picture: user.picture } : {}),
+    ...(typeof user.name === "string" && { name: user.name }),
+    ...(typeof user.picture === "string" && { picture: user.picture }),
   };
 }
 
