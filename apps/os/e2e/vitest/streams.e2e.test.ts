@@ -30,8 +30,7 @@ test("a project stream appends and reads events through the public capability", 
     expect.arrayContaining([expect.objectContaining({ offset: appended!.offset })]),
   );
   expect(coreState(await stream.runtimeState())).toMatchObject({
-    path: streamPath,
-    projectId,
+    identity: { path: streamPath, projectId },
   });
 });
 
