@@ -257,12 +257,18 @@ export function ApprovalBatchActions({
   baseUrl,
   offset,
   onDecided,
+  onDecideStarted,
   payload,
   projectId,
 }: {
   baseUrl: string;
   offset: number;
   onDecided: () => void;
+  /** Fires when a decide attempt BEGINS — before the decision event is
+   * appended, so the mounting surface can pin state that must not race the
+   * live stream echo of the decision (a cancelled reject prompt fires this
+   * too; harmless, since only actually-closed batches act on it). */
+  onDecideStarted: () => void;
   payload: RequestedPayload;
   projectId: string;
 }) {
@@ -273,6 +279,11 @@ export function ApprovalBatchActions({
   const enrolledKey = key.data?.kind === "enrolled" ? key.data.key : null;
   const respond = useMutation({
     mutationFn: async (decision: "approve" | "reject"): Promise<"decided" | "cancelled"> => {
+      // Before the append: once the decided event is on the stream, the live
+      // subscription's echo can re-render the surface ahead of any of this
+      // mutation's observer callbacks (which die silently if that re-render
+      // unmounts us).
+      onDecideStarted();
       const project = await getProjectItx(baseUrl, projectId);
       const stream = project.streams.get("/");
       const verdicts = payload.requests.map(

@@ -415,11 +415,15 @@ function ApprovalNotificationDetail({
         <ApprovalBatchActions
           baseUrl={baseUrl}
           offset={batchOffset}
+          onDecideStarted={() =>
+            // Pinned BEFORE the decision event is appended: if the live
+            // stream echo closed the batch first, this row would unmount and
+            // take the mutation's observer callbacks with it — the vanish
+            // this state exists to prevent. Only actually-closed batches
+            // linger, so a cancelled reject prompt recording here is inert.
+            onSessionDecided(batchOffset)
+          }
           onDecided={() => {
-            // Keeps this batch's row visible (with its outcome) for the rest
-            // of the session — the row must not vanish under the finger that
-            // just decided it.
-            onSessionDecided(batchOffset);
             void queryClient.invalidateQueries({
               queryKey: ["notification-approval-batch", baseUrl, projectId, batchOffset],
             });
