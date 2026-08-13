@@ -57,8 +57,8 @@ test("a chat wears its agent-set title in the thread header and chat list", asyn
   // an async server push, so it gets the repo's 15s cross-server tier.
   await page.goBack(); // chat → chat list: browser history IS the app's back stack on web
   await page.getByText("New chat").waitFor();
-  await expect.poll(() => page.getByText(TITLE).isVisible(), { timeout: 15_000 }).toBe(true);
-  await expect.poll(() => page.getByText(pathFallback).isVisible()).toBe(false);
+  await expect.poll(() => page.getByText(TITLE).count(), { timeout: 15_000 }).toBeGreaterThan(0);
+  await expect.poll(() => page.getByText(pathFallback).count()).toBe(0);
 });
 
 /** Type into the chat composer and send. `insertText` rather than `fill`:
