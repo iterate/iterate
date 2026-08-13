@@ -74,7 +74,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // separate Page outside the plugged middleware (no spinner-waiter to
     // extend), and these clicks land after auth-worker navigations that run
     // cold on fresh preview deploys — CI-proven >1s.
-    await popup.getByRole("button", { name: "Continue" }).click({ timeout: 15_000 });
+    // Project selection auto-continues for test identities (project-access.tsx).
     await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
 
     // Opening the project auto-enrolls this browser's approval key — no
@@ -82,7 +82,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // itx WebSocket to the deployment (~20-30s against preview slots) — a
     // product-latency problem worth fixing at the source, not something more
     // spinner UI can paper over.
-    await page.getByText(projectSlug).click();
+    // The app auto-opens the account's only project — no picker tap.
     await page.getByText("New chat").waitFor();
     const projectId = new URL(page.url()).pathname.split("/")[2]!;
 

@@ -29,12 +29,12 @@ test("opens the project integration catalogue from the mobile drawer", async ({
     projectSlug,
     testInfo,
   });
-  // timeout: same unwrapped popup — the spinner waiter cannot see it.
-  await popup.getByRole("button", { name: "Continue" }).click({ timeout: 15_000 });
+  // Project selection auto-continues for test identities (project-access.tsx)
+  // — consent is the next interactive page.
   // timeout: same unwrapped popup — the spinner waiter cannot see it.
   await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
 
-  await page.getByText(projectSlug).click();
+  // The app auto-opens the account's only project — no picker tap.
   await page.getByText("New chat").waitFor();
   await page.getByLabel("Open project menu").filter({ visible: true }).click();
   await page.getByRole("button", { name: "/agents" }).waitFor();
