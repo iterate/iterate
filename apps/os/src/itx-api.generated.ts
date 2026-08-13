@@ -699,7 +699,7 @@ export interface AgentCollection {
    */
   get(path: string): Agent;
   /** Known agents, read from the collection processor's reduced database. */
-  list(): Promise<StreamListItem[]>;
+  list(): Promise<AgentListItem[]>;
 }
 
 /**
@@ -2980,6 +2980,15 @@ export type AgentCollectionProcessorState = {
     }
   >;
   waitingForSinceOffsets: Record<string, number>;
+};
+
+/** One row of `itx.agents.list()`: stream identity plus the agent-authored
+ * title when one has been set (agents set it on their first turn via
+ * `agent/summary-updated`). Clients fall back to the path when absent. */
+export type AgentListItem = {
+  path: string;
+  createdAt: string;
+  title?: string;
 };
 
 /** What `itx.clients.list()` returns per client: the catalog record minus reducer bookkeeping. */

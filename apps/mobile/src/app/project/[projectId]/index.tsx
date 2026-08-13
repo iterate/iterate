@@ -113,7 +113,12 @@ export default function ChatListScreen() {
           onRefresh={() => agents.refetch()}
           renderItem={({ item: agent }) => (
             <Pressable style={styles.row} onPress={() => openChat(agent.path)}>
-              <Text style={styles.path}>{agent.path.replace(/^\/agents\//, "")}</Text>
+              <Text
+                style={agent.title === undefined ? styles.path : styles.title}
+                numberOfLines={2}
+              >
+                {agent.title || agent.path.replace(/^\/agents\//, "")}
+              </Text>
               <Text style={styles.date}>{new Date(agent.createdAt).toLocaleString()}</Text>
             </Pressable>
           )}
@@ -149,6 +154,9 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     gap: 2,
   },
+  title: { color: colors.text, fontSize: 15, fontWeight: "500" },
+  // Untitled chats (the agent has not set a summary title yet) fall back to
+  // the raw stream path, shown in mono so it reads as an identifier.
   path: { color: colors.text, fontSize: 14, fontFamily: "Menlo" },
   date: { color: colors.textMuted, fontSize: 12 },
   empty: { color: colors.textMuted, fontSize: 14 },

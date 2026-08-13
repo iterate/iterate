@@ -97,6 +97,7 @@ import type {
 } from "./domains/streams/core-processor-contract.ts";
 import type { EventFilter } from "./domains/streams/event-filter.ts";
 import { parseAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
+import type { AgentListItem } from "./domains/agents/agent-presence.ts";
 import {
   AGENT_COLLECTION_PATH,
   AGENT_COLLECTION_SUBSCRIPTION_NAME,
@@ -2065,11 +2066,12 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   }
 
   /** Known agents, read from the collection processor's reduced database. */
-  async list(): Promise<StreamListItem[]> {
+  async list(): Promise<AgentListItem[]> {
     const { state } = await this.processor.snapshot();
     return Object.values(state.agents).map((agent) => ({
       path: agent.path,
       createdAt: agent.timestamps.createdAt,
+      ...(agent.summary.title === undefined ? {} : { title: agent.summary.title }),
     }));
   }
 }
