@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
+  bornStreamIdentity,
   CORE_STATE_VERSION,
   subscriptionConfigurationForDelivery,
   type SubscriptionConfiguredPayload,
@@ -815,7 +816,7 @@ describe("StreamDurableObject reconciliation recovery", () => {
         state: {
           ...authoritative,
           identity: {
-            ...authoritative.identity!,
+            ...bornStreamIdentity(authoritative),
             streamId: "22222222-2222-4222-8222-222222222222",
           },
         },
@@ -826,7 +827,7 @@ describe("StreamDurableObject reconciliation recovery", () => {
       await context.settle();
 
       expect(recovered.runtimeState().coreProcessorState).toMatchObject({
-        identity: { streamId: authoritative.identity?.streamId },
+        identity: { streamId: bornStreamIdentity(authoritative).streamId },
       });
       expect(context.getKv("coreStateRebuild")).toBeUndefined();
       expect(loggedError).toHaveBeenCalledWith(

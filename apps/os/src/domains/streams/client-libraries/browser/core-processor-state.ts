@@ -19,7 +19,10 @@ const BrowserCoreProcessorState = z
     identity: z.object({ streamId: z.uuid() }).optional(),
     maxOffset: z.number().int().min(0).default(0),
   })
-  .transform(({ identity, maxOffset }) => ({ streamId: identity?.streamId, maxOffset }));
+  .transform(({ identity, maxOffset }) => ({
+    streamId: identity ? identity.streamId : undefined,
+    maxOffset,
+  }));
 
 type BrowserCoreProcessorState = z.infer<typeof BrowserCoreProcessorState>;
 

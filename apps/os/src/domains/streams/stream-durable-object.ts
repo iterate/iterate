@@ -92,6 +92,7 @@ import {
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./stream-unavailable.ts";
 import {
+  bornStreamIdentity,
   CORE_STATE_VERSION,
   CoreProcessorContract,
   ConnectionOpenerDescriptor as ConnectionOpenerDescriptorSchema,
@@ -1852,9 +1853,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (!args.streamId.trim().length) {
       throw new Error("streamId must be a non-empty string");
     }
-    const currentStreamId = this.#coreProcessorState.identity?.streamId;
-    if (currentStreamId !== args.streamId) {
-      throw new StreamIdMismatchError(streamIdMismatchMessage(args.streamId, currentStreamId));
+    const lifetime = this.#coreProcessorState.identity;
+    if (!lifetime || lifetime.streamId !== args.streamId) {
+      throw new StreamIdMismatchError(
+        streamIdMismatchMessage(args.streamId, lifetime && lifetime.streamId),
+      );
     }
     return this.#append({ authority: "public" }, args.events);
   }
@@ -1867,9 +1870,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (!args.streamId.trim().length) {
       throw new Error("streamId must be a non-empty string");
     }
-    const currentStreamId = this.#coreProcessorState.identity?.streamId;
-    if (currentStreamId !== args.streamId) {
-      throw new StreamIdMismatchError(streamIdMismatchMessage(args.streamId, currentStreamId));
+    const lifetime = this.#coreProcessorState.identity;
+    if (!lifetime || lifetime.streamId !== args.streamId) {
+      throw new StreamIdMismatchError(
+        streamIdMismatchMessage(args.streamId, lifetime && lifetime.streamId),
+      );
     }
     return this.#append({ authority: "core-event" }, args.events);
   }
@@ -2241,10 +2246,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       includeEphemeral?: boolean;
     } = {},
   ): { streamId: string; streamMaxOffset: number; events: StreamEvent[] } {
-    const streamId = this.#coreProcessorState.identity?.streamId;
-    if (!streamId) {
-      throw new Error("stream identity is unavailable after stream creation");
-    }
+    const { streamId } = bornStreamIdentity(this.#coreProcessorState);
     return {
       streamId,
       streamMaxOffset: this.#coreProcessorState.maxOffset,
@@ -2338,11 +2340,12 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** Tell every ancestor stream (up to the root) that this stream exists. */
   #announceToAncestors(): void {
     if (this.#ancestorsAnnouncedThisIncarnation || this.#ancestorAnnouncementInFlight) return;
-    const path = this.#coreProcessorState.identity?.path;
-    if (!path || path === "/") {
+    const identity = this.#coreProcessorState.identity;
+    if (!identity || identity.path === "/") {
       this.#ancestorsAnnouncedThisIncarnation = true;
       return;
     }
+    const path = identity.path;
 
     const pathSegments = path.split("/").filter(Boolean);
     const ancestorPaths = ["/"];
@@ -2614,25 +2617,27 @@ export class StreamDurableObject extends DurableObject<Env> {
     const parsed = CoreStateRebuildCheckpoint.safeParse(raw);
     if (parsed.success) {
       const state = parsed.data.state;
+      const identity = state.identity;
       let creationMatches = false;
       try {
-        const firstEvent = this.#log.getByOffset(1);
+        const firstEvent = identity && this.#log.getByOffset(1);
         if (firstEvent) {
           const created = parseCommittedCoreEvent(firstEvent, "events.iterate.com/stream/created");
           creationMatches =
             created.payload.projectId === this.name.projectId &&
             created.payload.path === this.name.path &&
-            created.payload.streamId === state.identity?.streamId &&
-            created.createdAt === state.identity.createdAt;
+            created.payload.streamId === identity.streamId &&
+            created.createdAt === identity.createdAt;
         }
       } catch (error) {
         this.#invalidCheckpointError ??= error;
       }
       const belongsToThisLog =
         creationMatches &&
+        !!identity &&
         state.eventCount > 0 &&
-        state.identity?.projectId === this.name.projectId &&
-        state.identity.path === this.name.path &&
+        identity.projectId === this.name.projectId &&
+        identity.path === this.name.path &&
         state.maxOffset > 0 &&
         state.maxOffset <= this.#log.highestAssignedOffset();
       if (belongsToThisLog) return state;

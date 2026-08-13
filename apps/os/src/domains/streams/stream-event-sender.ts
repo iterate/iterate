@@ -1863,9 +1863,11 @@ export class StreamConnections {
       connectionKey,
       source,
       ...deliveryErrorDiagnostics(error),
-      projectId: state.identity?.projectId,
-      streamPath: state.identity?.path,
-      streamId: state.identity?.streamId,
+      ...(state.identity && {
+        projectId: state.identity.projectId,
+        streamPath: state.identity.path,
+        streamId: state.identity.streamId,
+      }),
       configuredAtOffset: expectedDelivery.configuredAtOffset,
       cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
       connectionGeneration: expectedDelivery.connectionGeneration,
@@ -2091,10 +2093,11 @@ export class StreamConnections {
       processEventBatch[Symbol.dispose]();
       throw new Error("expectedStreamId must be null or a non-empty string");
     }
-    if (args.expectedStreamId && (coreState.identity?.streamId ?? null) !== args.expectedStreamId) {
+    const currentStreamId = coreState.identity ? coreState.identity.streamId : null;
+    if (args.expectedStreamId && currentStreamId !== args.expectedStreamId) {
       processEventBatch[Symbol.dispose]();
       throw new Error(
-        `stream ID changed (${String(args.expectedStreamId)} -> ${String(coreState.identity?.streamId ?? null)})`,
+        `stream ID changed (${String(args.expectedStreamId)} -> ${String(currentStreamId)})`,
       );
     }
     if (

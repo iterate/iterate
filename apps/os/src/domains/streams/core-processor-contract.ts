@@ -776,6 +776,22 @@ export type CoreProcessorContract = typeof CoreProcessorContract;
 /** Durable state reduced from the events in one stream. */
 export type CoreProcessorState = z.infer<typeof CoreProcessorContract.stateSchema>;
 
+export type StreamIdentity = NonNullable<CoreProcessorState["identity"]>;
+
+/**
+ * The stream's born identity, for code paths that only run after
+ * `stream/created` (offset 1) has folded — check once at the boundary and
+ * read the fields flat downstream. Where "not yet born" is a real case the
+ * caller handles (checkpoint validation, lifetime fences), read
+ * `state.identity` directly instead.
+ */
+export function bornStreamIdentity(state: CoreProcessorState): StreamIdentity {
+  if (!state.identity) {
+    throw new Error("stream identity is not initialized (stream/created has not folded)");
+  }
+  return state.identity;
+}
+
 type ParsedCoreEvent = ReturnType<typeof CoreProcessorContract.parseEvent>;
 
 /** One exact committed event from the core processor contract. */

@@ -57,3 +57,10 @@ oxlint-disable lines in stream-event-sender.ts.
   keys through `stateSchema.parse` (zod silently strips unknown keys), and a
   checkpoint fixture overriding flat `streamId` that the new schema ignored.
 - `pnpm generate:itx-api` refreshed the public snapshot type.
+- Review follow-up ("no scattered runtime `?.` checks"): added exported
+  `bornStreamIdentity(state)` — check once at the boundary, flat reads
+  after. Zero `identity?.`/`identity!.` remain; the only conditional
+  reads left are boundaries where unborn is a real case (the two
+  append-if-streamId lifetime fences, checkpoint validation, diagnostics
+  spread, self-subscribe guard, expectedStreamId compare), each narrowing
+  once into a local.

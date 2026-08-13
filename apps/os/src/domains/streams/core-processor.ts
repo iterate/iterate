@@ -226,7 +226,8 @@ export class StreamCoreProcessor {
       }
       if (
         event.payload.receiver.action === "copy-to-stream" &&
-        event.payload.receiver.receivingStreamPath === args.state.identity?.path
+        !!args.state.identity &&
+        event.payload.receiver.receivingStreamPath === args.state.identity.path
       ) {
         throw new Error("a stream cannot receive events from itself");
       }
