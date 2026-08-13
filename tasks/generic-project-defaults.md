@@ -8,8 +8,8 @@ branch: generic-project-defaults
 
 ## Status summary
 
-Implementation done and pushed; typecheck/lint/knip/format green, test suite
-run pending confirmation. Remaining: review + (optionally) a preview-slot
+Implementation done and pushed; typecheck/lint/knip/format/tests all green
+(269 files / 2787 tests). Remaining: review + (optionally) a preview-slot
 live check of the two templates publishing the new event.
 
 ## Motivation
@@ -82,8 +82,8 @@ store; move all interpretation to the consuming domain's read site.
       module-private in rpc-targets.ts; the degrade posture is covered by the
       builder-level "invalid list degrades" test plus validate tests —
       restructuring rpc-targets for testability is out of POC scope_
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
-      _typecheck/lint/knip/format green; full test suite running_
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
+      _all green: 269 test files, 2787 passed_
 
 ## Assumptions (made while Misha is AFK-ish; flag on review)
 
