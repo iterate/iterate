@@ -2031,7 +2031,8 @@ export class StreamDurableObject extends DurableObject<Env> {
           idempotencyHitsInBatch.get(body.idempotencyKey) ??
           this.getEvent({ idempotencyKey: body.idempotencyKey });
         if (existing) {
-          if (Number.isFinite(expectedOffset) && expectedOffset !== existing.offset) {
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- a NaN offset expectation must FAIL the check, not skip it
+          if (expectedOffset !== undefined && expectedOffset !== existing.offset) {
             throw new Error(`idempotency hit at offset ${existing.offset}, got ${expectedOffset}`);
           }
           if (options.authority === "copy") {
@@ -2071,7 +2072,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         createdAt: new Date().toISOString(),
         path: this.name.path,
       };
-      if (Number.isFinite(expectedOffset) && expectedOffset !== committed.offset) {
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- a NaN offset expectation must FAIL the check, not skip it
+      if (expectedOffset !== undefined && expectedOffset !== committed.offset) {
         throw new StreamOffsetConflictError(
           streamOffsetConflictMessage(expectedOffset, committed.offset),
         );
@@ -2209,7 +2211,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     } = {},
   ): StreamEvent[] {
     const limit = args.limit;
-    if (Number.isFinite(limit) && (!Number.isInteger(limit) || limit <= 0)) {
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- validation door: NaN must be REJECTED, not skipped as absent
+    if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
       throw new Error("getEvents limit must be a positive integer.");
     }
     if (Number.isFinite(limit) && limit > MAX_GET_EVENTS_LIMIT) {
@@ -2693,7 +2696,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error(`connectionKey "${connectionKey}" is reserved by a subscription`);
     }
     if (
-      Number.isFinite(args.replayAfterOffset) &&
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- validation door: NaN must be REJECTED, not skipped as absent (it binds as SQL NULL and delivers nothing forever)
+      args.replayAfterOffset !== undefined &&
       (!Number.isSafeInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
     ) {
       // NaN binds as SQL NULL downstream (`offset > NULL` matches nothing), so
@@ -2701,23 +2705,26 @@ export class StreamDurableObject extends DurableObject<Env> {
       // silently delivers nothing forever.
       throw new Error(`replayAfterOffset must be a non-negative integer`);
     }
-    if (args.expectedStreamId && !args.expectedStreamId.trim().length) {
+    if (typeof args.expectedStreamId === "string" && !args.expectedStreamId.trim().length) {
       throw new Error(`expectedStreamId must be null or a non-empty string`);
     }
     if (
-      Number.isFinite(args.maxReplayOffsetGap) &&
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- validation door: NaN must be REJECTED, not skipped as absent (it binds as SQL NULL and delivers nothing forever)
+      args.maxReplayOffsetGap !== undefined &&
       (!Number.isSafeInteger(args.maxReplayOffsetGap) || args.maxReplayOffsetGap < 0)
     ) {
       throw new Error(`maxReplayOffsetGap must be a non-negative integer`);
     }
     if (
-      Number.isFinite(args.maxDeliveryEvents) &&
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- validation door: NaN must be REJECTED, not skipped as absent (it binds as SQL NULL and delivers nothing forever)
+      args.maxDeliveryEvents !== undefined &&
       (!Number.isSafeInteger(args.maxDeliveryEvents) || args.maxDeliveryEvents < 1)
     ) {
       throw new Error(`maxDeliveryEvents must be a positive integer`);
     }
     if (
-      Number.isFinite(args.maxDeliveryBytes) &&
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- validation door: NaN must be REJECTED, not skipped as absent (it binds as SQL NULL and delivers nothing forever)
+      args.maxDeliveryBytes !== undefined &&
       (!Number.isSafeInteger(args.maxDeliveryBytes) || args.maxDeliveryBytes < 1)
     ) {
       throw new Error(`maxDeliveryBytes must be a positive integer`);
@@ -2798,7 +2805,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error("waitForEvent timeoutMs must be a positive number.");
     }
     if (
-      Number.isFinite(args.afterOffset) &&
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- validation door: NaN must be REJECTED, not skipped as absent (it binds as SQL NULL and delivers nothing forever)
+      args.afterOffset !== undefined &&
       (!Number.isSafeInteger(args.afterOffset) || args.afterOffset < 0)
     ) {
       throw new Error("waitForEvent afterOffset must be a non-negative safe integer.");

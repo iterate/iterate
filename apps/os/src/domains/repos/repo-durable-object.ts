@@ -2193,7 +2193,8 @@ const REPO_LOG_DEFAULT_LIMIT = 20;
 const REPO_LOG_MAX_LIMIT = 200;
 
 function assertGithubHistoryDepth(depth: number | undefined, method: string): void {
-  if (Number.isFinite(depth) && (!Number.isInteger(depth) || depth <= 0)) {
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- validation door: NaN must be REJECTED, not skipped as absent
+  if (depth !== undefined && (!Number.isInteger(depth) || depth <= 0)) {
     throw new Error(`${method} depth must be a positive integer.`);
   }
 }

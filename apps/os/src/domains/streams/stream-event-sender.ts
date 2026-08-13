@@ -2087,13 +2087,14 @@ export class StreamConnections {
       throw new Error("hosted processor connections require the expected delivery state");
     }
     if (
-      Number.isFinite(args.replayAfterOffset) &&
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- validation door: NaN must be REJECTED, not skipped as absent (it binds as SQL NULL and delivers nothing forever)
+      args.replayAfterOffset !== undefined &&
       (!Number.isSafeInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
     ) {
       processEventBatch[Symbol.dispose]();
       throw new Error("replayAfterOffset must be a non-negative safe integer");
     }
-    if (args.expectedStreamId && !args.expectedStreamId.trim().length) {
+    if (typeof args.expectedStreamId === "string" && !args.expectedStreamId.trim().length) {
       processEventBatch[Symbol.dispose]();
       throw new Error("expectedStreamId must be null or a non-empty string");
     }
@@ -2104,7 +2105,8 @@ export class StreamConnections {
       );
     }
     if (
-      Number.isFinite(args.maxReplayOffsetGap) &&
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- validation door: NaN must be REJECTED, not skipped as absent (it binds as SQL NULL and delivers nothing forever)
+      args.maxReplayOffsetGap !== undefined &&
       (!Number.isSafeInteger(args.maxReplayOffsetGap) || args.maxReplayOffsetGap < 0)
     ) {
       processEventBatch[Symbol.dispose]();
