@@ -10,6 +10,7 @@
 // and no LLM request ever opens. Every event in the thread is deterministic.
 
 import { type Page } from "@playwright/test";
+import { spinnerWaiter } from "middlewright";
 import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
 import { test } from "../test-support/test.ts";
@@ -29,16 +30,14 @@ test("a chat wears its agent-set title in the thread header and chat list", asyn
 
   // ── A brand-new chat: the only name that exists yet is the stream path,
   // worn by the thread header (react-navigation renders header titles with
-  // role=heading, which also keeps this from matching message text). The
-  // ••• menu is the thread screen's own header furniture — waiting on it
-  // proves navigation landed (so the URL is readable) while keeping the
-  // rendered cursor at the top of the screen: New chat → ••• → heading,
-  // before it ever descends to the composer.
+  // role=heading, which also keeps this from matching message text). Read
+  // the path off the screen the way a user would — URLs are an RN-web
+  // artifact, not part of the UI.
   await page.getByText("New chat").click();
-  await page.getByRole("button", { name: "Stream actions" }).waitFor();
-  const agentPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
-  const pathFallback = agentPath.replace(/^\/agents\//, "");
-  await page.getByRole("heading", { name: pathFallback }).waitFor();
+  const pathHeading = page.getByRole("heading", { name: /^mobile\// });
+  await pathHeading.waitFor();
+  const pathFallback = (await pathHeading.textContent())!;
+  const agentPath = `/agents/${pathFallback}`;
 
   // ── The agent's first turn, minus the model: append the same
   // summary-updated fact a real turn opens with. Returning nothing keeps the
@@ -57,20 +56,24 @@ test("a chat wears its agent-set title in the thread header and chat list", asyn
   await page.getByRole("heading", { name: TITLE }).waitFor();
 
   // ── Back on the chat list (via the header back control — accessible name
-  // "<previous title>, back", and role=link on web where react-navigation
-  // gives it an href), THIS chat's row wears the title — served by the live
-  // agent catalog (itx.agents.liveState), pushed over the socket with no
-  // spinner in between. The row-scoped locator pins which chat got renamed
-  // (and stays unique while the popped thread screen, whose header also
-  // says the title, is still mid-unmount). The annotated waitFor carries
-  // the rendered cursor to the row, holding into the final freeze-frame.
-  // timeout: async server push after first paint — the spinner waiter can't
-  // see it, so this gets the repo's 15s cross-server tier.
-  await page.getByRole("link", { name: /(^Go back$)|(, back$)/ }).click();
-  await page
-    .getByTestId(`chat-list-row:${agentPath}`)
-    .getByText(TITLE)
-    .waitFor({ timeout: 15_000 });
+  // "<previous screen title>, back", and role=link on web where
+  // react-navigation gives it an href), THIS chat's row wears the title —
+  // served by the live agent catalog (itx.agents.liveState). The push races
+  // the first paint with no product spinner in between, so the not-yet-
+  // renamed row (still showing the raw path) is taught to the spinner
+  // waiter as loading UI: the wait budget extends while the stale row is
+  // on screen, and no manual timeout is needed. The row-scoped locator
+  // pins which chat got renamed (and stays unique while the popped thread
+  // screen, whose header also says the title, is still mid-unmount); the
+  // annotated waitFor carries the rendered cursor to the row, holding into
+  // the final freeze-frame.
+  await page.getByRole("link", { name: `${projectSlug}, back` }).click();
+  await spinnerWaiter.settings.run(
+    { spinnerSelectors: [`:has-text(${JSON.stringify(pathFallback)})`] },
+    async () => {
+      await page.getByTestId(`chat-list-row:${agentPath}`).getByText(TITLE).waitFor();
+    },
+  );
 });
 
 /** Type into the chat composer and send. `insertText` rather than `fill`:
