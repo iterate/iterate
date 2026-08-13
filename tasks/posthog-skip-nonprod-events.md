@@ -9,10 +9,17 @@ branch: posthog-skip-nonprod
 ## Status summary
 
 Implemented, all checks green, PR open (draft):
-https://github.com/iterate/iterate/pull/2494. Every PostHog client (browser,
-server exceptions, durable stream events) now gates on one shared
-`shouldSendPosthogEvents(environment)` predicate — non-prod deployments no-op
-at egress. Remaining: review.
+https://github.com/iterate/iterate/pull/2494. Two pieces:
+
+1. Every app PostHog client (browser, server exceptions, durable stream
+   events) gates on one shared `shouldSendPosthogEvents(environment)`
+   predicate — non-prod deployments no-op at egress.
+2. CI telemetry PostHog delivery downsampled to ZERO: `sendPostHogEvents` in
+   `scripts/ci/posthog-events.ts` drops everything (artifacts still written).
+   CI test events were 70%+ of all ingestion (~13M/month at the July run
+   rate); the `CI_TELEMETRY_POSTHOG_ENABLED` escape hatch is gone.
+
+Remaining: review.
 
 ## Motivation
 
@@ -42,9 +49,10 @@ for the browser SDK), so no feature code changes:
 - "Non-production" = anything whose worker name isn't `*-prd`: preview slots,
   local dev (`pnpm dev`), `dev_<you>`, CI e2e runs against previews. Semaphore
   prd counts as production (it's a real deployed surface; its traffic is tiny).
-- CI test telemetry (`scripts/ci/*` → posthog-events.ts etc.) is a deliberate,
-  separate pipeline and stays untouched. If the bill analysis shows it's a big
-  contributor, that's a follow-up task.
+- ~~CI test telemetry (`scripts/ci/*` → posthog-events.ts etc.) is a
+  deliberate, separate pipeline and stays untouched.~~ _Superseded: the bill
+  analysis (PostHog HogQL, 30 days) showed CI telemetry was 71% of all
+  ingestion — Misha asked for it to be downsampled to zero in this PR._
 - We gate in code rather than only flipping `capture`/`sendStreamEvents` in
   non-prd Doppler configs: config-only is invisible, easy to regress, and the
   browser client in semaphore isn't gated by any flag today. The existing
@@ -86,8 +94,28 @@ for the browser SDK), so no feature code changes:
 - **PostHog-side downsampling transformation**: still ingests (billing),
   affects prod data quality, needs PostHog-side config nobody can code-review.
 
+## Bill analysis (2026-08-13, via PostHog HogQL)
+
+30-day org totals: prd project 16.9M events, stg 3.2M, dev 0.19M, ~20.3M
+total. prd breakdown: 71% CI test telemetry, 29% prod stream:append, 0.03%
+browser/product. stg's 3.2M was a one-off July 15–18 burst of preview stream
+events (2.67M on July 17 alone) — the exact accident the code gate prevents.
+Current steady state: non-prod ~11 events/day, CI telemetry bursting only
+from branches that re-enable it (441k on Aug 10–11 from
+`fix/posthog-ci-delivery-fence`).
+
+Note: PR #2446 (Jonas, Aug 6) deliberately removed an earlier worker-name
+gate from `capturePosthogStreamEventBatch` in favor of config flags only.
+This PR re-adds a worker-name gate — deliberately, because the July burst
+shows config flags alone regress silently.
+
 ## Implementation log
 
+- 2026-08-13 (later): CI telemetry downsampled to zero at the
+  `sendPostHogEvents` chokepoint — batching/retry/credential code deleted
+  (recoverable from git history), `CI_TELEMETRY_POSTHOG_ENABLED` checks
+  removed from both callers so the code can't suggest an env var re-enables
+  delivery. Artifact writing and CI-storage upload untouched.
 - 2026-08-13: one shared predicate + four egress gates, ~40 lines of product
   code. Notable deviation from the spec: the stream-event gate lives in
   `capturePosthogStreamEventBatch` rather than the rpc-target, because the
