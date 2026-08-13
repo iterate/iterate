@@ -407,7 +407,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "AgentCollection",
     kind: "interface",
     sourceText:
-      '/** Agent catalog within one project. */\nexport interface AgentCollection {\n  __describe(): Promise<Description>;\n  processor: StreamProcessorRpc<AgentCollectionProcessorState>;\n  liveState: LiveStateRpc<AgentCollectionProcessorState>;\n  /**\n   * The agent control surface at a path (`"/agents/<name>"`, or relative to\n   * the calling scope — `".."` climbs). The returned handle is a plain,\n   * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —\n   * `itx.agents.get(path).message(text)` or `.someTool(args)` in one\n   * expression for an already-created agent — over workerd RPC (the script\n   * lane); dynamic members resolve through the prototype-chain fallback. See\n   * Agent\'s class comment for the mechanism and\n   * `agent-handle-pipelining.itx.e2e.test.ts` for the guard.\n   */\n  get(path: string): Agent;\n  /** Known agents, read from the collection processor\'s reduced database. */\n  list(): Promise<StreamListItem[]>;\n}',
+      '/** Agent catalog within one project. */\nexport interface AgentCollection {\n  __describe(): Promise<Description>;\n  processor: StreamProcessorRpc<AgentCollectionProcessorState>;\n  liveState: LiveStateRpc<AgentCollectionProcessorState>;\n  /**\n   * The agent control surface at a path (`"/agents/<name>"`, or relative to\n   * the calling scope — `".."` climbs). The returned handle is a plain,\n   * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —\n   * `itx.agents.get(path).message(text)` or `.someTool(args)` in one\n   * expression for an already-created agent — over workerd RPC (the script\n   * lane); dynamic members resolve through the prototype-chain fallback. See\n   * Agent\'s class comment for the mechanism and\n   * `agent-handle-pipelining.itx.e2e.test.ts` for the guard.\n   */\n  get(path: string): Agent;\n  /** Known agents, read from the collection processor\'s reduced database. */\n  list(): Promise<AgentListItem[]>;\n}',
     summary: "Agent catalog within one project.",
     memberSummaries: {
       get: 'The agent control surface at a path (`"/agents/<name>"`, or relative to the calling scope — `".."` climbs).',
@@ -419,7 +419,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "AgentCollectionProcessorState",
       "LiveStateRpc",
       "Agent",
-      "StreamListItem",
+      "AgentListItem",
     ],
   },
   {
@@ -1555,6 +1555,16 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       '/** The singleton agent collection processor\'s reduced database state. */\nexport type AgentCollectionProcessorState = {\n  birthCertificate: Record<string, never> | null;\n  agents: Record<\n    string,\n    {\n      path: string;\n      summary: {\n        title?: string | undefined;\n        description?: string | undefined;\n        activity?: string | undefined;\n        waitingFor?: "external_event" | "timer" | "user_input" | undefined;\n        pinned: boolean;\n      };\n      timestamps: {\n        createdAt: string;\n        lastWorkAt: string;\n        summaryUpdatedAt?: string | undefined;\n        activityUpdatedAt?: string | undefined;\n      };\n    }\n  >;\n  waitingForSinceOffsets: Record<string, number>;\n};',
     summary: "The singleton agent collection processor's reduced database state.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "AgentListItem",
+    kind: "typeAlias",
+    sourceText:
+      "/** One row of `itx.agents.list()`: stream identity plus the agent-authored\n * title when one has been set (agents set it on their first turn via\n * `agent/summary-updated`). Clients fall back to the path when absent. */\nexport type AgentListItem = {\n  path: string;\n  createdAt: string;\n  title?: string;\n};",
+    summary:
+      "One row of `itx.agents.list()`: stream identity plus the agent-authored title when one has been set (agents set it on their first turn via `agent/summary-updated`).",
     memberSummaries: {},
     referencedTypeNames: [],
   },

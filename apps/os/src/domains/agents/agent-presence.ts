@@ -142,6 +142,15 @@ export const AgentCatalogRecord = z.strictObject({
 });
 export type AgentCatalogRecord = z.infer<typeof AgentCatalogRecord>;
 
+/** One row of `itx.agents.list()`: stream identity plus the agent-authored
+ * title when one has been set (agents set it on their first turn via
+ * `agent/summary-updated`). Clients fall back to the path when absent. */
+export type AgentListItem = {
+  path: string;
+  createdAt: string;
+  title?: string;
+};
+
 const AgentPresentationTimestamps = AgentCatalogTimestamps.extend({
   runtimeUpdatedAt: z.iso.datetime().optional(),
 });

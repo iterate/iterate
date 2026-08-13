@@ -329,7 +329,10 @@ test("the approval push is suppressed in the watched thread and sent when you're
     const reason = "not while the spec is watching";
     await rejectFromExpansion(page, deviceRow, reason);
     await page.getByText(`Rejected because: ${reason}`).waitFor();
-    await page.getByText("Sending the launch webhook").waitFor();
+    // The thread-context LINE, by its link role: the chat list mounted-but-
+    // hidden behind this screen now wears the same live title on its row, so
+    // a bare text locator would find that copy too.
+    await page.getByRole("link", { name: /Sending the launch webhook/ }).waitFor();
 
     // ── The orphan lane's payoff: the batch that predates enrollment
     // expands into the SAME detail and decide actions as a journaled row.
@@ -351,8 +354,10 @@ test("the approval push is suppressed in the watched thread and sent when you're
     await deviceRow.getByRole("link", { name: "Open thread" }).click();
     // The heading, specifically: expo-router keeps the Notifications screen
     // mounted-but-hidden behind the chat, and its thread-context line also
-    // says "elsewhere-thread" — a bare text locator finds that hidden copy.
-    await page.getByRole("heading", { name: "elsewhere-thread" }).waitFor();
+    // carries this text — a bare text locator finds that hidden copy. The
+    // header wears the thread's agent-set TITLE now, not the raw path
+    // (chat-titles.spec.ts covers that surface on its own).
+    await page.getByRole("heading", { name: "Sending the launch webhook" }).waitFor();
     expect(decodeURIComponent(page.url())).toContain("/agents/elsewhere-thread");
   } finally {
     await echo.close();
