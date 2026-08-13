@@ -71,7 +71,7 @@ export async function decideIngressRoute(input: {
       // BROWSER can use (e.g. form actions) — on host lanes there is no
       // prefix and the header is absent.
       const workerUrl = new URL(input.url);
-      workerUrl.pathname = !pathSegments.length ? "/" : `/${pathSegments.join("/")}`;
+      workerUrl.pathname = pathSegments.length === 0 ? "/" : `/${pathSegments.join("/")}`;
       return projectRoute({
         appSlug: null,
         headers,

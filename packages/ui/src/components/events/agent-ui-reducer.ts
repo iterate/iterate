@@ -671,7 +671,7 @@ function reduceAgentUiEvent(
           kind: "user",
           id: `user-${event.offset}`,
           text,
-          ...(!files.length ? {} : { files }),
+          ...(files.length === 0 ? {} : { files }),
           timestampMs,
         });
       }
@@ -699,7 +699,7 @@ function reduceAgentUiEvent(
           kind: "user",
           id: `user-${event.offset}`,
           text: rendersFromRawEvent ? "" : text,
-          ...(!files.length ? {} : { files }),
+          ...(files.length === 0 ? {} : { files }),
           timestampMs,
           via: { service: actorType, ...(!sender ? {} : { sender }) },
         });
@@ -722,14 +722,15 @@ function reduceAgentUiEvent(
         kind: "assistant",
         id: `assistant-${event.offset}`,
         text,
-        ...(!files.length ? {} : { files }),
+        ...(files.length === 0 ? {} : { files }),
         timestampMs,
       };
       return emitAssistantMessageItem(marked, items, item);
     }
 
     case AGENT_LLM_REQUEST_REQUESTED: {
-      const base = !state.queuedUserMessages.length ? state : settleLive(state, timestampMs, items);
+      const base =
+        state.queuedUserMessages.length === 0 ? state : settleLive(state, timestampMs, items);
       const ready =
         !base.live && (base.deferredAssistantMessages.length || base.queuedUserMessages.length)
           ? flushDeferredMessages(base, items)

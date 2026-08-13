@@ -62,7 +62,7 @@ export function TagPicker({
         }
       >
         <TagIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate">{!value.length ? "Tags" : value.join(", ")}</span>
+        <span className="truncate">{value.length === 0 ? "Tags" : value.join(", ")}</span>
         <ChevronDownIcon aria-hidden className="size-3 shrink-0" />
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 p-2" initialFocus={inputRef}>

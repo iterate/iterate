@@ -306,7 +306,7 @@ function FileDrawer({
         value={filter}
       />
       <View style={styles.treeFrame}>
-        {!tree.length ? (
+        {tree.length === 0 ? (
           <Text style={styles.muted}>No matching text files.</Text>
         ) : (
           <TreeView
@@ -386,7 +386,7 @@ function GitDrawer({
         <Text style={styles.changeCount}>{pending.length}</Text>
       </View>
       <ScrollView contentContainerStyle={styles.changeList}>
-        {!pending.length ? <Text style={styles.muted}>Working tree clean.</Text> : null}
+        {pending.length === 0 ? <Text style={styles.muted}>Working tree clean.</Text> : null}
         {pending.map((change) => (
           <View key={change.path} style={styles.changeRow}>
             <Pressable

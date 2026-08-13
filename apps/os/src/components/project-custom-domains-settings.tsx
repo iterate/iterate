@@ -122,7 +122,7 @@ function CustomDomainsEditor({
         </p>
       ) : !domains ? (
         <p className="text-xs text-muted-foreground">Loading custom domains...</p>
-      ) : !domains.length ? (
+      ) : domains.length === 0 ? (
         <p className="text-xs text-muted-foreground">No custom domains configured.</p>
       ) : (
         <div className="divide-y rounded-md border">

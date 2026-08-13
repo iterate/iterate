@@ -103,7 +103,7 @@ export function compileJsonataExpression(expression: string): jsonata.Expression
       .filter((value) => !!value)
       .join(", ");
     throw new Error(
-      `invalid JSONata expression${!coordinates.length ? "" : ` (${coordinates})`}: ${message}`,
+      `invalid JSONata expression${coordinates.length === 0 ? "" : ` (${coordinates})`}: ${message}`,
       { cause: error },
     );
   }

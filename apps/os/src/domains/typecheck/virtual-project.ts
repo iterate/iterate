@@ -396,7 +396,8 @@ function assembleScriptProject(
   return {
     files,
     preludeLineCount: prelude.length,
-    preambleLineRange: !preambleLines.length ? null : { start: 3, end: 2 + preambleLines.length },
+    preambleLineRange:
+      preambleLines.length === 0 ? null : { start: 3, end: 2 + preambleLines.length },
   };
 }
 

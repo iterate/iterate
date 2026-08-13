@@ -125,7 +125,7 @@ export function DeepLinkEmptyState({ workspacePath }: { workspacePath?: string }
           {!!documentsError && <p className="mt-1 text-xs text-red-700">{documentsError}</p>}
           {!!documents && (
             <ul className="mt-2 divide-y rounded-lg border bg-background">
-              {!documents.length ? (
+              {documents.length === 0 ? (
                 <li className="px-4 py-2.5 text-sm text-muted-foreground">
                   No documents in this workspace&rsquo;s own directory yet — agents create them, or
                   open a mount file through a deep link.

@@ -76,7 +76,7 @@ export async function executeCoordinatedWorkerBuild(
     createdAt: new Date().toISOString(),
     mainModule: built.mainModule,
     modules: built.modules,
-    ...(!built.warnings.length ? {} : { warnings: built.warnings }),
+    ...(built.warnings.length === 0 ? {} : { warnings: built.warnings }),
     ...(!built.wranglerConfig ? {} : { wranglerConfig: built.wranglerConfig }),
   };
   await store.put(artifact);

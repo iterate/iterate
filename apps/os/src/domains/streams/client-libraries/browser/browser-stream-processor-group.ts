@@ -168,9 +168,8 @@ export class BrowserStreamProcessorGroup implements AnyHostedProcessor {
         // the maximum so processors wait for that next callback batch. Keep the
         // server maximum on an empty batch: no later callback batch exists, so
         // each runner must read any missing durable events itself.
-        const processorStreamMaxOffset = !batch.events.length
-          ? batch.streamMaxOffset
-          : batch.scannedThroughOffset;
+        const processorStreamMaxOffset =
+          batch.events.length === 0 ? batch.streamMaxOffset : batch.scannedThroughOffset;
         for (const processorCallback of processorCallbacks) {
           // eslint-disable-next-line react-doctor/async-await-in-loop -- Commits must remain ordered on the processors' shared SQLite connection.
           await processorCallback.callback.processEventBatch({

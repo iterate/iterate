@@ -800,7 +800,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     const types = (await value.__describe?.())?.types;
     if (typeof types !== "string" || !types.length) return undefined;
     const problems = (await this.deps.validateCapabilityTypes?.(types)) ?? [];
-    return !problems.length ? types : undefined;
+    return problems.length === 0 ? types : undefined;
   }
 
   /**

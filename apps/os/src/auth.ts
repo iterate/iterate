@@ -283,7 +283,7 @@ export function resolveOrganizationSlugForCreate(
   }
   if (organizations.length === 1) return organizations[0]!.slug;
   throw new Error(
-    !organizations.length
+    organizations.length === 0
       ? "Project creation requires organization membership."
       : "Pass organizationSlug to choose which organization should own the project.",
   );

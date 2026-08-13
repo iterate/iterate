@@ -567,7 +567,7 @@ function GitPanel({
         </Button>
       </form>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2">
-        {!staged.length ? null : (
+        {staged.length === 0 ? null : (
           <>
             <div className="flex items-center justify-between px-3 pb-1 pt-2">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -599,7 +599,7 @@ function GitPanel({
           <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Changes
           </span>
-          {!working.length ? null : (
+          {working.length === 0 ? null : (
             <span className="flex items-center gap-0.5">
               {iconButton("Discard all changes", onDiscardAll, <Undo2Icon className="size-3" />)}
               {iconButton(
@@ -611,7 +611,7 @@ function GitPanel({
           )}
         </div>
         <div className="flex flex-col gap-0.5 px-1.5">
-          {!working.length ? (
+          {working.length === 0 ? (
             <span className="px-1.5 py-2 text-xs text-muted-foreground">No changes.</span>
           ) : (
             working.map(([path, change]) =>

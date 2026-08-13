@@ -310,7 +310,7 @@ function AgentResults({
       <CommandEmpty>
         {loading
           ? "Loading agents…"
-          : !Object.keys(agents).length
+          : Object.keys(agents).length === 0
             ? "No agents yet."
             : "No matching agents."}
       </CommandEmpty>

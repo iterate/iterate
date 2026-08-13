@@ -227,7 +227,7 @@ export function StreamStateButton({ metrics }: { metrics: BrowserStreamMetricsVi
       onClick={openProcessorsOverview}
       className="font-mono text-xs font-normal text-muted-foreground"
     >
-      {!metrics.spark.length ? null : (
+      {metrics.spark.length === 0 ? null : (
         <svg width="24" height="11" viewBox="0 0 26 12" className="shrink-0">
           <polyline
             points={sparklinePoints(metrics.spark.slice(-12), 26, 12)}
@@ -357,13 +357,13 @@ function StreamOverflowMenu({
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span>Stream state</span>
                   <span className="font-mono text-[11px] text-muted-foreground">
-                    {!metrics.spark.length ? "latency " : ""}
+                    {metrics.spark.length === 0 ? "latency " : ""}
                     {latencyLabel}
                   </span>
                 </span>
               </DropdownMenuItem>
             </DropdownMenuGroup>
-            {!connectedPresence.length ? null : (
+            {connectedPresence.length === 0 ? null : (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuGroup>

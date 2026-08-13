@@ -155,7 +155,7 @@ export function OrganizationDetail(props: {
         <div className="border-b px-5 py-3">
           <h3 className="text-sm font-medium">Projects</h3>
         </div>
-        {!props.organization.projects.length ? (
+        {props.organization.projects.length === 0 ? (
           <Empty className="min-h-[280px] border-0">
             <EmptyHeader>
               <EmptyTitle>No projects in this organization</EmptyTitle>
@@ -235,7 +235,7 @@ function ProjectRow(props: { project: Project; canManage: boolean; onDelete: () 
           <span>{props.project.slug}</span>
           <Identifier value={props.project.id} textClassName="text-xs" />
           <span>
-            {!metadataKeys.length
+            {metadataKeys.length === 0
               ? "No metadata"
               : `${metadataKeys.length} metadata ${metadataKeys.length === 1 ? "key" : "keys"}`}
           </span>
@@ -421,7 +421,7 @@ function OrganizationMembersPanel(props: {
                   Try again
                 </Button>
               </div>
-            ) : !invitations.length ? (
+            ) : invitations.length === 0 ? (
               <div className="px-5 py-6 text-sm text-muted-foreground">No pending invitations.</div>
             ) : (
               <div className="divide-y">

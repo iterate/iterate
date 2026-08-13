@@ -108,7 +108,7 @@ export function CorePrettyState({
         </div>
       ) : null}
 
-      {!Object.keys(outboundByName).length ? null : (
+      {Object.keys(outboundByName).length === 0 ? null : (
         <div>
           <SectionHeading>Outbound subscriptions</SectionHeading>
           <div className="flex flex-col gap-1.5">
@@ -189,7 +189,7 @@ export function CorePrettyState({
         </div>
       )}
 
-      {!inboundSubscriptions.length ? null : (
+      {inboundSubscriptions.length === 0 ? null : (
         <div>
           <SectionHeading>Inbound copy subscriptions</SectionHeading>
           <div className="flex flex-col gap-1.5">
@@ -219,7 +219,7 @@ export function CorePrettyState({
         </div>
       )}
 
-      {!childPaths.length ? null : (
+      {childPaths.length === 0 ? null : (
         <div>
           <SectionHeading>Child streams</SectionHeading>
           <div className="flex flex-col gap-1.5">
@@ -307,7 +307,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
         </div>
       )}
 
-      {!scripts.length ? null : (
+      {scripts.length === 0 ? null : (
         <div>
           <SectionHeading>In-progress scripts</SectionHeading>
           <div className="flex flex-col gap-1.5">
@@ -343,7 +343,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
         </div>
       </div>
 
-      {!system.length ? null : (
+      {system.length === 0 ? null : (
         <details className="rounded-xl bg-muted/40 px-3 py-2">
           <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground/70">
             System context ({system.length})

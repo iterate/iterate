@@ -197,7 +197,7 @@ function ItxScopeReplConnected({
             const fresh = scriptEvents.filter(
               (event) => !Number.isFinite(lastOffset) || event.offset > lastOffset,
             );
-            return !fresh.length
+            return fresh.length === 0
               ? previous
               : [...previous, ...fresh].slice(-MAX_BUFFERED_SCRIPT_EVENTS);
           });

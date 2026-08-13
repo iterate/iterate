@@ -167,7 +167,7 @@ export function StreamEventsSheet({
           }}
           className="min-h-0 flex-1 overflow-auto"
         >
-          {!events.length ? (
+          {events.length === 0 ? (
             <p className="p-4 text-sm text-muted-foreground">
               {status === "connecting"
                 ? "Connecting…"

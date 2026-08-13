@@ -203,7 +203,7 @@ export class SlackAgentProcessor extends StreamProcessor<
                   eventType: event.type,
                 },
               ],
-              ...(!input.files?.length ? {} : { files: input.files }),
+              ...(!input.files || input.files.length === 0 ? {} : { files: input.files }),
               ...(!input.llmRequestPolicy ? {} : { llmRequestPolicy: input.llmRequestPolicy }),
             },
           });

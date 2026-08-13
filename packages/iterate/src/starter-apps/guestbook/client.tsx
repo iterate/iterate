@@ -72,7 +72,7 @@ export function GuestbookClient() {
       {!!error && <p role="alert">{error}</p>}
       {!state ? (
         <p>Loading…</p>
-      ) : !entries.length ? (
+      ) : entries.length === 0 ? (
         <p>No entries yet.</p>
       ) : (
         <section aria-label="Guestbook entries">

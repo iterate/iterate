@@ -448,9 +448,10 @@ export function agentCreationForPath<
   // from the list; otherwise a project prompt-slot event REPLACES the
   // platform fallback below.
   const rawBirthEvents = input.defaults?.birthEvents ?? [];
-  const birthEventsCheck = !rawBirthEvents.length
-    ? ({ ok: true } as const)
-    : validateAgentBirthEvents(rawBirthEvents);
+  const birthEventsCheck =
+    rawBirthEvents.length === 0
+      ? ({ ok: true } as const)
+      : validateAgentBirthEvents(rawBirthEvents);
   if (!birthEventsCheck.ok) {
     console.warn("[agent] ignoring invalid agent birth defaults", {
       agentPath,

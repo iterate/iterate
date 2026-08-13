@@ -74,7 +74,7 @@ export function TodoClient() {
       {!!error && <p role="alert">{error}</p>}
       {!state ? (
         <p>Loading…</p>
-      ) : !todos.length ? (
+      ) : todos.length === 0 ? (
         <p>No todos yet.</p>
       ) : (
         <ul>

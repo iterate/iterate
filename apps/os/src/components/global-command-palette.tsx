@@ -189,7 +189,7 @@ function ProjectPickerDialog({
         <div className="max-h-80 overflow-y-auto">
           {!projects ? (
             <p className="px-2 py-1.5 text-sm text-muted-foreground">Loading projects…</p>
-          ) : !projects.length ? (
+          ) : projects.length === 0 ? (
             <p className="px-2 py-1.5 text-sm text-muted-foreground">No projects yet.</p>
           ) : (
             projects.map((project) => (

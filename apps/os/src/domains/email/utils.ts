@@ -371,7 +371,7 @@ export async function fallbackInboundMessageKey(input: {
 export function normalizeMessageId(value: string | null | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim().replace(/^<|>$/g, "").trim();
-  return !trimmed.length ? null : trimmed;
+  return trimmed.length === 0 ? null : trimmed;
 }
 
 /** Every `<...>` message id in a References/In-Reply-To header value, normalized. */

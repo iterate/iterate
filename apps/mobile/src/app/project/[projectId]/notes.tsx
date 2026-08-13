@@ -128,7 +128,7 @@ export default function NotesScreen() {
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
         </View>
-      ) : !items.length ? (
+      ) : items.length === 0 ? (
         <View style={styles.center}>
           <Text style={styles.emptyTitle}>Nothing here yet</Text>
           <Text style={styles.emptyBody}>
@@ -137,7 +137,7 @@ export default function NotesScreen() {
             project&apos;s agents alike.
           </Text>
         </View>
-      ) : !visible.length ? (
+      ) : visible.length === 0 ? (
         <View style={styles.center}>
           <Text style={styles.emptyTitle}>No results</Text>
           <Text style={styles.emptyBody}>Nothing matches this search — try fewer words.</Text>

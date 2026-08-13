@@ -73,7 +73,7 @@ export function NewAgentComposer({
           placeholder: "Message a new agent",
           onAttach: attachments.openFilePicker,
           onAddFiles: attachments.addFiles,
-          ...(!attachments.entries.length
+          ...(attachments.entries.length === 0
             ? {}
             : {
                 attachments: (

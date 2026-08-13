@@ -57,7 +57,7 @@ function AdminProjectsPage() {
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
-        ) : !projects.length ? (
+        ) : projects.length === 0 ? (
           <Empty className="border">
             <EmptyHeader>
               <EmptyTitle>No projects</EmptyTitle>

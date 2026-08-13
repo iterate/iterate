@@ -383,7 +383,7 @@ function StatusCell() {
   return (
     <>
       <span className="block">{state.label}</span>
-      {!runtimeCounts.length ? null : (
+      {runtimeCounts.length === 0 ? null : (
         <span className="block truncate text-xs text-muted-foreground">
           {runtimeCounts.join(" · ")}
         </span>

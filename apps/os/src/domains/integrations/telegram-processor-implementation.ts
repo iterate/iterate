@@ -435,7 +435,7 @@ function filterTelegramSessionsByAllowedUsers(
   return Object.fromEntries(
     Object.entries(sessionsByChat).flatMap(([chatKey, sessions]) => {
       const retained = sessions.filter((session) => allowed.has(session.senderId));
-      return !retained.length ? [] : [[chatKey, retained]];
+      return retained.length === 0 ? [] : [[chatKey, retained]];
     }),
   );
 }

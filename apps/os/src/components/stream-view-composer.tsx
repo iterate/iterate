@@ -139,9 +139,10 @@ export function StreamViewComposer({
   // lifecycles, so none may mask the others — show all active messages.
   const error =
     [attachments.fileError, submitError, interrupt?.error].filter(Boolean).join(" · ") || undefined;
-  const attachmentChips = !attachments.entries.length ? undefined : (
-    <AttachmentChips entries={attachments.entries} onRemove={attachments.removeFile} />
-  );
+  const attachmentChips =
+    attachments.entries.length === 0 ? undefined : (
+      <AttachmentChips entries={attachments.entries} onRemove={attachments.removeFile} />
+    );
 
   return (
     <>

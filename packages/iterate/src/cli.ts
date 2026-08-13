@@ -84,7 +84,8 @@ const firstNonFlagArgument = (args: string[]): string | undefined => {
   return undefined;
 };
 
-export const defaultBareInvocationToChat = (args: string[]) => (!args.length ? ["chat"] : args);
+export const defaultBareInvocationToChat = (args: string[]) =>
+  args.length === 0 ? ["chat"] : args;
 
 const applyDefaultBareInvocation = () => {
   const args = process.argv.slice(2);
@@ -413,7 +414,7 @@ const prepareProjectForChat = async (session: RpcStub<Session>, project: Project
 };
 
 const accessibleProjectsMessage = (projects: ProjectListEntry[]) =>
-  !projects.length
+  projects.length === 0
     ? "No accessible projects found."
     : `Accessible projects: ${projects
         .map((project) => `${project.slug} (${project.id}, ${project.deploymentStatus})`)

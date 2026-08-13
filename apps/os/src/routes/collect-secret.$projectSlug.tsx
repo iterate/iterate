@@ -72,7 +72,7 @@ function CollectSecretPage() {
   const search = Route.useSearch();
   return (
     <main className="flex min-h-screen items-center justify-center p-4">
-      {!search.egress.length ? (
+      {search.egress.length === 0 ? (
         // A pin to nothing can never be used — say so before dialing anything.
         <MalformedLinkCard />
       ) : (

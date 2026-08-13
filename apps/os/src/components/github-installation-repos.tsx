@@ -38,11 +38,11 @@ export function InstallationRepoPicker({
       />
       {error && !repos.length ? (
         <p className="break-words text-xs text-red-600">{error}</p>
-      ) : !repos.length ? (
+      ) : repos.length === 0 ? (
         <p className="text-xs text-muted-foreground">No repositories on this installation.</p>
       ) : (
         <div className="max-h-40 overflow-y-auto rounded-md border p-1">
-          {!visible.length ? (
+          {visible.length === 0 ? (
             <p className="p-2 text-xs text-muted-foreground">No match.</p>
           ) : (
             visible.map((repo) => (
@@ -105,7 +105,7 @@ export function InstallationRepoList({
   return (
     <div className="flex flex-col gap-1">
       <div className="max-h-56 overflow-y-auto rounded-md border p-1">
-        {!visible.length ? (
+        {visible.length === 0 ? (
           <div className="p-3 text-sm text-muted-foreground">No repositories match.</div>
         ) : (
           visible.map((repo) => (

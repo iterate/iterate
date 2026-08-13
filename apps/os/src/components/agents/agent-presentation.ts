@@ -81,11 +81,12 @@ export function bindingUrl(binding: AgentBinding): string | undefined {
 
 export function agentCommandAccessibleLabel(node: AgentTreeNode, expanded: boolean): string {
   const state = AGENT_DISPLAY_STATE_PRESENTATION[agentNodeDisplayState(node)];
-  const childInstruction = !node.children.length
-    ? ""
-    : expanded
-      ? " Child agents expanded; press Left Arrow to collapse."
-      : " Child agents collapsed; press Right Arrow to expand.";
+  const childInstruction =
+    node.children.length === 0
+      ? ""
+      : expanded
+        ? " Child agents expanded; press Left Arrow to collapse."
+        : " Child agents collapsed; press Right Arrow to expand.";
   const pinInstruction = node.agent.summary.pinned
     ? " Pinned; press Shift+P to unpin."
     : " Press Shift+P to pin.";

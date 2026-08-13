@@ -134,7 +134,7 @@ function handleLoopbackRequest(input: {
   });
   input.req.on("end", () => {
     void (async () => {
-      const body = !chunks.length ? undefined : Buffer.concat(chunks);
+      const body = chunks.length === 0 ? undefined : Buffer.concat(chunks);
       const request = new Request(requestUrl, {
         body,
         headers,

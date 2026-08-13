@@ -420,7 +420,7 @@ export default function MediaScreen() {
             you can search them here by what they show.
           </Text>
         </ScrollView>
-      ) : !feed.length ? (
+      ) : feed.length === 0 ? (
         <ScrollView
           contentContainerStyle={styles.centerScroll}
           refreshControl={refreshControl}

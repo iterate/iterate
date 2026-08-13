@@ -172,7 +172,7 @@ export default function PreviewChannelScreen() {
       alreadyOnTarget &&
       !reloadImminent &&
       (!canOta || freshness.isSuccess || freshness.isError) &&
-      (recommendedServer === null || phoneState.isSuccess || phoneState.isError),
+      (!recommendedServer || phoneState.isSuccess || phoneState.isError),
     staleTime: Infinity,
     refetchOnMount: "always",
     retry: false,
@@ -182,7 +182,7 @@ export default function PreviewChannelScreen() {
         return "none" as const;
       }
       await clearAutoContinueChannel();
-      if (plan !== null) {
+      if (plan) {
         await applyPlan.mutateAsync(plan);
       } else {
         router.replace("/");

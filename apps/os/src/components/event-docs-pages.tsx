@@ -251,7 +251,7 @@ export function EventDocsIndexPage(input: {
             aria-label="Filter event types"
             className="w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           />
-          {!sections.length ? (
+          {sections.length === 0 ? (
             <p className="text-sm text-muted-foreground">Nothing matches “{query.trim()}”.</p>
           ) : (
             sections.map(({ events, processor }) => (
@@ -279,7 +279,7 @@ export function EventDocsIndexPage(input: {
                     <p className="text-sm text-muted-foreground">{processor.description}</p>
                   ) : null}
                 </div>
-                {!events.length ? (
+                {events.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
                     This processor owns no event types.
                   </p>
@@ -347,7 +347,7 @@ export function ProcessorOverviewPage({ processor }: { processor: ProcessorDoc }
       <main className="grid gap-8 px-6 py-8 md:grid-cols-[minmax(0,1fr)_18rem] md:px-10">
         <section className="space-y-6">
           <DocSection title="Owned event types">
-            {!processor.events.length ? (
+            {processor.events.length === 0 ? (
               <p className="text-sm text-muted-foreground">This processor owns no event types.</p>
             ) : (
               <div className="divide-y rounded-md border">

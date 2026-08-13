@@ -2239,9 +2239,8 @@ export class StreamConnections {
           if (!currentState.projectId || !currentState.path || !currentState.streamId) {
             throw new Error("Cannot deliver stream batch before stream identity is initialized.");
           }
-          const newestCreatedAtMs = !events.length
-            ? undefined
-            : Date.parse(events.at(-1)!.createdAt);
+          const newestCreatedAtMs =
+            events.length === 0 ? undefined : Date.parse(events.at(-1)!.createdAt);
           const batch = {
             projectId: currentState.projectId,
             path: currentState.path,

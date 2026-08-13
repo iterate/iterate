@@ -241,7 +241,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // just without the secret-path matchers. A request that then matches no
     // rule falls to the egress lanes, which report the canonical error.
     const scanned = await secretReferencePathsFromRequest(request);
-    const secretPaths = !scanned.problems.length ? scanned.paths : [];
+    const secretPaths = scanned.problems.length === 0 ? scanned.paths : [];
 
     const rule = matchEgressRule(rules, { method: request.method, url: request.url, secretPaths });
     if (!rule) return this.#egress(request);

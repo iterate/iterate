@@ -4700,7 +4700,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
           to: input.audit.to,
           ...(!input.audit.threadId ? {} : { threadId: input.audit.threadId }),
           ...(!input.audit.inReplyTo ? {} : { inReplyTo: input.audit.inReplyTo }),
-          ...(!attachments.length ? {} : { attachments }),
+          ...(attachments.length === 0 ? {} : { attachments }),
         },
       });
     // The mail is already on the wire once send() resolved — an audit-append
@@ -5090,14 +5090,15 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         ? { message: input, files: undefined }
         : { message: input.message, files: input.files };
     const actor = this.#contextActor();
-    const files = !fileInputs?.length
-      ? undefined
-      : await storeAgentFileAttachments({
-          agentPath: actor.type === "agent" ? actor.path : this.#path,
-          config: parseConfig(env),
-          files: fileInputs,
-          projectId: this.#props.projectId,
-        });
+    const files =
+      !fileInputs || fileInputs.length === 0
+        ? undefined
+        : await storeAgentFileAttachments({
+            agentPath: actor.type === "agent" ? actor.path : this.#path,
+            config: parseConfig(env),
+            files: fileInputs,
+            projectId: this.#props.projectId,
+          });
     const [event] = await this.stream.append({
       type: "events.iterate.com/agents/context-added",
       payload: {

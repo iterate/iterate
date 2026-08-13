@@ -5806,7 +5806,7 @@ function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlugTy
 function orderPreviewDeployBatches(apps: readonly PreviewAppRuntime[]) {
   // Dependencies select a coherent set; they are not ordering constraints.
   // Each app's deploy command owns its readiness checks, so start the fleet together.
-  return !apps.length ? [] : [[...apps]];
+  return apps.length === 0 ? [] : [[...apps]];
 }
 
 async function mapWithConcurrency<T, Result>(

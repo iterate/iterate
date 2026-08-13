@@ -145,7 +145,7 @@ export class EmailAgentProcessor extends StreamProcessor<
                     eventType: event.type,
                   },
                 ],
-                ...(!files?.length ? {} : { files }),
+                ...(!files || files.length === 0 ? {} : { files }),
                 // Automated mail (Auto-Submitted, bulk precedence,
                 // mailer-daemon) is recorded but never triggers a reply —
                 // the classic mail-loop guard.
@@ -283,7 +283,7 @@ function inboundEmailAgentInput(payload: InboundEmailPayload): string {
     ...(!message.messageId ? {} : { messageId: message.messageId }),
     ...(!message.text ? {} : { text: message.text }),
     ...(!message.text && !!message.html && { html: message.html }),
-    ...(!attachments.length ? {} : { attachments }),
+    ...(attachments.length === 0 ? {} : { attachments }),
     ...(payload.automated && { automated: true }),
   };
   return [

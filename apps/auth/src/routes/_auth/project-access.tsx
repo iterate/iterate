@@ -247,7 +247,7 @@ function RouteComponent() {
     needsProjectSelection &&
     fixedTestOtpEnabled &&
     shouldUseTestOtp({ email: session.user.email, fixedTestOtpEnabled }) &&
-    autoContinueProjectIds.length > 0,
+    !!autoContinueProjectIds.length,
   );
   const autoContinue = useQuery({
     queryKey: ["test-user-auto-continue", client_id],
@@ -617,7 +617,7 @@ function RouteComponent() {
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium">Projects</p>
               <p className="text-xs text-muted-foreground">
-                {!effectiveSelectedProjectIds.length
+                {effectiveSelectedProjectIds.length === 0
                   ? "No projects selected."
                   : `${effectiveSelectedProjectIds.length} selected.`}
               </p>

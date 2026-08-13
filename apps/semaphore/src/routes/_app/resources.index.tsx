@@ -246,7 +246,7 @@ function ResourcesIndexPage() {
         })}
       </div>
 
-      {!data.length ? (
+      {data.length === 0 ? (
         <p className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
           No resources are currently registered.
         </p>

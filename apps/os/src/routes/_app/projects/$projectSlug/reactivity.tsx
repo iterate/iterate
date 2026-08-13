@@ -364,7 +364,7 @@ function MetricPanel({
 function ReactivityEventList({ events }: { events: ReactivityTestEvent[] }) {
   return (
     <section className="mt-3 text-sm" data-testid="reactivity-event-list">
-      {!events.length ? (
+      {events.length === 0 ? (
         <p className="mt-1 text-muted-foreground">None</p>
       ) : (
         <ul className="mt-1 space-y-1">

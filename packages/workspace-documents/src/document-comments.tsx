@@ -151,7 +151,7 @@ export function DocumentComments({
       ) : (
         <>
           <div className="min-h-0 flex-1 overflow-y-auto px-4">
-            {!threads.length ? (
+            {threads.length === 0 ? (
               <p className="pb-2 text-xs text-muted-foreground">No comments yet.</p>
             ) : null}
             {openDocumentThreads.length ? (

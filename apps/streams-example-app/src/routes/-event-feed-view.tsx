@@ -699,7 +699,7 @@ function feedItemEvents(row: FeedItemRow): Record<string, unknown>[] {
 
 function feedItemExpandedJson(row: FeedItemRow) {
   const events = feedItemEvents(row);
-  return !events.length ? row.data : events;
+  return events.length === 0 ? row.data : events;
 }
 
 function parseFeedItem(row: Record<string, unknown>): FeedItemRow | undefined {

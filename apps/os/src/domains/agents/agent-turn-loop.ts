@@ -65,7 +65,7 @@ export class AgentTurnLoop implements AgentComponent {
               payload: {
                 role: "assistant",
                 content: `The assistant sent this visible web-chat message: ${event.payload.message}`,
-                ...(!files?.length ? {} : { files }),
+                ...(!files || files.length === 0 ? {} : { files }),
               },
               idempotencyKey: this.#host.idempotencyKey(`render-web-response@${event.offset}`),
             },

@@ -89,6 +89,11 @@ Don't compare directly to `null`, `undefined`, or `NaN`.
   `x && x.length > 0` → `x?.length` (guard collapse only when the member
   chain is call/side-effect-free). 755 more sites, applied via
   `--fix-suggestions` with a config arming only this rule.
+- **Weakened per follow-up feedback:** `x.length === 0 ? foo : bar` reads
+  better than `!x.length ? foo : bar`, so emptiness comparisons used as
+  ternary tests are not flagged; the 108 swept instances were reverted to
+  the explicit form (optional chains expand to `!x || x.length === 0` —
+  `x?.length === 0` would flip the undefined case).
 - **Findings from the sweep experiment** (the interesting part):
   - The codemod broke its own rule: `node.value === null` (ESTree Literal)
     became `!node.value`, making the rule flag `x === 0`/`x === false`.

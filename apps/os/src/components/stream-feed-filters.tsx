@@ -233,13 +233,13 @@ function TypeCheckboxGrid({
   function toggle(type: string, checked: boolean) {
     const current = value ?? EMPTY_SELECTION;
     const next = checked ? [...current, type] : current.filter((entry) => entry !== type);
-    onChange(!next.length ? null : next);
+    onChange(next.length === 0 ? null : next);
   }
 
   return (
     <div className="flex min-h-0 flex-col gap-1.5" data-testid={dataTestId}>
       <div className="max-h-52 overflow-y-auto rounded-lg border bg-background p-1.5">
-        {!merged.length ? (
+        {merged.length === 0 ? (
           <p className="px-2 py-3 text-xs text-muted-foreground">{emptyLabel}</p>
         ) : (
           <div className="grid grid-cols-1 gap-0.5 sm:grid-cols-2">

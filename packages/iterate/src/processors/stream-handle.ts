@@ -31,7 +31,7 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
     }
     segments.push(segment);
   }
-  return !segments.length ? "/" : `/${segments.join("/")}`;
+  return segments.length === 0 ? "/" : `/${segments.join("/")}`;
 }
 
 /** One open journal read — page with `next()`, dispose when done

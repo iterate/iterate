@@ -94,7 +94,7 @@ export function useCollabEditor(input: {
       // clear the strip rather than re-injecting a self that is not live.
       // Otherwise self at call time — the clientId rotates on reseed.
       onPeersRef.current?.(
-        !clients.length
+        clients.length === 0
           ? null
           : {
               self: connection.clientId,

@@ -65,7 +65,7 @@ export function postHogEventBatches(
   let batchBytes = 0;
   for (const event of events) {
     const eventBytes = Buffer.byteLength(JSON.stringify(event));
-    const separatorBytes = !batch.length ? 0 : 1;
+    const separatorBytes = batch.length === 0 ? 0 : 1;
     if (batch.length && batchBytes + separatorBytes + eventBytes > eventBudgetBytes) {
       batches.push(batch);
       batch = [];

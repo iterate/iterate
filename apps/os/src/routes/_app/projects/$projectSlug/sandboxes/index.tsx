@@ -105,7 +105,7 @@ function ProjectSandboxesIndexContent() {
           <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
             Loading sandboxes…
           </div>
-        ) : !sandboxes.length ? (
+        ) : sandboxes.length === 0 ? (
           <Empty className="rounded-lg border">
             <EmptyHeader>
               <EmptyTitle>No sandboxes</EmptyTitle>

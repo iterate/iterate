@@ -618,7 +618,7 @@ function StreamOverview({
                   egress={throughput.egress.series.counts}
                 />
               )
-            ) : !metrics.spark.length ? (
+            ) : metrics.spark.length === 0 ? (
               <span className="flex-1 pb-1 text-xs text-muted-foreground/70">measuring…</span>
             ) : (
               <svg viewBox="0 0 368 44" className="h-11 min-w-0 flex-1" preserveAspectRatio="none">
@@ -687,7 +687,7 @@ function StreamOverview({
             </span>
           </div>
           <div className="flex flex-col">
-            {!subscriptionRows.length ? (
+            {subscriptionRows.length === 0 ? (
               <p className="px-3 py-2 text-xs text-muted-foreground">
                 No durable subscriptions are configured.
               </p>
@@ -711,7 +711,7 @@ function StreamOverview({
             <span className="text-right">Lag</span>
           </div>
           <div className="flex flex-col">
-            {!connectionRows.length ? (
+            {connectionRows.length === 0 ? (
               <p className="px-3 py-2 text-xs text-muted-foreground">
                 No live connections are open.
               </p>
@@ -1417,7 +1417,7 @@ function ConnectionDetailPane({
             <ContractEventChips heading="Emits" types={processor.emits} tone="blue" />
             <div>
               <SectionHeading>Owned events</SectionHeading>
-              {!processor.ownedEvents.length ? (
+              {processor.ownedEvents.length === 0 ? (
                 <span className="text-xs text-muted-foreground/70">none</span>
               ) : (
                 <div className="flex flex-col gap-1.5">
@@ -1858,7 +1858,7 @@ function ContractEventChips({
   return (
     <div>
       <SectionHeading>{heading}</SectionHeading>
-      {!types.length ? (
+      {types.length === 0 ? (
         <span className="text-xs text-muted-foreground/70">none</span>
       ) : (
         <div className="flex flex-wrap gap-1.5">
@@ -1917,7 +1917,7 @@ function readStringArray(value: unknown): string[] | undefined {
   const items = value.filter(
     (item): item is string => typeof item === "string" && item.trim() !== "",
   );
-  return !items.length ? undefined : items;
+  return items.length === 0 ? undefined : items;
 }
 
 function shortEventType(type: string): string {
