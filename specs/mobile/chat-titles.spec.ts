@@ -24,9 +24,6 @@ test("a chat wears its agent-set title in the thread header and chat list", asyn
   const projectSlug = `mobile-chat-titles-${Date.now().toString(36)}`;
 
   await signUpToProject(page, testInfo, osBaseUrl, projectSlug);
-  // Video-mode demos start at the interesting part: the chat list, not the
-  // OAuth signup ceremony.
-  page.videoMode?.setStartTime();
 
   // ── A brand-new chat: the only name that exists yet is the stream path,
   // worn by the thread header (react-navigation renders header titles with
@@ -36,7 +33,7 @@ test("a chat wears its agent-set title in the thread header and chat list", asyn
   await page.getByText("New chat").click();
   const pathHeading = page.getByRole("heading", { name: /^mobile\// });
   await pathHeading.waitFor();
-  const pathFallback = (await pathHeading.textContent())!;
+  const pathFallback = await pathHeading.textContent();
   const agentPath = `/agents/${pathFallback}`;
 
   // ── The agent's first turn, minus the model: append the same
@@ -87,8 +84,8 @@ async function sendChatMessage(page: Page, message: string) {
 }
 
 async function signUpToProject(
-  page: any,
-  testInfo: any,
+  page: test.Page,
+  testInfo: test.TestInfo,
   osBaseUrl: string,
   projectSlug: string,
 ): Promise<void> {
@@ -119,6 +116,9 @@ async function signUpToProject(
   await allowAccessButton.click({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
   await page.getByText(projectSlug).click();
   await page.getByText("New chat").waitFor();
+  // Video-mode demos start at the interesting part: the chat list, not the
+  // OAuth signup ceremony.
+  page.videoMode?.setStartTime();
 }
 
 async function resolveOsBaseUrl(): Promise<string> {
