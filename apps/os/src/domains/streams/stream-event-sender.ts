@@ -2240,8 +2240,8 @@ export class StreamConnections {
           connection.lastDeliveredAt = new Date(this.#hooks.now()).toISOString();
           this.#hooks.recordEgress(events.length, deliveredBytes);
           const currentState = this.#hooks.coreState();
-          // oxlint-disable-next-line iterate/simple-truthiness-check -- projectId tri-state: undefined = uninitialized stream, null = the GLOBAL namespace (a real, initialized identity)
           if (
+            // oxlint-disable-next-line iterate/simple-truthiness-check -- projectId tri-state: undefined = uninitialized stream, null = the GLOBAL namespace (a real, initialized identity)
             currentState.projectId === undefined ||
             !currentState.path ||
             !currentState.streamId
