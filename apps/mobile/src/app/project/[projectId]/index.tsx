@@ -135,7 +135,11 @@ export default function ChatListScreen() {
           refreshing={agents.isRefetching}
           onRefresh={() => agents.refetch()}
           renderItem={({ item: agent }) => (
-            <Pressable style={styles.row} onPress={() => openChat(agent.path)}>
+            <Pressable
+              style={styles.row}
+              testID={`chat-list-row:${agent.path}`}
+              onPress={() => openChat(agent.path)}
+            >
               <Text
                 style={agent.title === undefined ? styles.path : styles.title}
                 numberOfLines={2}

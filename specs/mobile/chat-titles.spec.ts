@@ -9,7 +9,7 @@
 // ZERO model turns: the script returns nothing, so no context is appended
 // and no LLM request ever opens. Every event in the thread is deterministic.
 
-import { expect, type Page } from "@playwright/test";
+import { type Page } from "@playwright/test";
 import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
 import { test } from "../test-support/test.ts";
@@ -27,12 +27,18 @@ test("a chat wears its agent-set title in the thread header and chat list", asyn
   // OAuth signup ceremony.
   page.videoMode?.setStartTime();
 
-  // ── A brand-new chat: the only name that exists yet is the stream path.
+  // ── A brand-new chat: the only name that exists yet is the stream path,
+  // worn by the thread header (react-navigation renders header titles with
+  // role=heading, which also keeps this from matching message text). The
+  // ••• menu is the thread screen's own header furniture — waiting on it
+  // proves navigation landed (so the URL is readable) while keeping the
+  // rendered cursor at the top of the screen: New chat → ••• → heading,
+  // before it ever descends to the composer.
   await page.getByText("New chat").click();
-  await page.getByPlaceholder("Message").waitFor();
+  await page.getByRole("button", { name: "Stream actions" }).waitFor();
   const agentPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
   const pathFallback = agentPath.replace(/^\/agents\//, "");
-  await page.getByText(pathFallback).first().waitFor();
+  await page.getByRole("heading", { name: pathFallback }).waitFor();
 
   // ── The agent's first turn, minus the model: append the same
   // summary-updated fact a real turn opens with. Returning nothing keeps the
@@ -46,19 +52,25 @@ test("a chat wears its agent-set title in the thread header and chat list", asyn
 
   // The header reads the title live off the thread's own event stream — no
   // refetch, no navigation. The working indicator spins while the script
-  // runs, so this wait rides real product UI.
-  await page.getByText(TITLE).first().waitFor();
+  // runs, so this wait rides real product UI. role=heading scopes it to the
+  // header: the sent /script bubble also contains the title string.
+  await page.getByRole("heading", { name: TITLE }).waitFor();
 
-  // ── Back on the chat list, the row wears the title — served by the live
-  // agent catalog (itx.agents.liveState); the path is demoted to nothing
-  // (it stays reachable from the thread's ••• menu). expect.poll, not a bare
-  // locator wait: the remounted list first paints its cached query data and
-  // the live snapshot arrives over the socket with no spinner in between —
-  // an async server push, so it gets the repo's 15s cross-server tier.
-  await page.goBack(); // chat → chat list: browser history IS the app's back stack on web
-  await page.getByText("New chat").waitFor();
-  await expect.poll(() => page.getByText(TITLE).count(), { timeout: 15_000 }).toBeGreaterThan(0);
-  await expect.poll(() => page.getByText(pathFallback).count()).toBe(0);
+  // ── Back on the chat list (via the header back control — accessible name
+  // "<previous title>, back", and role=link on web where react-navigation
+  // gives it an href), THIS chat's row wears the title — served by the live
+  // agent catalog (itx.agents.liveState), pushed over the socket with no
+  // spinner in between. The row-scoped locator pins which chat got renamed
+  // (and stays unique while the popped thread screen, whose header also
+  // says the title, is still mid-unmount). The annotated waitFor carries
+  // the rendered cursor to the row, holding into the final freeze-frame.
+  // timeout: async server push after first paint — the spinner waiter can't
+  // see it, so this gets the repo's 15s cross-server tier.
+  await page.getByRole("link", { name: /(^Go back$)|(, back$)/ }).click();
+  await page
+    .getByTestId(`chat-list-row:${agentPath}`)
+    .getByText(TITLE)
+    .waitFor({ timeout: 15_000 });
 });
 
 /** Type into the chat composer and send. `insertText` rather than `fill`:
@@ -92,10 +104,16 @@ async function signUpToProject(
     projectSlug,
     testInfo,
   });
-  // timeout: same unwrapped popup — the spinner waiter cannot see it.
-  await popup.getByRole("button", { name: "Continue" }).click({ timeout: 15_000 });
-  // timeout: same unwrapped popup — the spinner waiter cannot see it.
-  await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
+  // A fresh signup re-enters the authorize flow after onboarding, and
+  // re-entries can skip the /project-access "Continue" step (postLogin's
+  // shouldRedirect only fires on the initial authorize) — click it when it
+  // renders, then land on consent's "Allow access" either way. (Same fix as
+  // the other mobile specs; see PR #2492.)
+  const continueButton = popup.getByRole("button", { name: "Continue" });
+  const allowAccessButton = popup.getByRole("button", { name: "Allow access" });
+  await continueButton.or(allowAccessButton).first().waitFor({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
+  if (await continueButton.isVisible()) await continueButton.click();
+  await allowAccessButton.click({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
   await page.getByText(projectSlug).click();
   await page.getByText("New chat").waitFor();
 }
