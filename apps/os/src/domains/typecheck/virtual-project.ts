@@ -159,8 +159,9 @@ const SHARED_FILES: Record<string, string> = {
  */
 export function mountModuleText(types: string): string {
   const referenced = referencedPlatformTypeNames(types, ITX_API_DECLARATIONS_BY_NAME);
-  const importLine =
-    referenced.length > 0 ? `import type { ${referenced.join(", ")} } from "../itx-types";\n` : "";
+  const importLine = referenced.length
+    ? `import type { ${referenced.join(", ")} } from "../itx-types";\n`
+    : "";
   return importLine + types;
 }
 
@@ -239,7 +240,7 @@ export async function checkCapabilityTypes(input: {
   });
   // Only surface the export-less rule when nothing else failed — a compile
   // error already tells the author their declaration is broken.
-  if (problems.length === 0) return exportLess;
+  if (!problems.length) return exportLess;
   // Notes are CONTEXT for failures (a budget-tripped npm package reads as a
   // plain typo without them), never verdicts: typm warns on perfectly
   // successful acquisitions, and a warning must not fail a compiling mount.
@@ -283,7 +284,7 @@ export async function checkItxScript(input: {
     preambleLineRange: project.preambleLineRange,
   });
   // Notes only contextualize failures — see checkCapabilityTypes.
-  return problems.length > 0 ? [...problems, ...notes] : [];
+  return problems.length ? [...problems, ...notes] : [];
 }
 
 /**
@@ -337,7 +338,7 @@ export async function checkPreamble(input: {
     lineOffset: -project.preludeLineCount,
     preambleLineRange: project.preambleLineRange,
   });
-  return problems.length > 0 ? [...problems, ...checked.notes] : [];
+  return problems.length ? [...problems, ...checked.notes] : [];
 }
 
 /** The virtual project for one script check — shared by the advisory door
@@ -395,8 +396,7 @@ function assembleScriptProject(
   return {
     files,
     preludeLineCount: prelude.length,
-    preambleLineRange:
-      preambleLines.length === 0 ? null : { start: 3, end: 2 + preambleLines.length },
+    preambleLineRange: !preambleLines.length ? null : { start: 3, end: 2 + preambleLines.length },
   };
 }
 
@@ -569,7 +569,7 @@ export async function checkItxScriptForExecution(input: {
       diagnostic.fileName === "script.ts" &&
       isProvableBlocker(diagnostic),
   );
-  if (blocking.length === 0) {
+  if (!blocking.length) {
     // `js` can come back EMPTY when the program has errors anywhere (broken
     // mount declarations included) — the compiler emits nothing it can't
     // vouch for. Treat empty as absent: execution falls back to the raw
@@ -593,7 +593,7 @@ export async function checkItxScriptForExecution(input: {
       typechecker: input.typechecker,
       deadlineMs: input.deadlineMs,
     });
-    if (probe.length > 0) {
+    if (probe.length) {
       return {
         verdict: "unchecked",
         reason: "the scope's preamble does not compile (its errors spill past its own lines)",

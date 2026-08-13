@@ -239,7 +239,7 @@ export function writeTestTelemetryArtifact(
   environment: NodeJS.ProcessEnv = process.env,
 ): string | null {
   const outputFiles = resolveTestTelemetryArtifactPaths(artifact.artifactId, environment);
-  if (outputFiles.length === 0) return null;
+  if (!outputFiles.length) return null;
   const validated = TestTelemetryArtifact.parse(artifact);
   const contents = `${JSON.stringify(validated, null, 2)}\n`;
   for (const outputFile of outputFiles) {

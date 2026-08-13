@@ -95,7 +95,7 @@ async function exec(sql: string, params?: SqlValue[]): Promise<Record<string, Sq
   if (!sqlite3 || !Number.isFinite(db)) throw new Error("db not initialised");
   const rows: Record<string, SqlValue>[] = [];
   for await (const stmt of sqlite3.statements(db, sql)) {
-    if (params && params.length > 0) sqlite3.bind_collection(stmt, params);
+    if (params?.length) sqlite3.bind_collection(stmt, params);
     const columns = sqlite3.column_names(stmt);
     while ((await sqlite3.step(stmt)) === SQLITE_ROW) {
       const values = sqlite3.row(stmt);

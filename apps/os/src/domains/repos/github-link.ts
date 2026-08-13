@@ -270,7 +270,7 @@ export async function linkRepoToGithub(
         );
       }
     }
-    if (compensations.length === 0) throw error;
+    if (!compensations.length) throw error;
     console.error("github link compensation failed", { repoPath, subscriptionName, compensations });
     throw new Error(
       `${String(error)} (additionally: ${compensations.join("; ")} — re-run linkGithub to repair; subscriptions replace by name)`,

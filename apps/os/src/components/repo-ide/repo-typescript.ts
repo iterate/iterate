@@ -123,8 +123,8 @@ class RepoTypeScriptSession {
     const desired = desiredRepoVfs(this.#headContents, this.#store.changes);
     const { updates, removals } = repoVfsDiff(this.#pushed, desired);
     this.#pushed = desired;
-    if (Object.keys(updates).length > 0) void this.#remote.setFiles(updates);
-    if (removals.length > 0) void this.#remote.deleteFiles(removals);
+    if (Object.keys(updates).length) void this.#remote.setFiles(updates);
+    if (removals.length) void this.#remote.deleteFiles(removals);
     this.#maybeAcquireTypes(desired, 1000);
   }
 

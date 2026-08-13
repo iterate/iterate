@@ -18,7 +18,7 @@ function fakeSocket(attachment: unknown): FakeSocket {
     sent: [] as string[],
     closed: [] as { code?: number; reason?: string }[],
     get readyState() {
-      return socket.closed.length === 0 ? 1 : 2;
+      return !socket.closed.length ? 1 : 2;
     },
     serializeAttachment(value: unknown) {
       socket.attachment = value;
@@ -38,7 +38,7 @@ function fakeSocket(attachment: unknown): FakeSocket {
 
 function registryOver(sockets: FakeSocket[], liveKeys: string[] = []) {
   return new StreamSubscriberPagerRegistry({
-    getWebSockets: () => sockets.filter((socket) => socket.closed.length === 0),
+    getWebSockets: () => sockets.filter((socket) => !socket.closed.length),
     acceptWebSocket: () => undefined,
     maxOffset: () => 100,
     hasConnection: (connectionKey) => liveKeys.includes(connectionKey),

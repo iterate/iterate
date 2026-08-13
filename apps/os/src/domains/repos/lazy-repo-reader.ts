@@ -466,7 +466,7 @@ export function createLazyRepoReader(input: {
             oid: file.blobOid,
           });
         }
-        if (entries.length === 0 && dir !== "") return null; // git prunes empty dirs
+        if (!entries.length && dir !== "") return null; // git prunes empty dirs
         const payload = encodeTree(entries);
         const oid = await hashObject("tree", payload);
         newTrees.set(oid, payload);

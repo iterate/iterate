@@ -27,7 +27,7 @@ function fakeSocket(attachment: unknown): FakeSocket {
     closed: [] as { code?: number; reason?: string }[],
     sent: [] as string[],
     get readyState() {
-      return socket.closed.length === 0 ? 1 : 2;
+      return !socket.closed.length ? 1 : 2;
     },
     close(code?: number, reason?: string) {
       socket.closed.push({ code, reason });
@@ -55,7 +55,7 @@ function socketsOver(sockets: FakeSocket[]) {
     headerName: "x-test-pager",
     hooks: {
       acceptWebSocket: () => undefined,
-      getWebSockets: () => sockets.filter((socket) => socket.closed.length === 0),
+      getWebSockets: () => sockets.filter((socket) => !socket.closed.length),
     },
     lane: "test",
     pagerTag: "test-pager",

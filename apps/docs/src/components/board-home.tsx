@@ -60,7 +60,7 @@ export function BoardHome() {
               stays the owner&rsquo;s act).
             </p>
           </div>
-          {workspaces.length === 0 ? null : (
+          {!workspaces.length ? null : (
             <section className="rounded-xl border bg-background shadow-xs">
               <div className="flex items-center gap-2.5 border-b px-5 py-4">
                 <TelescopeIcon aria-hidden className="size-5 text-muted-foreground" />
@@ -129,7 +129,7 @@ export function BoardHome() {
                     <div className="min-w-0">
                       <h2 className="truncate font-mono text-sm font-semibold">{repoPath}</h2>
                       <p className="text-xs text-muted-foreground">
-                        {entries.length === 0
+                        {!entries.length
                           ? "No boards yet"
                           : `${entries.length} board${entries.length === 1 ? "" : "s"}`}
                       </p>
@@ -140,7 +140,7 @@ export function BoardHome() {
                     New board
                   </Button>
                 </div>
-                {entries.length === 0 ? null : (
+                {!entries.length ? null : (
                   <ul className="divide-y">
                     {entries.map((entry) => (
                       <li key={entry.path}>

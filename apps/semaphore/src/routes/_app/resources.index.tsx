@@ -196,7 +196,7 @@ function ResourcesIndexPage() {
 
   return (
     <section className="space-y-8">
-      {previewSlots.length > 0 ? <PreviewEnvironmentsSection slots={previewSlots} /> : null}
+      {previewSlots.length ? <PreviewEnvironmentsSection slots={previewSlots} /> : null}
 
       <div className="space-y-6">
         {Array.from(groupedResources.entries()).map(([type, resources]) => {
@@ -246,7 +246,7 @@ function ResourcesIndexPage() {
         })}
       </div>
 
-      {data.length === 0 ? (
+      {!data.length ? (
         <p className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
           No resources are currently registered.
         </p>

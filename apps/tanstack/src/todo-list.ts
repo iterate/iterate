@@ -86,7 +86,7 @@ export class TodoListDurableObject extends DurableObject<unknown> {
 
   add(title: string): void {
     const trimmed = title.trim().slice(0, 500);
-    if (trimmed.length === 0) return;
+    if (!trimmed.length) return;
     this.#db.insert({
       id: crypto.randomUUID(),
       title: trimmed,
@@ -102,7 +102,7 @@ export class TodoListDurableObject extends DurableObject<unknown> {
 
   rename(id: string, title: string): void {
     const trimmed = title.trim().slice(0, 500);
-    if (trimmed.length === 0) return;
+    if (!trimmed.length) return;
     this.#db.rename({ id, title: trimmed });
     this.#refresh();
   }

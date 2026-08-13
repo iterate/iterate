@@ -68,7 +68,7 @@ export function CommitControls({
   onWriteCommitMessage: () => void;
   onDiscardAll: () => void;
 }) {
-  const dirty = taskChanges.length > 0;
+  const dirty = !!taskChanges.length;
   const busy = commitPending || generatingMessage;
   const [open, setOpen] = useState(false);
   // A successful commit (or discard) empties the change set: the review
@@ -209,7 +209,7 @@ export function DeletedTasksStrip({
   deletedChanges: readonly TaskChangeSummary[];
   onRestore: (path: string) => void;
 }) {
-  if (deletedChanges.length === 0) return null;
+  if (!deletedChanges.length) return null;
   return (
     <div className="flex flex-wrap items-center justify-end gap-2 border-b bg-background px-3 py-1">
       <span className="text-xs text-muted-foreground">Deleted</span>

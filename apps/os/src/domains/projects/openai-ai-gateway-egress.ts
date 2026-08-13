@@ -104,7 +104,7 @@ export function openAiAiGatewayRoutingFromConfig(config: AppConfig): {
   // require a deployed-shaped config (ARTIFACTS_ACCOUNT_ID → cloudflare.accountId
   // on preview/prd) so local miniflare without CF account does not call a
   // missing/half-wired gateway binding with the real platform key.
-  if (!config.cloudflare.accountId || config.cloudflare.accountId.length === 0) {
+  if (!config.cloudflare.accountId?.length) {
     return null;
   }
   return {

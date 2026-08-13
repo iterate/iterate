@@ -554,7 +554,7 @@ function telegramWebhookAgentInput(
     );
   }
   const placeholders = telegramMediaPlaceholders(payload);
-  if (placeholders.length > 0) {
+  if (placeholders.length) {
     lines.push(
       "",
       `Media in this message (file_id is in the raw payload): ${placeholders.join(" ")}`,

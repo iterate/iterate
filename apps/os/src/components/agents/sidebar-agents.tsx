@@ -31,7 +31,7 @@ export function SidebarAgents({
   // Pins govern which shortcuts survive the cap, never their display order.
   const rows = useMemo(() => sidebarAgentShortcuts(forest, PINNED_LIMIT, ROOT_LIMIT), [forest]);
 
-  if (rows.length === 0) return null;
+  if (!rows.length) return null;
   return (
     <SidebarGroup className="group-data-[collapsible=icon]:hidden">
       <SidebarGroupLabel>Agents</SidebarGroupLabel>

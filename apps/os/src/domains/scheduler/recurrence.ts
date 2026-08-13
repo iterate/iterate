@@ -79,7 +79,7 @@ export function nextWakeAtMs(
   nowMs: number,
 ): number | null {
   const schedules = Object.values(state.schedules);
-  if (schedules.length === 0 && Object.keys(state.pendingTriggers).length === 0) return null;
+  if (!schedules.length && !Object.keys(state.pendingTriggers).length) return null;
   let wakeAtMs = nowMs + SCHEDULER_HEARTBEAT_MS;
   for (const entry of schedules) {
     if (!Number.isFinite(entry.nextTriggerAt)) continue;

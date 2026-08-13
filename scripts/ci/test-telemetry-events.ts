@@ -116,10 +116,9 @@ export function testTelemetryEvents(artifact: TestTelemetryArtifact): PostHogEve
           failed: testFailed(test),
           duration_ms: test.durationMs,
           final_attempt_duration_ms: finalAttempt?.durationMs,
-          retry_duration_ms:
-            test.attempts.length > 0
-              ? test.attempts.slice(0, -1).reduce((total, attempt) => total + attempt.durationMs, 0)
-              : undefined,
+          retry_duration_ms: test.attempts.length
+            ? test.attempts.slice(0, -1).reduce((total, attempt) => total + attempt.durationMs, 0)
+            : undefined,
           retry_count: test.retryCount,
           passed_after_retry: test.passedAfterRetry,
           schedule_delay_ms: test.scheduleDelayMs,
@@ -127,7 +126,7 @@ export function testTelemetryEvents(artifact: TestTelemetryArtifact): PostHogEve
           after_each_duration_ms: test.afterEachDurationMs,
           body_duration_ms: test.bodyDurationMs,
           attempt_detail: test.attemptDetail,
-          attempt_timing_available: test.attempts.length > 0,
+          attempt_timing_available: !!test.attempts.length,
           phase_count: phaseCount,
           phase_event_count: phaseEventCount,
           phase_events_omitted: phaseCount - phaseEventCount,
@@ -403,13 +402,13 @@ export function testTelemetryFinalizerEvent(input: {
     ci.jobName ?? "job",
   ].join(":");
   const incomplete =
-    input.incompleteArtifactIds.length > 0 ||
-    input.foreignArtifactIds.length > 0 ||
-    input.missingArtifactSources.length > 0 ||
-    input.missingWorkspaces.length > 0;
+    !!input.incompleteArtifactIds.length ||
+    !!input.foreignArtifactIds.length ||
+    !!input.missingArtifactSources.length ||
+    !!input.missingWorkspaces.length;
   const status = input.cancelled ? "cancelled" : incomplete ? "failed" : "passed";
   const testKinds = new Set(
-    input.expectedArtifactSources.length > 0
+    input.expectedArtifactSources.length
       ? input.expectedArtifactSources.map(({ testKind }) => testKind)
       : [input.primaryArtifact.context.testKind],
   );

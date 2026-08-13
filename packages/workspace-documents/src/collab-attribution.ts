@@ -128,7 +128,7 @@ export function attributionSegments(state: AttributionState): CollabChangeSegmen
     kind: "inserted" as const,
   }));
   for (const span of deleted) {
-    if (span.text.length > 0) segments.push({ ...span, kind: "deleted" as const });
+    if (span.text.length) segments.push({ ...span, kind: "deleted" as const });
   }
   return segments.toSorted(
     // Position order; at a tie (a replace), the deletion renders first —

@@ -58,7 +58,7 @@ export function ProjectWorkerHealthWarning({ projectId }: { projectId: string | 
     [subscriptionState],
   );
 
-  if (struggling.length === 0) return null;
+  if (!struggling.length) return null;
 
   const haltedCount = struggling.filter((subscription) => subscription.status === "halted").length;
   // Halted is the loud, red state; backoff-only is an amber "events are

@@ -30,7 +30,7 @@ const REPLY_TIMEOUT_MS = 120_000;
 const startedAt = Date.now();
 
 const workerVersionHeaders = cloudflareWorkerVersionOverrideHeaders(process.env);
-if (Object.keys(workerVersionHeaders).length > 0) {
+if (Object.keys(workerVersionHeaders).length) {
   // Node's browser-compatible global WebSocket cannot attach handshake
   // headers. Preview CI swaps in the repo's existing Node transport so this
   // keeper socket proves the same immutable Worker versions as every other

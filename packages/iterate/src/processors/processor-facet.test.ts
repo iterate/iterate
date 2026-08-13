@@ -310,7 +310,7 @@ describe("ProcessorFacet in real workerd (Miniflare)", () => {
       while (Date.now() < deadline) {
         const evidence = await invoke(run, "parentEvidence");
         if (
-          evidence.alarmFires.length > 0 &&
+          evidence.alarmFires.length &&
           evidence.log.some((line: string) =>
             line.includes("alarm replayed into facet.handleAlarm OK"),
           )

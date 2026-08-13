@@ -102,7 +102,7 @@ async function cloudflareContainerApplicationId(input: {
   const matches = (body.result as Array<{ id?: unknown; name?: unknown }>).filter(
     (application) => application.name === input.applicationName,
   );
-  if (matches.length === 0) {
+  if (!matches.length) {
     throw new Error(`Cloudflare container application "${input.applicationName}" was not found.`);
   }
   if (matches.length > 1) {

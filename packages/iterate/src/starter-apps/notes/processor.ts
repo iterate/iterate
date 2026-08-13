@@ -307,7 +307,7 @@ export class NotesProcessor extends StreamProcessor<NotesProcessorContract, Note
         try {
           await this.deps.sleep(NOTES_COMMIT_DEBOUNCE_MS);
           const dirty = await this.deps.workspace.dirtyNotePaths();
-          if (dirty.length === 0) return;
+          if (!dirty.length) return;
           await this.deps.workspace.commit({
             message: await this.#commitMessage(dirty),
             scope: notesRepoPath,

@@ -618,7 +618,7 @@ function StreamOverview({
                   egress={throughput.egress.series.counts}
                 />
               )
-            ) : metrics.spark.length === 0 ? (
+            ) : !metrics.spark.length ? (
               <span className="flex-1 pb-1 text-xs text-muted-foreground/70">measuring…</span>
             ) : (
               <svg viewBox="0 0 368 44" className="h-11 min-w-0 flex-1" preserveAspectRatio="none">
@@ -687,7 +687,7 @@ function StreamOverview({
             </span>
           </div>
           <div className="flex flex-col">
-            {subscriptionRows.length === 0 ? (
+            {!subscriptionRows.length ? (
               <p className="px-3 py-2 text-xs text-muted-foreground">
                 No durable subscriptions are configured.
               </p>
@@ -711,7 +711,7 @@ function StreamOverview({
             <span className="text-right">Lag</span>
           </div>
           <div className="flex flex-col">
-            {connectionRows.length === 0 ? (
+            {!connectionRows.length ? (
               <p className="px-3 py-2 text-xs text-muted-foreground">
                 No live connections are open.
               </p>
@@ -1117,7 +1117,7 @@ function subscriptionStatusTone(row: SubscriptionRow): string {
  */
 function ConfiguredFilterSummary({ row }: { row: SubscriptionRow }) {
   const hasEventFilter =
-    !!row.eventTypes && row.eventTypes.length > 0 && !row.eventTypes.includes("*");
+    !!row.eventTypes && !!row.eventTypes.length && !row.eventTypes.includes("*");
   const hasExtra =
     !!row.description || !!row.destinationStream || hasEventFilter || !!row.jsonataCondition;
   if (!hasExtra) return null;
@@ -1417,7 +1417,7 @@ function ConnectionDetailPane({
             <ContractEventChips heading="Emits" types={processor.emits} tone="blue" />
             <div>
               <SectionHeading>Owned events</SectionHeading>
-              {processor.ownedEvents.length === 0 ? (
+              {!processor.ownedEvents.length ? (
                 <span className="text-xs text-muted-foreground/70">none</span>
               ) : (
                 <div className="flex flex-col gap-1.5">
@@ -1858,7 +1858,7 @@ function ContractEventChips({
   return (
     <div>
       <SectionHeading>{heading}</SectionHeading>
-      {types.length === 0 ? (
+      {!types.length ? (
         <span className="text-xs text-muted-foreground/70">none</span>
       ) : (
         <div className="flex flex-wrap gap-1.5">
@@ -1887,7 +1887,7 @@ function ContractEventChips({
  * labeled by the method the stream actually calls, not a generic category name.
  */
 function formatItxExpression(expression: unknown): string | undefined {
-  if (!Array.isArray(expression) || expression.length === 0) return undefined;
+  if (!Array.isArray(expression) || !expression.length) return undefined;
   const steps: string[] = [];
   for (const step of expression) {
     if (typeof step === "string") {
@@ -1917,7 +1917,7 @@ function readStringArray(value: unknown): string[] | undefined {
   const items = value.filter(
     (item): item is string => typeof item === "string" && item.trim() !== "",
   );
-  return items.length === 0 ? undefined : items;
+  return !items.length ? undefined : items;
 }
 
 function shortEventType(type: string): string {

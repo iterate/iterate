@@ -120,7 +120,7 @@ function PlainPreview({ source }: { source: string }) {
 }
 
 function FrontmatterTable({ metadata }: { metadata: { key: string; value: string }[] }) {
-  if (metadata.length === 0) return null;
+  if (!metadata.length) return null;
   return (
     <div className="mb-6 overflow-hidden rounded-lg border bg-muted/20">
       <Table className="text-xs">
@@ -195,7 +195,7 @@ function AnnotatedPreview({
     projectionRef.current = projection;
     const groups = new Map<string, Range[]>();
     const push = (key: string, ranges: Range[]) => {
-      if (ranges.length === 0) return;
+      if (!ranges.length) return;
       groups.set(key, [...(groups.get(key) ?? []), ...ranges]);
     };
     for (const { thread, resolution } of resolved) {

@@ -47,14 +47,14 @@ export function createAgentFeedModel(): AgentFeedModel {
     snapshot: () => snapshot,
     applyEvents(events) {
       const fresh = events.filter((event) => event.offset > lastOffset);
-      if (fresh.length === 0) return false;
+      if (!fresh.length) return false;
 
       lastOffset = fresh[fresh.length - 1]!.offset;
       let settledItems: AgentUiItem[] | null = null;
       for (const event of fresh) {
         const step = reduceAgentUi(state, event as unknown as Parameters<typeof reduceAgentUi>[1]);
         state = step.endState;
-        if (step.items.length > 0) settledItems = [...(settledItems ?? []), ...step.items];
+        if (step.items.length) settledItems = [...(settledItems ?? []), ...step.items];
       }
       if (settledItems) items = [...items, ...settledItems];
       snapshot = { items, live: state.live, eventCount: state.eventCount, lastOffset };

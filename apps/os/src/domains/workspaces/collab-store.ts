@@ -51,7 +51,7 @@ export function sqliteCollabStore(storage: {
         const live = sql
           .exec(`SELECT 1 FROM collab_sessions WHERE path = ? AND epoch = ?`, path, epoch)
           .toArray();
-        if (live.length === 0) throw new Error(`stale collab session for ${path} — reopen`);
+        if (!live.length) throw new Error(`stale collab session for ${path} — reopen`);
         for (const op of ops) {
           sql.exec(
             `INSERT INTO collab_ops(path, epoch, version, client_id, client_seq, changes, created_at)
@@ -100,7 +100,7 @@ export function sqliteCollabStore(storage: {
               snapshot.epoch,
             )
             .toArray();
-          if (live.length === 0) throw new Error(`stale collab session for ${path} — reopen`);
+          if (!live.length) throw new Error(`stale collab session for ${path} — reopen`);
         }
         sql.exec(
           `INSERT OR REPLACE INTO collab_snapshots(path, epoch, version, content, client_seqs)
@@ -165,7 +165,7 @@ export function sqliteCollabStore(storage: {
           path: row.path as string,
         })),
     hasSession: (path) =>
-      sql.exec(`SELECT 1 FROM collab_sessions WHERE path = ?`, path).toArray().length > 0,
+      !!sql.exec(`SELECT 1 FROM collab_sessions WHERE path = ?`, path).toArray().length,
     markFlushed: (path, version, epoch) => {
       sql.exec(
         `UPDATE collab_sessions SET overlay_version = ? WHERE path = ?${!epoch ? "" : " AND epoch = ?"}`,
@@ -184,7 +184,7 @@ export function sqliteCollabStore(storage: {
               file.epoch,
             )
             .toArray();
-          if (live.length === 0) continue; // session ended mid-commit — nothing to stamp
+          if (!live.length) continue; // session ended mid-commit — nothing to stamp
           sql.exec(
             `INSERT OR REPLACE INTO collab_bases(path, version, content) VALUES (?, ?, ?)`,
             file.path,

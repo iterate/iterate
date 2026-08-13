@@ -140,7 +140,7 @@ function formatStructuredLines(options: {
   }
 
   const entries = Object.entries(options.value);
-  if (entries.length === 0) {
+  if (!entries.length) {
     return options.label ? [`${prefix}${options.label}: {}`] : [];
   }
 
@@ -155,7 +155,7 @@ function formatStructuredLines(options: {
       nestedValue &&
       typeof nestedValue === "object" &&
       !Array.isArray(nestedValue) &&
-      Object.keys(nestedValue).length > 0
+      Object.keys(nestedValue).length
     ) {
       lines.push(
         ...formatStructuredLines({ label: key, value: nestedValue, indent: options.indent + 2 }),
@@ -238,7 +238,7 @@ function createBodyEntries(event: AppStdoutEvent) {
     entries.push(...formatStructuredLines({ label: key, value, indent: 0 }));
   }
 
-  if (Array.isArray(event.requestLogs) && event.requestLogs.length > 0) {
+  if (Array.isArray(event.requestLogs) && event.requestLogs.length) {
     const logs = event.requestLogs;
     const endTimestamp = typeof event.timestamp === "string" ? event.timestamp : undefined;
     const totalDurationMs = resolveDurationMs(event);
@@ -295,9 +295,7 @@ export function renderPrettyStdoutEvent(event: AppStdoutEvent) {
     `${ansi.cyan}[${typeof event.appName === "string" ? event.appName : "app"}]${ansi.reset}`,
   ];
   const message =
-    typeof event.message === "string" && event.message.trim().length > 0
-      ? event.message
-      : undefined;
+    typeof event.message === "string" && event.message.trim().length ? event.message : undefined;
 
   if (message) {
     headerParts.push(message);
@@ -319,7 +317,7 @@ export function renderPrettyStdoutEvent(event: AppStdoutEvent) {
   }
 
   const entries = createBodyEntries(event);
-  if (entries.length === 0) {
+  if (!entries.length) {
     return headerParts.join(" ");
   }
 

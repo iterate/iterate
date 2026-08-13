@@ -203,7 +203,7 @@ export class SchedulerProcessor extends StreamProcessor<
     assertSchedulerCreated(state);
     const now = this.deps.now();
     const due = dueSchedules(state.schedules, now);
-    if (due.length > 0) {
+    if (due.length) {
       // One request per (schedule incarnation, occurrence): a later re-set
       // of the same key/occurrence (definedAtOffset differs) can never
       // dedupe against a spent request from a past life.
@@ -260,7 +260,7 @@ export class SchedulerProcessor extends StreamProcessor<
             scheduledFor: new Date(entry.nextTriggerAt!).toISOString(),
           },
         }));
-      if (requests.length > 0) await this.append(...requests);
+      if (requests.length) await this.append(...requests);
     }
     // Restart recovery: anything pending that no live execution owns was
     // orphaned by an eviction mid-run — launch it again (at-least-once).
@@ -274,7 +274,7 @@ export class SchedulerProcessor extends StreamProcessor<
     // resets the backoff. The offset is read AFTER the appends, exactly where
     // the pre-append read sat.
     const { offset: checkpointOffset } = await this.deps.reads.snapshot();
-    const barren = due.length > 0 && this.#lastWakeCheckpointOffset === checkpointOffset;
+    const barren = !!due.length && this.#lastWakeCheckpointOffset === checkpointOffset;
     this.#lastWakeCheckpointOffset = checkpointOffset;
     if (barren) {
       this.#consecutiveBarrenWakes += 1;

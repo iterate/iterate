@@ -49,7 +49,7 @@ export function useTaskCommit({
 
   const commitTasks = useCallback(
     async (manualMessage?: string) => {
-      if (commitInFlightRef.current || taskChanges.length === 0) return;
+      if (commitInFlightRef.current || !taskChanges.length) return;
       commitInFlightRef.current = true;
       try {
         const typed = (manualMessage ?? "").trim();
@@ -76,7 +76,7 @@ export function useTaskCommit({
   }, [autoSaveDueAt]);
 
   const writeCommitMessage = useCallback(async () => {
-    if (taskChanges.length === 0 || generatingMessage || !api) return;
+    if (!taskChanges.length || generatingMessage || !api) return;
     setGeneratingMessage(true);
     try {
       const generated = await api.generateCommitMessage({

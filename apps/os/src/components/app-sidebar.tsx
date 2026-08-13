@@ -166,7 +166,7 @@ function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
               <DropdownMenuLabel className="text-xs text-muted-foreground">
                 Projects
               </DropdownMenuLabel>
-              {projects.length > 0 ? (
+              {projects.length ? (
                 projects.map((project) => (
                   <DropdownMenuItem
                     key={project.id}

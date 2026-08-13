@@ -200,7 +200,7 @@ function makeHarness(
     async deliverPending(slug: string) {
       const woken = await harness.wake(slug);
       const events = stream.events.filter((event) => event.offset > woken.checkpointOffset);
-      if (events.length > 0) {
+      if (events.length) {
         const deliveryResult = await deliverWakeBatch(woken, {
           projectId: null,
           path: HOME,

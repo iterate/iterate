@@ -30,7 +30,7 @@ export function flattenTreeRows<T>(
   const searching = query !== "";
   const walk = (node: T, depth: number): TreeRow<T>[] => {
     const childRows = shape.children(node).flatMap((child) => walk(child, depth + 1));
-    if (searching && childRows.length === 0 && !shape.matches(node, query)) return [];
+    if (searching && !childRows.length && !shape.matches(node, query)) return [];
     const expanded = searching || expandedKeys.has(shape.key(node));
     const row: TreeRow<T> = { node, depth, expanded };
     return expanded ? [row, ...childRows] : [row];

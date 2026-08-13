@@ -616,7 +616,7 @@ function githubAiLinterReviewBody(analysis: GithubAiLinterPublicationAnalysis, m
     const diagnostics = visible.filter(
       (diagnostic) => diagnostic.classification === classification,
     );
-    if (diagnostics.length === 0) continue;
+    if (!diagnostics.length) continue;
     sections.push(
       `### ${classification[0]!.toUpperCase()}${classification.slice(1)}`,
       diagnostics
@@ -628,7 +628,7 @@ function githubAiLinterReviewBody(analysis: GithubAiLinterPublicationAnalysis, m
     );
   }
 
-  if (analysis.resolvedDiagnostics.length > 0) {
+  if (analysis.resolvedDiagnostics.length) {
     sections.push(
       "### Resolved",
       analysis.resolvedDiagnostics

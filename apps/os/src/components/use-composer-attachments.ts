@@ -17,7 +17,7 @@ export function partitionFilesBySize(files: readonly File[]): {
 }
 
 export function fileSizeErrorMessage(rejected: readonly File[]): string | undefined {
-  if (rejected.length === 0) return undefined;
+  if (!rejected.length) return undefined;
   const label = rejected.length === 1 ? rejected[0]!.name : `${rejected.length} files`;
   return `${label} must be ${formatFileSize(MAX_MESSAGE_FILE_SIZE_BYTES)} or smaller.`;
 }
@@ -39,10 +39,10 @@ export function useComposerAttachments() {
 
   function addFiles(fileList: FileList | null) {
     const files = Array.from(fileList ?? []);
-    if (files.length === 0) return;
+    if (!files.length) return;
     const { accepted, rejected } = partitionFilesBySize(files);
     setFileError(fileSizeErrorMessage(rejected));
-    if (accepted.length > 0) {
+    if (accepted.length) {
       setEntries((previous) => [
         ...previous,
         ...accepted.map((file) => ({ id: crypto.randomUUID(), file })),

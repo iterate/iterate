@@ -233,7 +233,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
    */
   async #egressWithApprovalGate(request: Request, streamContext: StreamContext): Promise<Response> {
     const rules = await this.#egressRules();
-    if (rules.length === 0) return this.#egress(request);
+    if (!rules.length) return this.#egress(request);
 
     // Secret references also feed rule matching (match.secretPaths). If the
     // reference set is malformed we still match on method/host/path — a broken
@@ -241,7 +241,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // just without the secret-path matchers. A request that then matches no
     // rule falls to the egress lanes, which report the canonical error.
     const scanned = await secretReferencePathsFromRequest(request);
-    const secretPaths = scanned.problems.length === 0 ? scanned.paths : [];
+    const secretPaths = !scanned.problems.length ? scanned.paths : [];
 
     const rule = matchEgressRule(rules, { method: request.method, url: request.url, secretPaths });
     if (!rule) return this.#egress(request);
@@ -561,7 +561,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         afterOffset: cursor,
         eventTypes: resolutionEventTypes,
       });
-      if (page.length === 0) return "expired";
+      if (!page.length) return "expired";
       for (const event of page) {
         if (Date.parse(event.createdAt) > input.deadline) return "expired";
         cursor = event.offset;
@@ -670,7 +670,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     const { paths: secretPaths, problems } = await secretReferencePathsFromRequest(request);
     if (problems[0]) return secretErrorResponse(problems[0].code);
     const platformReferences = platformReferencesFromHeaders(request.headers);
-    if (request.headers.has(SECRET_JSON_TEMPLATE_HEADER) && secretPaths.length === 0) {
+    if (request.headers.has(SECRET_JSON_TEMPLATE_HEADER) && !secretPaths.length) {
       return secretErrorResponse("secret_reference_required");
     }
 
@@ -678,8 +678,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // HERE, from typed deployment config against a known origin-pinned
     // allowlist — no Durable Object, no synthetic secret. They do not mix
     // with project-secret references in one request.
-    if (platformReferences.length > 0) {
-      if (secretPaths.length > 0) return secretErrorResponse("secret_reference_foreign");
+    if (platformReferences.length) {
+      if (secretPaths.length) return secretErrorResponse("secret_reference_foreign");
       try {
         const substituted = substitutePlatformApiKeyReferences({
           config: parseConfig(this.env),
@@ -742,7 +742,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     if (!gateway) return null;
 
     const endpoint = openAiGatewayBindingEndpoint(request.url);
-    if (endpoint.replace(/\?.*$/, "").length === 0) return null;
+    if (!endpoint.replace(/\?.*$/, "").length) return null;
 
     let body: unknown;
     try {

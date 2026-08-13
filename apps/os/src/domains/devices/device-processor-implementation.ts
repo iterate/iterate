@@ -213,12 +213,12 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     // pending expiry; its firing calls releaseGraces below.
     const nextGraceExpiry = this.#nextGraceExpiry(state);
     if (
-      settlements.length > 0 ||
+      settlements.length ||
       Number.isFinite(nextReceiptCheck) ||
       Number.isFinite(nextGraceExpiry)
     ) {
       runInBackground(async () => {
-        if (settlements.length > 0) {
+        if (settlements.length) {
           // Race-tolerant: the alarm-driven receipt check (or a raced sibling
           // pass) may settle the same requestOffset with a different outcome
           // first — the first-committed settlement stands, and once it reduces
@@ -395,7 +395,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
             notification.approvalRequestEventOffset === event.payload.approvalRequestEventOffset &&
             !Number.isFinite(notification.presentedAt),
         );
-        if (claimed.length > 0) {
+        if (claimed.length) {
           const notifications = { ...state.notifications };
           for (const [offset, notification] of claimed) {
             notifications[offset] = { ...notification, presentedAt: Date.parse(event.createdAt) };
@@ -442,7 +442,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
             notification.destination.path === event.payload.path &&
             !Number.isFinite(notification.presentedAt),
         );
-        if (claimed.length === 0) return { ...state, recentReplyClaims };
+        if (!claimed.length) return { ...state, recentReplyClaims };
         const notifications = { ...state.notifications };
         for (const [offset, notification] of claimed) {
           notifications[offset] = { ...notification, presentedAt: claimedAt };
@@ -567,7 +567,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         payload: { reason: "push-token-invalid" },
       });
     }
-    if (settlements.length > 0) {
+    if (settlements.length) {
       await this.#appendUnlessLostIdempotencyRace(
         (...events) => this.append(...events),
         settlements.map(({ outcome, requestOffset }) => ({

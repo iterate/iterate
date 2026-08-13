@@ -91,7 +91,7 @@ export async function downloadPublicGithubTemplate(
   }
   files.sort((left, right) => left.path.localeCompare(right.path));
 
-  if (files.length === 0) {
+  if (!files.length) {
     throw new Error("The selected config template contains no files.");
   }
   if (files.length > MAX_FILE_COUNT) {

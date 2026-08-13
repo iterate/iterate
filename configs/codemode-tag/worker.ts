@@ -173,7 +173,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       if (snapshot.state.config.driver === HEADLESS_PROCESSOR_SLUG) continue;
       const busy =
         !!snapshot.state.openRequest ||
-        snapshot.state.activeScriptExecutionIds.length > 0 ||
+        !!snapshot.state.activeScriptExecutionIds.length ||
         !!snapshot.state.pendingLlmRequestTrigger;
       if (busy) continue;
       await this.#appendUnlessAlreadyRecorded(() =>
@@ -240,7 +240,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    * change, dont-trigger-request).
    */
   async #syncSystemPromptContext(agentPaths: string[]): Promise<void> {
-    if (agentPaths.length === 0) return;
+    if (!agentPaths.length) return;
     const itx = await this.itx;
     const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
     // A deleted prompt file leaves the platform prompt standing — this
@@ -287,7 +287,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    * on a real change, dont-trigger-request, tombstone on deletion.
    */
   async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {
-    if (agentPaths.length === 0) return;
+    if (!agentPaths.length) return;
     const itx = await this.itx;
     const file = await itx.repo.readFile({ path: "AGENTS.md" });
     const content = !file

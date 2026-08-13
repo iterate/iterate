@@ -51,7 +51,7 @@ export async function readAllApprovalEvents(stream: RpcStub<Stream>): Promise<St
       afterOffset: cursor,
       eventTypes: APPROVAL_STREAM_EVENT_TYPES,
     });
-    if (page.length === 0) return events;
+    if (!page.length) return events;
     events.push(...page);
     cursor = page.at(-1)!.offset;
   }
@@ -238,7 +238,7 @@ export function deriveOpenBatches(events: readonly StreamEvent[]): OpenBatch[] {
       const approved = decision.verdicts.flatMap((verdict, index) =>
         verdict === "approve" ? [index] : [],
       );
-      if (approved.length === 0) continue; // all-reject — terminal
+      if (!approved.length) continue; // all-reject — terminal
       const settled = settledIndexes.get(offset) || new Set<number>();
       if (approved.every((index) => settled.has(index))) continue; // fully released
       open.push({ offset, payload, submitted: true, verdicts: decision.verdicts });
@@ -420,7 +420,7 @@ export async function reconcileBacklog(
       afterOffset: cursor,
       eventTypes: [EVENT.requested, EVENT.decided, EVENT.settled],
     });
-    if (page.length === 0) break;
+    if (!page.length) break;
     events.push(...page);
     cursor = page.at(-1)!.offset;
   }
@@ -449,7 +449,7 @@ export async function awaitSettlement(
   windowMs = SETTLEMENT_WINDOW_MS,
 ): Promise<Settlement> {
   const approved = verdicts.flatMap((verdict, index) => (verdict === "approve" ? [index] : []));
-  if (approved.length === 0) return { kind: "rejected", decidedBy: "human" };
+  if (!approved.length) return { kind: "rejected", decidedBy: "human" };
 
   const forThisBatch = (candidate: StreamEvent) =>
     (candidate.payload as { approvalRequestEventOffset?: number }).approvalRequestEventOffset ===

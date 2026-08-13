@@ -191,7 +191,7 @@ export default function MediaScreen() {
   const capture = useMutation({
     mutationFn: async () => {
       const picked = await pickImages({ selectionLimit: 20 });
-      if (picked.length === 0) return;
+      if (!picked.length) return;
       // Every picked image shows immediately; statuses update per item as
       // the three-wide pipeline works through them.
       setPending(
@@ -376,7 +376,7 @@ export default function MediaScreen() {
                 : syncSummary(syncPass.data, settings.sinceIso))}
         </Text>
       ) : null}
-      {chipTags.length > 0 ? (
+      {chipTags.length ? (
         <View style={styles.chips}>
           {chipTags.map((tag) => {
             const selected = selectedTags.includes(tag);
@@ -408,7 +408,7 @@ export default function MediaScreen() {
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
         </View>
-      ) : feed.length === 0 && items.length === 0 ? (
+      ) : !feed.length && !items.length ? (
         <ScrollView
           contentContainerStyle={styles.centerScroll}
           refreshControl={refreshControl}
@@ -420,7 +420,7 @@ export default function MediaScreen() {
             you can search them here by what they show.
           </Text>
         </ScrollView>
-      ) : feed.length === 0 ? (
+      ) : !feed.length ? (
         <ScrollView
           contentContainerStyle={styles.centerScroll}
           refreshControl={refreshControl}

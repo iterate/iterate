@@ -106,7 +106,7 @@ export function presenceLabel(entry: AgentUiPresenceEntry): string {
 
 export function presenceInitials(label: string): string {
   const segments = label.split(/[^a-zA-Z0-9]+/).filter(Boolean);
-  if (segments.length === 0) return "??";
+  if (!segments.length) return "??";
   if (segments.length === 1) return segments[0]!.slice(0, 2).toUpperCase();
   return `${segments[0]![0]}${segments[1]![0]}`.toUpperCase();
 }

@@ -54,7 +54,7 @@ export class GuestbookApp extends StreamProcessorDurableObject<GuestbookState> {
   async sign(name: string, message: string): Promise<void> {
     const trimmedName = name.trim().slice(0, 80);
     const trimmedMessage = message.trim().slice(0, 500);
-    if (trimmedName.length === 0 || trimmedMessage.length === 0) {
+    if (!trimmedName.length || !trimmedMessage.length) {
       throw new TypeError("Name and message are required");
     }
     const registry = await this.#ensureInitialized();

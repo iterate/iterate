@@ -151,10 +151,10 @@ export function DocumentComments({
       ) : (
         <>
           <div className="min-h-0 flex-1 overflow-y-auto px-4">
-            {threads.length === 0 ? (
+            {!threads.length ? (
               <p className="pb-2 text-xs text-muted-foreground">No comments yet.</p>
             ) : null}
-            {openDocumentThreads.length > 0 ? (
+            {openDocumentThreads.length ? (
               <CommentGroupLabel>Whole document</CommentGroupLabel>
             ) : null}
             {openDocumentThreads.map((thread) => (
@@ -168,7 +168,7 @@ export function DocumentComments({
                 onSelect={onSelectThread}
               />
             ))}
-            {openSelectionThreads.length > 0 ? (
+            {openSelectionThreads.length ? (
               <CommentGroupLabel>Selected text</CommentGroupLabel>
             ) : null}
             {openSelectionThreads.map((thread) => (
@@ -182,7 +182,7 @@ export function DocumentComments({
                 onSelect={onSelectThread}
               />
             ))}
-            {resolvedThreads.length > 0 ? (
+            {resolvedThreads.length ? (
               <button
                 type="button"
                 onClick={() => setShowResolved((value) => !value)}

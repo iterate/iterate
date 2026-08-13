@@ -388,7 +388,7 @@ export function ThreadContextLine({
           afterOffset: cursor,
           eventTypes: [SUMMARY_UPDATED_TYPE, SCRIPT_RUN_SETTLED_TYPE],
         });
-        if (page.length === 0) break;
+        if (!page.length) break;
         events.push(...page);
         cursor = page.at(-1)!.offset;
       }
@@ -466,7 +466,7 @@ function RequestDetails({
       <Text style={styles.url} selectable>
         {request.url}
       </Text>
-      {request.secretPaths.length > 0 ? (
+      {request.secretPaths.length ? (
         <Text style={styles.secretLine}>spends {request.secretPaths.join(", ")}</Text>
       ) : null}
       <Text style={styles.meta} selectable>

@@ -272,9 +272,9 @@ export class StreamSubscriberPagerRegistry {
    */
   pageDormant(justCommitted: readonly StreamEvent[]): void {
     const news = justCommitted;
-    if (news.length === 0) return;
+    if (!news.length) return;
     const pagerEntries = this.#pagers.entries();
-    if (pagerEntries.length === 0) return;
+    if (!pagerEntries.length) return;
 
     for (const { ws, attachment } of pagerEntries) {
       if (Number.isFinite(attachment.pageSentAtOffset)) continue;

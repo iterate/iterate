@@ -644,7 +644,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
               streamContext: { kind: "scope", scopePath: path },
             })) as { channel?: { name?: unknown } };
             const name = result.channel?.name;
-            return typeof name === "string" && name.length > 0 ? name : null;
+            return typeof name === "string" && name.length ? name : null;
           } catch (error) {
             // The channel id is the binding identity; its human-readable name
             // is optional enrichment. Record the binding without a name when

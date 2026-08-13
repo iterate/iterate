@@ -43,14 +43,14 @@ export function parseAuthSigningEs256PrivateJwk(value: string): AuthSigningEs256
     candidate.alg !== "ES256" ||
     candidate.crv !== "P-256" ||
     typeof candidate.d !== "string" ||
-    candidate.d.length === 0 ||
+    !candidate.d.length ||
     typeof candidate.kid !== "string" ||
-    candidate.kid.length === 0 ||
+    !candidate.kid.length ||
     candidate.kty !== "EC" ||
     typeof candidate.x !== "string" ||
-    candidate.x.length === 0 ||
+    !candidate.x.length ||
     typeof candidate.y !== "string" ||
-    candidate.y.length === 0
+    !candidate.y.length
   ) {
     throw new Error(
       "AUTH_FORGE_ES256_PRIVATE_JWK must be a private ES256 (P-256) JWK with alg, crv, d, kid, kty, x, and y",

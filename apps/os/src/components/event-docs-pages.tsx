@@ -71,7 +71,7 @@ function schemaTypeLabel(value: unknown): string {
     (!type && ("properties" in schema || "additionalProperties" in schema))
   ) {
     const properties = asSchemaObject(schema.properties);
-    if (properties && Object.keys(properties).length > 0) return "object";
+    if (properties && Object.keys(properties).length) return "object";
     const additional = schema.additionalProperties;
     if (additional) {
       return `Record<string, ${schemaTypeLabel(additional === true ? undefined : additional)}>`;
@@ -116,7 +116,7 @@ function schemaChildRows(value: unknown, depth: number): SchemaFieldRow[] {
         (variant): variant is Record<string, unknown> =>
           !!variant && !!asSchemaObject(variant.properties),
       );
-    if (objectVariants.length === 0) {
+    if (!objectVariants.length) {
       const nonNull = variants.filter((variant) => asSchemaObject(variant)?.type !== "null");
       return nonNull.length === 1 ? schemaChildRows(nonNull[0], depth) : [];
     }
@@ -178,7 +178,7 @@ function payloadPreview(value: unknown): string {
   const properties = asSchemaObject(schema.properties);
   if (properties) {
     const names = Object.keys(properties);
-    if (names.length === 0) {
+    if (!names.length) {
       const loose = !!schema.additionalProperties;
       return loose ? "{ …any }" : "{}";
     }
@@ -209,7 +209,7 @@ export function EventDocsIndexPage(input: {
     return input.processorDocs
       .map((processor) => {
         const processorMatches =
-          normalizedQuery.length === 0 ||
+          !normalizedQuery.length ||
           processor.contractSlug.toLowerCase().includes(normalizedQuery) ||
           processor.slug.toLowerCase().includes(normalizedQuery) ||
           (processor.description ?? "").toLowerCase().includes(normalizedQuery);
@@ -218,7 +218,7 @@ export function EventDocsIndexPage(input: {
           : processor.events.filter((event) => eventMatchesQuery(event, normalizedQuery));
         return { events, processor, processorMatches };
       })
-      .filter((section) => section.processorMatches || section.events.length > 0);
+      .filter((section) => section.processorMatches || !!section.events.length);
   }, [input.processorDocs, normalizedQuery]);
 
   const visibleEventCount = sections.reduce((count, section) => count + section.events.length, 0);
@@ -251,7 +251,7 @@ export function EventDocsIndexPage(input: {
             aria-label="Filter event types"
             className="w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           />
-          {sections.length === 0 ? (
+          {!sections.length ? (
             <p className="text-sm text-muted-foreground">Nothing matches “{query.trim()}”.</p>
           ) : (
             sections.map(({ events, processor }) => (
@@ -279,7 +279,7 @@ export function EventDocsIndexPage(input: {
                     <p className="text-sm text-muted-foreground">{processor.description}</p>
                   ) : null}
                 </div>
-                {events.length === 0 ? (
+                {!events.length ? (
                   <p className="text-sm text-muted-foreground">
                     This processor owns no event types.
                   </p>
@@ -293,7 +293,7 @@ export function EventDocsIndexPage(input: {
               </section>
             ))
           )}
-          {normalizedQuery.length > 0 ? (
+          {normalizedQuery.length ? (
             <p className="text-xs text-muted-foreground">
               Showing {visibleEventCount} of {input.eventDocs.length} event types.
             </p>
@@ -329,7 +329,7 @@ export function EventDocsIndexPage(input: {
 }
 
 function eventMatchesQuery(event: EventDoc, normalizedQuery: string): boolean {
-  if (normalizedQuery.length === 0) return true;
+  if (!normalizedQuery.length) return true;
   return (
     event.type.toLowerCase().includes(normalizedQuery) ||
     (event.description ?? "").toLowerCase().includes(normalizedQuery)
@@ -347,7 +347,7 @@ export function ProcessorOverviewPage({ processor }: { processor: ProcessorDoc }
       <main className="grid gap-8 px-6 py-8 md:grid-cols-[minmax(0,1fr)_18rem] md:px-10">
         <section className="space-y-6">
           <DocSection title="Owned event types">
-            {processor.events.length === 0 ? (
+            {!processor.events.length ? (
               <p className="text-sm text-muted-foreground">This processor owns no event types.</p>
             ) : (
               <div className="divide-y rounded-md border">
@@ -362,7 +362,7 @@ export function ProcessorOverviewPage({ processor }: { processor: ProcessorDoc }
               <p className="text-sm text-muted-foreground">
                 Consumes <span className="font-mono">*</span> — every event on the stream reaches
                 this processor's reducer
-                {processor.consumes.length > 0 ? ", with these types named explicitly:" : "."}
+                {processor.consumes.length ? ", with these types named explicitly:" : "."}
               </p>
             ) : null}
             <EventReferenceList
@@ -485,8 +485,8 @@ function EventListRow({
   const preview = payloadPreview(event.payloadJsonSchema);
   const meta: string[] = [];
   if (showCrossReferences) {
-    if (event.emittedBy.length > 0) meta.push(`emitted by ${event.emittedBy.length}`);
-    if (event.consumedBy.length > 0) meta.push(`consumed by ${event.consumedBy.length}`);
+    if (event.emittedBy.length) meta.push(`emitted by ${event.emittedBy.length}`);
+    if (event.consumedBy.length) meta.push(`consumed by ${event.consumedBy.length}`);
   }
 
   return (
@@ -504,7 +504,7 @@ function EventListRow({
           payload: {preview}
         </span>
       ) : null}
-      {meta.length > 0 ? (
+      {meta.length ? (
         <span className="mt-1 block text-xs text-muted-foreground">{meta.join(" · ")}</span>
       ) : null}
     </Link>
@@ -517,7 +517,7 @@ function EventReferenceList(input: {
   /** Rows owned by other processors get an "owned by" chip naming their contract. */
   ownContractSlug: string;
 }) {
-  if (input.events.length === 0) {
+  if (!input.events.length) {
     return input.emptyLabel ? (
       <p className="text-sm text-muted-foreground">{input.emptyLabel}</p>
     ) : null;
@@ -566,7 +566,7 @@ function ProcessorLinkList(input: {
   processors: readonly ProcessorReferenceDoc[];
   title: string;
 }) {
-  if (input.processors.length === 0) return null;
+  if (!input.processors.length) return null;
   return (
     <DocSection title={input.title}>
       <div className="space-y-2">
@@ -632,7 +632,7 @@ function SchemaView({ schema }: { schema: unknown }) {
                 <p className="border-b px-4 py-2 font-mono text-xs text-muted-foreground">
                   {variantObject ? variantLabel(variantObject, index) : `variant ${index + 1}`}
                 </p>
-                {variantRows.length > 0 ? (
+                {variantRows.length ? (
                   <FieldRows rows={variantRows} />
                 ) : (
                   <p className="px-4 py-3 font-mono text-sm text-muted-foreground">
@@ -643,7 +643,7 @@ function SchemaView({ schema }: { schema: unknown }) {
             );
           })}
         </div>
-      ) : rows.length > 0 ? (
+      ) : rows.length ? (
         <div className="rounded-md border">
           <FieldRows rows={rows} />
         </div>
@@ -654,7 +654,7 @@ function SchemaView({ schema }: { schema: unknown }) {
             : "This event carries no payload fields."}
         </p>
       )}
-      {rows.length > 0 && allowsAdditionalProperties ? (
+      {rows.length && allowsAdditionalProperties ? (
         <p className="text-xs text-muted-foreground">
           Additional properties beyond the listed fields are allowed.
         </p>
@@ -690,7 +690,7 @@ function FieldRows({ rows, depth = 0 }: { depth?: number; rows: readonly SchemaF
           {row.description ? (
             <p className="mt-1 pr-4 text-sm text-muted-foreground">{row.description}</p>
           ) : null}
-          {row.children.length > 0 ? (
+          {row.children.length ? (
             <div className="mt-2 -ml-0">
               <FieldRows rows={row.children} depth={depth + 1} />
             </div>

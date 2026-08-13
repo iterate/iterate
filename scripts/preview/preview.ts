@@ -250,7 +250,7 @@ export async function testTarget(options: TestTargetOptions) {
   logPreview(
     `target tests finished: ${passed}/${selection.repeat} passed, ${failures.length} failed, ${retries} retries; deployment was reused without deploy or erase`,
   );
-  if (failures.length > 0) {
+  if (failures.length) {
     throw new Error(
       `${failures.length}/${selection.repeat} targeted preview test runs failed:\n${failures.join("\n")}`,
     );
@@ -397,7 +397,7 @@ async function deployPreviewApps({
         previousState: current.state,
       });
 
-  if (selectedApps.length === 0) {
+  if (!selectedApps.length) {
     logPreview(
       "nothing to deploy: no preview apps are affected by this diff, no failed apps need a retry, and every recorded app is still serving — leaving lease and PR body untouched",
     );
@@ -911,7 +911,7 @@ async function testPreviewApps({
 
   const testableApps = selectPreviewAppsForTesting(recorded.apps);
 
-  if (testableApps.length === 0) {
+  if (!testableApps.length) {
     const notice = `Refusing to report preview e2e success for head ${context.pullRequestHeadSha.slice(0, 7)}: no runnable app deployment is recorded. E2e was NOT run. Run preview deploy first.`;
     logPreview(notice);
     await updatePreviewState(context, (state) => ({
@@ -1065,7 +1065,7 @@ async function testPreviewApps({
       ...entries.map((entry) => `  ${entry.appSlug}: ${entry.status}`),
     ].join("\n"),
   );
-  if (entries.length > 0) {
+  if (entries.length) {
     const update = await updatePreviewState(context, (state) => ({
       ...state,
       apps: {
@@ -1852,7 +1852,7 @@ async function readCanonicalTestTelemetry(
   lane: string,
 ): Promise<PreviewTestSummary> {
   const parsed = TestTelemetryArtifact.parse(JSON.parse(await readFile(filePath, "utf8")));
-  if (parsed.tests.length === 0) throw new Error(`${filePath} contained no test results`);
+  if (!parsed.tests.length) throw new Error(`${filePath} contained no test results`);
   return {
     testCount: parsed.tests.length,
     retried: parsed.tests
@@ -1965,7 +1965,7 @@ function combineTestSummaries(summaries: PreviewTestSummary[]): PreviewTestSumma
 
 /** One compact human line for the run log and the PR-body table. */
 function renderPreviewRetrySummary(summary: PreviewRetrySummary): string | null {
-  if (summary.retried.length === 0) {
+  if (!summary.retried.length) {
     return null;
   }
   const details = summary.retried
@@ -2671,7 +2671,7 @@ const previewEnvironmentSlugs = environmentConfigLeaseInventory.map((resource) =
 function resolveRequestedPreviewEnvironment(body: string): string | null {
   const actionableBody = withoutMarkdownExamplesOrComments(body);
   const matches = [...actionableBody.matchAll(/^preview_environment=(preview-\d+)\r?$/gm)];
-  if (matches.length === 0) return null;
+  if (!matches.length) return null;
   if (matches.length > 1) {
     throw new Error("PR body must contain at most one preview_environment directive");
   }
@@ -2916,7 +2916,7 @@ async function syncPreviewInventory(input: {
 function parseEnvironmentConfigLeaseData(
   data: Record<string, unknown>,
 ): EnvironmentConfigLeaseResourceData {
-  if (typeof data.dopplerConfig !== "string" || data.dopplerConfig.trim().length === 0) {
+  if (typeof data.dopplerConfig !== "string" || !data.dopplerConfig.trim().length) {
     throw new Error("Environment config lease data must include dopplerConfig.");
   }
 
@@ -3035,7 +3035,7 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState, pullReque
   const entries = Object.values(state.apps).sort((left, right) =>
     left.appDisplayName.localeCompare(right.appDisplayName),
   );
-  const table = entries.length > 0 ? renderPreviewAppTable(entries) : null;
+  const table = entries.length ? renderPreviewAppTable(entries) : null;
   const failureDetails = entries.map(renderPreviewAppFailureDetails).filter(Boolean).join("\n\n");
 
   const notice = state.notice
@@ -3181,7 +3181,7 @@ function summarizePreviewMessage(message: string | null | undefined) {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-  if (lines.length === 0) {
+  if (!lines.length) {
     return null;
   }
 
@@ -3318,7 +3318,7 @@ async function fetchMainWorkerSizeBaselines(params: {
       }
     }
   }
-  if (Object.keys(baselines).length === 0) {
+  if (!Object.keys(baselines).length) {
     logPreview(
       "no worker-size baselines found on recent main commits — size deltas will be blank until a main deploy publishes one",
     );
@@ -3662,7 +3662,7 @@ function evaluateCloudflareZoneCheck(input: {
     };
   }
 
-  if (matchingZones.length === 0) {
+  if (!matchingZones.length) {
     return {
       ok: false,
       message: `zone not found in Cloudflare account ${input.accountId}`,
@@ -4724,19 +4724,19 @@ function diagnosePreviewFleetCapacity(input: {
   );
 
   const reasons: string[] = [];
-  if (available.length === 0 && leased.length > 0) {
+  if (!available.length && leased.length) {
     reasons.push(`All ${leased.length} preview slots are leased (0 available).`);
-  } else if (available.length > 0) {
+  } else if (available.length) {
     reasons.push(`${available.length} of ${input.slots.length} slots are available.`);
   }
-  if (closedHolders.length > 0) {
+  if (closedHolders.length) {
     reasons.push(
       `${closedHolders.length} leased by closed/merged PRs (cleanup failed or never ran): ${closedHolders
         .map((slot) => `${slot.slug}←${slot.holder}`)
         .join(", ")}.`,
     );
   }
-  if (idle.length > 0) {
+  if (idle.length) {
     reasons.push(
       `${idle.length} idle (open holder, no deploy/test renewal recently): ${idle
         .map(
@@ -4746,14 +4746,14 @@ function diagnosePreviewFleetCapacity(input: {
         .join(", ")}.`,
     );
   }
-  if (nonPrHolders.length > 0) {
+  if (nonPrHolders.length) {
     reasons.push(
       `${nonPrHolders.length} held by non-PR holders (manual/reclaim): ${nonPrHolders
         .map((slot) => `${slot.slug}←${slot.holder ?? "unknown"}`)
         .join(", ")}.`,
     );
   }
-  if (openWithoutSlot.length > 0) {
+  if (openWithoutSlot.length) {
     reasons.push(
       `${openWithoutSlot.length} open PR(s) have no slot: ${openWithoutSlot
         .map((pullRequest) => `#${pullRequest.number}`)
@@ -4761,9 +4761,9 @@ function diagnosePreviewFleetCapacity(input: {
     );
   }
   if (
-    input.openPullRequests.length > 0 &&
-    closedHolders.length === 0 &&
-    available.length === 0 &&
+    input.openPullRequests.length &&
+    !closedHolders.length &&
+    !available.length &&
     input.openPullRequests.length <= input.slots.length
   ) {
     reasons.push(
@@ -4777,10 +4777,10 @@ function diagnosePreviewFleetCapacity(input: {
 
   const summaryParts = [
     `${available.length} available / ${leased.length} leased of ${input.slots.length}`,
-    closedHolders.length > 0 ? `${closedHolders.length} orphaned (closed PR)` : null,
-    idle.length > 0 ? `${idle.length} idle` : null,
-    active.length > 0 ? `${active.length} active` : null,
-    openWithoutSlot.length > 0 ? `${openWithoutSlot.length} open PR(s) waiting for a slot` : null,
+    closedHolders.length ? `${closedHolders.length} orphaned (closed PR)` : null,
+    idle.length ? `${idle.length} idle` : null,
+    active.length ? `${active.length} active` : null,
+    openWithoutSlot.length ? `${openWithoutSlot.length} open PR(s) waiting for a slot` : null,
   ].filter(Boolean);
 
   return {
@@ -5619,7 +5619,7 @@ async function selectRecordedGreenAppsNotServing(params: {
         probeFailures.push(`${url} answered ${probe.detail}`);
       }
     }
-    if (probeFailures.length > 0) {
+    if (probeFailures.length) {
       logPreview(
         `app ${app.slug} selected: recorded ${entry.status} but not actually serving (${probeFailures.join("; ")}) — the slot was likely erased since that deploy`,
       );
@@ -5656,7 +5656,7 @@ async function selectPreviewAppsForPullRequest(input: {
   const diffSelectedSlugs: CloudflarePreviewAppSlugType[] = [];
   if (compareBaseSha === input.pullRequestHeadSha) {
     logPreview(
-      retryApps.length > 0
+      retryApps.length
         ? `head sha unchanged since the last run — retrying apps that didn't reach a green state: ${retryApps.map((app) => app.slug).join(", ")}`
         : "head sha unchanged since the last run and every app finished — nothing to retry",
     );
@@ -5806,7 +5806,7 @@ function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlugTy
 function orderPreviewDeployBatches(apps: readonly PreviewAppRuntime[]) {
   // Dependencies select a coherent set; they are not ordering constraints.
   // Each app's deploy command owns its readiness checks, so start the fleet together.
-  return apps.length === 0 ? [] : [[...apps]];
+  return !apps.length ? [] : [[...apps]];
 }
 
 async function mapWithConcurrency<T, Result>(
@@ -6134,7 +6134,7 @@ function resolvePreviewCompareBaseSha(params: {
 }) {
   const previousHeadSha = Object.values(params.previousState.apps)
     .map((entry) => entry.headSha)
-    .find((headSha): headSha is string => typeof headSha === "string" && headSha.length > 0);
+    .find((headSha): headSha is string => typeof headSha === "string" && !!headSha.length);
   return previousHeadSha ?? params.pullRequestBaseSha;
 }
 
@@ -6292,7 +6292,7 @@ function commandFailureMessage(
 ) {
   const text = sanitizePreviewOutput(
     [result.stderr, result.stdout]
-      .filter((value) => typeof value === "string" && value.trim().length > 0)
+      .filter((value) => typeof value === "string" && !!value.trim().length)
       .join("\n")
       .trim(),
   );

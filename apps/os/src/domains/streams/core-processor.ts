@@ -692,7 +692,7 @@ function evictInboundRecordsOverCap(
   let remaining = bySourcePath;
   for (const [sourcePath, name] of records.slice(0, records.length - MAX_INBOUND_SOURCE_RECORDS)) {
     const { [name]: _evicted, ...keptRecords } = remaining[sourcePath]!;
-    if (Object.keys(keptRecords).length === 0) {
+    if (!Object.keys(keptRecords).length) {
       const { [sourcePath]: _emptied, ...keptSourcePaths } = remaining;
       remaining = keptSourcePaths;
     } else {

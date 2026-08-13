@@ -74,7 +74,7 @@ export default class CodeEditor extends Component<Props> {
       previous.path === this.props.path
         ? []
         : [this.#language.reconfigure(languageForPath(this.props.path))];
-    if (currentValue === this.props.value && effects.length === 0) return;
+    if (currentValue === this.props.value && !effects.length) return;
     this.#syncing = true;
     this.#view.dispatch({
       changes:

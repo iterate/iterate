@@ -221,7 +221,7 @@ export async function evaluateDecision(input: {
 }): Promise<{ accepted: true } | { accepted: false; reason: string }> {
   if (input.decision.verdicts.every((verdict) => verdict === "reject")) return { accepted: true };
   const activeKeys = input.keys.filter((key) => !key.revokedAt);
-  if (activeKeys.length === 0) return { accepted: true };
+  if (!activeKeys.length) return { accepted: true };
   const key = activeKeys.find((candidate) => candidate.keyId === input.decision.keyId);
   if (!key) return { accepted: false, reason: "unknown or missing keyId" };
   if (!input.decision.signature) {

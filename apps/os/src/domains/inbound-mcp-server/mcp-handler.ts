@@ -297,7 +297,7 @@ async function resolveMcpAuth(input: {
     ];
   });
 
-  if (projects.length === 0) {
+  if (!projects.length) {
     return new Response("MCP token does not grant access to any projects.", {
       status: 403,
       headers: mcpCorsHeaders,

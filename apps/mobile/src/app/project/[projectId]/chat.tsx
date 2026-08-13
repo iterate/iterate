@@ -158,7 +158,7 @@ export default function ChatScreen() {
       // chat or an already-created one opened from the list — the platform
       // requires an explicit create() before the first message either way.
       await agent.create();
-      if (input.files.length === 0) {
+      if (!input.files.length) {
         const event = await agent.message(input.message);
         return event.offset;
       }
@@ -290,7 +290,7 @@ export default function ChatScreen() {
         <EventList events={events.data || []} />
       )}
 
-      {attachments.length > 0 ? (
+      {attachments.length ? (
         <View style={styles.attachmentStrip}>
           {attachments.map((image) => (
             <Pressable
@@ -328,13 +328,13 @@ export default function ChatScreen() {
           accessibilityRole="button"
           onPress={() => {
             const message = draft.trim();
-            const canSend = message !== "" || attachments.length > 0;
+            const canSend = message !== "" || !!attachments.length;
             if (canSend && !send.isPending) send.mutate({ message, files: attachments });
           }}
-          disabled={(draft.trim() === "" && attachments.length === 0) || send.isPending}
+          disabled={(draft.trim() === "" && !attachments.length) || send.isPending}
           style={[
             styles.send,
-            ((draft.trim() === "" && attachments.length === 0) || send.isPending) && {
+            ((draft.trim() === "" && !attachments.length) || send.isPending) && {
               opacity: 0.4,
             },
           ]}

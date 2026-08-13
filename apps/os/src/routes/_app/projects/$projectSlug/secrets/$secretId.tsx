@@ -140,7 +140,7 @@ function SecretDetail({
         <InfoRow label="Visibility" value={secret.visibility} />
         <InfoRow
           label="Egress URLs"
-          value={secret.egress.urls.length > 0 ? secret.egress.urls.join(", ") : "(none)"}
+          value={secret.egress.urls.length ? secret.egress.urls.join(", ") : "(none)"}
         />
         <InfoRow label="Used" value={`${secret.audit.usedCount} time(s)`} />
         <InfoRow label="Last used" value={secret.audit.lastUsedAt ?? "never"} />

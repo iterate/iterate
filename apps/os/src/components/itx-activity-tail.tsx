@@ -57,9 +57,7 @@ export function ItxActivityTail({ path = PROJECT_CONTEXT_PATH }: { path?: string
             const fresh = batch.events.filter(
               (event) => !Number.isFinite(lastOffset) || event.offset > lastOffset,
             );
-            return fresh.length === 0
-              ? previous
-              : [...previous, ...fresh].slice(-MAX_BUFFERED_EVENTS);
+            return !fresh.length ? previous : [...previous, ...fresh].slice(-MAX_BUFFERED_EVENTS);
           });
         },
       }),
@@ -89,7 +87,7 @@ export function ItxActivityTail({ path = PROJECT_CONTEXT_PATH }: { path?: string
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
         {status === "error" ? (
           <p className="py-2 font-mono text-xs text-destructive">{error}</p>
-        ) : rows.length === 0 ? (
+        ) : !rows.length ? (
           <p className="py-2 text-xs text-muted-foreground">
             Nothing yet — provide a capability from the repl (itx.provideCapability) and watch it
             land here.

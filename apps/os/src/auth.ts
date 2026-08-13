@@ -283,7 +283,7 @@ export function resolveOrganizationSlugForCreate(
   }
   if (organizations.length === 1) return organizations[0]!.slug;
   throw new Error(
-    organizations.length === 0
+    !organizations.length
       ? "Project creation requires organization membership."
       : "Pass organizationSlug to choose which organization should own the project.",
   );
@@ -323,11 +323,11 @@ export async function resolveItxAuth(input: {
     if (!input.verifyProjectSecret) throw new ItxAuthenticationError();
     const hasProjectId = !!credentials.projectId;
     const hasProjectSlug = !!credentials.projectSlug;
-    if (hasProjectId === hasProjectSlug || credentials.secret.length === 0) {
+    if (hasProjectId === hasProjectSlug || !credentials.secret.length) {
       throw new ItxAuthenticationError();
     }
     const projectIdentifier = credentials.projectSlug ?? credentials.projectId;
-    if (projectIdentifier.length === 0) throw new ItxAuthenticationError();
+    if (!projectIdentifier.length) throw new ItxAuthenticationError();
     const projectId = await input.verifyProjectSecret({
       projectIdentifier,
       secret: credentials.secret,
@@ -346,7 +346,7 @@ export async function resolveItxAuth(input: {
 
   if (credentials.type === "project-app-session") {
     if (!input.verifyProjectAppSession) throw new ItxAuthenticationError();
-    if (credentials.token.length === 0) throw new ItxAuthenticationError();
+    if (!credentials.token.length) throw new ItxAuthenticationError();
     const claims = await input.verifyProjectAppSession(credentials.token);
     if (!claims) throw new ItxAuthenticationError();
     // One user on one project, exactly as minted — no admin, no directory

@@ -82,7 +82,7 @@ export function settlementAppendDeadline(
   inputs: readonly { expiresAt: number }[],
   now: number,
 ): number {
-  if (inputs.length === 0) throw new Error("a settlement append requires at least one input");
+  if (!inputs.length) throw new Error("a settlement append requires at least one input");
   return Math.min(
     ...inputs.map(({ expiresAt }) =>
       expiresAt > now

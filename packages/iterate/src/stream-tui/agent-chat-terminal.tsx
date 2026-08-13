@@ -211,7 +211,7 @@ function AgentChatApp() {
         stickyStart="bottom"
         contentOptions={{ flexDirection: "column", paddingLeft: 1, paddingRight: 1, gap: 1 }}
       >
-        {feed.items.length === 0 && !feed.live ? (
+        {!feed.items.length && !feed.live ? (
           <text fg={COLORS.textMuted}>
             No messages yet — say something to {args.agentPath.slice("/agents/".length)}.
           </text>

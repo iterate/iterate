@@ -117,7 +117,7 @@ function makeJournal() {
                 (!Number.isFinite(args?.beforeOffset) || row.offset < args.beforeOffset),
             )
             .slice(0, limit);
-          if (page.length > 0) cursor = page.at(-1)!.offset;
+          if (page.length) cursor = page.at(-1)!.offset;
           return Promise.resolve(page);
         },
         [Symbol.dispose]: () => {},

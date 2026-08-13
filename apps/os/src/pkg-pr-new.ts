@@ -77,5 +77,5 @@ export function parseIterateRepoPkgSpecOverridesEnv(
     }
     overrides[name] = spec;
   }
-  return Object.keys(overrides).length > 0 ? overrides : undefined;
+  return Object.keys(overrides).length ? overrides : undefined;
 }

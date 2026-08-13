@@ -134,7 +134,7 @@ describe("node-hosted stream processor (e2e)", () => {
         outputs = events
           .filter((e) => e.type === "events.iterate.com/echo-example/output-echoed")
           .map((e) => e.offset);
-        if (outputs.length > 0) break;
+        if (outputs.length) break;
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
       expect(outputs.length).toBeGreaterThan(0);

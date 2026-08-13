@@ -102,7 +102,7 @@ async function main(): Promise<void> {
     }))
     .sort((a, b) => b.wallTimeP99Hours - a.wallTimeP99Hours);
 
-  if (flagged.length === 0) {
+  if (!flagged.length) {
     console.log(
       `✅ DO duration probe clean: no ${prefix}* script in the last ${lookbackHours}h had a ` +
         `single invocation over ${thresholdHours}h wall-clock (the pinned-DO signature).`,

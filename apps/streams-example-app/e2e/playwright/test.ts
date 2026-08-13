@@ -8,7 +8,7 @@ export { expect } from "@playwright/test";
 
 export const test = base.extend({
   context: async ({ context }, use) => {
-    if (Object.keys(cloudflareWorkerVersionOverrideHeaders(process.env)).length > 0) {
+    if (Object.keys(cloudflareWorkerVersionOverrideHeaders(process.env)).length) {
       await context.route("**/*", async (route) => {
         const request = route.request();
         if (request.isNavigationRequest()) {

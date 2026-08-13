@@ -311,7 +311,7 @@ export class CollabHost {
       waiters.add(finish);
     });
     const first = await this.#engine.pull(path, epoch, afterVersion, clientId);
-    if (first.status !== "ops" || first.ops.length > 0) {
+    if (first.status !== "ops" || first.ops.length) {
       finish(); // release OUR registration only — no spurious wake of peers
       return withPresence(first);
     }
@@ -365,7 +365,7 @@ export class CollabHost {
         .filter(([, cursor]) => now - cursor.at <= PRESENCE_STALE_MS)
         .map(([clientId]) => clientId)
         .sort();
-      if (fresh.length > 0) summary[path] = fresh;
+      if (fresh.length) summary[path] = fresh;
     }
     return summary;
   }

@@ -196,7 +196,7 @@ function parseMessage(raw: unknown): LiveAgentStateMessage | undefined {
   if (
     value.kind === "claim" &&
     typeof value.sessionId === "string" &&
-    value.sessionId.length > 0 &&
+    value.sessionId.length &&
     typeof value.startedAtMs === "number" &&
     Number.isFinite(value.startedAtMs)
   ) {
@@ -209,7 +209,7 @@ function parseMessage(raw: unknown): LiveAgentStateMessage | undefined {
   if (
     value.kind === "state" &&
     typeof value.sessionId === "string" &&
-    value.sessionId.length > 0 &&
+    value.sessionId.length &&
     typeof value.sequence === "number" &&
     Number.isSafeInteger(value.sequence) &&
     value.sequence >= 0 &&

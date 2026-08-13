@@ -21,7 +21,7 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
   for (const segment of streamPath.split("/")) {
     if (segment === "" || segment === ".") continue;
     if (segment === "..") {
-      if (segments.length === 0) {
+      if (!segments.length) {
         throw new Error(
           `stream path "${streamPath}" escapes the stream root (resolved from "${basePath}")`,
         );
@@ -31,7 +31,7 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
     }
     segments.push(segment);
   }
-  return segments.length === 0 ? "/" : `/${segments.join("/")}`;
+  return !segments.length ? "/" : `/${segments.join("/")}`;
 }
 
 /** One open journal read — page with `next()`, dispose when done

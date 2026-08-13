@@ -38,7 +38,7 @@ const CreateProjectInput = z.object({
     .string()
     .trim()
     .superRefine((value, context) => {
-      if (value.length === 0) return;
+      if (!value.length) return;
       try {
         parseConfigRepoTemplateReference(value);
       } catch (error) {

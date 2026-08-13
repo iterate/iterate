@@ -203,7 +203,7 @@ export class SlackAgentProcessor extends StreamProcessor<
                   eventType: event.type,
                 },
               ],
-              ...(!input.files || input.files.length === 0 ? {} : { files: input.files }),
+              ...(!input.files?.length ? {} : { files: input.files }),
               ...(!input.llmRequestPolicy ? {} : { llmRequestPolicy: input.llmRequestPolicy }),
             },
           });
@@ -305,7 +305,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           const sharedFiles = readSlackMessageFiles(slackEvent);
           let files: AgentFileAttachment[] | undefined;
           let attachmentFailureNote: string | undefined;
-          if (sharedFiles.length > 0 && this.deps.storeSlackFiles) {
+          if (sharedFiles.length && this.deps.storeSlackFiles) {
             try {
               files = await this.deps.storeSlackFiles({
                 connection: birthCertificate.config.connection,
@@ -990,7 +990,7 @@ function botUserIdFromPayload(payload: unknown): string | undefined {
 
 /** True when message text encodes a Slack user mention of our bot (`<@U…>`). */
 function slackTextMentionsBot(text: string | undefined, botUserId: string | undefined): boolean {
-  if (!text || !botUserId || botUserId.length === 0) return false;
+  if (!text || !botUserId || !botUserId.length) return false;
   // Slack encodes mentions as <@U123> or <@U123|display name>.
   return text.includes(`<@${botUserId}>`) || text.includes(`<@${botUserId}|`);
 }

@@ -835,7 +835,7 @@ export class RepoDurableObject extends DurableObject<Env> {
         proposedCommitOid: outcome.proposedCommitOid,
       };
     }
-    if (outcome.changedPaths.length === 0) {
+    if (!outcome.changedPaths.length) {
       return {
         kind: "completed",
         result: { branch, changedPaths: [], commitOid: outcome.commitOid, noChanges: true },
@@ -1069,7 +1069,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   #writeBranchAuthority(branch: string, authority: RepoHeadAuthority) {
-    if (authority.observedPushes.length === 0) {
+    if (!authority.observedPushes.length) {
       this.ctx.storage.kv.delete(repoObservedPushesStorageKey(branch));
     } else {
       this.ctx.storage.kv.put(repoObservedPushesStorageKey(branch), authority.observedPushes);
@@ -2068,7 +2068,7 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
 
   const extra = await input.mutate({ filesystem, git });
   const changedPaths = (await git.status()).map((entry) => entry.filepath).sort();
-  if (changedPaths.length === 0) {
+  if (!changedPaths.length) {
     const [head] = await git.log({ depth: 1 });
     if (!head) throw new Error("Repo has no commits.");
     return {
@@ -2171,9 +2171,9 @@ function isRepoHeadRecord(value: unknown): value is { commitOid: string; content
   const record = value as { commitOid?: unknown; contentHash?: unknown };
   return (
     typeof record.commitOid === "string" &&
-    record.commitOid.length > 0 &&
+    !!record.commitOid.length &&
     typeof record.contentHash === "string" &&
-    record.contentHash.length > 0
+    !!record.contentHash.length
   );
 }
 
@@ -2219,7 +2219,7 @@ function parseCommitFilesInput(input: CommitRepoFilesInput): CommitRepoFilesInpu
   if (typeof input.message !== "string" || input.message.trim() === "") {
     throw new Error("commitFiles message must be a non-empty string.");
   }
-  if (!Array.isArray(input.changes) || input.changes.length === 0) {
+  if (!Array.isArray(input.changes) || !input.changes.length) {
     throw new Error("commitFiles changes must be a non-empty array.");
   }
   if (input.branch && (typeof input.branch !== "string" || input.branch.trim() === "")) {

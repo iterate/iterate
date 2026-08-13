@@ -128,7 +128,7 @@ function writableAnnotations(annotations: WorkerSettings["annotations"]) {
 
 function bindingNames(bindings: readonly WorkerBinding[], workerName: string) {
   const names = bindings.map((binding) => binding.name);
-  if (names.some((name) => typeof name !== "string" || name.length === 0)) {
+  if (names.some((name) => typeof name !== "string" || !name.length)) {
     throw new Error(
       `DO reset: ${workerName} has a binding without a usable name; refusing to rewrite its settings`,
     );
@@ -198,7 +198,7 @@ export async function detachExternalDurableObjectBindings(input: {
     const removed = bindings.filter((binding) =>
       isBindingToWorker(binding, input.targetWorkerName, namespaceIds),
     );
-    if (removed.length === 0) return;
+    if (!removed.length) return;
 
     const remaining = bindings.filter(
       (binding) => !isBindingToWorker(binding, input.targetWorkerName, namespaceIds),
@@ -278,7 +278,7 @@ async function detachExternalBindingsNamedByFailure(input: {
   alreadyDetached: Set<string>;
 }) {
   const namedWorkers = namedExternalBindingWorkers(input);
-  if (namedWorkers.length === 0) return false;
+  if (!namedWorkers.length) return false;
   await detachExternalDurableObjectBindings({
     ctx: input.ctx,
     targetWorkerName: input.targetWorkerName,
@@ -318,7 +318,7 @@ export async function resetWorkerDurableObjects(input: {
     return { action: "skipped", reason: "script does not exist" };
   }
   const namespaces = await getWorkerDoNamespaces(input.ctx, input.workerName);
-  if (namespaces.length === 0) {
+  if (!namespaces.length) {
     console.log(`DO reset: worker ${input.workerName} has no Durable Object classes — clean`);
     return { action: "skipped", reason: "no Durable Object classes" };
   }
@@ -356,7 +356,7 @@ export async function resetWorkerDurableObjects(input: {
         `(class ${namespace?.className ?? "unknown"})`,
     );
   }
-  if (retiredApplications.length > 0) {
+  if (retiredApplications.length) {
     applications =
       await input.ctx.cf<
         { id: string; name: string; durable_objects?: { namespace_id?: string } }[]
@@ -371,7 +371,7 @@ export async function resetWorkerDurableObjects(input: {
       const namespaceId = application.durable_objects?.namespace_id;
       return !!namespaceId && retiredNamespaceIds.has(namespaceId);
     });
-    if (lingering.length > 0) {
+    if (lingering.length) {
       throw new Error(
         `DO reset: Cloudflare kept retired container applications ` +
           `${lingering.map((application) => application.name).join(", ")}; refusing to park ${input.workerName}`,
@@ -391,7 +391,7 @@ export async function resetWorkerDurableObjects(input: {
     .filter((namespace) => !containerNamespaceIds.has(namespace.namespaceId))
     .map((namespace) => namespace.className)
     .sort();
-  if (deletedClasses.length === 0) {
+  if (!deletedClasses.length) {
     console.log(
       `DO reset: worker ${input.workerName} has only container-bearing classes (${kept.join(", ")}) — kept`,
     );
@@ -567,7 +567,7 @@ export async function resetWorkerDurableObjects(input: {
         );
         resurrected.push(missingClass);
       }
-      if (resurrected.length > 0) {
+      if (resurrected.length) {
         console.log(
           `DO reset: kept unlisted classes ${resurrected.join(", ")} as stubs (instances survive as orphans)`,
         );
@@ -579,7 +579,7 @@ export async function resetWorkerDurableObjects(input: {
   console.log(
     `DO reset: ${input.workerName} destroyed ${deletedClasses.length} classes ` +
       `(${deletedClasses.join(", ")})` +
-      (kept.length > 0 ? `; kept container classes ${kept.join(", ")}` : "") +
+      (kept.length ? `; kept container classes ${kept.join(", ")}` : "") +
       `; parked at 503 until the next deploy`,
   );
   return { action: "reset", deletedClasses, keptContainerClasses: kept };
@@ -674,7 +674,7 @@ export async function ensureContainerClasses(input: {
   containerClassNames: string[];
   compatibilityDate: string;
 }): Promise<{ action: "skipped" | "bootstrapped"; missing: string[] }> {
-  if (input.containerClassNames.length === 0) return { action: "skipped", missing: [] };
+  if (!input.containerClassNames.length) return { action: "skipped", missing: [] };
 
   const scripts =
     await input.ctx.cf<{ id: string; migration_tag?: string | null }[]>(`/workers/scripts`);
@@ -712,7 +712,7 @@ export async function ensureContainerClasses(input: {
     }
   }
 
-  if (missing.length === 0) return { action: "skipped", missing: [] };
+  if (!missing.length) return { action: "skipped", missing: [] };
 
   console.log(
     `container-class bootstrap: ${input.workerName} is missing ${missing.join(", ")} — ` +

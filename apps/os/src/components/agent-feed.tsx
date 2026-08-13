@@ -428,7 +428,7 @@ export function QueuedMessagesPanel({
   onInterrupt?: () => Promise<void> | void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  if (messages.length === 0) return null;
+  if (!messages.length) return null;
   const hiddenCount = messages.length - 1;
   return (
     <div
@@ -527,7 +527,7 @@ function MessageAttachments({
   files: AgentUiMessageItem["files"];
   hasText: boolean;
 }) {
-  if (!files || files.length === 0) return null;
+  if (!files?.length) return null;
   return (
     <div className={cn("flex max-w-full flex-col gap-2", hasText && "mt-1")}>
       {files.map((file) => (
@@ -603,7 +603,7 @@ export function AgentLiveActivity({
   );
   const showStepRail =
     activityExpanded &&
-    (doneSteps.length > 0 ||
+    (!!doneSteps.length ||
       runningSteps.some((step) => step.kind === "code" || liveStepHasVisibleContent(step)));
 
   const runtimeDisplayState = deriveAgentDisplayState(runtime);
@@ -657,7 +657,7 @@ export function AgentLiveActivity({
 
   return (
     <div className="flex flex-col py-0.5">
-      {doneSteps.length > 0 ? (
+      {doneSteps.length ? (
         <Button
           variant="ghost"
           size="sm"

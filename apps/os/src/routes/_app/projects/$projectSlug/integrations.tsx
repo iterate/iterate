@@ -491,7 +491,7 @@ function ProjectIntegrationsContent() {
         )}
       </section>
 
-      {providedConnections.length > 0 ? (
+      {providedConnections.length ? (
         <section className="space-y-3">
           <div className="space-y-1">
             <h2 className="text-base font-medium">Project integrations</h2>
@@ -625,7 +625,7 @@ function ConnectableIntegrationCard({
           <div className="text-xs text-muted-foreground">{connectionSummary}</div>
         </div>
         <div className="flex flex-wrap gap-2">{connectControl}</div>
-        {connections.length > 0 ? (
+        {connections.length ? (
           <div className="grid gap-0.5 border-t pt-2">
             {connections.map((entry) => (
               <ConnectionRow
@@ -904,7 +904,7 @@ function countScopes(scopes: string | null, separator: "," | " ") {
   return scopes
     .split(separator)
     .map((scope) => scope.trim())
-    .filter((scope) => scope.length > 0).length;
+    .filter((scope) => !!scope.length).length;
 }
 
 const ACCOUNT_CONNECTION_PATH = /^\/secrets\/integrations\/([^/]+)\/([^/]+)\/session$/;
@@ -1050,7 +1050,7 @@ function AccountConnectionsItem() {
           write-only session secret; the secret logs itself in and re-logins when the session
           expires.
         </ItemDescription>
-        {accounts.length > 0 ? (
+        {accounts.length ? (
           <div className="mt-2 grid gap-1.5 text-xs text-muted-foreground">
             {accounts.map((account) => (
               <IntegrationMetadataRow

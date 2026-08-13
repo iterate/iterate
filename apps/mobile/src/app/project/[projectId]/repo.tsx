@@ -72,7 +72,7 @@ export default function RepoScreen() {
       const message = current.commitMessage.trim();
       if (current.headChanged) throw new Error("HEAD changed. Reload before committing.");
       if (message === "") throw new Error("Enter a commit message.");
-      if (pending.length === 0) throw new Error("There are no changes to commit.");
+      if (!pending.length) throw new Error("There are no changes to commit.");
       const result = await (
         await getProjectRepo(projectId, repoPath)
       ).commitFiles({
@@ -306,7 +306,7 @@ function FileDrawer({
         value={filter}
       />
       <View style={styles.treeFrame}>
-        {tree.length === 0 ? (
+        {!tree.length ? (
           <Text style={styles.muted}>No matching text files.</Text>
         ) : (
           <TreeView
@@ -359,7 +359,7 @@ function GitDrawer({
   onReload: () => void;
   pending: PendingRepoChange[];
 }) {
-  const disabled = committing || (!headChanged && pending.length === 0);
+  const disabled = committing || (!headChanged && !pending.length);
   return (
     <View style={styles.drawerPanel}>
       <View style={styles.commitForm}>
@@ -386,7 +386,7 @@ function GitDrawer({
         <Text style={styles.changeCount}>{pending.length}</Text>
       </View>
       <ScrollView contentContainerStyle={styles.changeList}>
-        {pending.length === 0 ? <Text style={styles.muted}>Working tree clean.</Text> : null}
+        {!pending.length ? <Text style={styles.muted}>Working tree clean.</Text> : null}
         {pending.map((change) => (
           <View key={change.path} style={styles.changeRow}>
             <Pressable

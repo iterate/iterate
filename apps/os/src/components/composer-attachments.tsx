@@ -30,7 +30,7 @@ export function AttachmentChips({
   entries: readonly AttachmentEntry[];
   onRemove: (id: string) => void;
 }) {
-  if (entries.length === 0) return null;
+  if (!entries.length) return null;
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {entries.map(({ id, file }) => (

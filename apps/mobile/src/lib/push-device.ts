@@ -71,7 +71,7 @@ export async function revokeEnrolledPushDevices(baseUrl: string): Promise<void> 
     const projectIds = enrollments
       .filter((enrollment) => enrollment.baseUrl === baseUrl)
       .map((enrollment) => enrollment.projectId);
-    if (projectIds.length === 0) return;
+    if (!projectIds.length) return;
     const deviceId = await getMobileDeviceId();
     await Promise.all(
       projectIds.map(async (projectId) => {

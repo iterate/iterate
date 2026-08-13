@@ -49,11 +49,11 @@ export function githubWebhookAssociations(input: {
   if (
     !nativeRepository ||
     typeof repositoryOwner !== "string" ||
-    repositoryOwner.length === 0 ||
+    !repositoryOwner.length ||
     !Number.isSafeInteger(nativeRepository.id) ||
     nativeRepository.id < 1 ||
     typeof repositoryName !== "string" ||
-    repositoryName.length === 0
+    !repositoryName.length
   )
     return {};
   const repository = {

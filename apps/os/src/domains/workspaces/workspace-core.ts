@@ -554,7 +554,7 @@ export class WorkspaceCore {
     const localFiles = await this.#localFilePaths();
     const dirty = [...localFiles, ...Object.keys(this.#whiteouts())];
     const moved = reRoutedPaths(current, next, dirty);
-    if (moved.length > 0) {
+    if (moved.length) {
       throw new Error(
         `mount change would silently move uncommitted work to a different repo (or orphan it): ` +
           `${moved
@@ -638,7 +638,7 @@ export class WorkspaceCore {
     // without a repo listing — with every project repo mounted, status and
     // commit inference must not pay one listFiles per repo just to learn
     // that untouched mounts are untouched.
-    if (owned.length === 0 && grouped.whiteoutsByMount.get(mountPath)!.length === 0) {
+    if (!owned.length && !grouped.whiteoutsByMount.get(mountPath)!.length) {
       return { changes: [], localPaths: [], staleWhiteouts: [] };
     }
     const ownedSet = new Set(owned);
@@ -705,7 +705,7 @@ export class WorkspaceCore {
     // the repo write and cleanup must not need another commit attempt to
     // stop masking a future re-add of the file.
     const stale = classified.flatMap((mount) => mount.staleWhiteouts);
-    if (stale.length > 0) await this.#healStaleWhiteouts(stale);
+    if (stale.length) await this.#healStaleWhiteouts(stale);
     return { mounts: classified.map((mount) => mount.entry), unmounted: grouped.unmounted };
   }
 
@@ -766,11 +766,11 @@ export class WorkspaceCore {
         const dirty: string[] = [];
         for (const path of snapshot.mountPaths) {
           const publishable =
-            grouped.whiteoutsByMount.get(path)!.length > 0 ||
-            (await this.#publishableLocalPaths(path, grouped.localByMount.get(path)!)).length > 0;
+            !!grouped.whiteoutsByMount.get(path)!.length ||
+            !!(await this.#publishableLocalPaths(path, grouped.localByMount.get(path)!)).length;
           if (publishable) dirty.push(path);
         }
-        if (dirty.length === 0) {
+        if (!dirty.length) {
           throw new Error("Nothing to commit — no mount has changes.");
         }
         if (dirty.length > 1) {
@@ -804,12 +804,12 @@ export class WorkspaceCore {
       // Heal crash residue FIRST: a whiteout masking nothing at HEAD (a prior
       // commit died between the repo write and cleanup) would otherwise mark
       // this mount dirty forever and hide a future re-add of the file.
-      if (staleWhiteouts.length > 0) {
+      if (staleWhiteouts.length) {
         const whiteouts = this.#whiteouts();
         for (const key of staleWhiteouts) delete whiteouts[key];
         this.#kv.put(WHITEOUTS_KEY, whiteouts);
       }
-      if (changes.length === 0) {
+      if (!changes.length) {
         throw new Error(`Nothing to commit — no changes under the mount at "${mountPath}".`);
       }
 

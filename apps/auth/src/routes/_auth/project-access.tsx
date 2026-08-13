@@ -315,10 +315,10 @@ function RouteComponent() {
   const allProjectIds = projectSelections.flatMap((selection) =>
     selection.projects.map((project) => project.id),
   );
-  const hasProjects = allProjectIds.length > 0;
+  const hasProjects = !!allProjectIds.length;
   const effectiveSelectedProjectIds = selectedProjectIds ?? allProjectIds;
-  const canContinue = effectiveSelectedProjectIds.length > 0;
-  const isCreatingFirstOrganization = organizations.length === 0;
+  const canContinue = !!effectiveSelectedProjectIds.length;
+  const isCreatingFirstOrganization = !organizations.length;
   const suggestedProjectSlug =
     hintedProjectSlug || (organizationName.trim() ? slugify(organizationName) : "");
   const firstProjectSlug = projectSlugOverride ?? suggestedProjectSlug;
@@ -327,11 +327,11 @@ function RouteComponent() {
     projectSlug: firstProjectSlug,
   });
   const organizationNameIssues =
-    !parsedOrganizationWithProject.success && organizationName.length > 0
+    !parsedOrganizationWithProject.success && organizationName.length
       ? parsedOrganizationWithProject.error.issues.filter((issue) => issue.path[0] === "name")
       : [];
   const firstProjectSlugIssues =
-    !parsedOrganizationWithProject.success && firstProjectSlug.length > 0
+    !parsedOrganizationWithProject.success && firstProjectSlug.length
       ? parsedOrganizationWithProject.error.issues.filter(
           (issue) => issue.path[0] === "projectSlug",
         )
@@ -356,7 +356,7 @@ function RouteComponent() {
     isSubmitting,
     isCreating: createProjectMutation.isPending,
     isValid: parsedProject.success,
-    error: !parsedProject.success && projectSlug.length > 0 ? parsedProject.error.issues : null,
+    error: !parsedProject.success && projectSlug.length ? parsedProject.error.issues : null,
     // The combined first-run mutation can leave an error behind when the
     // organization was created but the project was not (the UI then falls to
     // this project-only form) — keep that failure visible for the retry.
@@ -414,7 +414,7 @@ function RouteComponent() {
               }}
             >
               <FieldGroup>
-                <Field data-invalid={organizationNameIssues.length > 0}>
+                <Field data-invalid={!!organizationNameIssues.length}>
                   <FieldLabel htmlFor="organization-name">Organization name</FieldLabel>
                   <Input
                     id="organization-name"
@@ -422,14 +422,14 @@ function RouteComponent() {
                     placeholder="Acme"
                     value={organizationName}
                     onChange={(event) => setOrganizationName(event.target.value)}
-                    aria-invalid={organizationNameIssues.length > 0}
+                    aria-invalid={!!organizationNameIssues.length}
                     disabled={isSubmitting}
                   />
-                  {organizationNameIssues.length > 0 ? (
+                  {organizationNameIssues.length ? (
                     <FieldError errors={organizationNameIssues} />
                   ) : null}
                 </Field>
-                <Field data-invalid={firstProjectSlugIssues.length > 0}>
+                <Field data-invalid={!!firstProjectSlugIssues.length}>
                   <FieldLabel htmlFor="first-project-slug">Project slug</FieldLabel>
                   <Input
                     id="first-project-slug"
@@ -437,7 +437,7 @@ function RouteComponent() {
                     placeholder="acme"
                     value={firstProjectSlug}
                     onChange={(event) => setProjectSlugOverride(event.target.value)}
-                    aria-invalid={firstProjectSlugIssues.length > 0}
+                    aria-invalid={!!firstProjectSlugIssues.length}
                     disabled={isSubmitting}
                   />
                   <FieldDescription>
@@ -446,7 +446,7 @@ function RouteComponent() {
                       {firstProjectSlug || "your-project"}.{projectHostnameBase}
                     </span>
                   </FieldDescription>
-                  {firstProjectSlugIssues.length > 0 ? (
+                  {firstProjectSlugIssues.length ? (
                     <FieldError errors={firstProjectSlugIssues} />
                   ) : null}
                 </Field>
@@ -565,7 +565,7 @@ function RouteComponent() {
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium">Projects</p>
               <p className="text-xs text-muted-foreground">
-                {effectiveSelectedProjectIds.length === 0
+                {!effectiveSelectedProjectIds.length
                   ? "No projects selected."
                   : `${effectiveSelectedProjectIds.length} selected.`}
               </p>
@@ -621,7 +621,7 @@ function RouteComponent() {
                     {selection.projects.length === 1 ? "" : "s"}
                   </p>
                 </div>
-                {selection.projects.length > 0 ? (
+                {selection.projects.length ? (
                   <div className="divide-y">
                     {selection.projects.map((project) => {
                       const checked = effectiveSelectedProjectIds.includes(project.id);
@@ -788,7 +788,7 @@ function CreateProjectForm(props: {
             className="w-full"
             value={props.selectedOrganizationSlug}
             onChange={(event) => props.onOrganizationSlugChange(event.target.value)}
-            disabled={props.organizations.length === 0 || props.isSubmitting}
+            disabled={!props.organizations.length || props.isSubmitting}
           >
             {props.organizations.map((organization) => (
               <NativeSelectOption key={organization.id} value={organization.slug}>

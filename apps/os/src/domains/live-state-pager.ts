@@ -212,7 +212,7 @@ export class LiveStatePagers {
 
   /** Whether any watcher has given this DO a Pager (state pushes wanted). */
   hasPagers(): boolean {
-    return this.#hooks.getWebSockets(LIVE_STATE_PAGER_TAG).length > 0;
+    return !!this.#hooks.getWebSockets(LIVE_STATE_PAGER_TAG).length;
   }
 
   /**
@@ -293,7 +293,7 @@ export class LiveStatePagers {
 
   #flush(): void {
     const sockets = this.#hooks.getWebSockets(LIVE_STATE_PAGER_TAG);
-    if (sockets.length === 0) return;
+    if (!sockets.length) return;
     let page: string;
     try {
       page = JSON.stringify({ type: "state", state: this.#hooks.readState() });

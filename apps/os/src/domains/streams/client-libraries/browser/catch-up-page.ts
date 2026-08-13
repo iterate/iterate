@@ -121,7 +121,7 @@ export async function catchUpAvailableHistory<T extends { offset: number }>(args
     }
     if (result.limit < pageLimit) args.onPageLimitReduced?.(pageLimit, result.limit);
     pageLimit = result.limit;
-    if (result.page.length === 0) {
+    if (!result.page.length) {
       await args.ingest({
         events: [],
         scannedAfterOffset: cursor,

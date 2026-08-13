@@ -1765,7 +1765,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
           afterOffset: cursor,
           eventTypes: ["events.iterate.com/media/captured", "events.iterate.com/media/processed"],
         });
-        if (page.length === 0) break;
+        if (!page.length) break;
         events.push(...page);
         cursor = page[page.length - 1].offset;
       }

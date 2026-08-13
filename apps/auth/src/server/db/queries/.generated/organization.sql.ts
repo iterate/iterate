@@ -18,7 +18,7 @@ export const getOrganizationBySlug = Object.assign(
     params: getOrganizationBySlug.Params,
   ): Promise<getOrganizationBySlug.Result | null> {
     const rows = await client.all<getOrganizationBySlug.Result>(getOrganizationBySlugQuery(params));
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   { sql: getOrganizationBySlugSql, query: getOrganizationBySlugQuery },
 );
@@ -142,7 +142,7 @@ export const getMembershipByOrganizationAndUserId = Object.assign(
     const rows = await client.all<getMembershipByOrganizationAndUserId.Result>(
       getMembershipByOrganizationAndUserIdQuery(params),
     );
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   {
     sql: getMembershipByOrganizationAndUserIdSql,
@@ -331,7 +331,7 @@ export const getOrganizationMemberPresenceByEmail = Object.assign(
     const rows = await client.all<getOrganizationMemberPresenceByEmail.Result>(
       getOrganizationMemberPresenceByEmailQuery(params),
     );
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   {
     sql: getOrganizationMemberPresenceByEmailSql,
@@ -371,7 +371,7 @@ export const getInviteByOrganizationAndEmail = Object.assign(
     const rows = await client.all<getInviteByOrganizationAndEmail.Result>(
       getInviteByOrganizationAndEmailQuery(params),
     );
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   { sql: getInviteByOrganizationAndEmailSql, query: getInviteByOrganizationAndEmailQuery },
 );
@@ -604,7 +604,7 @@ export const getPendingInviteByIdAndEmail = Object.assign(
     const rows = await client.all<getPendingInviteByIdAndEmail.Result>(
       getPendingInviteByIdAndEmailQuery(params),
     );
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   { sql: getPendingInviteByIdAndEmailSql, query: getPendingInviteByIdAndEmailQuery },
 );

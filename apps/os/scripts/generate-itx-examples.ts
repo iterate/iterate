@@ -280,7 +280,7 @@ function unwrapBlockBody(
   const unprotected = lines.filter(
     (line, index) => line.trim() !== "" && !isProtected(lineStarts[index]!),
   );
-  if (unprotected.length === 0) throw new Error(`example "${id}": fn body is empty`);
+  if (!unprotected.length) throw new Error(`example "${id}": fn body is empty`);
   const baseIndent = Math.min(...unprotected.map((line) => line.length - line.trimStart().length));
 
   const dedented = lines.map((line, index) => {

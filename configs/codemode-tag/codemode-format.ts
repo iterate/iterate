@@ -44,8 +44,8 @@ export function parseCodemodeResponse(content: string): CodemodeParseOutcome {
   const lines = content.split("\n");
   const openIndexes = lines.flatMap((line, index) => (OPEN_LINE_RE.test(line) ? [index] : []));
   const closeIndexes = lines.flatMap((line, index) => (CLOSE_LINE_RE.test(line) ? [index] : []));
-  if (openIndexes.length === 0) {
-    if (closeIndexes.length > 0) {
+  if (!openIndexes.length) {
+    if (closeIndexes.length) {
       return {
         kind: "malformed",
         feedback: `Your code did NOT run: the response has a </codemode> line with no opening <codemode> line before it. ${GRAMMAR_REMINDER}`,
@@ -67,7 +67,7 @@ export function parseCodemodeResponse(content: string): CodemodeParseOutcome {
   // `</codemode>` line CAN appear inside a template literal the script
   // builds, and cutting there would execute an unparseable prefix.
   const closersAfterOpen = closeIndexes.filter((index) => index > openIndex);
-  if (closeIndexes.some((index) => index < openIndex) || closersAfterOpen.length === 0) {
+  if (closeIndexes.some((index) => index < openIndex) || !closersAfterOpen.length) {
     return {
       kind: "malformed",
       feedback: `Your code did NOT run: the <codemode> tag was never closed (or a stray </codemode> line appeared before it). ${GRAMMAR_REMINDER}`,

@@ -87,7 +87,7 @@ test("OpenAPI built-in connects directly and mounts as a described capability", 
       project.pets.findPetsByStatus({ status: "pending" }),
     ).resolves.toEqual([{ id: 1, name: "pending-pet", status: "pending" }]);
 
-    if (api.authHeaders.length > 0) {
+    if (api.authHeaders.length) {
       expect(api).toMatchObject({
         authHeaders: expect.arrayContaining([`Bearer ${secretMaterial}`]),
       });
@@ -167,11 +167,11 @@ test("MCP built-in connects directly and mounts as a described capability", asyn
       project.cloudflareDocs.search_docs({ query: "Durable Objects" }),
     ).resolves.toEqual({ answer: "docs:Durable Objects" });
 
-    if (mcp.methods.length > 0) {
+    if (mcp.methods.length) {
       expect(mcp).toMatchObject({ methods: expect.arrayContaining(["initialize", "tools/call"]) });
       expect(mcp.methods).not.toContain("tools/list");
     }
-    if (mcp.authHeaders.length > 0) {
+    if (mcp.authHeaders.length) {
       expect(mcp).toMatchObject({
         authHeaders: expect.arrayContaining([`Bearer ${secretMaterial}`]),
       });

@@ -148,7 +148,7 @@ if (cmd === "state") {
       beforeOffset: to + 1,
       limit: pageSize,
     })) as { offset: number }[];
-    if (page.length === 0) break;
+    if (!page.length) break;
     total += page.length;
     cursor = page.at(-1)!.offset;
   }

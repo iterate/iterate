@@ -33,7 +33,7 @@ function fakeLocalLayer() {
         const rest = key.slice(prefix.length);
         const [head, ...tail] = rest.split("/");
         if (head === "" || !head) continue;
-        children.set(head, tail.length > 0 ? "directory" : "file");
+        children.set(head, tail.length ? "directory" : "file");
       }
       return [...children.entries()].map(([name, type]) => ({
         name,
@@ -98,7 +98,7 @@ function fakeRepo(tree: Record<string, string>) {
         branch: "main",
         changedPaths: input.changes.map((change) => change.path),
         commitOid: `commit-${commits.length}`,
-        noChanges: input.changes.length === 0,
+        noChanges: !input.changes.length,
       };
     },
     log: async ({ limit }) => ({

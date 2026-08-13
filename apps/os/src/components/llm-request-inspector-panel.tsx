@@ -424,7 +424,7 @@ function ReplayMetricsSection({ stats }: { stats: LlmRequestReplayStats }) {
             </dd>
           </>
         )}
-        {streamingParts.length === 0 ? null : (
+        {!streamingParts.length ? null : (
           <>
             <dt className="text-muted-foreground/70">streaming</dt>
             <dd>{streamingParts.join(" · ")}</dd>

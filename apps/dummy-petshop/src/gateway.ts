@@ -141,7 +141,7 @@ async function accessGrantFromToken(
   token: unknown,
   deps: GatewayDeps,
 ): Promise<AccessPayload | null> {
-  if (typeof token !== "string" || token.length === 0) return null;
+  if (typeof token !== "string" || !token.length) return null;
   const grant = await unseal<AccessPayload>(token, deps.sealKey);
   if (!grant || grant.t !== "access" || grant.exp < nowSeconds()) return null;
   if (grant.epoch !== (await deps.getAccessTokenEpoch(grant.clientId))) return null;
@@ -226,7 +226,7 @@ export function subprotocolAuth(header: string | null): {
   const offered = (header ?? "")
     .split(",")
     .map((value) => value.trim())
-    .filter((value) => value.length > 0);
+    .filter((value) => !!value.length);
   const carrier = offered.find((value) => value.startsWith(SUBPROTOCOL_TOKEN_PREFIX));
   const token = carrier ? carrier.slice(SUBPROTOCOL_TOKEN_PREFIX.length) : null;
   const selected = offered.includes(GATEWAY_SUBPROTOCOL)

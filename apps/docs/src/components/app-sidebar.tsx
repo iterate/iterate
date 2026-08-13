@@ -242,7 +242,7 @@ function WorkspaceSwitcher({
                     {listError ?? "Loading…"}
                   </span>
                 </DropdownMenuItem>
-              ) : workspaces.length === 0 ? (
+              ) : !workspaces.length ? (
                 <DropdownMenuItem disabled className="p-2">
                   <span className="truncate">No workspaces yet</span>
                 </DropdownMenuItem>

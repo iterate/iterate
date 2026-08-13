@@ -680,7 +680,7 @@ function childStreamPathFromRow(row: FeedItemRow): string | undefined {
   const payload = event.payload;
   if (!payload || typeof payload !== "object") return undefined;
   const childPath = (payload as Record<string, unknown>).childPath;
-  return typeof childPath === "string" && childPath.length > 0 ? childPath : undefined;
+  return typeof childPath === "string" && childPath.length ? childPath : undefined;
 }
 
 function feedItemEventType(row: FeedItemRow) {
@@ -699,7 +699,7 @@ function feedItemEvents(row: FeedItemRow): Record<string, unknown>[] {
 
 function feedItemExpandedJson(row: FeedItemRow) {
   const events = feedItemEvents(row);
-  return events.length === 0 ? row.data : events;
+  return !events.length ? row.data : events;
 }
 
 function parseFeedItem(row: Record<string, unknown>): FeedItemRow | undefined {

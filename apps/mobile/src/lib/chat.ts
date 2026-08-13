@@ -147,7 +147,7 @@ export function mergeEventsByOffset(
   existing: StreamEvent[],
   incoming: StreamEvent[],
 ): StreamEvent[] {
-  if (incoming.length === 0) return existing;
+  if (!incoming.length) return existing;
   const byOffset = new Map<number, StreamEvent>();
   for (const event of existing) byOffset.set(event.offset, event);
   for (const event of incoming) byOffset.set(event.offset, event);

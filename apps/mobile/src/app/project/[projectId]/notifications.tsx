@@ -297,7 +297,7 @@ function ApprovalNotificationDetail({
           afterOffset: cursor,
           eventTypes: [EVENT.requested, EVENT.decided, EVENT.settled],
         });
-        if (page.length === 0) break;
+        if (!page.length) break;
         events.push(...page);
         cursor = page.at(-1)!.offset;
         // Completed history is immutable — stop paging the moment the batch

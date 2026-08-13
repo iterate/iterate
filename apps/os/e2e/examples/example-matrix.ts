@@ -167,7 +167,7 @@ function cliProcessFailure(error: unknown): unknown {
 function compactProcessOutput(output: unknown): string | undefined {
   if (typeof output !== "string") return undefined;
   const compact = output.replace(/\s+/gu, " ").trim();
-  if (compact.length === 0) return undefined;
+  if (!compact.length) return undefined;
   const limit = 2_000;
   return compact.length > limit ? `…${compact.slice(-limit)}` : compact;
 }

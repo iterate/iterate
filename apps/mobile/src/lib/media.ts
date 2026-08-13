@@ -529,7 +529,7 @@ export async function readAllMediaEvents(stream: {
       afterOffset: cursor,
       eventTypes: MEDIA_EVENT_TYPES,
     });
-    if (page.length === 0) return events;
+    if (!page.length) return events;
     events.push(...page);
     cursor = page.at(-1)!.offset;
   }

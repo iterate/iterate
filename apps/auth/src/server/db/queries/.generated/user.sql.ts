@@ -28,7 +28,7 @@ export const getUserById = Object.assign(
     params: getUserById.Params,
   ): Promise<getUserById.Result | null> {
     const rows = await client.all<getUserById.Result>(getUserByIdQuery(params));
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   { sql: getUserByIdSql, query: getUserByIdQuery },
 );
@@ -80,7 +80,7 @@ export const getUserByEmail = Object.assign(
     params: getUserByEmail.Params,
   ): Promise<getUserByEmail.Result | null> {
     const rows = await client.all<getUserByEmail.Result>(getUserByEmailQuery(params));
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   { sql: getUserByEmailSql, query: getUserByEmailQuery },
 );

@@ -4,7 +4,7 @@ export function parseSignupAllowlist(value: string): string[] {
   return value
     .split(",")
     .map((pattern) => pattern.trim().toLowerCase())
-    .filter((pattern) => pattern.length > 0);
+    .filter((pattern) => !!pattern.length);
 }
 
 export function matchesSignupAllowlist(email: string, patterns: string[]): boolean {

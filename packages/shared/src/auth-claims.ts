@@ -41,7 +41,7 @@ export function listProjectScopeIds(scopes: Iterable<string>) {
     }
 
     const projectId = scope.slice(ITERATE_PROJECT_SCOPE_PREFIX.length).trim();
-    if (projectId.length === 0) {
+    if (!projectId.length) {
       continue;
     }
 

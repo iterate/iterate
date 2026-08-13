@@ -102,7 +102,7 @@ export class EmailAgentProcessor extends StreamProcessor<
           );
           let files: AgentFileAttachment[] | undefined;
           let attachmentFailureNote: string | undefined;
-          if (stored.length > 0 && this.deps.resolveStoredAttachments) {
+          if (stored.length && this.deps.resolveStoredAttachments) {
             try {
               files = await this.deps.resolveStoredAttachments(
                 stored.map((attachment) => ({
@@ -145,7 +145,7 @@ export class EmailAgentProcessor extends StreamProcessor<
                     eventType: event.type,
                   },
                 ],
-                ...(!files || files.length === 0 ? {} : { files }),
+                ...(!files?.length ? {} : { files }),
                 // Automated mail (Auto-Submitted, bulk precedence,
                 // mailer-daemon) is recorded but never triggers a reply —
                 // the classic mail-loop guard.
@@ -283,7 +283,7 @@ function inboundEmailAgentInput(payload: InboundEmailPayload): string {
     ...(!message.messageId ? {} : { messageId: message.messageId }),
     ...(!message.text ? {} : { text: message.text }),
     ...(!message.text && !!message.html && { html: message.html }),
-    ...(attachments.length === 0 ? {} : { attachments }),
+    ...(!attachments.length ? {} : { attachments }),
     ...(payload.automated && { automated: true }),
   };
   return [

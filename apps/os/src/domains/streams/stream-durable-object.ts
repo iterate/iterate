@@ -1849,7 +1849,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * for work retained across a stream deletion and recreation.
    */
   appendIfStreamId(args: { streamId: string; events: StreamEventInput[] }): StreamEvent[] {
-    if (args.streamId.trim().length === 0) {
+    if (!args.streamId.trim().length) {
       throw new Error("streamId must be a non-empty string");
     }
     const currentStreamId = this.#coreProcessorState.streamId;
@@ -1864,7 +1864,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     streamId: string;
     events: StreamEventInput[];
   }): StreamEvent[] {
-    if (args.streamId.trim().length === 0) {
+    if (!args.streamId.trim().length) {
       throw new Error("streamId must be a non-empty string");
     }
     const currentStreamId = this.#coreProcessorState.streamId;
@@ -2102,7 +2102,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
     }
 
-    if (newEvents.length === 0) return events;
+    if (!newEvents.length) return events;
 
     // 2. Persist event rows and advance the in-memory reduction. Durable Object
     // SQL storage runs synchronously in the object's thread; each sql.exec() is
@@ -2387,7 +2387,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       self: { projectId: this.name.projectId, path: this.name.path },
       inbound: this.#coreProcessorState.subscriptions.inbound.bySourcePath[batch.path],
     });
-    if (inputs.length > 0) {
+    if (inputs.length) {
       this.#append({ authority: "copy" }, inputs);
     }
     return receipt;
@@ -2506,7 +2506,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       beforeOffset: highestOffset + 1,
       limit: 500,
     });
-    if (page.length === 0) return undefined;
+    if (!page.length) return undefined;
 
     let next = state;
     for (const event of page) {
@@ -2701,7 +2701,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       // silently delivers nothing forever.
       throw new Error(`replayAfterOffset must be a non-negative integer`);
     }
-    if (args.expectedStreamId && args.expectedStreamId.trim().length === 0) {
+    if (args.expectedStreamId && !args.expectedStreamId.trim().length) {
       throw new Error(`expectedStreamId must be null or a non-empty string`);
     }
     if (
@@ -2890,7 +2890,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     args: { offset: number; timeoutMs?: number },
   ): Promise<void> {
     const trimmedName = name.trim();
-    if (trimmedName.length === 0) {
+    if (!trimmedName.length) {
       throw new Error("waitUntilProcessed requires a subscription name");
     }
     if (!Number.isSafeInteger(args.offset) || args.offset < 0) {

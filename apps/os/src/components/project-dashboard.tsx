@@ -60,7 +60,7 @@ export function ProjectDashboard({
 
         <NewAgentComposer projectId={projectId} projectSlug={projectSlug} />
 
-        {recent.length > 0 ? (
+        {recent.length ? (
           <section className="flex flex-col gap-3" aria-labelledby="recent-agents-heading">
             <div className="flex items-baseline justify-between gap-3">
               <h2 id="recent-agents-heading" className="text-base font-medium tracking-tight">

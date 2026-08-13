@@ -65,7 +65,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    * can end up one version behind until the next AGENTS.md change.)
    */
   async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {
-    if (agentPaths.length === 0) return;
+    if (!agentPaths.length) return;
     const itx = await this.itx;
     const file = await itx.repo.readFile({ path: "AGENTS.md" });
     const content = !file

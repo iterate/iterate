@@ -79,7 +79,7 @@ export async function replayPath({
   path: string[];
   target: unknown;
 }) {
-  if (path.length === 0) {
+  if (!path.length) {
     return typeof target === "function" ? await target(...args) : target;
   }
   let receiver = await target;

@@ -408,7 +408,7 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
   };
   for (const entry of entries) if (entry.type) await emit(entry);
   let pending = entries.filter((entry) => !entry.type);
-  while (pending.length > 0) {
+  while (pending.length) {
     const next: Entry[] = [];
     for (const entry of pending) {
       try {
@@ -553,7 +553,7 @@ export function parseReceivePackResponse(body: Uint8Array, expectedRef: string):
   const first = frames[0]?.payload ?? new Uint8Array(0);
   const notes: string[] = [];
   let report: Uint8Array;
-  if (first.length > 0 && (first[0] === 1 || first[0] === 2 || first[0] === 3)) {
+  if (first.length && (first[0] === 1 || first[0] === 2 || first[0] === 3)) {
     for (const frame of frames) {
       if (frame.payload[0] === 3) {
         notes.push(textDecoder.decode(frame.payload.subarray(1)).trim());

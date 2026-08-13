@@ -103,7 +103,7 @@ export function canonicalizeStreamPath(path: string): string {
 }
 
 function assertLegalDurableObjectName(name: string): void {
-  if (name.length === 0) {
+  if (!name.length) {
     throw new Error("Durable Object name must be non-empty.");
   }
   const byteLength = new TextEncoder().encode(name).byteLength;

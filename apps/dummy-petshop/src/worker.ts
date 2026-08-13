@@ -288,11 +288,7 @@ async function authorizeRejection(
       400,
     );
   }
-  if (
-    client.redirectUris &&
-    client.redirectUris.length > 0 &&
-    !client.redirectUris.includes(redirectUri)
-  ) {
+  if (client.redirectUris?.length && !client.redirectUris.includes(redirectUri)) {
     return json(
       {
         error: "invalid_request",
@@ -374,7 +370,7 @@ async function registerOAuthClient(request: Request, deps: PetshopDeps): Promise
   const redirectUris = Array.isArray(body.redirect_uris)
     ? body.redirect_uris.filter((value): value is string => typeof value === "string")
     : [];
-  if (redirectUris.length === 0 || !redirectUris.every((value) => URL.canParse(value))) {
+  if (!redirectUris.length || !redirectUris.every((value) => URL.canParse(value))) {
     return json(
       { error: "invalid_redirect_uri", error_description: "redirect_uris must be absolute URLs" },
       400,
@@ -730,7 +726,7 @@ async function backdoor(key: string, request: Request, deps: PetshopDeps): Promi
   }
   if (key === "POST /__backdoor/expire-tokens") {
     const clientId = (await readJson(request)).clientId;
-    if (typeof clientId !== "string" || clientId.length === 0) {
+    if (typeof clientId !== "string" || !clientId.length) {
       return json(
         {
           error: "invalid_request",
@@ -764,7 +760,7 @@ async function backdoor(key: string, request: Request, deps: PetshopDeps): Promi
     const body = await readJson(request);
     const clientId = body.clientId;
     const times = body.times;
-    if (typeof clientId !== "string" || clientId.length === 0) {
+    if (typeof clientId !== "string" || !clientId.length) {
       return json(
         {
           error: "invalid_request",
@@ -807,7 +803,7 @@ async function backdoor(key: string, request: Request, deps: PetshopDeps): Promi
     // installs the key matching the private key it signs App JWTs with. The
     // private key never comes near petshop.
     const body = await readJson(request);
-    if (typeof body.publicKeyPem !== "string" || body.publicKeyPem.length === 0) {
+    if (typeof body.publicKeyPem !== "string" || !body.publicKeyPem.length) {
       return json(
         {
           error: "invalid_request",

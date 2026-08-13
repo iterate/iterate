@@ -72,82 +72,81 @@ function ProjectSchedulerContent() {
       ? cancelSchedule.variables
       : undefined;
 
-  const panel =
-    schedules.length === 0 ? (
-      <Empty className="rounded-lg border">
-        <EmptyHeader>
-          <EmptyTitle>No Schedules</EmptyTitle>
-          <EmptyDescription>
-            Schedules set via <code>itx.scheduler.set(...)</code> appear here — try the scheduler
-            examples in the REPL.
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    ) : (
-      <div className="rounded-lg border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Key</TableHead>
-              <TableHead>Recurrence</TableHead>
-              <TableHead>Next trigger</TableHead>
-              <TableHead>Runs</TableHead>
-              <TableHead>Set</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {schedules
-              .toSorted((left, right) => compareByNextTrigger(left, right))
-              .map((schedule) => (
-                <TableRow key={schedule.key}>
-                  <TableCell className="min-w-[12rem] py-3 text-sm font-medium">
-                    <span className="block min-w-0 truncate" title={schedule.key}>
-                      {schedule.key}
-                    </span>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-muted-foreground">
-                    {recurrenceLabel(schedule.recurrence)}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-muted-foreground">
-                    {!schedule.nextTriggerAt ? "—" : formatRelativeTime(schedule.nextTriggerAt)}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{schedule.runCount}</TableCell>
-                  <TableCell className="whitespace-nowrap text-muted-foreground">
-                    {formatTimeAgo(schedule.setAt)}
-                  </TableCell>
-                  <TableCell className="w-0">
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={!!pendingKey}
-                        onClick={() => triggerSchedule.mutate(schedule.key)}
-                      >
-                        {pendingKey === schedule.key && triggerSchedule.isPending
-                          ? "Triggering..."
-                          : "Run now"}
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={!!pendingKey}
-                        onClick={() => cancelSchedule.mutate(schedule.key)}
-                      >
-                        {pendingKey === schedule.key && cancelSchedule.isPending
-                          ? "Cancelling..."
-                          : "Cancel"}
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-          </TableBody>
-        </Table>
-      </div>
-    );
+  const panel = !schedules.length ? (
+    <Empty className="rounded-lg border">
+      <EmptyHeader>
+        <EmptyTitle>No Schedules</EmptyTitle>
+        <EmptyDescription>
+          Schedules set via <code>itx.scheduler.set(...)</code> appear here — try the scheduler
+          examples in the REPL.
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  ) : (
+    <div className="rounded-lg border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Key</TableHead>
+            <TableHead>Recurrence</TableHead>
+            <TableHead>Next trigger</TableHead>
+            <TableHead>Runs</TableHead>
+            <TableHead>Set</TableHead>
+            <TableHead />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {schedules
+            .toSorted((left, right) => compareByNextTrigger(left, right))
+            .map((schedule) => (
+              <TableRow key={schedule.key}>
+                <TableCell className="min-w-[12rem] py-3 text-sm font-medium">
+                  <span className="block min-w-0 truncate" title={schedule.key}>
+                    {schedule.key}
+                  </span>
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-muted-foreground">
+                  {recurrenceLabel(schedule.recurrence)}
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-muted-foreground">
+                  {!schedule.nextTriggerAt ? "—" : formatRelativeTime(schedule.nextTriggerAt)}
+                </TableCell>
+                <TableCell className="text-muted-foreground">{schedule.runCount}</TableCell>
+                <TableCell className="whitespace-nowrap text-muted-foreground">
+                  {formatTimeAgo(schedule.setAt)}
+                </TableCell>
+                <TableCell className="w-0">
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={!!pendingKey}
+                      onClick={() => triggerSchedule.mutate(schedule.key)}
+                    >
+                      {pendingKey === schedule.key && triggerSchedule.isPending
+                        ? "Triggering..."
+                        : "Run now"}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={!!pendingKey}
+                      onClick={() => cancelSchedule.mutate(schedule.key)}
+                    >
+                      {pendingKey === schedule.key && cancelSchedule.isPending
+                        ? "Cancelling..."
+                        : "Cancel"}
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
 
   return (
     <ProjectStreamView

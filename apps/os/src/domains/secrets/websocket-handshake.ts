@@ -47,7 +47,7 @@ export async function downstreamHandshakeHeaders(
   headers.delete("sec-websocket-protocol");
 
   const key = request.headers.get("sec-websocket-key");
-  if (key && key.length > 0) {
+  if (key?.length) {
     headers.set("sec-websocket-accept", await computeSecWebSocketAccept(key));
   }
 

@@ -23,7 +23,7 @@ export const getProjectBySlug = Object.assign(
     params: getProjectBySlug.Params,
   ): Promise<getProjectBySlug.Result | null> {
     const rows = await client.all<getProjectBySlug.Result>(getProjectBySlugQuery(params));
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   { sql: getProjectBySlugSql, query: getProjectBySlugQuery },
 );
@@ -65,7 +65,7 @@ export const getProjectById = Object.assign(
     params: getProjectById.Params,
   ): Promise<getProjectById.Result | null> {
     const rows = await client.all<getProjectById.Result>(getProjectByIdQuery(params));
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   { sql: getProjectByIdSql, query: getProjectByIdQuery },
 );
@@ -108,7 +108,7 @@ export const getProjectAccessForUser = Object.assign(
     const rows = await client.all<getProjectAccessForUser.Result>(
       getProjectAccessForUserQuery(params),
     );
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   { sql: getProjectAccessForUserSql, query: getProjectAccessForUserQuery },
 );
@@ -155,7 +155,7 @@ export const getProjectWithOrganizationBySlug = Object.assign(
     const rows = await client.all<getProjectWithOrganizationBySlug.Result>(
       getProjectWithOrganizationBySlugQuery(params),
     );
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   { sql: getProjectWithOrganizationBySlugSql, query: getProjectWithOrganizationBySlugQuery },
 );

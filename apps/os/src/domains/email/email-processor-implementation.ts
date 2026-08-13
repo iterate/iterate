@@ -153,7 +153,7 @@ export class EmailProcessor extends StreamProcessor<EmailProcessorContract> {
       }
       case "events.iterate.com/email/sender-allowed": {
         const pattern = event.payload.pattern.trim().toLowerCase();
-        if (pattern.length === 0 || state.allowedSenders.includes(pattern)) return state;
+        if (!pattern.length || state.allowedSenders.includes(pattern)) return state;
         return { ...state, allowedSenders: [...state.allowedSenders, pattern] };
       }
       case "events.iterate.com/email/sent": {

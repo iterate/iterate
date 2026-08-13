@@ -17,7 +17,7 @@ export function readPostHogConfig(environment = process.env): { apiKey: string; 
   const raw = environment.APP_CONFIG_POSTHOG?.trim();
   if (!raw) throw new Error("APP_CONFIG_POSTHOG is required for CI telemetry");
   const parsed = JSON.parse(raw) as { apiKey?: unknown; host?: unknown };
-  if (typeof parsed.apiKey !== "string" || parsed.apiKey.length === 0) {
+  if (typeof parsed.apiKey !== "string" || !parsed.apiKey.length) {
     throw new Error("APP_CONFIG_POSTHOG.apiKey is required for CI telemetry");
   }
   return {
@@ -65,8 +65,8 @@ export function postHogEventBatches(
   let batchBytes = 0;
   for (const event of events) {
     const eventBytes = Buffer.byteLength(JSON.stringify(event));
-    const separatorBytes = batch.length === 0 ? 0 : 1;
-    if (batch.length > 0 && batchBytes + separatorBytes + eventBytes > eventBudgetBytes) {
+    const separatorBytes = !batch.length ? 0 : 1;
+    if (batch.length && batchBytes + separatorBytes + eventBytes > eventBudgetBytes) {
       batches.push(batch);
       batch = [];
       batchBytes = 0;
@@ -74,7 +74,7 @@ export function postHogEventBatches(
     batch.push(event);
     batchBytes += (batch.length === 1 ? 0 : 1) + eventBytes;
   }
-  if (batch.length > 0) batches.push(batch);
+  if (batch.length) batches.push(batch);
   return batches;
 }
 

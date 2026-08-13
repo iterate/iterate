@@ -108,7 +108,7 @@ export function CorePrettyState({
         </div>
       ) : null}
 
-      {Object.keys(outboundByName).length === 0 ? null : (
+      {!Object.keys(outboundByName).length ? null : (
         <div>
           <SectionHeading>Outbound subscriptions</SectionHeading>
           <div className="flex flex-col gap-1.5">
@@ -169,10 +169,10 @@ export function CorePrettyState({
                       {deliveryHint}
                     </div>
                   )}
-                  {eventTypes.length === 0 && !condition ? null : (
+                  {!eventTypes.length && !condition ? null : (
                     <div className="mt-1 text-[11px] text-muted-foreground">
                       {/* `*` anywhere means "all types" — same convention as EventFilter. */}
-                      {eventTypes.length === 0 || eventTypes.includes("*")
+                      {!eventTypes.length || eventTypes.includes("*")
                         ? "all events"
                         : eventTypes
                             .map((type) => type.replace("events.iterate.com/", ""))
@@ -189,7 +189,7 @@ export function CorePrettyState({
         </div>
       )}
 
-      {inboundSubscriptions.length === 0 ? null : (
+      {!inboundSubscriptions.length ? null : (
         <div>
           <SectionHeading>Inbound copy subscriptions</SectionHeading>
           <div className="flex flex-col gap-1.5">
@@ -219,7 +219,7 @@ export function CorePrettyState({
         </div>
       )}
 
-      {childPaths.length === 0 ? null : (
+      {!childPaths.length ? null : (
         <div>
           <SectionHeading>Child streams</SectionHeading>
           <div className="flex flex-col gap-1.5">
@@ -272,7 +272,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
   const isSystem = (item: unknown) => readItemPayload(item)?.role === "system";
   const system = contextItems.filter(isSystem);
   const history = contextItems.filter((item) => !isSystem(item));
-  const lastMessage = history.length > 0 ? history[history.length - 1] : null;
+  const lastMessage = history.length ? history[history.length - 1] : null;
   const lastPreview = !lastMessage ? null : previewProjectedItem(lastMessage);
   const scripts = Array.isArray(agent.activeScriptExecutionIds)
     ? agent.activeScriptExecutionIds
@@ -307,7 +307,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
         </div>
       )}
 
-      {scripts.length === 0 ? null : (
+      {!scripts.length ? null : (
         <div>
           <SectionHeading>In-progress scripts</SectionHeading>
           <div className="flex flex-col gap-1.5">
@@ -343,7 +343,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
         </div>
       </div>
 
-      {system.length === 0 ? null : (
+      {!system.length ? null : (
         <details className="rounded-xl bg-muted/40 px-3 py-2">
           <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground/70">
             System context ({system.length})
@@ -422,7 +422,7 @@ function previewChatMessage(message: Record<string, unknown>): { role: string; t
 
 /** Compact itx expression for core-state list rows. */
 function formatItxExpressionHint(expression: unknown): string | null {
-  if (!Array.isArray(expression) || expression.length === 0) return null;
+  if (!Array.isArray(expression) || !expression.length) return null;
   const steps: string[] = [];
   for (const step of expression) {
     if (typeof step === "string") {

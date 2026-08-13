@@ -67,7 +67,7 @@ export function useIndexedStreamTreeTable({
     if (searching) return true;
     const expandedPaths: [string, boolean][] = [];
     const visit = (node: StreamTreeNode) => {
-      if (node.children.length > 0 && !collapsedPaths.has(node.path)) {
+      if (node.children.length && !collapsedPaths.has(node.path)) {
         expandedPaths.push([node.path, true]);
       }
       for (const child of node.children) visit(child);

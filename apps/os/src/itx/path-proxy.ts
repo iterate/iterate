@@ -97,7 +97,7 @@ export async function replayPathCall(
         : message,
     );
 
-  if (call.path.length === 0) {
+  if (!call.path.length) {
     if (typeof target !== "function") {
       throw miss("Capability invoked as a function but the target is not callable.");
     }

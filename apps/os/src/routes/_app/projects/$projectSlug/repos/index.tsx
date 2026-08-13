@@ -223,7 +223,7 @@ function ProjectReposIndexContent() {
           <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
             Loading repos…
           </div>
-        ) : repos.length === 0 ? (
+        ) : !repos.length ? (
           <Empty className="rounded-lg border">
             <EmptyHeader>
               <EmptyTitle>No Repos</EmptyTitle>
@@ -253,7 +253,7 @@ function ProjectReposIndexContent() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {visibleRepos.length === 0 ? (
+                {!visibleRepos.length ? (
                   <TableRow>
                     <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
                       No Repos match.

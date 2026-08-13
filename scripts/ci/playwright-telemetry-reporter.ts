@@ -126,7 +126,7 @@ function toTestRecord(test: TestCase, runStartedAtMs: number): TestTelemetryReco
   });
   const finalAttempt = attempts.at(-1);
   const errors = test.results.flatMap((result) =>
-    result.errors.length > 0
+    result.errors.length
       ? result.errors.map(normalizePlaywrightError)
       : result.error
         ? [normalizePlaywrightError(result.error)]

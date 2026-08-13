@@ -277,7 +277,7 @@ export async function removeWorkerSecrets(input: {
     console.log(`removed retired Worker secret: ${input.workerName}/${secretName}`);
   }
 
-  if (present.length === 0) {
+  if (!present.length) {
     console.log(`retired Worker secrets absent: ${input.workerName}`);
     return [];
   }
@@ -287,7 +287,7 @@ export async function removeWorkerSecrets(input: {
     .map((binding) => binding.name)
     .filter((name) => retired.has(name))
     .sort();
-  if (stale.length > 0) {
+  if (stale.length) {
     throw new Error(
       `Retired Worker secrets remain after deletion: ${input.workerName}/${stale.join(", ")}`,
     );
@@ -348,7 +348,7 @@ export function collectSecrets(
     if (!value || value === "") missing.push(key);
     else secretValues[key] = value;
   }
-  if (missing.length > 0) {
+  if (missing.length) {
     throw new Error(
       `Doppler config ${ctx.env.dopplerConfig} is missing required secrets: ${missing.join(", ")}. ` +
         `Set them (doppler secrets set --config ${ctx.env.dopplerConfig} ...) and retry.`,
@@ -483,7 +483,7 @@ export async function ensureProxiedDnsRecord(
   const existing = await ctx.cfV4<unknown[]>(
     `/zones/${zone.id}/dns_records?name=${encodeURIComponent(host)}&per_page=50`,
   );
-  if (existing.length > 0) {
+  if (existing.length) {
     console.log(`DNS record for ${host} exists`);
     return;
   }

@@ -257,11 +257,11 @@ function classifyBuildResult<T>(
     const dependencyInstallFailures = warnings.filter((warning) =>
       DEPENDENCY_INSTALL_FAILURE_WARNING_PATTERNS.some((pattern) => pattern.test(warning)),
     );
-    if (dependencyInstallFailures.length > 0) {
+    if (dependencyInstallFailures.length) {
       return sourceFailure(dependencyInstallFailures.join("\n"));
     }
     const unresolvedImports = unresolvedImportFailures(warnings);
-    if (unresolvedImports.length > 0) {
+    if (unresolvedImports.length) {
       return sourceFailure(
         [
           "The built worker would fail at startup with `No such module` — it contains imports that do not resolve:",

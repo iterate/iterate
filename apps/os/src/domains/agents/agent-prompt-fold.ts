@@ -473,9 +473,7 @@ function renderProjectedContextItem(
     `@${item.offset}`,
     ...(!payload.key ? [] : [`key=${JSON.stringify(payload.key)}`]),
     ...(!actor ? [] : [`actor=${renderContextActor(actor)}`]),
-    ...(!payload.refs || payload.refs.length === 0
-      ? []
-      : [`refs=[${payload.refs.map(renderContextRef).join(",")}]`]),
+    ...(!payload.refs?.length ? [] : [`refs=[${payload.refs.map(renderContextRef).join(",")}]`]),
   ];
   const replyInstruction =
     actor?.type === "agent"
@@ -484,7 +482,7 @@ function renderProjectedContextItem(
   return {
     role: modelRoleForContextItem(payload),
     content: `${fields.join(" ")}\n${replyInstruction}${payload.content}`,
-    ...(!payload.files || payload.files.length === 0 ? {} : { files: payload.files }),
+    ...(!payload.files?.length ? {} : { files: payload.files }),
   };
 }
 
@@ -544,7 +542,7 @@ function renderContextRef(ref: NonNullable<AgentContextAddedPayload["refs"]>[num
  */
 export function flattenMessageToText(message: AgentChatMessage): string {
   const files = message.files ?? [];
-  if (files.length === 0) return message.content;
+  if (!files.length) return message.content;
   return [message.content, ...files.map(renderFileHintLine)].join("\n");
 }
 

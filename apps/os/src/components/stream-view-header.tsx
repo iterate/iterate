@@ -119,7 +119,7 @@ export function StreamViewHeader({
       />
 
       <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-3">
-        {isMobile || connectedPresence.length === 0 ? null : (
+        {isMobile || !connectedPresence.length ? null : (
           <div className="flex items-center pl-1.5">
             {connectedPresence.slice(0, MAX_PRESENCE_AVATARS).map((entry) => {
               const selected = entry.connectionKey === focusedProcessorKey;
@@ -227,7 +227,7 @@ export function StreamStateButton({ metrics }: { metrics: BrowserStreamMetricsVi
       onClick={openProcessorsOverview}
       className="font-mono text-xs font-normal text-muted-foreground"
     >
-      {metrics.spark.length === 0 ? null : (
+      {!metrics.spark.length ? null : (
         <svg width="24" height="11" viewBox="0 0 26 12" className="shrink-0">
           <polyline
             points={sparklinePoints(metrics.spark.slice(-12), 26, 12)}
@@ -260,7 +260,7 @@ export function StreamModeTabs({
   const { search, setSearch } = useStreamViewSearch();
   const modes = modesForStream(streamPath);
   const activeMode = streamViewMode(search, streamPath);
-  if (modes.length === 0) return null;
+  if (!modes.length) return null;
   return (
     <Tabs
       value={activeMode}
@@ -357,13 +357,13 @@ function StreamOverflowMenu({
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span>Stream state</span>
                   <span className="font-mono text-[11px] text-muted-foreground">
-                    {metrics.spark.length === 0 ? "latency " : ""}
+                    {!metrics.spark.length ? "latency " : ""}
                     {latencyLabel}
                   </span>
                 </span>
               </DropdownMenuItem>
             </DropdownMenuGroup>
-            {connectedPresence.length === 0 ? null : (
+            {!connectedPresence.length ? null : (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuGroup>

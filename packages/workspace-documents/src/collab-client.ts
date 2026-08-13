@@ -211,7 +211,7 @@ export function peerExtension(connection: CollabConnection, startVersion: number
       async push(): Promise<void> {
         if (this.pushing || this.done || this.recovering) return;
         const updates = sendableUpdates(this.view.state);
-        if (updates.length === 0) return;
+        if (!updates.length) return;
         this.pushing = true;
         try {
           const result = await connection.push(getSyncedVersion(this.view.state), updates);
@@ -240,7 +240,7 @@ export function peerExtension(connection: CollabConnection, startVersion: number
         }
         this.pushing = false;
         // Anything typed while the push was in flight goes in the next batch.
-        if (!this.done && !this.recovering && sendableUpdates(this.view.state).length > 0) {
+        if (!this.done && !this.recovering && sendableUpdates(this.view.state).length) {
           setTimeout(() => void this.push(), 120);
         }
       }
@@ -275,14 +275,14 @@ export function peerExtension(connection: CollabConnection, startVersion: number
               let lost = "";
               for (const update of unacked) {
                 update.changes.iterChanges((_fromA, _toA, _fromB, _toB, text) => {
-                  if (text.length > 0) lost += (lost === "" ? "" : "\n") + text.toString();
+                  if (text.length) lost += (lost === "" ? "" : "\n") + text.toString();
                 });
               }
               this.done = true;
               connection.onReseed(result.snapshot, lost === "" ? null : lost);
               return;
             }
-            if (result.ops.length === 0) continue;
+            if (!result.ops.length) continue;
             connection.stageDeliveredOps(result.ops);
             try {
               this.view.dispatch(receiveUpdates(this.view.state, connection.absorb(result.ops)));
@@ -318,7 +318,7 @@ export function peerExtension(connection: CollabConnection, startVersion: number
         // server dedupes by (clientId, clientSeq).
         if (!this.done && !this.recovering) {
           const pending = sendableUpdates(this.view.state);
-          if (pending.length > 0) {
+          if (pending.length) {
             // ONE quiet try on the live session: a failure here must never
             // dispose the shared WS (withProject's retry would), which was
             // tearing down the poll/wait loops on every editor remount.

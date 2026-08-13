@@ -30,7 +30,7 @@ export function newReplSessionPath(date: Date) {
  */
 export function newestReplSessionPath(streams: readonly StreamListItem[]): string | null {
   const sessions = streams.filter((stream) => stream.path.startsWith(REPL_SESSION_PATH_PREFIX));
-  if (sessions.length === 0) return null;
+  if (!sessions.length) return null;
   sessions.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.path.localeCompare(a.path));
   return sessions[0]!.path;
 }

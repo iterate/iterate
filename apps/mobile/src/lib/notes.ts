@@ -78,7 +78,7 @@ export function parseNoteFile(content: string): NoteFile {
 }
 
 export function composeNoteFile(frontmatter: Record<string, unknown>, body: string): string {
-  if (Object.keys(frontmatter).length === 0) return body;
+  if (!Object.keys(frontmatter).length) return body;
   return `---\n${YAML.stringify(frontmatter).trimEnd()}\n---\n${body}`;
 }
 

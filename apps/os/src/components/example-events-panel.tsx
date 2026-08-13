@@ -38,7 +38,7 @@ export function ExampleEventsPanel({
       <p className="mb-3 text-xs text-muted-foreground">
         Example events from connected processors — click to load into the raw editor.
       </p>
-      {groups.length === 0 ? (
+      {!groups.length ? (
         <p className="py-2 text-sm text-muted-foreground">
           No connected processors announced any example events yet.
         </p>
@@ -90,7 +90,7 @@ function buildGroups(presence: readonly AgentUiPresenceEntry[]): ExampleGroup[] 
     const slug = announcement?.slug;
     if (!announcement || !slug || seen.has(slug)) continue;
     seen.add(slug);
-    if (announcement.ownedEvents.length === 0) continue;
+    if (!announcement.ownedEvents.length) continue;
     groups.push({ slug, events: announcement.ownedEvents });
   }
   return groups;

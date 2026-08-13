@@ -68,7 +68,7 @@ function ProjectsIndexPage() {
     staleTime: projectsListStaleTime,
   });
   const projects = data ?? [];
-  const hasProjects = projects.length > 0;
+  const hasProjects = !!projects.length;
   const organizationSlugFor = useCallback(
     (project: ProjectListEntry) =>
       project.organizationId

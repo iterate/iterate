@@ -244,8 +244,8 @@ export function commitPlan(changes: WorkingTreeChanges): {
   fileChanges: RepoFileChange[];
 } {
   const staged = [...changes].filter(([, change]) => !!change.staged);
-  const pick = staged.length > 0 ? staged : [...changes];
-  const mode = staged.length > 0 ? ("staged" as const) : ("everything" as const);
+  const pick = staged.length ? staged : [...changes];
+  const mode = staged.length ? ("staged" as const) : ("everything" as const);
   const fileChanges: RepoFileChange[] = [];
   const paths: string[] = [];
   for (const [path, change] of pick) {

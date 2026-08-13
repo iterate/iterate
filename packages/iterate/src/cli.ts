@@ -84,8 +84,7 @@ const firstNonFlagArgument = (args: string[]): string | undefined => {
   return undefined;
 };
 
-export const defaultBareInvocationToChat = (args: string[]) =>
-  args.length === 0 ? ["chat"] : args;
+export const defaultBareInvocationToChat = (args: string[]) => (!args.length ? ["chat"] : args);
 
 const applyDefaultBareInvocation = () => {
   const args = process.argv.slice(2);
@@ -414,7 +413,7 @@ const prepareProjectForChat = async (session: RpcStub<Session>, project: Project
 };
 
 const accessibleProjectsMessage = (projects: ProjectListEntry[]) =>
-  projects.length === 0
+  !projects.length
     ? "No accessible projects found."
     : `Accessible projects: ${projects
         .map((project) => `${project.slug} (${project.id}, ${project.deploymentStatus})`)
@@ -466,7 +465,7 @@ export const resolveChatProject = async (input: {
       }
 
       const createdProjects = projects.filter((project) => project.deploymentStatus === "created");
-      const candidates = createdProjects.length > 0 ? createdProjects : projects;
+      const candidates = createdProjects.length ? createdProjects : projects;
       if (candidates.length === 1) {
         return await prepareProjectForChat(session, candidates[0]!);
       }
@@ -1561,7 +1560,7 @@ export const proxifyOrpc = <R extends AnyRouter>(
         validate: (value: unknown) => ({ value }),
       },
       toJsonSchema: () => {
-        if (schemas.length === 0) return {};
+        if (!schemas.length) return {};
         if (schemas.length === 1) return schemas[0];
         return { allOf: schemas };
       },

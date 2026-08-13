@@ -60,7 +60,7 @@ function BoardPresence({
     ...(self && !clients.some((client) => client.clientId === self.clientId) ? [self] : []),
     ...clients,
   ];
-  if (everyone.length === 0) return null;
+  if (!everyone.length) return null;
   return (
     <div className="mr-1 flex items-center -space-x-1.5">
       {everyone.slice(0, 6).map((client) => (

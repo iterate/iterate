@@ -4,8 +4,7 @@ export function parseChatSlashCommand(input: string): { kind: "use-my-computer" 
 
 export function computerCapabilityName(username: string): string {
   const words = username.split(/[^a-zA-Z0-9]+/).filter(Boolean);
-  if (words.length === 0)
-    throw new Error("The operating-system username has no letters or digits.");
+  if (!words.length) throw new Error("The operating-system username has no letters or digits.");
 
   const camelName = words
     .map((word, index) => {

@@ -316,8 +316,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
         ["/reviewer-b", reviewerB.stream] as const,
       ]
         .filter(
-          ([, stream]) =>
-            stream.getEvents({ eventTypes: ["example.com/issue-created"] }).length > 0,
+          ([, stream]) => !!stream.getEvents({ eventTypes: ["example.com/issue-created"] }).length,
         )
         .map(([path]) => path);
       expect(receiversHoldingTheCopy.length).toBeLessThanOrEqual(1);

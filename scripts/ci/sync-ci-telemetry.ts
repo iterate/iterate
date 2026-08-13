@@ -42,7 +42,7 @@ async function main() {
   if (dryRun) {
     console.log(JSON.stringify(summarize(events), null, 2));
   } else if (process.env.CI_TELEMETRY_POSTHOG_ENABLED === "1") await sendPostHogEvents(events);
-  if (failures.length > 0) {
+  if (failures.length) {
     throw new AggregateError(
       failures.map((failure) => failure.error),
       `CI telemetry source collection failed: ${failures.map((failure) => failure.source).join(", ")}`,
@@ -164,7 +164,7 @@ async function githubReviewEvents(): Promise<PostHogEvent[]> {
       per_page: 100,
     });
     const reviewSources = selectReviewSources(checks, reviews, pull.head.sha);
-    if (reviewSources.checks.length === 0 && reviewSources.reviews.length === 0) continue;
+    if (!reviewSources.checks.length && !reviewSources.reviews.length) continue;
     const threadCounts = await reviewThreadCounts(octokit, pull.number, pull.head.sha);
     events.push(
       ...buildReviewEvents({

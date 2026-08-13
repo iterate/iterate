@@ -143,7 +143,7 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
   function audiences() {
     const resources = Array.isArray(config.resource) ? config.resource : [config.resource];
     const configuredResources = resources.filter((resource): resource is string => !!resource);
-    return configuredResources.length > 0
+    return configuredResources.length
       ? expandOAuthResourceAudienceVariants(configuredResources)
       : [issuerURL.href];
   }
@@ -917,7 +917,7 @@ export function withAuthenticationResponseHeaders(
   response: Response,
   authenticationHeaders: Headers,
 ): Response {
-  if ([...authenticationHeaders].length === 0) return response;
+  if (![...authenticationHeaders].length) return response;
 
   // A 101/WebSocket response cannot be reconstructed. Authentication never
   // refreshes on an upgrade, so that path emits no headers and returns above.

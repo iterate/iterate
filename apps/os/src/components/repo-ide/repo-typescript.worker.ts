@@ -301,7 +301,7 @@ const api = {
         }
         lastAcquiredFilePaths = nextPaths;
         // Deletions change effective types too — the host relints on either.
-        return { acquired: nextPaths.size > 0 || stalePaths.length > 0, failed: false };
+        return { acquired: nextPaths.size > 0 || !!stalePaths.length, failed: false };
       } catch (error) {
         // Transient failure (offline, CDN hiccup): allow a later retrigger.
         lastAcquiredDependencies = null;

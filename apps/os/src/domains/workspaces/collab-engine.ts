@@ -195,7 +195,7 @@ export class CollabEngine {
 
     // Full-duplicate fast path (retry after a lost ack with no news since).
     const seen = file.clientSeqs.get(input.clientId) ?? -1;
-    if (input.ops.length === 0 || input.ops.at(-1)!.clientSeq <= seen) {
+    if (!input.ops.length || input.ops.at(-1)!.clientSeq <= seen) {
       return { status: "accepted", version: file.version };
     }
 
@@ -267,7 +267,7 @@ export class CollabEngine {
     file: FileEngine,
     updates: { changes: ChangeSet; clientId: string; clientSeq: number }[],
   ): Promise<CollabPushResult> {
-    if (updates.length === 0) return { status: "accepted", version: file.version };
+    if (!updates.length) return { status: "accepted", version: file.version };
 
     // Size gates BEFORE any application work: the serialized batch must fit
     // a SQLite cell, and the resulting doc must stay under the live cap.

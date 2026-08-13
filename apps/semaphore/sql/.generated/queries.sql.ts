@@ -194,7 +194,7 @@ export const selectResourceByTypeAndSlug = Object.assign(
     const rows = await client.all<selectResourceByTypeAndSlug.RawResult>(
       selectResourceByTypeAndSlugQuery(params),
     );
-    return rows.length > 0 ? selectResourceByTypeAndSlugMapResult(rows[0]!) : null;
+    return rows.length ? selectResourceByTypeAndSlugMapResult(rows[0]!) : null;
   },
   {
     sql: selectResourceByTypeAndSlugSql,
@@ -281,7 +281,7 @@ export const selectResourcePresenceByType = Object.assign(
     const rows = await client.all<selectResourcePresenceByType.Result>(
       selectResourcePresenceByTypeQuery(params),
     );
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   { sql: selectResourcePresenceByTypeSql, query: selectResourcePresenceByTypeQuery },
 );

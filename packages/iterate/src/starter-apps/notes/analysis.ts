@@ -38,7 +38,7 @@ export async function analyzeNoteText(
                   .replace(/[^a-z0-9-]+/g, "-")
                   .replace(/^-+|-+$/g, ""),
               )
-              .filter((tag: string) => tag.length > 0 && tag.length <= 30),
+              .filter((tag: string) => !!tag.length && tag.length <= 30),
           ),
         ].slice(0, 4);
       }

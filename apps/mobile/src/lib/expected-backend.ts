@@ -95,7 +95,7 @@ export function recommendationSwitchPlan(
   rec: Recommendation,
 ): SwitchPlan | null {
   const mismatches = recommendationMismatches(phone, rec);
-  if (!rec.server || mismatches.length === 0) return null;
+  if (!rec.server || !mismatches.length) return null;
   const { baseUrl, label } = rec.server;
   if (mismatches.some((m) => m.kind === "identity")) {
     return { type: "sign-in", baseUrl, label, loginHint: rec.email };

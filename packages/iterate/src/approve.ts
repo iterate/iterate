@@ -280,7 +280,7 @@ async function listKeys(input: {
   localKey: StoredApprovalKey | null;
 }): Promise<void> {
   const keys = (await input.project.processor.snapshot()).state.humanApprovalKeys;
-  if (keys.length === 0) {
+  if (!keys.length) {
     prompts.outro("No approval keys enrolled — decisions are plain events. Enroll with --enroll.");
     return;
   }
@@ -290,7 +290,7 @@ async function listKeys(input: {
       !key.revokedAt ? null : `revoked ${key.revokedAt}`,
     ].filter((mark) => !!mark);
     prompts.log.info(
-      `${key.keyId}  ${key.label}  added ${key.addedAt}${marks.length > 0 ? `  (${marks.join(", ")})` : ""}`,
+      `${key.keyId}  ${key.label}  added ${key.addedAt}${marks.length ? `  (${marks.join(", ")})` : ""}`,
     );
   }
   prompts.outro(`${keys.filter((key) => !key.revokedAt).length} active key(s).`);
@@ -356,7 +356,7 @@ function reportSettlement(offset: number, settlement: Exclude<Settlement, { kind
   switch (settlement.kind) {
     case "released": {
       const failures = settlement.outcomes.filter((outcome) => !!outcome.error);
-      if (failures.length === 0) {
+      if (!failures.length) {
         const statuses = [...new Set(settlement.outcomes.map((outcome) => outcome.status))];
         return prompts.log.success(
           `Released #${offset} — ${settlement.outcomes.length} request${settlement.outcomes.length === 1 ? "" : "s"}, upstream ${statuses.join(", ")}.`,
@@ -388,7 +388,7 @@ function renderHeldBatch(offset: number, payload: RequestedPayload): void {
   }
   if (payload.requests.length > 6) lines.push(`… and ${payload.requests.length - 6} more`);
   const secretPaths = [...new Set(payload.requests.flatMap((request) => request.secretPaths))];
-  if (secretPaths.length > 0) {
+  if (secretPaths.length) {
     const noun = secretPaths.length > 1 ? "secrets" : "secret";
     lines.push(`spends ${noun}: ${secretPaths.join(", ")}`);
   }

@@ -46,11 +46,11 @@ function isStreamKeepaliveRecord(value: unknown): value is StreamKeepaliveRecord
     typeof candidate.lastRevivalAt === "number" &&
     Number.isFinite(candidate.lastRevivalAt) &&
     typeof candidate.version === "string" &&
-    candidate.version.trim().length > 0 &&
+    !!candidate.version.trim().length &&
     (!Number.isFinite(candidate.armedAtMs) ||
       (typeof candidate.armedAtMs === "number" && Number.isFinite(candidate.armedAtMs))) &&
     typeof candidate.streamId === "string" &&
-    candidate.streamId.trim().length > 0
+    !!candidate.streamId.trim().length
   );
 }
 
@@ -218,7 +218,7 @@ export function durableObjectRecovery(args: {
 
   const requireProgressStreamId = (): string => {
     const streamId = readProgress()?.streamId;
-    if (!streamId || streamId.trim().length === 0) {
+    if (!streamId || !streamId.trim().length) {
       throw new Error(
         `stream processor "${args.name}" cannot arm recovery before its stream lifetime is bound`,
       );

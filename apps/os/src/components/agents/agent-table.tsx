@@ -116,7 +116,7 @@ export function AgentTable({
     if (searching) return true;
     const entries: [string, boolean][] = [];
     const visit = (node: AgentPathTreeNode) => {
-      if (node.children.length > 0 && !collapsedPaths.has(node.path)) {
+      if (node.children.length && !collapsedPaths.has(node.path)) {
         entries.push([node.path, true]);
       }
       for (const child of node.children) visit(child);
@@ -383,7 +383,7 @@ function StatusCell() {
   return (
     <>
       <span className="block">{state.label}</span>
-      {runtimeCounts.length === 0 ? null : (
+      {!runtimeCounts.length ? null : (
         <span className="block truncate text-xs text-muted-foreground">
           {runtimeCounts.join(" · ")}
         </span>

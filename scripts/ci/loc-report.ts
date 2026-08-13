@@ -125,7 +125,7 @@ export function getChangedFiles(baseRef: string, headRef: string, cwd: string): 
  */
 function linguistGeneratedPaths(paths: string[], cwd: string): Set<string> {
   const generated = new Set<string>();
-  if (paths.length === 0) return generated;
+  if (!paths.length) return generated;
   const out = execFileSync("git", ["check-attr", "--stdin", "-z", "linguist-generated"], {
     cwd,
     encoding: "utf8",

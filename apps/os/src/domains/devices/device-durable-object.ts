@@ -139,7 +139,7 @@ export class DeviceDurableObject extends DurableObject<Env> {
       return consumed as DeviceAppendInput;
     });
     const committed = await this.#stream.append(...(parsed as StreamEventInput[]));
-    if (committed.length > 0) {
+    if (committed.length) {
       await this.#waitUntilProcessed(Math.max(...committed.map((event) => event.offset)));
     }
     return committed;

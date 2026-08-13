@@ -25,7 +25,7 @@ export async function walkWorkspaceFiles(workspace: Workspace, dir = "/"): Promi
 export async function wipeWorkspace(workspace: Workspace, dir = "/"): Promise<void> {
   for (;;) {
     const page = await workspace.readDir(dir, { limit: READ_DIR_PAGE });
-    if (page.length === 0) return;
+    if (!page.length) return;
     for (const entry of page) {
       await workspace.rm(entry.path, { force: true, recursive: true });
     }

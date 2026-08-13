@@ -297,7 +297,7 @@ export function parseConfig(env: unknown): AppConfig {
     cloudflareBindings.workerName = workerName as AppConfig["cloudflare"]["workerName"];
   }
 
-  if (Object.keys(cloudflareBindings).length === 0) {
+  if (!Object.keys(cloudflareBindings).length) {
     return config;
   }
 
@@ -317,5 +317,5 @@ function readStringBinding(env: unknown, key: string) {
   if (typeof value !== "string") return null;
 
   const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  return trimmed.length ? trimmed : null;
 }

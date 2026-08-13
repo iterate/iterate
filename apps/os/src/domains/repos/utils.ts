@@ -208,7 +208,7 @@ function normalizeRepoPath(path: string): string {
 }
 
 function assertProjectId(projectId: string): void {
-  if (projectId.length === 0) throw new Error("Repo artifact projectId must be non-empty.");
+  if (!projectId.length) throw new Error("Repo artifact projectId must be non-empty.");
   if (projectId === GLOBAL_REPO_ARTIFACT_PROJECT_ID) {
     throw new Error(
       `"${GLOBAL_REPO_ARTIFACT_PROJECT_ID}" is reserved for deployment-wide repo artifacts; use projectId null instead.`,

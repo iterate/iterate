@@ -58,7 +58,7 @@ export async function latestStreamEventOfTypes(
   let latest: StreamEvent | null = null;
   for (;;) {
     const page = await stream.getEvents({ afterOffset, eventTypes, limit: FILTERED_PAGE_SIZE });
-    if (page.length === 0) return latest;
+    if (!page.length) return latest;
     latest = page.at(-1)!;
     if (page.length < FILTERED_PAGE_SIZE) return latest;
     afterOffset = latest.offset;

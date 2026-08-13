@@ -188,7 +188,7 @@ export async function capture(options: CaptureOptions) {
   const unsupported = connected.filter(
     (entry) => !["github", "google", "slack"].includes(entry.provider),
   );
-  if (unsupported.length > 0) {
+  if (unsupported.length) {
     throw new Error(
       `Capture does not support ${unsupported
         .map((entry) => `${entry.provider}/${entry.connection}`)
@@ -580,14 +580,13 @@ async function restoreConfigRepository(input: {
         .filter((path) => !wanted.has(path))
         .map((path) => ({ path, delete: true as const })),
     ];
-    const commit =
-      changes.length === 0
-        ? before
-        : await repository.commitFiles({
-            branch: "main",
-            changes,
-            message: "Restore project seed",
-          });
+    const commit = !changes.length
+      ? before
+      : await repository.commitFiles({
+          branch: "main",
+          changes,
+          message: "Restore project seed",
+        });
     const after = await repository.listFiles();
     if (!sameStrings(after.paths, [...wanted])) {
       throw new Error(`${path} file-tree proof failed.`);
@@ -891,7 +890,7 @@ async function unwrap(material: CiphertextMaterial) {
 }
 
 function asString(value: unknown, label: string) {
-  if (typeof value !== "string" || value.length === 0) {
+  if (typeof value !== "string" || !value.length) {
     throw new Error(`${label} is not a non-empty string.`);
   }
   return value;

@@ -91,6 +91,6 @@ function parseGithubAiLinterRule(path: string, content: string) {
     throw new Error(`GitHub AI linter rule ${path} has invalid frontmatter`, { cause });
   }
   const invariant = body.trim();
-  if (invariant.length === 0) throw new Error(`GitHub AI linter rule ${path} has no body`);
+  if (!invariant.length) throw new Error(`GitHub AI linter rule ${path} has no body`);
   return { ...metadata, invariant };
 }

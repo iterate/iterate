@@ -116,7 +116,7 @@ export default async function eraseData(options: {
       const keys = await cf<{ name: string }[]>(
         `/storage/kv/namespaces/${env.resources.projectDirectoryKvId}/keys?limit=1000`,
       );
-      if (keys.length === 0) break;
+      if (!keys.length) break;
       await cf(`/storage/kv/namespaces/${env.resources.projectDirectoryKvId}/bulk/delete`, {
         method: "POST",
         body: JSON.stringify(keys.map((key) => key.name)),
@@ -211,7 +211,7 @@ export default async function eraseData(options: {
         const listing = await cf<{ key: string }[]>(
           `/r2/buckets/${bucket}/objects?per_page=1000&page=1`,
         );
-        if (listing.length === 0) break;
+        if (!listing.length) break;
         const { deleted, failed } = await deleteAll({
           items: listing.map((object) => object.key),
           deadline: bucketDeadline,

@@ -371,7 +371,7 @@ function extractAssistantText(raw: unknown): string {
   if ("response" in raw && typeof raw.response === "string") return raw.response;
 
   const choices = (raw as { choices?: unknown }).choices;
-  if (Array.isArray(choices) && choices.length > 0) {
+  if (Array.isArray(choices) && choices.length) {
     const first = choices[0] as
       | { message?: { content?: unknown }; delta?: { content?: unknown } }
       | undefined;
@@ -404,7 +404,7 @@ export function extractChunkText(chunk: unknown): string {
   if ("response" in chunk && typeof chunk.response === "string") return chunk.response;
 
   const choices = (chunk as { choices?: unknown }).choices;
-  if (Array.isArray(choices) && choices.length > 0) {
+  if (Array.isArray(choices) && choices.length) {
     const first = choices[0] as { delta?: { content?: unknown } } | undefined;
     if (typeof first?.delta?.content === "string") return first.delta.content;
   }

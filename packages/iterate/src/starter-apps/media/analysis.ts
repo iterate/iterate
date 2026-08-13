@@ -166,7 +166,7 @@ function parseVisionAnswer(text: string): Omit<MediaAnalysisResult, "markdown"> 
                   .replace(/[^a-z0-9-]+/g, "-")
                   .replace(/^-+|-+$/g, ""),
               )
-              .filter((tag) => tag.length > 0 && tag.length <= 30),
+              .filter((tag) => !!tag.length && tag.length <= 30),
           ),
         ].slice(0, 6);
       }

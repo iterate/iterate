@@ -236,7 +236,7 @@ export async function reconcileBacklog(stream: RpcStub<Stream>): Promise<{
       afterOffset: cursor,
       eventTypes: [EVENT.requested, EVENT.decided, EVENT.settled],
     });
-    if (page.length === 0) break;
+    if (!page.length) break;
     for (const event of page) {
       cursor = event.offset;
       if (event.type === EVENT.requested) {
@@ -280,7 +280,7 @@ export async function reconcileBacklog(stream: RpcStub<Stream>): Promise<{
     const verdicts = decisions.get(offset) ?? null;
     if (verdicts) {
       const approved = verdicts.flatMap((verdict, index) => (verdict === "approve" ? [index] : []));
-      if (approved.length === 0) continue; // all-reject (human or expiry) — terminal
+      if (!approved.length) continue; // all-reject (human or expiry) — terminal
       const settled = settledIndexes.get(offset) ?? new Set<number>();
       if (approved.every((index) => settled.has(index))) continue; // fully released — terminal
       open.push({ offset, payload, submitted: true, verdicts });
@@ -317,7 +317,7 @@ export async function awaitSettlement(
   windowMs = SETTLEMENT_WINDOW_MS,
 ): Promise<Settlement> {
   const approved = verdicts.flatMap((verdict, index) => (verdict === "approve" ? [index] : []));
-  if (approved.length === 0) return { kind: "rejected", decidedBy: "human" };
+  if (!approved.length) return { kind: "rejected", decidedBy: "human" };
 
   const forThisBatch = (candidate: StreamEvent) =>
     (candidate.payload as { approvalRequestEventOffset?: number }).approvalRequestEventOffset ===

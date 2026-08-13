@@ -58,7 +58,7 @@ async function replayProviderPath({
   target: unknown;
 }) {
   const root = await target;
-  if (path.length === 0) {
+  if (!path.length) {
     return typeof root === "function" ? await Reflect.apply(root, receiver, args) : root;
   }
 

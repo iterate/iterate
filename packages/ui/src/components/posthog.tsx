@@ -166,7 +166,7 @@ function applyPosthogContext(client: import("posthog-js").PostHog, input: Postho
   if (!input) {
     if (
       typeof client.get_property("$user_id") === "string" ||
-      Object.keys(client.getGroups()).length > 0
+      Object.keys(client.getGroups()).length
     ) {
       resetPosthogClient(client);
     }

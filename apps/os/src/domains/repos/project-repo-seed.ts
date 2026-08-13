@@ -26,7 +26,7 @@ export function projectRepoSeedFiles(config: {
 }): Array<{ content: string; path: string }> {
   const ref = config.iterateRepoPkgRef;
   const specOverrides = config.iterateRepoPkgSpecOverrides || {};
-  if (!ref && Object.keys(specOverrides).length === 0) {
+  if (!ref && !Object.keys(specOverrides).length) {
     return PROJECT_REPO_INITIAL_FILES;
   }
 

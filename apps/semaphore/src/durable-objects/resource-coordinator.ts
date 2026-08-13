@@ -342,7 +342,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
     await this.reapExpiredLeases();
 
     const inventory = await selectInventoryByType(this.env.DB, type);
-    if (inventory.length === 0) {
+    if (!inventory.length) {
       return null;
     }
 
@@ -365,7 +365,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
           (!allowedSlugSet || allowedSlugSet.has(resource.slug)),
       )
       .sort((left, right) => (left.lastReleasedAt ?? 0) - (right.lastReleasedAt ?? 0));
-    if (candidates.length === 0) {
+    if (!candidates.length) {
       return null;
     }
 
@@ -388,7 +388,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
       )
       .toArray();
 
-    if (expired.length === 0) {
+    if (!expired.length) {
       return;
     }
 
@@ -451,7 +451,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
 
       const arrivals = this.waiters;
       this.waiters = [...deferred.filter((waiter) => !waiter.settled), ...arrivals];
-      if (!capacityFreedDuringPass && arrivals.length === 0) {
+      if (!capacityFreedDuringPass && !arrivals.length) {
         return;
       }
     }

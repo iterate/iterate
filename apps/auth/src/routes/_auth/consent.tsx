@@ -127,7 +127,7 @@ function RouteComponent() {
             </Button>
           </div>
         </CardContent>
-        {requestedScopes.length > 0 && (
+        {!!requestedScopes.length && (
           <>
             <Separator />
             <CardContent className="space-y-3">

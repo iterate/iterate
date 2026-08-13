@@ -305,12 +305,12 @@ function AgentResults({
   const table = useAgentTreeTable({ agents, expandedPaths, query });
   const visibleRows = table.getRowModel().rows.slice(0, MAX_AGENT_RESULTS);
 
-  if (visibleRows.length === 0) {
+  if (!visibleRows.length) {
     return (
       <CommandEmpty>
         {loading
           ? "Loading agents…"
-          : Object.keys(agents).length === 0
+          : !Object.keys(agents).length
             ? "No agents yet."
             : "No matching agents."}
       </CommandEmpty>
@@ -354,7 +354,7 @@ function StreamTreeResults({
 }) {
   const table = useIndexedStreamTreeTable({ streams, collapsedPaths, query });
   const rows = table.getRowModel().rows.slice(0, MAX_STREAM_TREE_RESULTS);
-  if (rows.length === 0) {
+  if (!rows.length) {
     return <CommandEmpty>{loading ? "Loading streams…" : "No matching streams."}</CommandEmpty>;
   }
   return (
@@ -421,7 +421,7 @@ function RecentStreamResults({
         .slice(0, MAX_RECENT_RESULTS),
     [normalizedQuery, streams],
   );
-  if (rows.length === 0) {
+  if (!rows.length) {
     return <CommandEmpty>{loading ? "Loading streams…" : "No recent streams."}</CommandEmpty>;
   }
   return (

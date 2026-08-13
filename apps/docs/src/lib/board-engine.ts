@@ -85,7 +85,7 @@ function rowGroups(
   // Tags: a task appears in EVERY one of its tags' rows (multi-tag cards
   // render more than once); untagged tasks share one trailing "No tag" row.
   for (const task of tasks) {
-    const labels = task.labels.length === 0 ? [""] : task.labels;
+    const labels = !task.labels.length ? [""] : task.labels;
     for (const label of labels) {
       const group = groups.get(label) ?? [];
       group.push(task);

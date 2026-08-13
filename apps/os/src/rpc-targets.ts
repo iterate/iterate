@@ -679,7 +679,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     invoke: () => Promise<StreamEvent[]>,
   ): Promise<StreamEvent[]> {
     const isKeyed = events.every(
-      (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
+      (event) => typeof event.idempotencyKey === "string" && !!event.idempotencyKey.length,
     );
     const canDeadlineReplay = isKeyed && this.props.path !== "/";
     const canRetry = isKeyed;
@@ -724,7 +724,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     const append = () => Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].appendIfStreamId(args));
     const result = await (
       args.events.every(
-        (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
+        (event) => typeof event.idempotencyKey === "string" && !!event.idempotencyKey.length,
       )
         ? retryLoggedIdempotentOperation({
             context: { path: this.props.path, projectId: this.props.projectId },
@@ -1322,7 +1322,7 @@ class StreamSubscriptionRpcTarget extends IterateRpcTarget<"StreamSubscription">
   ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
-    if (props.name.trim().length === 0) {
+    if (!props.name.trim().length) {
       throw new Error("subscriptions.get(name) requires a non-empty name");
     }
   }
@@ -2886,7 +2886,7 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
     if (!path.isWellFormed()) {
       throw new Error("collectFromUser paths must be well-formed strings (no lone surrogates).");
     }
-    if (input.egress.urls.length === 0) {
+    if (!input.egress.urls.length) {
       throw new Error(
         "collectFromUser needs at least one egress URL: the user is shown where the value can ever be sent, and a secret pinned to nothing can never be used.",
       );
@@ -3358,7 +3358,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   ): Promise<
     CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]
   > {
-    if (args.length === 0) {
+    if (!args.length) {
       return env.AI.toMarkdown().supported();
     }
     const [documents, options] = args;
@@ -3786,12 +3786,12 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
   async invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown> {
     const { args = [], path } = call;
     const [slug, selector, ...rest] = path;
-    if (slug && selector === "__describe" && rest.length === 0 && args.length === 0) {
+    if (slug && selector === "__describe" && !rest.length && !args.length) {
       return await this.#capabilityHost.invokeCapability({
         path: ["integrations", slug, "__describe"],
       });
     }
-    if (!slug || selector !== "get" || rest.length !== 0 || args.length > 1) {
+    if (!slug || selector !== "get" || rest.length || args.length > 1) {
       throw new Error(
         'Integration connections use `.get(connection?)`, for example `itx.integrations.github.get().octokit.rest.repos.get(...)` or `itx.integrations.github.get("work").octokit...`.',
       );
@@ -3845,7 +3845,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     const { args, connection, method, slug } = input;
 
     if (slug === "slack") {
-      if (!connection || method.length === 0) {
+      if (!connection || !method.length) {
         throw new Error(SLACK_CALL_GRAMMAR);
       }
       // Every node answers __describe() — the SDK proxies must not break that
@@ -3926,7 +3926,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     }
 
     if (slug === "github") {
-      if (!connection || method.length === 0) {
+      if (!connection || !method.length) {
         throw new Error(GITHUB_CALL_GRAMMAR);
       }
       if (method.length === 1 && method[0] === "__describe") {
@@ -3958,7 +3958,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     }
 
     if (slug === "telegram") {
-      if (!connection || method.length === 0) {
+      if (!connection || !method.length) {
         throw new Error(TELEGRAM_CALL_GRAMMAR);
       }
       if (method.length === 1 && method[0] === "__describe") {
@@ -3992,7 +3992,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     }
 
     if (slug === "waitrose") {
-      if (!connection || method.length === 0) {
+      if (!connection || !method.length) {
         throw new Error(WAITROSE_CALL_GRAMMAR);
       }
       if (method.length === 1 && method[0] === "__describe") {
@@ -4378,7 +4378,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       throw new Error("Restoring inbound email senders requires an admin principal.");
     }
     const patterns = [...new Set(input.patterns.map(normalizeInboundEmailAllowedSender))];
-    if (patterns.length > 0) {
+    if (patterns.length) {
       const committed = await integrationStreamStub(
         this.props.projectId,
         EMAIL_INTEGRATION_STREAM_PATH,
@@ -4611,7 +4611,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
   async #resolveAttachments(
     inputs: EmailAttachmentInput[] | undefined,
   ): Promise<OutboundEmailAttachment[]> {
-    if (!inputs || inputs.length === 0) return [];
+    if (!inputs?.length) return [];
     return await Promise.all(
       inputs.map(async (input): Promise<OutboundEmailAttachment> => {
         if ("path" in input) {
@@ -4700,7 +4700,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
           to: input.audit.to,
           ...(!input.audit.threadId ? {} : { threadId: input.audit.threadId }),
           ...(!input.audit.inReplyTo ? {} : { inReplyTo: input.audit.inReplyTo }),
-          ...(attachments.length === 0 ? {} : { attachments }),
+          ...(!attachments.length ? {} : { attachments }),
         },
       });
     // The mail is already on the wire once send() resolved — an audit-append
@@ -4830,7 +4830,7 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
     const trimmed = message.trim();
     if (trimmed === "") throw new Error("itx.chat.sendMessage requires a non-empty message.");
     const files =
-      !options?.files || options.files.length === 0
+      !options?.files || !options.files.length
         ? undefined
         : await storeAgentFileAttachments({
             agentPath: this.props.path,
@@ -5090,15 +5090,14 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         ? { message: input, files: undefined }
         : { message: input.message, files: input.files };
     const actor = this.#contextActor();
-    const files =
-      !fileInputs || fileInputs.length === 0
-        ? undefined
-        : await storeAgentFileAttachments({
-            agentPath: actor.type === "agent" ? actor.path : this.#path,
-            config: parseConfig(env),
-            files: fileInputs,
-            projectId: this.#props.projectId,
-          });
+    const files = !fileInputs?.length
+      ? undefined
+      : await storeAgentFileAttachments({
+          agentPath: actor.type === "agent" ? actor.path : this.#path,
+          config: parseConfig(env),
+          files: fileInputs,
+          projectId: this.#props.projectId,
+        });
     const [event] = await this.stream.append({
       type: "events.iterate.com/agents/context-added",
       payload: {
@@ -5183,7 +5182,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     };
   }): Promise<{ event: StreamEvent; files: AgentFileAttachment[] }> {
     await this.#assertCreated();
-    if (input.files.length === 0) throw new Error("agent.addFiles requires at least one file.");
+    if (!input.files.length) throw new Error("agent.addFiles requires at least one file.");
     const files = await storeAgentFileAttachments({
       agentPath: this.#path,
       config: parseConfig(env),
@@ -5588,7 +5587,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     if (path === "/") {
       throw new Error(`client path must not be the project root, got ${JSON.stringify(opts.path)}`);
     }
-    if (typeof opts.description !== "string" || opts.description.trim().length === 0) {
+    if (typeof opts.description !== "string" || !opts.description.trim().length) {
       throw new Error("client description is required");
     }
     const projectId = await resolveProjectIdBySlug({
@@ -8057,9 +8056,7 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
     const nearest = (await this.search({ q: input.name })).slice(0, 3);
     throw new Error(
       `unknown docs entry ${JSON.stringify(input.name)}` +
-        (nearest.length > 0
-          ? ` — closest matches: ${nearest.map((hit) => hit.name).join(", ")}`
-          : "") +
+        (nearest.length ? ` — closest matches: ${nearest.map((hit) => hit.name).join(", ")}` : "") +
         `. itx.docs.search({ q: "several related words" }) finds examples, types, and capabilities.`,
     );
   }
@@ -8086,7 +8083,7 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
       preamble: preamble?.text,
       typechecker: env.TYPECHECKER,
     });
-    return { ok: problems.length === 0, problems };
+    return { ok: !problems.length, problems };
   }
 }
 
@@ -8747,7 +8744,7 @@ class KvRpcTarget extends IterateRpcTarget<"Kv"> {
     // 256 chars leaves comfortable headroom under Workers KV's 512-BYTE
     // limit on the full stored key (prefix + project id included); the byte
     // check catches multibyte keys the char count alone would let through.
-    if (typeof key !== "string" || key.length === 0 || key.length > 256) {
+    if (typeof key !== "string" || !key.length || key.length > 256) {
       throw new Error("kv keys are non-empty strings of at most 256 characters");
     }
     const stored = `projectkv:${this.#projectId}:${key}`;
@@ -9047,7 +9044,7 @@ class OpenApiRpcTarget extends IterateRpcRelay<"OpenApiRpc"> {
       // split) keeps the reference.
       types:
         this.props.description?.types ??
-        (Object.keys(specFetchHeaders(this.props.config)).length > 0
+        (Object.keys(specFetchHeaders(this.props.config)).length
           ? openApiCapabilityTypeInline(operations, spec, this.props.config.specUrl)
           : openApiCapabilityTypeReference(this.props.config.specUrl)),
       children: Object.fromEntries(
@@ -9163,14 +9160,14 @@ async function executeOperation(args: {
 
   if (!operation.requestBody) {
     const leftover = Object.keys(input);
-    if (leftover.length > 0) {
+    if (leftover.length) {
       const valid = operation.parameters
         .filter((parameter) => parameter.in === "path" || parameter.in === "query")
         .map((parameter) => parameter.name);
       throw new Error(
         `Operation "${operation.operationId}" has no request body and got unknown input ` +
           `key${leftover.length > 1 ? "s" : ""} ${leftover.map((key) => JSON.stringify(key)).join(", ")} — ` +
-          (valid.length > 0 ? `valid params: ${valid.join(", ")}.` : `it takes no parameters.`),
+          (valid.length ? `valid params: ${valid.join(", ")}.` : `it takes no parameters.`),
       );
     }
   }
@@ -9179,7 +9176,7 @@ async function executeOperation(args: {
   for (const [name, value] of query) url.searchParams.set(name, value);
 
   let body: string | undefined;
-  if (operation.requestBody && Object.keys(input).length > 0) {
+  if (operation.requestBody && Object.keys(input).length) {
     // One input object is split into path/query params first; leftovers are the
     // JSON body. Non-object request bodies use `{ body }` so the convention is
     // still representable as one TypeScript parameter.

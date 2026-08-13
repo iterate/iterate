@@ -120,9 +120,9 @@ function normalizeEnvSegment(segment: string) {
     .trim()
     .toLowerCase()
     .split("_")
-    .filter((word) => word.length > 0);
+    .filter((word) => !!word.length);
 
-  if (words.length === 0) {
+  if (!words.length) {
     return "";
   }
 
@@ -190,7 +190,7 @@ function extractPublicConfigSchemaInternal(schema: z.ZodTypeAny): z.ZodTypeAny |
       }
     }
 
-    if (Object.keys(publicShape).length === 0) {
+    if (!Object.keys(publicShape).length) {
       return null;
     }
 
@@ -277,7 +277,7 @@ function getBaseConfigEnvKey(prefix: string) {
   }
 
   const baseKey = prefix.slice(0, -1);
-  if (baseKey.length === 0) {
+  if (!baseKey.length) {
     throw new Error("Config env prefix must include a base key before the trailing underscore.");
   }
 
@@ -285,7 +285,7 @@ function getBaseConfigEnvKey(prefix: string) {
 }
 
 function formatEnvOverrideKey(prefix: string, path: AppConfigPath) {
-  if (path.length === 0) {
+  if (!path.length) {
     return getBaseConfigEnvKey(prefix);
   }
 
@@ -381,9 +381,9 @@ export function unflattenEnv(prefix: string, env: AppConfigEnv) {
       .slice(prefix.length)
       .split(ENV_PATH_SEPARATOR)
       .map(normalizeEnvSegment)
-      .filter((segment) => segment.length > 0);
+      .filter((segment) => !!segment.length);
 
-    if (path.length === 0) {
+    if (!path.length) {
       continue;
     }
 

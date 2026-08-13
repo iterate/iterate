@@ -140,7 +140,7 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
   }
 
   #appendOps(offset: number, ops: readonly FeedOp[], open: BrowserFeedState["open"]): void {
-    if (ops.length === 0) return;
+    if (!ops.length) return;
     for (const op of ops) {
       if ((op.kind === "insert" || op.kind === "replace") && isAgentActivity(op.data)) {
         this.#pendingActivityRows.set(op.localIndex, { activity: op.data, sourceOffset: offset });

@@ -374,9 +374,9 @@ function EmailOtpSignIn({
   });
 
   const normalizedEmail = email.trim().toLowerCase();
-  const canSendOtp = normalizedEmail.length > 0;
-  const canSignIn = otp.length === 6 && submittedEmail.length > 0;
-  const showExpandedForm = isExpanded || submittedEmail.length > 0;
+  const canSendOtp = !!normalizedEmail.length;
+  const canSignIn = otp.length === 6 && !!submittedEmail.length;
+  const showExpandedForm = isExpanded || !!submittedEmail.length;
 
   return (
     <div className="space-y-3">

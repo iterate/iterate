@@ -225,7 +225,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     }
     // Settle inline — this runs inside the head event's outer blocking closure
     // (see processEvent), so awaiting the single atomic append holds the frame.
-    if (settle.length === 0) return;
+    if (!settle.length) return;
     for (const { executionId, reason, settlement } of settle) {
       if (reason !== "recovery") continue;
       console.info("[capability-host] recovering undriven script execution", {
@@ -504,7 +504,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
    */
   async setPreamble(input: SetPreambleInput): Promise<void> {
     await this.#assertCreated();
-    if (typeof input.key !== "string" || input.key.length === 0) {
+    if (typeof input.key !== "string" || !input.key.length) {
       throw new Error('setPreamble requires a non-empty string "key"');
     }
     if (typeof input.code !== "string") {
@@ -523,7 +523,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
           state.birthCertificate?.fallback ?? null,
         );
         const problems = await checkPreamble({ capabilities, preamble: withCandidate.ts });
-        if (problems.length > 0) {
+        if (problems.length) {
           const without = assemblePreamble({
             entries: state.preamble.filter((entry) => entry.key !== input.key),
             results: state.settledScriptResults,
@@ -548,7 +548,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
             preexisting.set(key, remaining - 1);
             return false;
           });
-          if (introduced.length > 0) {
+          if (introduced.length) {
             throw new Error(
               `preamble entry "${input.key}" does not compile:\n${introduced.join("\n")}`,
             );
@@ -569,7 +569,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
   /** Remove one preamble entry by key; unknown keys are a durable no-op. */
   async removePreamble(input: { key: string }): Promise<void> {
     await this.#assertCreated();
-    if (typeof input.key !== "string" || input.key.length === 0) {
+    if (typeof input.key !== "string" || !input.key.length) {
       throw new Error('removePreamble requires a non-empty string "key"');
     }
     const [committed] = await this.append({
@@ -745,7 +745,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     // network-bound compile before its real error surfaces.
     if (input.types) {
       const problems = (await this.deps.validateCapabilityTypes?.(input.types)) ?? [];
-      if (problems.length > 0) {
+      if (problems.length) {
         throw new Error(
           `capability "types" for "${path.join(".")}" does not compile:\n${problems.join("\n")}`,
         );
@@ -798,9 +798,9 @@ export class CapabilityHostProcessor extends StreamProcessor<
       __describe?: () => Promise<{ types?: string }>;
     };
     const types = (await value.__describe?.())?.types;
-    if (typeof types !== "string" || types.length === 0) return undefined;
+    if (typeof types !== "string" || !types.length) return undefined;
     const problems = (await this.deps.validateCapabilityTypes?.(types)) ?? [];
-    return problems.length === 0 ? types : undefined;
+    return !problems.length ? types : undefined;
   }
 
   /**
@@ -1097,7 +1097,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       settlement: ScriptExecutionSettlementValue;
     }[],
   ) {
-    if (inputs.length === 0) return Promise.resolve();
+    if (!inputs.length) return Promise.resolve();
     for (const { executionId, settlement } of inputs) {
       this.#pendingSettlements.set(executionId, settlement);
     }

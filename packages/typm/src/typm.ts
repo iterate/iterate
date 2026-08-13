@@ -129,7 +129,7 @@ export async function acquireTypes(input: AcquireTypesInput): Promise<AcquireTyp
       return [];
     }
     const declarationFiles = tree.files.filter((file) => isDeclarationPath(file.name));
-    if (declarationFiles.length === 0) {
+    if (!declarationFiles.length) {
       // No shipped types: fall back to DefinitelyTyped, preferring the @types
       // major that matches the resolved package version over blindly-latest.
       const typesPackage = `@types/${definitelyTypedName(name)}`;
@@ -186,7 +186,7 @@ export async function acquireTypes(input: AcquireTypesInput): Promise<AcquireTyp
 
   let wave = rootDependencies(root);
   input.log(`acquiring types for ${wave.length} package.json dependencies`);
-  while (wave.length > 0) {
+  while (wave.length) {
     const batch: PendingDependency[] = [];
     for (const dependency of wave) {
       if (seen.has(dependency.name)) continue;

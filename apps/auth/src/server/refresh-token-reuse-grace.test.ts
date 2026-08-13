@@ -118,7 +118,7 @@ describe("refresh token rotation reuse grace window", () => {
     const { response, body } = await refreshGrant(auth, RAW_REFRESH_TOKEN);
 
     assert.equal(response.status, 200);
-    assert.ok(typeof body.refresh_token === "string" && body.refresh_token.length > 0);
+    assert.ok(typeof body.refresh_token === "string" && !!body.refresh_token.length);
     assert.notEqual(body.refresh_token, RAW_REFRESH_TOKEN);
 
     const originalRow = db.oauthRefreshToken.find((row) => row.id === "refresh_row_1");

@@ -261,7 +261,7 @@ function makeJournal(homePath = HOME) {
                   (!Number.isFinite(args?.beforeOffset) || row.offset < args.beforeOffset),
               )
               .slice(0, limit);
-            if (page.length > 0) cursor = page.at(-1)!.offset;
+            if (page.length) cursor = page.at(-1)!.offset;
             return Promise.resolve(page);
           },
           [Symbol.dispose]: () => {},
@@ -481,7 +481,7 @@ function makeHarness(args: HarnessArgs = {}) {
     async deliverPending() {
       const opened = await runner.openEventBatchCallback();
       const events = journal.rows().filter((row) => row.offset > opened.checkpointOffset);
-      if (events.length > 0) {
+      if (events.length) {
         await opened.processEventBatch(eventBatch(events, journal.head()));
       }
       return opened.checkpointOffset;
@@ -496,7 +496,7 @@ function makeHarness(args: HarnessArgs = {}) {
       const events = journal
         .rows()
         .filter((row) => row.offset > opened.checkpointOffset && consumed.has(row.type));
-      if (events.length > 0) {
+      if (events.length) {
         await opened.processEventBatch(eventBatch(events, journal.head()));
       }
       return opened.checkpointOffset;
@@ -533,7 +533,7 @@ function randomPartition<T>(items: readonly T[], seed: number): T[][] {
       current = [];
     }
   }
-  if (current.length > 0) out.push(current);
+  if (current.length) out.push(current);
   return out;
 }
 

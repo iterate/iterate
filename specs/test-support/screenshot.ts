@@ -8,7 +8,7 @@ const occurrencesByTest = new WeakMap<TestInfo, Map<string, number>>();
 export const screenshot = (): Plugin => {
   const matchers = parseMatchers(process.env[ENVIRONMENT_VARIABLE] || "");
 
-  if (matchers.length === 0 || process.env.PWDEBUG) return { name: "screenshot" };
+  if (!matchers.length || process.env.PWDEBUG) return { name: "screenshot" };
 
   return {
     name: "screenshot",

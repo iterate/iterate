@@ -106,7 +106,7 @@ async function checkBundle(bundle: BundleManifestEntry): Promise<void> {
   const unsupported = new Set<string>();
   let bundledSource = "";
 
-  while (pending.length > 0) {
+  while (pending.length) {
     const moduleUrl = pending.pop()!;
     if (visited.has(moduleUrl.href)) continue;
     visited.add(moduleUrl.href);

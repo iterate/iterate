@@ -324,7 +324,7 @@ function LinkForm({
   const [connection, setConnection] = useState(connections[0] ?? "");
   const [selected, setSelected] = useState<InstallationRepo | null>(null);
 
-  if (connections.length === 0) {
+  if (!connections.length) {
     return (
       <div className="p-3 text-xs text-muted-foreground">
         Connect GitHub on the{" "}

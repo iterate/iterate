@@ -420,8 +420,7 @@ export class StreamEventSender {
    * storage round trip.
    */
   sendDue(justCommittedEvents?: SizedStreamEvent[]): boolean {
-    if (justCommittedEvents && justCommittedEvents.length > 0)
-      this.#justCommittedEvents = justCommittedEvents;
+    if (justCommittedEvents?.length) this.#justCommittedEvents = justCommittedEvents;
     try {
       const state = this.#hooks.coreState();
       this.connections.closeStaleHosted((connectionKey) =>
@@ -435,7 +434,7 @@ export class StreamEventSender {
         this.#consecutiveSendStartFailures = 0;
         return true;
       }
-      if (justCommittedEvents && justCommittedEvents.length > 0) {
+      if (justCommittedEvents?.length) {
         this.#hooks.pageDormantSubscribers(justCommittedEvents);
       }
       this.#sendDueSubscriptions();
@@ -851,7 +850,7 @@ export class StreamEventSender {
             expectedDelivery,
             deliverable,
           );
-          if (filterFailure && matched.length === 0) {
+          if (filterFailure && !matched.length) {
             if (!this.#hooks.appendDeliveryEvent(filterFailure.eventToAppend)) {
               // The filter decision is not allowed to outrun its durable
               // explanation. Lifecycle teardown can interrupt append after
@@ -873,7 +872,7 @@ export class StreamEventSender {
             return;
           }
 
-          if (matched.length === 0) {
+          if (!matched.length) {
             // Skip-not-defer: nothing here for this callback owner, but the cursor
             // must advance or the subscription re-reads these events forever.
             this.#hooks.store.ack(name, lastOffset, {
@@ -1689,12 +1688,12 @@ function deliveryErrorDiagnostics(error: unknown): {
     if (typeof error === "object" && error) {
       const candidateName: unknown = Reflect.get(error, "name");
       const candidateItxCallId: unknown = Reflect.get(error, "itxCallId");
-      if (typeof candidateName === "string" && candidateName.length > 0) {
+      if (typeof candidateName === "string" && candidateName.length) {
         errorName = candidateName.slice(0, 200);
       }
       if (
         typeof candidateItxCallId === "string" &&
-        candidateItxCallId.length > 0 &&
+        candidateItxCallId.length &&
         candidateItxCallId.length <= 200
       ) {
         itxCallId = candidateItxCallId;
@@ -1997,7 +1996,7 @@ export class StreamConnections {
     const idleCandidates = [...eligible.hosted, ...eligible.session].filter(
       (key) => this.#connections.get(key)?.hasPendingDelivery() !== true,
     );
-    if (idleCandidates.length === 0) {
+    if (!idleCandidates.length) {
       this.#idleTeardownAtMs = null;
       return;
     }
@@ -2053,7 +2052,7 @@ export class StreamConnections {
     // Session connections have no cursor row; their equivalent of the ack
     // above is the stream-subscriber-pager attachment stamp, which must likewise land
     // AFTER the close facts so those facts can never wake the subscriber.
-    if (idleSessions.length > 0) this.#hooks.onSessionsIdleClosed(idleSessions);
+    if (idleSessions.length) this.#hooks.onSessionsIdleClosed(idleSessions);
     this.#idleTeardownAtMs = null;
     return keys;
   }
@@ -2094,7 +2093,7 @@ export class StreamConnections {
       processEventBatch[Symbol.dispose]();
       throw new Error("replayAfterOffset must be a non-negative safe integer");
     }
-    if (args.expectedStreamId && args.expectedStreamId.trim().length === 0) {
+    if (args.expectedStreamId && !args.expectedStreamId.trim().length) {
       processEventBatch[Symbol.dispose]();
       throw new Error("expectedStreamId must be null or a non-empty string");
     }
@@ -2220,7 +2219,7 @@ export class StreamConnections {
             kind === "session" &&
             args.includeState === false &&
             deliverEvents &&
-            events.length === 0 &&
+            !events.length &&
             !initialBatchPending
           ) {
             // A state-free batch whose filter rejected every event has no
@@ -2240,8 +2239,9 @@ export class StreamConnections {
           if (!currentState.projectId || !currentState.path || !currentState.streamId) {
             throw new Error("Cannot deliver stream batch before stream identity is initialized.");
           }
-          const newestCreatedAtMs =
-            events.length === 0 ? undefined : Date.parse(events.at(-1)!.createdAt);
+          const newestCreatedAtMs = !events.length
+            ? undefined
+            : Date.parse(events.at(-1)!.createdAt);
           const batch = {
             projectId: currentState.projectId,
             path: currentState.path,
@@ -2451,7 +2451,7 @@ function parseWakeDeliveryResult(
     outcome: "error",
     error: Object.assign(error, {
       ...(typeof serialized.itxCallId === "string" &&
-        serialized.itxCallId.length > 0 &&
+        !!serialized.itxCallId.length &&
         serialized.itxCallId.length <= 200 && { itxCallId: serialized.itxCallId }),
       ...(serialized.durableObjectReset === true && { durableObjectReset: true }),
       ...(serialized.overloaded === true && { overloaded: true }),

@@ -108,9 +108,9 @@ export class EventConsumptionMetrics {
       const hostNowOnStreamClock = args.atMs - (this.#clockOffsetMs ?? 0);
       this.#deliveryAge.record(hostNowOnStreamClock - args.newestEventCreatedAtMs, args.atMs);
     }
-    if (this.#pendingOwnAppends.length > 0) {
+    if (this.#pendingOwnAppends.length) {
       const settled = this.#pendingOwnAppends.filter((p) => p.offset <= args.ingestedThroughOffset);
-      if (settled.length > 0) {
+      if (settled.length) {
         this.#pendingOwnAppends = this.#pendingOwnAppends.filter(
           (p) => p.offset > args.ingestedThroughOffset,
         );

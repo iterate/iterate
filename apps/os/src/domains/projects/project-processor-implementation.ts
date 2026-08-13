@@ -730,7 +730,7 @@ export class ProjectProcessor extends StreamProcessor<
             ...state.clients,
             [source.path]: {
               ...previous,
-              connected: connectedAtOffsets.length > 0,
+              connected: !!connectedAtOffsets.length,
               lastDisconnectedAt: source.createdAt,
               connectedAtOffsets,
             },

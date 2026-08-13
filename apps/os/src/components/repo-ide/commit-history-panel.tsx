@@ -141,7 +141,7 @@ function ExpandedCommit({
             onOpen={() => onOpenFile(file.path)}
           />
         ))}
-        {details.files.length === 0 ? (
+        {!details.files.length ? (
           <span className="text-[11px] text-muted-foreground">No file changes.</span>
         ) : null}
       </div>

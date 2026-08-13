@@ -62,7 +62,7 @@ export function isSentinelLine(lineContent: string): boolean {
 
 export function isValidId(value: string): boolean {
   return (
-    value.length > 0 &&
+    !!value.length &&
     value.length <= MAX_ID_LENGTH &&
     /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) &&
     !value.includes("--")
@@ -71,7 +71,7 @@ export function isValidId(value: string): boolean {
 
 export function isValidAuthor(value: string): boolean {
   return (
-    value.length > 0 &&
+    !!value.length &&
     value.length <= MAX_AUTHOR_LENGTH &&
     !/\s/.test(value) &&
     !value.includes("--")
@@ -126,7 +126,7 @@ function validateQuoteParts(
   prefix: unknown,
   suffix: unknown,
 ): AnchorSelector["quote"] | null {
-  if (typeof exact !== "string" || exact.length === 0 || exact.length > MAX_QUOTE_EXACT_LENGTH) {
+  if (typeof exact !== "string" || !exact.length || exact.length > MAX_QUOTE_EXACT_LENGTH) {
     return null;
   }
   if (prefix && typeof prefix !== "string") return null;
@@ -151,7 +151,7 @@ function validatePositionParts(position: unknown): { start: number; end: number 
 }
 
 function validateW3cSelectorList(list: unknown): AnchorSelector | null {
-  if (!Array.isArray(list) || list.length === 0 || list.length > 2) return null;
+  if (!Array.isArray(list) || !list.length || list.length > 2) return null;
   let quote: AnchorSelector["quote"] | null = null;
   let position: { start: number; end: number } | null = null;
   for (const entry of list) {
@@ -233,7 +233,7 @@ export function parseSentinelLine(lineContent: string, lineStart: number): Senti
   }
 
   if (kind === "anchor") {
-    if (rest.length === 0 || rest.length > MAX_ANCHOR_JSON_LENGTH) {
+    if (!rest.length || rest.length > MAX_ANCHOR_JSON_LENGTH) {
       return {
         ok: false,
         code: "anchor-invalid",

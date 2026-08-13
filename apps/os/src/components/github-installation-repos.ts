@@ -90,7 +90,7 @@ export async function listInstallationRepos(
           pushedAt: r.pushed_at,
         })),
       );
-      if (response.data.repositories.length === 0 || repos.length >= totalCount) break;
+      if (!response.data.repositories.length || repos.length >= totalCount) break;
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
       break;

@@ -108,7 +108,7 @@ export function setTaskCardAgent(source: string, agentPath: string): string {
 export function setTaskCardLabels(source: string, labels: readonly string[]): string {
   return updateFrontmatter(source, (document) => {
     document.delete("labels");
-    if (labels.length === 0) document.delete("tags");
+    if (!labels.length) document.delete("tags");
     else document.set("tags", [...labels]);
   });
 }
@@ -186,7 +186,7 @@ export function taskPathForTitle(title: string, suffix?: string): string {
 
 /** Deterministic commit message when AI is unavailable or empty. */
 export function fallbackCommitMessage(changes: readonly TaskChangeSummary[]): string {
-  if (changes.length === 0) return "Update tasks";
+  if (!changes.length) return "Update tasks";
   const added = changes.filter((change) => change.status === "added");
   const modified = changes.filter((change) => change.status === "modified");
   const deleted = changes.filter((change) => change.status === "deleted");
@@ -269,7 +269,7 @@ function parseMarkdownFrontmatter(content: string): {
     body: content.slice(match[0].length),
     document,
     exists: true,
-    invalid: document.errors.length > 0,
+    invalid: !!document.errors.length,
   };
 }
 

@@ -320,9 +320,9 @@ export function generateItxApi(): string {
     name: string,
   ): TypeAliasDeclaration | InterfaceDeclaration | undefined => {
     const list = namedDecls.get(name);
-    if (!list || list.length === 0) return undefined;
+    if (!list?.length) return undefined;
     const exported = list.filter((decl) => decl.modifierFlags & ModifierFlags.Export);
-    const candidates = exported.length > 0 ? exported : list;
+    const candidates = exported.length ? exported : list;
     if (candidates.length > 1) {
       const files = candidates.map((d) => path.relative(projectDir, d.getSourceFile().fileName));
       throw new Error(
@@ -546,7 +546,7 @@ export function generateItxApi(): string {
   // the /api walk (nothing on the capability tree mentions it), but worker code
   // imports it through `iterate/sdk`, so it is a second seed.
   enqueue("ItxBinding");
-  while (queue.length > 0) {
+  while (queue.length) {
     const name = queue.shift()!;
     if (emitted.has(name)) continue;
     emitted.add(name);
@@ -691,7 +691,7 @@ export function buildItxApiGraph(flatFileSource: string): ItxApiDeclaration[] {
   const duplicates = records.filter(
     (record, index) => records.findIndex((other) => other.name === record.name) !== index,
   );
-  if (duplicates.length > 0) {
+  if (duplicates.length) {
     throw new Error(
       `itx api graph has duplicate declaration names: ${duplicates.map((d) => d.name).join(", ")}`,
     );
@@ -775,7 +775,7 @@ export function verifyRpcTargetsSatisfyContract(generatedSource: string): void {
     ]),
   );
   const diagnostics = session.project.program.getSemanticDiagnostics(rpcTargetsPath);
-  if (diagnostics.length > 0) {
+  if (diagnostics.length) {
     const details = diagnostics.map((d) => `  ${d.fileName ?? "?"}:${d.pos}: ${d.text}`);
     throw new Error(
       `rpc-targets.ts does not satisfy the generated itx contract — ` +

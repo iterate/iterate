@@ -61,7 +61,7 @@ export function decideHeadResolution(
     return { cache: false, reason: "behind-own-push" };
   }
   const tips = frontierTips(authority.observedPushes);
-  if (tips.length > 0 && !tips.includes(resolvedOid)) {
+  if (tips.length && !tips.includes(resolvedOid)) {
     return { cache: false, reason: "unsettled-external-push" };
   }
   return { cache: true };

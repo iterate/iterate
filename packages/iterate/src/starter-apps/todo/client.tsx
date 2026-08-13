@@ -25,7 +25,7 @@ export function TodoClient() {
   const [pendingMutations, setPendingMutations] = useState(0);
   const mutating = pendingMutations > 0;
 
-  const error = liveError || (actionError.length > 0 ? actionError : undefined);
+  const error = liveError || (actionError.length ? actionError : undefined);
   const todos = state?.todos || [];
 
   const run = async (action: () => Promise<void>) => {
@@ -42,7 +42,7 @@ export function TodoClient() {
 
   const add = async (event: FormEvent) => {
     event.preventDefault();
-    if (!api || title.trim().length === 0) return;
+    if (!api || !title.trim().length) return;
     const next = title;
     setTitle("");
     await run(() => api.add(next));
@@ -74,7 +74,7 @@ export function TodoClient() {
       {!!error && <p role="alert">{error}</p>}
       {!state ? (
         <p>Loading…</p>
-      ) : todos.length === 0 ? (
+      ) : !todos.length ? (
         <p>No todos yet.</p>
       ) : (
         <ul>

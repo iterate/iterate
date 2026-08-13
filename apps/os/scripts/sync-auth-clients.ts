@@ -19,7 +19,7 @@ type SeedOAuthClientSpec = {
 
 const targets: Target[] = Object.values(envs).map((env) => {
   const [projectHostnameBase, ...additionalProjectHostnameBases] = env.projectHostnameBases;
-  if (!projectHostnameBase || additionalProjectHostnameBases.length > 0) {
+  if (!projectHostnameBase || additionalProjectHostnameBases.length) {
     throw new Error(
       `${env.dopplerConfig} must have exactly one project hostname base to sync its Auth client.`,
     );

@@ -163,7 +163,7 @@ export function buildCopyAppends({
     });
   }
 
-  if (droppedOffsets.length > 0) {
+  if (droppedOffsets.length) {
     const firstOffset = droppedOffsets[0]!;
     const lastOffset = droppedOffsets.at(-1)!;
     inputs.push({
@@ -191,7 +191,7 @@ export function buildCopyAppends({
 }
 
 function validateStreamDeliveryBatch(batch: StreamDeliveryBatch): void {
-  if (batch.events.length === 0) {
+  if (!batch.events.length) {
     throw new Error("copy batches must contain at least one event");
   }
   if (!z.uuid().safeParse(batch.streamId).success) {

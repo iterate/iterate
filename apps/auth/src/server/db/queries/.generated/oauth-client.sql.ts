@@ -27,7 +27,7 @@ export const getOAuthClientByReferenceId = Object.assign(
     const rows = await client.all<getOAuthClientByReferenceId.Result>(
       getOAuthClientByReferenceIdQuery(params),
     );
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   { sql: getOAuthClientByReferenceIdSql, query: getOAuthClientByReferenceIdQuery },
 );
@@ -75,7 +75,7 @@ export const getOAuthClientByClientId = Object.assign(
     const rows = await client.all<getOAuthClientByClientId.Result>(
       getOAuthClientByClientIdQuery(params),
     );
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   { sql: getOAuthClientByClientIdSql, query: getOAuthClientByClientIdQuery },
 );
@@ -337,7 +337,7 @@ export const getOAuthAccessTokenForInternalIntrospection = Object.assign(
     const rows = await client.all<getOAuthAccessTokenForInternalIntrospection.Result>(
       getOAuthAccessTokenForInternalIntrospectionQuery(params),
     );
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   {
     sql: getOAuthAccessTokenForInternalIntrospectionSql,

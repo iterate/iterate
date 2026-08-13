@@ -189,7 +189,7 @@ function ApprovalGlyphs({
       ? [{ mark: "✗", style: styles.glyphRejected, label: "rejected" }]
       : []),
   ];
-  if (glyphs.length === 0) return null;
+  if (!glyphs.length) return null;
   return (
     <View style={styles.glyphRow}>
       {glyphs.map((glyph) => (
@@ -309,7 +309,7 @@ function CodeStepTabs({
   // the inferred tab union collapses.
   const tabs = [
     { key: "script" as const, name: "Script" },
-    ...(batches.length > 0 ? [{ key: "approvals" as const, name: "Approvals" }] : []),
+    ...(batches.length ? [{ key: "approvals" as const, name: "Approvals" }] : []),
     ...(step.status === "done" && (step.result || step.errorMessage)
       ? [{ key: "result" as const, name: "Result" }]
       : []),
@@ -326,7 +326,7 @@ function CodeStepTabs({
   // input set. (Request-scoped lifecycle events feed only the replay's
   // response/stats, which this tab doesn't show — not fetched.)
   const requestCovered =
-    !!llm && threadEvents.length > 0 && threadEvents.at(-1)!.offset >= llm.llmRequestOffset;
+    !!llm && !!threadEvents.length && threadEvents.at(-1)!.offset >= llm.llmRequestOffset;
   const llmRequestOffset = !llm ? null : llm.llmRequestOffset;
   const promptReplay = useMemo(() => {
     if (active !== "meta" || !Number.isFinite(llmRequestOffset) || !requestCovered) return null;
@@ -461,13 +461,12 @@ function metaYaml(
       ...(!Number.isFinite(code.durationMs) ? {} : { duration: seconds(code.durationMs) }),
       ...(code.status === "done" && code.success === false && { failed: true }),
     },
-    ...(promptMessages &&
-      promptMessages.length > 0 && {
-        prompt: promptMessages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-      }),
+    ...(!!promptMessages?.length && {
+      prompt: promptMessages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+    }),
     // The raw model response the round's consequences were derived from —
     // after the prompt, so the doc reads request → answer (parity with the
     // os feed's buildRoundMetaYaml).
@@ -506,7 +505,7 @@ function footerStats(step: Extract<AgentUiStep, { kind: "llm" }>): string {
           ? ["cancelled"]
           : []),
   ];
-  return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
+  return parts.length ? ` · ${parts.join(" · ")}` : "";
 }
 
 // If the CodeMirror webview never reports ready in dev, flag it after this

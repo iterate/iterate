@@ -13,7 +13,7 @@ const GITHUB_REPO_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
 export function isSafeConfigRepoTemplatePath(path: string): boolean {
   const segments = path.split("/");
   return (
-    path.length > 0 &&
+    !!path.length &&
     !path.startsWith("/") &&
     !path.endsWith("/") &&
     !path.includes("\\") &&
@@ -35,7 +35,7 @@ export function isSafeConfigRepoTemplatePath(path: string): boolean {
  */
 export function parseConfigRepoTemplateReference(input: string): ConfigRepoTemplateReference {
   const value = input.trim();
-  if (value.length === 0) throw new Error("Config template reference cannot be empty.");
+  if (!value.length) throw new Error("Config template reference cannot be empty.");
 
   const fragmentStart = value.indexOf("#");
   if (fragmentStart !== -1 && value.indexOf("#", fragmentStart + 1) !== -1) {
@@ -106,7 +106,7 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
 
   if (ref) {
     if (
-      ref.length === 0 ||
+      !ref.length ||
       ref.startsWith("/") ||
       ref.endsWith("/") ||
       ref.endsWith(".") ||

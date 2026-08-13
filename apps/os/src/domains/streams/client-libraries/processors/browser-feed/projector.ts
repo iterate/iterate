@@ -329,7 +329,7 @@ export function isCurrentBrowserFeedState(value: unknown): value is BrowserFeedS
   if (
     !Object.entries(candidate.provisionalAgentItemIndexes).every(
       ([id, index]) =>
-        id.length > 0 &&
+        !!id.length &&
         isNonNegativeSafeInteger(index) &&
         index < nextLocalIndex &&
         Object.hasOwn(agent.provisionalActivities, id),
@@ -368,7 +368,7 @@ function isOpenGroup(value: unknown): value is OpenGroup | null {
     value.eventCount > 0 &&
     value.eventCount <= MAX_GROUP_EVENTS &&
     typeof value.eventType === "string" &&
-    value.eventType.length > 0 &&
+    !!value.eventType.length &&
     events.length === value.eventCount &&
     events.every(
       (event, index) =>

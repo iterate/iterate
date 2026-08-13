@@ -248,7 +248,7 @@ function workerdRssKb(rootPid: number) {
   }
   let totalKb = 0;
   const queue = [rootPid];
-  while (queue.length > 0) {
+  while (queue.length) {
     for (const child of childrenByPpid.get(queue.shift()!) || []) {
       if (child.comm.includes("workerd")) totalKb += child.rss;
       queue.push(child.pid);

@@ -55,7 +55,7 @@ export function AddRepoFromGithub({
     query: (itx) => listGithubConnections(itx),
   });
   const [open, setOpen] = useState(false);
-  if (connections.length === 0) return null;
+  if (!connections.length) return null;
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">

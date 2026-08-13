@@ -43,7 +43,7 @@ export function paintHighlights(
   if (!api) return false;
   clearHighlights(prefix);
   for (const group of groups) {
-    if (group.ranges.length === 0) continue;
+    if (!group.ranges.length) continue;
     api.registry.set(`${prefix}-${group.key}`, new api.Highlight(...group.ranges));
   }
   return true;

@@ -18,7 +18,7 @@ export function assertCapabilityPath(path: string[]): void {
   if (!Array.isArray(path)) {
     throw new Error('capability path must be an ARRAY of segments (e.g. ["tools", "weather"])');
   }
-  if (path.length === 0) {
+  if (!path.length) {
     throw new Error("capability path must contain at least one segment");
   }
   for (const segment of path) {

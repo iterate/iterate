@@ -52,7 +52,7 @@ export function NewAgentComposer({
   const busy = createAgent.isPending || createAgent.isSuccess;
 
   function submit() {
-    if (busy || (message.trim() === "" && attachments.files.length === 0)) return;
+    if (busy || (message.trim() === "" && !attachments.files.length)) return;
     createAgent.mutate({ content: message.trim(), files: attachments.files });
   }
 
@@ -69,11 +69,11 @@ export function NewAgentComposer({
           value: message,
           onValueChange: setMessage,
           onSubmit: submit,
-          canSubmit: message.trim() !== "" || attachments.files.length > 0,
+          canSubmit: message.trim() !== "" || !!attachments.files.length,
           placeholder: "Message a new agent",
           onAttach: attachments.openFilePicker,
           onAddFiles: attachments.addFiles,
-          ...(attachments.entries.length === 0
+          ...(!attachments.entries.length
             ? {}
             : {
                 attachments: (

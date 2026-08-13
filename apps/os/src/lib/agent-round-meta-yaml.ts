@@ -58,13 +58,12 @@ export function buildRoundMetaYaml(
         : { duration: `${(code.durationMs / 1000).toFixed(1)}s` }),
       ...(code.status === "done" && code.success === false && { failed: true }),
     },
-    ...(promptMessages &&
-      promptMessages.length > 0 && {
-        prompt: promptMessages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-      }),
+    ...(!!promptMessages?.length && {
+      prompt: promptMessages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+    }),
     // The raw model response the round's consequences were derived from —
     // after the prompt, so the doc reads request → answer.
     ...(llm?.responseText && { response: llm.responseText }),

@@ -120,7 +120,7 @@ function AuthorizedApps() {
       </CardHeader>
       <Separator />
       <CardContent>
-        {consents.length === 0 ? (
+        {!consents.length ? (
           <p className="text-sm text-muted-foreground">
             No apps have been authorized to access your account.
           </p>

@@ -137,9 +137,9 @@ function withTrailingBlankLine(raw: string, range: SourceRange): SourceRange {
 
 function normalizeBodyLines(body: string): string[] {
   const lines = body.replace(/\r\n/g, "\n").split("\n");
-  while (lines.length > 0 && lines[0]?.trim() === "") lines.shift();
-  while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") lines.pop();
-  if (lines.length === 0) return fail("invalid-body", "comment text is empty");
+  while (lines.length && lines[0]?.trim() === "") lines.shift();
+  while (lines.length && lines[lines.length - 1]?.trim() === "") lines.pop();
+  if (!lines.length) return fail("invalid-body", "comment text is empty");
   for (const line of lines) {
     if (line.startsWith("<!-- iterate-")) {
       return fail(

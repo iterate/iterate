@@ -98,7 +98,7 @@ export function MediaViewer({
           </Pressable>
           <View style={styles.panel}>
             {title ? <Text style={styles.panelTitle}>{title}</Text> : null}
-            {tags.length > 0 ? (
+            {tags.length ? (
               <View style={styles.tagRow}>
                 {tags.map((tag) => (
                   <Text key={tag} style={styles.tag}>

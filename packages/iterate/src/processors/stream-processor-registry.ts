@@ -211,7 +211,7 @@ function serializeWakeDeliveryError(error: unknown): StreamWakeDeliveryError {
         ? candidate.message
         : String(error) || "unknown delivery failure",
     ...(typeof candidate?.itxCallId === "string" &&
-      candidate.itxCallId.length > 0 &&
+      !!candidate.itxCallId.length &&
       candidate.itxCallId.length <= 200 && { itxCallId: candidate.itxCallId }),
     ...(candidate?.durableObjectReset === true && { durableObjectReset: true as const }),
     ...(candidate?.overloaded === true && { overloaded: true as const }),
@@ -676,7 +676,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
               failures.push(error);
             }
           }
-          if (failures.length > 0) throw failures[0];
+          if (failures.length) throw failures[0];
         } finally {
           // Awaited AND rethrown: the platform only retries an alarm whose
           // handler THREW. Resolving with the re-arm still queued (or

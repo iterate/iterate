@@ -115,7 +115,7 @@ export function assemblePreamble(input: {
 }): AssembledPreamble | null {
   const renderer = markedRenderer();
   const sections: string[] = [];
-  if (input.results.length > 0) {
+  if (input.results.length) {
     sections.push(renderResultsArray(input.results, renderer.tsOnly));
   }
   for (const entry of input.entries) {
@@ -124,7 +124,7 @@ export function assemblePreamble(input: {
     // no-emit fallback path.
     sections.push(`// ── preamble entry ${JSON.stringify(entry.key)} ──\n${entry.code}`);
   }
-  if (sections.length === 0) return null;
+  if (!sections.length) return null;
   const marked = sections.join("\n");
   return { ts: renderer.toTs(marked), js: renderer.toJs(marked) };
 }

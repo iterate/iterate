@@ -62,7 +62,7 @@ export function TagPicker({
         }
       >
         <TagIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate">{value.length === 0 ? "Tags" : value.join(", ")}</span>
+        <span className="truncate">{!value.length ? "Tags" : value.join(", ")}</span>
         <ChevronDownIcon aria-hidden className="size-3 shrink-0" />
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 p-2" initialFocus={inputRef}>
@@ -73,7 +73,7 @@ export function TagPicker({
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               if (canCreate) create();
-              else if (filtered.length > 0) toggle(filtered[0]!);
+              else if (filtered.length) toggle(filtered[0]!);
             }
             if (event.key === "Escape") setOpen(false);
           }}
@@ -106,7 +106,7 @@ export function TagPicker({
               Create &ldquo;{trimmed}&rdquo;
             </button>
           ) : null}
-          {filtered.length === 0 && !canCreate ? (
+          {!filtered.length && !canCreate ? (
             <p className="px-2 py-1 text-xs text-muted-foreground">
               No tags yet — type to create one.
             </p>

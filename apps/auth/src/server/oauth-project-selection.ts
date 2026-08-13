@@ -200,7 +200,7 @@ function normalizeProjectIds(projectIds: Iterable<string>) {
     new Set(
       Array.from(projectIds)
         .map((projectId) => projectId.trim())
-        .filter((projectId) => projectId.length > 0),
+        .filter((projectId) => !!projectId.length),
     ),
   ).sort();
 }

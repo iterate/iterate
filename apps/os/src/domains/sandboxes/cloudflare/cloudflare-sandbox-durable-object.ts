@@ -167,7 +167,7 @@ function sandboxProcessGroupCleanupCommand(processGroupId: number): string {
 }
 
 function appendSandboxTimeoutMessage(stderr: string, timeoutMs: number): string {
-  const separator = stderr.length === 0 || stderr.endsWith("\n") ? "" : "\n";
+  const separator = !stderr.length || stderr.endsWith("\n") ? "" : "\n";
   return `${stderr}${separator}Command timed out after ${timeoutMs}ms`;
 }
 
@@ -523,7 +523,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       await this.#appendBirth(input.instanceType, input.env);
       if (input.sleepAfter || input.sleepAfter === 0) await this.setSleepAfter(input.sleepAfter);
       if (typeof input.keepAlive === "boolean") await this.setKeepAlive(input.keepAlive);
-      if (input.env && Object.keys(input.env).length > 0) {
+      if (input.env && Object.keys(input.env).length) {
         const initialEnv = Object.fromEntries(
           Object.entries(input.env).filter((entry): entry is [string, string] => {
             return !!entry[1];

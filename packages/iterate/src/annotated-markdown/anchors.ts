@@ -269,7 +269,7 @@ function normalizeWithMap(text: string): { text: string; map: number[] } {
     const char = text[i];
     if (!char) break;
     if (/\s/.test(char)) {
-      pendingSpace = out.length > 0;
+      pendingSpace = !!out.length;
       continue;
     }
     if (pendingSpace) {

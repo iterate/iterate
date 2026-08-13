@@ -294,7 +294,7 @@ function BoardCard({
         isDragging && "opacity-40",
       )}
     >
-      {presence.length > 0 ? (
+      {presence.length ? (
         <span className="absolute right-2 bottom-2 flex -space-x-1">
           {presence.slice(0, 4).map((user, index) => (
             <span
@@ -314,7 +314,7 @@ function BoardCard({
           {task.summary}
         </p>
       )}
-      {(showTags && task.labels.length > 0) ||
+      {(showTags && task.labels.length) ||
       (showFolder && task.folder !== "tasks") ||
       task.commentCount > 0 ? (
         <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5">
@@ -344,7 +344,7 @@ function BoardCard({
       ) : null}
     </button>
   );
-  if (hoverLines.length === 0) return card;
+  if (!hoverLines.length) return card;
   return (
     <Tooltip>
       <TooltipTrigger render={<span className="block w-full" />}>{card}</TooltipTrigger>

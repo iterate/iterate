@@ -246,7 +246,7 @@ class KvStream implements ProcessorStream {
     return {
       next: async () => {
         const page = await this.getEventPage({ ...args, afterOffset: after, limit: pageSize });
-        if (page.events.length > 0) after = page.events.at(-1)!.offset;
+        if (page.events.length) after = page.events.at(-1)!.offset;
         return page.events;
       },
       [Symbol.dispose]() {},

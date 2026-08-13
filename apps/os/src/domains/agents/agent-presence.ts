@@ -51,7 +51,7 @@ export const AgentSummaryUpdate = z
     waitingFor: AgentWaitingFor.nullable().optional(),
     pinned: z.boolean().optional(),
   })
-  .refine((update) => Object.keys(update).length > 0, {
+  .refine((update) => !!Object.keys(update).length, {
     message: "agent summary update must contain at least one property",
   });
 /** A partial agent-summary update; null clears an optional field and omission preserves it. */

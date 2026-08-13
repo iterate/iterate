@@ -99,7 +99,7 @@ export function StreamViewComposer({
       const committed = await submit();
       store.noteExternalAppend({ maxCommittedOffset: committed.offset, t0 });
     };
-    if (attachments.files.length > 0 && onSubmitFiles) {
+    if (attachments.files.length && onSubmitFiles) {
       await runSubmit(async () => {
         await measured(() => onSubmitFiles({ files: attachments.files, message: trimmed }));
         setMessageText("");
@@ -139,10 +139,9 @@ export function StreamViewComposer({
   // lifecycles, so none may mask the others — show all active messages.
   const error =
     [attachments.fileError, submitError, interrupt?.error].filter(Boolean).join(" · ") || undefined;
-  const attachmentChips =
-    attachments.entries.length === 0 ? undefined : (
-      <AttachmentChips entries={attachments.entries} onRemove={attachments.removeFile} />
-    );
+  const attachmentChips = !attachments.entries.length ? undefined : (
+    <AttachmentChips entries={attachments.entries} onRemove={attachments.removeFile} />
+  );
 
   return (
     <>
@@ -161,7 +160,7 @@ export function StreamViewComposer({
                 onSubmit: submitMessage,
                 canSubmit:
                   messageText.trim() !== "" ||
-                  (attachments.files.length > 0 && !!messageComposer.onSubmitFiles),
+                  (!!attachments.files.length && !!messageComposer.onSubmitFiles),
                 ...(!attachmentChips ? {} : { attachments: attachmentChips }),
                 ...(!messageComposer.onSubmitFiles
                   ? {}

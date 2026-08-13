@@ -29,7 +29,7 @@ export const getFreshOAuthProjectSelectionBySessionId = Object.assign(
     const rows = await client.all<getFreshOAuthProjectSelectionBySessionId.Result>(
       getFreshOAuthProjectSelectionBySessionIdQuery(params),
     );
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   {
     sql: getFreshOAuthProjectSelectionBySessionIdSql,

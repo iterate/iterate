@@ -203,7 +203,7 @@ export function getAuthPlugins(options: AuthPluginOptions) {
         shouldRedirect: async ({ scopes, session }) => {
           if (session?.userId) {
             const organizations = await listOrganizationsForUser(db, { userId: session.userId });
-            if (organizations.length === 0) {
+            if (!organizations.length) {
               return true;
             }
           }

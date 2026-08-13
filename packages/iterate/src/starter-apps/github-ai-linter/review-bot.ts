@@ -137,12 +137,12 @@ export async function handleGithubPullRequestWebhook(
   const mention =
     typeof appSlug === "string" &&
     !!author &&
-    author.login.length > 0 &&
+    !!author.login.length &&
     author.type !== "Bot" &&
     ["OWNER", "MEMBER", "COLLABORATOR"].includes(author.association) &&
     webhook.associations.mentionedUsers?.includes(appSlug.toLowerCase()) === true &&
     typeof requestBody === "string" &&
-    requestBody.trim().length > 0 &&
+    !!requestBody.trim().length &&
     ((webhook.delivery.name === "issue_comment" && action === "created") ||
       (webhook.delivery.name === "pull_request_review" && action === "submitted") ||
       (webhook.delivery.name === "pull_request_review_comment" && action === "created"));
@@ -155,7 +155,7 @@ export async function handleGithubPullRequestWebhook(
   const analysisLifecycleEvent =
     reviewLifecycleEvent &&
     typeof appSlug === "string" &&
-    appSlug.length > 0 &&
+    !!appSlug.length &&
     pullRequest?.number === number &&
     pullRequest.state === "open" &&
     pullRequest.draft !== true &&
@@ -182,13 +182,12 @@ export async function handleGithubPullRequestWebhook(
 
   const agentPath = `/agents${repoPath}/pr/${number}`;
   const agent = itx.agents.get(agentPath);
-  const exists =
-    (
-      await agent.stream.getEvents({
-        eventTypes: ["events.iterate.com/agent/created"],
-        limit: 1,
-      })
-    ).length > 0;
+  const exists = !!(
+    await agent.stream.getEvents({
+      eventTypes: ["events.iterate.com/agent/created"],
+      limit: 1,
+    })
+  ).length;
   // Synchronize/ready deliveries can be the first event observed after a
   // production recreation. Creating from every accepted lifecycle delivery
   // makes the system self-healing instead of depending on historical opened.
@@ -277,13 +276,12 @@ export async function handleGithubPullRequestWebhook(
   const rulesSnapshot = await githubPullRequests.loadRules();
   const linterPath = `${agentPath}/ai-linter`;
   const linter = itx.agents.get(linterPath);
-  const linterExists =
-    (
-      await linter.stream.getEvents({
-        eventTypes: ["events.iterate.com/agent/created"],
-        limit: 1,
-      })
-    ).length > 0;
+  const linterExists = !!(
+    await linter.stream.getEvents({
+      eventTypes: ["events.iterate.com/agent/created"],
+      limit: 1,
+    })
+  ).length;
   if (!linterExists) await linter.create();
 
   await linter.append(

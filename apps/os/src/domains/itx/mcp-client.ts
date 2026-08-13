@@ -134,7 +134,7 @@ type McpToolCall = {
 function toolCallFromCapabilityPath(path: string[], args: unknown[]): McpToolCall {
   const [name, ...extraPath] = path;
   if (!name) throw new Error("MCP tool calls need a tool name path.");
-  if (extraPath.length > 0) {
+  if (extraPath.length) {
     throw new Error(`MCP tools are flat tool names, got "${path.join(".")}".`);
   }
 
@@ -187,7 +187,7 @@ function mcpResultToItxValue(result: CallToolResult) {
   if (result.structuredContent) return result.structuredContent;
 
   const textParts = textContent(result);
-  if (textParts.length === 0) return result;
+  if (!textParts.length) return result;
 
   const text = textParts.join("\n");
   try {

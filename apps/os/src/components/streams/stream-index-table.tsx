@@ -75,7 +75,7 @@ export function StreamIndexTable({
   });
   const rows = table.getRowModel().rows;
 
-  if (rows.length === 0) {
+  if (!rows.length) {
     return <p className="px-3 py-2 text-xs text-muted-foreground">No indexed streams.</p>;
   }
 

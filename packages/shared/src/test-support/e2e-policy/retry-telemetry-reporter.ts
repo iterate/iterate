@@ -289,9 +289,7 @@ export class RetryTelemetryReporter {
       const status =
         reason === "interrupted"
           ? "interrupted"
-          : reason === "failed" ||
-              unhandled.length > 0 ||
-              tests.some((test) => test.state === "failed")
+          : reason === "failed" || unhandled.length || tests.some((test) => test.state === "failed")
             ? "failed"
             : "passed";
       writeTestTelemetryArtifact({
@@ -321,7 +319,7 @@ export class RetryTelemetryReporter {
         tests,
         modules,
       });
-      if (retried.length > 0) {
+      if (retried.length) {
         const details = retried
           .map(
             (record) =>

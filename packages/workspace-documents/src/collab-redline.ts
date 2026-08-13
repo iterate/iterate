@@ -259,7 +259,7 @@ export function redlineExtension(connection: CollabConnection) {
           // mapped decorations and try again once the versions agree.
           if (
             changes.headVersion !== getSyncedVersion(this.view.state) ||
-            sendableUpdates(this.view.state).length > 0
+            sendableUpdates(this.view.state).length
           ) {
             if (this.futile++ < 20) {
               this.timer = setTimeout(() => void this.refresh(), REFRESH_DEBOUNCE_MS);

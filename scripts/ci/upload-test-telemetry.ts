@@ -24,7 +24,7 @@ export async function loadTestTelemetryArtifacts(rawDirectory: string) {
     })),
   );
   const duplicateIds = duplicateValues(artifacts.map(({ artifact }) => artifact.artifactId));
-  if (duplicateIds.length > 0) {
+  if (duplicateIds.length) {
     throw new Error(`Duplicate test telemetry artifact IDs: ${duplicateIds.join(", ")}`);
   }
   return artifacts;
@@ -39,7 +39,7 @@ export async function finalizeTestTelemetry(options: {
   const artifactRoot = resolve(options.artifactRoot);
   const rawDirectory = join(artifactRoot, "raw");
   const loaded = await loadTestTelemetryArtifacts(rawDirectory);
-  if (loaded.length === 0 && !options.cancelled) {
+  if (!loaded.length && !options.cancelled) {
     throw new Error(`No test telemetry artifacts found below ${rawDirectory}`);
   }
   const telemetryEvents = loaded.flatMap(({ artifact }) => testTelemetryEvents(artifact));
@@ -104,16 +104,16 @@ export async function finalizeTestTelemetry(options: {
   if (
     !options.dryRun &&
     !options.cancelled &&
-    events.length > 0 &&
+    events.length &&
     process.env.CI_TELEMETRY_POSTHOG_ENABLED === "1"
   )
     await sendPostHogEvents(events);
   if (!options.cancelled) {
     const failures = [
-      ...(missingWorkspaces.length > 0
+      ...(missingWorkspaces.length
         ? [`Missing expected test telemetry workspaces: ${missingWorkspaces.join(", ")}`]
         : []),
-      ...(missingArtifactSources.length > 0
+      ...(missingArtifactSources.length
         ? [
             `Missing expected test telemetry artifact sources: ${missingArtifactSources
               .map(
@@ -123,14 +123,14 @@ export async function finalizeTestTelemetry(options: {
               .join(", ")}`,
           ]
         : []),
-      ...(incompleteArtifactIds.length > 0
+      ...(incompleteArtifactIds.length
         ? [`Incomplete test telemetry artifacts: ${incompleteArtifactIds.join(", ")}`]
         : []),
-      ...(foreignArtifactIds.length > 0
+      ...(foreignArtifactIds.length
         ? [`Foreign test telemetry artifacts: ${foreignArtifactIds.join(", ")}`]
         : []),
     ];
-    if (failures.length > 0) throw new Error(failures.join("; "));
+    if (failures.length) throw new Error(failures.join("; "));
   }
   return { artifacts: loaded.map(({ artifact }) => artifact), events };
 }

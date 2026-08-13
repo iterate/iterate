@@ -47,10 +47,10 @@ export function diff(prev: unknown, next: unknown): LiveStatePatch | undefined {
     if (!Object.hasOwn(next, key)) drop.push(key);
   }
 
-  if (fields.length === 0 && drop.length === 0) return undefined;
+  if (!fields.length && !drop.length) return undefined;
   const patch: { fields?: Record<string, LiveStatePatch>; drop?: string[] } = {};
-  if (fields.length > 0) patch.fields = Object.fromEntries(fields);
-  if (drop.length > 0) patch.drop = drop;
+  if (fields.length) patch.fields = Object.fromEntries(fields);
+  if (drop.length) patch.drop = drop;
   return patch;
 }
 

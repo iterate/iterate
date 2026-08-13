@@ -94,7 +94,7 @@ export function useCollabEditor(input: {
       // clear the strip rather than re-injecting a self that is not live.
       // Otherwise self at call time — the clientId rotates on reseed.
       onPeersRef.current?.(
-        clients.length === 0
+        !clients.length
           ? null
           : {
               self: connection.clientId,
@@ -186,7 +186,7 @@ export function useCollabEditor(input: {
             },
             flushPending: async () => {
               const pending = sendableUpdates(live.state);
-              if (pending.length === 0) return;
+              if (!pending.length) return;
               await connection.pushOnce(getSyncedVersion(live.state), pending).catch(() => {});
             },
             isLive: () => !connection.dead,

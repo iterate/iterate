@@ -109,10 +109,9 @@ async function appendNoteToProject(
   const project = await getProjectItx(baseUrl, projectId);
   await ensureNotesProvisioned(project, projectId);
   const attachments: NoteAttachment[] = [];
-  const wipeGeneration =
-    note.attachments.length > 0
-      ? await readWipeGeneration(project.streams.get(MEDIA_STREAM_PATH))
-      : 0;
+  const wipeGeneration = note.attachments.length
+    ? await readWipeGeneration(project.streams.get(MEDIA_STREAM_PATH))
+    : 0;
   for (const picked of note.attachments) {
     const stableKey = await Crypto.digestStringAsync(
       Crypto.CryptoDigestAlgorithm.SHA256,
@@ -157,7 +156,7 @@ async function appendNoteToProject(
     composeNoteFile(
       {
         capturedAt: note.capturedOnDeviceAt,
-        ...(attachments.length > 0 && { attachments }),
+        ...(!!attachments.length && { attachments }),
       },
       note.text,
     ),
@@ -293,7 +292,7 @@ export function NoteCaptureOverlay() {
     retry: false,
     queryFn: async () => {
       const notes = await readPendingNotes(AsyncStorage);
-      if (notes.length === 0) return "nothing-pending";
+      if (!notes.length) return "nothing-pending";
       const label = notes.length === 1 ? "1 pending note" : `${notes.length} pending notes`;
       const store = await new Promise<boolean>((resolve) => {
         Alert.alert(
@@ -362,7 +361,7 @@ export function NoteCaptureOverlay() {
     );
   }
 
-  const canSend = draft.trim() !== "" || attachments.length > 0;
+  const canSend = draft.trim() !== "" || !!attachments.length;
   const feedback =
     capture.data === "pending"
       ? "Saved on this phone — you'll be asked to store it when you open a project"
@@ -377,7 +376,7 @@ export function NoteCaptureOverlay() {
       style={styles.overlay}
     >
       <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
-        {attachments.length > 0 ? (
+        {attachments.length ? (
           <View style={styles.attachmentStrip}>
             {attachments.map((image) => (
               <Pressable

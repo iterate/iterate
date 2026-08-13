@@ -62,7 +62,7 @@ export async function executeCoordinatedWorkerBuild(
   });
   if (!result.ok) return result;
   const built = result.output;
-  if (built.warnings.length > 0) {
+  if (built.warnings.length) {
     console.warn("dynamic worker build completed with warnings", {
       buildKey: request.buildKey,
       warnings: built.warnings,
@@ -76,7 +76,7 @@ export async function executeCoordinatedWorkerBuild(
     createdAt: new Date().toISOString(),
     mainModule: built.mainModule,
     modules: built.modules,
-    ...(built.warnings.length === 0 ? {} : { warnings: built.warnings }),
+    ...(!built.warnings.length ? {} : { warnings: built.warnings }),
     ...(!built.wranglerConfig ? {} : { wranglerConfig: built.wranglerConfig }),
   };
   await store.put(artifact);

@@ -49,7 +49,7 @@ export const test = base.extend<{
   page: Awaited<ReturnType<typeof addPagePlugins>>;
 }>({
   context: async ({ context }, use) => {
-    if (Object.keys(cloudflareWorkerVersionOverrideHeaders(process.env)).length > 0) {
+    if (Object.keys(cloudflareWorkerVersionOverrideHeaders(process.env)).length) {
       await context.route("**/*", async (route) => {
         const request = route.request();
 

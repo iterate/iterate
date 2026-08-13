@@ -526,7 +526,7 @@ export async function prepareAgentLlmMessages(
   return await Promise.all(
     messages.map(async (message) => {
       const files = message.files ?? [];
-      if (files.length === 0) return { role: message.role, content: message.content };
+      if (!files.length) return { role: message.role, content: message.content };
       const resolvedFiles = !resolveModelFileUrl
         ? files
         : await Promise.all(

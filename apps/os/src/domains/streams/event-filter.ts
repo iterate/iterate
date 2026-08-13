@@ -96,14 +96,14 @@ export function compileJsonataExpression(expression: string): jsonata.Expression
         ? parserError.position
         : undefined;
     const message =
-      typeof parserError?.message === "string" && parserError.message.length > 0
+      typeof parserError?.message === "string" && parserError.message.length
         ? parserError.message
         : String(error);
     const coordinates = [code, !Number.isFinite(position) ? undefined : `position ${position}`]
       .filter((value) => !!value)
       .join(", ");
     throw new Error(
-      `invalid JSONata expression${coordinates.length === 0 ? "" : ` (${coordinates})`}: ${message}`,
+      `invalid JSONata expression${!coordinates.length ? "" : ` (${coordinates})`}: ${message}`,
       { cause: error },
     );
   }

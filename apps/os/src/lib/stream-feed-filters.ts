@@ -78,11 +78,11 @@ type SqlFilter = { whereSql: string; params: SqlValue[] };
 export function buildFeedItemsFilter(input: FeedItemsFilterInput): SqlFilter | null {
   const clauses: string[] = [];
   const params: SqlValue[] = [];
-  if (input.eventTypes && input.eventTypes.length > 0) {
+  if (input.eventTypes?.length) {
     clauses.push(`${FEED_TYPE_EXPRESSION} IN (${input.eventTypes.map(() => "?").join(", ")})`);
     params.push(...input.eventTypes);
   }
-  if (input.components && input.components.length > 0) {
+  if (input.components?.length) {
     clauses.push(`kind IN (${input.components.map(() => "?").join(", ")})`);
     params.push(...input.components);
   }
@@ -98,7 +98,7 @@ export function buildFeedItemsFilter(input: FeedItemsFilterInput): SqlFilter | n
     clauses.push(`first_offset <= ?`);
     params.push(input.offsetTo);
   }
-  if (clauses.length === 0) return null;
+  if (!clauses.length) return null;
   return { whereSql: clauses.join(" AND "), params };
 }
 
@@ -143,7 +143,7 @@ export function buildStreamFeedWhere(input: StreamFeedQueryInput): SqlFilter {
     }
     sides.push({ whereSql: clauses.join(" AND "), params });
   }
-  if (sides.length === 0) return { whereSql: "0", params: [] };
+  if (!sides.length) return { whereSql: "0", params: [] };
   if (sides.length === 1) return sides[0]!;
   return {
     whereSql: sides.map((side) => `(${side.whereSql})`).join(" OR "),

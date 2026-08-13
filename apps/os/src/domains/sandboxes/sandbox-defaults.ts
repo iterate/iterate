@@ -38,7 +38,7 @@ export function sandboxCreationEvents(input: {
       idempotencyKey: `sandbox/created:${projectId}:${path}`,
       payload: { config: { instanceType } },
     }),
-    ...(!input.env || Object.keys(input.env).length === 0
+    ...(!input.env || !Object.keys(input.env).length
       ? []
       : [
           SandboxProcessorContract.buildEvent({

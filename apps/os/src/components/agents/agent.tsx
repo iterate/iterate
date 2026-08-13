@@ -121,7 +121,7 @@ export function AgentListRow({
   const waitingFor = expanded ? agent.summary.waitingFor : agentNodeWaitingFor(node);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
   const descendantCount = node.aggregateAgentCount - 1;
-  const expandable = node.children.length > 0 && !!onToggleChildren;
+  const expandable = !!node.children.length && !!onToggleChildren;
   return (
     <div
       className="group/agent relative flex items-start gap-2 border-b py-2.5 pr-2 hover:bg-accent/40"
@@ -435,7 +435,7 @@ export function AgentCommandItem({
   onToggleExpanded: (path: string) => void;
   onTogglePinned: (agent: AgentRecord) => void | Promise<void>;
 }) {
-  const hasChildren = node.children.length > 0;
+  const hasChildren = !!node.children.length;
   return (
     <CommandItem
       value={agentCommandValue(node.agent.path)}
@@ -483,7 +483,7 @@ export function AgentCommandPresentation({
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
   const activity = agent.summary.activity;
   const descendantCount = node.aggregateAgentCount - 1;
-  const hasChildren = node.children.length > 0;
+  const hasChildren = !!node.children.length;
   return (
     <>
       <span

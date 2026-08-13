@@ -45,7 +45,7 @@ function socketsOver(input: {
 }) {
   const waits: Promise<unknown>[] = [];
   const host = new LiveStatePagers({
-    getWebSockets: () => input.sockets.filter((socket) => socket.closed.length === 0),
+    getWebSockets: () => input.sockets.filter((socket) => !socket.closed.length),
     acceptWebSocket: () => undefined,
     readState: input.readState ?? (() => ({})),
     refresh: input.refresh ?? (() => undefined),

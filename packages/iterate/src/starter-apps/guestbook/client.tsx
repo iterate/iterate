@@ -39,7 +39,7 @@ export function GuestbookClient() {
     { error: "", message: "", name: "" },
   );
 
-  const error = liveError || (signState.error.length > 0 ? signState.error : undefined);
+  const error = liveError || (signState.error.length ? signState.error : undefined);
   const entries = state?.entries || [];
   // Only claim the configured title once reduced state has arrived — the
   // seeded-apps heading wait must not pass on the HTML shell alone.
@@ -72,7 +72,7 @@ export function GuestbookClient() {
       {!!error && <p role="alert">{error}</p>}
       {!state ? (
         <p>Loading…</p>
-      ) : entries.length === 0 ? (
+      ) : !entries.length ? (
         <p>No entries yet.</p>
       ) : (
         <section aria-label="Guestbook entries">

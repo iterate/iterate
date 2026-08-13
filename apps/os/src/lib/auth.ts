@@ -16,7 +16,7 @@ export function requireOrganizationMemberForSession(
   appOrigin: string | undefined,
 ) {
   const principal = requireUserPrincipalFromSession(session, location, authError);
-  if (principal.organizations.length === 0) {
+  if (!principal.organizations.length) {
     throw redirectToProjectAccess(issuer, appOrigin);
   }
 
@@ -33,7 +33,7 @@ export function requireAuthenticatedRootRedirectTargetFromSession(
 ) {
   const principal = requireUserPrincipalFromSession(session, location, authError);
 
-  if (principal.organizations.length === 0) {
+  if (!principal.organizations.length) {
     throw redirectToProjectAccess(issuer, appOrigin);
   }
 

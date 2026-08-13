@@ -148,7 +148,7 @@ export function typeSlice(input: {
   // where the trailer's exact size is known.
   let rootTruncated = false;
 
-  while (queue.length > 0) {
+  while (queue.length) {
     const declaration = queue.shift()!;
     const cost = declaration.sourceText.length + 2; // +2 = the "\n\n" join separator
     if (!budgetExhausted && usedChars + cost <= walkBudget) {
@@ -156,7 +156,7 @@ export function typeSlice(input: {
       includedNames.push(declaration.name);
       usedChars += cost;
       enqueueReferences(declaration);
-    } else if (includedNames.length === 0) {
+    } else if (!includedNames.length) {
       rootTruncated = true;
       includedNames.push(declaration.name);
       budgetExhausted = true;
@@ -173,7 +173,7 @@ export function typeSlice(input: {
   }
 
   const trailerFor = (names: string[]): string => {
-    if (names.length === 0) return "";
+    if (!names.length) return "";
     const listed: string[] = [];
     let listedChars = 0;
     for (const name of names) {
@@ -412,7 +412,7 @@ function queryWords(query: string): string[] {
     ),
   ];
   const informative = words.filter((word) => !QUERY_NOISE_WORDS.has(word));
-  return informative.length > 0 ? informative : words;
+  return informative.length ? informative : words;
 }
 
 /**

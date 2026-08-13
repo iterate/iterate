@@ -104,7 +104,7 @@ export function errorMessage(error: unknown): string {
     error &&
     "message" in error &&
     typeof error.message === "string" &&
-    error.message.length > 0
+    error.message.length
   ) {
     return error.message;
   }
@@ -114,7 +114,7 @@ export function errorMessage(error: unknown): string {
 /** Safe text for an error persisted in a stream event's bounded payload. */
 export function boundedErrorMessage(error: unknown): string | undefined {
   const message = errorMessage(error).trim().slice(0, 4_096);
-  return message.length === 0 ? undefined : message;
+  return !message.length ? undefined : message;
 }
 
 /**

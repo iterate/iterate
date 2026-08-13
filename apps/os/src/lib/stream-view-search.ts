@@ -156,7 +156,7 @@ export function streamViewMode(search: StreamViewSearch, streamPath: string): St
   if (!requested) return defaultModeForStream(streamPath);
   const offered = modesForStream(streamPath);
   // Non-agent streams have no mode tabs — only `raw` is valid (implicit).
-  if (offered.length === 0) return "raw";
+  if (!offered.length) return "raw";
   return offered.some((entry) => entry.id === requested)
     ? requested
     : defaultModeForStream(streamPath);

@@ -171,7 +171,7 @@ export class PathFunctionTarget extends RpcTarget {
   }
 
   invokeCapability({ args, path }: { args: unknown[]; path: string[] }) {
-    if (path.length === 0) return this.target;
+    if (!path.length) return this.target;
 
     let receiver = this.target;
     for (const segment of path.slice(0, -1)) {

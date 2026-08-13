@@ -559,7 +559,7 @@ function installSocketKillSwitch(page: Page) {
     ).__closeAllApiSocketsAndWait = async () => {
       const sockets = apiSockets();
       const closed = sockets.map((ws) => ws.url);
-      if (sockets.length === 0) return closed;
+      if (!sockets.length) return closed;
       await new Promise<void>((resolve, reject) => {
         let remaining = sockets.length;
         const timeout = setTimeout(

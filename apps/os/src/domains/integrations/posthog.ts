@@ -220,7 +220,7 @@ export async function capturePosthogStreamEventBatch(
   },
   deps: { fetch?: typeof fetch } = {},
 ): Promise<void> {
-  if (args.batch.events.length === 0) {
+  if (!args.batch.events.length) {
     throw new Error("PostHog stream delivery batch must contain an event");
   }
   await tracing.enterSpan("posthog.capture_stream_events", async (span) => {
@@ -246,7 +246,7 @@ export async function capturePosthogStreamEventBatch(
     span.setAttribute("iterate.stream.durable_event_count", durableCount);
     // An all-ephemeral delivery (or one that yields no PostHog rows) is a
     // successful no-op — do not fail event sending or call the capture API.
-    if (events.length === 0) {
+    if (!events.length) {
       return;
     }
 

@@ -111,7 +111,7 @@ export class ChatReplyNotifyProcessor extends StreamProcessor<ChatReplyNotifyPro
  * non-empty body. */
 function pushBody(message: string): string {
   const text = markdownToPlainText(message);
-  if (text.length === 0) return "Sent a reply.";
+  if (!text.length) return "Sent a reply.";
   if (text.length <= PUSH_BODY_MAX_LENGTH) return text;
   return `${text.slice(0, PUSH_BODY_MAX_LENGTH - 1)}…`;
 }

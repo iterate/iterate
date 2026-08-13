@@ -444,7 +444,7 @@ export class MediaProcessor extends StreamProcessor<MediaProcessorContract, Medi
         }
       });
     }
-    if (expired.length === 0) return;
+    if (!expired.length) return;
     // Short must-happen appends: an expired obligation's settlement must
     // land even if this incarnation dies right after the pass — otherwise
     // the row shows "Analyzing…" forever.

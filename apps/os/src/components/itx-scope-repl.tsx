@@ -174,7 +174,7 @@ function ItxScopeReplConnected({
   const activeScopePath = scopePath || (run.variables ? run.variables.path : null);
   const born =
     !!activeScopePath &&
-    (events.length > 0 ||
+    (!!events.length ||
       bornPaths.includes(activeScopePath) ||
       (knownStreams.data || []).some((stream) => stream.path === activeScopePath));
 
@@ -191,13 +191,13 @@ function ItxScopeReplConnected({
           const scriptEvents = batch.events.filter((event) =>
             (REPL_SCRIPT_EVENT_TYPES as readonly string[]).includes(event.type),
           );
-          if (scriptEvents.length === 0) return;
+          if (!scriptEvents.length) return;
           setEvents((previous) => {
             const lastOffset = previous.at(-1)?.offset;
             const fresh = scriptEvents.filter(
               (event) => !Number.isFinite(lastOffset) || event.offset > lastOffset,
             );
-            return fresh.length === 0
+            return !fresh.length
               ? previous
               : [...previous, ...fresh].slice(-MAX_BUFFERED_SCRIPT_EVENTS);
           });

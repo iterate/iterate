@@ -72,7 +72,7 @@ function CollectSecretPage() {
   const search = Route.useSearch();
   return (
     <main className="flex min-h-screen items-center justify-center p-4">
-      {search.egress.length === 0 ? (
+      {!search.egress.length ? (
         // A pin to nothing can never be used — say so before dialing anything.
         <MalformedLinkCard />
       ) : (
@@ -198,7 +198,7 @@ function CollectSecretCard() {
             <AlertTitle>This replaces an existing secret</AlertTitle>
             <AlertDescription>
               {`A secret already exists at ${search.path}`}
-              {existing.egress.urls.length > 0
+              {existing.egress.urls.length
                 ? `, currently pinned to ${existing.egress.urls.join(", ")}`
                 : ""}
               . Saving overwrites its value and its allowed hosts.
@@ -208,7 +208,7 @@ function CollectSecretCard() {
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            if (material.length > 0) submit.mutate(material);
+            if (material.length) submit.mutate(material);
           }}
         >
           <Field>
@@ -228,7 +228,7 @@ function CollectSecretCard() {
           <Button
             type="submit"
             className="mt-4 w-full"
-            disabled={material.length === 0 || submit.isPending}
+            disabled={!material.length || submit.isPending}
           >
             {submit.isPending ? "Saving..." : "Save secret"}
           </Button>

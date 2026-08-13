@@ -148,7 +148,7 @@ export async function evaluateItxExpression(
 
 /** Structural validation of an expression (shape only, no evaluation). */
 function assertItxExpression(expression: ItxExpression): void {
-  if (!Array.isArray(expression) || expression.length === 0) {
+  if (!Array.isArray(expression) || !expression.length) {
     throw new Error("itx expression must contain at least one step");
   }
 

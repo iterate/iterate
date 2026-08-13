@@ -162,7 +162,7 @@ export function parseInboundRecipient(address: string): InboundEmailRecipient | 
   const domain = trimmed.slice(at + 1);
   const plus = localPart.indexOf("+");
   const slug = plus === -1 ? localPart : localPart.slice(0, plus);
-  if (slug.length === 0) return null;
+  if (!slug.length) return null;
   const tag = plus === -1 ? null : localPart.slice(plus + 1);
   const threadId = tag && /^t[a-z0-9-]+$/.test(tag) ? tag.slice(1) : null;
   return { domain, slug, threadId };
@@ -371,16 +371,14 @@ export async function fallbackInboundMessageKey(input: {
 export function normalizeMessageId(value: string | null | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim().replace(/^<|>$/g, "").trim();
-  return trimmed.length === 0 ? null : trimmed;
+  return !trimmed.length ? null : trimmed;
 }
 
 /** Every `<...>` message id in a References/In-Reply-To header value, normalized. */
 export function parseMessageIdList(value: string | null | undefined): string[] {
   if (!value) return [];
   const ids = value.match(/<[^<>\s]+>/g) ?? [];
-  return ids
-    .map((id) => normalizeMessageId(id))
-    .filter((id): id is string => !!id && id.length > 0);
+  return ids.map((id) => normalizeMessageId(id)).filter((id): id is string => !!id && !!id.length);
 }
 
 /** Re-add the angle brackets an RFC 5322 message-id header value requires. */
@@ -391,7 +389,7 @@ function angleBracketed(messageId: string): string {
 /** Prefix a subject with `Re:` unless some Re: variant is already there. */
 export function replySubject(subject: string | undefined): string {
   const trimmed = subject?.trim() ?? "";
-  if (trimmed.length === 0) return "Re:";
+  if (!trimmed.length) return "Re:";
   return /^re\s*:/i.test(trimmed) ? trimmed : `Re: ${trimmed}`;
 }
 
@@ -516,7 +514,7 @@ export function buildProjectEmailMessage(input: {
     ...(request.text && { text: request.text }),
     ...(request.html && { html: request.html }),
     ...(replyTo && { replyTo }),
-    ...(Object.keys(headers).length > 0 && { headers }),
-    ...(attachments.length > 0 && { attachments }),
+    ...(!!Object.keys(headers).length && { headers }),
+    ...(!!attachments.length && { attachments }),
   };
 }

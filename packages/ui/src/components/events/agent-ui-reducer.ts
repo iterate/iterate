@@ -671,7 +671,7 @@ function reduceAgentUiEvent(
           kind: "user",
           id: `user-${event.offset}`,
           text,
-          ...(files.length === 0 ? {} : { files }),
+          ...(!files.length ? {} : { files }),
           timestampMs,
         });
       }
@@ -683,7 +683,7 @@ function reduceAgentUiEvent(
         actorType === "github"
       ) {
         const rendersFromRawEvent = actorType === "slack" || actorType === "telegram";
-        if (rendersFromRawEvent && files.length === 0) return contextState;
+        if (rendersFromRawEvent && !files.length) return contextState;
         const senderValue =
           actorType === "agent"
             ? actor?.path
@@ -699,7 +699,7 @@ function reduceAgentUiEvent(
           kind: "user",
           id: `user-${event.offset}`,
           text: rendersFromRawEvent ? "" : text,
-          ...(files.length === 0 ? {} : { files }),
+          ...(!files.length ? {} : { files }),
           timestampMs,
           via: { service: actorType, ...(!sender ? {} : { sender }) },
         });
@@ -722,18 +722,16 @@ function reduceAgentUiEvent(
         kind: "assistant",
         id: `assistant-${event.offset}`,
         text,
-        ...(files.length === 0 ? {} : { files }),
+        ...(!files.length ? {} : { files }),
         timestampMs,
       };
       return emitAssistantMessageItem(marked, items, item);
     }
 
     case AGENT_LLM_REQUEST_REQUESTED: {
-      const base =
-        state.queuedUserMessages.length === 0 ? state : settleLive(state, timestampMs, items);
+      const base = !state.queuedUserMessages.length ? state : settleLive(state, timestampMs, items);
       const ready =
-        !base.live &&
-        (base.deferredAssistantMessages.length > 0 || base.queuedUserMessages.length > 0)
+        !base.live && (base.deferredAssistantMessages.length || base.queuedUserMessages.length)
           ? flushDeferredMessages(base, items)
           : base;
       const live = ensureLive(ready, event.offset, timestampMs);
@@ -875,7 +873,7 @@ function reduceAgentUiEvent(
       // a lane that can lag or wedge independently. Journal facts alone must
       // surface a sent message: settle the activity here and flush.
       if (
-        (next.deferredAssistantMessages.length > 0 || next.queuedUserMessages.length > 0) &&
+        (next.deferredAssistantMessages.length || next.queuedUserMessages.length) &&
         !steps.some((candidate) => candidate.status === "running")
       ) {
         return flushDeferredMessages(settleLive(next, timestampMs, items), items);
@@ -1183,7 +1181,7 @@ function settleActivityAtBoundary(
 /** Closes the live activity (if any) and emits it as a settled item. */
 function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]): AgentUiState {
   if (!state.live) return state;
-  if (state.live.steps.length === 0) return { ...state, live: null };
+  if (!state.live.steps.length) return { ...state, live: null };
   const settled: AgentUiActivity = {
     ...state.live,
     status: "done",

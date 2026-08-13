@@ -156,7 +156,7 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
  */
 export function assertProvisioned(name: string, resources: Record<string, string>) {
   const missing = Object.entries(resources).filter(([, id]) => id === UNPROVISIONED);
-  if (missing.length > 0) {
+  if (missing.length) {
     throw new Error(
       `Environment ${name} has unprovisioned resources (${missing.map(([key]) => key).join(", ")}). ` +
         `Run ensure-resources --env ${name}, paste the printed IDs into envs.ts, and retry.`,

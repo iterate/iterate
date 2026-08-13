@@ -221,7 +221,7 @@ function slackSigningSecret(): string | null {
 
 async function signedSlackWebhookRequest(body: string, signingSecret: string): Promise<Request> {
   const eventId = (JSON.parse(body) as { event_id?: unknown }).event_id;
-  if (typeof eventId !== "string" || eventId.length === 0) {
+  if (typeof eventId !== "string" || !eventId.length) {
     throw new Error("signed Slack E2E webhook body must contain event_id");
   }
   const timestamp = String(Math.floor(Date.now() / 1000));

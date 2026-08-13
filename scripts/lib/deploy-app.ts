@@ -174,7 +174,7 @@ export async function deployApp<E extends DeployableEnv>(input: {
     builtConfig,
     secretValues,
     credentials,
-    extraDeployArgs: extraDeployArgs.length > 0 ? extraDeployArgs : undefined,
+    extraDeployArgs: extraDeployArgs.length ? extraDeployArgs : undefined,
   });
 
   for (const probe of input.smokes(ctx.env)) {

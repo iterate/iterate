@@ -46,7 +46,7 @@ class RepoWorkingTreeStore {
 
   setHead(commitOid: string, paths: string[]) {
     if (this.#snapshot.headCommitOid === commitOid) return;
-    if (this.#snapshot.headCommitOid && pendingChanges(this.#snapshot).length > 0) {
+    if (this.#snapshot.headCommitOid && pendingChanges(this.#snapshot).length) {
       this.#update({ headChanged: true });
       return;
     }

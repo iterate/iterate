@@ -132,7 +132,7 @@ export function mcpCapabilityTypeDeclaration(tools: Tool[], source: string): str
     // Dispatch treats a missing argument as {} — the input parameter is only
     // required when the schema actually requires a property.
     const requiredProperties = (tool.inputSchema as { required?: unknown } | undefined)?.required;
-    const required = Array.isArray(requiredProperties) && requiredProperties.length > 0;
+    const required = Array.isArray(requiredProperties) && !!requiredProperties.length;
     return `${doc}  ${quoteMemberName(tool.name)}(input${required ? "" : "?"}: ${input}): Promise<unknown>;`;
   });
   return withGeneratedBudget({ members, source });
@@ -195,7 +195,7 @@ function openApiMembers(operations: OpenApiOperation[], spec: Record<string, unk
       const bodyMembers = objectSchemaMembers(body, spec as JsonSchema, 1).filter(
         (member) => !parameterNames.has(member.name),
       );
-      if (Object.keys((body.properties ?? {}) as object).length > 0) {
+      if (Object.keys((body.properties ?? {}) as object).length) {
         parts.push(...bodyMembers.map((member) => member.text));
         const requiredBody = new Set(Array.isArray(body.required) ? body.required : []);
         if (bodyMembers.some((member) => requiredBody.has(member.name))) requiredInput = true;
@@ -205,10 +205,9 @@ function openApiMembers(operations: OpenApiOperation[], spec: Record<string, unk
     } else if (typeof body === "object" || typeof body === "boolean") {
       parts.push(`body?: ${jsonSchemaToTypeText(body, spec as JsonSchema, 1)}`);
     }
-    const input =
-      parts.length > 0
-        ? `input${requiredInput ? "" : "?"}: { ${parts.join("; ")} }`
-        : "input?: Record<string, unknown>";
+    const input = parts.length
+      ? `input${requiredInput ? "" : "?"}: { ${parts.join("; ")} }`
+      : "input?: Record<string, unknown>";
     return `${doc}  ${quoteMemberName(operation.operationId)}(${input}): Promise<unknown>;`;
   });
 }

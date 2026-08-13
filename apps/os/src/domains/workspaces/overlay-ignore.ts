@@ -35,9 +35,9 @@ export async function filterPublishablePaths(input: {
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line !== "" && !line.startsWith("#") && !line.startsWith("!"));
-    if (patterns.length > 0) scopes.push({ dir, patterns });
+    if (patterns.length) scopes.push({ dir, patterns });
   }
-  if (scopes.length === 0) return input.paths;
+  if (!scopes.length) return input.paths;
   return input.paths.filter((path) => !isIgnored(path, scopes));
 }
 

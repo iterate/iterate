@@ -786,7 +786,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "   * can end up one version behind until the next AGENTS.md change.)\n" +
       "   */\n" +
       "  async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {\n" +
-      "    if (agentPaths.length === 0) return;\n" +
+      "    if (!agentPaths.length) return;\n" +
       "    const itx = await this.itx;\n" +
       "    const file = await itx.repo.readFile({ path: \"AGENTS.md\" });\n" +
       "    const content = !file\n" +

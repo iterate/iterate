@@ -220,7 +220,7 @@ export default function PreviewChannelScreen() {
           let a tap route away with the switch never made (running the old
           channel's JS against the new backend). The post-switch reload
           re-opens this deep link, and the card appears then. */}
-      {alreadyOnTarget && recommendedServer && mismatches.length > 0 ? (
+      {alreadyOnTarget && recommendedServer && mismatches.length ? (
         <>
           <Text style={styles.mismatchHeading}>This bundle expects a different setup</Text>
           <View style={styles.card}>

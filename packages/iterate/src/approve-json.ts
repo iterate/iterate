@@ -149,7 +149,7 @@ export async function runApprovalJson(input: {
           const errors = settlement.outcomes.flatMap((outcome) =>
             !outcome.error ? [] : [outcome.error],
           );
-          if (errors.length === 0) {
+          if (!errors.length) {
             emit({
               type: "settled",
               offset,

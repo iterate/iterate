@@ -372,7 +372,7 @@ function workerHtmlDocumentCommit(request: Request, response: Response): string 
   // absent sec-fetch-dest (curl, old clients) counts as a document.
   const dest = request.headers.get("sec-fetch-dest");
   if (dest && dest !== "document") return null;
-  return raw.length > 0 ? raw : null;
+  return raw.length ? raw : null;
 }
 
 export function workerOverlayDecision(request: Request, response: Response): string | null {

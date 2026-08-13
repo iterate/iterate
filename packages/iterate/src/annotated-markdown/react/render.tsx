@@ -101,7 +101,7 @@ function textSegment(ctx: RenderContext, node: Nodes & { value: string }): React
   }
   const coreValue = value.slice(prefix, value.length - suffix);
   const coreSlice = slice.slice(prefix, slice.length - suffix);
-  if (coreValue.length === 0 || coreSlice.length === 0) {
+  if (!coreValue.length || !coreSlice.length) {
     return <Segment value={value} start={offsets.start} end={offsets.end} atomic={true} />;
   }
   return (
@@ -201,7 +201,7 @@ function innerSegment(
     const firstLineEnd = slice.indexOf("\n");
     searchFrom = firstLineEnd === -1 ? slice.length : firstLineEnd + 1;
   }
-  const inner = node.value.length === 0 ? -1 : slice.indexOf(node.value, searchFrom);
+  const inner = !node.value.length ? -1 : slice.indexOf(node.value, searchFrom);
   if (inner === -1) {
     return {
       segment: <Segment value={node.value} start={offsets.start} end={offsets.end} atomic={true} />,

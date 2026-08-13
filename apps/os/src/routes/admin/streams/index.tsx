@@ -24,7 +24,7 @@ function AdminStreamsProjectPicker() {
 
   function submit() {
     const parsed = projectId.trim();
-    if (parsed.length === 0) {
+    if (!parsed.length) {
       setError("Project id is required.");
       toast.error("Project id is required.");
       return;

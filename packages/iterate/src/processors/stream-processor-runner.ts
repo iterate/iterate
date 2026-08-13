@@ -606,7 +606,7 @@ export class StreamProcessorRunner<
       batch.streamMaxOffset,
       batchScannedThroughOffset,
     );
-    if (pending.length === 0 && batchScannedThroughOffset === committedThroughOffset) return;
+    if (!pending.length && batchScannedThroughOffset === committedThroughOffset) return;
     const highestObservedOffset = this.#highestObservedOffset;
 
     // `caughtUp` is a batch property, not a per-event-offset one. If this batch
@@ -827,7 +827,7 @@ export class StreamProcessorRunner<
     // metrics report (the legacy #ingest's noteBatchIngested placement).
     // Fed through the processor hooks so the wake capability's
     // consumption-lag samples stay current.
-    if (committedEvents.length > 0) {
+    if (committedEvents.length) {
       const newestEventCreatedAtMs = Date.parse(committedEvents.at(-1)!.createdAt);
       this.hooks.noteBatchIngested({
         ingestedThroughOffset: next.processing.acknowledgedThroughOffset,
@@ -1124,7 +1124,7 @@ export class StreamProcessorRunner<
           limit: this.readPageSize,
         });
         this.#assertReadStreamId(page.streamId, streamId);
-        if (page.events.length === 0) break;
+        if (!page.events.length) break;
         for (const event of page.events) {
           if (event.offset > throughOffset) continue;
           const reduction = this.hooks.reduceRawEvent({ event, state });

@@ -90,7 +90,7 @@ export class TodoApp extends IterateDurableObject {
 
   add(title: string): void {
     const trimmed = title.trim().slice(0, 200);
-    if (trimmed.length === 0) return;
+    if (!trimmed.length) return;
     this.#db.insert({
       createdAt: new Date().toISOString(),
       id: crypto.randomUUID(),

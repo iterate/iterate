@@ -108,7 +108,7 @@ function Breadcrumbs() {
     ];
   });
 
-  if (crumbs.length === 0) {
+  if (!crumbs.length) {
     return null;
   }
 

@@ -191,7 +191,7 @@ test("per-connection delivery caps split coalesced appends and state can be omit
     { description: "the capped connection to page through all five events" },
   );
 
-  const eventBatches = batches.filter((batch) => batch.events.length > 0);
+  const eventBatches = batches.filter((batch) => !!batch.events.length);
   expect(eventBatches.length).toBeGreaterThanOrEqual(3);
   for (const batch of eventBatches) {
     expect(batch.events.length).toBeLessThanOrEqual(2);
@@ -224,7 +224,7 @@ test("per-connection delivery caps split coalesced appends and state can be omit
       ),
     { description: "the byte-capped connection to page through the appends" },
   );
-  const singleEventBatches = single.filter((batch) => batch.events.length > 0);
+  const singleEventBatches = single.filter((batch) => !!batch.events.length);
   expect(singleEventBatches.length).toBe(3);
   for (const batch of singleEventBatches) {
     expect(batch.events.length).toBe(1);
@@ -680,7 +680,7 @@ test("newly appended events cross the callback owner's WebSocket in one directio
       receivedOffsets.push(...batch.events.map((event) => event.offset)),
   });
 
-  await waitForCondition(() => receivedOffsets.length > 0, {
+  await waitForCondition(() => !!receivedOffsets.length, {
     description: "the initial callback batch",
   });
   // A request/response on the same WebSocket is an ordering barrier for the
@@ -2456,7 +2456,7 @@ test.skipIf(!deployedBaseUrl())(
           (runtime?.snapshot.offset ?? 0) >= newConfiguration!.offset &&
           !!state &&
           !state.birthCertificate &&
-          Object.keys(state.schedules ?? {}).length === 0
+          !Object.keys(state.schedules ?? {}).length
         );
       },
       {
@@ -3460,7 +3460,7 @@ test("a star-consuming hosted processor still receives no ephemeral events", asy
    * certainly been scanned past, so its absence is a decision and not a race. */
   await stream.append({ type: DURABLE_POKE_TYPE, payload: {}, idempotencyKey: `after-${marker}` });
   await waitForCondition(
-    async () => (await seen()).filter((t) => t === DURABLE_POKE_TYPE).length > 0,
+    async () => !!(await seen()).filter((t) => t === DURABLE_POKE_TYPE).length,
     {
       description: "the trailing durable event to be recorded",
       timeoutMs: 60_000,

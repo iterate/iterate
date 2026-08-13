@@ -109,7 +109,7 @@ const MUTATIONS: readonly { name: string; mutate: Mutation }[] = [
   {
     name: "delete char",
     mutate: (content, rand) => {
-      if (content.length === 0) return content;
+      if (!content.length) return content;
       const at = Math.floor(rand() * content.length);
       return content.slice(0, at) + content.slice(at + 1);
     },
@@ -117,7 +117,7 @@ const MUTATIONS: readonly { name: string; mutate: Mutation }[] = [
   {
     name: "replace char",
     mutate: (content, rand) => {
-      if (content.length === 0) return content;
+      if (!content.length) return content;
       const at = Math.floor(rand() * content.length);
       return content.slice(0, at) + pick(rand, ["-", "q", "=", "9"]) + content.slice(at + 1);
     },
@@ -257,7 +257,7 @@ describe("edit-sequence fuzz", () => {
       ] as const);
       counter++;
       try {
-        if (op === "addThread" || threads.length === 0) {
+        if (op === "addThread" || !threads.length) {
           const body = randomBody();
           const anchored = rand() < 0.4 && doc.body.length > 12;
           const anchor = anchored
@@ -279,7 +279,7 @@ describe("edit-sequence fuzz", () => {
           const thread = pick(rand, threads);
           const body = randomBody();
           const replyTo =
-            thread.comments.length > 0 && rand() < 0.5 ? pick(rand, thread.comments).id : undefined;
+            thread.comments.length && rand() < 0.5 ? pick(rand, thread.comments).id : undefined;
           const result = addComment(doc, {
             threadId: thread.id,
             body,
@@ -289,12 +289,12 @@ describe("edit-sequence fuzz", () => {
           });
           doc = result.doc;
           expectedBodies.set(result.commentId, normalize(body));
-        } else if (op === "editComment" && liveComments.length > 0) {
+        } else if (op === "editComment" && liveComments.length) {
           const comment = pick(rand, liveComments);
           const body = randomBody();
           doc = editComment(doc, comment.id, body).doc;
           expectedBodies.set(comment.id, normalize(body));
-        } else if (op === "deleteComment" && liveComments.length > 0) {
+        } else if (op === "deleteComment" && liveComments.length) {
           const comment = pick(rand, liveComments);
           doc = deleteComment(doc, comment.id).doc;
           expectedBodies.delete(comment.id);
@@ -329,8 +329,8 @@ describe("edit-sequence fuzz", () => {
 
     function normalize(body: string): string {
       const lines = body.split("\n");
-      while (lines.length > 0 && lines[0]?.trim() === "") lines.shift();
-      while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") lines.pop();
+      while (lines.length && lines[0]?.trim() === "") lines.shift();
+      while (lines.length && lines[lines.length - 1]?.trim() === "") lines.pop();
       return lines.join("\n");
     }
   });

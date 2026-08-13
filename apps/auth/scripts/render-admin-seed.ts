@@ -43,7 +43,7 @@ function allowlistPatternToSqlLike(pattern: string) {
 // auth.ts hook, so the backfill only needs to catch users who existed before
 // their pattern was allowlisted.
 function renderPlatformAdminBackfillSql(allowlist: string[], now: string) {
-  if (allowlist.length === 0) {
+  if (!allowlist.length) {
     return "";
   }
 

@@ -128,7 +128,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     // leaves via reveal() OR via pinned egress substitution, never both. The
     // matching update() guard makes this an INVARIANT, not a default — a
     // readable secret can never later grow an egress pin.
-    if (visibility === "readable" && egress.urls.length > 0) {
+    if (visibility === "readable" && egress.urls.length) {
       throw new Error(
         `a readable secret cannot have egress origins: ${this.#name.path} (readable material leaves via reveal(), never substitution)`,
       );
@@ -225,7 +225,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     }
     if (!sameRefresh(born.refresh, requested.refresh)) mismatches.push("refresh");
     if (born.visibility !== requested.visibility) mismatches.push("visibility");
-    if (mismatches.length > 0) {
+    if (mismatches.length) {
       throw new Error(
         `secret already created with a different ${mismatches.join("/")} policy: ${this.#name.path} (use update() to change an existing secret)`,
       );
@@ -292,7 +292,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     if (
       initialSnapshot.state.birthCertificate?.config.visibility === "readable" &&
       egress &&
-      egress.urls.length > 0
+      egress.urls.length
     ) {
       throw new Error(
         `a readable secret cannot have egress origins: ${this.#name.path} (readable material leaves via reveal(), never substitution)`,
@@ -396,7 +396,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   ): Promise<Response> {
     const { problems, references } = await secretReferencesFromRequest(request);
     if (problems[0]) return secretErrorResponse(problems[0].code);
-    if (references.length === 0) return secretErrorResponse("secret_reference_required");
+    if (!references.length) return secretErrorResponse("secret_reference_required");
     if (references.some((reference) => reference.path !== this.#name.path)) {
       // One request, one secret: cross-secret chaining is not supported.
       return secretErrorResponse("secret_reference_foreign");
@@ -504,7 +504,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     } catch {
       return false;
     }
-    if (typeof expected !== "string" || expected.length === 0) return false;
+    if (typeof expected !== "string" || !expected.length) return false;
     return await constantTimeStringEquals(expected, input.value);
   }
 

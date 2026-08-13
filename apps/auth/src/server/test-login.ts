@@ -131,7 +131,7 @@ async function ensureOrganizationWithProject(input: { userId: string; projectSlu
   }
 
   const projects = await listProjectsForUser(db, { userId: input.userId });
-  if (projects.length > 0) {
+  if (projects.length) {
     return;
   }
   // Project slugs are globally unique; when another org owns the requested

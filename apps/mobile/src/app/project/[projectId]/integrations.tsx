@@ -273,7 +273,7 @@ export default function IntegrationsScreen() {
             />
           </Section>
 
-          {integrations.data.provided.length > 0 ? (
+          {integrations.data.provided.length ? (
             <Section title="Project integrations">
               <Text style={styles.sectionDescription}>
                 Mounted by this project through provideCapability; manage these in project code.

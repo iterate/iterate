@@ -36,13 +36,13 @@ export function InstallationRepoPicker({
         value={filter}
         onChange={(e) => setFilter(e.currentTarget.value)}
       />
-      {error && repos.length === 0 ? (
+      {error && !repos.length ? (
         <p className="break-words text-xs text-red-600">{error}</p>
-      ) : repos.length === 0 ? (
+      ) : !repos.length ? (
         <p className="text-xs text-muted-foreground">No repositories on this installation.</p>
       ) : (
         <div className="max-h-40 overflow-y-auto rounded-md border p-1">
-          {visible.length === 0 ? (
+          {!visible.length ? (
             <p className="p-2 text-xs text-muted-foreground">No match.</p>
           ) : (
             visible.map((repo) => (
@@ -58,7 +58,7 @@ export function InstallationRepoPicker({
           )}
         </div>
       )}
-      {error && repos.length > 0 ? (
+      {error && repos.length ? (
         <p className="text-xs text-red-600">Partial list: {error}</p>
       ) : repos.length < totalCount ? (
         <p className="text-xs text-muted-foreground">
@@ -92,10 +92,10 @@ export function InstallationRepoList({
     return q === "" ? repos : repos.filter((r) => r.fullName.toLowerCase().includes(q));
   }, [filter, repos]);
 
-  if (error && repos.length === 0) {
+  if (error && !repos.length) {
     return <div className="break-words rounded-md border p-3 text-sm text-red-600">{error}</div>;
   }
-  if (repos.length === 0) {
+  if (!repos.length) {
     return (
       <div className="rounded-md border p-3 text-sm text-muted-foreground">
         No repositories on this installation.
@@ -105,7 +105,7 @@ export function InstallationRepoList({
   return (
     <div className="flex flex-col gap-1">
       <div className="max-h-56 overflow-y-auto rounded-md border p-1">
-        {visible.length === 0 ? (
+        {!visible.length ? (
           <div className="p-3 text-sm text-muted-foreground">No repositories match.</div>
         ) : (
           visible.map((repo) => (

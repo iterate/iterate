@@ -105,7 +105,7 @@ for (let round = 1; round <= ROUNDS; round++) {
 }
 const ok = results.filter((r) => r.ok).map((r) => r.ms);
 ok.sort((a, b) => a - b);
-if (ok.length > 0) {
+if (ok.length) {
   console.log(
     `healthy ask latency: median ${ok[Math.floor(ok.length / 2)]}ms, max ${ok[ok.length - 1]}ms`,
   );

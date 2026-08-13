@@ -93,7 +93,7 @@ function describeStreamDelivery(input: {
   const requestedRuns = input.agentEvents.filter(
     (event) => event.type === "events.iterate.com/capability-host/script-run-requested",
   );
-  if (requestedRuns.length === 0) {
+  if (!requestedRuns.length) {
     return { firstMissingTransition: "script-run-requested", path: input.path };
   }
 

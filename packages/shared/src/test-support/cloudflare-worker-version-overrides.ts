@@ -24,7 +24,7 @@ const workerVersionIdPattern = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\d
 export function renderCloudflareWorkerVersionOverrides(
   overrides: readonly CloudflareWorkerVersionOverride[],
 ): string {
-  if (overrides.length === 0) {
+  if (!overrides.length) {
     throw new Error("At least one Cloudflare Worker version override is required.");
   }
 
@@ -100,7 +100,7 @@ export function createCloudflareWorkerVersionOverrideFetch(
   environment: Readonly<Record<string, string | undefined>>,
 ): typeof fetch {
   const versionHeaders = cloudflareWorkerVersionOverrideHeaders(environment);
-  if (Object.keys(versionHeaders).length === 0) return fetchImplementation;
+  if (!Object.keys(versionHeaders).length) return fetchImplementation;
 
   return (input, init) => {
     const headers = new Headers(input instanceof Request ? input.headers : undefined);

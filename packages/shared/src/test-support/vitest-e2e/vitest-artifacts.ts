@@ -99,7 +99,7 @@ export async function appendResultFooter(params: {
   const normalizedState = normalizeResultState(params.state);
   const footerLines = ["", "===== VITEST RESULT =====", `state: ${normalizedState}`];
 
-  if (params.errorMessages.length > 0) {
+  if (params.errorMessages.length) {
     footerLines.push("errors:");
     for (const message of params.errorMessages) {
       footerLines.push(indentBlock(message, "  - "));

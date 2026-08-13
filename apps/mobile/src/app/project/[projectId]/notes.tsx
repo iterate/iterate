@@ -92,7 +92,7 @@ export default function NotesScreen() {
       if (!repos.some((repo: any) => repo.path === NOTES_REPO_PATH)) return {};
       const workspace = project.workspaces.get(NOTES_WORKSPACE_PATH);
       const paths = (await workspace.glob(`${NOTES_REPO_PATH}/*.md`)).filter(isNoteFilePath);
-      if (paths.length === 0) return {};
+      if (!paths.length) return {};
       return await workspace.readFiles(paths);
     },
   });
@@ -128,7 +128,7 @@ export default function NotesScreen() {
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
         </View>
-      ) : items.length === 0 ? (
+      ) : !items.length ? (
         <View style={styles.center}>
           <Text style={styles.emptyTitle}>Nothing here yet</Text>
           <Text style={styles.emptyBody}>
@@ -137,7 +137,7 @@ export default function NotesScreen() {
             project&apos;s agents alike.
           </Text>
         </View>
-      ) : visible.length === 0 ? (
+      ) : !visible.length ? (
         <View style={styles.center}>
           <Text style={styles.emptyTitle}>No results</Text>
           <Text style={styles.emptyBody}>Nothing matches this search — try fewer words.</Text>
@@ -282,7 +282,7 @@ function NoteRow({
             {item.text}
           </Text>
         ) : null}
-        {item.attachments.length > 0 ? (
+        {item.attachments.length ? (
           <View style={styles.thumbRow}>
             {item.attachments.map((attachment) => (
               <NoteThumb

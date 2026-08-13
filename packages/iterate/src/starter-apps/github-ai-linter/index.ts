@@ -17,7 +17,7 @@ export const GithubAiLinter = {
             : undefined;
         if (
           event.type === "events.iterate.com/repo/github-link-configured" &&
-          (typeof linkedConnection !== "string" || linkedConnection.length === 0)
+          (typeof linkedConnection !== "string" || !linkedConnection.length)
         ) {
           return;
         }

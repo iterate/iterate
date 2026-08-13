@@ -114,12 +114,12 @@ async function syncAll(engine: CollabEngine, peers: Peer[]) {
     let moved = false;
     for (const peer of peers) {
       const gap = await engine.pull(PATH, EPOCH, peer.version);
-      if (gap.status === "ops" && gap.ops.length > 0) {
+      if (gap.status === "ops" && gap.ops.length) {
         peer.receive(gap.ops);
         moved = true;
       }
       const batch = peer.sendable();
-      if (batch.ops.length > 0) {
+      if (batch.ops.length) {
         const result = await engine.push(batch);
         expect(result.status).toBe("accepted");
         moved = true;
@@ -420,14 +420,14 @@ describe("collab engine", () => {
         if (action < 0.4) {
           const doc = peer.state.doc;
           const at = Math.floor(random() * (doc.length + 1));
-          if (random() < 0.3 && doc.length > 0) {
+          if (random() < 0.3 && doc.length) {
             peer.edit(Math.max(0, at - 1), at, "");
           } else {
             peer.edit(at, at, String.fromCharCode(97 + Math.floor(random() * 26)));
           }
         } else if (action < 0.7) {
           const batch = peer.sendable();
-          if (batch.ops.length > 0) {
+          if (batch.ops.length) {
             const result = await engine.push(batch).catch(() => null);
             if (result) expect(result.status).toBe("accepted");
           }

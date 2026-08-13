@@ -293,7 +293,7 @@ function ProjectSecretsIndexContent() {
         <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
           Loading secrets…
         </div>
-      ) : secretsList.length === 0 ? (
+      ) : !secretsList.length ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>No Secrets</EmptyTitle>
@@ -304,7 +304,7 @@ function ProjectSecretsIndexContent() {
         </Empty>
       ) : (
         <div className="space-y-3">
-          {visibleSecrets.length === 0 ? (
+          {!visibleSecrets.length ? (
             <div className="rounded-lg border p-4 text-sm text-muted-foreground">
               No Secrets match.
             </div>

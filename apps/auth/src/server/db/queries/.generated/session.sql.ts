@@ -18,7 +18,7 @@ export const getSessionActiveOrganizationIdById = Object.assign(
     params: getSessionActiveOrganizationIdById.Params,
   ): Promise<getSessionActiveOrganizationIdById.Result | null> {
     const rows = await client.all<getSessionActiveOrganizationIdById.Result>(query(params));
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length ? rows[0] : null;
   },
   { sql, query },
 );
