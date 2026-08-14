@@ -283,15 +283,22 @@ export type AgentCreateInput = z.input<
 /**
  * PROJECT-LEVEL AGENT BIRTH DEFAULTS — the format-agnostic door that makes
  * the agent processor swappable in userland WITHOUT a race: a project
- * appends this event (latest occurrence wins) to its root stream, and the
- * generic agent-creation door folds it into every birth batch — so an agent
- * is BORN with the chosen driver, prompt, and processor subscriptions
+ * publishes this value under the AGENT_BIRTH_DEFAULTS_KEY of its generic
+ * defaults store (`project/defaults-configured`, latest occurrence wins per
+ * key), and the agent-creation door folds it into every birth batch — so an
+ * agent is BORN with the chosen driver, prompt, and processor subscriptions
  * instead of being converted a delivery-hop after its first turn already
- * started. The platform validates shape here and the config patch through
- * the agent/configured vocabulary; it never learns what any of it means.
- * Explicit per-call policies (integration routers' systemPromptPolicy)
- * always win over project defaults.
+ * started. The project stores the value opaquely; THIS schema and the
+ * vocabulary check run at the door's read site, and the platform never
+ * learns what any of it means. Explicit per-call policies (integration
+ * routers' systemPromptPolicy) always win over project defaults.
  */
+/** The agents domain's key in the project's generic defaults store
+ * (`project/defaults-configured` → `state.defaults[key]`). The project holds
+ * the value opaquely; THIS domain parses it (AgentBirthDefaults +
+ * validateAgentBirthEvents) at the creation door's read site. */
+export const AGENT_BIRTH_DEFAULTS_KEY = "agents/birth-defaults";
+
 export const AgentBirthDefaults = z.object({
   /** Which agents these defaults apply to. Absent = every agent born through
    * the generic creation door. */
@@ -324,11 +331,10 @@ export type AgentBirthDefaults = z.infer<typeof AgentBirthDefaults>;
 const BIRTH_DEFAULTS_SUBSCRIPTION_ALLOWLIST = new Set<string>(["agent-headless"]);
 
 /**
- * Validate one defaults payload's birth events. Returns the parsed events or
- * an error string — callers (the project processor's fold, the creation
- * door's defensive re-check) treat any error as "no defaults", never as a
- * creation failure: malformed userland data must degrade to platform-default
- * births.
+ * Validate one defaults value's birth events. Returns ok or an error string —
+ * the caller (the creation door's read of the project's generic defaults
+ * store) treats any error as "no defaults", never as a creation failure:
+ * malformed userland data must degrade to platform-default births.
  */
 export function validateAgentBirthEvents(
   birthEvents: AgentBirthDefaults["birthEvents"],

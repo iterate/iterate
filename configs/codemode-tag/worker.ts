@@ -1,5 +1,9 @@
 import { DocsApp } from "@iterate-com/docs";
-import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+import {
+  IterateWorkerEntrypoint,
+  type AgentBirthDefaultsValue,
+  type StreamEvent,
+} from "iterate/sdk";
 import { isIdempotencyConflict } from "iterate/processors";
 import { parseCodemodeResponse } from "./codemode-format.ts";
 
@@ -188,11 +192,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 
   /**
    * THE OPT-IN, made constitutive: the platform's generic agent-creation
-   * door reads the project's latest agent-birth-defaults event and folds it
-   * into every birth batch — so new agents are BORN under the headless
-   * driver with the codemode prompt and subscription, and there is no
-   * first-turn race at all. Content-hash keyed: editing the prompt file and
-   * committing re-publishes, and the newest event wins at read.
+   * door reads the "agents/birth-defaults" key of the project's generic
+   * defaults store (`project/defaults-configured`, latest occurrence wins
+   * per key) and folds it into every birth batch — so new agents are BORN
+   * under the headless driver with the codemode prompt and subscription,
+   * and there is no first-turn race at all. Content-hash keyed: editing the
+   * prompt file and committing re-publishes, and the newest event wins at
+   * read.
    */
   async #publishAgentBirthDefaults(): Promise<void> {
     const itx = await this.itx;
@@ -204,30 +210,37 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       .join("");
     await this.#appendUnlessAlreadyRecorded(() =>
       itx.streams.get("/").append({
-        type: "events.iterate.com/project/agent-birth-defaults-configured",
-        idempotencyKey: `codemode-tag/agent-birth-defaults:${hash}`,
-        // Plain birth events — the platform validates each against the agent
-        // vocabulary at fold time and mints per-event content-hash keys, so
-        // this list needs no keys of its own. The prompt-slot event replaces
-        // the platform's fallback prompt in the same keyed slot.
+        type: "events.iterate.com/project/defaults-configured",
+        // New prefix on purpose: the stream rejects same-key-different-body
+        // appends, so the generic event must not reuse the legacy
+        // `codemode-tag/agent-birth-defaults:` keys.
+        idempotencyKey: `codemode-tag/defaults:agents/birth-defaults:${hash}`,
+        // Plain birth events — the creation door validates each against the
+        // agent vocabulary when it reads this key and mints per-event
+        // content-hash keys, so this list needs no keys of its own. The
+        // prompt-slot event replaces the platform's fallback prompt in the
+        // same keyed slot.
         payload: {
-          birthEvents: [
-            {
-              type: "events.iterate.com/agent/configured",
-              payload: { config: { driver: HEADLESS_PROCESSOR_SLUG } },
-            },
-            {
-              type: "events.iterate.com/agents/context-added",
-              payload: { role: "system", key: SYSTEM_PROMPT_KEY, content: file.content },
-            },
-            {
-              type: "events.iterate.com/stream/subscription-configured",
-              payload: {
-                name: HEADLESS_PROCESSOR_SLUG,
-                receiver: { action: "facet-processor", source: { kind: "builtin" } },
+          key: "agents/birth-defaults",
+          value: {
+            birthEvents: [
+              {
+                type: "events.iterate.com/agent/configured",
+                payload: { config: { driver: HEADLESS_PROCESSOR_SLUG } },
               },
-            },
-          ],
+              {
+                type: "events.iterate.com/agents/context-added",
+                payload: { role: "system", key: SYSTEM_PROMPT_KEY, content: file.content },
+              },
+              {
+                type: "events.iterate.com/stream/subscription-configured",
+                payload: {
+                  name: HEADLESS_PROCESSOR_SLUG,
+                  receiver: { action: "facet-processor", source: { kind: "builtin" } },
+                },
+              },
+            ],
+          } satisfies AgentBirthDefaultsValue,
         },
       }),
     );

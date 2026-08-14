@@ -28,7 +28,6 @@ import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-con
 import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
 import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
-import { AgentBirthDefaults } from "../agents/agent-defaults.ts";
 import { parseConfigRepoTemplateReference } from "../../lib/config-repo-template-reference.ts";
 import { ApprovalPresentedEvents } from "./approval-presented-contract.ts";
 import { AgentReplyPresentedEvents } from "./agent-reply-presented-contract.ts";
@@ -225,15 +224,17 @@ export const ProjectProcessorContract = defineProcessorContract({
       description:
         "True once the notification/created fact from the atomic project birth batch reduces.",
     }),
-    agentBirthDefaults: AgentBirthDefaults.nullable()
-      .default(null)
+    defaults: z
+      .record(z.string(), z.unknown())
+      .default({})
       .meta({
         description:
-          "The project's standing contribution to matching agent birth batches: the LATEST " +
-          "project/agent-birth-defaults-configured payload, with each birth event validated " +
-          "against the agent-consumed vocabulary at fold time. A malformed latest payload folds " +
-          "to null (degrade to platform-default births, never to stale defaults). What the " +
-          "agent creation door reads.",
+          "Generic project-scoped facts, latest occurrence wins PER KEY: the raw value of the " +
+          "newest project/defaults-configured event for each key. The project stores these " +
+          "opaquely — schema, validation, and meaning belong to whichever domain reads a key " +
+          '(e.g. the agent creation door reads and validates "agents/birth-defaults"). A ' +
+          "malformed value therefore degrades at the read site, never to a stale predecessor: " +
+          "the raw latest always replaces the previous raw value.",
       }),
   }),
   events: {
@@ -294,15 +295,23 @@ export const ProjectProcessorContract = defineProcessorContract({
           .meta({ description: "The scheduler key whose heartbeat fired." }),
       }),
     },
-    "events.iterate.com/project/agent-birth-defaults-configured": {
+    "events.iterate.com/project/defaults-configured": {
       description:
-        "The project's config worker declares birth defaults for agents born through the " +
-        "generic creation door: a list of plain agent-vocabulary events (a prompt is a keyed " +
-        "agents/context-added, a driver choice an agent/configured, a processor attachment an " +
-        "allowlisted stream/subscription-configured) appended into every matching birth batch " +
-        "with platform-minted content-hash idempotency keys. Latest occurrence wins; explicit " +
-        "call-site policies (integration routers) outrank it.",
-      payloadSchema: AgentBirthDefaults,
+        "A project-scoped fact, published as data: the newest occurrence PER KEY is folded " +
+        "into state.defaults. The project never interprets the value — the consuming domain " +
+        "owns the key's schema and validates at its read site (the agent creation door reads " +
+        '"agents/birth-defaults"; the next defaultable concern is a new key with zero ' +
+        "project-contract changes). Unknown keys are inert data.",
+      payloadSchema: z.object({
+        key: z
+          .string()
+          .trim()
+          .min(1)
+          .meta({ description: "Which fact this event sets; latest occurrence wins per key." }),
+        value: z.unknown().meta({
+          description: "Opaque to the project; schema belongs to the domain that reads the key.",
+        }),
+      }),
     },
     "events.iterate.com/project/onboarding-completed": {
       description: "The project owner completed the onboarding agent flow.",
@@ -544,7 +553,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/custom-domain-remove-requested",
     "events.iterate.com/project/custom-domain-removed",
     "events.iterate.com/project/onboarding-completed",
-    "events.iterate.com/project/agent-birth-defaults-configured",
+    "events.iterate.com/project/defaults-configured",
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",

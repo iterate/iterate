@@ -706,7 +706,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { MediaApp } from \"iterate/starter-apps/media\";\n" +
       "import { NotesApp } from \"iterate/starter-apps/notes\";\n" +
-      "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
+      "import {\n" +
+      "  IterateWorkerEntrypoint,\n" +
+      "  type AgentBirthDefaultsValue,\n" +
+      "  type StreamEvent,\n" +
+      "} from \"iterate/sdk\";\n" +
       "import { TodoApp } from \"iterate/starter-apps/todo\";\n" +
       "\n" +
       "// An iterate project is, in the abstract, just a fetch function.\n" +
@@ -811,21 +815,23 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "\n" +
       "  /**\n" +
-      "   * THE PROJECT'S PROMPT, published as data: the platform's generic\n" +
-      "   * agent-creation door folds the LATEST agent-birth-defaults event on the\n" +
-      "   * project root into every agent birth batch, so agents in this project are\n" +
-      "   * BORN with this repo's prompts/agent-system-prompt.md as their system\n" +
-      "   * prompt. Edit that file and commit to change it — the content-hash key\n" +
-      "   * re-publishes and the newest event wins; no platform deploy. Deleting the\n" +
-      "   * file publishes an EMPTY list, which restores the platform's embedded\n" +
-      "   * fallback prompt (identical text until you fork the file). Rough token\n" +
-      "   * budget: prompts ride every LLM request, so a much larger file mostly\n" +
-      "   * buys latency and cost — keep it lean.\n" +
+      "   * THE PROJECT'S PROMPT, published as data: the project root's generic\n" +
+      "   * defaults store (`project/defaults-configured`, latest occurrence wins\n" +
+      "   * per key) holds this repo's birth events under the \"agents/birth-defaults\"\n" +
+      "   * key, and the platform's agent-creation door folds them into every agent\n" +
+      "   * birth batch — so agents in this project are BORN with this repo's\n" +
+      "   * prompts/agent-system-prompt.md as their system prompt. Edit that file\n" +
+      "   * and commit to change it — the content-hash key re-publishes and the\n" +
+      "   * newest event wins; no platform deploy. Deleting the file publishes an\n" +
+      "   * EMPTY list, which restores the platform's embedded fallback prompt\n" +
+      "   * (identical text until you fork the file). Rough token budget: prompts\n" +
+      "   * ride every LLM request, so a much larger file mostly buys latency and\n" +
+      "   * cost — keep it lean.\n" +
       "   */\n" +
       "  async #publishAgentBirthDefaults(): Promise<void> {\n" +
       "    const itx = await this.itx;\n" +
       "    const file = await itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
-      "    const birthEvents =\n" +
+      "    const birthEvents: AgentBirthDefaultsValue[\"birthEvents\"] =\n" +
       "      file === null\n" +
       "        ? []\n" +
       "        : [\n" +
@@ -856,9 +862,15 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
       "      .join(\"\");\n" +
       "    await itx.streams.get(\"/\").append({\n" +
-      "      type: \"events.iterate.com/project/agent-birth-defaults-configured\",\n" +
-      "      idempotencyKey: `iterate/config/agent-birth-defaults:${hash}`,\n" +
-      "      payload: { birthEvents },\n" +
+      "      type: \"events.iterate.com/project/defaults-configured\",\n" +
+      "      // New prefix on purpose: the stream rejects same-key-different-body\n" +
+      "      // appends, so the generic event must not reuse the legacy\n" +
+      "      // `iterate/config/agent-birth-defaults:` keys.\n" +
+      "      idempotencyKey: `iterate/config/defaults:agents/birth-defaults:${hash}`,\n" +
+      "      payload: {\n" +
+      "        key: \"agents/birth-defaults\",\n" +
+      "        value: { birthEvents } satisfies AgentBirthDefaultsValue,\n" +
+      "      },\n" +
       "    });\n" +
       "  }\n" +
       "\n" +
