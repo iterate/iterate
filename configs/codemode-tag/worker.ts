@@ -1,5 +1,9 @@
 import { DocsApp } from "@iterate-com/docs";
-import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+import {
+  IterateWorkerEntrypoint,
+  type AgentBirthDefaultsValue,
+  type StreamEvent,
+} from "iterate/sdk";
 import { isIdempotencyConflict } from "iterate/processors";
 import { parseCodemodeResponse } from "./codemode-format.ts";
 
@@ -236,7 +240,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
                 },
               },
             ],
-          },
+          } satisfies AgentBirthDefaultsValue,
         },
       }),
     );

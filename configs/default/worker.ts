@@ -3,7 +3,11 @@ import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { MediaApp } from "iterate/starter-apps/media";
 import { NotesApp } from "iterate/starter-apps/notes";
-import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+import {
+  IterateWorkerEntrypoint,
+  type AgentBirthDefaultsValue,
+  type StreamEvent,
+} from "iterate/sdk";
 import { TodoApp } from "iterate/starter-apps/todo";
 
 // An iterate project is, in the abstract, just a fetch function.
@@ -124,7 +128,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   async #publishAgentBirthDefaults(): Promise<void> {
     const itx = await this.itx;
     const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
-    const birthEvents =
+    const birthEvents: AgentBirthDefaultsValue["birthEvents"] =
       file === null
         ? []
         : [
@@ -160,7 +164,10 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       // appends, so the generic event must not reuse the legacy
       // `iterate/config/agent-birth-defaults:` keys.
       idempotencyKey: `iterate/config/defaults:agents/birth-defaults:${hash}`,
-      payload: { key: "agents/birth-defaults", value: { birthEvents } },
+      payload: {
+        key: "agents/birth-defaults",
+        value: { birthEvents } satisfies AgentBirthDefaultsValue,
+      },
     });
   }
 

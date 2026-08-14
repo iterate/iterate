@@ -706,7 +706,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { MediaApp } from \"iterate/starter-apps/media\";\n" +
       "import { NotesApp } from \"iterate/starter-apps/notes\";\n" +
-      "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
+      "import {\n" +
+      "  IterateWorkerEntrypoint,\n" +
+      "  type AgentBirthDefaultsValue,\n" +
+      "  type StreamEvent,\n" +
+      "} from \"iterate/sdk\";\n" +
       "import { TodoApp } from \"iterate/starter-apps/todo\";\n" +
       "\n" +
       "// An iterate project is, in the abstract, just a fetch function.\n" +
@@ -827,7 +831,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  async #publishAgentBirthDefaults(): Promise<void> {\n" +
       "    const itx = await this.itx;\n" +
       "    const file = await itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
-      "    const birthEvents =\n" +
+      "    const birthEvents: AgentBirthDefaultsValue[\"birthEvents\"] =\n" +
       "      file === null\n" +
       "        ? []\n" +
       "        : [\n" +
@@ -863,7 +867,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      // appends, so the generic event must not reuse the legacy\n" +
       "      // `iterate/config/agent-birth-defaults:` keys.\n" +
       "      idempotencyKey: `iterate/config/defaults:agents/birth-defaults:${hash}`,\n" +
-      "      payload: { key: \"agents/birth-defaults\", value: { birthEvents } },\n" +
+      "      payload: { key: \"agents/birth-defaults\", value: { birthEvents } satisfies AgentBirthDefaultsValue },\n" +
       "    });\n" +
       "  }\n" +
       "\n" +
