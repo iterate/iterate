@@ -4,6 +4,12 @@ import * as path from "node:path";
 
 import dedent from "dedent";
 import { createCli } from "trpc-cli";
+import { existsSync } from "node:fs";
+
+export async function list() {
+  const list = await fs.readdir(import.meta.dirname);
+  return list.filter((item) => existsSync(path.join(import.meta.dirname, item, "eval.md")));
+}
 
 export default async function run(
   slug: string,
