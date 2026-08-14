@@ -52,6 +52,8 @@ export default async function run(
 
     Also include the coding agent session id in the result so it can be resumed later.
 
+    If there are links to agent chats that are relevant, include a command like \`cd apps/os && doppler run --config prd -- pnpm cli session create --project prj_... --return-to /projects/eval-.../agents/streams/agents/... --open\` to make them easy to inspect after the run.
+
     The eval must state its success criteria. If it does not, immediately mark the run as a failure and recommend suitable criteria in the explanation.
 
     This session is not a conversation and will usually run headlessly. Do not respond to the eval or ask for clarification. If the user intervenes, treat that as evidence that the eval setup may need improvement. After the eval, make any broadly useful harness or helper improvements and open a pull request.
