@@ -48,6 +48,7 @@ import {
   projectSelectionQueryOptions,
 } from "../../utils/auth-query-options.ts";
 import { getInitials } from "../../utils/initials.ts";
+import { redirectAndStayPending } from "../../utils/redirect-and-stay-pending.ts";
 import { orpcClient } from "../../utils/query.tsx";
 import { parseConfig } from "../../config.ts";
 
@@ -300,7 +301,13 @@ function RouteComponent() {
     (testUserAutoContinue && !autoContinue.isError)
   ) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-muted/20 p-4">
+      // role/aria: a marked loading state — assistive tech announces it, and
+      // the e2e spinner-waiter extends its wait budget while it shows.
+      <div
+        aria-label="Loading"
+        className="flex min-h-screen items-center justify-center bg-muted/20 p-4"
+        role="status"
+      >
         <Card className="w-full max-w-xl">
           <CardHeader>
             <div className="h-12 w-12 rounded-lg bg-muted" />
@@ -879,19 +886,6 @@ function CreateProjectForm(props: {
       ) : null}
     </form>
   );
-}
-
-/**
- * Leave the page and keep the caller's mutation pending until the browser
- * actually unloads. A bare `window.location.href = ...` returns immediately,
- * react-query flips `isPending` off, and every `isSubmitting`-gated button
- * re-enables mid-navigation — "Create project" then invites a double submit.
- * Returning this never-resolving promise (from `onSuccess`, or awaited in a
- * `mutationFn`) keeps the mutation pending for the page's remaining lifetime.
- */
-function redirectAndStayPending(href: string): Promise<never> {
-  window.location.href = href;
-  return new Promise<never>(() => {});
 }
 
 /**
