@@ -1,9 +1,14 @@
 ---
-status: ready
+status: implemented
 size: small
 ---
 
 # Support the standard two-arg `fetch(url, init)` form on egress fetch handles
+
+**Status summary:** Implemented and unit-suite green. Both user-callable
+fetch handles accept `(input, init?)`, docs/examples/generated contract
+regenerated, and a new e2e proves method+headers+body reach the upstream on
+both handles (runs on the PR's preview deploy). Nothing known missing.
 
 `itx.egress.fetch(url, init)` silently DROPS the `init` argument — headers,
 method, and body are all lost. Verified against prod today:
@@ -30,13 +35,13 @@ is ignored") instead of fixing it.
 
 ## Checklist
 
-- [ ] `ProjectEgressRpcTarget.fetch` accepts the standard signature `fetch(input: RequestInfo | URL, init?: RequestInit)`, building `new Request(input, init)` server-side
-- [ ] `SecretRpcTarget.fetch` (the other user-callable fetch-shaped handle, backed by the Secret DO) gets the same treatment
-- [ ] `__describe()` instruction strings updated to advertise `fetch(input, init?)`
-- [ ] `egress-fetch` catalogue example (`apps/os/src/itx/examples-source.ts`) rewritten to show the two-arg form; regenerate `examples.generated.ts` (`pnpm generate:itx-examples` or equivalent)
-- [ ] Regenerate the public contract `itx-api.generated.ts` via `pnpm generate:itx-api` (do not hand-edit)
-- [ ] e2e test in `apps/os/e2e/vitest/itx-egress.e2e.test.ts` proving the two-arg form's method, headers, and body reach the upstream (for both `project.egress.fetch` and the secret handle's `fetch`)
-- [ ] Full pre-PR gauntlet green: install, typecheck, lint, knip, format, test
+- [x] `ProjectEgressRpcTarget.fetch` accepts the standard signature `fetch(input: RequestInfo | URL, init?: RequestInit)`, building `new Request(input, init)` server-side — _rpc-targets.ts, `new Request(input, init)` wrapped in the existing `withStreamContext`_
+- [x] `SecretRpcTarget.fetch` (the other user-callable fetch-shaped handle, backed by the Secret DO) gets the same treatment — _same construction before `durableObjectStub.fetch`_
+- [x] `__describe()` instruction strings updated to advertise `fetch(input, init?)` — _both targets_
+- [x] `egress-fetch` catalogue example (`apps/os/src/itx/examples-source.ts`) rewritten to show the two-arg form; regenerate `examples.generated.ts` (`pnpm generate:itx-examples` or equivalent) — _example now leads with the two-arg form_
+- [x] Regenerate the public contract `itx-api.generated.ts` via `pnpm generate:itx-api` (do not hand-edit) — _both apps/os and packages/iterate copies, plus itx-api-graph_
+- [x] e2e test in `apps/os/e2e/vitest/itx-egress.e2e.test.ts` proving the two-arg form's method, headers, and body reach the upstream (for both `project.egress.fetch` and the secret handle's `fetch`) — _"two-arg fetch(url, init) carries method, headers, and body to the upstream"; secret lane also asserts placeholder substitution in init headers_
+- [x] Full pre-PR gauntlet green: install, typecheck, lint, knip, format, test — _all green locally; e2e runs on the PR preview_
 
 ## Non-goals
 

@@ -3021,7 +3021,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   async __describe(): Promise<Description & SecretDescription> {
     const state = await this.durableObjectStub.describe();
     return describeNode({
-      instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
+      instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch(input, init?) — the standard fetch signature — to use it in an egress request via placeholder substitution.`,
       children: {
         create:
           "Create this secret with its initial egress, material, and refresh config; returns this same secret handle.",
@@ -3055,9 +3055,10 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     );
   }
 
-  /** Egress fetch with this secret's placeholders substituted server-side. */
-  fetch(request: Request): Promise<Response> {
-    return this.durableObjectStub.fetch(request);
+  /** Egress fetch with this secret's placeholders substituted server-side —
+   * the standard fetch signature: a Request, or a URL plus optional init. */
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    return this.durableObjectStub.fetch(new Request(input, init));
   }
 
   /** Admin-only recovery read of the current encrypted cell. */
@@ -7728,7 +7729,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Project-attributed outbound fetch: fetch(request) egresses with the project's identity and secret substitution. Headers and URL paths interpolate getSecret(...); an application/json body substitutes exact string values when x-iterate-secret-template: json is set. intercept(handler) installs a live egress interceptor (last writer wins).",
+        "Project-attributed outbound fetch: fetch(input, init?) — the standard fetch signature — egresses with the project's identity and secret substitution. Headers and URL paths interpolate getSecret(...); an application/json body substitutes exact string values when x-iterate-secret-template: json is set. intercept(handler) installs a live egress interceptor (last writer wins).",
       children: {
         fetch: "Outbound fetch through project egress.",
         intercept: "Install an egress interceptor; returns a release handle.",
@@ -7741,12 +7742,13 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
     super();
   }
 
-  /** Outbound fetch with project identity and secret substitution. Set
+  /** Outbound fetch with project identity and secret substitution — the
+   * standard fetch signature: a Request, or a URL plus optional init. Set
    * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
    * values in an `application/json` (or `+json`) body. */
-  fetch(request: Request): Promise<EgressResponse> {
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<EgressResponse> {
     return projectStub(env.PROJECT, this.props.projectId).fetch(
-      withStreamContext(request, this.props.streamContext),
+      withStreamContext(new Request(input, init), this.props.streamContext),
     );
   }
 
