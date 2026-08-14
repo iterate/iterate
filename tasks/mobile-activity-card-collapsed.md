@@ -1,5 +1,5 @@
 ---
-status: ready
+status: implemented
 size: small
 ---
 
@@ -26,17 +26,17 @@ const expanded = toggled ?? isLive;
 
 ## Checklist
 
-- [ ] `ActivityCard` defaults to collapsed regardless of live status —
-      expanded only by tap (`toggled === true`)
-- [ ] Keep `RoundView`'s auto-expand of a *running round* — it only renders
+- [x] `ActivityCard` defaults to collapsed regardless of live status —
+      expanded only by tap (`toggled === true`) — _activity-card.tsx, one-line change plus comments_
+- [x] Keep `RoundView`'s auto-expand of a *running round* — it only renders
       inside a card the user deliberately opened, where watching the live
-      round is the point
-- [ ] Update the component doc comment (no more "automatically while
-      live-streaming")
-- [ ] Verify the chat-titles spec still passes (it rides the collapsed
-      card's spinner while its `/script` runs)
-- [ ] VIDEO_MODE recording for the PR body showing the calm collapsed line
-- [ ] typecheck / lint / knip / format / test green
+      round is the point — _untouched_
+- [x] Update the component doc comment (no more "automatically while
+      live-streaming") — _done_
+- [x] Verify the chat-titles spec still passes (it rides the collapsed
+      card's spinner while its `/script` runs) — _passes locally, including in video mode_
+- [x] VIDEO_MODE recording for the PR body showing the calm collapsed line — _in the PR body_
+- [x] typecheck / lint / knip / format / test green — _all green locally_
 
 ## Non-goals
 
