@@ -155,6 +155,13 @@ export type ProcessorProgressStore<State> = {
 export type ProcessorRecovery = {
   keepAliveWhile(work: () => Promise<unknown>): void;
   handleAlarm(info?: unknown): MaybePromise<void>;
+  /**
+   * Operator seam: clear the keepalive's crash-loop budget and pull an owed
+   * retry in to the confirmation lead — the no-deploy antidote for a
+   * 3-strikes revival plateau. Optional: in-memory/test recoveries without a
+   * durable budget have nothing to reset.
+   */
+  resetBackoff?(): void;
 };
 
 /**

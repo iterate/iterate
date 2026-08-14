@@ -61,6 +61,72 @@ test("ephemeral events advance the stream head without changing durable core agg
   expect(after).toEqual({ ...before, maxOffset: 1 });
 });
 
+test("connection presence facts classify ephemeral, so reconnect churn cannot grow the durable journal", () => {
+  const processor = new StreamCoreProcessor({ projectId: PROJECT_ID });
+  const state = coreState();
+
+  // The contract marks the presence facts ephemeral, so the append pipeline's
+  // canonicalize step attaches the flag without the append site opting in.
+  const opened = processor.canonicalize({
+    type: "events.iterate.com/stream/connection-opened",
+    payload: { connectionKey: "reviewer", kind: "hosted" },
+  });
+  const closed = processor.canonicalize({
+    type: "events.iterate.com/stream/connection-closed",
+    payload: { connectionKey: "reviewer", reason: "idle" },
+  });
+  expect(opened).toMatchObject({ ephemeral: true });
+  expect(closed).toMatchObject({ ephemeral: true });
+
+  // And validation admits them (presence is runtime-authoritative; nothing
+  // durable may depend on these facts).
+  expect(() => processor.validate({ event: opened, state, authority: "core-event" })).not.toThrow();
+  expect(() => processor.validate({ event: closed, state, authority: "core-event" })).not.toThrow();
+});
+
+test("the dormant-subscriber departure fact appends keyless: presence facts are ephemeral and reject idempotency keys", () => {
+  const processor = new StreamCoreProcessor({ projectId: PROJECT_ID });
+  const state = coreState();
+
+  // The exact shape webSocketClose appends for a dormant subscriber's real
+  // departure. It MUST stay keyless: canonicalize forces the ephemeral flag,
+  // and a keyed ephemeral input is rejected — a key here would make every
+  // departure observation throw out of webSocketClose instead of landing.
+  const departure = processor.canonicalize({
+    type: "events.iterate.com/stream/connection-closed",
+    payload: { connectionKey: "subscriber", reason: "departed" },
+  });
+  expect(departure).toMatchObject({ ephemeral: true });
+  expect(() =>
+    processor.validate({ event: departure, state, authority: "core-event" }),
+  ).not.toThrow();
+
+  expect(() =>
+    processor.canonicalize({
+      type: "events.iterate.com/stream/connection-closed",
+      idempotencyKey: "iterate-internal/stream-subscriber-pager-departed/pager-1",
+      payload: { connectionKey: "subscriber", reason: "departed" },
+    }),
+  ).toThrow(/ephemeral events cannot have an idempotencyKey/);
+});
+
+test("every other stream control event still refuses to be ephemeral", () => {
+  const processor = new StreamCoreProcessor({ projectId: PROJECT_ID });
+  const state = coreState();
+
+  expect(() =>
+    processor.validate({
+      event: {
+        type: "events.iterate.com/stream/woken",
+        payload: { incarnationId: "11111111-1111-4111-8111-111111111111" },
+        ephemeral: true,
+      },
+      state,
+      authority: "core-event",
+    }),
+  ).toThrow(/cannot be ephemeral/);
+});
+
 function committed(
   offset: number,
   type: string,

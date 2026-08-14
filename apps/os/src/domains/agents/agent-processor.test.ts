@@ -687,6 +687,34 @@ describe("AgentProcessor recovery", () => {
     ).toMatchObject({ payload: { role: "developer", actor: { type: "integration" } } });
   });
 
+  it("near-expiry: adoption with only seconds of validity left settles expired instead of running a doomed attempt", async () => {
+    // Prod 2026-08-11: a revival adopted a request with ~9s of its 10-minute
+    // horizon left and ran the attempt with a 9-second transport deadline —
+    // guaranteed to time out, burning the retry budget on a stale trigger.
+    // Too-little-validity must take the same expired path as fully-expired.
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Hello")],
+      ["advanceTime", 10_000],
+      ["crash"],
+      () => {
+        // The revival lands with 9s of the 600s horizon remaining: the clock
+        // already advanced 10s past the trigger, so add 581s.
+        h.clock.now += 581_000;
+      },
+      ["advanceTime", 0],
+    );
+
+    expect(h.llm.calls).toHaveLength(1); // only the pre-crash attempt — no doomed 9s retry
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { result: { status: "cancelled", reason: "expired" } } },
+    ]);
+    expect(h.state().openRequest).toBeNull();
+    expect(h.events("events.iterate.com/stream/error-occurred")).toMatchObject([
+      { payload: { message: expect.stringContaining("expired") } },
+    ]);
+  });
+
   it("expiry: a WEDGED in-flight attempt is abandoned at the horizon — the live incarnation settles expired instead of deferring to a hung promise forever", async () => {
     // The 2026-08-13 prd incident: the attempt hung (an un-deadlined await in
     // the run closure), the incarnation stayed alive on constant unrelated

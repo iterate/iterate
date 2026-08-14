@@ -297,10 +297,17 @@ export class AgentTurnLoop implements AgentComponent {
     // incarnation's own in-flight slot: a wedged attempt (a hung await the
     // transport deadline doesn't cover) would otherwise hold isExecuting
     // forever, and with steady unrelated deliveries keeping the DO alive no
-    // eviction ever breaks the tie (the 2026-08-13 prd incident).
+    // eviction ever breaks the tie (the 2026-08-13 prd incident). Adoption
+    // (nobody here executing) settles early, at the MIN_LLM_ATTEMPT_VALIDITY_MS
+    // floor: a late revival adopting a request with seconds left computes a
+    // near-zero transport deadline — prod 2026-08-11 saw a 9-second attempt
+    // "time out" and burn its retries. A live attempt keeps the full horizon;
+    // it may still finish.
     const open = state.openRequest;
     if (open !== null) {
-      if (this.#host.now() >= open.expiresAt) {
+      const executing = this.#llm.isExecuting(open.requestedAtOffset);
+      const validityFloorMs = executing ? 0 : MIN_LLM_ATTEMPT_VALIDITY_MS;
+      if (this.#host.now() + validityFloorMs >= open.expiresAt) {
         this.#llm.abandonExpired(open.requestedAtOffset);
         runInBackground(() =>
           appendUnlessLostIdempotencyRace(append, [
@@ -321,12 +328,21 @@ export class AgentTurnLoop implements AgentComponent {
             },
           ]),
         );
-      } else if (!this.#llm.isExecuting(open.requestedAtOffset)) {
+      } else if (!executing) {
         this.#llm.run(args, open);
       }
     }
   }
 }
+
+/**
+ * The floor under an attempt's transport deadline: adopting a request with
+ * less remaining validity than this settles it expired rather than running a
+ * doomed attempt (`deadlineMs = expiresAt - now` self-caps at the intent's
+ * validity — see agent-llm-request.ts). Small next to the default 10-minute
+ * horizon, so ordinary starts (debounce is seconds) never come near it.
+ */
+const MIN_LLM_ATTEMPT_VALIDITY_MS = 30_000;
 
 /** Exponential failure backoff reduced into the debounce window: doubling from
  * the policy's base, capped at its ceiling. */

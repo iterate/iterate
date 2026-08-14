@@ -296,6 +296,46 @@ describe("the crash-loop breaker", () => {
     });
   });
 
+  test("resetBackoff clears the crash-loop budget without a deploy and pulls the owed retry in", async () => {
+    // Prod 2026-08-11: three consecutive revival failures parked an agent at
+    // the 6-hour plateau, and the ONLY documented antidote was a deploy. The
+    // operator seam must reset the budget and retry promptly, in place.
+    const h = makeHarness({ revive: () => Promise.reject(new Error("storage reset")) });
+    h.build().track(deferred().promise);
+    for (let i = 0; i < 5; i += 1) {
+      const fresh = h.build();
+      h.clock.now = fresh.armedAtMs!;
+      await fresh.onAlarm();
+    }
+    expect(h.state.record?.revivals).toBe(5);
+    expect(h.state.record!.armedAtMs! - h.clock.now).toBe(REVIVAL_BACKOFF_PLATEAU_MS);
+
+    h.state.revive = () => Promise.resolve();
+    const fresh = h.build();
+    fresh.resetBackoff();
+    expect(h.state.record).toMatchObject({ revivals: 0 });
+    expect(h.state.record!.armedAtMs! - h.clock.now).toBe(KEEPALIVE_ALARM_LEAD_MS);
+
+    // The pulled-in fire revives on the fresh budget.
+    h.clock.now = fresh.armedAtMs!;
+    await expect(fresh.onAlarm()).resolves.toBe("revived");
+    expect(h.state.record?.revivals).toBe(1);
+  });
+
+  test("resetBackoff on a disarmed record only clears the stale budget", () => {
+    const h = makeHarness();
+    h.state.record = {
+      revivals: 4,
+      lastRevivalAt: T0 - 60_000,
+      version: "v1",
+      armedAtMs: null,
+    };
+    const keepalive = h.build();
+    keepalive.resetBackoff();
+    expect(h.state.record).toMatchObject({ revivals: 0, armedAtMs: null });
+    expect(h.state.armCalls).toEqual([]);
+  });
+
   test("a new worker version resets the budget (the antidote deployed)", async () => {
     const h = makeHarness({ revive: () => Promise.reject(new Error("revival failed")) });
     h.build().track(deferred().promise);

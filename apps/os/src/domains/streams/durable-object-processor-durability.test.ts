@@ -443,6 +443,37 @@ describe("durableObjectRecovery", () => {
     expect(fixture.readRecord()?.armedAtMs).not.toBeNull();
   });
 
+  it("resetBackoff clears a plateaued record without a deploy; the pulled-in fire revives on a fresh budget", async () => {
+    const journal = makeJournal();
+    const { storage } = makeStorage();
+    const fixture = makeRecoveryFixture({ journal, storage });
+    const kv = (storage as unknown as { kv: { put(key: string, value: unknown): void } }).kv;
+    // Three consecutive failed revivals already marked; the next retry sits
+    // at the 6-hour plateau (the prod 2026-08-11 wedge).
+    kv.put(processorKeepaliveKey(SLUG), {
+      revivals: 3,
+      lastRevivalAt: fixture.clock.now,
+      version: "v1",
+      armedAtMs: fixture.clock.now + 6 * 60 * 60_000,
+      streamId: TEST_STREAM_ID,
+    });
+
+    const recovery = fixture.build();
+    recovery.resetBackoff!();
+    const pulledInAt = fixture.clock.now + KEEPALIVE_ALARM_LEAD_MS;
+    expect(fixture.readRecord()).toMatchObject({
+      revivals: 0,
+      armedAtMs: pulledInAt,
+      streamId: TEST_STREAM_ID,
+    });
+    expect(fixture.alarmCalls.at(-1)).toBe(pulledInAt);
+
+    fixture.clock.now = pulledInAt + 1;
+    await recovery.handleAlarm();
+    expect(journal.rows.filter((row) => row.type === REVIVED)).toHaveLength(1);
+    expect(fixture.readRecord()?.revivals).toBe(1);
+  });
+
   it("an in-flight lifetime-A revival cannot append into a recreated lifetime B; B arms a fresh record", async () => {
     const journal = makeJournal();
     const { storage } = makeStorage();
