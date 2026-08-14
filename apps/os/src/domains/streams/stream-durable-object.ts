@@ -3093,9 +3093,13 @@ export class StreamDurableObject extends DurableObject<Env> {
    * cleanup: the registry stops reporting it and the connection (if any)
    * keeps today's non-idle-eligible session semantics. But when the socket
    * carried a DORMANT subscriber, its closing is the subscriber's real
-   * departure — the `"idle"` close deliberately was not one — so audit and
-   * presence consumers get the durable `"departed"` fact here. Idempotent
-   * per socket; best-effort like every connection-close observation.
+   * departure — the `"idle"` close deliberately was not one — so live
+   * presence consumers get the `"departed"` fact here. Presence facts are
+   * ephemeral (contract-forced at input parsing, which also rejects
+   * idempotency keys on them), so this append is keyless: a duplicate from
+   * a repeated close observation is harmless — runtime connection state,
+   * not paired open/close facts, is authoritative for what is open now.
+   * Best-effort like every connection-close observation.
    */
   async webSocketClose(ws: WebSocket): Promise<void> {
     // A closed Capability Provider Pager is its provider's real departure:
@@ -3112,7 +3116,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       this.#append({ authority: "core-event" }, [
         {
           type: "events.iterate.com/stream/connection-closed",
-          idempotencyKey: internalStreamId("stream-subscriber-pager-departed", departed.pagerId),
           payload: { connectionKey: departed.connectionKey, reason: "departed" },
         },
       ]);

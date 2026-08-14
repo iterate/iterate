@@ -84,6 +84,32 @@ test("connection presence facts classify ephemeral, so reconnect churn cannot gr
   expect(() => processor.validate({ event: closed, state, authority: "core-event" })).not.toThrow();
 });
 
+test("the dormant-subscriber departure fact appends keyless: presence facts are ephemeral and reject idempotency keys", () => {
+  const processor = new StreamCoreProcessor({ projectId: PROJECT_ID });
+  const state = coreState();
+
+  // The exact shape webSocketClose appends for a dormant subscriber's real
+  // departure. It MUST stay keyless: canonicalize forces the ephemeral flag,
+  // and a keyed ephemeral input is rejected — a key here would make every
+  // departure observation throw out of webSocketClose instead of landing.
+  const departure = processor.canonicalize({
+    type: "events.iterate.com/stream/connection-closed",
+    payload: { connectionKey: "subscriber", reason: "departed" },
+  });
+  expect(departure).toMatchObject({ ephemeral: true });
+  expect(() =>
+    processor.validate({ event: departure, state, authority: "core-event" }),
+  ).not.toThrow();
+
+  expect(() =>
+    processor.canonicalize({
+      type: "events.iterate.com/stream/connection-closed",
+      idempotencyKey: "iterate-internal/stream-subscriber-pager-departed/pager-1",
+      payload: { connectionKey: "subscriber", reason: "departed" },
+    }),
+  ).toThrow(/ephemeral events cannot have an idempotencyKey/);
+});
+
 test("every other stream control event still refuses to be ephemeral", () => {
   const processor = new StreamCoreProcessor({ projectId: PROJECT_ID });
   const state = coreState();
