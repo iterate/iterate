@@ -94,9 +94,11 @@ async function signUpToProject(
   // timeout: OIDC discovery + client registration have no loading UI for the spinner waiter
   const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
   await page.getByRole("button", { name: "Sign in" }).click();
+  // The popup arrives already middlewright-wrapped (popups auto-wrap since
+  // middlewright#33), so the spinner/hydration waiters cover it — no manual
+  // timeouts on popup actions.
   const popup = await popupPromise;
-  // timeout: the popup is outside the wrapped page, so no spinner waiter covers it
-  await popup.getByTestId("email-login-button").click({ timeout: 15_000 });
+  await popup.getByTestId("email-login-button").click();
   await signUpWithEmailOtp(popup, {
     // A constant prefix, NOT the slug: the signup display name embeds this,
     // and a slug-containing name makes getByText(projectSlug) ambiguous.
@@ -106,8 +108,7 @@ async function signUpToProject(
   });
   // Project selection auto-continues for test identities (project-access.tsx)
   // — consent is the next interactive page.
-  // timeout: same unwrapped popup — the spinner waiter cannot see it.
-  await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
+  await popup.getByRole("button", { name: "Allow access" }).click();
   // The app auto-opens the account's only project — no picker tap. (The old
   // picker tap was a strict-mode trap: the slug also appears in the note
   // composer's "→ /notes in <slug>" caption once the chat list is up.)
