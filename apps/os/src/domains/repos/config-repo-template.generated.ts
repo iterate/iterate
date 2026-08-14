@@ -705,6 +705,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { GithubAiLinter } from \"iterate/starter-apps/github-ai-linter\";\n" +
       "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { MediaApp } from \"iterate/starter-apps/media\";\n" +
+      "import { NotesApp } from \"iterate/starter-apps/notes\";\n" +
       "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
       "import { TodoApp } from \"iterate/starter-apps/todo\";\n" +
       "\n" +
@@ -739,6 +740,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  });\n" +
       "  #guestbookApp = GuestbookApp.create(this.env);\n" +
       "  #mediaApp = MediaApp.create(this.env);\n" +
+      "  #notesApp = NotesApp.create(this.env);\n" +
       "  #todoApp = TodoApp.create(this.env);\n" +
       "\n" +
       "  /** Agent-callable app helpers: `itx.worker.docs.link({ workspace, path })`\n" +
@@ -922,6 +924,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    await this.#aiLintApp.processEvent(event);\n" +
       "    await this.#guestbookApp.processEvent(event);\n" +
       "    await this.#mediaApp.processEvent(event);\n" +
+      "    await this.#notesApp.processEvent(event);\n" +
       "  }\n" +
       "\n" +
       "  async fetch(req: Request): Promise<Response> {\n" +

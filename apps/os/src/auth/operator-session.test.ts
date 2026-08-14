@@ -43,7 +43,7 @@ async function issue(
     headers: {
       authorization: options.authorization ?? `Bearer ${ADMIN_SECRET}`,
       "content-type": "application/json",
-      ...(options.origin ? { origin: options.origin } : {}),
+      ...(options.origin && { origin: options.origin }),
     },
     method: "POST",
   });

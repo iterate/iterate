@@ -906,7 +906,7 @@ function asGoogleToken(value: unknown) {
   }
   return {
     refreshToken: value.refreshToken,
-    ...(typeof value.accessToken === "string" ? { accessToken: value.accessToken } : {}),
+    ...(typeof value.accessToken === "string" && { accessToken: value.accessToken }),
   };
 }
 

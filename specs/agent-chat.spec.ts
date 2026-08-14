@@ -1,4 +1,3 @@
-import { spinnerWaiter } from "middlewright";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
@@ -44,34 +43,27 @@ test("agent replies to a browser chat message in the feed", async ({ helpers, pa
     "Use the chat tool. Do not only describe what you would do.",
   ].join("\n");
 
-  // LLM round-trips are genuinely slow, so the waits here are generous but
-  // bounded. Deviation from the suite's default middleware: the feed's live
-  // "Thinking…" state renders two spinner-matching elements at once, which
-  // trips spinner-waiter's strict-mode isVisible — use its documented
-  // per-call override to sit this spec out.
-  await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    const composer = page.getByPlaceholder("Message this agent");
-    // This is route readiness, not an LLM wait; bound it explicitly before
-    // interacting with the deliberately tight default action budget.
-    await composer.waitFor({ timeout: 30_000 });
-    await composer.fill(message);
-    await page.getByRole("button", { name: "Send message" }).click({ timeout: 30_000 });
+  // The spinner-waiter runs here like everywhere else: the feed's live
+  // "Thinking…" state is honest loading UI covering the LLM round trip, and
+  // middlewright's spinner check has been multi-element-safe since
+  // iterate/middlewright#3 (this spec used to sit the middleware out because
+  // two simultaneous spinner-matching elements tripped a strict-mode
+  // isVisible in older builds).
+  const composer = page.getByPlaceholder("Message this agent");
+  await composer.waitFor();
+  await composer.fill(message);
+  await page.getByRole("button", { name: "Send message" }).click();
 
-    await page.locator(userMessage).getByText(marker).waitFor({ timeout: 30_000 });
+  await page.locator(userMessage).getByText(marker).waitFor();
 
-    await agent.stream.waitForEvent({
-      afterOffset,
-      eventTypes: [WEB_MESSAGE_SENT],
-      timeoutMs: 120_000,
-      predicate: (event) => {
-        const text = (event.payload as { message?: unknown } | undefined)?.message;
-        return typeof text === "string" && text.toLowerCase().includes(marker);
-      },
-    });
-    await page
-      .locator(assistantMessage)
-      .filter({ hasText: marker })
-      .first()
-      .waitFor({ timeout: 30_000 });
+  await agent.stream.waitForEvent({
+    afterOffset,
+    eventTypes: [WEB_MESSAGE_SENT],
+    timeoutMs: 120_000,
+    predicate: (event) => {
+      const text = (event.payload as { message?: unknown } | undefined)?.message;
+      return typeof text === "string" && text.toLowerCase().includes(marker);
+    },
   });
+  await page.locator(assistantMessage).filter({ hasText: marker }).first().waitFor();
 });

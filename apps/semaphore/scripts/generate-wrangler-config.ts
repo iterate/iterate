@@ -54,6 +54,7 @@ export const REQUIRED_SECRETS = [
 export function envShapedVars(env: SemaphoreEnv) {
   return {
     APP_CONFIG_BASE_URL: env.baseUrl,
+    APP_CONFIG_WORKER_NAME: env.workerName,
     APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
   };
 }

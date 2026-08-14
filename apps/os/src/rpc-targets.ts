@@ -97,6 +97,7 @@ import type {
 } from "./domains/streams/core-processor-contract.ts";
 import type { EventFilter } from "./domains/streams/event-filter.ts";
 import { parseAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
+import type { AgentListItem } from "./domains/agents/agent-presence.ts";
 import {
   AGENT_COLLECTION_PATH,
   AGENT_COLLECTION_SUBSCRIPTION_NAME,
@@ -1203,7 +1204,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         ...(args.idempotencyKey === undefined ? {} : { idempotencyKey: args.idempotencyKey }),
         configuration: {
           ...(args.name === undefined ? {} : { name: args.name }),
-          ...(args.description?.trim() ? { description: args.description.trim() } : {}),
+          ...(args.description?.trim() && { description: args.description.trim() }),
           ...(args.filter === undefined ? {} : { filter: args.filter }),
           receiver: {
             action: "copy-to-stream",
@@ -2010,9 +2011,8 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   }
 
   get liveState(): LiveStateRpc<AgentCollectionProcessorState> {
-    return facetProcessorLiveStateRelay<AgentCollectionProcessorState>({
-      name: AgentCollectionProcessorContract.slug,
-      path: AGENT_COLLECTION_PATH,
+    return new AgentCollectionLiveStateRpcTarget({
+      auth: this.props.auth,
       projectId: this.props.projectId,
     });
   }
@@ -2065,12 +2065,68 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   }
 
   /** Known agents, read from the collection processor's reduced database. */
-  async list(): Promise<StreamListItem[]> {
+  async list(): Promise<AgentListItem[]> {
     const { state } = await this.processor.snapshot();
     return Object.values(state.agents).map((agent) => ({
       path: agent.path,
       createdAt: agent.timestamps.createdAt,
+      ...(agent.summary.title === undefined ? {} : { title: agent.summary.title }),
     }));
+  }
+}
+
+/**
+ * The agent catalog's live state, tolerant of the unborn collection. The
+ * `/agents` stream is born on the FIRST agent create(); before that, the
+ * facet relay's subscription lookup refuses with
+ * stream-subscription-unconfigured — which used to error every live watcher
+ * mounted on a fresh project (the dashboard sidebar, the mobile chat list)
+ * and leave it dead even after chats appeared. On exactly that refusal,
+ * append the same idempotency-keyed birth batch agent create() ensures
+ * (repeats are free) and retry once; every other error propagates untouched.
+ * Already-born projects never pay the extra append.
+ */
+class AgentCollectionLiveStateRpcTarget
+  extends IterateRpcRelay<"LiveStateRpc">
+  implements LiveStateRpc<AgentCollectionProcessorState>
+{
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+  }
+
+  #relay(): LiveStateRpc<AgentCollectionProcessorState> {
+    return facetProcessorLiveStateRelay<AgentCollectionProcessorState>({
+      name: AgentCollectionProcessorContract.slug,
+      path: AGENT_COLLECTION_PATH,
+      projectId: this.props.projectId,
+    });
+  }
+
+  async #bornThenRetry<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isUnconfiguredSubscriptionError(error)) throw error;
+      const collectionStream = new StreamRpcTarget({
+        auth: this.props.auth,
+        projectId: this.props.projectId,
+        path: AGENT_COLLECTION_PATH,
+      });
+      await collectionStream.append(
+        ...agentCollectionCreationEvents({ projectId: this.props.projectId }),
+      );
+      return await operation();
+    }
+  }
+
+  async get(): Promise<AgentCollectionProcessorState> {
+    return await this.#bornThenRetry(() => this.#relay().get());
+  }
+
+  async subscribe(
+    onUpdate: (update: LiveUpdate<AgentCollectionProcessorState>) => unknown,
+  ): Promise<LiveStateSubscriptionHandle> {
+    return await this.#bornThenRetry(() => this.#relay().subscribe(onUpdate));
   }
 }
 
@@ -2942,7 +2998,7 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
         path,
         egress: egressOrigins,
         ...(input.description === undefined ? {} : { description: input.description }),
-        ...(scopePath.startsWith("/agents/") ? { notify: scopePath } : {}),
+        ...(scopePath.startsWith("/agents/") && { notify: scopePath }),
       },
     });
     return { path, url };
@@ -2965,7 +3021,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   async __describe(): Promise<Description & SecretDescription> {
     const state = await this.durableObjectStub.describe();
     return describeNode({
-      instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
+      instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch(input, init?) — the standard fetch signature — to use it in an egress request via placeholder substitution.`,
       children: {
         create:
           "Create this secret with its initial egress, material, and refresh config; returns this same secret handle.",
@@ -2999,9 +3055,10 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     );
   }
 
-  /** Egress fetch with this secret's placeholders substituted server-side. */
-  fetch(request: Request): Promise<Response> {
-    return this.durableObjectStub.fetch(request);
+  /** Egress fetch with this secret's placeholders substituted server-side —
+   * the standard fetch signature: a Request, or a URL plus optional init. */
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    return this.durableObjectStub.fetch(new Request(input, init));
   }
 
   /** Admin-only recovery read of the current encrypted cell. */
@@ -4447,7 +4504,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       request: {
         ...input,
         attachments,
-        ...(thread !== null && input.replyTo === undefined ? { replyTo: thread.replyTo } : {}),
+        ...(thread !== null && input.replyTo === undefined && { replyTo: thread.replyTo }),
       },
     });
     const { from, messageId } = await this.#deliver({
@@ -6795,12 +6852,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       }).sourceText,
       children: {
         ...PROJECT_BUILTIN_BLIPS,
-        ...(scopePath.startsWith("/agents/")
-          ? {
-              agent: "THIS agent's control surface (present because this is an agent scope).",
-              chat: "THIS agent's web-chat door.",
-            }
-          : {}),
+        ...(scopePath.startsWith("/agents/") && {
+          agent: "THIS agent's control surface (present because this is an agent scope).",
+          chat: "THIS agent's web-chat door.",
+        }),
       },
       parent: scopePath === "/" ? "session.projects" : `the project-root itx (scope "/")`,
       // Dynamic mounts only: the builtins are already the `children` map, and
@@ -7674,7 +7729,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Project-attributed outbound fetch: fetch(request) egresses with the project's identity and secret substitution. Headers and URL paths interpolate getSecret(...); an application/json body substitutes exact string values when x-iterate-secret-template: json is set. intercept(handler) installs a live egress interceptor (last writer wins).",
+        "Project-attributed outbound fetch: fetch(input, init?) — the standard fetch signature — egresses with the project's identity and secret substitution. Headers and URL paths interpolate getSecret(...); an application/json body substitutes exact string values when x-iterate-secret-template: json is set. intercept(handler) installs a live egress interceptor (last writer wins).",
       children: {
         fetch: "Outbound fetch through project egress.",
         intercept: "Install an egress interceptor; returns a release handle.",
@@ -7687,12 +7742,13 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
     super();
   }
 
-  /** Outbound fetch with project identity and secret substitution. Set
+  /** Outbound fetch with project identity and secret substitution — the
+   * standard fetch signature: a Request, or a URL plus optional init. Set
    * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
    * values in an `application/json` (or `+json`) body. */
-  fetch(request: Request): Promise<EgressResponse> {
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<EgressResponse> {
     return projectStub(env.PROJECT, this.props.projectId).fetch(
-      withStreamContext(request, this.props.streamContext),
+      withStreamContext(new Request(input, init), this.props.streamContext),
     );
   }
 
@@ -8909,9 +8965,9 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
       mcpUrl: input.url,
       path,
       redirectUri: `${baseUrl.replace(/\/$/, "")}/api/mcp-oauth/callback`,
-      ...(input.scope ? { scope: input.scope } : {}),
+      ...(input.scope && { scope: input.scope }),
       // An agent scope gets messaged when the user finishes signing in.
-      ...(this.props.scopePath.startsWith("/agents/") ? { notify: this.props.scopePath } : {}),
+      ...(this.props.scopePath.startsWith("/agents/") && { notify: this.props.scopePath }),
       projectId: this.props.projectId,
       encryptionKey: env.SECRET_ENCRYPTION_KEY,
       fetchFn: fetchLikeFromFetcher(this.props.egress),
@@ -8928,7 +8984,7 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
   get exa(): McpClientRpc {
     const hasPlatformKey = parseConfig(env).integrations.exa !== undefined;
     return McpClientRpcTarget.createLazyClient(
-      { url: EXA_MCP_URL, ...(hasPlatformKey ? { headers: EXA_PLATFORM_KEY_HEADER } : {}) },
+      { url: EXA_MCP_URL, ...(hasPlatformKey && { headers: EXA_PLATFORM_KEY_HEADER }) },
       {
         description: {
           instructions:

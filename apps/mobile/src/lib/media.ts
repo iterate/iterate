@@ -1,45 +1,51 @@
 // Media capture pipeline: pure logic only (no Expo imports), so vitest
 // covers it in root CI. The screen (app/project/[projectId]/media.tsx) wires
 // this to the picker and itx. Flow per item: bytes to itx.files at a
-// content-hash path, then ONE capabilityHost.runScript call server-side does
-// files.bytes → ai.toMarkdown (vision model describes the image) → one
-// vision-model call over the actual pixels returning {transcript, tags} →
-// append a media/captured event, idempotency-keyed by the hash so retries
-// and re-picks dedup. "Re-analyze" runs the same pipeline again and appends
-// a media/processed event; the list derivation takes the latest processing
-// per item, so prompt/model improvements apply retroactively. Search is
+// content-hash path, then ONE cheap durable stream append — a
+// media/uploaded event carrying only metadata. Analysis happens SERVER-SIDE:
+// the MediaApp processor (iterate/starter-apps/media) reacts to uploaded
+// events, runs toMarkdown + a vision model, and settles with a
+// media/processed event the list derivation overlays. The phone never holds
+// a socket open for analysis, so locking it mid-pass loses nothing, and an
+// AI failure never loses the item — the row exists from the uploaded event
+// and shows the failure. "Re-analyze" appends media/reanalyze-requested and
+// the same server pipeline overlays the newest result. Search is
 // client-side over description + transcript + tags.
 
 import type { StreamEvent } from "iterate/sdk/itx/react";
 
 export const MEDIA_STREAM_PATH = "/media";
+/** LEGACY birth event (phone-scripted capture+analysis in one) — still
+ * rendered, never appended anymore. */
 export const MEDIA_CAPTURED_EVENT_TYPE = "events.iterate.com/media/captured";
+export const MEDIA_UPLOADED_EVENT_TYPE = "events.iterate.com/media/uploaded";
 export const MEDIA_PROCESSED_EVENT_TYPE = "events.iterate.com/media/processed";
+export const MEDIA_REANALYZE_REQUESTED_EVENT_TYPE = "events.iterate.com/media/reanalyze-requested";
 export const MEDIA_WIPED_EVENT_TYPE = "events.iterate.com/media/wiped";
 export const MEDIA_EVENT_TYPES = [
   MEDIA_CAPTURED_EVENT_TYPE,
+  MEDIA_UPLOADED_EVENT_TYPE,
   MEDIA_PROCESSED_EVENT_TYPE,
+  MEDIA_REANALYZE_REQUESTED_EVENT_TYPE,
   MEDIA_WIPED_EVENT_TYPE,
 ];
-/** Sees the pixels: transcribes text verbatim and picks tags. */
-export const MEDIA_VISION_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
 
 /**
- * Starter taxonomy — expect churn. Multi-tag with overlap allowed; the model
- * may also coin up to two novel kebab-case tags, and returning NO tags is an
- * acceptable answer (deliberately conservative — early dogfood tagged
- * everything `bug-report` on wild guesses).
+ * Display order for tag filter chips. The analysis-owning taxonomy (tags +
+ * model hints + prompt) lives server-side in
+ * iterate/starter-apps/media/analysis.ts (MEDIA_TAG_TAXONOMY) — kept in sync
+ * by hand, same convention as the search semantics.
  */
-export const MEDIA_TAGS: { tag: string; hint: string }[] = [
-  { tag: "screenshot", hint: "a captured device screen: app UI, web page, status bar visible" },
-  { tag: "photo", hint: "a camera photograph of the physical world" },
-  { tag: "transient", hint: "one-off info with no lasting value: OTP codes, confirmations" },
-  { tag: "clipping", hint: "a saved post, article, meme, or quote worth keeping" },
-  { tag: "logistics", hint: "tickets, bookings, schedules, travel details, QR codes" },
-  { tag: "receipt", hint: "proof of purchase, invoices, order confirmations" },
-  { tag: "conversation", hint: "chat threads, DMs, emails, comment sections" },
-  { tag: "code", hint: "code, terminals, dev tools, technical docs" },
-  { tag: "reference", hint: "info to keep long-term: settings, lists, instructions" },
+export const MEDIA_TAGS = [
+  "screenshot",
+  "photo",
+  "transient",
+  "clipping",
+  "logistics",
+  "receipt",
+  "conversation",
+  "code",
+  "reference",
 ];
 
 export type MediaProcessingResult = {
@@ -55,7 +61,8 @@ export type MediaProcessingResult = {
   processedBy: string;
 };
 
-export type MediaCapturedPayload = MediaProcessingResult & {
+/** The cheap durable birth fact: file metadata only, no analysis. */
+export type MediaUploadedPayload = {
   stableKey: string;
   /** itx.files path holding the bytes. */
   path: string;
@@ -63,8 +70,8 @@ export type MediaCapturedPayload = MediaProcessingResult & {
   contentType: string;
   width: number;
   height: number;
-  /** Where the item entered: hand-picked or the library sync engine. */
-  source: "picker" | "library-sync";
+  /** Where the item entered: hand-picked, the library sync engine, or a note attachment. */
+  source: "picker" | "library-sync" | "note";
   /** Asset creation time (ISO) when the source knows it; null from the
    * picker, which strips asset metadata on recompression. */
   capturedAt: string | null;
@@ -72,7 +79,18 @@ export type MediaCapturedPayload = MediaProcessingResult & {
   isScreenshot: boolean | null;
 };
 
-export type MediaProcessedPayload = MediaProcessingResult & { stableKey: string };
+export type MediaCapturedPayload = MediaProcessingResult & MediaUploadedPayload;
+
+export type MediaProcessedPayload = MediaProcessingResult & {
+  stableKey: string;
+  /** Terminal analysis failure, or null/absent on success (absent on legacy
+   * phone-scripted re-analysis events). */
+  error?: string | null;
+  /** The uploaded/reanalyze event this settles (absent on legacy appends).
+   * Lets the derivation ignore a LATE settlement answering a superseded
+   * request — e.g. a pre-wipe attempt racing Delete-all + re-upload. */
+  requestOffset?: number | null;
+};
 
 /**
  * The picker recompresses to JPEG/PNG (quality 0.8) but iOS often keeps the
@@ -102,7 +120,11 @@ export function mediaFilePath(stableKey: string, filename: string): string {
 /**
  * Capture identity = content hash + wipe generation. Without the
  * generation, re-capturing a screenshot after Delete-all would dedup
- * against the pre-wipe event and silently never come back.
+ * against the pre-wipe event and silently never come back. The key spelling
+ * is shared with the legacy media/captured events ON PURPOSE: an item
+ * captured before the uploaded-event split can never re-enter as a
+ * duplicate (the phone's getEvent check hits, and the stream itself rejects
+ * a same-key append).
  */
 export function mediaIdempotencyKey(stableKey: string, wipeGeneration: number): string {
   return wipeGeneration === 0
@@ -134,170 +156,62 @@ export function extendedSinceIso(
   return new Date(Math.min(chosen, existing)).toISOString();
 }
 
-export type ProcessScriptInput = {
+/**
+ * The durable birth append for one captured item — the ENTIRE remote half of
+ * capture now that analysis is server-side. Appended right after files.put;
+ * idempotency-keyed by content hash + wipe generation.
+ */
+export function buildUploadedEvent(input: {
   stableKey: string;
-  /** From readWipeGeneration — capture dedup identity; reprocess ignores it. */
   wipeGeneration: number;
   filename: string;
   contentType: string;
   width: number;
   height: number;
-  source: "picker" | "library-sync";
+  source: "picker" | "library-sync" | "note";
   capturedAt: string | null;
   isScreenshot: boolean | null;
-  /**
-   * "capture" appends the media/captured birth event (idempotent per
-   * stableKey — a re-run returns the existing event). A reprocess appends a
-   * media/processed event instead; the nonce keys each re-run separately.
-   */
-  mode: "capture" | { reprocessNonce: string };
-};
-
-/**
- * The server-side half, as an `async (itx) => {...}` script string for
- * capabilityHost.runScript. Input rides in as one JSON literal — never
- * interpolate fields individually (filenames are attacker-ish data).
- * Returns the appended (or pre-existing) event.
- */
-export function buildProcessScript(input: ProcessScriptInput): string {
-  const scriptInput = {
-    stableKey: input.stableKey,
-    filename: input.filename,
-    contentType: input.contentType,
-    width: input.width,
-    height: input.height,
-    source: input.source,
-    capturedAt: input.capturedAt,
-    isScreenshot: input.isScreenshot,
-    path: mediaFilePath(input.stableKey, input.filename),
-    capture: input.mode === "capture",
-    idempotencyKey:
-      input.mode === "capture"
-        ? mediaIdempotencyKey(input.stableKey, input.wipeGeneration)
-        : `media-processed-${input.stableKey}-${input.mode.reprocessNonce}`,
-    eventType: input.mode === "capture" ? MEDIA_CAPTURED_EVENT_TYPE : MEDIA_PROCESSED_EVENT_TYPE,
-    streamPath: MEDIA_STREAM_PATH,
-    visionModel: MEDIA_VISION_MODEL,
-    visionPrompt: visionPrompt(),
-  };
-  return `async (itx) => {
-  const input = ${asJsLiteral(scriptInput)};
-  const stream = itx.streams.get(input.streamPath);
-  if (input.capture) {
-    const existing = await stream.getEvent({ idempotencyKey: input.idempotencyKey });
-    if (existing) return existing;
-  }
-
-  // blob takes raw bytes (a Blob cannot cross the sandbox RPC boundary);
-  // the extension in \`name\` picks the converter.
-  const bytes = await itx.files.get(input.path).bytes();
-  const described = await itx.ai.toMarkdown({ name: input.filename, blob: bytes });
-  if (described.format === "error") {
-    throw new Error("toMarkdown failed for " + input.filename + ": " + described.error);
-  }
-  const markdown = (described.data || "").trim();
-
-  // Workers AI rejects oversized request bodies (error 3006) — long
-  // full-page screenshots hit it. Downscale for the AI call only (the
-  // stored original is untouched); if the Images binding can't (e.g. some
-  // local dev setups), fall through with the original and let the model
-  // call answer.
-  let visionBytes = bytes;
-  let visionType = input.contentType;
-  if (bytes.length > 1_000_000) {
-    try {
-      const resized = await itx.integrations.cf.images.transformBytes({
-        image: bytes,
-        transforms: [{ width: 1280 }],
-        output: { format: "image/jpeg", quality: 80 },
-      });
-      visionBytes = resized.bytes;
-      visionType = resized.contentType;
-    } catch {}
-  }
-
-  // One vision call over the actual pixels: title + verbatim transcript +
-  // tags in a single JSON answer. Parse defensively — an unparseable answer
-  // degrades to empty title/transcript and ["untagged"] so failures stay
-  // visible.
-  let binary = "";
-  for (let i = 0; i < visionBytes.length; i += 32768) {
-    binary += String.fromCharCode(...visionBytes.subarray(i, i + 32768));
-  }
-  const answer = await itx.ai.run(input.visionModel, {
-    messages: [{
-      role: "user",
-      content: [
-        { type: "text", text: input.visionPrompt },
-        { type: "image_url", image_url: { url: "data:" + visionType + ";base64," + btoa(binary) } },
-      ],
-    }],
-    max_tokens: 1024,
-  });
-  const text = typeof answer?.response === "string"
-    ? answer.response
-    : typeof answer?.choices?.[0]?.message?.content === "string"
-      ? answer.choices[0].message.content
-      : "";
-  let title = "";
-  let transcript = "";
-  let tags = ["untagged"];
-  const match = text.match(/\\{[\\s\\S]*\\}/);
-  if (match) {
-    try {
-      const parsed = JSON.parse(match[0]);
-      if (typeof parsed.title === "string") title = parsed.title.trim().slice(0, 120);
-      if (typeof parsed.transcript === "string") transcript = parsed.transcript.trim();
-      if (Array.isArray(parsed.tags)) {
-        tags = [...new Set(
-          parsed.tags
-            .filter((tag) => typeof tag === "string")
-            .map((tag) => tag.toLowerCase().trim().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, ""))
-            .filter((tag) => tag.length > 0 && tag.length <= 30),
-        )].slice(0, 6);
-      }
-    } catch {}
-  }
-
-  const [event] = await stream.append({
-    type: input.eventType,
-    idempotencyKey: input.idempotencyKey,
+}): { type: string; idempotencyKey: string; payload: MediaUploadedPayload } {
+  return {
+    type: MEDIA_UPLOADED_EVENT_TYPE,
+    idempotencyKey: mediaIdempotencyKey(input.stableKey, input.wipeGeneration),
     payload: {
       stableKey: input.stableKey,
-      title,
-      markdown,
-      transcript,
-      tags,
-      processedBy: input.visionModel,
-      ...(input.capture
-        ? {
-            path: input.path,
-            filename: input.filename,
-            contentType: input.contentType,
-            width: input.width,
-            height: input.height,
-            source: input.source,
-            capturedAt: input.capturedAt,
-            isScreenshot: input.isScreenshot,
-          }
-        : {}),
+      path: mediaFilePath(input.stableKey, input.filename),
+      filename: input.filename,
+      contentType: input.contentType,
+      width: input.width,
+      height: input.height,
+      source: input.source,
+      capturedAt: input.capturedAt,
+      isScreenshot: input.isScreenshot,
     },
-  });
-  return event;
-}`;
+  };
+}
+
+/** Ask the server to re-run analysis; the nonce keys each request separately. */
+export function buildReanalyzeEvent(
+  stableKey: string,
+  nonce: string,
+): { type: string; idempotencyKey: string; payload: { stableKey: string } } {
+  return {
+    type: MEDIA_REANALYZE_REQUESTED_EVENT_TYPE,
+    idempotencyKey: `media-reanalyze-${stableKey}-${nonce}`,
+    payload: { stableKey },
+  };
 }
 
 /**
  * Delete-everything, as a product event on the append-only stream: the
- * script deletes every stored file it can find via the captured events,
- * then appends media/wiped — the tombstone every derivation (phone list,
- * MediaApp fold) resets on. Idempotency-keyed per invocation, not content:
- * each deliberate wipe is its own fact.
+ * script deletes every stored file it can find via the birth events
+ * (uploaded + legacy captured), then appends media/wiped — the tombstone
+ * every derivation (phone list, MediaApp fold) resets on. Idempotency-keyed
+ * per invocation, not content: each deliberate wipe is its own fact.
  */
 export function buildWipeScript(nonce: string): string {
   const scriptInput = {
     streamPath: MEDIA_STREAM_PATH,
-    capturedType: MEDIA_CAPTURED_EVENT_TYPE,
+    birthTypes: [MEDIA_CAPTURED_EVENT_TYPE, MEDIA_UPLOADED_EVENT_TYPE],
     wipedType: MEDIA_WIPED_EVENT_TYPE,
     idempotencyKey: `media-wiped-${nonce}`,
   };
@@ -307,7 +221,7 @@ export function buildWipeScript(nonce: string): string {
   const events = [];
   let cursor = 0;
   while (true) {
-    const page = await stream.getEvents({ afterOffset: cursor, eventTypes: [input.capturedType] });
+    const page = await stream.getEvents({ afterOffset: cursor, eventTypes: input.birthTypes });
     if (page.length === 0) break;
     events.push(...page);
     cursor = page[page.length - 1].offset;
@@ -329,19 +243,6 @@ export function buildWipeScript(nonce: string): string {
 }`;
 }
 
-function visionPrompt(): string {
-  const lines = MEDIA_TAGS.map(({ tag, hint }) => `- "${tag}": ${hint}`);
-  return [
-    'Reply with ONLY a JSON object: {"title": string, "transcript": string, "tags": string[]}.',
-    "title: ONE line saying what the image IS, specific not generic — 'Trenitalia ticket Rome→Florence 09:45', never 'Screenshot' or 'Image Description'.",
-    "transcript: ALL text visible in the image, verbatim, reading order. Empty string if there is none.",
-    "tags: pick from the list below. Include a tag ONLY when the image clearly shows it — no guesses.",
-    "Fewer tags is better; an empty array is a fine answer. Overlap is allowed.",
-    ...lines,
-    "You may add at most 2 extra kebab-case tags if something important has no tag above.",
-  ].join("\n");
-}
-
 /**
  * JSON.stringify is almost a JS literal — U+2028/U+2029 are the exception
  * (legal in JSON strings, line terminators in source). Escape them so a
@@ -351,42 +252,242 @@ function asJsLiteral(value: unknown): string {
   return JSON.stringify(value).replaceAll("\u2028", "\\u2028").replaceAll("\u2029", "\\u2029");
 }
 
+/** Where an item is in its analysis lifecycle — drives the row badge. */
+export type MediaAnalysisState = {
+  status: "pending" | "failed" | "done";
+  /** The terminal failure message when status is "failed". */
+  error: string | null;
+};
+
 export type MediaListItem = {
-  /** The captured event's offset — the item's identity in the list. */
+  /** The birth event's offset (captured or uploaded) — the item's identity
+   * in the list. */
   offset: number;
   capturedAt: string;
   payload: MediaCapturedPayload;
+  analysis: MediaAnalysisState;
 };
 
 /**
- * Captured events → list items, newest first, with the latest media/processed
- * result (by offset) overlaid per stableKey — so a re-analysis updates what
- * you see without rewriting history.
+ * Birth events (uploaded + legacy captured, deduped per stableKey) → list
+ * items, newest first, with the latest successful media/processed result
+ * (by offset) overlaid — so a re-analysis updates what you see without
+ * rewriting history. A failed settlement keeps the previous fields and
+ * surfaces its error; an open request (uploaded or reanalyze newer than the
+ * latest settlement) shows as "pending".
  */
 export function deriveMediaList(events: StreamEvent[]): MediaListItem[] {
   // A wiped tombstone resets everything before it.
-  const lastWipeIndex = events.findLastIndex((event) => event.type === MEDIA_WIPED_EVENT_TYPE);
-  const liveEvents = lastWipeIndex === -1 ? events : events.slice(lastWipeIndex + 1);
-  const latestProcessed = new Map<string, MediaProcessedPayload>();
+  const wipedThroughOffset = lastWipeOffset(events);
+  const liveEvents = events.filter((event) => event.offset > wipedThroughOffset);
+  const appliedSettlement = new Map<
+    string,
+    { payload: MediaProcessedPayload; offset: number; requestOffset: number | null; floor: number }
+  >();
+  const latestSuccessful = new Map<string, MediaProcessedPayload>();
+  const latestRequest = new Map<string, number>();
   for (const event of liveEvents) {
     // Events arrive offset-ascending, so later wins by insertion order.
     if (event.type === MEDIA_PROCESSED_EVENT_TYPE) {
       const payload = event.payload as MediaProcessedPayload;
-      latestProcessed.set(payload.stableKey, payload);
+      // Explicit undefined check — `||` would swallow a legitimate 0.
+      const requestOffset = payload.requestOffset === undefined ? null : payload.requestOffset;
+      const prior = appliedSettlement.get(payload.stableKey);
+      // Settlements apply MONOTONICALLY by requestOffset (lockstep with the
+      // server fold's guard): one answering an older request than an
+      // already-applied settlement is ignored outright, so commit order can
+      // never un-settle a row or resurrect stale content. Legacy
+      // settlements carry no requestOffset — they always apply and never
+      // advance the floor.
+      if (requestOffset !== null && requestOffset < (prior?.floor || 0)) continue;
+      appliedSettlement.set(payload.stableKey, {
+        payload,
+        offset: event.offset,
+        requestOffset,
+        floor: requestOffset === null ? prior?.floor || 0 : requestOffset,
+      });
+      if (!payload.error) latestSuccessful.set(payload.stableKey, payload);
+    }
+    if (event.type === MEDIA_REANALYZE_REQUESTED_EVENT_TYPE) {
+      const payload = event.payload as { stableKey: string };
+      latestRequest.set(payload.stableKey, event.offset);
     }
   }
-  return liveEvents
-    .filter((event) => event.type === MEDIA_CAPTURED_EVENT_TYPE)
-    .map((event) => {
-      const captured = event.payload as MediaCapturedPayload;
-      const processed = latestProcessed.get(captured.stableKey);
-      return {
-        offset: event.offset,
-        capturedAt: event.createdAt,
-        payload: processed ? { ...captured, ...processed } : captured,
-      };
-    })
-    .sort((a, b) => b.offset - a.offset);
+  const seen = new Set<string>();
+  const items: MediaListItem[] = [];
+  for (const event of liveEvents) {
+    const isCaptured = event.type === MEDIA_CAPTURED_EVENT_TYPE;
+    if (!isCaptured && event.type !== MEDIA_UPLOADED_EVENT_TYPE) continue;
+    const born = event.payload as MediaCapturedPayload;
+    // One row per stableKey even if both a legacy captured and an uploaded
+    // event exist — the first birth wins.
+    if (seen.has(born.stableKey)) continue;
+    seen.add(born.stableKey);
+    // Uploaded births carry no processing fields yet.
+    const base: MediaCapturedPayload = isCaptured
+      ? born
+      : { ...born, title: "", markdown: "", transcript: "", tags: [], processedBy: "" };
+    const processed = appliedSettlement.get(born.stableKey);
+    // Content comes from the latest SUCCESSFUL processing — a terminal
+    // failure contributes only its failed state below, never a blank
+    // overlay wiping fields an earlier success produced (the server fold
+    // keeps them the same way).
+    const success = latestSuccessful.get(born.stableKey);
+    const payload: MediaCapturedPayload = success
+      ? {
+          ...base,
+          title: success.title,
+          markdown: success.markdown,
+          transcript: success.transcript,
+          tags: success.tags,
+          processedBy: success.processedBy,
+        }
+      : base;
+    // An uploaded birth IS an analysis request; reanalyze events are later
+    // ones. Settled = a processed event newer than the latest request.
+    const requestOffset = Math.max(
+      isCaptured ? 0 : event.offset,
+      latestRequest.get(born.stableKey) || 0,
+    );
+    // A settlement only counts when it answers the CURRENT request: a late
+    // one for a superseded requestOffset (pre-wipe attempt racing a wipe +
+    // re-upload) must not mark the fresh generation settled or failed — the
+    // server fold applies the same stale-result guard. Legacy settlements
+    // carry no requestOffset and settle whatever was asked.
+    const settles =
+      processed !== undefined &&
+      (processed.requestOffset === null || processed.requestOffset >= requestOffset);
+    const settledOffset = settles ? processed.offset : 0;
+    const analysis: MediaAnalysisState =
+      requestOffset > settledOffset
+        ? { status: "pending", error: null }
+        : processed !== undefined && processed.payload.error
+          ? { status: "failed", error: processed.payload.error }
+          : { status: "done", error: null };
+    items.push({ offset: event.offset, capturedAt: event.createdAt, payload, analysis });
+  }
+  // Newest first by the ORIGINAL image's date, not append order: parallel
+  // uploads commit in arbitrary order, and offset-sorting made rows re-sort
+  // under the user's thumb as each landed. capturedAt is the asset's own
+  // creation time when the source knew it (library-sync always does); the
+  // picker strips it, so those fall back to the event's stream time — which
+  // is "just now" for a fresh pick. Offset breaks exact ties
+  // deterministically.
+  return items.sort((a, b) => captureInstant(b) - captureInstant(a) || b.offset - a.offset);
+}
+
+/** The row's sort instant (ms). Unparseable dates collapse to 0 so the
+ * offset tiebreak decides — never NaN into the comparator. */
+function captureInstant(item: MediaListItem): number {
+  const instant = new Date(item.payload.capturedAt || item.capturedAt).getTime();
+  return Number.isNaN(instant) ? 0 : instant;
+}
+
+/**
+ * A not-yet-derived capture in flight on this device: the local preview the
+ * screen shows while bytes upload (or after a terminal skip/error). Lives in
+ * component state; deriveMediaFeed interleaves these with the real rows.
+ */
+export type MediaPendingCard = {
+  previewUri: string;
+  filename: string;
+  /** Content hash once computed; null while "waiting" (pre-hash). Ties the
+   * card to the row it will become. */
+  stableKey: string | null;
+  /** The uploaded event's offset once the append succeeded ("done"); null
+   * before. A wipe tombstone at or past it supersedes the card — its row is
+   * gone for good, so the card must not ghost back. */
+  uploadedOffset: number | null;
+  /** The asset's own creation time when the source knows it (library sync);
+   * null from the picker. The card sorts by it so it sits where its row
+   * will land. */
+  capturedAt: string | null;
+  /** waiting → uploading are in-flight (retryable work this device still
+   * owes); "done" means the append committed and the card only bridges the
+   * moment until its row arrives over the live stream. */
+  status: "waiting" | "uploading" | "done" | "skipped" | "error";
+  error?: string;
+};
+
+/** The last wiped tombstone's offset in an already-read event list (0 when
+ * never wiped) — the client-side twin of readWipeGeneration's server read. */
+export function lastWipeOffset(events: StreamEvent[]): number {
+  return events.findLast((event) => event.type === MEDIA_WIPED_EVENT_TYPE)?.offset || 0;
+}
+
+export type MediaFeedEntry =
+  | { kind: "row"; key: string; item: MediaListItem }
+  | { kind: "pending"; key: string; card: MediaPendingCard };
+
+/**
+ * ONE list for the screen: pending cards interleaved with real rows, all
+ * sorted by the same original-image-date key — two separate zones made every
+ * upload completion jump the item across the zone boundary and shift both.
+ *
+ * The no-gap rule: an in-flight or done card renders only while NO derived
+ * row exists for its stableKey (checked against ALL rows, not the filtered
+ * view) — the row takes over the card's list position AND its React key, so
+ * resolution is an in-place morph, never a vanish-reappear. A "done" card is
+ * additionally superseded by a wipe tombstone at/past its append offset:
+ * its row is gone for good and must not ghost back as an eternal spinner.
+ * Terminal skipped/error cards are exempt from suppression: a row for the
+ * same content can legitimately coexist (skipped MEANS already captured),
+ * so they keep their own key and stay visible until the next capture or
+ * pull-to-refresh clears them.
+ */
+export function deriveMediaFeed(input: {
+  /** Rows to display (post-search-filter). */
+  rows: MediaListItem[];
+  /** EVERY derived row (unfiltered) — the card-suppression authority. */
+  allRows: MediaListItem[];
+  cards: MediaPendingCard[];
+  /** From {@link lastWipeOffset} over the same events the rows derive from. */
+  wipedThroughOffset: number;
+}): MediaFeedEntry[] {
+  const resolvedKeys = new Set(input.allRows.map((row) => row.payload.stableKey));
+  const decorated: { entry: MediaFeedEntry; instant: number; tiebreak: number }[] = [];
+  for (const item of input.rows) {
+    decorated.push({
+      entry: { kind: "row", key: item.payload.stableKey, item },
+      instant: captureInstant(item),
+      tiebreak: item.offset,
+    });
+  }
+  const cardKeys = new Set<string>();
+  for (const card of input.cards) {
+    const awaitingRow =
+      card.status === "waiting" || card.status === "uploading" || card.status === "done";
+    if (awaitingRow && card.stableKey !== null && resolvedKeys.has(card.stableKey)) continue;
+    if (
+      card.status === "done" &&
+      card.uploadedOffset !== null &&
+      card.uploadedOffset <= input.wipedThroughOffset
+    ) {
+      // The wipe erased this card's committed event along with every row —
+      // nothing will ever arrive for it.
+      continue;
+    }
+    const parsed = card.capturedAt === null ? NaN : Date.parse(card.capturedAt);
+    // The stableKey key is what carries the mounted component across the
+    // card→row morph; pre-hash and terminal cards key on their preview, as
+    // does a duplicate-hash straggler (two concurrent captures of identical
+    // bytes must not collide on one FlatList key).
+    const key =
+      awaitingRow && card.stableKey !== null && !cardKeys.has(card.stableKey)
+        ? card.stableKey
+        : `pending:${card.previewUri}`;
+    cardKeys.add(key);
+    decorated.push({
+      entry: { kind: "pending", key, card },
+      // A dateless (picker) card is "just captured now", i.e. newest.
+      instant: Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed,
+      // On exact date ties an in-flight card outranks committed rows.
+      tiebreak: Number.MAX_SAFE_INTEGER,
+    });
+  }
+  return decorated
+    .sort((a, b) => b.instant - a.instant || b.tiebreak - a.tiebreak)
+    .map(({ entry }) => entry);
 }
 
 /**
@@ -434,9 +535,9 @@ export async function readAllMediaEvents(stream: {
   }
 }
 
-/** Run `work` over `items` with at most `limit` in flight — the capture
- * pipeline is AI-call-bound (~5-15s per item), so strict sequencing made a
- * 20-item batch crawl. Preserves item order in the result array. */
+/** Run `work` over `items` with at most `limit` in flight — a sync pass
+ * uploads many items and the reads/uploads overlap nicely. Preserves item
+ * order in the result array. */
 export async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,

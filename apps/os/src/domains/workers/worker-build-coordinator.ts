@@ -144,7 +144,7 @@ export class WorkerBuildCoordinator {
   ) {
     this.#observe({
       buildKey: flight.buildKey,
-      ...(kind === "settled" ? { durationMs: this.#now() - flight.startedAt } : {}),
+      ...(kind === "settled" && { durationMs: this.#now() - flight.startedAt }),
       kind,
       ...(outcome === undefined ? {} : { outcome }),
       ...(sizes === undefined ? {} : { sizes }),

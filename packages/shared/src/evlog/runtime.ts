@@ -25,12 +25,10 @@ export function createNitroEvlogModuleOptions(options: { context: AppLoggingCont
       appName: options.context.manifest.packageName,
       version: options.context.manifest.version,
     },
-    ...(options.context.config.logs.stdoutFormat === "pretty"
-      ? {
-          pretty: false,
-          stringify: false,
-        }
-      : {}),
+    ...(options.context.config.logs.stdoutFormat === "pretty" && {
+      pretty: false,
+      stringify: false,
+    }),
   };
 }
 

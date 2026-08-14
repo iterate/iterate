@@ -2,39 +2,48 @@
 // they show. "Add" picks from the photo library (PHPicker — no permission,
 // no native module, ships OTA). Per image: sha256 the payload, skip if the
 // /media stream already has that idempotency key, upload bytes to itx.files,
-// then one capabilityHost.runScript call does
-// toMarkdown → vision transcript+tags → append server-side (lib/media.ts
-// builds the script and owns the taxonomy). Picked items appear immediately
-// as pending cards (three at a time in flight) and resolve into real rows as
-// their events land on the live stream. Tap a thumbnail for full screen;
-// "Re-analyze" reruns the pipeline and overlays the newest result.
+// then ONE cheap durable media/uploaded append — analysis happens
+// server-side (the MediaApp processor reacts to the event and overlays a
+// media/processed settlement; lib/media.ts owns the client vocabulary).
+// Picked items appear immediately as pending cards in ONE list shared with
+// the real rows (deriveMediaFeed — everything sorts by the original image's
+// date, and a card morphs into its row in place when the uploaded event
+// lands), then show "Analyzing…" until the settlement arrives — locking the
+// phone mid-pass loses nothing. Tap a thumbnail for full screen;
+// "Re-analyze" appends a reanalyze request the same server pipeline answers.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Crypto from "expo-crypto";
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
   Image,
   Modal,
   Pressable,
+  RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
+import { unsupportedImageReason } from "../../../lib/image-format.ts";
 import { Markdown } from "../../../components/markdown.tsx";
 import { MediaViewer } from "../../../components/media-viewer.tsx";
 import { getProjectItx } from "../../../lib/itx.ts";
 import {
-  buildProcessScript,
+  buildReanalyzeEvent,
+  buildUploadedEvent,
   buildWipeScript,
   extendedSinceIso,
   readWipeGeneration,
+  deriveMediaFeed,
   deriveMediaList,
   filterMedia,
+  lastWipeOffset,
   mapWithConcurrency,
   MEDIA_EVENT_TYPES,
   MEDIA_STREAM_PATH,
@@ -43,6 +52,7 @@ import {
   mediaIdempotencyKey,
   readAllMediaEvents,
   type MediaListItem,
+  type MediaPendingCard,
 } from "../../../lib/media.ts";
 import { runSyncPass, type SyncPassResult } from "../../../lib/media-sync.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
@@ -55,13 +65,6 @@ import {
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
 
-type PendingItem = {
-  previewUri: string;
-  filename: string;
-  status: "waiting" | "analyzing" | "skipped" | "error";
-  error?: string;
-};
-
 export default function MediaScreen() {
   const { projectId, slug, q } = useLocalSearchParams<{
     projectId: string;
@@ -72,7 +75,13 @@ export default function MediaScreen() {
   }>();
   const [query, setQuery] = useState(q || "");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [pending, setPending] = useState<PendingItem[]>([]);
+  const [pending, setPending] = useState<MediaPendingCard[]>([]);
+  // Session-scoped local previews by content hash: the pending card's
+  // previewUri OUTLIVES the card, so when the derived row takes over it can
+  // keep showing the local bytes until the signed-URL query loads — never a
+  // blank thumbnail for something this device just captured. A ref, not
+  // state: every write rides a setPending that re-renders anyway.
+  const localPreviews = useRef(new Map<string, string>()).current;
   const [viewer, setViewer] = useState<{
     uri: string;
     title: string;
@@ -111,25 +120,34 @@ export default function MediaScreen() {
           onProgress: setSyncProgress,
           // Discovered screenshots appear immediately as pending cards with
           // local previews, exactly like picked ones, and resolve into real
-          // rows as their captured events land on the live stream.
-          onCandidate: (candidate) =>
+          // rows as their uploaded events land on the live stream.
+          onCandidate: (candidate) => {
+            localPreviews.set(candidate.stableKey, candidate.previewUri);
             setPending((current) => [
               ...current,
               {
                 previewUri: candidate.previewUri,
                 filename: candidate.filename,
-                status: "analyzing",
+                stableKey: candidate.stableKey,
+                uploadedOffset: null,
+                capturedAt: candidate.capturedAt,
+                status: "uploading",
               },
-            ]),
-          onCandidateDone: (candidate, error) =>
+            ]);
+          },
+          // Success settles the card as "done" (bridging until its row
+          // arrives — deriveMediaFeed hides it the moment the row exists, and
+          // a later wipe at/past its offset supersedes it instead of letting
+          // it ghost back as an eternal spinner).
+          onCandidateDone: (candidate, outcome) =>
             setPending((current) =>
-              error === null
-                ? current.filter((row) => row.previewUri !== candidate.previewUri)
-                : current.map((row) =>
-                    row.previewUri === candidate.previewUri
-                      ? { ...row, status: "error", error }
-                      : row,
-                  ),
+              current.map((row) =>
+                row.previewUri === candidate.previewUri
+                  ? "error" in outcome
+                    ? { ...row, status: "error", error: outcome.error }
+                    : { ...row, status: "done", uploadedOffset: outcome.uploadedOffset }
+                  : row,
+              ),
             ),
         });
       } finally {
@@ -145,7 +163,10 @@ export default function MediaScreen() {
       const project = await getProjectItx(baseUrl!, projectId);
       await project.capabilityHost.runScript(buildWipeScript(Date.now().toString(36)));
       // The wiped tombstone arrives over the live stream; deriveMediaList
-      // resets on it — nothing to invalidate.
+      // resets on it. This device's own capture leftovers reset here too —
+      // cards and cached previews describe files the wipe just deleted.
+      setPending([]);
+      localPreviews.clear();
       setSyncDialogOpen(false);
     },
   });
@@ -177,39 +198,64 @@ export default function MediaScreen() {
         picked.map((image) => ({
           previewUri: image.previewUri,
           filename: image.filename,
+          stableKey: null, // not hashed yet
+          uploadedOffset: null,
+          // The picker strips asset metadata on recompression — no date.
+          capturedAt: null,
           status: "waiting" as const,
         })),
       );
-      const setStatus = (image: PickedImage, status: PendingItem["status"], error?: string) =>
+      const patchCard = (image: PickedImage, patch: Partial<MediaPendingCard>) =>
         setPending((current) =>
-          current.map((row) =>
-            row.previewUri === image.previewUri ? { ...row, status, error } : row,
-          ),
+          current.map((row) => (row.previewUri === image.previewUri ? { ...row, ...patch } : row)),
         );
       const project = await getProjectItx(baseUrl!, projectId);
       const stream = project.streams.get(MEDIA_STREAM_PATH);
       const wipeGeneration = await readWipeGeneration(stream);
+      // Identical bytes picked twice in one batch hash to one stableKey —
+      // the server would dedupe the second append anyway (idempotency key),
+      // so skip its upload here; this also keeps feed keys unique.
+      const batchKeys = new Set<string>();
       await mapWithConcurrency(picked, 3, async (image) => {
         try {
-          setStatus(image, "analyzing");
+          // Genuinely HEIC/AVIF payloads (rare now that the picker asks for
+          // the compatible representation) would fail server-side in
+          // toMarkdown — fail the card here with something actionable
+          // instead of uploading bytes doomed to fail.
+          const unsupported = unsupportedImageReason(image.contentType);
+          if (unsupported !== null) {
+            patchCard(image, { status: "error", error: unsupported });
+            return;
+          }
           const stableKey = await Crypto.digestStringAsync(
             Crypto.CryptoDigestAlgorithm.SHA256,
             image.base64,
           );
+          if (batchKeys.has(stableKey)) {
+            patchCard(image, { status: "skipped", stableKey });
+            return;
+          }
+          batchKeys.add(stableKey);
+          // The stableKey on the card is what lets the feed morph it into
+          // the derived row in place once the uploaded event lands.
+          localPreviews.set(stableKey, image.previewUri);
+          patchCard(image, { status: "uploading", stableKey });
           if (
             await stream.getEvent({
               idempotencyKey: mediaIdempotencyKey(stableKey, wipeGeneration),
             })
           ) {
-            setStatus(image, "skipped");
+            patchCard(image, { status: "skipped" });
             return;
           }
           await project.files.get(mediaFilePath(stableKey, image.filename)).put({
             data: base64ToUint8Array(image.base64),
             contentType: image.contentType,
           });
-          await project.capabilityHost.runScript(
-            buildProcessScript({
+          // The durable birth fact — analysis follows server-side and lands
+          // as a media/processed event over the live stream.
+          const [uploaded] = await stream.append(
+            buildUploadedEvent({
               stableKey,
               wipeGeneration,
               filename: image.filename,
@@ -219,14 +265,20 @@ export default function MediaScreen() {
               source: "picker",
               capturedAt: null,
               isScreenshot: null,
-              mode: "capture",
             }),
           );
-          // The captured event arrives over the live connection and renders
-          // as a real row; drop the pending card.
-          setPending((current) => current.filter((row) => row.previewUri !== image.previewUri));
+          // Settled, not removed: deriveMediaFeed swaps the card for the
+          // real row in place when the event arrives (removal now would open
+          // a vanish-reappear gap), and the recorded offset lets a later
+          // wipe supersede the card instead of ghosting it back. The
+          // assertion restates append's contract: one input, one committed
+          // (or deduped) event back.
+          patchCard(image, { status: "done", uploadedOffset: uploaded!.offset });
         } catch (error) {
-          setStatus(image, "error", error instanceof Error ? error.message : String(error));
+          patchCard(image, {
+            status: "error",
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       });
       // Skipped/errored cards stay visible until the next capture starts.
@@ -235,11 +287,50 @@ export default function MediaScreen() {
 
   const items = deriveMediaList(events.data || []);
   const visible = filterMedia(items, query, selectedTags);
+  // ONE list: pending cards interleaved with real rows on the shared
+  // original-image-date key. Suppression is against ALL items (not the
+  // filtered view) so a search can never resurrect an already-resolved card.
+  const feed = deriveMediaFeed({
+    rows: visible,
+    allRows: items,
+    cards: pending,
+    wipedThroughOffset: lastWipeOffset(events.data || []),
+  });
+  // Stock pull-to-refresh: rereads the event log, drops settled
+  // (errored/skipped) pending cards — sticky error cards in prod often
+  // described items a later sync pass had captured fine — and, with
+  // auto-collect on, kicks a sync pass (this replaced the inline "Sync now"
+  // button; the dialog keeps one too). In-flight cards stay; their statuses
+  // are still live. The spinner tracks only the event reread — a sync pass
+  // can run for minutes and reports through the status line instead. Shared
+  // between the list and the empty/no-results states (RefreshControl only
+  // works inside a scrollable, and first-run IS the empty state).
+  const refreshControl = (
+    <RefreshControl
+      refreshing={events.isRefetching}
+      onRefresh={() => {
+        // Keep "done" too: those cards bridge until their row arrives —
+        // dropping them mid-refetch re-opened the vanish-reappear gap.
+        // Ghosts stay impossible without the drop: the feed supersedes a
+        // done card once a wipe passes its offset, and only a wipe ever
+        // removes a derived row.
+        setPending((current) =>
+          current.filter(
+            (row) =>
+              row.status === "waiting" || row.status === "uploading" || row.status === "done",
+          ),
+        );
+        void events.refetch();
+        if (settings?.enabled === true && !syncPass.isFetching) void syncPass.refetch();
+      }}
+      tintColor={colors.textMuted}
+    />
+  );
   // Chips: taxonomy order first, then novel model-coined tags actually in use.
   const tagsInUse = new Set(items.flatMap((item) => item.payload.tags));
   const chipTags = [
-    ...MEDIA_TAGS.map(({ tag }) => tag).filter((tag) => tagsInUse.has(tag)),
-    ...[...tagsInUse].filter((tag) => !MEDIA_TAGS.some(({ tag: known }) => known === tag)).sort(),
+    ...MEDIA_TAGS.filter((tag) => tagsInUse.has(tag)),
+    ...[...tagsInUse].filter((tag) => !MEDIA_TAGS.includes(tag)).sort(),
   ];
 
   return (
@@ -263,38 +354,27 @@ export default function MediaScreen() {
         >
           <Text style={styles.captureText}>+ Add</Text>
         </Pressable>
+        <Pressable
+          accessibilityLabel="Media options"
+          accessibilityRole="button"
+          onPress={() => setSyncDialogOpen(true)}
+          style={styles.moreButton}
+        >
+          <Text style={styles.moreButtonText}>⋯</Text>
+        </Pressable>
       </View>
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => setSyncDialogOpen(true)}
-        style={styles.syncRow}
-      >
-        <Text style={styles.syncLabel}>Auto-collect screenshots</Text>
-        <View style={styles.syncRowValue}>
-          <Text style={styles.syncRowValueText}>
-            {settings?.enabled ? `On · back to ${shortDate(settings.sinceIso)}` : "Off"}
-          </Text>
-          <Text style={styles.syncChevron}>›</Text>
-        </View>
-      </Pressable>
       {settings?.enabled === true ? (
-        <View style={styles.syncStatusRow}>
-          <Text numberOfLines={1} style={styles.syncStatus}>
-            {syncProgress ||
-              (syncPass.isFetching
-                ? "Syncing…"
-                : syncPass.isError
-                  ? String(syncPass.error.message)
-                  : syncSummary(syncPass.data))}
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            disabled={syncPass.isFetching}
-            onPress={() => void syncPass.refetch()}
-          >
-            <Text style={styles.syncNow}>Sync now</Text>
-          </Pressable>
-        </View>
+        // One unobtrusive line: the sync pass result plus the auto-collect
+        // window ("back to <date>") — everything the old settings row said.
+        // Turning it on/off lives behind the ⋯ dialog.
+        <Text numberOfLines={1} style={styles.syncStatus}>
+          {syncProgress ||
+            (syncPass.isFetching
+              ? "Syncing…"
+              : syncPass.isError
+                ? String(syncPass.error.message)
+                : syncSummary(syncPass.data, settings.sinceIso))}
+        </Text>
       ) : null}
       {chipTags.length > 0 ? (
         <View style={styles.chips}>
@@ -328,52 +408,58 @@ export default function MediaScreen() {
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
         </View>
-      ) : items.length === 0 && pending.length === 0 ? (
-        <View style={styles.center}>
+      ) : feed.length === 0 && items.length === 0 ? (
+        <ScrollView
+          contentContainerStyle={styles.centerScroll}
+          refreshControl={refreshControl}
+          style={styles.centerScrollView}
+        >
           <Text style={styles.emptyTitle}>Nothing here yet</Text>
           <Text style={styles.emptyBody}>
             Add screenshots or photos — each gets described and transcribed by a vision model, then
             you can search them here by what they show.
           </Text>
-        </View>
-      ) : visible.length === 0 && pending.length === 0 ? (
-        <View style={styles.center}>
+        </ScrollView>
+      ) : feed.length === 0 ? (
+        <ScrollView
+          contentContainerStyle={styles.centerScroll}
+          refreshControl={refreshControl}
+          style={styles.centerScrollView}
+        >
           <Text style={styles.emptyTitle}>No results</Text>
           <Text style={styles.emptyBody}>Nothing matches this search — try fewer words.</Text>
-        </View>
+        </ScrollView>
       ) : (
         <FlatList
-          data={visible}
-          keyExtractor={(item) => String(item.offset)}
+          data={feed}
+          // The entry key survives the card→row morph (both spell the
+          // stableKey), so the mounted component carries over in place.
+          keyExtractor={(entry) => entry.key}
           contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
-          ListHeaderComponent={
-            pending.length > 0 ? (
-              <View style={{ gap: spacing.sm, marginBottom: spacing.sm }}>
-                {pending.map((row) => (
-                  <PendingRow
-                    key={row.previewUri}
-                    onViewImage={(uri) => setViewer({ uri, title: "", tags: [], markdown: "" })}
-                    row={row}
-                  />
-                ))}
-              </View>
-            ) : null
+          refreshControl={refreshControl}
+          renderItem={({ item: entry }) =>
+            entry.kind === "pending" ? (
+              <PendingRow
+                onViewImage={(uri) => setViewer({ uri, title: "", tags: [], markdown: "" })}
+                row={entry.card}
+              />
+            ) : (
+              <MediaRow
+                baseUrl={baseUrl!}
+                item={entry.item}
+                localPreviewUri={localPreviews.get(entry.item.payload.stableKey) || null}
+                onViewImage={(uri) =>
+                  setViewer({
+                    uri,
+                    title: entry.item.payload.title,
+                    tags: entry.item.payload.tags,
+                    markdown: entry.item.payload.markdown,
+                  })
+                }
+                projectId={projectId}
+              />
+            )
           }
-          renderItem={({ item }) => (
-            <MediaRow
-              baseUrl={baseUrl!}
-              item={item}
-              onViewImage={(uri) =>
-                setViewer({
-                  uri,
-                  title: item.payload.title,
-                  tags: item.payload.tags,
-                  markdown: item.payload.markdown,
-                })
-              }
-              projectId={projectId}
-            />
-          )}
         />
       )}
       <Modal
@@ -387,8 +473,13 @@ export default function MediaScreen() {
           itemCount={items.length}
           onApply={applySyncSettings}
           onCancel={() => setSyncDialogOpen(false)}
+          onSyncNow={() => {
+            setSyncDialogOpen(false);
+            void syncPass.refetch();
+          }}
           onWipe={() => wipe.mutate()}
           settings={settings || null}
+          syncFetching={syncPass.isFetching}
           wipePending={wipe.isPending}
         />
       </Modal>
@@ -425,22 +516,27 @@ function shortDate(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
-/** The confirm sheet behind the Auto-collect row: nothing syncs until "Turn
- * on" — the row itself never acts. Extending the window backwards later is
- * the same dialog with a longer choice. */
+/** The options sheet behind the toolbar's ⋯ button: auto-collect on/off with
+ * its backfill window, a manual Sync now, and Delete all. Nothing syncs
+ * until "Turn on" — opening the sheet never acts. Extending the window
+ * backwards later is the same dialog with a longer choice. */
 function SyncDialog({
   settings,
   itemCount,
   onApply,
   onCancel,
+  onSyncNow,
   onWipe,
+  syncFetching,
   wipePending,
 }: {
   settings: MediaSyncSettings | null;
   itemCount: number;
   onApply: (next: MediaSyncSettings) => void;
   onCancel: () => void;
+  onSyncNow: () => void;
   onWipe: () => void;
+  syncFetching: boolean;
   wipePending: boolean;
 }) {
   const enabled = settings?.enabled === true;
@@ -464,9 +560,9 @@ function SyncDialog({
       <View style={styles.dialog}>
         <Text style={styles.dialogTitle}>Auto-collect screenshots</Text>
         <Text style={styles.dialogBody}>
-          When on, opening this screen syncs screenshots from your photo library into this project —
-          screenshots only, at most 50 per visit, and never older than the date you pick. Nothing
-          happens until you confirm here.
+          When on, opening this screen or pulling to refresh syncs screenshots from your photo
+          library into this project — screenshots only, at most 50 per pass, and never older than
+          the date you pick. Nothing happens until you confirm here.
         </Text>
         <Text style={styles.dialogSectionLabel}>Collect back to</Text>
         <View style={styles.chips}>
@@ -493,11 +589,26 @@ function SyncDialog({
             style={styles.dialogHint}
           >{`Currently on, back to ${shortDate(settings.sinceIso)}.`}</Text>
         ) : null}
+        {enabled ? (
+          // Pull-to-refresh is the everyday trigger; this is the explicit one.
+          <Pressable
+            accessibilityRole="button"
+            disabled={syncFetching}
+            onPress={onSyncNow}
+            style={[
+              styles.dialogButton,
+              styles.syncNowButton,
+              syncFetching && styles.captureDisabled,
+            ]}
+          >
+            <Text style={styles.dialogButtonText}>{syncFetching ? "Syncing…" : "Sync now"}</Text>
+          </Pressable>
+        ) : null}
         {itemCount > 0 ? (
           confirmingWipe ? (
             <View style={styles.wipeConfirm}>
               <Text style={styles.wipeWarning}>
-                {`Deletes all ${itemCount} items and their image files from this project, for everyone. This cannot be undone.`}
+                {`Deletes all ${itemCount} items and their image files from this project, for everyone. Photos on your phone are untouched. This cannot be undone.`}
               </Text>
               <Pressable
                 accessibilityRole="button"
@@ -512,7 +623,7 @@ function SyncDialog({
             </View>
           ) : (
             <Pressable accessibilityRole="button" onPress={() => setConfirmingWipe(true)}>
-              <Text style={styles.wipeLink}>Delete all media…</Text>
+              <Text style={styles.wipeLink}>Delete all media from this project…</Text>
             </Pressable>
           )
         ) : null}
@@ -542,13 +653,17 @@ function SyncDialog({
   );
 }
 
-function syncSummary(result: SyncPassResult | undefined): string {
-  if (result === undefined) return "";
+/** The status line also carries the auto-collect window ("back to <date>") —
+ * the old settings row's information, folded in when the ⋯ dialog replaced
+ * the row. Last so a long summary truncates it first. */
+function syncSummary(result: SyncPassResult | undefined, sinceIso: string): string {
+  const backTo = `back to ${shortDate(sinceIso)}`;
+  if (result === undefined) return `Auto-collect on · ${backTo}`;
   if (result.status === "denied") return "Photo access denied — allow it in Settings";
   const limited = result.accessPrivileges === "limited" ? " · limited access" : "";
   const more = result.more ? " · more next pass" : "";
   const failed = result.failed > 0 ? ` · ${result.failed} failed (will retry)` : "";
-  return `Synced ${result.synced} new · ${result.known} already captured${failed}${more}${limited}`;
+  return `Synced ${result.synced} new · ${result.known} already captured${failed}${more}${limited} · ${backTo}`;
 }
 
 function PendingRow({
@@ -556,7 +671,7 @@ function PendingRow({
   row,
 }: {
   onViewImage: (uri: string) => void;
-  row: PendingItem;
+  row: MediaPendingCard;
 }) {
   return (
     <View style={[styles.row, row.status === "error" && styles.rowError]}>
@@ -568,16 +683,22 @@ function PendingRow({
           {row.filename}
         </Text>
         {row.status === "error" ? (
-          <Text numberOfLines={3} style={styles.pendingError}>
-            {row.error}
-          </Text>
+          // Unclamped on purpose: error text is the one place truncation
+          // defeats the purpose (the HEIC guidance ends in the fix steps).
+          <Text style={styles.pendingError}>{row.error}</Text>
         ) : row.status === "skipped" ? (
           <Text style={styles.pendingStatus}>Already captured — skipped</Text>
         ) : (
           <View style={styles.pendingSpinnerRow}>
             <ActivityIndicator color={colors.textMuted} size="small" />
             <Text style={styles.pendingStatus}>
-              {row.status === "waiting" ? "Waiting…" : "Analyzing…"}
+              {/* "done" = uploaded, bridging until its row arrives — which
+                  will say Analyzing…, so the morph doesn't flicker text. */}
+              {row.status === "waiting"
+                ? "Waiting…"
+                : row.status === "done"
+                  ? "Analyzing…"
+                  : "Uploading…"}
             </Text>
           </View>
         )}
@@ -589,11 +710,15 @@ function PendingRow({
 function MediaRow({
   baseUrl,
   item,
+  localPreviewUri,
   onViewImage,
   projectId,
 }: {
   baseUrl: string;
   item: MediaListItem;
+  /** The pending card's local preview for this content hash, when this
+   * device captured it this session — shown until the signed URL loads. */
+  localPreviewUri: string | null;
   onViewImage: (uri: string) => void;
   projectId: string;
 }) {
@@ -606,23 +731,17 @@ function MediaRow({
     },
     staleTime: Infinity,
   });
+  // Never a blank thumbnail when we hold local bytes: the signed URL when
+  // loaded, else the session-local preview the pending card was showing.
+  const imageUri = imageUrl.data || localPreviewUri;
   const reanalyze = useMutation({
     mutationFn: async () => {
       const project = await getProjectItx(baseUrl, projectId);
-      await project.capabilityHost.runScript(
-        buildProcessScript({
-          stableKey: item.payload.stableKey,
-          wipeGeneration: 0, // reprocess keys on its nonce, not the capture identity
-          filename: item.payload.filename,
-          contentType: item.payload.contentType,
-          width: item.payload.width,
-          height: item.payload.height,
-          source: item.payload.source,
-          capturedAt: item.payload.capturedAt,
-          isScreenshot: item.payload.isScreenshot,
-          mode: { reprocessNonce: Date.now().toString(36) },
-        }),
-      );
+      // A durable request the server-side pipeline answers; the row shows
+      // "Analyzing…" (via deriveMediaList) until the settlement arrives.
+      await project.streams
+        .get(MEDIA_STREAM_PATH)
+        .append(buildReanalyzeEvent(item.payload.stableKey, Date.now().toString(36)));
       // The processed event arrives over the live stream and re-renders the
       // row through deriveMediaList — nothing to invalidate here.
     },
@@ -632,11 +751,11 @@ function MediaRow({
     <Pressable onPress={() => setExpanded(!expanded)} style={styles.row}>
       <Pressable
         accessibilityLabel="View full screen"
-        disabled={imageUrl.data === undefined}
-        onPress={() => imageUrl.data && onViewImage(imageUrl.data)}
+        disabled={imageUri === null}
+        onPress={() => imageUri && onViewImage(imageUri)}
       >
-        {imageUrl.data ? (
-          <Image source={{ uri: imageUrl.data }} style={styles.thumb} />
+        {imageUri ? (
+          <Image source={{ uri: imageUri }} style={styles.thumb} />
         ) : (
           <View style={[styles.thumb, styles.thumbPlaceholder]} />
         )}
@@ -646,6 +765,13 @@ function MediaRow({
           <Text numberOfLines={expanded ? undefined : 1} style={styles.rowTitle}>
             {item.payload.title}
           </Text>
+        ) : item.analysis.status === "pending" ? (
+          // Identity while analyzing: the filename line the pending card was
+          // showing carries straight over (same style), so the morph never
+          // drops to an anonymous spinner.
+          <Text numberOfLines={1} style={styles.pendingFilename}>
+            {item.payload.filename}
+          </Text>
         ) : null}
         {item.payload.markdown ? (
           // Same renderer as chat messages; collapsed rows clip to a few
@@ -654,12 +780,33 @@ function MediaRow({
           <View style={expanded ? undefined : styles.markdownCollapsed}>
             <Markdown markdown={item.payload.markdown} preview />
           </View>
-        ) : (
+        ) : item.analysis.status === "pending" ? null : (
           <Text style={styles.markdown}>(no description)</Text>
         )}
+        {item.analysis.status === "pending" ? (
+          // Born from an uploaded event (or re-analyzing): the server-side
+          // settlement will overlay this row when it lands.
+          <View style={styles.pendingSpinnerRow}>
+            <ActivityIndicator color={colors.textMuted} size="small" />
+            <Text style={styles.pendingStatus}>Analyzing…</Text>
+          </View>
+        ) : null}
+        {item.analysis.status === "failed" ? (
+          <Text numberOfLines={expanded ? undefined : 2} style={styles.pendingError}>
+            {`Analysis failed: ${item.analysis.error || "unknown error"}`}
+          </Text>
+        ) : null}
         {expanded && item.payload.transcript ? (
           <Text selectable style={styles.transcript}>
             {item.payload.transcript}
+          </Text>
+        ) : null}
+        {expanded ? (
+          // The original filename (IMG_1234.PNG), findable but faint — it's
+          // also what in-app deep links search by. Expanded detail only; the
+          // collapsed meta row is already full with tags + date.
+          <Text numberOfLines={1} selectable style={styles.rowFilename}>
+            {item.payload.filename}
           </Text>
         ) : null}
         <View style={styles.rowTags}>
@@ -719,20 +866,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   captureDisabled: { opacity: 0.5 },
-  syncRow: {
+  // The ⋯ options button: quiet next to the accent +Add, but the same
+  // height and a comfortable tap target.
+  moreButton: {
     alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    justifyContent: "center",
     paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
   },
-  syncLabel: { color: colors.text, flex: 1, fontSize: 14 },
-  syncRowValue: { alignItems: "center", flexDirection: "row", gap: spacing.xs },
-  // NOT syncStatus: that style's flex:1 (needed for truncation in the
-  // status line) stretches the value into a wide box here, stranding the
-  // chevron at the screen edge.
-  syncRowValueText: { color: colors.textMuted, fontSize: 12 },
-  syncChevron: { color: colors.textFaint, fontSize: 18 },
+  moreButtonText: { color: colors.text, fontSize: 18, fontWeight: "600" },
   dialogBackdrop: {
     alignItems: "center",
     backgroundColor: "rgba(0, 0, 0, 0.6)",
@@ -774,16 +918,13 @@ const styles = StyleSheet.create({
   wipeButton: { alignSelf: "flex-start", borderColor: colors.danger },
   wipeButtonText: { color: colors.danger, fontSize: 14, fontWeight: "600" },
   dialogButtonPrimaryText: { color: colors.background, fontSize: 14, fontWeight: "600" },
-  syncStatusRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: spacing.sm,
-    justifyContent: "space-between",
+  syncStatus: {
+    color: colors.textMuted,
+    fontSize: 12,
     paddingHorizontal: spacing.md,
     paddingTop: 4,
   },
-  syncStatus: { color: colors.textMuted, flex: 1, fontSize: 12 },
-  syncNow: { color: colors.accent, fontSize: 12, fontWeight: "600" },
+  syncNowButton: { alignSelf: "flex-start" },
   captureText: { color: colors.background, fontSize: 14, fontWeight: "600" },
   chips: {
     flexDirection: "row",
@@ -803,6 +944,17 @@ const styles = StyleSheet.create({
   chipText: { color: colors.textMuted, fontSize: 12 },
   chipTextSelected: { color: colors.background, fontWeight: "600" },
   center: { alignItems: "center", flex: 1, justifyContent: "center", padding: spacing.xl },
+  // The empty/no-results ScrollView wrappers: the ScrollView itself needs
+  // flex to claim the remaining viewport (it shrink-wraps to content
+  // otherwise), and the content box needs flexGrow to fill it for centering
+  // while the whole area stays pullable.
+  centerScrollView: { flex: 1 },
+  centerScroll: {
+    alignItems: "center",
+    flexGrow: 1,
+    justifyContent: "center",
+    padding: spacing.xl,
+  },
   error: { color: colors.danger, fontSize: 13, padding: spacing.md },
   retry: {
     borderColor: colors.border,
@@ -845,6 +997,7 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     paddingLeft: spacing.sm,
   },
+  rowFilename: { color: colors.textFaint, fontSize: 11 },
   rowTags: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   rowTag: {
     backgroundColor: colors.background,

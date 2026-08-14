@@ -414,7 +414,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           channel: target.channel,
           ...(channelType == null ? {} : { channelType }),
           conversationActive: state.conversationActive || mentioned,
-          ...(getsEyesReaction ? { eyesReactionMessageTs: target.messageTs } : {}),
+          ...(getsEyesReaction && { eyesReactionMessageTs: target.messageTs }),
           threadTs: target.threadTs,
         };
       }

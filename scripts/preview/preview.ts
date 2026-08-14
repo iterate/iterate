@@ -306,7 +306,7 @@ async function withPreviewE2eTelemetry<T>(
   telemetry.runFinished({
     status: operationError ? "failed" : previewOperationWasSkipped(result) ? "skipped" : "passed",
     durationMs: Date.now() - startedAt,
-    ...(operationError ? { error: operationError } : {}),
+    ...(!!operationError && { error: operationError }),
   });
   let telemetryError: unknown;
   try {
@@ -546,9 +546,8 @@ async function deployPreviewApps({
             // are moving targets, while the sha pins the exact builds this
             // deploy shipped.
             PREVIEW_PULL_REQUEST_HEAD_SHA: context.pullRequestHeadSha,
-            ...(app.slug === "os" && osContainerRollout
-              ? { OS_CONTAINERS_ROLLOUT: osContainerRollout.mode }
-              : {}),
+            ...(app.slug === "os" &&
+              osContainerRollout && { OS_CONTAINERS_ROLLOUT: osContainerRollout.mode }),
           },
           dopplerConfig: environmentConfigLease.dopplerConfig,
           mainWorkerSize: workerSizeBaselines[app.slug] ?? null,
@@ -608,6 +607,13 @@ async function deployPreviewApps({
       ),
     ].join("\n"),
   );
+  if (ok) {
+    await seedPreviewTestLogin({
+      lease: toSlotDisplay(environmentConfigLease),
+      pullRequestNumber: context.pullRequestNumber,
+    });
+  }
+
   const result = {
     ok,
     state: latestState,
@@ -620,6 +626,41 @@ async function deployPreviewApps({
   }
 
   return result;
+}
+
+/**
+ * Visit the PR's one-click login link once per deploy: auth's /test-login
+ * (apps/auth/src/server/test-login.ts) creates the pr<N> test user, org, and
+ * project before answering with its redirect — we stop there — so the Login
+ * link in the PR comment lands on a pre-warmed, already-existing project and
+ * the endpoint itself gets smoke-tested. Non-fatal by design: a slot serving
+ * an auth build without /test-login (fingerprint reuse of a pre-feature
+ * deploy) logs and moves on — the first human click seeds the same way.
+ */
+async function seedPreviewTestLogin(input: {
+  lease: CloudflarePreviewSlotDisplay;
+  pullRequestNumber: number;
+}) {
+  const url = previewLoginUrl(input.lease, input.pullRequestNumber);
+  if (!url) {
+    return;
+  }
+  try {
+    const response = await fetch(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (response.status >= 300 && response.status < 400) {
+      logPreview(
+        `test-login seeded: pr${input.pullRequestNumber}+test@nustom.com user, org, and project exist on ${input.lease.slug}`,
+      );
+    } else {
+      const detail = (await response.text().catch(() => "")).slice(0, 200);
+      logPreview(`test-login seed skipped: ${url} answered ${response.status} ${detail}`);
+    }
+  } catch (error) {
+    logPreview(`test-login seed skipped: ${formatPreviewErrorMessage(error)}`);
+  }
 }
 
 function resolvePreviewTestBaseUrlEnvironment({
@@ -970,9 +1011,9 @@ async function testPreviewApps({
           context,
           previewSlot: environmentConfigLease.slug,
         }),
-        ...(telemetryArtifactDirectory
-          ? { TEST_TELEMETRY_ARTIFACT_DIR: telemetryArtifactDirectory }
-          : {}),
+        ...(telemetryArtifactDirectory && {
+          TEST_TELEMETRY_ARTIFACT_DIR: telemetryArtifactDirectory,
+        }),
       },
       signal: runtime.signal,
       workingDirectory: resolve(runtime.repositoryRoot, app.appPath),
@@ -1827,7 +1868,7 @@ async function readCanonicalTestTelemetry(
         name: record.fullName,
         retryCount: record.retryCount,
         passedAfterRetry: record.passedAfterRetry,
-        ...(record.firstFailure ? { firstFailure: record.firstFailure } : {}),
+        ...(record.firstFailure && { firstFailure: record.firstFailure }),
       })),
     collectionErrors: [],
   };
@@ -1886,7 +1927,7 @@ async function readPlaywrightTestTelemetry(
               .join(" › "),
             retryCount,
             passedAfterRetry: test.status === "flaky" || finalResult?.status === "passed",
-            ...(firstFailureSummary ? { firstFailure: firstFailureSummary } : {}),
+            ...(firstFailureSummary && { firstFailure: firstFailureSummary }),
           });
         }
       }
@@ -2756,9 +2797,9 @@ function resolvePreviewTestTelemetryEnvironment(input: {
     TEST_TELEMETRY_KIND: "e2e",
     TEST_TELEMETRY_APP: input.app,
     TEST_TELEMETRY_HEAD_SHA: input.context.pullRequestHeadSha,
-    ...(input.context.pullRequestHeadRef
-      ? { TEST_TELEMETRY_BRANCH: input.context.pullRequestHeadRef }
-      : {}),
+    ...(input.context.pullRequestHeadRef && {
+      TEST_TELEMETRY_BRANCH: input.context.pullRequestHeadRef,
+    }),
     TEST_TELEMETRY_PULL_REQUEST_NUMBER: String(input.context.pullRequestNumber),
     TEST_TELEMETRY_PREVIEW_SLOT: input.previewSlot,
   };
@@ -2971,21 +3012,28 @@ function renderCloudflarePreviewPullRequestBody(
 }
 
 /**
- * One-click login into the leased slot's os deployment: `+test@nustom.com`
- * emails get a fixed OTP outside production, and a per-PR login_hint keeps
- * each PR's poking on its own throwaway user.
+ * One-click login into the leased slot's os deployment: auth's /test-login
+ * (apps/auth/src/server/test-login.ts, fixed-test-OTP deployments only)
+ * signs the per-PR `pr<N>+test@nustom.com` user in server-side, ensures
+ * their org+project exist, and hands the session to os' OAuth flow — the
+ * click on this link is the only interaction. The deploy also visits this
+ * URL once (seedPreviewTestLogin) so the user+project already exist.
  */
 function previewLoginUrl(lease: CloudflarePreviewSlotDisplay, pullRequestNumber: number) {
-  let baseUrl: string;
+  let authBaseUrl: string;
+  let osBaseUrl: string;
   try {
-    baseUrl = cloudflarePreviewApps.os.resolvePreviewAppConfig(lease.dopplerConfig).baseUrl;
+    authBaseUrl = cloudflarePreviewApps.auth.resolvePreviewAppConfig(lease.dopplerConfig).baseUrl;
+    osBaseUrl = cloudflarePreviewApps.os.resolvePreviewAppConfig(lease.dopplerConfig).baseUrl;
   } catch {
     // A body can carry a doppler config this checkout doesn't know (e.g. a
     // retired slot) — drop the link rather than failing the whole render.
     return null;
   }
-  const url = new URL("/api/iterate-auth/login", baseUrl);
-  url.searchParams.set("login_hint", `pr${pullRequestNumber}+test@nustom.com`);
+  const url = new URL("/test-login", authBaseUrl);
+  url.searchParams.set("email", `pr${pullRequestNumber}+test@nustom.com`);
+  url.searchParams.set("project", `pr${pullRequestNumber}`);
+  url.searchParams.set("return_to", new URL("/api/iterate-auth/login", osBaseUrl).toString());
   return url.toString();
 }
 

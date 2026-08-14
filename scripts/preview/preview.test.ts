@@ -1587,7 +1587,7 @@ describe("cloudflare preview state helpers", () => {
     expect(parseCloudflarePreviewState(body)).toEqual(state);
     expect(body).toContain("## Summary");
     expect(body).toContain(
-      "## Environment Config Lease [Login ↗](https://os.iterate-preview-2.com/api/iterate-auth/login?login_hint=pr2474%2Btest%40nustom.com)",
+      "## Environment Config Lease [Login ↗](https://auth.iterate-preview-2.com/test-login?email=pr2474%2Btest%40nustom.com&project=pr2474&return_to=https%3A%2F%2Fos.iterate-preview-2.com%2Fapi%2Fiterate-auth%2Flogin)",
     );
     expect(body).toContain(
       "<summary>Slot: preview-2 | Doppler config: preview_2</summary>\n\n| app | status | commit | preview | size (gzip) | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",

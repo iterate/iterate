@@ -628,7 +628,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         ...material,
         accessToken: data.access_token,
         // Providers may rotate the refresh token on use; keep the newest.
-        ...(typeof data.refresh_token === "string" ? { refreshToken: data.refresh_token } : {}),
+        ...(typeof data.refresh_token === "string" && { refreshToken: data.refresh_token }),
       },
       snapshot,
     );

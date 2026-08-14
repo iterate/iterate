@@ -81,7 +81,7 @@ export function openAiAiGatewayBindingHeaders(input: {
     "cf-aig-metadata": JSON.stringify({
       projectId: input.projectId,
       source: "project-egress",
-      ...(caller !== undefined ? { caller } : {}),
+      ...(caller !== undefined && { caller }),
     }),
   };
   for (const [name, value] of input.requestHeaders.entries()) {
@@ -110,9 +110,9 @@ export function openAiAiGatewayRoutingFromConfig(config: AppConfig): {
   return {
     gatewayId: config.cloudflareAiGateway.id,
     openaiApiKey: config.openAiApiKey.exposeSecret(),
-    ...(config.cloudflareAiGateway.responseCacheTtlSeconds !== undefined
-      ? { responseCacheTtlSeconds: config.cloudflareAiGateway.responseCacheTtlSeconds }
-      : {}),
+    ...(config.cloudflareAiGateway.responseCacheTtlSeconds !== undefined && {
+      responseCacheTtlSeconds: config.cloudflareAiGateway.responseCacheTtlSeconds,
+    }),
   };
 }
 

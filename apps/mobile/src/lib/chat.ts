@@ -137,6 +137,23 @@ export function threadContextForScriptRun(
 }
 
 /**
+ * The chat's current agent-set title: the standing `title` after folding
+ * every summary-updated event in offset order (string sets, "" or explicit
+ * null clears, absent preserves — the same per-field semantics as
+ * threadContextForScriptRun, but over the whole stream). Null until the
+ * agent's first-turn summary lands; callers fall back to the path.
+ */
+export function latestAgentTitle(events: StreamEvent[]): string | null {
+  let title: string | null = null;
+  for (const event of [...events].sort((a, b) => a.offset - b.offset)) {
+    if (event.type !== SUMMARY_UPDATED_TYPE) continue;
+    const payload = (event.payload || {}) as { title?: unknown };
+    if (typeof payload.title === "string" || payload.title === null) title = payload.title || null;
+  }
+  return title;
+}
+
+/**
  * Merge a live batch into the events already held, deduping by offset (a
  * replayAfterOffset subscription can overlap the initial page read) and
  * keeping offset order.

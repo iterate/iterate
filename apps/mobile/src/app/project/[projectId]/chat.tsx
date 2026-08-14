@@ -56,7 +56,7 @@ import {
   type AgentUiMessageItem,
   type MobileFeedItem,
 } from "../../../lib/feed.ts";
-import { awaitingAgentActivity } from "../../../lib/chat.ts";
+import { awaitingAgentActivity, latestAgentTitle } from "../../../lib/chat.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 // APPROVAL_STREAM_EVENT_TYPES is module-level (identity-stable) on purpose:
 // useLiveEvents folds eventTypes into its connection-hook deps, so an inline
@@ -170,7 +170,7 @@ export default function ChatScreen() {
           data: base64ToUint8Array(file.base64),
           filename: file.filename,
         })),
-        ...(input.message ? { message: input.message } : {}),
+        ...(input.message && { message: input.message }),
       });
       return added.event.offset;
     },
@@ -233,7 +233,9 @@ export default function ChatScreen() {
     >
       <Stack.Screen
         options={{
-          title: path.replace(/^\/agents\//, ""),
+          // Agent-set title once the first-turn summary lands; the raw path
+          // (still one tap away in the ••• menu) until then.
+          title: latestAgentTitle(events.data || []) || path.replace(/^\/agents\//, ""),
           headerRight: () => (
             <Pressable
               accessibilityLabel="Stream actions"

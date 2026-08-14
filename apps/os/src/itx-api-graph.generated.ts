@@ -407,7 +407,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "AgentCollection",
     kind: "interface",
     sourceText:
-      '/** Agent catalog within one project. */\nexport interface AgentCollection {\n  __describe(): Promise<Description>;\n  processor: StreamProcessorRpc<AgentCollectionProcessorState>;\n  liveState: LiveStateRpc<AgentCollectionProcessorState>;\n  /**\n   * The agent control surface at a path (`"/agents/<name>"`, or relative to\n   * the calling scope — `".."` climbs). The returned handle is a plain,\n   * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —\n   * `itx.agents.get(path).message(text)` or `.someTool(args)` in one\n   * expression for an already-created agent — over workerd RPC (the script\n   * lane); dynamic members resolve through the prototype-chain fallback. See\n   * Agent\'s class comment for the mechanism and\n   * `agent-handle-pipelining.itx.e2e.test.ts` for the guard.\n   */\n  get(path: string): Agent;\n  /** Known agents, read from the collection processor\'s reduced database. */\n  list(): Promise<StreamListItem[]>;\n}',
+      '/** Agent catalog within one project. */\nexport interface AgentCollection {\n  __describe(): Promise<Description>;\n  processor: StreamProcessorRpc<AgentCollectionProcessorState>;\n  liveState: LiveStateRpc<AgentCollectionProcessorState>;\n  /**\n   * The agent control surface at a path (`"/agents/<name>"`, or relative to\n   * the calling scope — `".."` climbs). The returned handle is a plain,\n   * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —\n   * `itx.agents.get(path).message(text)` or `.someTool(args)` in one\n   * expression for an already-created agent — over workerd RPC (the script\n   * lane); dynamic members resolve through the prototype-chain fallback. See\n   * Agent\'s class comment for the mechanism and\n   * `agent-handle-pipelining.itx.e2e.test.ts` for the guard.\n   */\n  get(path: string): Agent;\n  /** Known agents, read from the collection processor\'s reduced database. */\n  list(): Promise<AgentListItem[]>;\n}',
     summary: "Agent catalog within one project.",
     memberSummaries: {
       get: 'The agent control surface at a path (`"/agents/<name>"`, or relative to the calling scope — `".."` climbs).',
@@ -419,7 +419,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "AgentCollectionProcessorState",
       "LiveStateRpc",
       "Agent",
-      "StreamListItem",
+      "AgentListItem",
     ],
   },
   {
@@ -438,10 +438,11 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectEgress",
     kind: "interface",
     sourceText:
-      "/**\n * Public project egress facet.\n *\n * The Project Durable Object is the single egress decision point: it owns the\n * live runtime interceptor slot and, when there is no interceptor, performs the\n * terminal secret-substitution fetch path.\n */\nexport interface ProjectEgress {\n  __describe(): Promise<Description>;\n  /** Outbound fetch with project identity and secret substitution. Set\n   * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string\n   * values in an `application/json` (or `+json`) body. */\n  fetch(request: Request): Promise<EgressResponse>;\n  /** Install a live egress interceptor (last writer wins); returns a release handle. */\n  intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;\n}",
+      "/**\n * Public project egress facet.\n *\n * The Project Durable Object is the single egress decision point: it owns the\n * live runtime interceptor slot and, when there is no interceptor, performs the\n * terminal secret-substitution fetch path.\n */\nexport interface ProjectEgress {\n  __describe(): Promise<Description>;\n  /** Outbound fetch with project identity and secret substitution — the\n   * standard fetch signature: a Request, or a URL plus optional init. Set\n   * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string\n   * values in an `application/json` (or `+json`) body. */\n  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<EgressResponse>;\n  /** Install a live egress interceptor (last writer wins); returns a release handle. */\n  intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;\n}",
     summary: "Public project egress facet.",
     memberSummaries: {
-      fetch: "Outbound fetch with project identity and secret substitution.",
+      fetch:
+        "Outbound fetch with project identity and secret substitution — the standard fetch signature: a Request, or a URL plus optional init.",
       intercept: "Install a live egress interceptor (last writer wins); returns a release handle.",
     },
     referencedTypeNames: [
@@ -921,12 +922,13 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Secret",
     kind: "interface",
     sourceText:
-      "/** Path-addressed secret capability. Secret material has no public read API:\n * material never leaves the Secret Durable Object except substituted into a\n * request bound for one of the secret's pinned egress hosts. */\nexport interface Secret {\n  /** Like every other node, the secret's self-report IS `__describe()`: the\n   * discovery Description merged with the secret's public SecretDescription\n   * (audit, egress, whether material is present, the refresh strategy). The\n   * raw value is never part of it. */\n  __describe(): Promise<Description & SecretDescription>;\n  /** Egress fetch with this secret's placeholders substituted server-side. */\n  fetch(request: Request): Promise<Response>;\n  /** Admin-only recovery read of the current encrypted cell. */\n  exportForProjectSeed(): Promise<SecretProjectSeedExport>;\n  /** Restart the secret's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /**\n   * Create this secret and wait until its processor has reduced the birth\n   * certificate, then return this same secret handle, so create chains. The\n   * Secret Durable Object owns the birth semantics: it encrypts the material\n   * bound to the exact commit offset and appends `secret/created` plus the\n   * secret's processor subscription in one atomic batch. An identical-policy\n   * retry over an existing secret resolves fine (material is write-only and\n   * not comparable — it is kept, never replaced; rotate through `update()`);\n   * a create with a DIFFERENT egress/refresh/visibility policy fails loudly.\n   */\n  create(input: SecretCreateInput): Promise<Secret>;\n  /**\n   * Read the material back — only for a secret born `readable: true` (an\n   * immutable birth-certificate fact; every other secret stays write-only\n   * and this throws). The born project ingress key at\n   * /secrets/project-api-key is the canonical readable secret: show it to an\n   * external app as often as needed.\n   */\n  reveal(): Promise<unknown>;\n  /** Set secret material, its egress allowlist, and/or refresh strategy.\n   * Replacement material requires its complete egress policy in the same\n   * update. Every update without replacement material clears stored material. */\n  update(input: SecretUpdateInput): Promise<StreamEvent>;\n  /** The secret stream processor; its public state IS the SecretDescription\n   * (the ciphertext never leaves — the relay's projection redacts it). */\n  processor: StreamProcessorRpc<SecretDescription>;\n  /** The secret's live state — its public SecretDescription (never the\n   * ciphertext; the facet host's projection redacts it). See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<SecretDescription>;\n}",
+      "/** Path-addressed secret capability. Secret material has no public read API:\n * material never leaves the Secret Durable Object except substituted into a\n * request bound for one of the secret's pinned egress hosts. */\nexport interface Secret {\n  /** Like every other node, the secret's self-report IS `__describe()`: the\n   * discovery Description merged with the secret's public SecretDescription\n   * (audit, egress, whether material is present, the refresh strategy). The\n   * raw value is never part of it. */\n  __describe(): Promise<Description & SecretDescription>;\n  /** Egress fetch with this secret's placeholders substituted server-side —\n   * the standard fetch signature: a Request, or a URL plus optional init. */\n  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;\n  /** Admin-only recovery read of the current encrypted cell. */\n  exportForProjectSeed(): Promise<SecretProjectSeedExport>;\n  /** Restart the secret's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /**\n   * Create this secret and wait until its processor has reduced the birth\n   * certificate, then return this same secret handle, so create chains. The\n   * Secret Durable Object owns the birth semantics: it encrypts the material\n   * bound to the exact commit offset and appends `secret/created` plus the\n   * secret's processor subscription in one atomic batch. An identical-policy\n   * retry over an existing secret resolves fine (material is write-only and\n   * not comparable — it is kept, never replaced; rotate through `update()`);\n   * a create with a DIFFERENT egress/refresh/visibility policy fails loudly.\n   */\n  create(input: SecretCreateInput): Promise<Secret>;\n  /**\n   * Read the material back — only for a secret born `readable: true` (an\n   * immutable birth-certificate fact; every other secret stays write-only\n   * and this throws). The born project ingress key at\n   * /secrets/project-api-key is the canonical readable secret: show it to an\n   * external app as often as needed.\n   */\n  reveal(): Promise<unknown>;\n  /** Set secret material, its egress allowlist, and/or refresh strategy.\n   * Replacement material requires its complete egress policy in the same\n   * update. Every update without replacement material clears stored material. */\n  update(input: SecretUpdateInput): Promise<StreamEvent>;\n  /** The secret stream processor; its public state IS the SecretDescription\n   * (the ciphertext never leaves — the relay's projection redacts it). */\n  processor: StreamProcessorRpc<SecretDescription>;\n  /** The secret's live state — its public SecretDescription (never the\n   * ciphertext; the facet host's projection redacts it). See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<SecretDescription>;\n}",
     summary: "Path-addressed secret capability.",
     memberSummaries: {
       __describe:
         "Like every other node, the secret's self-report IS `__describe()`: the discovery Description merged with the secret's public SecretDescription (audit, egress, whether material is present, the refresh strategy).",
-      fetch: "Egress fetch with this secret's placeholders substituted server-side.",
+      fetch:
+        "Egress fetch with this secret's placeholders substituted server-side — the standard fetch signature: a Request, or a URL plus optional init.",
       exportForProjectSeed: "Admin-only recovery read of the current encrypted cell.",
       kill: "Restart the secret's server-side object; the next request boots it fresh.",
       create:
@@ -1555,6 +1557,16 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       '/** The singleton agent collection processor\'s reduced database state. */\nexport type AgentCollectionProcessorState = {\n  birthCertificate: Record<string, never> | null;\n  agents: Record<\n    string,\n    {\n      path: string;\n      summary: {\n        title?: string | undefined;\n        description?: string | undefined;\n        activity?: string | undefined;\n        waitingFor?: "external_event" | "timer" | "user_input" | undefined;\n        pinned: boolean;\n      };\n      timestamps: {\n        createdAt: string;\n        lastWorkAt: string;\n        summaryUpdatedAt?: string | undefined;\n        activityUpdatedAt?: string | undefined;\n      };\n    }\n  >;\n  waitingForSinceOffsets: Record<string, number>;\n};',
     summary: "The singleton agent collection processor's reduced database state.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "AgentListItem",
+    kind: "typeAlias",
+    sourceText:
+      "/** One row of `itx.agents.list()`: stream identity plus the agent-authored\n * title when one has been set (agents set it on their first turn via\n * `agent/summary-updated`). Clients fall back to the path when absent. */\nexport type AgentListItem = {\n  path: string;\n  createdAt: string;\n  title?: string;\n};",
+    summary:
+      "One row of `itx.agents.list()`: stream identity plus the agent-authored title when one has been set (agents set it on their first turn via `agent/summary-updated`).",
     memberSummaries: {},
     referencedTypeNames: [],
   },

@@ -125,7 +125,7 @@ function postJson(cookie: string | null, body: unknown): RequestInit {
     headers: {
       "content-type": "application/json",
       origin: baseUrl,
-      ...(cookie ? { cookie } : {}),
+      ...(cookie && { cookie }),
     },
     body: JSON.stringify(body),
   };
@@ -238,14 +238,12 @@ async function exchangeToken(body: Record<string, string>, origin?: string): Pro
     method: "POST",
     headers: {
       "content-type": "application/x-www-form-urlencoded",
-      ...(origin
-        ? {
-            origin,
-            "sec-fetch-dest": "empty",
-            "sec-fetch-mode": "cors",
-            "sec-fetch-site": "cross-site",
-          }
-        : {}),
+      ...(origin && {
+        origin,
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "cross-site",
+      }),
     },
     body: new URLSearchParams(body),
   });

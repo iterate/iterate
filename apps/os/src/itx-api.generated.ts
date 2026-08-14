@@ -699,7 +699,7 @@ export interface AgentCollection {
    */
   get(path: string): Agent;
   /** Known agents, read from the collection processor's reduced database. */
-  list(): Promise<StreamListItem[]>;
+  list(): Promise<AgentListItem[]>;
 }
 
 /**
@@ -733,10 +733,11 @@ export interface Clients {
  */
 export interface ProjectEgress {
   __describe(): Promise<Description>;
-  /** Outbound fetch with project identity and secret substitution. Set
+  /** Outbound fetch with project identity and secret substitution — the
+   * standard fetch signature: a Request, or a URL plus optional init. Set
    * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
    * values in an `application/json` (or `+json`) body. */
-  fetch(request: Request): Promise<EgressResponse>;
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<EgressResponse>;
   /** Install a live egress interceptor (last writer wins); returns a release handle. */
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
 }
@@ -1643,8 +1644,9 @@ export interface Secret {
    * (audit, egress, whether material is present, the refresh strategy). The
    * raw value is never part of it. */
   __describe(): Promise<Description & SecretDescription>;
-  /** Egress fetch with this secret's placeholders substituted server-side. */
-  fetch(request: Request): Promise<Response>;
+  /** Egress fetch with this secret's placeholders substituted server-side —
+   * the standard fetch signature: a Request, or a URL plus optional init. */
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   /** Admin-only recovery read of the current encrypted cell. */
   exportForProjectSeed(): Promise<SecretProjectSeedExport>;
   /** Restart the secret's server-side object; the next request boots it fresh. */
@@ -2980,6 +2982,15 @@ export type AgentCollectionProcessorState = {
     }
   >;
   waitingForSinceOffsets: Record<string, number>;
+};
+
+/** One row of `itx.agents.list()`: stream identity plus the agent-authored
+ * title when one has been set (agents set it on their first turn via
+ * `agent/summary-updated`). Clients fall back to the path when absent. */
+export type AgentListItem = {
+  path: string;
+  createdAt: string;
+  title?: string;
 };
 
 /** What `itx.clients.list()` returns per client: the catalog record minus reducer bookkeeping. */

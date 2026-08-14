@@ -366,9 +366,9 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
                 ? {}
                 : { agentReplyEventOffset: event.payload.agentReplyEventOffset }),
               ...(approvalRequestEventOffset === undefined ? {} : { approvalRequestEventOffset }),
-              ...(approvalPresentedAt || claimed?.claimedAt
-                ? { presentedAt: approvalPresentedAt || claimed?.claimedAt }
-                : {}),
+              ...((approvalPresentedAt || claimed?.claimedAt) && {
+                presentedAt: approvalPresentedAt || claimed?.claimedAt,
+              }),
               body: event.payload.body,
               destination: event.payload.destination,
               expiresAt: event.payload.expiresAt,

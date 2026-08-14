@@ -791,9 +791,8 @@ function reduceAgentUiEvent(
               status: "done",
               outcome:
                 status === "succeeded" ? "completed" : status === "failed" ? "failed" : "cancelled",
-              ...(partialText !== null && step.responseText === ""
-                ? { responseText: partialText }
-                : {}),
+              ...(partialText !== null &&
+                step.responseText === "" && { responseText: partialText }),
               ...(typeof payload.durationMs === "number"
                 ? { durationMs: payload.durationMs }
                 : status === "cancelled"
@@ -991,17 +990,17 @@ function reduceAgentUiEvent(
       const user =
         typeof openerUser?.email === "string"
           ? {
-              ...(typeof openerUser.id === "string" ? { id: openerUser.id } : {}),
+              ...(typeof openerUser.id === "string" && { id: openerUser.id }),
               email: openerUser.email,
-              ...(typeof openerUser.name === "string" ? { name: openerUser.name } : {}),
-              ...(typeof openerUser.picture === "string" ? { picture: openerUser.picture } : {}),
+              ...(typeof openerUser.name === "string" && { name: openerUser.name }),
+              ...(typeof openerUser.picture === "string" && { picture: openerUser.picture }),
             }
           : undefined;
       const entry: AgentUiPresenceEntry = {
         connectionKey,
         connectionKind,
         connected: true,
-        ...(typeof openedBy?.description === "string" ? { description: openedBy.description } : {}),
+        ...(typeof openedBy?.description === "string" && { description: openedBy.description }),
         ...(user === undefined ? {} : { user }),
         ...(announcement == null ? {} : { processor: announcement }),
       };
@@ -1408,7 +1407,7 @@ function readCodeOutcome(payload: Record<string, unknown>): Partial<AgentUiCodeS
   if (settlement.status === "succeeded") {
     return {
       success: true,
-      ...(Object.hasOwn(settlement, "result") ? { result: settlement.result } : {}),
+      ...(Object.hasOwn(settlement, "result") && { result: settlement.result }),
     };
   }
   return { success: false, errorMessage: settlement.error };
@@ -1418,8 +1417,8 @@ function readUsageTokens(usage: unknown): { input?: number; output?: number } {
   if (!isRecord(usage)) return {};
   // The settled event's normalized usage (the contract's camelCase shape).
   return {
-    ...(typeof usage.inputTokens === "number" ? { input: usage.inputTokens } : {}),
-    ...(typeof usage.outputTokens === "number" ? { output: usage.outputTokens } : {}),
+    ...(typeof usage.inputTokens === "number" && { input: usage.inputTokens }),
+    ...(typeof usage.outputTokens === "number" && { output: usage.outputTokens }),
   };
 }
 
@@ -1440,7 +1439,7 @@ function readProcessorAnnouncement(value: unknown): AgentUiProcessorAnnouncement
           .filter((owned) => typeof owned.type === "string")
           .map((owned) => ({
             type: owned.type as string,
-            ...(typeof owned.description === "string" ? { description: owned.description } : {}),
+            ...(typeof owned.description === "string" && { description: owned.description }),
           }))
       : [],
   };

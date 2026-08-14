@@ -439,7 +439,7 @@ export async function resetWorkerDurableObjects(input: {
         // them also names them here.
         containers: kept.map((className) => ({ class_name: className })),
         migrations: {
-          ...(script.migration_tag ? { old_tag: script.migration_tag } : {}),
+          ...(script.migration_tag && { old_tag: script.migration_tag }),
           new_tag: `do-reset-${tagHash([script.migration_tag ?? null, deletedClasses])}`,
           steps: [{ deleted_classes: deletedClasses }],
         },
@@ -739,7 +739,7 @@ export async function ensureContainerClasses(input: {
       // what container-enables their namespaces.
       containers: missing.map((className) => ({ class_name: className })),
       migrations: {
-        ...(script?.migration_tag ? { old_tag: script.migration_tag } : {}),
+        ...(script?.migration_tag && { old_tag: script.migration_tag }),
         new_tag: `container-bootstrap-${tagHash([script?.migration_tag ?? null, missing])}`,
         steps: [{ new_sqlite_classes: missing }],
       },

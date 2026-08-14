@@ -214,13 +214,11 @@ function serializeWakeDeliveryError(error: unknown): StreamWakeDeliveryError {
         ? candidate.message
         : String(error) || "unknown delivery failure",
     ...(typeof candidate?.itxCallId === "string" &&
-    candidate.itxCallId.length > 0 &&
-    candidate.itxCallId.length <= 200
-      ? { itxCallId: candidate.itxCallId }
-      : {}),
-    ...(candidate?.durableObjectReset === true ? { durableObjectReset: true as const } : {}),
-    ...(candidate?.overloaded === true ? { overloaded: true as const } : {}),
-    ...(candidate?.retryable === true ? { retryable: true as const } : {}),
+      candidate.itxCallId.length > 0 &&
+      candidate.itxCallId.length <= 200 && { itxCallId: candidate.itxCallId }),
+    ...(candidate?.durableObjectReset === true && { durableObjectReset: true as const }),
+    ...(candidate?.overloaded === true && { overloaded: true as const }),
+    ...(candidate?.retryable === true && { retryable: true as const }),
   };
 }
 

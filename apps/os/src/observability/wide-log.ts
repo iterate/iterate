@@ -151,7 +151,7 @@ function boundedEvent(event: WideLogEvent): WideLogEvent {
     message: event.message,
     log: event.log,
     outcome: event.outcome,
-    ...(event.error ? { error: event.error } : {}),
+    ...(event.error && { error: event.error }),
     dropped: { eventBytes },
   };
 }
@@ -197,7 +197,7 @@ export async function runWideLog<T>(
       log: {
         id: `log_${crypto.randomUUID().replaceAll("-", "")}`,
         kind,
-        ...(parentId ? { parentId } : {}),
+        ...(parentId && { parentId }),
         start: new Date(startedAt).toISOString(),
       },
       outcome: "unknown",

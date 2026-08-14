@@ -83,15 +83,15 @@ test("renders, searches, and views seeded media", async ({ page }, testInfo) => 
   await page.getByText("See less").waitFor();
   await page.getByLabel("Close image").click();
 
-  // The Auto-collect row opens a confirm dialog — nothing syncs on tap.
-  await page.getByText("Auto-collect screenshots").click();
+  // The toolbar's ⋯ button opens the options dialog — nothing syncs on tap.
+  await page.getByLabel("Media options").click();
   await page.getByText("Nothing happens until you confirm here.").waitFor();
   await page.getByText("1 week", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Turn on" }).waitFor();
 
   // Delete-all lives behind its own inline confirm, then the wiped
   // tombstone clears the list live.
-  await page.getByText("Delete all media…").click();
+  await page.getByText("Delete all media from this project…").click();
   await page.getByText(/cannot be undone/).waitFor();
   await page.getByRole("button", { name: "Yes, delete everything" }).click();
   await page.getByText("Nothing here yet").waitFor();
@@ -114,8 +114,9 @@ test("captures through the live vision pipeline", async ({ page }, testInfo) => 
   await page.getByText("Nothing here yet").waitFor();
 
   // Capture through the picker's web fallback (an <input type=file>). The
-  // pending card's spinner keeps the spinner waiter extending the wait
-  // while the vision pipeline runs — no explicit timeouts.
+  // upload is a fast durable append; the row then shows an Analyzing… badge
+  // whose spinner keeps the spinner waiter extending the wait while the
+  // SERVER-side vision pipeline runs — no explicit timeouts.
   const fileChooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "+ Add" }).click();
   const fileChooser = await fileChooserPromise;
@@ -150,11 +151,11 @@ async function signUpToProject(
     projectSlug,
     testInfo,
   });
-  // timeout: same unwrapped popup — the spinner waiter cannot see it.
-  await popup.getByRole("button", { name: "Continue" }).click({ timeout: 15_000 });
+  // Project selection auto-continues for test identities (project-access.tsx)
+  // — consent is the next interactive page.
   // timeout: same unwrapped popup — the spinner waiter cannot see it.
   await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
-  await page.getByText(projectSlug).click();
+  // The app auto-opens the account's only project — no picker tap.
   await page.getByText("New chat").waitFor();
 }
 

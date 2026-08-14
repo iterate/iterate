@@ -715,6 +715,35 @@ describe("AgentProcessor recovery", () => {
     ]);
   });
 
+  it("expiry: a WEDGED in-flight attempt is abandoned at the horizon — the live incarnation settles expired instead of deferring to a hung promise forever", async () => {
+    // The 2026-08-13 prd incident: the attempt hung (an un-deadlined await in
+    // the run closure), the incarnation stayed alive on constant unrelated
+    // deliveries, and the expiry branch deferred to isExecuting() for 28
+    // minutes. No crash here, deliberately — the same incarnation that dialed
+    // must expire its own wedge.
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
+    expect(h.llm.calls).toHaveLength(1); // dialed and hung; the test never settles it
+
+    await h.play(
+      () => {
+        h.clock.now += 10 * 60_000 + 1;
+      },
+      // Any delivery at head (a watcher presence event in prd) re-runs the
+      // at-head pass; the expiry settle must not need an eviction first.
+      () => h.stream.append(REVIVED),
+    );
+
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { result: { status: "cancelled", reason: "expired" } } },
+    ]);
+    expect(h.state().openRequest).toBeNull();
+    // The hung zombie was aborted, so it can neither keep streaming chunks
+    // nor journal a competing settlement; and the horizon never re-dials.
+    expect(h.llm.calls[0]!.signal.aborted).toBe(true);
+    expect(h.llm.calls).toHaveLength(1);
+  });
+
   it("a transient outage on the settlement append does not lose the turn", async () => {
     const h = makeAgentHarness();
     await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);

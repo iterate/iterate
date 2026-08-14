@@ -1,9 +1,11 @@
-// Proof that the bundle's baked-in expectation reaches a REAL deployed auth
-// screen: the sign-in screen shows the expected backend, Sign in opens the
-// deployment's actual /oauth2/authorize (whose signed /login redirect must
-// carry the login_hint — the @better-auth/oauth-provider patch), and the
-// login page offers "Continue as <test email>" with the fixed test OTP
-// prefilled after one press.
+// Proof that the bundle's baked-in expectation drives a one-tap sign-in
+// against a REAL deployed auth worker: the sign-in screen shows the expected
+// backend, Sign in routes the browser through the deployment's /test-login
+// (apps/auth/src/server/test-login.ts — server-side fixed-OTP sign-in, then
+// straight into the authorize URL), project selection auto-continues for the
+// test identity, and the first interactive page is the consent screen — the
+// deliberate "userland client" moment. Allowing access completes the code
+// exchange and the app lands in the identity's only project, no picker.
 //
 // The expectation is stamped into build-info.json at publish time
 // (apps/mobile/scripts/write-build-info.mjs); the web dev bundle here is
@@ -16,7 +18,6 @@
 // Skipped otherwise — the stamp must name an envs.ts preset, and prd keeps
 // the fixed test OTP off.
 
-import { expect } from "@playwright/test";
 import { deployedPreviewEnvs } from "../../envs.ts";
 import { test } from "../test-support/test.ts";
 
@@ -53,7 +54,7 @@ test("scanning the channel you're already on shows the bundle's expected backend
   await page.getByText(`test sign-in as ${HINT_EMAIL}`).waitFor();
 });
 
-test("the bundle's expectation survives to a real auth screen with the test OTP prefilled", async ({
+test("one tap signs the test identity in: consent is the only stop before the project", async ({
   page,
   context,
 }) => {
@@ -77,27 +78,23 @@ test("the bundle's expectation survives to a real auth screen with the test OTP 
   await page.locator(`input[value="${target!.baseUrl}"]`).waitFor();
 
   // Sign in opens the REAL auth deployment in a popup (OIDC discovery +
-  // client registration + authorize happen live against the slot).
+  // client registration happen live against the slot) — routed through
+  // /test-login, so the login page and OTP screen never appear.
   // timeout: cold cross-server auth navigation — no loading UI for the spinner waiter
   const popupPromise = context.waitForEvent("page", { timeout: 45_000 });
   await page.getByRole("button", { name: "Sign in" }).click();
   const popup = await popupPromise;
 
-  // The signed /login redirect carried the login_hint: the page offers the
-  // hinted identity as its primary action.
-  const continueAs = popup.getByRole("button", { name: `Continue as ${HINT_EMAIL}` });
-  // timeout: the popup is outside the wrapped page, so no spinner waiter covers it
-  await continueAs.waitFor({ timeout: 45_000 });
-  await continueAs.click();
+  // First interactive page: consent, already signed in as the hinted
+  // identity with project selection auto-continued behind the scenes. This
+  // stop is deliberate — the mobile app is an untrusted userland client.
+  // timeout: unwrapped popup (no spinner waiter) + first-visit /test-login seeding
+  await popup.getByText("Allow Iterate (iOS)?").waitFor({ timeout: 45_000 });
+  await popup.getByRole("button", { name: "Allow access" }).click();
 
-  // One press later: the normal OTP screen, code already filled with the
-  // fixed test OTP. The user only confirms.
-  await popup
-    .getByText(`Enter the 6-digit code sent to ${HINT_EMAIL}`)
-    // timeout: unwrapped popup — the spinner waiter cannot see it
-    .waitFor({ timeout: 30_000 });
-  await expect
-    // timeout: unwrapped popup — the spinner waiter cannot see it
-    .poll(() => popup.getByTestId("email-otp-input").inputValue(), { timeout: 10_000 })
-    .toBe("424242");
+  // Allowing access finishes the code exchange; the app opens the identity's
+  // only project directly ("New chat" is the project chat screen) — no
+  // project picker for a single-project account.
+  // timeout: popup handoff + cold OS-side backfill create, both outside the spinner waiter
+  await page.getByText("New chat").waitFor({ timeout: 90_000 });
 });

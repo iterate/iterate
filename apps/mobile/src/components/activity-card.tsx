@@ -1,8 +1,8 @@
 // One activity roll-up in the chat feed — the mobile rendering of the web's
 // "Ran code 2× · 3 requests · 7.4s" rows (packages/ui agent-ui-reducer items).
-// Collapsed: the one-line summary plus status glyphs (spinner while running,
-// approval marks once the run parked batches at the egress door). Expanded
-// (tap, or automatically while live-streaming): the run organized into
+// Collapsed (the default, live or settled): the one-line summary plus status
+// glyphs (spinner while running, approval marks once the run parked batches
+// at the egress door). Expanded (tap only): the run organized into
 // ROUNDS — the llm step that writes a script and the code step that runs it.
 // A single round shows its content directly; several rounds each collapse to
 // a "Round N · <summary status>" header (tap to expand; a running round
@@ -57,9 +57,13 @@ export function ActivityCard({
 }) {
   const isLive = activity.status !== "done";
   const [toggled, setToggled] = useState<boolean | null>(null);
-  // Live activities stream open so you can watch the code being written;
-  // settled ones collapse to their summary until tapped.
-  const expanded = toggled ?? isLive;
+  // Collapsed by default, live or not: a streaming run used to auto-expand
+  // and balloon the chat as code filled in, then vanish back to one line on
+  // settle. The summary row already tells the live story small — spinner
+  // plus "writing code…" — so expansion is a deliberate tap, both ways.
+  // (Inside an opened card, a RUNNING round still streams open — that
+  // auto-expand is what the tap asked to watch.)
+  const expanded = toggled === true;
   const rounds = groupActivityRounds(activity.steps);
   const batchesByExecution = new Map(
     activity.steps
@@ -381,6 +385,7 @@ function CodeStepTabs({
                         ? styles.approvedBadge
                         : styles.rejectedBadge,
                     ]}
+                    testID="approval-decision-badge"
                   >
                     {batch.resolved.decisionSummary}
                   </Text>
@@ -447,35 +452,32 @@ function metaYaml(
 ): string {
   const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
   const doc = new Document({
-    ...(llm
-      ? {
-          llm: {
-            ...(llm.model ? { model: llm.model } : {}),
-            ...(llm.durationMs == null ? {} : { duration: seconds(llm.durationMs) }),
-            ...(llm.inputTokens == null ? {} : { inputTokens: llm.inputTokens }),
-            ...(llm.outputTokens == null ? {} : { outputTokens: llm.outputTokens }),
-            ...(llm.outcome && llm.outcome !== "completed" ? { outcome: llm.outcome } : {}),
-            ...(llm.cancelReason ? { cancelReason: llm.cancelReason } : {}),
-          },
-        }
-      : {}),
+    ...(llm && {
+      llm: {
+        ...(llm.model && { model: llm.model }),
+        ...(llm.durationMs == null ? {} : { duration: seconds(llm.durationMs) }),
+        ...(llm.inputTokens == null ? {} : { inputTokens: llm.inputTokens }),
+        ...(llm.outputTokens == null ? {} : { outputTokens: llm.outputTokens }),
+        ...(llm.outcome && llm.outcome !== "completed" && { outcome: llm.outcome }),
+        ...(llm.cancelReason && { cancelReason: llm.cancelReason }),
+      },
+    }),
     code: {
-      ...(code.status === "running" ? { status: "running" } : {}),
+      ...(code.status === "running" && { status: "running" }),
       ...(code.durationMs == null ? {} : { duration: seconds(code.durationMs) }),
-      ...(code.status === "done" && code.success === false ? { failed: true } : {}),
+      ...(code.status === "done" && code.success === false && { failed: true }),
     },
-    ...(promptMessages && promptMessages.length > 0
-      ? {
-          prompt: promptMessages.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
-        }
-      : {}),
+    ...(promptMessages &&
+      promptMessages.length > 0 && {
+        prompt: promptMessages.map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+      }),
     // The raw model response the round's consequences were derived from —
     // after the prompt, so the doc reads request → answer (parity with the
     // os feed's buildRoundMetaYaml).
-    ...(llm?.responseText ? { response: llm.responseText } : {}),
+    ...(llm?.responseText && { response: llm.responseText }),
   });
   visit(doc, {
     // Multiline strings as |- blocks: readable and highlightable, instead of

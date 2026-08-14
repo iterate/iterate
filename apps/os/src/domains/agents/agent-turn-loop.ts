@@ -290,16 +290,25 @@ export class AgentTurnLoop implements AgentComponent {
     // that is the normal start (our own requested event arriving at head);
     // after an eviction it is the recovery (the revived fact arriving at
     // head). Runs even while paused: a committed request is drained, never
-    // stranded (see the paused branch above). Expired — or so close to expiry
-    // that no attempt could finish (a late revival adopting a request with
-    // seconds left computes a near-zero transport deadline; prod 2026-08-11
-    // saw a 9-second attempt "time out" and burn its retries) → settle it
-    // instead, with the error transcribed for the next turn: answering a
-    // stale trigger with a stale context snapshot is worse than admitting
-    // the miss.
+    // stranded (see the paused branch above). Expired → settle it instead,
+    // with the error transcribed for the next turn: answering a stale trigger
+    // with a stale context snapshot is worse than admitting the miss. The
+    // expiry settle is UNCONDITIONAL past the horizon — even against this
+    // incarnation's own in-flight slot: a wedged attempt (a hung await the
+    // transport deadline doesn't cover) would otherwise hold isExecuting
+    // forever, and with steady unrelated deliveries keeping the DO alive no
+    // eviction ever breaks the tie (the 2026-08-13 prd incident). Adoption
+    // (nobody here executing) settles early, at the MIN_LLM_ATTEMPT_VALIDITY_MS
+    // floor: a late revival adopting a request with seconds left computes a
+    // near-zero transport deadline — prod 2026-08-11 saw a 9-second attempt
+    // "time out" and burn its retries. A live attempt keeps the full horizon;
+    // it may still finish.
     const open = state.openRequest;
-    if (open !== null && !this.#llm.isExecuting(open.requestedAtOffset)) {
-      if (this.#host.now() + MIN_LLM_ATTEMPT_VALIDITY_MS >= open.expiresAt) {
+    if (open !== null) {
+      const executing = this.#llm.isExecuting(open.requestedAtOffset);
+      const validityFloorMs = executing ? 0 : MIN_LLM_ATTEMPT_VALIDITY_MS;
+      if (this.#host.now() + validityFloorMs >= open.expiresAt) {
+        this.#llm.abandonExpired(open.requestedAtOffset);
         runInBackground(() =>
           appendUnlessLostIdempotencyRace(append, [
             {
@@ -319,7 +328,7 @@ export class AgentTurnLoop implements AgentComponent {
             },
           ]),
         );
-      } else {
+      } else if (!executing) {
         this.#llm.run(args, open);
       }
     }

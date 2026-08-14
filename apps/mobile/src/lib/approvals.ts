@@ -186,8 +186,8 @@ export async function decide(input: {
       approvalRequestEventOffset: input.offset,
       verdicts: [...input.verdicts],
       decidedBy: "human",
-      ...(reason ? { reason } : {}),
-      ...(signed ? { keyId: signed.keyId, signature: signed.signature } : {}),
+      ...(reason && { reason }),
+      ...(signed && { keyId: signed.keyId, signature: signed.signature }),
     },
   });
 }

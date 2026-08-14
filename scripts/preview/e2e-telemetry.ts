@@ -49,10 +49,10 @@ export class PreviewE2eTelemetryArtifact {
     );
     this.ci = {
       ...ci,
-      ...(context.branch ? { branch: context.branch } : {}),
+      ...(context.branch && { branch: context.branch }),
       headSha: context.headSha,
       pullRequestNumber: context.pullRequestNumber,
-      ...(context.runUrl ? { workflowRunUrl: context.runUrl } : {}),
+      ...(context.runUrl && { workflowRunUrl: context.runUrl }),
     };
     this.artifactId = testTelemetryArtifactId(
       "preview",
@@ -92,7 +92,7 @@ export class PreviewE2eTelemetryArtifact {
   }) {
     this.deploymentLanes.push({
       app: input.app,
-      ...(input.slot ? { previewSlot: input.slot } : {}),
+      ...(input.slot && { previewSlot: input.slot }),
       status: input.status,
       durationMs: input.durationMs,
       finishedAt: input.finishedAt,
@@ -126,8 +126,8 @@ export class PreviewE2eTelemetryArtifact {
       startedAt: new Date(startedAtMs).toISOString(),
       finishedAt,
       durationMs: input.durationMs,
-      ...(previewSlot ? { previewSlot } : {}),
-      ...(input.error ? { error: normalizeTestTelemetryError(input.error) } : {}),
+      ...(previewSlot && { previewSlot }),
+      ...(!!input.error && { error: normalizeTestTelemetryError(input.error) }),
       lanes: this.deploymentLanes,
     };
   }
@@ -148,7 +148,7 @@ export class PreviewE2eTelemetryArtifact {
         testKind: "e2e",
         lane: "preview",
         app: input.app,
-        ...(input.slot ? { previewSlot: input.slot } : {}),
+        ...(input.slot && { previewSlot: input.slot }),
       },
       status: input.status,
       durationMs: input.durationMs,
@@ -170,7 +170,7 @@ export class PreviewE2eTelemetryArtifact {
       startedAt: new Date(this.startedAtMs).toISOString(),
       finishedAt,
       durationMs: input.durationMs,
-      ...(input.error ? { error: normalizeTestTelemetryError(input.error) } : {}),
+      ...(!!input.error && { error: normalizeTestTelemetryError(input.error) }),
     };
   }
 
@@ -208,7 +208,7 @@ export class PreviewE2eTelemetryArtifact {
       context: this.context,
       expectedArtifactSources: this.expectedArtifactSources,
       run: this.runResult,
-      ...(this.deploymentResult ? { deployment: this.deploymentResult } : {}),
+      ...(this.deploymentResult && { deployment: this.deploymentResult }),
       lanes: this.lanes,
       tests: [],
       modules: [],
