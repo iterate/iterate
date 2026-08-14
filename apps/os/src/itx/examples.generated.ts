@@ -630,17 +630,15 @@ return await secret.__describe();
     e2eProven: false,
     title: "Make a plain HTTP request through project egress",
     description:
-      "itx.egress.fetch(request) is the raw outbound HTTP door: call an external API, download a file, GET or POST anything — every request project-attributed. It takes ONE argument, a Request (build headers/method/body onto it). Choosing a door: egress.fetch is the plain request; itx.browser.quickAction renders a JS-heavy page and can return markdown; itx.ai.toMarkdown converts documents. RETURN the response data (or just the fields you need) — never save a copy to a file first: script results are retained, and your next script reads them via the `results` preamble. Secret placeholders in headers and URL paths substitute at egress; exact JSON string values also substitute when x-iterate-secret-template: json is set (see secret-postman-echo). External service — interactive-only.",
+      "itx.egress.fetch(input, init?) is the raw outbound HTTP door: call an external API, download a file, GET or POST anything — every request project-attributed. It has the standard fetch signature: a URL plus optional init (headers/method/body), or a prebuilt Request. Choosing a door: egress.fetch is the plain request; itx.browser.quickAction renders a JS-heavy page and can return markdown; itx.ai.toMarkdown converts documents. RETURN the response data (or just the fields you need) — never save a copy to a file first: script results are retained, and your next script reads them via the `results` preamble. Secret placeholders in headers and URL paths substitute at egress; exact JSON string values also substitute when x-iterate-secret-template: json is set (see secret-postman-echo). External service — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
 const url = vars.url ?? "https://example.com/";
 
-// egress.fetch takes ONE argument — a Request. Options like headers
-// ride on the Request itself (a second fetch-style init is ignored).
-const response = await itx.egress.fetch(
-  new Request(url, { headers: { accept: "text/html" } }),
-);
+// egress.fetch has the standard fetch signature — a URL plus optional
+// init (or a prebuilt Request if you prefer).
+const response = await itx.egress.fetch(url, { headers: { accept: "text/html" } });
 const body = await response.text();
 
 return { status: response.status, bodyStart: body.slice(0, 200) };

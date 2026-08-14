@@ -104,17 +104,13 @@ async function signUpToProject(
     projectSlug,
     testInfo,
   });
-  // A fresh signup re-enters the authorize flow after onboarding, and
-  // re-entries can skip the /project-access "Continue" step (postLogin's
-  // shouldRedirect only fires on the initial authorize) — click it when it
-  // renders, then land on consent's "Allow access" either way. (Same fix as
-  // the other mobile specs; see PR #2492.)
-  const continueButton = popup.getByRole("button", { name: "Continue" });
-  const allowAccessButton = popup.getByRole("button", { name: "Allow access" });
-  await continueButton.or(allowAccessButton).first().waitFor({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
-  if (await continueButton.isVisible()) await continueButton.click();
-  await allowAccessButton.click({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
-  await page.getByText(projectSlug).click();
+  // Project selection auto-continues for test identities (project-access.tsx)
+  // — consent is the next interactive page.
+  // timeout: same unwrapped popup — the spinner waiter cannot see it.
+  await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
+  // The app auto-opens the account's only project — no picker tap. (The old
+  // picker tap was a strict-mode trap: the slug also appears in the note
+  // composer's "→ /notes in <slug>" caption once the chat list is up.)
   await page.getByText("New chat").waitFor();
   // Video-mode demos start at the interesting part: the chat list, not the
   // OAuth signup ceremony.
