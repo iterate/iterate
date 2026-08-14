@@ -660,14 +660,6 @@ export class ProjectProcessor extends StreamProcessor<
           ...state,
           defaults: { ...state.defaults, [event.payload.key]: event.payload.value },
         };
-      case "events.iterate.com/project/agent-birth-defaults-configured":
-        // LEGACY alias still published by deployed config repos (they drift
-        // independently of the platform): folds as the agents key's value.
-        // Remove once deployed config repos publish the generic event.
-        return {
-          ...state,
-          defaults: { ...state.defaults, "agents/birth-defaults": event.payload },
-        };
       case "events.iterate.com/notification/created":
         return { ...state, notificationReady: true };
       case "events.iterate.com/stream/created":

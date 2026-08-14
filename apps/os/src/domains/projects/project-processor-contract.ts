@@ -313,13 +313,6 @@ export const ProjectProcessorContract = defineProcessorContract({
         }),
       }),
     },
-    "events.iterate.com/project/agent-birth-defaults-configured": {
-      description:
-        'LEGACY alias of project/defaults-configured with key "agents/birth-defaults" — the ' +
-        "payload folds as that key's value. Deployed config repos drift independently and " +
-        "still publish this type; remove once they have migrated to the generic event.",
-      payloadSchema: z.record(z.string(), z.unknown()),
-    },
     "events.iterate.com/project/onboarding-completed": {
       description: "The project owner completed the onboarding agent flow.",
       payloadSchema: z.object({
@@ -561,7 +554,6 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/custom-domain-removed",
     "events.iterate.com/project/onboarding-completed",
     "events.iterate.com/project/defaults-configured",
-    "events.iterate.com/project/agent-birth-defaults-configured",
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",

@@ -1031,24 +1031,4 @@ describe("ProjectProcessor generic defaults", () => {
       "notifications/digest": { cadence: "daily" },
     });
   });
-
-  it("folds the legacy agent-birth-defaults event as the agents key's value", async () => {
-    const h = makeProjectHarness();
-    await h.append({
-      type: "events.iterate.com/project/agent-birth-defaults-configured",
-      payload: {
-        birthEvents: [
-          {
-            type: "events.iterate.com/agent/configured",
-            payload: { config: { driver: "agent-headless" } },
-          },
-        ],
-      },
-    });
-    expect(h.state().defaults).toMatchObject({
-      "agents/birth-defaults": {
-        birthEvents: [{ type: "events.iterate.com/agent/configured" }],
-      },
-    });
-  });
 });

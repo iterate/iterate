@@ -43,13 +43,12 @@ store; move all interpretation to the consuming domain's read site.
 - "Never stale" survives: the raw latest value replaces the previous raw
   value per key; a malformed latest validates to "no defaults", not to the
   previous defaults.
-- Legacy shim: keep consuming
-  `events.iterate.com/project/agent-birth-defaults-configured` (loose
-  `Record<string, unknown>` payload schema, no agent imports) and fold it
-  into `defaults["agents/birth-defaults"]`. Existing projects' config repos
-  drift independently and still publish the old type; without the shim their
-  birth defaults silently stop working. Clearly marked for removal once
-  deployed config repos have migrated.
+- ~~Legacy shim for the old event type~~ _implemented, then removed at
+  Misha's call: no backcompat. Existing projects' config repos still publish
+  the old type; those events become unrecognized and their birth defaults
+  stop applying until the config repo is updated (default-template projects
+  degrade to the identical embedded fallback prompt, so only codemode-tag
+  experiment projects visibly regress — to the corrective sweep path)._
 - Publishers (`configs/default/worker.ts`, `configs/codemode-tag/worker.ts`)
   publish the new event with a **new idempotency-key prefix** (same key +
   different body is rejected by the stream, so reusing the old prefix would
@@ -59,11 +58,11 @@ store; move all interpretation to the consuming domain's read site.
 
 - [x] Project contract: replace the agent-named event + `agentBirthDefaults`
       slot with `project/defaults-configured` + generic `defaults` record;
-      drop the `AgentBirthDefaults` import; add legacy-event shim
-      _no agent imports remain in projects/; legacy event keeps a loose
-      record schema_
-- [x] Project implementation: generic per-key fold (no validation), legacy
-      case folds to the agents key _two switch cases, both raw stores_
+      drop the `AgentBirthDefaults` import; ~~add legacy-event shim~~
+      _no agent imports remain in projects/; shim removed on review — no
+      backcompat_
+- [x] Project implementation: generic per-key fold (no validation)
+      _one switch case, raw store_
 - [x] agent-defaults.ts: export `AGENT_BIRTH_DEFAULTS_KEY`; keep
       schema/validation as-is _constant + doc updates only_
 - [x] rpc-targets.ts `agentBirthDefaultsForProject`: read
@@ -89,9 +88,8 @@ store; move all interpretation to the consuming domain's read site.
 
 - Event/key naming: `project/defaults-configured` and key
   `"agents/birth-defaults"`. Easy to bikeshed later.
-- The legacy shim is worth its 10 lines (deployed prd/preview projects exist
-  since #2474 merged 2026-08-11). If you'd rather break them, delete the
-  shim commit.
+- ~~The legacy shim is worth its 10 lines~~ _overruled by Misha 2026-08-14:
+  no backcompat._
 - `matches.pathPrefix` stays inside the agents-owned value, not lifted into
   the generic envelope — scoping semantics are the consumer's business.
 - No per-key event vocabulary registry: any key can be published; only keys
