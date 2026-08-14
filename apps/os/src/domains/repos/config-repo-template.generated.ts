@@ -867,7 +867,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      // appends, so the generic event must not reuse the legacy\n" +
       "      // `iterate/config/agent-birth-defaults:` keys.\n" +
       "      idempotencyKey: `iterate/config/defaults:agents/birth-defaults:${hash}`,\n" +
-      "      payload: { key: \"agents/birth-defaults\", value: { birthEvents } satisfies AgentBirthDefaultsValue },\n" +
+      "      payload: {\n" +
+      "        key: \"agents/birth-defaults\",\n" +
+      "        value: { birthEvents } satisfies AgentBirthDefaultsValue,\n" +
+      "      },\n" +
       "    });\n" +
       "  }\n" +
       "\n" +
