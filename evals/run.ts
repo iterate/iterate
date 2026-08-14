@@ -2,9 +2,9 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+import { existsSync } from "node:fs";
 import dedent from "dedent";
 import { createCli } from "trpc-cli";
-import { existsSync } from "node:fs";
 
 export async function list() {
   const list = await fs.readdir(import.meta.dirname);
