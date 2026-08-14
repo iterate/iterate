@@ -1,8 +1,8 @@
 // One activity roll-up in the chat feed — the mobile rendering of the web's
 // "Ran code 2× · 3 requests · 7.4s" rows (packages/ui agent-ui-reducer items).
-// Collapsed: the one-line summary plus status glyphs (spinner while running,
-// approval marks once the run parked batches at the egress door). Expanded
-// (tap, or automatically while live-streaming): the run organized into
+// Collapsed (the default, live or settled): the one-line summary plus status
+// glyphs (spinner while running, approval marks once the run parked batches
+// at the egress door). Expanded (tap only): the run organized into
 // ROUNDS — the llm step that writes a script and the code step that runs it.
 // A single round shows its content directly; several rounds each collapse to
 // a "Round N · <summary status>" header (tap to expand; a running round
@@ -57,9 +57,13 @@ export function ActivityCard({
 }) {
   const isLive = activity.status !== "done";
   const [toggled, setToggled] = useState<boolean | null>(null);
-  // Live activities stream open so you can watch the code being written;
-  // settled ones collapse to their summary until tapped.
-  const expanded = toggled ?? isLive;
+  // Collapsed by default, live or not: a streaming run used to auto-expand
+  // and balloon the chat as code filled in, then vanish back to one line on
+  // settle. The summary row already tells the live story small — spinner
+  // plus "writing code…" — so expansion is a deliberate tap, both ways.
+  // (Inside an opened card, a RUNNING round still streams open — that
+  // auto-expand is what the tap asked to watch.)
+  const expanded = toggled === true;
   const rounds = groupActivityRounds(activity.steps);
   const batchesByExecution = new Map(
     activity.steps
