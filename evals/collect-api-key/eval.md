@@ -1,7 +1,3 @@
-https://os.iterate.com/projects/misha/agents/streams/agents/web/2026-08-13t15-16-03-686z
-
-That chat went badly. Some of it was product bugs since fixed (`itx.egress.fetch(url, init)` silently dropped the init — #2499; the stream also wedged on "Waiting for a response" — #2498), and some of it was noise from my tunnel pointing at a file server instead of a real api. The core flow is worth keeping as an eval, with httpbin.org standing in for the api — its echo endpoints make the headers verifiable from the response body, which cuts all the ambiguity.
-
 Starter prompt, in a fresh project's chat:
 
 > i want you to call an api for me (https://httpbin.org) but you'll need an api key. collect it from me securely pls, i don't want to paste it in the chat
@@ -14,9 +10,9 @@ and then:
 
 > also send a user-agent so i know what's you. show me proof the headers actually arrived
 
-Problems in the original thread:
+Problems in a previous run:
 
-- The headers never went out (the two-arg fetch bug), but the agent repeatedly _claimed_ it had sent them — "Done. I sent GET / with both headers" — and kept claiming after I pasted the received request showing otherwise. Asserting what a request contained, with no evidence, is exactly wrong.
+- The headers never went out (the two-arg fetch bug)
 - When challenged it reached for `itx.docs.search` and re-running the same request instead of finding a way to verify.
 
 Success criteria:
