@@ -50,6 +50,8 @@ export default async function run(
 
     Include in ${resultFile} every agent stream created in the eval project and the total token usage. You can write helper tools in the \`evals/\` directory. Track a helper in git only if it will help future evals; otherwise give it a gitignored filename.
 
+    Also include the coding agent session id in the result so it can be resumed later.
+
     The eval must state its success criteria. If it does not, immediately mark the run as a failure and recommend suitable criteria in the explanation.
 
     This session is not a conversation and will usually run headlessly. Do not respond to the eval or ask for clarification. If the user intervenes, treat that as evidence that the eval setup may need improvement. After the eval, make any broadly useful harness or helper improvements and open a pull request.
