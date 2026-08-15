@@ -1,0 +1,20 @@
+{
+  "name": "iterate-project-worker",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Iterate project worker for the waiter-chef front-of-house experiment.",
+  "dependencies": {
+    "@iterate-com/docs": "https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main",
+    "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250620.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.9.3"
+  }
+}
