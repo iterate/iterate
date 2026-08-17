@@ -43,6 +43,33 @@ export interface DirectOptions {
 /** Silence between one answer ending and the next utterance starting. */
 const TURN_GAP_MS = 400;
 
+/**
+ * One question and its answer, stamped on ONE clock.
+ *
+ * The summary this replaced was shaped for a single turn and said so in three
+ * ways at once: it differenced `Date.now()` against `performance.now()` and
+ * printed −59 seconds, it read `utteranceEnds[0]` however many turns ran, and
+ * it pooled the gaps BETWEEN answers into a distribution meant to describe the
+ * jitter WITHIN one. None of that mattered while `--turns` could not produce a
+ * second turn. A latency floor is a median over repetitions, so it matters now.
+ *
+ * Everything here is `performance.now()`, which is what MicSource stamps its
+ * utterance ends with, so no two fields need aligning.
+ */
+interface Turn {
+  /** When the microphone stopped speaking the question. */
+  askedAtMs: number;
+  /** When the provider's own VAD decided the question had ended. */
+  speechStoppedAtMs: number | null;
+  /** When this answer's first sample arrived here. THE number. */
+  firstAudioAtMs: number | null;
+  /** When the provider said the answer was complete. */
+  doneAtMs: number | null;
+  /** Gaps between consecutive audio messages inside THIS answer. */
+  gapsMs: number[];
+  transcript: string;
+}
+
 export async function direct(options: DirectOptions = {}) {
   const apiKey = process.env.XAI_API_KEY?.trim() ?? "";
   if (!apiKey && !options.url) throw new Error("XAI_API_KEY is required (or pass --url).");
@@ -78,18 +105,18 @@ export async function direct(options: DirectOptions = {}) {
     reasoningEffort: options.effort === "high" ? "high" : "none",
   });
 
-  const marks: Record<string, number> = {};
-  const interArrival: number[] = [];
+  /** Every turn this run asked, in order. Pending ones have nulls. */
+  const turns: Turn[] = [];
+  /** The turn currently being answered; null between answers. */
+  let answering: Turn | null = null;
   let lastAudioAt: number | null = null;
-  let spkFrames = 0;
+  let firstAudioEverAt: number | null = null;
+  let spkMessages = 0;
   let spkBytes = 0;
   let micFramesSent = 0;
   let turnsDone = 0;
   let userTranscript: string | null = null;
   let assistantTranscript = "";
-  let turnTranscript = "";
-  /** Wall time each answer finished, so the gap between turns is visible. */
-  const turnEndedAt: number[] = [];
   let finishRequested = false;
   let say2Injected = false;
   let bargeInAt: number | null = null;
@@ -108,23 +135,44 @@ export async function direct(options: DirectOptions = {}) {
     });
     mic.start();
   });
+  /*
+   * A QUESTION ENDS WHEN THE MICROPHONE STOPS SAYING IT, and that is where a
+   * turn begins for measuring purposes. Every later stamp attaches to the turn
+   * this opens, so an answer can never be timed against the wrong question.
+   */
+  mic.on("utterance-end", (at: number) => {
+    turns.push({
+      askedAtMs: at,
+      speechStoppedAtMs: null,
+      firstAudioAtMs: null,
+      doneAtMs: null,
+      gapsMs: [],
+      transcript: "",
+    });
+  });
   grok.on("audio", (pcm: Buffer) => {
     impair.rx(() => {
-      const now = Date.now();
-      if (marks.firstSpkFrame === undefined) {
-        marks.firstSpkFrame = now;
+      const now = performance.now();
+      if (firstAudioEverAt === null) {
+        firstAudioEverAt = now;
         if (say2Pcm && !say2Injected) {
           say2Injected = true;
           setTimeout(() => {
-            bargeInAt = Date.now();
+            bargeInAt = performance.now();
             mic.inject(say2Pcm);
             console.error("direct: barge-in utterance injected");
           }, options.say2AfterMs ?? 1200);
         }
       }
-      if (lastAudioAt !== null) interArrival.push(now - lastAudioAt);
+      if (answering !== null) {
+        if (answering.firstAudioAtMs === null) answering.firstAudioAtMs = now;
+        /* Within THIS answer only. Pooling across answers folded the pause
+         * between turns into a jitter figure, where it is the largest sample
+         * by an order of magnitude and describes nothing. */ else if (lastAudioAt !== null)
+          answering.gapsMs.push(now - lastAudioAt);
+      }
       lastAudioAt = now;
-      spkFrames++;
+      spkMessages++;
       spkBytes += pcm.length;
       playout.write(pcm);
     });
@@ -132,8 +180,11 @@ export async function direct(options: DirectOptions = {}) {
   grok.on("event", (rawEvent: { type: string; [key: string]: unknown }) =>
     impair.rx(() => handleEvent(rawEvent)),
   );
+  /** The newest turn nobody has stamped `field` on yet. */
+  const pending = (field: "speechStoppedAtMs"): Turn | null =>
+    [...turns].reverse().find((turn) => turn[field] === null) ?? null;
   const handleEvent = (event: { type: string; [key: string]: unknown }) => {
-    const now = Date.now();
+    const now = performance.now();
     switch (event.type) {
       case "input_audio_buffer.speech_started": {
         const dropped = playout.clear();
@@ -143,25 +194,36 @@ export async function direct(options: DirectOptions = {}) {
         }
         break;
       }
-      case "input_audio_buffer.speech_stopped":
-        marks.speechStopped = now;
+      case "input_audio_buffer.speech_stopped": {
+        const turn = pending("speechStoppedAtMs");
+        if (turn !== null) turn.speechStoppedAtMs = now;
         break;
+      }
       case "conversation.item.input_audio_transcription.updated":
       case "conversation.item.input_audio_transcription.completed":
         if (typeof event.transcript === "string") userTranscript = event.transcript;
         break;
       case "response.created":
-        turnTranscript = "";
+        /*
+         * WHICH QUESTION THIS ANSWERS, decided once, here. Binding audio to
+         * "the newest turn" instead would mis-attribute a barge-in: the
+         * interrupted answer is still arriving when the interrupting question
+         * ends, and those samples belong to the turn before.
+         */
+        answering = turns.find((turn) => turn.doneAtMs === null) ?? null;
         break;
       case "response.output_audio_transcript.delta":
-        turnTranscript += (event.delta as string) ?? "";
+        if (answering !== null) answering.transcript += (event.delta as string) ?? "";
         assistantTranscript += (event.delta as string) ?? "";
         break;
       case "response.done":
         turnsDone++;
         playout.endOfResponse();
-        turnEndedAt.push(now);
-        console.error(`direct: turn ${turnsDone} done — "${turnTranscript.trim()}"`);
+        if (answering !== null) {
+          answering.doneAtMs = now;
+          console.error(`direct: turn ${turnsDone} done — "${answering.transcript.trim()}"`);
+          answering = null;
+        }
         if (turnsTarget > 0 && turnsDone >= turnsTarget && !finishRequested) {
           finishRequested = true;
           setTimeout(() => done?.(), Math.max(500, playout.depthMs() + 300));
@@ -198,7 +260,13 @@ export async function direct(options: DirectOptions = {}) {
   playout.stop();
   grok.close();
 
-  const utteranceEnd = mic.utteranceEnds[0] ?? mic.utteranceEndAt;
+  /** Only turns that actually got an answer can be timed. */
+  const answered = turns.filter((turn) => turn.firstAudioAtMs !== null);
+  const span = (from: number | null, to: number | null) =>
+    from === null || to === null ? null : Math.round(to - from);
+  const spans = (pick: (turn: Turn) => number | null) =>
+    percentiles(answered.map(pick).filter((value): value is number => value !== null));
+
   const summary = {
     role: options.url ? "ws-proxy" : "direct",
     ...(options.url ? { url: options.url } : {}),
@@ -209,23 +277,32 @@ export async function direct(options: DirectOptions = {}) {
       ...(impair.describe === null ? {} : { impairment: impair.describe }),
     },
     micFramesSent,
-    spkFrames,
+    /* Grok's audio deltas are of no fixed length, so this counts MESSAGES.
+     * It read `spkFrames`, which invited reading it as 20 ms frames. */
+    spkMessages,
     spkSeconds: +(spkBytes / BYTES_PER_SEC).toFixed(2),
+    turnsAsked: turns.length,
+    turnsAnswered: answered.length,
     latency: {
-      utteranceEndToFirstSpkFrameMs:
-        utteranceEnd !== null && marks.firstSpkFrame !== undefined
-          ? Math.round(marks.firstSpkFrame - (performance.timeOrigin + utteranceEnd))
-          : null,
-      speechStoppedToFirstSpkFrameMs:
-        marks.speechStopped !== undefined && marks.firstSpkFrame !== undefined
-          ? Math.round(marks.firstSpkFrame - marks.speechStopped)
-          : null,
-      spkInterArrivalMs: percentiles(interArrival),
+      /** THE FLOOR: microphone stops, first sample of the answer arrives. */
+      askToFirstAudioMs: spans((turn) => span(turn.askedAtMs, turn.firstAudioAtMs)),
+      /** How long the provider's VAD waits before calling the question over. */
+      vadHangoverMs: spans((turn) => span(turn.askedAtMs, turn.speechStoppedAtMs)),
+      /** And what it does after that: everything the provider owns. */
+      vadToFirstAudioMs: spans((turn) => span(turn.speechStoppedAtMs, turn.firstAudioAtMs)),
+      /** Gaps between audio messages, pooled over turns but never across one. */
+      audioGapMs: percentiles(answered.flatMap((turn) => turn.gapsMs)),
     },
     playout: playout.stats(),
     ...(bargeInAt === null
       ? {}
       : { bargeIn: { reactionMs: bargeInReactionMs, droppedMs: bargeInDrops } }),
+    turns: answered.map((turn) => ({
+      askToFirstAudioMs: span(turn.askedAtMs, turn.firstAudioAtMs),
+      vadHangoverMs: span(turn.askedAtMs, turn.speechStoppedAtMs),
+      answerMs: span(turn.firstAudioAtMs, turn.doneAtMs),
+      transcript: turn.transcript.trim(),
+    })),
     userTranscript,
     assistantTranscript: assistantTranscript.trim(),
   };

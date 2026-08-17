@@ -21,12 +21,18 @@ import { describe, expect, it } from "vitest";
 
 import { answerKey, type HeardFrame, firstFrameOfNewAnswer } from "./ptt-marginal.ts";
 
-/** A frame off the wire, at a time, for a call, in an answer. */
-const frame = (at: number, conversationId: string, answer: number): HeardFrame => ({
-  at,
-  facetT: at,
+/** A frame off the wire, at a time, for a call, cut from a provider delta. */
+const frame = (
+  atDeviceMs: number,
+  conversationId: string,
+  fromGrokAudioDeltaSeq: number,
+  hasAudio = true,
+): HeardFrame => ({
+  atDeviceMs,
+  sentAtFacetMs: atDeviceMs,
   conversationId,
-  answer,
+  fromGrokAudioDeltaSeq,
+  hasAudio,
 });
 
 /** What the probe knew before the button went down. */
@@ -35,14 +41,14 @@ const seen = (...frames: HeardFrame[]) => new Set(frames.map(answerKey));
 describe("which frame answers this press", () => {
   it("takes the first frame of an answer nobody had heard yet", () => {
     const heard = firstFrameOfNewAnswer([frame(200, "aaaaaaaa", 1)], seen(), 100);
-    expect(heard?.at).toBe(200);
+    expect(heard?.atDeviceMs).toBe(200);
   });
 
   it("ignores frames that arrived before the button came up", () => {
     /* The release is the zero of this measurement. A frame from before it
      * belongs to the utterance, not to the reply. */
     const frames = [frame(50, "aaaaaaaa", 1), frame(200, "aaaaaaaa", 1)];
-    expect(firstFrameOfNewAnswer(frames, seen(), 100)?.at).toBe(200);
+    expect(firstFrameOfNewAnswer(frames, seen(), 100)?.atDeviceMs).toBe(200);
   });
 
   it("does not time the tail of the answer the presser talked over", () => {
@@ -54,7 +60,7 @@ describe("which frame answers this press", () => {
      */
     const stale = frame(150, "aaaaaaaa", 1);
     const fresh = frame(900, "aaaaaaaa", 2);
-    expect(firstFrameOfNewAnswer([stale, fresh], seen(stale), 100)?.at).toBe(900);
+    expect(firstFrameOfNewAnswer([stale, fresh], seen(stale), 100)?.atDeviceMs).toBe(900);
   });
 
   it("hears an answer numbered 1 again, because the call is a new one", () => {
@@ -67,7 +73,7 @@ describe("which frame answers this press", () => {
      */
     const roundOne = frame(150, "aaaaaaaa", 1);
     const roundTwo = frame(900, "bbbbbbbb", 1);
-    expect(firstFrameOfNewAnswer([roundTwo], seen(roundOne), 800)?.at).toBe(900);
+    expect(firstFrameOfNewAnswer([roundTwo], seen(roundOne), 800)?.atDeviceMs).toBe(900);
   });
 
   it("still refuses a repeat of a pair it has already timed", () => {
@@ -76,6 +82,19 @@ describe("which frame answers this press", () => {
     expect(firstFrameOfNewAnswer([frame(1_500, "bbbbbbbb", 1)], seen(already), 1_400)).toBe(
       undefined,
     );
+  });
+
+  it("does not time the clear this very press caused", () => {
+    /*
+     * THE v2 TRAP. A press interrupts whatever is playing, and the facet says
+     * so by putting out a frame with no samples in it — carrying a delta
+     * number one past anything heard, arriving milliseconds after the release.
+     * It is new, it is late enough, and it is not an answer: timing it reports
+     * a couple of milliseconds for a reply the model has not started.
+     */
+    const clear = frame(120, "aaaaaaaa", 7, false);
+    const answer = frame(1_400, "aaaaaaaa", 8);
+    expect(firstFrameOfNewAnswer([clear, answer], seen(), 100)?.atDeviceMs).toBe(1_400);
   });
 
   it("answers nothing when nothing arrived, rather than guessing", () => {

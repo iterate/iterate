@@ -38,17 +38,30 @@
  *                            immediately — which is exactly why a flush must
  *                            name this one and no other.
  *
- * EVERY TIMESTAMP SAYS WHERE IT WAS TAKEN, in its name, with no exceptions:
+ * EVERY TIMESTAMP SAYS WHERE IT WAS TAKEN, in its name, with no exceptions.
+ * FOUR CLOCKS, and this is the whole taxonomy — anything measuring this system
+ * uses these four names and coins no fifth:
  *
- *   `...AtDeviceMs`   the board's own clock (its uptime, not wall time)
- *   `...AtGrokMs`     a stamp the provider put on its own event
+ *   `...AtDeviceMs`   THE CLIENT that holds the microphone: a board's uptime,
+ *                     or a laptop running the host CLI or a latency probe. Not
+ *                     wall time on a board, and not the same clock twice if
+ *                     there are two clients.
+ *   `...AtFacetMs`    read inside this processor, `deps.nowAtFacetMs()`
  *   `...AtStreamMs`   the Stream Durable Object's commit stamp (`event.createdAt`)
- *   `...AtFacetMs`    read inside this processor, `deps.now()`
+ *   `...AtGrokMs`     a stamp the PROVIDER put on its own event
  *
- * Four clocks, none of them synchronised with any other. A duration is only
- * meaningful between two stamps with the SAME suffix; subtracting across them
- * is the mistake that produced a device that muted itself against a deadline
- * from somebody else's clock.
+ * None of them is synchronised with any other. A duration is only meaningful
+ * between two stamps with the SAME suffix; subtracting across them is the
+ * mistake that produced a device muting itself against a deadline from
+ * somebody else's clock, and a latency probe reporting minus fifty-nine
+ * seconds because one end of the subtraction was `Date.now()` and the other
+ * was `performance.now()` — two clocks on ONE machine, which is why "it is all
+ * local" is not a defence.
+ *
+ * A duration therefore has no `At`: it is `...Ms`, it belongs to no clock, and
+ * it is the ONLY thing safe to send across a boundary. That is how an
+ * instrument on a laptop attributes a turn it measured itself to work done on
+ * a facet whose clock it has never seen — see `turn-timing`.
  *
  * THE CLIENT IS DUMB, AND THAT IS THE DESIGN, NOT A LIMITATION.
  *
@@ -531,6 +544,53 @@ export const VoiceAgent2Contract = defineProcessorContract({
         receivedAtFacetMs: z.number(),
       }),
     },
+    /**
+     * WHERE ONE TURN'S TIME WENT, and the only lane that can say.
+     *
+     * `grok-event` already carries every provider stamp — and every audio
+     * delta with them, tens of kilobytes at a time. An instrument that
+     * subscribes to it to learn four numbers doubles its own downlink and
+     * inflates the very latency it is measuring. This is those four numbers
+     * and nothing else, once per turn.
+     *
+     * ALL ON THE FACET'S CLOCK, which is what makes it usable from a laptop
+     * whose clock is minutes off. A probe measures its own release-to-audio
+     * total locally and subtracts the two provider terms below, both of which
+     * are DURATIONS on one clock — so the skew cancels instead of being
+     * estimated, and what is left is ours.
+     */
+    "events.iterate.com/voice-agent/turn-timing": {
+      description: "One turn's stamps on the facet clock: end seen, commit, ack, first delta.",
+      ...EPH,
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+        /** The release reaching the facet. Everything before it is the network. */
+        endSeenAtFacetMs: z.number(),
+        /** Null when the turn ended before the provider handshake finished. */
+        commitSentAtFacetMs: z.number().nullable(),
+        /** The provider acknowledging the commit: one round trip from the colo. */
+        committedAckAtFacetMs: z.number().nullable(),
+        /** The answer's first byte. Ack to here is the model thinking. */
+        firstDeltaAtFacetMs: z.number(),
+        /** The turn's first capture, so delivery backlog is visible. */
+        firstMicFrameAtFacetMs: z.number().nullable(),
+        micFrames: z.number(),
+        /** The longest silence between two frames: one stall, against drift. */
+        maxMicFrameGapMs: z.number(),
+        /**
+         * How many frames had already arrived when that gap happened.
+         *
+         * SIZING A STALL DOES NOT LOCATE IT, and the two candidate causes make
+         * opposite predictions. A stall at frame one or two is the delivery
+         * lane WAKING UP — nothing has been sent for the length of the
+         * previous answer, so the first frame pays for whatever went to sleep.
+         * A stall in the middle is the lane failing to keep up while running,
+         * which is a different bug with a different fix. One number tells them
+         * apart; without it both stories fit every measurement.
+         */
+        maxMicFrameGapAfterFrames: z.number(),
+      }),
+    },
   },
   consumes: [
     "events.iterate.com/voice-agent/created",
@@ -555,9 +615,36 @@ export const VoiceAgent2Contract = defineProcessorContract({
     "events.iterate.com/voice-agent/spk-frame",
     "events.iterate.com/voice-agent/speaker-flush",
     "events.iterate.com/voice-agent/grok-event",
+    "events.iterate.com/voice-agent/turn-timing",
   ],
 });
 export type VoiceAgent2Contract = typeof VoiceAgent2Contract;
+
+/** The stamps a turn accumulates before it can be reported. See the contract. */
+interface TurnTiming {
+  firstMicFrameAtFacetMs: number | null;
+  lastMicFrameAtFacetMs: number | null;
+  micFrames: number;
+  maxMicFrameGapMs: number;
+  maxMicFrameGapAfterFrames: number;
+  endSeenAtFacetMs: number | null;
+  commitSentAtFacetMs: number | null;
+  committedAckAtFacetMs: number | null;
+  /** Reported once, when the answer's first byte lands. */
+  reported: boolean;
+}
+
+const freshTurn = (): TurnTiming => ({
+  firstMicFrameAtFacetMs: null,
+  lastMicFrameAtFacetMs: null,
+  micFrames: 0,
+  maxMicFrameGapMs: 0,
+  maxMicFrameGapAfterFrames: 0,
+  endSeenAtFacetMs: null,
+  commitSentAtFacetMs: null,
+  committedAckAtFacetMs: null,
+  reported: false,
+});
 
 /* ========================================================================== */
 /* PROCESSOR                                                                  */
@@ -625,6 +712,16 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * two presses inside one handshake still owe exactly one commit.
    */
   #turnEndedDuringHandshake = false;
+
+  /**
+   * The turn in flight, for `turn-timing`. Never null; reset by the button.
+   *
+   * INSTRUMENTATION AND NOTHING ELSE — no decision in this file reads it. That
+   * is deliberate: the measurement should not be able to change the thing it
+   * measures, and a turn record that only ever grows and gets overwritten
+   * cannot fail in a way that costs a caller an answer.
+   */
+  #turn: TurnTiming = freshTurn();
 
   /** Last sequence number minted on each lane, for this call. */
   #lastGrokAudioDeltaSeq = 0;
@@ -849,6 +946,15 @@ export class VoiceAgent2Processor extends StreamProcessor<
             ? base64ToBytes(event.payload.pcm)
             : null;
         /*
+         * THE TURN'S STAMPS, taken before any branch below can return.
+         *
+         * Every arm of this case returns, and the interesting ones return
+         * early — a frame held for a handshake, a frame that opens a call.
+         * Stamping at the bottom would time only the turns that were already
+         * easy. See `turn-timing`.
+         */
+        this.#stampTurn(event.type, micPcm16 !== null);
+        /*
          * A CALL IS OPENED BY SOMEBODY TALKING, not by anybody asking for one.
          * The device has no way to know whether a call exists, and asking it to
          * say made two sources of truth for one fact.
@@ -930,8 +1036,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * of a button answers halfway through a sentence. */
         if (event.type === "events.iterate.com/voice-agent/ptt-end" && state.clientTakesTurns) {
           if (this.#grokReady && this.#grokSocket !== null) {
-            this.#grokSocket.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-            this.#grokSocket.send(JSON.stringify({ type: "response.create" }));
+            this.#askForAnswer(this.#grokSocket);
           } else {
             /* HELD, EXACTLY LIKE THE AUDIO IT BELONGS TO. This arm used to be
              * `&& this.#grokReady` on the condition above, so a turn that
@@ -1121,8 +1226,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * away sixty seconds earlier.
              */
             if (this.#turnEndedDuringHandshake && state.clientTakesTurns) {
-              socket.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-              socket.send(JSON.stringify({ type: "response.create" }));
+              this.#askForAnswer(socket);
             }
             this.#turnEndedDuringHandshake = false;
             void append({
@@ -1141,6 +1245,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
             return;
           }
 
+          /* The commit came back. One colo-to-provider round trip, and the
+           * only term in a turn that is purely the network between them. */
+          case "input_audio_buffer.committed":
+            this.#turn.committedAckAtFacetMs = receivedAtFacetMs;
+            return;
+
           case "input_audio_buffer.speech_started":
           case "response.created":
             this.#dropAnswerInFlight(conversationId, grokEventType, receivedAtFacetMs, append);
@@ -1148,6 +1258,10 @@ export class VoiceAgent2Processor extends StreamProcessor<
 
           case "response.output_audio.delta": {
             if (typeof grok.delta !== "string") return;
+            /* The turn is over the moment its first byte exists, so the report
+             * goes out before this delta is cut up and paced — which can take
+             * as long as the answer is. */
+            this.#reportTurnTiming(conversationId, receivedAtFacetMs, append);
             const fromGrokAudioDeltaSeq = ++this.#lastGrokAudioDeltaSeq;
             /*
              * CUT ONLY TO FIT THE DEVICE'S RECEIVE BUFFER. A delta is audio
@@ -1271,6 +1385,76 @@ export class VoiceAgent2Processor extends StreamProcessor<
         });
         return;
       }
+    });
+  }
+
+  /* ------------------------------------------------------------------ turn */
+
+  /**
+   * Note what this microphone event says about the turn in flight.
+   *
+   * The button opening a turn is the reset, not the answer arriving: a press
+   * that interrupts an answer starts a turn whose old report has not been sent
+   * and never will be, and holding on to it would attribute this turn's
+   * release to the previous one's capture.
+   */
+  #stampTurn(eventType: string, carriesAudio: boolean): void {
+    const atFacetMs = this.deps.nowAtFacetMs();
+    if (eventType === "events.iterate.com/voice-agent/ptt-start") this.#turn = freshTurn();
+    const turn = this.#turn;
+    if (carriesAudio) {
+      turn.micFrames += 1;
+      if (turn.firstMicFrameAtFacetMs === null) turn.firstMicFrameAtFacetMs = atFacetMs;
+      else if (turn.lastMicFrameAtFacetMs !== null) {
+        const gapMs = atFacetMs - turn.lastMicFrameAtFacetMs;
+        if (gapMs > turn.maxMicFrameGapMs) {
+          turn.maxMicFrameGapMs = gapMs;
+          turn.maxMicFrameGapAfterFrames = turn.micFrames - 1;
+        }
+      }
+      turn.lastMicFrameAtFacetMs = atFacetMs;
+      return;
+    }
+    if (eventType === "events.iterate.com/voice-agent/ptt-end") {
+      turn.endSeenAtFacetMs = atFacetMs;
+    }
+  }
+
+  /**
+   * Commit the captured turn and ask for an answer — the two sends that a
+   * client owning its own turns pays for, kept together so the stamp cannot
+   * drift away from them.
+   */
+  #askForAnswer(socket: WebSocket): void {
+    socket.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    socket.send(JSON.stringify({ type: "response.create" }));
+    this.#turn.commitSentAtFacetMs = this.deps.nowAtFacetMs();
+  }
+
+  /** This turn's stamps, once, as the answer's first byte lands. */
+  #reportTurnTiming(
+    conversationId: string,
+    firstDeltaAtFacetMs: number,
+    append: ProcessEventArgs<VoiceAgent2Contract>["append"],
+  ): void {
+    const turn = this.#turn;
+    /* A turn nobody ended is server VAD answering on its own; there is no
+     * release to measure from and the report would be all nulls. */
+    if (turn.reported || turn.endSeenAtFacetMs === null) return;
+    turn.reported = true;
+    void append({
+      type: "events.iterate.com/voice-agent/turn-timing",
+      payload: {
+        conversationId,
+        endSeenAtFacetMs: turn.endSeenAtFacetMs,
+        commitSentAtFacetMs: turn.commitSentAtFacetMs,
+        committedAckAtFacetMs: turn.committedAckAtFacetMs,
+        firstDeltaAtFacetMs,
+        firstMicFrameAtFacetMs: turn.firstMicFrameAtFacetMs,
+        micFrames: turn.micFrames,
+        maxMicFrameGapMs: Math.round(turn.maxMicFrameGapMs),
+        maxMicFrameGapAfterFrames: turn.maxMicFrameGapAfterFrames,
+      },
     });
   }
 
@@ -1478,6 +1662,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
     this.#speakerQueue = [];
     this.#micQueue = [];
     this.#turnEndedDuringHandshake = false;
+    this.#turn = freshTurn();
     const socket = this.#grokSocket;
     this.#grokSocket = null;
     try {

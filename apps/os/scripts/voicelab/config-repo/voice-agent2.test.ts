@@ -573,6 +573,129 @@ describe("opening a call", () => {
 });
 
 /* ========================================================================== */
+/* TURN TIMING                                                                */
+/* ========================================================================== */
+
+describe("turn timing", () => {
+  /** Every turn report, oldest first. */
+  function turnReports(h: Harness) {
+    return eventsOfType(h, "turn-timing").map(
+      (event) =>
+        event.payload as {
+          endSeenAtFacetMs: number;
+          commitSentAtFacetMs: number | null;
+          committedAckAtFacetMs: number | null;
+          firstDeltaAtFacetMs: number;
+          firstMicFrameAtFacetMs: number | null;
+          micFrames: number;
+          maxMicFrameGapMs: number;
+          maxMicFrameGapAfterFrames: number;
+        },
+    );
+  }
+
+  /** Press, speak `frames` frames with `gapMs` between them, release. */
+  async function speakATurn(h: Harness, frames: number, gapMs = 20): Promise<void> {
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    for (let frame = 0; frame < frames; frame++) {
+      await h.append(micFrame(frame + 1));
+      await h.settle();
+      await h.advanceTime(gapMs);
+    }
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
+    await h.settle();
+  }
+
+  it("splits the wait into terms a probe can subtract", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    await speakATurn(h, 3);
+
+    /* The provider takes 50ms to acknowledge and 300ms more to think. */
+    await h.advanceTime(50);
+    h.grok.push({ type: "input_audio_buffer.committed" });
+    await h.settle();
+    await h.advanceTime(300);
+    h.grok.answerAudio(100);
+    await h.settle();
+
+    const [turn] = turnReports(h);
+    expect(turn).toBeDefined();
+    expect(turn!.committedAckAtFacetMs! - turn!.commitSentAtFacetMs!).toBe(50);
+    expect(turn!.firstDeltaAtFacetMs - turn!.committedAckAtFacetMs!).toBe(300);
+    expect(turn!.micFrames).toBe(3);
+  });
+
+  it("reports once per turn however many deltas the answer has", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    await speakATurn(h, 2);
+    for (let delta = 0; delta < 5; delta++) {
+      h.grok.answerAudio(40);
+      await h.settle();
+    }
+    expect(turnReports(h)).toHaveLength(1);
+  });
+
+  it("says nothing about an answer nobody asked for", async () => {
+    /* Server VAD answers on its own, so there is no release to measure from
+     * and every term would be null. A report of nulls is worse than none: it
+     * puts a row in a median that describes nothing. */
+    const h = makeHarness();
+    await callIsLive(h, GROK_LISTENS);
+    h.grok.answerAudio(100);
+    await h.settle();
+    expect(turnReports(h)).toHaveLength(0);
+  });
+
+  it("says how big the worst gap was AND where it fell", async () => {
+    /*
+     * Sizing a stall does not locate it, and the two causes worth telling
+     * apart make opposite predictions: a lane waking up stalls at frame one,
+     * a lane that cannot keep up stalls in the middle.
+     */
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    for (const gap of [20, 20, 240, 20]) {
+      await h.append(micFrame(1));
+      await h.settle();
+      await h.advanceTime(gap);
+    }
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
+    await h.settle();
+    h.grok.answerAudio(40);
+    await h.settle();
+    const [turn] = turnReports(h);
+    expect(turn!.maxMicFrameGapMs).toBe(240);
+    /* The 240 ms silence follows the third frame, so three had arrived. */
+    expect(turn!.maxMicFrameGapAfterFrames).toBe(3);
+  });
+
+  it("starts a fresh turn on the button, so a barge-in is not timed twice", async () => {
+    /*
+     * The press that interrupts an answer opens a turn whose predecessor was
+     * never reported — the interrupted answer's first delta had already gone
+     * by. Carrying the old stamps forward would attribute this release to the
+     * previous question's capture and report a turn that took minus a second.
+     */
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    await speakATurn(h, 4);
+    await h.advanceTime(500);
+    await speakATurn(h, 1);
+    h.grok.answerAudio(40);
+    await h.settle();
+
+    const reports = turnReports(h);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]!.micFrames).toBe(1);
+  });
+});
+
+/* ========================================================================== */
 /* THE SPEAKER LANE                                                           */
 /* ========================================================================== */
 

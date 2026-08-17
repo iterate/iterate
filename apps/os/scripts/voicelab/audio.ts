@@ -50,7 +50,10 @@ export interface MicSourceOptions {
   preSilenceMs?: number;
 }
 
-/** Emits `frame` (Buffer of FRAME_BYTES, captureTimeMs) every FRAME_MS. */
+/**
+ * Emits `frame` (Buffer of FRAME_BYTES, captureTimeMs) every FRAME_MS, and
+ * `utterance-end` (performance.now) whenever synthetic speech runs out.
+ */
 export class MicSource extends EventEmitter {
   /** Wall time (performance.now) when the last non-silence synthetic frame was emitted. */
   utteranceEndAt: number | null = null;
@@ -97,6 +100,10 @@ export class MicSource extends EventEmitter {
           if (this.reservoir.length === 0) {
             this.utteranceEndAt = performance.now();
             this.utteranceEnds.push(this.utteranceEndAt);
+            /* The one instant a latency probe measures from. It was only ever
+             * recorded in an array, so a caller wanting to open a turn at the
+             * end of a question had to poll the array's length. */
+            this.emit("utterance-end", this.utteranceEndAt);
           }
         } else {
           frame = Buffer.alloc(FRAME_BYTES);

@@ -8,6 +8,28 @@
  * callbacks and the signal flag in main. The large arrays are intentional:
  * they mirror the device profile and make every protocol, audio, utterance,
  * and report bound visible in one assembly object.
+ *
+ * WHICH CLOCK EVERY `_ms` FIELD IS ON, once, so no field has to say it twice.
+ *
+ * Four clocks touch this system and none of them is synchronised with any
+ * other — the client's, the facet's, the stream Durable Object's, and the
+ * inference provider's. The taxonomy and the naming rule live in
+ * `voice-agent2.ts`, which is where events are defined; on the wire they are
+ * `...AtDeviceMs`, `...AtFacetMs`, `...AtStreamMs` and `...AtGrokMs`.
+ *
+ * IN HERE, THIS MACHINE IS THE DEVICE, and every bare `_ms` below is
+ * `cli_runtime_now_ms()` — this process's own monotonic clock, and nothing
+ * else. That is what makes an unqualified subtraction between any two of them
+ * sound.
+ *
+ * So the rule for this struct is the inverse of the rule on the wire: a bare
+ * `_ms` is OURS, and a stamp from anywhere else must name where it came from
+ * (`..._at_facet_ms`, `..._at_stream_ms`, `..._at_grok_ms`) and may never be
+ * subtracted from one of ours. There are currently NONE — this target reads no
+ * foreign timestamp off any payload, and `turn-timing` is deliberately read by
+ * the latency probes rather than by the client. Adding the first one is the
+ * moment to re-read this paragraph, because a deadline compared against
+ * somebody else's clock is what once muted every board in the building.
  */
 
 #include <stdbool.h>

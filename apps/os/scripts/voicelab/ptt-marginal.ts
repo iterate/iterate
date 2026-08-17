@@ -9,19 +9,14 @@
 // pacing — so the difference between the two medians is ours and not the
 // weather.
 //
-// THE TWO HALVES NO LONGER HOLD THE SAME KIND OF SOCKET, and that is the
-// measurement rather than a flaw in it. The direct half keeps one provider
-// session up for the whole run. The facet HANGS UP as soon as an answer is
-// handed over, because a held socket keeps the stream's Durable Object awake
-// for xAI's whole 900-second idle timeout — so the stream half dials afresh on
-// every press. The claim under test is that this costs a caller nothing:
-// dialling starts the instant the button goes down, so the handshake runs
-// underneath the person speaking instead of in front of the answer. A negative
-// result looks like the marginal number growing by about a handshake.
+// BOTH HALVES HOLD ONE SOCKET FOR THE WHOLE RUN. The direct half dials xAI
+// once; the v2 facet opens a call when somebody first talks and keeps it until
+// a minute of silence ends it. So neither half pays a handshake per round, and
+// the difference between the two medians is the plumbing between them.
 //
 //   doppler run --config preview_3 -- pnpm cli voicelab ptt-marginal \
-//     --project facet-proof-8 --stream-path /agents/voice/ptt-1 \
-//     --mic-wav /tmp/utterance.wav --rounds 8
+//     --project voice-test --stream-path /agents/voice2/marginal-1 \
+//     --mic-wav /tmp/utterance.wav --rounds 20
 //
 // Attribution, not just a total, and WITHOUT aligning two clocks. The facet
 // emits one tiny `turn-timing` event per turn holding its own stamps, and the
@@ -30,6 +25,12 @@
 // leaves everything that is ours, with the skew cancelled out. That is both
 // simpler and tighter than estimating an offset and splitting the answer into
 // an uplink and a downlink either side of it.
+//
+// EVERY STAMP HERE NAMES ITS CLOCK, per the taxonomy in `voice-agent2.ts`:
+// `...AtDeviceMs` is this process (it is the client — it holds the microphone),
+// `...AtFacetMs` is the facet's. Nothing subtracts one from the other. This
+// file used to call them `at` and `facetT`, which is how a probe ends up
+// reporting a latency of minus fifty-nine seconds.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -155,6 +156,8 @@ interface StreamTurn extends Turn {
   micFramesSeen: number | null;
   /** The longest single gap between frames: one stall, or steady drift. */
   maxFrameGapMs: number | null;
+  /** Where that gap fell. Near zero means the lane was asleep, not slow. */
+  maxFrameGapAfterFrames: number | null;
 }
 
 /** A direct turn, measured on the socket it was spoken into. */
@@ -185,7 +188,7 @@ async function dialProvider(baseUrl: string, model: string, apiKey: string) {
   const socket = new WebSocket(target.toString(), {
     headers: { Authorization: `Bearer ${apiKey}` },
   });
-  /** Arrival times, by provider event type, newest last. */
+  /** Arrival times HERE, by provider event type, newest last — our clock. */
   const seen = new Map<string, number[]>();
   const note = (type: string) => {
     const times = seen.get(type) ?? [];
@@ -210,80 +213,90 @@ async function dialProvider(baseUrl: string, model: string, apiKey: string) {
   return {
     socket,
     ready,
-    /** The first arrival of `type` at or after `since`, or null. */
-    firstAfter: (type: string, since: number) => seen.get(type)?.find((at) => at >= since) ?? null,
+    /** The first arrival of `type` at or after `sinceAtDeviceMs`, or null. */
+    firstAfter: (type: string, sinceAtDeviceMs: number) =>
+      seen.get(type)?.find((atDeviceMs) => atDeviceMs >= sinceAtDeviceMs) ?? null,
     send: (message: Record<string, unknown>) => socket.send(JSON.stringify(message)),
   };
 }
 
 /** One speaker frame, as much of it as a latency probe needs. */
 export interface HeardFrame {
-  /** When it reached this process. */
-  at: number;
-  /** The facet's own stamp on it. */
-  facetT: number;
-  /** The call it belongs to. Answer numbers only mean anything inside one. */
+  /** When it reached this process, on THIS process's clock. */
+  atDeviceMs: number;
+  /** The facet's own stamp on it, on the FACET's clock. Never subtract these. */
+  sentAtFacetMs: number;
+  /** The call it belongs to. Delta numbers only mean anything inside one. */
   conversationId: string;
   /**
-   * Which answer of that call, counted HERE from the `drop` bit.
+   * Which provider delta this chunk was cut from, as the facet numbered it.
    *
-   * The sender used to stamp this on every frame, and stopped: the device's
-   * whole buffer policy is now `drop` and `last`, so a number naming which
-   * answer a chunk belongs to had no reader left on the wire. A probe that
-   * wants to tell one answer from the next counts the drops, which is the same
-   * information from the same source. Restarts at 1 for every call.
+   * v2 stamps this on every frame, so a probe telling one answer from the next
+   * needs no counting of its own. It restarts at zero on a fresh socket, which
+   * is why the key below is scoped to the call.
    */
-  answer: number;
+  fromGrokAudioDeltaSeq: number;
+  /** False for a frame whose only job is a clear or an end-of-answer marker. */
+  hasAudio: boolean;
 }
 
-/** An answer's identity on the wire: a call, and a number within it. */
-export const answerKey = (frame: Pick<HeardFrame, "conversationId" | "answer">) =>
-  `${frame.conversationId}:${frame.answer}`;
+/** A chunk of generated audio's identity on the wire: a call, and a delta in it. */
+export const answerKey = (frame: Pick<HeardFrame, "conversationId" | "fromGrokAudioDeltaSeq">) =>
+  `${frame.conversationId}:${frame.fromGrokAudioDeltaSeq}`;
 
 /**
  * The first frame that can only belong to the answer this press asked for.
  *
- * THE ANSWER NUMBER IS NOT A RUN-WIDE CLOCK, and reading it as one is what
- * made the first attempt at the facet's hang-up look like a dead server. The
- * rule was "a frame numbered above the highest answer seen so far", which is
- * sound inside one call and meaningless across two: `answer` counts responses
- * on a `GrokCall`, and a call that hangs up takes its counter with it. Once
- * every press dialled its own call, every answer was numbered 1 — so from
- * round two onwards the probe sat for its full 30-second deadline waiting for
- * a 2 that no longer existed, and reported five silent rounds against a facet
- * that had answered all five.
+ * THE DELTA NUMBER IS NOT A RUN-WIDE CLOCK, and reading it as one is what once
+ * made a working facet look like a dead server. The rule was "a frame numbered
+ * above the highest seen so far", which is sound inside one call and
+ * meaningless across two: the counter lives on the socket, and a call that
+ * hangs up takes it away. Every answer was then numbered 1, so from round two
+ * the probe sat out its full 30-second deadline waiting for a 2 that no longer
+ * existed, and reported five silent rounds against a facet that had answered
+ * all five.
  *
  * Scoping the comparison to the conversation is what makes it true again, and
  * it is still the honest match for the thing this guards against: the facet
  * paces a long answer out over its whole playing time, so frames of the
  * PREVIOUS answer are still arriving when the next button goes down. Those
  * carry a pair this turn has already seen; the answer it is waiting for cannot.
+ *
+ * REQUIRING AUDIO is the v2 half of the rule. That lane also carries frames
+ * with no samples in them — the clear that a press puts out, and the marker
+ * that ends an answer — and the clear is emitted BY THIS PRESS, microseconds
+ * after the button goes down. Timing that would report a few milliseconds for
+ * an answer nobody has generated yet.
  */
 export function firstFrameOfNewAnswer(
   frames: readonly HeardFrame[],
   seenBeforeThePress: ReadonlySet<string>,
-  releasedAt: number,
+  releasedAtDeviceMs: number,
 ): HeardFrame | undefined {
   return frames.find(
-    (frame) => frame.at >= releasedAt && !seenBeforeThePress.has(answerKey(frame)),
+    (frame) =>
+      frame.hasAudio &&
+      frame.atDeviceMs >= releasedAtDeviceMs &&
+      !seenBeforeThePress.has(answerKey(frame)),
   );
 }
 
 /** The facet's stamps for one turn, all on the facet's own clock. */
 interface TurnMarks {
-  endSeenT: number;
-  commitSentT: number | null;
-  committedAckT: number | null;
-  firstDeltaT: number;
-  firstFrameT: number | null;
+  endSeenAtFacetMs: number;
+  commitSentAtFacetMs: number | null;
+  committedAckAtFacetMs: number | null;
+  firstDeltaAtFacetMs: number;
+  firstMicFrameAtFacetMs: number | null;
   micFrames: number;
-  maxFrameGapMs: number;
+  maxMicFrameGapMs: number;
+  maxMicFrameGapAfterFrames: number;
 }
 
 export async function pttMarginal(options: PttMarginalOptions) {
   const apiKey = process.env.APP_CONFIG_X_AI_API_KEY?.trim() ?? "";
   if (apiKey === "") throw new Error("APP_CONFIG_X_AI_API_KEY is required for the direct half.");
-  const streamPath = options.streamPath ?? "/agents/voice/ptt-1";
+  const streamPath = options.streamPath ?? "/agents/voice2/marginal-1";
   const rounds = options.rounds ?? 8;
   const settleMs = options.settleMs ?? 8_000;
   const batch = Math.max(1, options.framesPerAppend ?? 12);
@@ -306,18 +319,15 @@ export async function pttMarginal(options: PttMarginalOptions) {
    */
   let spkAt: HeardFrame[] = [];
   /*
-   * Every (call, answer) pair this run has heard, for the whole run rather
+   * Every (call, delta) pair this run has heard, for the whole run rather
    * than the turn: `spkAt` is cleared per turn, so a straggler from the
    * previous answer arrives into an empty list and would otherwise look new.
    * See `firstFrameOfNewAnswer` for why the pair, and not the number alone.
    */
   const answersSeen = new Set<string>();
-  /** Answers opened so far, per call — counted from `drop`. Lifetime, not per turn. */
-  const answersByCall = new Map<string, number>();
-  let lastSpkAt = 0;
+  let lastSpkAtDeviceMs = 0;
   /** The facet's stamps for the turn in flight; at most one per turn. */
   const timing: TurnMarks[] = [];
-  const pongs = new Map<string, { at: number; facetT: number }>();
   let faultThisTurn = false;
   /* Lifetime counts, so "no answer" can be told apart from "no delivery". */
   const delivered = new Map<string, number>();
@@ -326,33 +336,27 @@ export async function pttMarginal(options: PttMarginalOptions) {
     eventTypes: [
       "events.iterate.com/voice-agent/spk-frame",
       "events.iterate.com/voice-agent/turn-timing",
-      "events.iterate.com/voice-agent/pong",
       "events.iterate.com/voice-agent/call-started",
       "events.iterate.com/voice-agent/provider-error",
-      "events.iterate.com/voice-agent/conversation-failed",
       "events.iterate.com/voice-agent/conversation-ended",
     ],
     processEventBatch: (payloadBatch: { events?: { type: string; payload?: unknown }[] }) => {
-      const at = Date.now();
+      const atDeviceMs = Date.now();
       for (const event of payloadBatch.events ?? []) {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
         delivered.set(event.type, (delivered.get(event.type) ?? 0) + 1);
         if (event.type === "events.iterate.com/voice-agent/spk-frame") {
-          lastSpkAt = at;
-          const conversationId = String(payload.conversationId ?? "");
-          /* `drop` opens an answer, so counting drops per call reproduces the
-           * numbering the sender used to carry. */
-          if (payload.drop === true) {
-            answersByCall.set(conversationId, (answersByCall.get(conversationId) ?? 0) + 1);
-          }
+          lastSpkAtDeviceMs = atDeviceMs;
           const frame: HeardFrame = {
-            at,
-            facetT: typeof payload.t === "number" ? payload.t : Number.NaN,
-            conversationId,
-            answer: answersByCall.get(conversationId) ?? 0,
+            atDeviceMs,
+            sentAtFacetMs:
+              typeof payload.sentAtFacetMs === "number" ? payload.sentAtFacetMs : Number.NaN,
+            conversationId: String(payload.conversationId ?? ""),
+            fromGrokAudioDeltaSeq: Number(payload.fromGrokAudioDeltaSeq ?? 0),
+            hasAudio: typeof payload.pcm === "string" && payload.pcm !== "",
           };
           spkAt.push(frame);
-          answersSeen.add(answerKey(frame));
+          if (frame.hasAudio) answersSeen.add(answerKey(frame));
           continue;
         }
         if (event.type === "events.iterate.com/voice-agent/provider-error") {
@@ -362,20 +366,19 @@ export async function pttMarginal(options: PttMarginalOptions) {
         }
         if (event.type === "events.iterate.com/voice-agent/turn-timing") {
           timing.push({
-            endSeenT: Number(payload.endSeenT),
-            commitSentT: payload.commitSentT === null ? null : Number(payload.commitSentT),
-            committedAckT: payload.committedAckT === null ? null : Number(payload.committedAckT),
-            firstDeltaT: Number(payload.firstDeltaT),
-            firstFrameT: payload.firstFrameT === null ? null : Number(payload.firstFrameT),
+            endSeenAtFacetMs: Number(payload.endSeenAtFacetMs),
+            commitSentAtFacetMs:
+              payload.commitSentAtFacetMs === null ? null : Number(payload.commitSentAtFacetMs),
+            committedAckAtFacetMs:
+              payload.committedAckAtFacetMs === null ? null : Number(payload.committedAckAtFacetMs),
+            firstDeltaAtFacetMs: Number(payload.firstDeltaAtFacetMs),
+            firstMicFrameAtFacetMs:
+              payload.firstMicFrameAtFacetMs === null
+                ? null
+                : Number(payload.firstMicFrameAtFacetMs),
             micFrames: Number(payload.micFrames ?? 0),
-            maxFrameGapMs: Number(payload.maxFrameGapMs ?? 0),
-          });
-          continue;
-        }
-        if (event.type === "events.iterate.com/voice-agent/pong") {
-          pongs.set(String(payload.id), {
-            at,
-            facetT: typeof payload.t1 === "number" ? payload.t1 : Number.NaN,
+            maxMicFrameGapMs: Number(payload.maxMicFrameGapMs ?? 0),
+            maxMicFrameGapAfterFrames: Number(payload.maxMicFrameGapAfterFrames ?? 0),
           });
           continue;
         }
@@ -386,10 +389,6 @@ export async function pttMarginal(options: PttMarginalOptions) {
          * is reported at the end. Only the stream saying the call went wrong
          * makes a round unusable.
          */
-        if (event.type === "events.iterate.com/voice-agent/conversation-failed") {
-          console.log(`  conversation failed: ${String(payload.reason).slice(0, 200)}`);
-          faultThisTurn = true;
-        }
       }
     },
   });
@@ -408,19 +407,24 @@ export async function pttMarginal(options: PttMarginalOptions) {
    * here, and `turn-timing`'s provider RTT and think time are facet-clock
    * DURATIONS, so subtracting them leaves everything that is ours with the
    * skew cancelled out.
+   *
+   * IT PROBES WITH `warmup`, WHICH IS THE ONLY EVENT THAT STARTS NOTHING. It
+   * used to append an empty `mic-frame`, and on v2 that is not a null probe at
+   * all: a microphone frame is what OPENS A CALL, so three of them between
+   * rounds would dial the provider from a probe measuring the cost of not
+   * dialling it.
    */
   async function probeAppendRtt(): Promise<number | null> {
     const trips: number[] = [];
     for (let probe = 0; probe < APPEND_PROBES; probe++) {
-      const at = Date.now();
+      const atDeviceMs = Date.now();
       await discardRpcResult(
         stream.append({
-          type: "events.iterate.com/voice-agent/mic-frame",
-          ephemeral: true,
-          payload: { seq: -1 - probe, pcm: "" },
+          type: "events.iterate.com/voice-agent/warmup",
+          payload: { token: `append-rtt-${atDeviceMs}-${probe}` },
         }),
       );
-      trips.push(Date.now() - at);
+      trips.push(Date.now() - atDeviceMs);
     }
     return median(trips);
   }
@@ -438,7 +442,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
     const deadline = Date.now() + settleMs;
     /* A floor as well as a ceiling: the answer may not have started yet. */
     await sleep(Math.min(1_500, settleMs));
-    while (Date.now() < deadline && Date.now() - lastSpkAt < 1_500) await sleep(100);
+    while (Date.now() < deadline && Date.now() - lastSpkAtDeviceMs < 1_500) await sleep(100);
   }
 
   /**
@@ -452,10 +456,10 @@ export async function pttMarginal(options: PttMarginalOptions) {
    * the answer. Riding in the final batch makes the ordering a fact rather
    * than a hope, and costs a round trip less than sending it separately.
    */
-  async function speakToStream(pressedAt: number): Promise<number> {
+  async function speakToStream(pressedAtDeviceMs: number): Promise<number> {
     for (let index = 0; index < spoken.length; index += batch) {
       /* A batch cannot be sent before the audio in it has been captured. */
-      const due = pressedAt + Math.min(index + batch, spoken.length) * FRAME_MS;
+      const due = pressedAtDeviceMs + Math.min(index + batch, spoken.length) * FRAME_MS;
       const wait = due - Date.now();
       if (wait > 0) await sleep(wait);
       const events = [];
@@ -463,19 +467,23 @@ export async function pttMarginal(options: PttMarginalOptions) {
         events.push({
           type: "events.iterate.com/voice-agent/mic-frame" as const,
           ephemeral: true as const,
-          payload: { seq: index + offset, pcm: spoken[index + offset]! },
+          payload: {
+            deviceMicFrameSeq: index + offset,
+            pcm: spoken[index + offset]!,
+            capturedAtDeviceMs: pressedAtDeviceMs + (index + offset) * FRAME_MS,
+          },
         });
       }
       if (index + batch >= spoken.length) {
-        const releasedAt = Date.now();
+        const releasedAtDeviceMs = Date.now();
         await discardRpcResult(
           stream.append(...events, {
             type: "events.iterate.com/voice-agent/ptt-end",
             ephemeral: true,
-            payload: { t: releasedAt },
+            payload: {},
           }),
         );
-        return releasedAt;
+        return releasedAtDeviceMs;
       }
       void stream.append(...events).catch(() => undefined);
     }
@@ -487,20 +495,20 @@ export async function pttMarginal(options: PttMarginalOptions) {
     timing.length = 0;
     faultThisTurn = false;
     const answersBefore = new Set(answersSeen);
-    const pressedAt = Date.now();
+    const pressedAtDeviceMs = Date.now();
     await discardRpcResult(
       stream.append({
         type: "events.iterate.com/voice-agent/ptt-start",
         ephemeral: true,
-        payload: { t: pressedAt },
+        payload: {},
       }),
     );
-    const releasedAt = await speakToStream(pressedAt);
+    const releasedAtDeviceMs = await speakToStream(pressedAtDeviceMs);
 
     const deadline = Date.now() + 30_000;
     let heard: HeardFrame | undefined;
     while (Date.now() < deadline) {
-      heard = firstFrameOfNewAnswer(spkAt, answersBefore, releasedAt);
+      heard = firstFrameOfNewAnswer(spkAt, answersBefore, releasedAtDeviceMs);
       if (heard !== undefined) break;
       await sleep(5);
     }
@@ -510,22 +518,27 @@ export async function pttMarginal(options: PttMarginalOptions) {
         ? null
         : Math.round(to - from);
     const facetSide = {
-      facetMs: span(marks?.endSeenT, marks?.commitSentT),
-      providerRttMs: span(marks?.commitSentT, marks?.committedAckT),
-      providerThinkMs: span(marks?.committedAckT, marks?.firstDeltaT),
+      facetMs: span(marks?.endSeenAtFacetMs, marks?.commitSentAtFacetMs),
+      providerRttMs: span(marks?.commitSentAtFacetMs, marks?.committedAckAtFacetMs),
+      providerThinkMs: span(marks?.committedAckAtFacetMs, marks?.firstDeltaAtFacetMs),
       /* The client spoke `spoken.length` frames of FRAME_MS each; anything the
        * facet's own span has beyond that is time it spent catching up. */
       backlogMs:
-        marks === null || marks.firstFrameT === null
+        marks === null || marks.firstMicFrameAtFacetMs === null
           ? null
-          : Math.round(marks.endSeenT - marks.firstFrameT - (spoken.length - 1) * FRAME_MS),
+          : Math.round(
+              marks.endSeenAtFacetMs -
+                marks.firstMicFrameAtFacetMs -
+                (spoken.length - 1) * FRAME_MS,
+            ),
       micFramesSeen: marks?.micFrames ?? null,
-      maxFrameGapMs: marks?.maxFrameGapMs ?? null,
+      maxFrameGapMs: marks?.maxMicFrameGapMs ?? null,
+      maxFrameGapAfterFrames: marks?.maxMicFrameGapAfterFrames ?? null,
     };
     if (heard === undefined) {
       return { totalMs: null, ourMs: null, appendRttMs, clean: !faultThisTurn, ...facetSide };
     }
-    const totalMs = heard.at - releasedAt;
+    const totalMs = heard.atDeviceMs - releasedAtDeviceMs;
     const provider =
       facetSide.providerRttMs === null || facetSide.providerThinkMs === null
         ? null
@@ -542,31 +555,37 @@ export async function pttMarginal(options: PttMarginalOptions) {
   async function directTurn(
     session: Awaited<ReturnType<typeof dialProvider>>,
   ): Promise<DirectTurn> {
-    const pressedAt = Date.now();
+    const pressedAtDeviceMs = Date.now();
     /* Paced exactly as the stream half paces it, so both put audio on the wire
      * at the same rate rather than one of them dumping it in a burst. */
     for (let index = 0; index < spoken.length; index++) {
-      const due = pressedAt + index * FRAME_MS;
+      const due = pressedAtDeviceMs + index * FRAME_MS;
       const wait = due - Date.now();
       if (wait > 0) await sleep(wait);
       session.send({ type: "input_audio_buffer.append", audio: spoken[index]! });
     }
-    const releasedAt = Date.now();
+    const releasedAtDeviceMs = Date.now();
     session.send({ type: "input_audio_buffer.commit" });
     session.send({ type: "response.create" });
 
     const deadline = Date.now() + 30_000;
-    let audioAt: number | null = null;
+    let audioAtDeviceMs: number | null = null;
     while (Date.now() < deadline) {
-      audioAt = session.firstAfter("response.output_audio.delta", releasedAt);
-      if (audioAt !== null) break;
+      audioAtDeviceMs = session.firstAfter("response.output_audio.delta", releasedAtDeviceMs);
+      if (audioAtDeviceMs !== null) break;
       await sleep(5);
     }
-    const committedAt = session.firstAfter("input_audio_buffer.committed", releasedAt);
+    const committedAtDeviceMs = session.firstAfter(
+      "input_audio_buffer.committed",
+      releasedAtDeviceMs,
+    );
     return {
-      totalMs: audioAt === null ? null : audioAt - releasedAt,
-      providerMs: audioAt === null || committedAt === null ? null : audioAt - committedAt,
-      providerRttMs: committedAt === null ? null : committedAt - releasedAt,
+      totalMs: audioAtDeviceMs === null ? null : audioAtDeviceMs - releasedAtDeviceMs,
+      providerMs:
+        audioAtDeviceMs === null || committedAtDeviceMs === null
+          ? null
+          : audioAtDeviceMs - committedAtDeviceMs,
+      providerRttMs: committedAtDeviceMs === null ? null : committedAtDeviceMs - releasedAtDeviceMs,
       clean: true,
     };
   }
@@ -605,7 +624,8 @@ export async function pttMarginal(options: PttMarginalOptions) {
           `stream ${show(viaStream.totalMs)} = ours ${show(viaStream.ourMs)} + ` +
           `xai-rtt ${show(viaStream.providerRttMs)} + think ${show(viaStream.providerThinkMs)} ` +
           `(facet ${show(viaStream.facetMs)}) ` +
-          `[backlog ${show(viaStream.backlogMs)}, gap ${show(viaStream.maxFrameGapMs)}, ` +
+          `[backlog ${show(viaStream.backlogMs)}, ` +
+          `gap ${show(viaStream.maxFrameGapMs)}@${String(viaStream.maxFrameGapAfterFrames ?? "-")}, ` +
           `frames ${String(viaStream.micFramesSeen ?? "-")}]  ` +
           `direct ${show(viaDirect.totalMs)} = xai-rtt ${show(viaDirect.providerRttMs)} + ` +
           `think ${show(viaDirect.providerMs)}` +
@@ -663,6 +683,10 @@ export async function pttMarginal(options: PttMarginalOptions) {
     /** The worst single stall in the delivery lane during an utterance. */
     maxFrameGapMs: summarize(
       cleanStream.map((t) => t.maxFrameGapMs).filter((v): v is number => v !== null),
+    ),
+    /** And how far into the utterance it fell: 0-2 means a cold lane waking. */
+    maxFrameGapAfterFrames: summarize(
+      cleanStream.map((t) => t.maxFrameGapAfterFrames).filter((v): v is number => v !== null),
     ),
     /** How far the delivery lane fell behind the microphone. */
     backlogMs: summarize(
