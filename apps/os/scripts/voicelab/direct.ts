@@ -40,6 +40,9 @@ export interface DirectOptions {
   url?: string;
 }
 
+/** Silence between one answer ending and the next utterance starting. */
+const TURN_GAP_MS = 400;
+
 export async function direct(options: DirectOptions = {}) {
   const apiKey = process.env.XAI_API_KEY?.trim() ?? "";
   if (!apiKey && !options.url) throw new Error("XAI_API_KEY is required (or pass --url).");
@@ -57,6 +60,13 @@ export async function direct(options: DirectOptions = {}) {
   }
 
   const say2Pcm = options.say2 ? synthesizePcm(options.say2) : null;
+  /*
+   * The utterance, kept so it can be said more than once. A real microphone
+   * has a person behind it and needs no reservoir; a synthetic one is a file
+   * that drains.
+   */
+  const repeatPcm =
+    !options.mic && syntheticPcmPath !== undefined ? fs.readFileSync(syntheticPcmPath) : null;
 
   const playout = new PlayoutBuffer({ device: options.device === true });
   const mic = new MicSource(syntheticPcmPath ? { syntheticPcmPath } : {});
@@ -78,6 +88,8 @@ export async function direct(options: DirectOptions = {}) {
   let userTranscript: string | null = null;
   let assistantTranscript = "";
   let turnTranscript = "";
+  /** Wall time each answer finished, so the gap between turns is visible. */
+  const turnEndedAt: number[] = [];
   let finishRequested = false;
   let say2Injected = false;
   let bargeInAt: number | null = null;
@@ -148,10 +160,30 @@ export async function direct(options: DirectOptions = {}) {
       case "response.done":
         turnsDone++;
         playout.endOfResponse();
+        turnEndedAt.push(now);
         console.error(`direct: turn ${turnsDone} done — "${turnTranscript.trim()}"`);
         if (turnsTarget > 0 && turnsDone >= turnsTarget && !finishRequested) {
           finishRequested = true;
           setTimeout(() => done?.(), Math.max(500, playout.depthMs() + 300));
+          break;
+        }
+        /*
+         * SAY IT AGAIN, because `--turns` was a counter with no producer.
+         *
+         * The synthetic microphone drains its utterance once and then emits
+         * silence for ever, so anything above one turn waited for a
+         * `response.done` that nothing could cause. It did not fail: it hung,
+         * until xAI ended the conversation for 900 seconds of inactivity, and
+         * the run reported nothing at all. A latency floor is a median over
+         * repetitions, so a harness that can only do one repetition could
+         * never answer the question it exists for.
+         *
+         * Waiting for the answer to finish playing before speaking again is
+         * what a person does, and it keeps each turn's timings independent of
+         * the previous answer's tail.
+         */
+        if (turnsTarget > 0 && repeatPcm !== null) {
+          setTimeout(() => mic.inject(repeatPcm, TURN_GAP_MS), Math.max(0, playout.depthMs()));
         }
         break;
     }
