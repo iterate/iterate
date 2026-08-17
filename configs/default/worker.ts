@@ -183,7 +183,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         }
 
         const onboardingAgent = this.itx.agents.get("/agents/onboarding");
-        await onboardingAgent.create({ purpose: "onboarding", template: "default" });
+        await onboardingAgent.create();
         await onboardingAgent.append(
           {
             type: "events.iterate.com/agents/context-added",

@@ -80,6 +80,6 @@ test("the config template creates and opens onboarding for a new project", async
   ]);
   expect(
     createdEvent.find((event) => event.type === "events.iterate.com/agent/created")?.payload,
-  ).toEqual({ purpose: "onboarding", template: "default" });
+  ).toEqual({});
   expect(promptEvent?.payload?.content).toContain("# Onboarding Agent");
 });

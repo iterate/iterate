@@ -905,7 +905,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        }\n" +
       "\n" +
       "        const onboardingAgent = this.itx.agents.get(\"/agents/onboarding\");\n" +
-      "        await onboardingAgent.create({ purpose: \"onboarding\", template: \"default\" });\n" +
+      "        await onboardingAgent.create();\n" +
       "        await onboardingAgent.append(\n" +
       "          {\n" +
       "            type: \"events.iterate.com/agents/context-added\",\n" +

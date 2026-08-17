@@ -113,7 +113,7 @@ test.each([
       },
     });
 
-    expect(create).toHaveBeenCalledWith({ purpose: "onboarding", template: name });
+    expect(create).toHaveBeenCalledExactlyOnceWith();
     expect(append).toHaveBeenCalledWith(
       {
         type: "events.iterate.com/agents/context-added",

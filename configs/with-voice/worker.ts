@@ -10,7 +10,7 @@ export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
     }
 
     const onboardingAgent = this.itx.agents.get("/agents/onboarding");
-    await onboardingAgent.create({ purpose: "onboarding", template: "with-voice" });
+    await onboardingAgent.create();
     await onboardingAgent.append(
       {
         type: "events.iterate.com/agents/context-added",
