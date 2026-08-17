@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test, vi } from "vitest";
 import {
   buildChatCommand,
+  defaultBareInvocationToChat,
   ensureBearerAuthHeadersForChat,
   oauthResourceForOsBaseUrl,
   refreshOAuthSession,
@@ -167,6 +168,20 @@ describe("verifyOsSession", () => {
     });
     expect(description.principal).toBe("user_123");
     expect(fake.disposeAuthenticated).toHaveBeenCalledOnce();
+  });
+});
+
+describe("defaultBareInvocationToChat", () => {
+  test("runs generic chat for a bare invocation", () => {
+    expect(defaultBareInvocationToChat([])).toEqual(["chat"]);
+  });
+
+  test("leaves explicit commands and flags untouched", () => {
+    const explicit = ["chat", "--project", "prj_123"];
+    expect(defaultBareInvocationToChat(explicit)).toBe(explicit);
+
+    const help = ["--help"];
+    expect(defaultBareInvocationToChat(help)).toBe(help);
   });
 });
 

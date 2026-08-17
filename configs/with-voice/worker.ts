@@ -4,13 +4,12 @@ export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
   protected override async processEvent(event: StreamEvent): Promise<void> {
     if (event.type !== "events.iterate.com/project/created" || event.path !== "/") return;
 
-    const itx = this.itx;
-    const instructions = await itx.repo.readFile({ path: "ONBOARDING.md" });
+    const instructions = await this.itx.repo.readFile({ path: "ONBOARDING.md" });
     if (instructions === null) {
       throw new Error("The voice template enables onboarding but ONBOARDING.md is missing.");
     }
 
-    const onboardingAgent = itx.agents.get("/agents/onboarding");
+    const onboardingAgent = this.itx.agents.get("/agents/onboarding");
     await onboardingAgent.create({ purpose: "onboarding", template: "with-voice" });
     await onboardingAgent.append(
       {
@@ -36,14 +35,14 @@ export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
       },
     );
 
-    const [{ slug }, clients] = await Promise.all([itx.identity(), itx.clients.list()]);
+    const [{ slug }, clients] = await Promise.all([this.itx.identity(), this.itx.clients.list()]);
     const projectHomePath = `/projects/${slug}`;
     const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;
     await Promise.all(
       clients
         .filter((client) => client.connected && client.path.startsWith("/clients/os-app/"))
         .map(async (client) => {
-          const browserClient = itx.clients.get(client.path);
+          const browserClient = this.itx.clients.get(client.path);
           const currentUrl = await browserClient.invokeCapability({
             path: ["capabilities", "browser", "url"],
           });

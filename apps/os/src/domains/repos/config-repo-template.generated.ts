@@ -899,13 +899,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    switch (event.type) {\n" +
       "      case \"events.iterate.com/project/created\": {\n" +
       "        if (event.path !== \"/\") break;\n" +
-      "        const itx = this.itx;\n" +
-      "        const instructions = await itx.repo.readFile({ path: \"ONBOARDING.md\" });\n" +
+      "        const instructions = await this.itx.repo.readFile({ path: \"ONBOARDING.md\" });\n" +
       "        if (instructions === null) {\n" +
       "          throw new Error(\"The default template enables onboarding but ONBOARDING.md is missing.\");\n" +
       "        }\n" +
       "\n" +
-      "        const onboardingAgent = itx.agents.get(\"/agents/onboarding\");\n" +
+      "        const onboardingAgent = this.itx.agents.get(\"/agents/onboarding\");\n" +
       "        await onboardingAgent.create({ purpose: \"onboarding\", template: \"default\" });\n" +
       "        await onboardingAgent.append(\n" +
       "          {\n" +
@@ -931,14 +930,17 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          },\n" +
       "        );\n" +
       "\n" +
-      "        const [{ slug }, clients] = await Promise.all([itx.identity(), itx.clients.list()]);\n" +
+      "        const [{ slug }, clients] = await Promise.all([\n" +
+      "          this.itx.identity(),\n" +
+      "          this.itx.clients.list(),\n" +
+      "        ]);\n" +
       "        const projectHomePath = `/projects/${slug}`;\n" +
       "        const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;\n" +
       "        await Promise.all(\n" +
       "          clients\n" +
       "            .filter((client) => client.connected && client.path.startsWith(\"/clients/os-app/\"))\n" +
       "            .map(async (client) => {\n" +
-      "              const browserClient = itx.clients.get(client.path);\n" +
+      "              const browserClient = this.itx.clients.get(client.path);\n" +
       "              const currentUrl = await browserClient.invokeCapability({\n" +
       "                path: [\"capabilities\", \"browser\", \"url\"],\n" +
       "              });\n" +

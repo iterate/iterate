@@ -177,13 +177,12 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     switch (event.type) {
       case "events.iterate.com/project/created": {
         if (event.path !== "/") break;
-        const itx = this.itx;
-        const instructions = await itx.repo.readFile({ path: "ONBOARDING.md" });
+        const instructions = await this.itx.repo.readFile({ path: "ONBOARDING.md" });
         if (instructions === null) {
           throw new Error("The default template enables onboarding but ONBOARDING.md is missing.");
         }
 
-        const onboardingAgent = itx.agents.get("/agents/onboarding");
+        const onboardingAgent = this.itx.agents.get("/agents/onboarding");
         await onboardingAgent.create({ purpose: "onboarding", template: "default" });
         await onboardingAgent.append(
           {
@@ -209,14 +208,17 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
           },
         );
 
-        const [{ slug }, clients] = await Promise.all([itx.identity(), itx.clients.list()]);
+        const [{ slug }, clients] = await Promise.all([
+          this.itx.identity(),
+          this.itx.clients.list(),
+        ]);
         const projectHomePath = `/projects/${slug}`;
         const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;
         await Promise.all(
           clients
             .filter((client) => client.connected && client.path.startsWith("/clients/os-app/"))
             .map(async (client) => {
-              const browserClient = itx.clients.get(client.path);
+              const browserClient = this.itx.clients.get(client.path);
               const currentUrl = await browserClient.invokeCapability({
                 path: ["capabilities", "browser", "url"],
               });
