@@ -1,31 +1,56 @@
-// core/config.ts — the deployment-wide APP_CONFIG (target-core §3.3, §4). No projectId here; the projectId
-// comes from the DO name. For the walking skeleton we only need `fallback` (the shell we delegate outward to).
+// core/config.ts — the typed APP_CONFIG. Its heart is `seeds`: mount rows (pattern ⇒ target) in
+// the SAME expression grammar userspace `provideCapability` uses, written in either half of the
+// codec ("most people would prefer the string"). Seeds sit at the BOTTOM of every shadow stack,
+// with provenance `config` — the only provenance whose targets may reference `roots` (the
+// privileged physical-layer vocabulary; see core/roots.ts). Topology lives here as data:
+//
+//   iterate-hosted   { "pattern": "itx.os", "target": "roots.binding('FALLBACK')" }
+//   BYO-cloud        { "pattern": "itx.os", "target": "roots.dial('https://os.iterate.com/api')" }
+//   solo/dev         (omit APP_CONFIG entirely — the defaults below apply)
+//
+// Secrets NEVER appear here: a dial's auth rides `{{secret:NAME}}` placeholders inside ordinary
+// request headers, substituted at the egress terminal from the per-project store.
 
-/** A dotted capability expression, e.g. "itx.slack.chat.postMessage" (target-core §4.0). */
+import { z } from "zod";
+import { parse, type Expression } from "./expression.ts";
+
+/** @deprecated dotted callPath addressing — dies with the old ItxDurableObject's Mount union. */
 export type ItxCallPath = `itx.${string}`;
 
-/** What a worker's root context falls back to (target-core §3.4 / D30). */
-export type FallbackRef =
-  | { via: "terminal" } // the real internet + real bindings — ends the chain
-  | { via: "service-binding"; binding: string } // → an outer-shell worker (self-host / hosted)
-  | { via: "loopback-entrypoint"; entrypoint: string }; // → a loopback entrypoint (solo: DummyControlPlane)
+const ExpressionInput = z.union([
+  z.string().transform((s) => parse(s)),
+  z.array(z.union([z.string(), z.tuple([z.string()]).rest(z.unknown())])) as z.ZodType<Expression>,
+]);
 
-export type AppConfig = {
-  fallback: FallbackRef;
-};
+const SeedRow = z.object({
+  pattern: ExpressionInput,
+  target: ExpressionInput,
+});
 
-const SOLO_DEFAULT: AppConfig = {
-  fallback: { via: "loopback-entrypoint", entrypoint: "DummyControlPlane" },
-};
+export const AppConfig = z.object({
+  seeds: z.array(SeedRow).default([]),
+});
+export type AppConfig = z.infer<typeof AppConfig>;
 
-/** Parse env.APP_CONFIG; default to SOLO (fallback → the project worker's own DummyControlPlane). */
-export function parseAppConfig(raw: string | undefined): AppConfig {
-  if (!raw) return SOLO_DEFAULT;
-  try {
-    const p = JSON.parse(raw) as Partial<AppConfig>;
-    if (p && typeof p === "object" && p.fallback) return { fallback: p.fallback };
-  } catch {
-    /* fall through to solo */
-  }
-  return SOLO_DEFAULT;
+/** The solo/dev seed set: every platform built-in, no default route (misses are errors). */
+export const DEFAULT_SEEDS: { pattern: string; target: string }[] = [
+  { pattern: "itx.whoami", target: "roots.whoami" },
+  { pattern: "itx.kv", target: "roots.kv" },
+  { pattern: "itx.secrets", target: "roots.secrets" },
+  { pattern: "itx.streams", target: "roots.streams" },
+  { pattern: "itx.clients", target: "roots.clients" },
+  { pattern: "itx.workers", target: "roots.workers" },
+  { pattern: "itx.os", target: "roots.binding('FALLBACK')" },
+];
+
+/** Parse env.APP_CONFIG (fail-loud on malformed config — a typo must not boot a mis-wired
+ *  project) and return the seed mounts. An absent APP_CONFIG is the solo default. */
+export function parseAppConfig(raw: string | undefined): {
+  seeds: { pattern: Expression; target: Expression }[];
+} {
+  const parsed = AppConfig.parse(raw ? JSON.parse(raw) : {});
+  const seeds = parsed.seeds.length
+    ? parsed.seeds
+    : DEFAULT_SEEDS.map((s) => ({ pattern: parse(s.pattern), target: parse(s.target) }));
+  return { seeds };
 }

@@ -547,6 +547,34 @@ export async function apply(
   return await value;
 }
 
+/** Does this target expression consume the caller's invocation args (numeric/rest/spread holes)?
+ *  If yes, `substitute` spends the boundary args and `apply` must not re-apply them; if no, the
+ *  boundary args apply to the evaluated value itself (a plain function/method alias). */
+export function usesCallerArgs(expr: Expression): boolean {
+  let found = false;
+  const walk = (v: unknown): void => {
+    if (found || typeof v !== "object" || v === null) return;
+    const kind = holeKind(v);
+    if (kind === "arg") {
+      if (typeof (v as { "?": number | string })["?"] === "number") found = true;
+      return;
+    }
+    if (kind === "rest") {
+      found = true;
+      return;
+    }
+    if (kind === "literal") return; // escaped user data — never a hole
+    // an object-SPREAD is a "..." key on a (possibly multi-key) object, not a single-key tag
+    if (!Array.isArray(v) && "..." in (v as Record<string, unknown>)) {
+      found = true;
+      return;
+    }
+    for (const inner of Object.values(v)) walk(inner);
+  };
+  for (const step of expr) if (Array.isArray(step)) step.slice(1).forEach(walk);
+  return found;
+}
+
 /** Does a resolved call ride the fetch lane? Exactly when the terminal method is `fetch` — the one
  *  method workerd grants 101/upgrade semantics. Check AFTER alias resolution, on the final shape. */
 export function isFetchTerminal(expr: Expression): boolean {
