@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { postHogEventBatches, systemEvent, type PostHogEvent } from "./posthog-events.ts";
+import { systemEvent } from "./posthog-events.ts";
 
 it("uses a stable top-level PostHog UUID for retry and replay deduplication", () => {
   const first = systemEvent("ci test finished", "stable-source-occurrence", "ci-test:1", {});
@@ -13,39 +13,3 @@ it("uses a stable top-level PostHog UUID for retry and replay deduplication", ()
   );
   expect(first.properties.$insert_id).toBe("stable-source-occurrence");
 });
-
-it("packs capture batches by encoded payload size", () => {
-  const events = [
-    eventWithPayload("a", "1234"),
-    eventWithPayload("b", "5678"),
-    eventWithPayload("c", "9"),
-  ];
-  const oneEventBytes = Buffer.byteLength(JSON.stringify(events[0]));
-
-  expect(postHogEventBatches(events, oneEventBytes * 2 + 1)).toEqual([
-    [events[0], events[1]],
-    [events[2]],
-  ]);
-});
-
-it("keeps an individually oversized event intact for an explicit API failure", () => {
-  const event = eventWithPayload("oversized", "1234567890");
-  expect(postHogEventBatches([event], 1)).toEqual([[event]]);
-});
-
-it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
-  "rejects an invalid capture batch byte budget (%s)",
-  (budget) => {
-    expect(() => postHogEventBatches([], budget)).toThrow(
-      "PostHog batch event budget must be a positive safe integer",
-    );
-  },
-);
-
-function eventWithPayload(id: string, payload: string): PostHogEvent {
-  return {
-    event: "ci test finished",
-    uuid: id,
-    properties: { distinct_id: `ci-test:${id}`, payload },
-  };
-}

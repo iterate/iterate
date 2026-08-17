@@ -2,6 +2,8 @@ import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import {
   ASSISTANT_MESSAGE_TYPE,
+  awaitingAgentActivity,
+  latestAgentTitle,
   mergeEventsByOffset,
   newMobileAgentPath,
   reduceChatEvents,
@@ -10,6 +12,30 @@ import {
   threadContextForScriptRun,
   USER_MESSAGE_TYPE,
 } from "./chat.ts";
+
+test("a sent message stays pending until the live feed acknowledges agent activity", () => {
+  const sent = userMessage(17, "/script do the work");
+
+  expect(awaitingAgentActivity([sent], sent.offset)).toBe(true);
+  expect(
+    awaitingAgentActivity(
+      [sent, activity(18, "events.iterate.com/agents/context-added")],
+      sent.offset,
+    ),
+  ).toBe(true);
+  expect(
+    awaitingAgentActivity(
+      [sent, activity(18, "events.iterate.com/capability-host/script-run-requested")],
+      sent.offset,
+    ),
+  ).toBe(false);
+  expect(
+    awaitingAgentActivity(
+      [sent, activity(18, "events.iterate.com/agent/llm-request-requested")],
+      sent.offset,
+    ),
+  ).toBe(false);
+});
 
 test("reduces user and assistant messages into ordered bubbles", () => {
   const thread = reduceChatEvents([
@@ -146,6 +172,24 @@ test("a null status is provisional until the run settles, immutable after", () =
       executionId: "run-a",
     }),
   ).toEqual({ settled: true, status: null });
+});
+
+test("the chat title is the standing agent-set title, renames included", () => {
+  expect(latestAgentTitle([])).toBeNull();
+  expect(latestAgentTitle([userMessage(1, "hi")])).toBeNull();
+  expect(
+    latestAgentTitle([
+      summaryUpdated(1, { title: "Refund sweep", activity: "Starting work" }),
+      summaryUpdated(2, { activity: "Digging in" }), // activity-only update preserves the title
+      summaryUpdated(3, { title: "Refund sweep for March" }),
+    ]),
+  ).toBe("Refund sweep for March");
+  expect(
+    latestAgentTitle([
+      summaryUpdated(1, { title: "Refund sweep" }),
+      summaryUpdated(2, { title: null }),
+    ]),
+  ).toBeNull();
 });
 
 test("mobile agent paths follow the web slug convention under the mobile channel", () => {

@@ -19,29 +19,27 @@
 // Web-platform approximations, deliberate and dev-only: the web build has no
 // push channel, so the spec enrolls this browser's device identity
 // server-side with a format-valid but undeliverable Expo token. Expo answers
-// DeviceNotRegistered at send time (verified against the real API), so lane
-// two's deterministic terminal status is "Send failed" — the honest web-build
-// account of "the push left the building"; a real phone would read
-// Sent/Delivered. That rejection also revokes the fake device, which is why
-// the send lane runs LAST.
+// DeviceNotRegistered normally answers at send time (verified against the real
+// API), so lane two reads "Send failed". If the vendor call crosses its
+// bounded deadline after the durable attempt starts, the only honest terminal
+// status is "Delivery uncertain" — it may have accepted the push, so the
+// processor never retries. A real phone would normally read Sent/Delivered.
 
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { connectItxReady } from "iterate/node";
 import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { withTunnel } from "../../apps/os/e2e/test-support/tunnel.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
 import { resolveAdminSecret } from "../test-support/forged-session.ts";
 import { test } from "../test-support/test.ts";
+import { withApprovalDeliveryDiagnostic } from "./approval-delivery-diagnostics.ts";
 
 // The browser's device identity, fixed BEFORE the app boots (the web build's
 // secure store is localStorage), so the server-side enrollment below and the
 // app's Notifications view read the same device stream.
 const DEVICE_ID = "spec-web-phone";
 
-// KNOWN GAP (2026-08-03): the same silent approval/notification event loss as
-// approvals.spec.ts fails at both root-intent and device-journal boundaries.
-// Evidence and restoration criteria: tasks/quarantined-mobile-approvals-event-delivery.md.
-test.skip("the approval push is suppressed in the watched thread and sent when you're elsewhere", async ({
+test("the approval push is suppressed in the watched thread and sent when you're elsewhere", async ({
   page,
 }, testInfo) => {
   const osBaseUrl = await resolveOsBaseUrl();
@@ -54,7 +52,7 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
     // ── Sign up through the REAL flow (same as approvals.spec.ts). NB: the
     // slug must not contain "notifications" — getByText matches substrings,
     // and the drawer assertion below must not collide with header titles.
-    const projectSlug = `mobile-notifs-${Date.now().toString(36)}`;
+    const projectSlug = `mobile-notifs-${Date.now().toString(36)}-${testInfo.parallelIndex}`;
     await page.goto("/");
     await page.getByPlaceholder("https://os.iterate.com").fill(osBaseUrl);
     // Explicit timeout: without one, waitForEvent inherits the global 1s
@@ -62,11 +60,17 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
     // spinner-waiter never sees it), and the popup only opens after signIn's
     // three sequential auth round trips (issuer discovery -> OIDC config ->
     // client registration; measured >1s against a cold local dev worker).
-    // Cross-server waits get 15s in this repo's timeout taxonomy.
+    // Cross-server waits get a 15s timeout — no spinner-waiter covers them.
     const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
     await page.getByRole("button", { name: "Sign in" }).click();
     const popup = await popupPromise;
-    await popup.getByTestId("email-login-button").click();
+    const emailLoginButton = popup.getByTestId("email-login-button");
+    // The popup event fires before its cross-server auth navigation mounts
+    // the login choices. Wait for that durable UI fact, then keep the click
+    // itself under the normal 1s action budget. The popup is a raw Page —
+    // no spinner-waiter middleware — so the timeout must be explicit.
+    await emailLoginButton.waitFor({ state: "visible", timeout: 15_000 });
+    await emailLoginButton.click();
     await signUpWithEmailOtp(popup, {
       email: uniqueSignupEmail("mobile-notifs"),
       projectSlug,
@@ -76,9 +80,9 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
     // separate Page outside the plugged middleware (no spinner-waiter to
     // extend), and these clicks land after auth-worker navigations that run
     // cold on fresh preview deploys — CI-proven >1s.
-    await popup.getByRole("button", { name: "Continue" }).click({ timeout: 15_000 });
-    await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
-    await page.getByText(projectSlug).click();
+    // Project selection auto-continues for test identities (project-access.tsx).
+    await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
+    // The app auto-opens the account's only project — no picker tap.
     await page.getByText("New chat").waitFor();
     const projectId = new URL(page.url()).pathname.split("/")[2]!;
 
@@ -113,8 +117,9 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
     const outwaitRulesCache = () => new Promise((resolve) => setTimeout(resolve, 6_000));
     await (page.videoMode ? page.videoMode.deadAir(outwaitRulesCache) : outwaitRulesCache());
 
-    const parkOneRequest = (marker: string) =>
-      `async () => { await fetch(${JSON.stringify(echo.url)} + "?${marker}=1", { method: "POST", body: "${marker}" }).catch(() => {}); }`;
+    const parkRequestBody = (marker: string) =>
+      `await fetch(${JSON.stringify(echo.url)} + "?${marker}=1", { method: "POST", body: "${marker}" }).catch(() => {});`;
+    const parkOneRequest = (marker: string) => `async () => { ${parkRequestBody(marker)} }`;
 
     // ── Stage the ORPHAN before the device exists: park a batch, and only
     // enroll once its push intent has been journaled on the root stream.
@@ -123,17 +128,42 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
     // device — the batch is permanently unrepresented in the device list,
     // exactly the gap the synthetic needs-approval row exists to cover.
     const orphanAgent = await itx.agents.get("/agents/orphan-thread").create();
+    const orphanRunStarted = orphanAgent.stream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/capability-host/script-run-started"],
+      timeoutMs: 15_000,
+    });
     void orphanAgent.capabilityHost.runScript(parkOneRequest("orphan")).catch(() => {});
-    await expect
-      .poll(
-        async () =>
-          (
-            await itx.streams.get("/").getEvents({
-              eventTypes: ["events.iterate.com/notification/requested"],
-            })
-          ).length,
-      )
-      .toBe(1);
+    const orphanStarted = await orphanRunStarted;
+    const rootStream = itx.streams.get("/");
+    // script-run-started is durable progress BEFORE the one-off Worker Loader
+    // invokes the body. Four cold inline workers can legitimately queue there:
+    // the restoration gate measured 17.4s from started to this approval, then
+    // only 82ms from approval to notification. Give that cold-load boundary
+    // ~2x its observed tail; the notification projection keeps its own 15s
+    // deadline below, so this does not hide the delivery behavior under test.
+    const orphanApproval = await rootStream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/project/human-approval-requested"],
+      predicate: (event) => {
+        const context = event.payload?.streamContext;
+        return (
+          typeof context === "object" &&
+          context !== null &&
+          "executionId" in context &&
+          context.executionId === orphanStarted.payload?.executionId
+        );
+      },
+      timeoutMs: 30_000,
+    });
+    await rootStream.waitForEvent({
+      afterOffset: orphanApproval.offset,
+      eventTypes: ["events.iterate.com/notification/requested"],
+      predicate: (event) =>
+        (event.payload as { approvalRequestEventOffset?: number }).approvalRequestEventOffset ===
+        orphanApproval.offset,
+      timeoutMs: 15_000,
+    });
     await itx.devices.get(DEVICE_ID).enroll({
       appVersion: "spec",
       expoPushToken: `ExponentPushToken[${DEVICE_ID}-never-deliverable]`,
@@ -149,23 +179,43 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
     await page.getByText("New chat").click();
     await page.getByPlaceholder("Message").waitFor();
     const watchedPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
-    const watchedAgent = await itx.agents.get(watchedPath).create();
-    void watchedAgent.capabilityHost.runScript(parkOneRequest("watched")).catch(() => {});
-    await waitForBatchCardButton(page, "Approve (Face ID)");
+    const watchedAgent = itx.agents.get(watchedPath);
+    // Start this lane through the visible composer. Creating the agent from a
+    // second admin connection after the blank chat has mounted replaces the
+    // lazily opened stream underneath the page; the browser store correctly
+    // heals that separate stream-birth race, but only after its liveness
+    // probe. A real first message creates the agent and nudges the same live
+    // connection before running the script, which is the foreground delivery
+    // path this spec means to exercise.
+    await sendChatMessage(page, `/script ${parkRequestBody("watched")}`);
+    await page.getByText("running code…").waitFor();
+    const watchedRunStarted = watchedAgent.stream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/capability-host/script-run-started"],
+      timeoutMs: 15_000,
+    });
+    await watchedRunStarted;
+    await waitForBatchCardButton({
+      agentPaths: [watchedPath],
+      deviceId: DEVICE_ID,
+      itx,
+      name: "Approve (Face ID)",
+      page,
+    });
 
     // Off to the Notifications view (project screen → drawer). The claim has
     // fired; by the time we arrive the device processor has settled the push
     // obligation `suppressed` — the row says so, instead of a push having
     // interrupted whoever was reading the thread.
     await page.goBack();
-    await page.getByLabel("Open project menu").click();
+    await page.getByLabel("Open project menu").filter({ visible: true }).click();
     // The drawer slides in over ~180ms and the press works mid-slide — but
     // clicking then bakes a half-open drawer into the recording (video-mode
     // freezes the click-moment screenshot under its synthetic pointer, which
     // reads as a clipped drawer to a reviewer). The product is fine: given a
     // beat, the panel settles at translateX(0) at this exact viewport. Wait
     // for the item to stop moving before pressing.
-    const notificationsItem = page.getByRole("button", { name: "Notifications" });
+    const notificationsItem = page.getByRole("button", { name: "/notifications" });
     await notificationsItem.waitFor();
     await expect
       .poll(async () => {
@@ -185,7 +235,8 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
     // ── Lane two: the user stays HERE while a different thread's batch
     // parks. No dialog renders, nothing claims the batch, the grace window
     // lapses, and the device processor sends the push — on the web build's
-    // undeliverable token that terminally reads "Send failed" (see header).
+    // undeliverable token that terminally reads either an explicit rejection
+    // or bounded uncertainty (see header).
     const elsewhereAgent = await itx.agents.get("/agents/elsewhere-thread").create();
     // The thread's agent-maintained status, appended ahead of the run so the
     // notification expansion's thread-context line has something real to
@@ -194,28 +245,69 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
       type: "events.iterate.com/agent/summary-updated",
       payload: { title: "Sending the launch webhook", activity: "waiting on egress approval" },
     });
+    const elsewhereRunStarted = elsewhereAgent.stream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/capability-host/script-run-started"],
+      timeoutMs: 15_000,
+    });
     void elsewhereAgent.capabilityHost.runScript(parkOneRequest("elsewhere")).catch(() => {});
+    const elsewhereStarted = await elsewhereRunStarted;
+    const elsewhereApproval = await rootStream.waitForEvent({
+      afterOffset: orphanApproval.offset,
+      eventTypes: ["events.iterate.com/project/human-approval-requested"],
+      predicate: (event) => {
+        const context = event.payload?.streamContext;
+        return (
+          typeof context === "object" &&
+          context !== null &&
+          "executionId" in context &&
+          context.executionId === elsewhereStarted.payload?.executionId
+        );
+      },
+      timeoutMs: 30_000,
+    });
     // Until the push pipeline journals onto THIS device's stream, nothing on
     // the device represents it — the script start, egress hold, debounce and
     // grace window are server work with no on-screen counterpart, exactly
-    // like a real phone idling before a push arrives. So the spec waits for
-    // the terminal settlement on the PROTOCOL (lane one's suppression was
-    // the first settled event; lane two's rejection is the second). The row
-    // itself appeared on screen much earlier, wearing its in-flight
-    // "Waiting to send…" / "Sending…" statuses — honest product indicators
-    // that keep the UI wait below covered until the settle push flips the
-    // label.
-    await expect
-      .poll(
-        async () =>
-          (
-            await itx.streams.get(`/devices/${DEVICE_ID}`).getEvents({
-              eventTypes: ["events.iterate.com/device/notification-settled"],
-            })
-          ).length,
-      )
-      .toBe(2);
-    await page.getByText("Send failed").waitFor();
+    // like a real phone idling before a push arrives. Separate the durable
+    // attempt boundary from the vendor call: approval debounce + the 1.5s
+    // suppression grace happen before this event, and Expo then has its own
+    // bounded 15s answer deadline. An aggregate 15s poll from script launch
+    // races that valid terminal-uncertain path.
+    const deviceStream = itx.streams.get(`/devices/${DEVICE_ID}`);
+    const elsewhereDeviceRequest = await deviceStream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/notification/requested"],
+      predicate: (event) =>
+        (event.payload as { approvalRequestEventOffset?: number }).approvalRequestEventOffset ===
+        elsewhereApproval.offset,
+      timeoutMs: 15_000,
+    });
+    const attemptStarted = await deviceStream.waitForEvent({
+      afterOffset: elsewhereDeviceRequest.offset,
+      eventTypes: ["events.iterate.com/device/notification-attempt-started"],
+      predicate: (event) => event.payload?.requestOffset === elsewhereDeviceRequest.offset,
+      timeoutMs: 15_000,
+    });
+    await deviceStream.waitForEvent({
+      afterOffset: attemptStarted.offset,
+      eventTypes: ["events.iterate.com/device/notification-settled"],
+      predicate: (event) => event.payload?.requestOffset === attemptStarted.payload?.requestOffset,
+      // The product deadline is 15s; leave only a small propagation margin
+      // for its already-durable terminal event to reach this ITX reader.
+      timeoutMs: 20_000,
+    });
+    const settlements = await deviceStream.getEvents({
+      eventTypes: ["events.iterate.com/device/notification-settled"],
+    });
+    expect(settlements).toHaveLength(2);
+    const sendOutcome = (settlements.at(-1)!.payload as any).outcome;
+    expect(["rejected-by-expo", "uncertain"]).toContain(sendOutcome.kind);
+    if (sendOutcome.kind === "uncertain") {
+      expect(sendOutcome).toMatchObject({ phase: "expo-send", reason: expect.any(String) });
+    }
+    const sendStatus = sendOutcome.kind === "uncertain" ? "Delivery uncertain" : "Send failed";
+    await page.getByText(sendStatus).waitFor();
     // Both lanes journaled side by side — the comparison this spec exists for.
     await page.getByText("Skipped — already on screen").waitFor();
 
@@ -224,76 +316,100 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
     // open batch gets DECIDED. Tapping the sent push's row unfolds the held
     // request still awaiting its decision, with Reject / Approve right
     // there.
-    await page
-      .getByTestId(/^notification-row-/)
-      .filter({ hasText: "Send failed" })
-      .click();
+    const deviceRow = page.getByTestId(/^notification-row-/).filter({ hasText: sendStatus });
+    await deviceRow.click();
     await page.getByText("Awaiting decision").waitFor();
     await page.getByText("egress-echo?elsewhere=1").waitFor();
 
     // Reject it from the expansion with a typed reason (the web build's
-    // window.prompt stands in for the native reason sheet). Departure of
-    // the buttons is the success signal: the decision refetches the batch,
-    // the actions unmount, and the historical record takes their place —
+    // window.prompt stands in for the native reason sheet). The outcome
+    // badge is the success signal: the decision refetches the batch, the
+    // actions retire, and the historical record takes their place —
     // verdict, the human's reason, and the #2372 thread-context line.
     const reason = "not while the spec is watching";
-    await rejectFromExpansion(page, reason);
+    await rejectFromExpansion(page, deviceRow, reason);
     await page.getByText(`Rejected because: ${reason}`).waitFor();
-    await page.getByText("Sending the launch webhook").waitFor();
+    // The thread-context LINE, by its link role: the chat list mounted-but-
+    // hidden behind this screen now wears the same live title on its row, so
+    // a bare text locator would find that copy too.
+    await page.getByRole("link", { name: /Sending the launch webhook/ }).waitFor();
 
     // ── The orphan lane's payoff: the batch that predates enrollment
     // expands into the SAME detail and decide actions as a journaled row.
-    // Reject it right there; once decided the synthetic row vanishes
-    // entirely — all-reject is terminal, and an orphan has no device
-    // history to keep a row alive (decided history lives on real device
-    // rows, where they exist).
+    // Reject it right there; the decided row lingers with its outcome for
+    // this session (it must not vanish under the deciding finger) — the
+    // Rejected status and reason record ARE the acknowledgment. Next visit
+    // it's gone: an orphan has no device history to keep a row alive.
     const orphanRow = page.getByTestId(/^needs-approval-row-/);
     await orphanRow.click();
     await page.getByText("Awaiting decision").waitFor();
     await page.getByText("egress-echo?orphan=1").waitFor();
-    await rejectFromExpansion(page, "orphans get decided here too");
-    await orphanRow.waitFor({ state: "detached" });
+    await rejectFromExpansion(page, orphanRow, "orphans get decided here too");
+    await page.getByText("Rejected because: orphans get decided here too").waitFor();
 
     // The chat deep-link lives INSIDE the expansion now — its "Open thread"
     // lands in the thread that caused the push, where tapping the real push
-    // would have gone.
-    await page.getByRole("link", { name: "Open thread" }).click();
+    // would have gone. Scoped to the device row: the lingering rejected
+    // orphan's expansion carries its own thread link now.
+    await deviceRow.getByRole("link", { name: "Open thread" }).click();
     // The heading, specifically: expo-router keeps the Notifications screen
     // mounted-but-hidden behind the chat, and its thread-context line also
-    // says "elsewhere-thread" — a bare text locator finds that hidden copy.
-    await page.getByRole("heading", { name: "elsewhere-thread" }).waitFor();
+    // carries this text — a bare text locator finds that hidden copy. The
+    // header wears the thread's agent-set TITLE now, not the raw path
+    // (chat-titles.spec.ts covers that surface on its own).
+    await page.getByRole("heading", { name: "Sending the launch webhook" }).waitFor();
     expect(decodeURIComponent(page.url())).toContain("/agents/elsewhere-thread");
   } finally {
     await echo.close();
   }
 });
 
-/**
- * Wait for a batch-card button while the burst coalesces at the egress door —
- * same as specs/mobile/approvals.spec.ts's helper of the same name: the
- * parked script run's activity spinner covers the wait the whole way.
- */
-function waitForBatchCardButton(page: Page, name: string) {
-  return page.getByRole("button", { name }).waitFor();
+/** Type into the chat composer and send through RN-web's controlled input. */
+async function sendChatMessage(page: Page, message: string) {
+  await page.getByPlaceholder("Message").click();
+  await page.keyboard.insertText(message);
+  await page.getByRole("button", { name: "Send" }).click();
 }
 
 /**
- * Press the expansion's Reject and answer the reason prompt — the retried
- * press + button-departure success signal of approvals.spec.ts's
- * decideBatch, for the notification surface: RN-web's Pressable
- * occasionally drops a synthesized press outright, and a decision must not
- * silently not-happen. The armed dialog handler is removed after every
- * attempt so a stale one cannot answer a later prompt.
+ * Wait for a batch-card button while the burst coalesces at the egress door —
+ * same as specs/mobile/approvals.spec.ts's helper of the same name: the
+ * already-started script run's activity spinner covers the wait the whole way.
  */
-async function rejectFromExpansion(page: Page, reason: string) {
-  const button = page.getByRole("button", { name: "Reject" });
+function waitForBatchCardButton(input: {
+  agentPaths: string[];
+  deviceId: string;
+  itx: Parameters<typeof withApprovalDeliveryDiagnostic>[0]["itx"];
+  name: string;
+  page: Page;
+}) {
+  return withApprovalDeliveryDiagnostic({
+    description: `The approval button "${input.name}" did not render in the thread.`,
+    deviceId: input.deviceId,
+    itx: input.itx,
+    streamPaths: input.agentPaths,
+    wait: () => input.page.getByRole("button", { name: input.name }).waitFor(),
+  });
+}
+
+/**
+ * Press a row expansion's Reject and answer the reason prompt — the retried
+ * press + outcome-badge success signal of approvals.spec.ts's decideBatch,
+ * for the notification surface: RN-web's Pressable occasionally drops a
+ * synthesized press outright, and a decision must not silently not-happen.
+ * The armed dialog handler is removed after every attempt so a stale one
+ * cannot answer a later prompt. Scoped to the row: an earlier rejection's
+ * badge elsewhere on the screen must not vouch for this one.
+ */
+async function rejectFromExpansion(page: Page, row: Locator, reason: string) {
+  const button = row.getByRole("button", { name: "Reject" });
   for (let attempt = 0; attempt < 3; attempt++) {
     const handler = (dialog: import("@playwright/test").Dialog) =>
       void Promise.resolve(dialog.accept(reason)).catch(() => {});
     page.once("dialog", handler);
     try {
       await button.click().catch(() => {});
-      await button.waitFor({ state: "detached" });
+      await row.getByTestId("approval-decision-badge").filter({ hasText: "Rejected" }).waitFor();
       return;
     } catch {
       // Press lost or decision not landed — re-arm and press again. The
@@ -302,7 +418,7 @@ async function rejectFromExpansion(page: Page, reason: string) {
       page.off("dialog", handler);
     }
   }
-  throw new Error("The Reject decision never left the expansion after 3 presses.");
+  throw new Error("The Reject decision never showed a Rejected badge after 3 presses.");
 }
 
 /** Same helper as specs/mobile/approvals.spec.ts. */

@@ -7,6 +7,7 @@
 import { expect, test } from "vitest";
 import { applyPatch, type LiveUpdate } from "iterate/sdk/capnweb";
 import { LIVE_STATE_PAGER_HEADER } from "../../src/domains/live-state-pager.ts";
+import type { AgentCollectionProcessorState } from "../../src/itx-api.generated.ts";
 import type { ProjectLiveState } from "../../src/domains/projects/project-live-state.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -104,6 +105,55 @@ test("itx.liveState indexes stream activity as a peer slice", async () => {
     path: streamPath,
     eventCount: expect.any(Number),
     lastActivityAt: expect.any(String),
+  });
+  expect(await subscription.ping()).toBe(true);
+});
+
+// The `/agents` collection stream is born on the FIRST agent create(); a live
+// watcher mounted before that (the dashboard sidebar, the mobile chat list on
+// a brand-new project) used to be refused with
+// stream-subscription-unconfigured and stay dead even after chats appeared.
+// The relay now ensures the idempotency-keyed birth batch on exactly that
+// refusal, so the early subscriber gets the empty catalog and then watches
+// the first agent (and its agent-set title) arrive as pushes.
+test("agents.liveState subscribed before any agent exists serves the empty catalog, then pushes the first agent and its title", async () => {
+  const marker = crypto.randomUUID().slice(0, 8);
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects.get(`agents-live-${RUN_SUFFIX}-${marker}`).create({});
+
+  const track = trackLiveState<AgentCollectionProcessorState>();
+  using subscription = await project.agents.liveState.subscribe(track.onUpdate);
+  await waitForCondition(() => track.state() !== undefined, {
+    description: "the initial (empty) agent catalog snapshot",
+  });
+  // The whole reduced state, exactly: born (birth certificate reduced) with
+  // an EMPTY catalog — toMatchObject({ agents: {} }) would not prove empty.
+  expect(track.state()).toEqual({
+    birthCertificate: {},
+    agents: {},
+    waitingForSinceOffsets: {},
+  });
+
+  const agentPath = `/agents/live-${marker}`;
+  using agent = project.agents.get(agentPath);
+  await agent.create();
+  await waitForCondition(() => track.state()?.agents[agentPath] !== undefined, {
+    description: "the created agent arriving as a push",
+    timeoutMs: 30_000,
+  });
+
+  await project.streams.get(agentPath).append({
+    type: "events.iterate.com/agent/summary-updated",
+    payload: { title: "Live title lands", activity: "first turn" },
+  });
+  await waitForCondition(() => track.state()?.agents[agentPath]?.summary.title !== undefined, {
+    description: "the agent-set title arriving as a push",
+    timeoutMs: 30_000,
+  });
+  expect(track.state()!.agents[agentPath]).toMatchObject({
+    path: agentPath,
+    summary: { title: "Live title lands", activity: "first turn" },
   });
   expect(await subscription.ping()).toBe(true);
 });

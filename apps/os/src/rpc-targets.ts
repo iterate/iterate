@@ -97,6 +97,7 @@ import type {
 } from "./domains/streams/core-processor-contract.ts";
 import type { EventFilter } from "./domains/streams/event-filter.ts";
 import { parseAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
+import type { AgentListItem } from "./domains/agents/agent-presence.ts";
 import {
   AGENT_COLLECTION_PATH,
   AGENT_COLLECTION_SUBSCRIPTION_NAME,
@@ -283,7 +284,7 @@ import type {
   WaitroseConnection,
 } from "./domains/integrations/types.ts";
 import type { EmailAttachmentInput } from "./domains/email/utils.ts";
-import type { FileData } from "./domains/files/file-url-signing.ts";
+import { projectFileDataToBytes, type FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import {
   AgentProcessorContract,
@@ -424,8 +425,11 @@ import {
 } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import {
+  AGENT_BIRTH_DEFAULTS_KEY,
+  AgentBirthDefaults,
   agentCollectionCreationEvents,
   agentCreationForPath,
+  validateAgentBirthEvents,
   type AgentCreateInput,
 } from "./domains/agents/agent-defaults.ts";
 import { ChatReplyNotifyProcessorContract } from "./domains/notifications/chat-reply-notify-contract.ts";
@@ -439,6 +443,7 @@ import { describeSecretState } from "./domains/secrets/secret-durable-object.ts"
 import { SlackProcessorContract } from "./domains/integrations/slack-processor-contract.ts";
 import { WorkspaceProcessorContract } from "./domains/workspaces/workspace-processor-contract.ts";
 import { normalizeConfigRepoTemplateReference } from "./lib/config-repo-template-reference.ts";
+import { resolveSlugConventionTemplate } from "./lib/slug-config-template.ts";
 
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
@@ -528,9 +533,10 @@ const STREAM_WAIT_REACQUIRE_MS = 10_000;
 // Bound each DO invocation below the outer e2e/client watchdog so a half-open
 // native RPC cannot park the public call forever; two attempts still fit
 // comfortably inside the standard 30-second operation budget. Root appends
-// are excluded: project/capability-host birth can legitimately spend longer
-// than this under load, and those callers already own explicit end-to-ready
-// deadlines around the whole durable saga.
+// are excluded from this DEADLINE: project/capability-host birth can
+// legitimately spend longer than this under load. A keyed root append still
+// gets one retry after an explicit availability rejection — no timer invents
+// that signal, and its idempotency key makes the replay safe.
 const KEYED_STREAM_APPEND_ATTEMPT_TIMEOUT_MS = 10_000;
 
 function detachPlainRpcResult<T>(result: T[]): T[];
@@ -679,6 +685,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
     );
     const canDeadlineReplay = isKeyed && this.props.path !== "/";
+    const canRetry = isKeyed;
     const append = async () => {
       const invocation = invoke();
       if (!canDeadlineReplay) return await invocation;
@@ -701,7 +708,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       );
     };
     const result = await (
-      canDeadlineReplay
+      canRetry
         ? retryLoggedIdempotentOperation({
             context: { path: this.props.path, projectId: this.props.projectId },
             message: "keyed stream append retrying after Durable Object unavailability",
@@ -1199,7 +1206,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         ...(args.idempotencyKey === undefined ? {} : { idempotencyKey: args.idempotencyKey }),
         configuration: {
           ...(args.name === undefined ? {} : { name: args.name }),
-          ...(args.description?.trim() ? { description: args.description.trim() } : {}),
+          ...(args.description?.trim() && { description: args.description.trim() }),
           ...(args.filter === undefined ? {} : { filter: args.filter }),
           receiver: {
             action: "copy-to-stream",
@@ -2006,9 +2013,8 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   }
 
   get liveState(): LiveStateRpc<AgentCollectionProcessorState> {
-    return facetProcessorLiveStateRelay<AgentCollectionProcessorState>({
-      name: AgentCollectionProcessorContract.slug,
-      path: AGENT_COLLECTION_PATH,
+    return new AgentCollectionLiveStateRpcTarget({
+      auth: this.props.auth,
       projectId: this.props.projectId,
     });
   }
@@ -2061,12 +2067,68 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   }
 
   /** Known agents, read from the collection processor's reduced database. */
-  async list(): Promise<StreamListItem[]> {
+  async list(): Promise<AgentListItem[]> {
     const { state } = await this.processor.snapshot();
     return Object.values(state.agents).map((agent) => ({
       path: agent.path,
       createdAt: agent.timestamps.createdAt,
+      ...(agent.summary.title === undefined ? {} : { title: agent.summary.title }),
     }));
+  }
+}
+
+/**
+ * The agent catalog's live state, tolerant of the unborn collection. The
+ * `/agents` stream is born on the FIRST agent create(); before that, the
+ * facet relay's subscription lookup refuses with
+ * stream-subscription-unconfigured — which used to error every live watcher
+ * mounted on a fresh project (the dashboard sidebar, the mobile chat list)
+ * and leave it dead even after chats appeared. On exactly that refusal,
+ * append the same idempotency-keyed birth batch agent create() ensures
+ * (repeats are free) and retry once; every other error propagates untouched.
+ * Already-born projects never pay the extra append.
+ */
+class AgentCollectionLiveStateRpcTarget
+  extends IterateRpcRelay<"LiveStateRpc">
+  implements LiveStateRpc<AgentCollectionProcessorState>
+{
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+  }
+
+  #relay(): LiveStateRpc<AgentCollectionProcessorState> {
+    return facetProcessorLiveStateRelay<AgentCollectionProcessorState>({
+      name: AgentCollectionProcessorContract.slug,
+      path: AGENT_COLLECTION_PATH,
+      projectId: this.props.projectId,
+    });
+  }
+
+  async #bornThenRetry<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isUnconfiguredSubscriptionError(error)) throw error;
+      const collectionStream = new StreamRpcTarget({
+        auth: this.props.auth,
+        projectId: this.props.projectId,
+        path: AGENT_COLLECTION_PATH,
+      });
+      await collectionStream.append(
+        ...agentCollectionCreationEvents({ projectId: this.props.projectId }),
+      );
+      return await operation();
+    }
+  }
+
+  async get(): Promise<AgentCollectionProcessorState> {
+    return await this.#bornThenRetry(() => this.#relay().get());
+  }
+
+  async subscribe(
+    onUpdate: (update: LiveUpdate<AgentCollectionProcessorState>) => unknown,
+  ): Promise<LiveStateSubscriptionHandle> {
+    return await this.#bornThenRetry(() => this.#relay().subscribe(onUpdate));
   }
 }
 
@@ -2130,6 +2192,59 @@ class ClientsRpcTarget extends IterateRpcTarget<"Clients"> {
  * bases normalize). Absent (id-only boot line) when the directory has no
  * record yet — never a birth blocker.
  */
+/**
+ * The project's agent birth defaults, read from the generic per-key defaults
+ * store on the project processor's fold (`state.defaults` — raw latest value
+ * per key; the project holds it opaquely). THIS is where the agents domain
+ * interprets its key: schema parse plus the agent-vocabulary/allowlist check,
+ * both at the read site so the project contract never learns what an agent
+ * is. Absent, malformed, non-matching, or unreadable → no defaults — a
+ * broken or missing defaults declaration must degrade to platform-default
+ * births, never break agent creation (and never fall back to a stale
+ * predecessor: the raw latest is all the fold keeps).
+ */
+async function agentBirthDefaultsForProject(props: {
+  agentPath: string;
+  auth: ItxAuth;
+  projectId: string;
+}): Promise<{ defaults?: AgentBirthDefaults }> {
+  try {
+    const { state } = await facetProcessorRelay<ProjectProcessorState>({
+      auth: props.auth,
+      name: ProjectProcessorContract.slug,
+      path: "/",
+      projectId: props.projectId,
+    }).snapshot();
+    const raw = state.defaults[AGENT_BIRTH_DEFAULTS_KEY];
+    if (raw === undefined) return {};
+    const parsed = AgentBirthDefaults.safeParse(raw);
+    if (!parsed.success) {
+      console.warn("[agent] ignoring malformed agent birth defaults; using platform defaults", {
+        error: parsed.error.message,
+        projectId: props.projectId,
+      });
+      return {};
+    }
+    const check = validateAgentBirthEvents(parsed.data.birthEvents);
+    if (!check.ok) {
+      console.warn("[agent] ignoring invalid agent birth defaults; using platform defaults", {
+        error: check.error,
+        projectId: props.projectId,
+      });
+      return {};
+    }
+    const pathPrefix = parsed.data.matches?.pathPrefix;
+    if (pathPrefix !== undefined && !props.agentPath.startsWith(pathPrefix)) return {};
+    return { defaults: parsed.data };
+  } catch (error) {
+    console.warn("[agent] agent birth defaults read failed; using platform defaults", {
+      error: String(error),
+      projectId: props.projectId,
+    });
+    return {};
+  }
+}
+
 async function agentBootProjectFacts(
   projectId: string,
 ): Promise<{ project?: { name: string; slug: string; workerUrl?: string } }> {
@@ -2904,7 +3019,7 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
         path,
         egress: egressOrigins,
         ...(input.description === undefined ? {} : { description: input.description }),
-        ...(scopePath.startsWith("/agents/") ? { notify: scopePath } : {}),
+        ...(scopePath.startsWith("/agents/") && { notify: scopePath }),
       },
     });
     return { path, url };
@@ -2927,7 +3042,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   async __describe(): Promise<Description & SecretDescription> {
     const state = await this.durableObjectStub.describe();
     return describeNode({
-      instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
+      instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch(input, init?) — the standard fetch signature — to use it in an egress request via placeholder substitution.`,
       children: {
         create:
           "Create this secret with its initial egress, material, and refresh config; returns this same secret handle.",
@@ -2961,9 +3076,10 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     );
   }
 
-  /** Egress fetch with this secret's placeholders substituted server-side. */
-  fetch(request: Request): Promise<Response> {
-    return this.durableObjectStub.fetch(request);
+  /** Egress fetch with this secret's placeholders substituted server-side —
+   * the standard fetch signature: a Request, or a URL plus optional init. */
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    return this.durableObjectStub.fetch(new Request(input, init));
   }
 
   /** Admin-only recovery read of the current encrypted cell. */
@@ -3264,12 +3380,12 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents — including an in-hand HTML string via new Blob([html], { type: 'text/html' }) — to Markdown. run() is for what YOU cannot do: image/audio/video generation, transcription, embeddings, classification at volume. Don't run() a text model to summarize, draft, or answer over content you are about to read or relay — you are usually a more intelligent model; return the data and write it yourself. Text models take { messages: [{ role, content }, …] } and answer in result.response. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
+        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. run() is for what YOU cannot do: image/audio/video generation, transcription, embeddings, classification at volume. Don't run() a text model to summarize, draft, or answer over content you are about to read or relay — you are usually a more intelligent model; return the data and write it yourself. Text models take { messages: [{ role, content }, …] } and answer in result.response. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
       children: {
         models: "List available models.",
         run: "Run one model invocation — for outputs the caller cannot produce itself (images, audio, transcription, bulk classification), not for text the caller will read or relay.",
         toMarkdown:
-          "Convert one document or an array of { name, blob } to Markdown — an in-hand HTML string converts via new Blob([html], { type: 'text/html' }); call with no args for supported formats. For emails and newsletters (mostly tracking links and giant base64 images), pass { conversionOptions: { output: { format: 'text' } } } to strip link targets and image URLs — often 10x smaller.",
+          "Convert one document or an array of { name, blob } to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. Call with no args for supported formats. For emails and newsletters (mostly tracking links and giant base64 images), pass { conversionOptions: { output: { format: 'text' } } } to strip link targets and image URLs — often 10x smaller.",
       },
       parent: "a project itx (itx.ai)",
     });
@@ -3306,9 +3422,11 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
 
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
-  /** Convert one document (`{ name, blob }`) to Markdown — an in-hand HTML
-   * string (a fetched page, an email body) converts via
-   * `new Blob([html], { type: "text/html" })`; never strip HTML by hand.
+  /** Convert one document (`{ name, blob }`) to Markdown — `blob` accepts
+   * bytes or base64 (a Blob made in a script cannot cross the RPC
+   * boundary). An in-hand HTML string (a fetched page, an email body)
+   * converts via `new TextEncoder().encode(html)` with a `.html` name;
+   * never strip HTML by hand.
    * `{ conversionOptions: { output: { format: "text" } } }` returns plain
    * text with link targets and image URLs stripped — the compact choice for
    * emails and newsletters, whose bytes are mostly tracking links. */
@@ -3321,7 +3439,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
     documents: CfMarkdownDocument[],
     options?: CfMarkdownConversionOptions,
   ): Promise<CfMarkdownConversionResult[]>;
-  toMarkdown(
+  async toMarkdown(
     ...args: CfMarkdownConversionArgs
   ): Promise<
     CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]
@@ -3330,7 +3448,21 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       return env.AI.toMarkdown().supported();
     }
     const [documents, options] = args;
-    return env.AI.toMarkdown(documents as never, options as never) as Promise<
+    // Blob cannot cross the capnweb hop from script sandboxes, so `blob`
+    // accepts the whole FileData union and the Blob is minted here.
+    const coerce = async (document: CfMarkdownDocument) => ({
+      name: document.name,
+      blob:
+        document.blob instanceof Blob
+          ? document.blob
+          : new Blob([(await projectFileDataToBytes(document.blob)) as Uint8Array<ArrayBuffer>], {
+              type: "application/octet-stream",
+            }),
+    });
+    const coerced = Array.isArray(documents)
+      ? await Promise.all(documents.map(coerce))
+      : await coerce(documents);
+    return env.AI.toMarkdown(coerced as never, options as never) as Promise<
       CfMarkdownConversionResult | CfMarkdownConversionResult[]
     >;
   }
@@ -3388,7 +3520,9 @@ class CfImagesCapabilityRpcTarget extends IterateRpcTarget<"CfImagesCapability">
       children: {
         info: "Inspect an image stream for format/dimensions/file size.",
         transform:
-          "Apply ordered image transforms/draws and output a Response, e.g. transform({ image: resp.body, transforms: [{ width: 800 }], output: { format: 'image/webp' } }).",
+          "Apply ordered image transforms/draws and output a Response, e.g. transform({ image: resp.body, transforms: [{ width: 800 }], output: { format: 'image/webp' } }). image accepts bytes/base64 too (streams don't cross the RPC hop from scripts).",
+        transformBytes:
+          "transform, buffered to { bytes, contentType } — the shape scripts need (Response bodies don't cross the RPC hop).",
       },
       parent: "itx.integrations.cf.images",
     });
@@ -3401,12 +3535,12 @@ class CfImagesCapabilityRpcTarget extends IterateRpcTarget<"CfImagesCapability">
 
   /** Apply ordered image transforms/draws and output a Response. */
   async transform(input: CfImageTransformInput): Promise<Response> {
-    let image = env.IMAGES.input(input.image);
+    let image = env.IMAGES.input(await coerceImageSource(input.image));
     for (const transform of input.transforms ?? []) {
       image = image.transform(transform as ImageTransform);
     }
     for (const draw of input.draws ?? []) {
-      let overlay = env.IMAGES.input(draw.image);
+      let overlay = env.IMAGES.input(await coerceImageSource(draw.image));
       for (const transform of draw.transforms ?? []) {
         overlay = overlay.transform(transform as ImageTransform);
       }
@@ -3414,6 +3548,32 @@ class CfImagesCapabilityRpcTarget extends IterateRpcTarget<"CfImagesCapability">
     }
     return (await image.output(input.output as ImageOutputOptions)).response();
   }
+
+  /**
+   * `transform`, buffered: Response bodies (like streams and Blobs) cannot
+   * cross the RPC boundary back into a script sandbox, so scripts use this
+   * to get plain bytes — e.g. downscaling an oversized screenshot before a
+   * vision-model call.
+   */
+  async transformBytes(
+    input: CfImageTransformInput,
+  ): Promise<{ bytes: Uint8Array; contentType: string }> {
+    const response = await this.transform(input);
+    return {
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      contentType: response.headers.get("content-type") || "application/octet-stream",
+    };
+  }
+}
+
+/** Streams pass through; every FileData shape becomes one via the same
+ * coercion the file-writing surfaces use. */
+async function coerceImageSource(
+  image: ReadableStream<Uint8Array> | FileData,
+): Promise<ReadableStream<Uint8Array>> {
+  if (image instanceof ReadableStream) return image;
+  const bytes = (await projectFileDataToBytes(image)) as Uint8Array<ArrayBuffer>;
+  return new Blob([bytes]).stream();
 }
 
 /** Cloudflare Media Transformations binding exposed through itx as one-call helpers. */
@@ -3611,10 +3771,9 @@ class PostHogIntegrationRpcTarget extends RpcTarget {
  * The SDK connection targets are thin dispatchers over the normal vendor
  * clients. A project extends the collection with ordinary
  * `provideCapability({ path: ["integrations", ...] })` — data, not deployment.
- * `completeConnect` is called by the app worker's
- * OAuth callback routes (/api/integrations/<provider>/callback); its
- * authority is the HMAC-signed OAuth state minted by startOAuthFlow,
- * verified itx-side.
+ * Native `completeConnect` calls are bound to this RPC target's authenticated
+ * user; browser callbacks use the same domain operation with their cookie
+ * session. Both re-verify the HMAC-signed state minted by startOAuthFlow.
  */
 class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations"> {
   constructor(
@@ -4058,7 +4217,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       children: {
         cf: "Cloudflare first-party platform bindings: ai, browser, images, videos.",
         completeConnect:
-          "OAuth callback completion; authority is the HMAC-signed state minted by startOAuthFlow.",
+          "Complete a native OAuth callback with this RPC session and the signed state from startOAuthFlow.",
         confirmGithubSteal:
           "Move a GitHub installation after explicit confirmation: { state } — state is the signed user/project/installation proof returned by completeConnect.",
         connectTelegram:
@@ -4188,21 +4347,21 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
   startOAuthFlow(input: {
     callbackUrl?: string;
     provider: OAuthProviderSlug;
-    /** The user to bind the OAuth state to. Browser-supplied, not authority;
-     * the callback's check against the signed state is the backstop. */
-    userId: string;
   }): Promise<{ authorizationUrl: string }> {
+    const user = userPrincipalOf(this.props.auth);
+    if (!user) throw new Error("Starting an OAuth connection requires a signed-in user.");
     return startOAuthFlow({
       callbackUrl: input.callbackUrl,
       config: parseConfig(env),
       projectId: this.props.projectId,
       provider: input.provider,
-      userId: input.userId,
+      userId: user.userId,
     });
   }
 
-  /** Called by the app worker's OAuth callback route; authority is the
-   * HMAC-signed OAuth state minted by startOAuthFlow. */
+  /** Complete a native OAuth callback using this authenticated RPC session.
+   * Browser callbacks use the app worker route, which supplies its session
+   * identity directly to the same domain operation. */
   completeConnect(input: {
     /** OAuth authorization code (Slack/Google, or GitHub's proof callback). */
     code?: string;
@@ -4210,8 +4369,9 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     installationId?: string;
     provider: OAuthProviderSlug;
     state: string;
-    userId: string | null;
   }): Promise<CompleteConnectResult> {
+    const user = userPrincipalOf(this.props.auth);
+    if (!user) throw new Error("Completing an OAuth connection requires a signed-in user.");
     return completeConnect({
       code: input.code,
       config: parseConfig(env),
@@ -4219,7 +4379,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       projectId: this.props.projectId,
       provider: input.provider,
       state: input.state,
-      userId: input.userId,
+      userId: user.userId,
     });
   }
 
@@ -4365,7 +4525,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       request: {
         ...input,
         attachments,
-        ...(thread !== null && input.replyTo === undefined ? { replyTo: thread.replyTo } : {}),
+        ...(thread !== null && input.replyTo === undefined && { replyTo: thread.replyTo }),
       },
     });
     const { from, messageId } = await this.#deliver({
@@ -4927,6 +5087,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       projectId: this.#props.projectId,
       ...(payload === undefined ? {} : { payload }),
       ...(await agentBootProjectFacts(this.#props.projectId)),
+      // Project-level birth defaults (driver, prompt, extra processor
+      // subscriptions) apply to every agent born through this generic door;
+      // integration routers use their own creation calls with explicit
+      // policies and never pick these up.
+      ...(await agentBirthDefaultsForProject({ ...this.#props, agentPath: this.#path })),
       // Plain chat threads (mobile + web — everything born through this
       // generic door) get the chat-reply push producer as their sibling.
       // Integration threads (Slack/Telegram/Email) are born elsewhere with
@@ -6215,7 +6380,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     options?: { waitUntilCreated?: boolean },
   ): Promise<ProjectRpcTarget> {
     const projectCreateDeadline = Date.now() + PROJECT_CREATE_TIMEOUT_MS;
-    const configRepoTemplate =
+    const explicitConfigRepoTemplate =
       args.configRepoTemplate === undefined
         ? undefined
         : normalizeConfigRepoTemplateReference(args.configRepoTemplate);
@@ -6276,6 +6441,15 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         slug: identity.slug,
       };
     }
+
+    // The `-template-<name>` slug convention (docs/dev-environments.md):
+    // covers creates that never see a template field — the auth app's
+    // first-run form and the welcome page's ?ensureBirth retry. An explicit
+    // arg always wins and skips the convention entirely.
+    const configRepoTemplate =
+      explicitConfigRepoTemplate !== undefined
+        ? explicitConfigRepoTemplate
+        : await resolveSlugConventionTemplate(registered.slug);
 
     const timing = { projectId: registered.projectId };
     const creatorEmail = userPrincipalOf(this.#props.auth)?.email;
@@ -6698,12 +6872,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       }).sourceText,
       children: {
         ...PROJECT_BUILTIN_BLIPS,
-        ...(scopePath.startsWith("/agents/")
-          ? {
-              agent: "THIS agent's control surface (present because this is an agent scope).",
-              chat: "THIS agent's web-chat door.",
-            }
-          : {}),
+        ...(scopePath.startsWith("/agents/") && {
+          agent: "THIS agent's control surface (present because this is an agent scope).",
+          chat: "THIS agent's web-chat door.",
+        }),
       },
       parent: scopePath === "/" ? "session.projects" : `the project-root itx (scope "/")`,
       // Dynamic mounts only: the builtins are already the `children` map, and
@@ -7577,7 +7749,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Project-attributed outbound fetch: fetch(request) egresses with the project's identity and secret substitution. Headers and URL paths interpolate getSecret(...); an application/json body substitutes exact string values when x-iterate-secret-template: json is set. intercept(handler) installs a live egress interceptor (last writer wins).",
+        "Project-attributed outbound fetch: fetch(input, init?) — the standard fetch signature — egresses with the project's identity and secret substitution. Headers and URL paths interpolate getSecret(...); an application/json body substitutes exact string values when x-iterate-secret-template: json is set. intercept(handler) installs a live egress interceptor (last writer wins).",
       children: {
         fetch: "Outbound fetch through project egress.",
         intercept: "Install an egress interceptor; returns a release handle.",
@@ -7590,12 +7762,13 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
     super();
   }
 
-  /** Outbound fetch with project identity and secret substitution. Set
+  /** Outbound fetch with project identity and secret substitution — the
+   * standard fetch signature: a Request, or a URL plus optional init. Set
    * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
    * values in an `application/json` (or `+json`) body. */
-  fetch(request: Request): Promise<EgressResponse> {
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<EgressResponse> {
     return projectStub(env.PROJECT, this.props.projectId).fetch(
-      withStreamContext(request, this.props.streamContext),
+      withStreamContext(new Request(input, init), this.props.streamContext),
     );
   }
 
@@ -8812,9 +8985,9 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
       mcpUrl: input.url,
       path,
       redirectUri: `${baseUrl.replace(/\/$/, "")}/api/mcp-oauth/callback`,
-      ...(input.scope ? { scope: input.scope } : {}),
+      ...(input.scope && { scope: input.scope }),
       // An agent scope gets messaged when the user finishes signing in.
-      ...(this.props.scopePath.startsWith("/agents/") ? { notify: this.props.scopePath } : {}),
+      ...(this.props.scopePath.startsWith("/agents/") && { notify: this.props.scopePath }),
       projectId: this.props.projectId,
       encryptionKey: env.SECRET_ENCRYPTION_KEY,
       fetchFn: fetchLikeFromFetcher(this.props.egress),
@@ -8831,7 +9004,7 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
   get exa(): McpClientRpc {
     const hasPlatformKey = parseConfig(env).integrations.exa !== undefined;
     return McpClientRpcTarget.createLazyClient(
-      { url: EXA_MCP_URL, ...(hasPlatformKey ? { headers: EXA_PLATFORM_KEY_HEADER } : {}) },
+      { url: EXA_MCP_URL, ...(hasPlatformKey && { headers: EXA_PLATFORM_KEY_HEADER }) },
       {
         description: {
           instructions:

@@ -75,15 +75,10 @@ pnpm install && pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm 
 ```
 
 How to open a PR (branch hygiene, body shape, **screenshots that actually
-render**, drafts/previews) — and **after open**: wait for Iterate Review /
+render**, previews) — and **after open**: wait for Iterate Review /
 review bots, address **every** CI/review comment (fix or reply + resolve),
 **never leave threads standing**, **never merge on red CI** unless the human
 explicitly said so: **[Pull requests](docs/pull-requests.md)**.
-
-**Draft PRs don't get a preview deployment** (or preview e2e). If you open a
-PR as a draft and want a preview environment, add the `preview` label; marking
-the PR ready for review also starts previews. Lease model details:
-[Dev environments](docs/dev-environments.md).
 
 ## Repository map
 

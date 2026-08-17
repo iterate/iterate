@@ -38,34 +38,32 @@ export function buildRoundMetaYaml(
   promptMessages: { role: string; content: string }[] | null,
 ) {
   const doc = new Document({
-    ...(llm
-      ? {
-          llm: {
-            ...(llm.model ? { model: llm.model } : {}),
-            ...(llm.durationMs == null
-              ? {}
-              : { duration: `${(llm.durationMs / 1000).toFixed(1)}s` }),
-            ...(llm.inputTokens == null ? {} : { inputTokens: llm.inputTokens }),
-            ...(llm.outputTokens == null ? {} : { outputTokens: llm.outputTokens }),
-            ...(llm.outcome && llm.outcome !== "completed" ? { outcome: llm.outcome } : {}),
-            ...(llm.cancelReason ? { cancelReason: llm.cancelReason } : {}),
-          },
-        }
-      : {}),
+    ...(llm && {
+      llm: {
+        ...(llm.model && { model: llm.model }),
+        ...(llm.durationMs == null ? {} : { duration: `${(llm.durationMs / 1000).toFixed(1)}s` }),
+        ...(llm.inputTokens == null ? {} : { inputTokens: llm.inputTokens }),
+        ...(llm.outputTokens == null ? {} : { outputTokens: llm.outputTokens }),
+        ...(llm.outcome && llm.outcome !== "completed" && { outcome: llm.outcome }),
+        ...(llm.cancelReason && { cancelReason: llm.cancelReason }),
+      },
+    }),
     code: {
-      ...(code.status === "running" ? { status: "running" } : {}),
+      ...(code.status === "running" && { status: "running" }),
       started: formatClockTime(code.startedAtMs),
       ...(code.durationMs == null ? {} : { duration: `${(code.durationMs / 1000).toFixed(1)}s` }),
-      ...(code.status === "done" && code.success === false ? { failed: true } : {}),
+      ...(code.status === "done" && code.success === false && { failed: true }),
     },
-    ...(promptMessages && promptMessages.length > 0
-      ? {
-          prompt: promptMessages.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
-        }
-      : {}),
+    ...(promptMessages &&
+      promptMessages.length > 0 && {
+        prompt: promptMessages.map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+      }),
+    // The raw model response the round's consequences were derived from —
+    // after the prompt, so the doc reads request → answer.
+    ...(llm?.responseText && { response: llm.responseText }),
   });
   visit(doc, {
     // Multiline strings as |- blocks: readable and highlightable, instead of

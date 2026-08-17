@@ -17,6 +17,7 @@ import { getLoginRedirectSearch } from "../utils/auth-redirect-error.ts";
 // shortcut, OTP guess for test addresses, mode hints.
 import { deriveLoginHintPresentation } from "../utils/login-hint.ts";
 import { authClient } from "../utils/auth-client.ts";
+import { redirectAndStayPending } from "../utils/redirect-and-stay-pending.ts";
 import { AccountChooser } from "./-login-account-chooser.tsx";
 
 // Runs on the server for both SSR and client navigations; the session comes
@@ -365,9 +366,9 @@ function EmailOtpSignIn({
 
       return getPostLoginRedirectUrl(redirectTo);
     },
-    onSuccess: (nextUrl) => {
-      window.location.assign(nextUrl);
-    },
+    // Returning the never-resolving redirect keeps "Signing in..." showing
+    // until the browser actually leaves (see redirectAndStayPending).
+    onSuccess: (nextUrl) => redirectAndStayPending(nextUrl),
     onError: (error: Error) => {
       toast.error(error.message || "Failed to sign in with email");
     },

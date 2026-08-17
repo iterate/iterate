@@ -7,7 +7,11 @@
 // - the `results` array — DERIVED from the host's retained script settlements
 //   (`state.settledScriptResults`), newest first, re-rendered fresh for every
 //   run. It is never stored as preamble code: the settlement event is the only
-//   durable storage, so there is no O(n²) re-carrying of old results.
+//   durable storage, so there is no O(n²) re-carrying of old results. Every
+//   row carries its settlement's stream `offset`, and `results.byOffset(n)`
+//   addresses a row STABLY — positions shift whenever another writer (a
+//   teammate in the shared project REPL scope, another agent) lands a result,
+//   offsets never do. Applies to every scope, agents included.
 // - user/agent-authored entries (`state.preamble`), recorded by
 //   `preamble-set` events in first-set order.
 //
@@ -130,6 +134,13 @@ export function assemblePreamble(input: {
  * `.data` its literal type; large results expose a throwing never-typed
  * `.data` plus a typed async `load(itx)` that reads the settlement back
  * through the scope's own capability host; failures carry `.error`.
+ *
+ * Every row also carries `offset` — its settlement's stream offset — and the
+ * array wears a `results.byOffset(n)` helper for STABLE addressing: in a
+ * shared scope (the project REPL, an agent another writer scripts into),
+ * positions shift as new results land, but the settle offset names one row
+ * forever. Retention still applies: byOffset only sees the retained window
+ * (RETAINED_SCRIPT_RESULTS_LIMIT), and throws for anything older or unknown.
  */
 function renderResultsArray(rows: RetainedScriptResult[], tsOnly: (code: string) => string) {
   const newestFirst = [...rows].reverse();
@@ -140,7 +151,7 @@ function renderResultsArray(rows: RetainedScriptResult[], tsOnly: (code: string)
     switch (row.kind) {
       case "data":
         elements.push(
-          `  { executionId: ${id}, data: ${inlineDataExpression(row.resultJson, tsOnly)} },`,
+          `  { offset: ${row.settledAtOffset}, executionId: ${id}, data: ${inlineDataExpression(row.resultJson, tsOnly)} },`,
         );
         break;
       case "large": {
@@ -152,6 +163,7 @@ function renderResultsArray(rows: RetainedScriptResult[], tsOnly: (code: string)
         );
         elements.push(
           `  {`,
+          `    offset: ${row.settledAtOffset},`,
           `    executionId: ${id},`,
           `    get data()${tsOnly(": never")} { throw new Error(${message}); },`,
           `    load: async (itx${tsOnly(": Itx")})${tsOnly(`: Promise<${typeName}>`)} => ${loadBody}${tsOnly(` as ${typeName}`)},`,
@@ -160,7 +172,9 @@ function renderResultsArray(rows: RetainedScriptResult[], tsOnly: (code: string)
         break;
       }
       case "error":
-        elements.push(`  { executionId: ${id}, error: ${JSON.stringify(row.error)} },`);
+        elements.push(
+          `  { offset: ${row.settledAtOffset}, executionId: ${id}, error: ${JSON.stringify(row.error)} },`,
+        );
         break;
     }
   });
@@ -168,9 +182,25 @@ function renderResultsArray(rows: RetainedScriptResult[], tsOnly: (code: string)
     "// ── prior script results, newest first (assembled by the platform) ──",
     // Whole-line TS-only sections carry their own trailing newline inside the
     // span (see typeAliases above), so the js variant has no blank ghosts.
-    `${typeAliases.join("")}const results = [`,
+    `${typeAliases.join("")}const __resultRows = [`,
     ...elements,
     `]${tsOnly(" as const")};`,
+    // Positional AND stable addressing on one value: the tuple keeps
+    // per-index literal types (results[0].data), byOffset names a row by its
+    // settle offset — stable while others append to a shared scope. The
+    // generic keys on the tuple's LITERAL offset types, so byOffset(16)
+    // returns exactly the row settled at 16 (a retained error row elsewhere
+    // in the window cannot poison `.data` with a union), and an offset
+    // outside the retained window is a compile-time error before it is a
+    // runtime throw.
+    `const results = Object.assign(__resultRows, {`,
+    `  /** The row settled at this stream offset (entries are labeled with it); offsets outside the retained window error at typecheck and throw at runtime. */`,
+    `  byOffset: ${tsOnly(`<O extends (typeof __resultRows)[number]["offset"]>`)}(offset${tsOnly(": O")}) => {`,
+    `    const match = __resultRows.find((row) => row.offset === offset);`,
+    `    if (!match) throw new Error("no retained script result settled at offset " + offset);`,
+    `    return match${tsOnly(" as Extract<(typeof __resultRows)[number], { offset: O }>")};`,
+    `  },`,
+    `});`,
   ].join("\n");
 }
 

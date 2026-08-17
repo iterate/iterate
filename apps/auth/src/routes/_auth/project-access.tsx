@@ -41,21 +41,29 @@ import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { z } from "zod/v4";
 import { authClient, useSession } from "../../utils/auth-client.ts";
+import { shouldUseTestOtp } from "../../server/email.ts";
 import {
   oauthClientQueryOptions,
   organizationsQueryOptions,
   projectSelectionQueryOptions,
 } from "../../utils/auth-query-options.ts";
 import { getInitials } from "../../utils/initials.ts";
+import { redirectAndStayPending } from "../../utils/redirect-and-stay-pending.ts";
 import { orpcClient } from "../../utils/query.tsx";
 import { parseConfig } from "../../config.ts";
 
 // Runs on the server for both SSR and client navigations. The hostname base
 // is this environment's deployed project domain (e.g. "iterate.app",
 // "iterate-preview-3.app") — onboarding previews "<slug>.<base>" under it.
-const getProjectAccessConfig = createServerFn({ method: "GET" }).handler(({ context }) => ({
-  projectHostnameBase: parseConfig(context.cloudflare.env).projectHostnameBase,
-}));
+// fixedTestOtpEnabled is not a secret (see login.tsx): it gates the test-user
+// auto-continue below.
+const getProjectAccessConfig = createServerFn({ method: "GET" }).handler(({ context }) => {
+  const config = parseConfig(context.cloudflare.env);
+  return {
+    projectHostnameBase: config.projectHostnameBase,
+    fixedTestOtpEnabled: config.fixedTestOtpEnabled,
+  };
+});
 
 export const Route = createFileRoute("/_auth/project-access")({
   component: RouteComponent,
@@ -63,6 +71,12 @@ export const Route = createFileRoute("/_auth/project-access")({
     client_id: z.string().optional(),
     scope: z.string().optional(),
     redirect: z.string().optional(),
+    // Suggested project slug, forwarded through the OAuth flow like
+    // login_hint (see the oauth-provider patch). Prefills the create forms
+    // below instead of the derived-from-email suggestion; the user still
+    // confirms. Powers template-carrying PR-body login links
+    // (docs/dev-environments.md) via os' `-template-<name>` slug convention.
+    project_hint: z.string().optional().catch(undefined),
   }),
   loader: () => getProjectAccessConfig(),
 });
@@ -89,23 +103,33 @@ const CreateProjectInput = z.object({
 });
 
 function RouteComponent() {
-  const { client_id, scope, redirect } = Route.useSearch();
-  const { projectHostnameBase } = Route.useLoaderData();
+  const { client_id, scope, redirect, project_hint } = Route.useSearch();
+  const { projectHostnameBase, fixedTestOtpEnabled } = Route.useLoaderData();
+  // Only a well-formed slug counts; anything else falls back to the derived
+  // suggestion as if no hint arrived.
+  const hintedProjectSlug = ProjectSlugInput.safeParse(project_hint).success
+    ? project_hint
+    : undefined;
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
   const session = useSession();
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[] | null>(null);
-  const [organizationName, setOrganizationName] = useState(() =>
-    suggestOrganizationName({
-      name: session.user.name,
-      email: session.user.email,
-    }),
+  const [organizationName, setOrganizationName] = useState(
+    () =>
+      // A hinted project slug names the org too: every test signup shares the
+      // same email domain, so the domain-derived suggestion ("Nustom") would
+      // collide with the previous link-clicker's organization.
+      hintedProjectSlug ||
+      suggestOrganizationName({
+        name: session.user.name,
+        email: session.user.email,
+      }),
   );
   // null = still deriving the first project's slug from the organization name.
   // Once the user edits the field (including clearing it), we keep their
   // value — empty string stays empty and does not snap back to the suggestion.
   const [projectSlugOverride, setProjectSlugOverride] = useState<string | null>(null);
-  const [projectSlug, setProjectSlug] = useState("");
+  const [projectSlug, setProjectSlug] = useState(hintedProjectSlug || "");
   const [selectedOrganizationSlug, setSelectedOrganizationSlug] = useState("");
   const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
   const hasOAuthClientId = Boolean(client_id);
@@ -149,8 +173,7 @@ function RouteComponent() {
     onSuccess: async (project) => {
       if (!hasOAuthClientId) {
         // Back to the app that sent us here (usually the OS dashboard).
-        window.location.href = redirectTarget ?? "/";
-        return;
+        return redirectAndStayPending(redirectTarget || "/");
       }
       if (!needsProjectSelection) {
         const result = await authClient.oauth2.continue({ postLogin: true });
@@ -158,8 +181,7 @@ function RouteComponent() {
           throw new Error("Could not continue the OAuth redirect");
         }
 
-        window.location.href = result.url;
-        return;
+        return redirectAndStayPending(result.url);
       }
       setSelectedProjectIds([project.id]);
       await queryClient.invalidateQueries({ queryKey: organizationsQueryOptions().queryKey });
@@ -179,8 +201,7 @@ function RouteComponent() {
       setIsCreateProjectDialogOpen(false);
       if (!hasOAuthClientId) {
         // Back to the app that sent us here (usually the OS dashboard).
-        window.location.href = redirectTarget ?? "/";
-        return;
+        return redirectAndStayPending(redirectTarget || "/");
       }
       setSelectedProjectIds((current) => {
         const existingProjectIds =
@@ -207,8 +228,44 @@ function RouteComponent() {
         throw new Error("Could not continue the OAuth redirect");
       }
 
-      window.location.href = preserveOAuthResourceSearchParam(result.url);
-      return result;
+      return redirectAndStayPending(preserveOAuthResourceSearchParam(result.url));
+    },
+  });
+
+  // Test users sail through project selection: on fixed-test-OTP deployments
+  // (never production — build-time flag) a signed-in `*+test@nustom.com`
+  // user's selection page would only ever be ceremony, so select every
+  // project and continue without a tap. This keeps the protocol shape
+  // identical to real users' (selection row → continue → consent — the
+  // consent screen still shows for untrusted clients); only the tap is gone.
+  // One-tap mobile test sign-in rides this (apps/mobile/src/lib/auth.ts).
+  const autoContinueProjectIds =
+    projectSelectionQuery.data?.flatMap((selection) =>
+      selection.projects.map((project) => project.id),
+    ) ?? [];
+  const testUserAutoContinue = Boolean(
+    hasOAuthClientId &&
+    needsProjectSelection &&
+    fixedTestOtpEnabled &&
+    shouldUseTestOtp({ email: session.user.email, fixedTestOtpEnabled }) &&
+    autoContinueProjectIds.length > 0,
+  );
+  const autoContinue = useQuery({
+    queryKey: ["test-user-auto-continue", client_id],
+    enabled: testUserAutoContinue,
+    retry: false,
+    staleTime: Infinity,
+    gcTime: Infinity,
+    queryFn: async () => {
+      await orpcClient.user.storeOAuthProjectSelection({
+        clientId: client_id!,
+        projectIds: autoContinueProjectIds,
+      });
+      const result = await authClient.oauth2.continue({ postLogin: true });
+      if (!result.url) {
+        throw new Error("Could not continue the OAuth redirect");
+      }
+      return redirectAndStayPending(preserveOAuthResourceSearchParam(result.url));
     },
   });
 
@@ -219,8 +276,7 @@ function RouteComponent() {
         throw new Error("Could not continue the OAuth redirect");
       }
 
-      window.location.href = result.url;
-      return result;
+      return redirectAndStayPending(result.url);
     },
   });
 
@@ -235,9 +291,23 @@ function RouteComponent() {
   const isLoadingOAuthClient = hasOAuthClientId && oauthClientQuery.isPending;
   const isLoadingProjectSelection = wantsProjects && projectSelectionQuery.isPending;
 
-  if (isLoadingOAuthClient || organizationsQuery.isPending || isLoadingProjectSelection) {
+  // While the test-user auto-continue is in flight, hold the loading skeleton
+  // so the selection card never flashes (and can't be double-submitted). If
+  // it errors, fall through to the normal interactive page.
+  if (
+    isLoadingOAuthClient ||
+    organizationsQuery.isPending ||
+    isLoadingProjectSelection ||
+    (testUserAutoContinue && !autoContinue.isError)
+  ) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-muted/20 p-4">
+      // role/aria: a marked loading state — assistive tech announces it, and
+      // the e2e spinner-waiter extends its wait budget while it shows.
+      <div
+        aria-label="Loading"
+        className="flex min-h-screen items-center justify-center bg-muted/20 p-4"
+        role="status"
+      >
         <Card className="w-full max-w-xl">
           <CardHeader>
             <div className="h-12 w-12 rounded-lg bg-muted" />
@@ -308,7 +378,8 @@ function RouteComponent() {
   const effectiveSelectedProjectIds = selectedProjectIds ?? allProjectIds;
   const canContinue = effectiveSelectedProjectIds.length > 0;
   const isCreatingFirstOrganization = organizations.length === 0;
-  const suggestedProjectSlug = organizationName.trim() ? slugify(organizationName) : "";
+  const suggestedProjectSlug =
+    hintedProjectSlug || (organizationName.trim() ? slugify(organizationName) : "");
   const firstProjectSlug = projectSlugOverride ?? suggestedProjectSlug;
   const parsedOrganizationWithProject = CreateOrganizationWithProjectInput.safeParse({
     name: organizationName,

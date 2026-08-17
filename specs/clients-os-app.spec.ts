@@ -32,26 +32,53 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
 
   await test.step("tab one connects as a client", async () => {
     await page.goto(`/projects/${slug}/repl`);
-    await expect.poll(connectedOsAppClients, { timeout: 60_000, intervals: [500] }).toHaveLength(1);
+    await expect.poll(connectedOsAppClients, { timeout: 60_000, intervals: [500] }).toHaveLength(1); // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
   });
 
   const pageTwo = await context.newPage();
   await test.step("tab two is a SECOND client", async () => {
     await pageTwo.goto(`/projects/${slug}/integrations`);
-    await expect.poll(connectedOsAppClients, { timeout: 60_000, intervals: [500] }).toHaveLength(2);
+    await expect.poll(connectedOsAppClients, { timeout: 60_000, intervals: [500] }).toHaveLength(2); // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
   });
   const bothPaths = await connectedOsAppClients();
 
   // Map catalog paths to tabs via each client's own url() capability — the
   // call executes INSIDE the owning tab, so it self-identifies (the two tabs
-  // were tagged with distinct SPA locations above).
+  // were tagged with distinct SPA locations above). `connected` is the
+  // provider Pager's durable presence fact; the capability mount is the next
+  // durable fact. Under a fully parallel preview the catalog can therefore
+  // lead the callable surface briefly, so synchronize on the public call.
   const tabUrl = async (clientPath: string): Promise<string> => {
-    using host = project.clients.get(clientPath);
-    // @ts-expect-error - dynamic capability member
-    return (await host.capabilities.browser.url()) as string;
+    let url: string | undefined;
+    await expect
+      .poll(
+        async () => {
+          using host = project.clients.get(clientPath);
+          try {
+            // @ts-expect-error - dynamic capability member
+            url = (await host.capabilities.browser.url()) as string;
+            return "ready";
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              error.message === 'no capability "capabilities.browser.url"'
+            ) {
+              return "mounting";
+            }
+            throw error;
+          }
+        },
+        { timeout: 15_000 }, // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
+      )
+      .toBe("ready");
+    if (url === undefined) throw new Error(`client ${clientPath} reported ready without a URL`);
+    return url;
   };
   const urls = await Promise.all(bothPaths.map((clientPath) => tabUrl(clientPath)));
-  const ofPage = bothPaths[urls.findIndex((url) => url.endsWith(`/projects/${slug}/repl`))];
+  // Bare /repl resolves to a session URL (/repl/<timestamp-slug>) on arrival,
+  // so tab one matches on the prefix, not an exact suffix.
+  const replUrl = new RegExp(`/projects/${slug}/repl(/|$)`);
+  const ofPage = bothPaths[urls.findIndex((url) => replUrl.test(url))];
   const ofPageTwo =
     bothPaths[urls.findIndex((url) => url.endsWith(`/projects/${slug}/integrations`))];
   if (ofPage === undefined || ofPageTwo === undefined || ofPage === ofPageTwo) {
@@ -62,11 +89,9 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
     using host = project.clients.get(ofPageTwo);
     // @ts-expect-error - dynamic capability member
     await host.capabilities.browser.navigate(`/projects/${slug}/repl`);
-    await expect
-      .poll(() => pageTwo.url(), { timeout: 15_000 })
-      .toMatch(new RegExp(`/projects/${slug}/repl$`));
+    await expect.poll(() => pageTwo.url(), { timeout: 15_000 }).toMatch(replUrl); // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
     // Tab one stays on its own tag, unchanged.
-    await expect.poll(() => page.url()).toMatch(new RegExp(`/projects/${slug}/repl$`));
+    await expect.poll(() => page.url()).toMatch(replUrl);
   });
 
   await test.step("navigate ONLY tab one to a third route; tab two stays put", async () => {
@@ -74,9 +99,9 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
     // @ts-expect-error - dynamic capability member
     await host.capabilities.browser.navigate(`/projects/${slug}/settings`);
     await expect
-      .poll(() => page.url(), { timeout: 15_000 })
+      .poll(() => page.url(), { timeout: 15_000 }) // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
       .toMatch(new RegExp(`/projects/${slug}/settings`));
-    await expect.poll(() => pageTwo.url()).toMatch(new RegExp(`/projects/${slug}/repl$`));
+    await expect.poll(() => pageTwo.url()).toMatch(replUrl);
   });
 
   await test.step("a DUPLICATED tab (copied sessionStorage) mints its own client", async () => {
@@ -91,14 +116,14 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
       window.sessionStorage.setItem("iterate-os-app-tab-key", key);
     }, copiedKey);
     await pageThree.goto(`/projects/${slug}/reactivity`);
-    await expect.poll(connectedOsAppClients, { timeout: 60_000, intervals: [500] }).toHaveLength(3);
+    await expect.poll(connectedOsAppClients, { timeout: 60_000, intervals: [500] }).toHaveLength(3); // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
     await pageThree.close();
   });
 
   await test.step("closing tab two flips exactly its client to disconnected", async () => {
     await pageTwo.close();
     await expect
-      .poll(connectedOsAppClients, { timeout: 60_000, intervals: [1_000] })
+      .poll(connectedOsAppClients, { timeout: 60_000, intervals: [1_000] }) // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
       .toEqual([ofPage]);
   });
 });

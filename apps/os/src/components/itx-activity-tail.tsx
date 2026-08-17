@@ -1,8 +1,10 @@
-// Live tail of the project context's own stream (the project root stream —
-// the only authority for its capability table): capabilities being provided,
-// revoked, disconnecting; script executions. The first instance of the canonical
-// "filtered stream view" — friendly per-event-type renderers, raw mode shows
-// the same events unfiltered (filtering is client-side by design). Rides useItx (suspends until connected — give it a Suspense
+// Live tail of ONE capability scope's stream (default: the project root —
+// the only authority for its capability table; the REPL page points it at the
+// shared /repl scope, where its runs actually journal): capabilities being
+// provided, revoked, disconnecting; script executions. The first instance of
+// the canonical "filtered stream view" — friendly per-event-type renderers,
+// raw mode shows the same events unfiltered (filtering is client-side by
+// design). Rides useItx (suspends until connected — give it a Suspense
 // boundary) with one kernel subscribe from "start": full replay + live tail.
 // If the socket dies, the subscription re-runs on the fresh generation and
 // re-subscribes from "start" again, deduping the replay by offset — no
@@ -30,9 +32,15 @@ const FRIENDLY_RENDERERS: Record<string, (payload: Record<string, unknown>) => s
   "events.iterate.com/capability-host/capability-disconnected": (p) =>
     `capability "${capabilityName(p)}" disconnected`,
   "events.iterate.com/capability-host/context-created": (p) => `context created: ${p.name ?? ""}`,
+  "events.iterate.com/capability-host/script-run-requested": (p) =>
+    `script run requested (${String(p.executionId ?? "").slice(0, 8)})`,
+  "events.iterate.com/capability-host/script-run-settled": (p) => {
+    const settlement = p.settlement as { status?: string } | undefined;
+    return `script run settled: ${settlement?.status ?? "?"} (${String(p.executionId ?? "").slice(0, 8)})`;
+  },
 };
 
-export function ItxActivityTail() {
+export function ItxActivityTail({ path = PROJECT_CONTEXT_PATH }: { path?: string }) {
   // Renders under a <ProjectScope>, so the subscription resolves the ambient
   // project's itx off the one shared socket — no projectId prop needed.
   const [raw, setRaw] = useState(false);
@@ -40,7 +48,7 @@ export function ItxActivityTail() {
 
   const { error, status } = useStreamConnection(
     (itx) =>
-      itx.streams.get(PROJECT_CONTEXT_PATH).openConnection({
+      itx.streams.get(path).openConnection({
         replayAfterOffset: 0,
         processEventBatch: (batch) => {
           setEvents((previous) => {
@@ -55,7 +63,7 @@ export function ItxActivityTail() {
           });
         },
       }),
-    [],
+    [path],
   );
 
   const rows = raw

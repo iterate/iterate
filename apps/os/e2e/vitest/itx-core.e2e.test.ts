@@ -104,7 +104,8 @@ test("Authenticated internal auth itx can create project and append to stream", 
       "events.iterate.com/project/create-requested",
       "events.iterate.com/project/created",
       "events.iterate.com/repos/created",
-      "events.iterate.com/stream/connection-closed",
+      // NOTE: connection-opened/closed presence facts are ephemeral (memory
+      // only) and deliberately absent from durable reads like this one.
     ]),
   );
 

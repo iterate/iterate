@@ -20,6 +20,7 @@
 
 import * as AuthSession from "expo-auth-session";
 import * as WebBrowser from "expo-web-browser";
+import { emailFromJwt } from "./jwt-claims.ts";
 import { clearStoredAuth, getStoredAuth, setStoredAuth } from "./storage.ts";
 
 // Required for promptAsync to resolve when the OAuth redirect deep-links back
@@ -121,16 +122,43 @@ export async function signIn(baseUrl: string, options: { loginHint?: string } = 
     extraParams: {
       resource,
       // Rides the OAuth authorize request into the auth worker's login page,
-      // which prefills it — and, for `*+test@nustom.com` on deployments with
-      // the test OTP enabled, signs in with it automatically (preview QR
-      // deep links carry a per-PR test identity).
-      ...(options.loginHint ? { login_hint: options.loginHint } : {}),
+      // which prefills it (preview QR deep links carry a per-PR test
+      // identity). For test addresses the browser doesn't even land there —
+      // see the /test-login wrap below — but the hint stays on the authorize
+      // request so the fallback (endpoint missing on a stale deployment) is
+      // the prefilled login page, not a blank one.
+      ...(options.loginHint && { login_hint: options.loginHint }),
     },
   });
+  const discovery = { authorizationEndpoint: config.authorization_endpoint };
+  // Test identities skip the login screen entirely: route the browser through
+  // the auth worker's /test-login (fixed-test-OTP deployments only — 404 in
+  // production, apps/auth/src/server/test-login.ts), which completes the
+  // fixed-OTP sign-in server-side and bounces straight into this same
+  // authorize URL with the session cookie set. The user's first page is the
+  // consent screen — deliberately kept, since the app is a userland client.
+  // Probed first: a param-less GET answers 400 ("email must be…") exactly
+  // where the endpoint exists and is enabled, without signing anything in —
+  // anywhere else (stale deployment, prod, network trouble) the wrap is
+  // skipped and the plain authorize URL still carries the login_hint, so the
+  // fallback is the prefilled login page rather than a 404.
+  const testLoginHint =
+    options.loginHint && /\+test@nustom\.com$/i.test(options.loginHint) ? options.loginHint : null;
+  const promptUrl = testLoginHint
+    ? await (async () => {
+        const testLoginUrl = new URL("/test-login", issuer);
+        const probe = await fetch(testLoginUrl).catch(() => null);
+        if (probe?.status !== 400) {
+          console.log(`[auth] /test-login unavailable (${probe?.status}); using the login page`);
+          return undefined;
+        }
+        testLoginUrl.searchParams.set("email", testLoginHint);
+        testLoginUrl.searchParams.set("return_to", await request.makeAuthUrlAsync(discovery));
+        return testLoginUrl.toString();
+      })()
+    : undefined;
   console.log(`[auth] prompting: redirectUri=${REDIRECT_URI} clientId=${clientId}`);
-  const result = await request.promptAsync({
-    authorizationEndpoint: config.authorization_endpoint,
-  });
+  const result = await request.promptAsync(discovery, promptUrl ? { url: promptUrl } : {});
   console.log(
     `[auth] prompt result: type=${result.type}` +
       (result.type === "success" ? ` params=${JSON.stringify(Object.keys(result.params))}` : "") +
@@ -168,6 +196,21 @@ export async function signIn(baseUrl: string, options: { loginHint?: string } = 
 
 export async function hasSignIn(baseUrl: string): Promise<boolean> {
   return (await getStoredAuth(baseUrl)) !== null;
+}
+
+/**
+ * The email claim of the server's current sign-in, or null when signed out or
+ * the session can't produce a token (dead refresh token — which
+ * getAccessToken already clears). Never throws: this powers comparison UI
+ * (the preview-QR mismatch card), not an auth gate.
+ */
+export async function getSignedInEmail(baseUrl: string): Promise<string | null> {
+  if (!(await hasSignIn(baseUrl))) return null;
+  try {
+    return emailFromJwt(await getAccessToken(baseUrl));
+  } catch {
+    return null;
+  }
 }
 
 export async function signOut(baseUrl: string): Promise<void> {

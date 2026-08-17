@@ -309,6 +309,27 @@ export class ProcessorKeepalive {
     }
   }
 
+  /**
+   * The operator's no-deploy antidote: clear the crash-loop budget and, when
+   * a retry is owed (the record is armed), pull it in to the confirmation
+   * lead so the next fire revives promptly on the fresh budget. Without this
+   * the mark resets only on a quiet-clean confirmation or a version change —
+   * a 3-strikes plateau otherwise mutes a wedged processor for six hours at
+   * a time with a deploy as the only cure (the 2026-08-11 prod incident).
+   */
+  resetBackoff(): void {
+    const record = this.#hooks.readRecord();
+    if (record === undefined) return;
+    if (record.armedAtMs === null) {
+      // Nothing owed — just clear the stale budget.
+      this.#hooks.writeRecord({ ...FRESH_RECORD, version: this.#hooks.version });
+      return;
+    }
+    const atMs = this.#hooks.now() + KEEPALIVE_ALARM_LEAD_MS;
+    this.#hooks.writeRecord({ ...FRESH_RECORD, version: this.#hooks.version, armedAtMs: atMs });
+    this.#hooks.armAlarm(atMs);
+  }
+
   /** Arm for in-flight work: move the alarm earlier, never later, and never
    * during a revival pass (its backoff safety net must govern). */
   #ensureArmedForWork(): void {

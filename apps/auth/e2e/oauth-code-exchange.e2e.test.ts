@@ -125,7 +125,7 @@ function postJson(cookie: string | null, body: unknown): RequestInit {
     headers: {
       "content-type": "application/json",
       origin: baseUrl,
-      ...(cookie ? { cookie } : {}),
+      ...(cookie && { cookie }),
     },
     body: JSON.stringify(body),
   };
@@ -238,14 +238,12 @@ async function exchangeToken(body: Record<string, string>, origin?: string): Pro
     method: "POST",
     headers: {
       "content-type": "application/x-www-form-urlencoded",
-      ...(origin
-        ? {
-            origin,
-            "sec-fetch-dest": "empty",
-            "sec-fetch-mode": "cors",
-            "sec-fetch-site": "cross-site",
-          }
-        : {}),
+      ...(origin && {
+        origin,
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "cross-site",
+      }),
     },
     body: new URLSearchParams(body),
   });
@@ -429,11 +427,14 @@ describe("deployed auth OAuth2/OIDC provider", () => {
     // patches/@better-auth__oauth-provider@1.6.9.patch. If a rewrite drops
     // the patch, this test names exactly what must be reimplemented.
     const hint = "pr9999+test@nustom.com";
+    // project_hint rides the same patched endpoint schema — a template-carrying
+    // login link needs both to survive this hop together.
+    const projectHint = "pr9999-template-waiter-chef";
     // No cookie: a fresh phone has no session. Like authorizeJson above, ask
     // for the JSON envelope ({redirect: true, url}) — better-auth serves that
     // to API clients where a browser would get the 302 with the same URL.
     const response = await authFetch(
-      authorizeUrlFor(fx.armsClient, { login_hint: hint }).toString(),
+      authorizeUrlFor(fx.armsClient, { login_hint: hint, project_hint: projectHint }).toString(),
       { headers: { accept: "application/json" }, redirect: "manual" },
     );
     expect(response.status).toBe(200);
@@ -442,6 +443,7 @@ describe("deployed auth OAuth2/OIDC provider", () => {
     const redirect = new URL(body.url, baseUrl);
     expect(redirect.pathname).toBe("/login");
     expect(redirect.searchParams.get("login_hint")).toBe(hint);
+    expect(redirect.searchParams.get("project_hint")).toBe(projectHint);
     // Still the SIGNED redirect — the hint rides inside the signature, so the
     // post-login authorize re-entry can't be tampered with.
     expect(redirect.searchParams.get("sig")).toBeTruthy();

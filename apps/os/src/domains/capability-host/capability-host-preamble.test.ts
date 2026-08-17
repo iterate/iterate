@@ -126,8 +126,25 @@ describe("assemblePreamble", () => {
     expect(ts).toContain('getScriptResult("agent-output:42")');
     expect(ts).toContain('error: "TypeError: boom"');
     expect(ts).toContain("] as const;");
+    // stable addressing: every row wears its settle offset, and the array
+    // carries byOffset alongside the positional tuple
+    expect(ts).toContain("offset: 57,");
+    expect(ts).toContain("byOffset:");
     // user entries render after the results array
     expect(ts.indexOf("TECH_CHANNEL_ID")).toBeGreaterThan(errorIndex);
+  });
+
+  it("results.byOffset addresses one row stably by its settle offset", async () => {
+    const { js } = assemblePreamble({ entries: [], results: ROWS })!;
+    const results = (await evaluatePreambleJs(js)) as {
+      byOffset: (offset: number) => { executionId: string; offset: number };
+    } & { executionId: string; offset: number }[];
+    // positional and stable addressing agree on the same rows
+    expect(results[0]).toMatchObject({ executionId: "agent-output:57", offset: 57 });
+    expect(results.byOffset(42)).toMatchObject({ executionId: "agent-output:42", offset: 42 });
+    expect(results.byOffset(33)).toMatchObject({ executionId: "agent-output:33", offset: 33 });
+    // outside the retained window: loud, not undefined
+    expect(() => results.byOffset(999)).toThrow("no retained script result settled at offset 999");
   });
 
   it("the js variant is runnable JavaScript with the same bindings (no TS syntax)", async () => {

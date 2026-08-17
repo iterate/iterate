@@ -355,6 +355,14 @@ export function durableObjectRecovery(args: {
       if (record === undefined) return;
       await keepaliveFor(record.streamId).onAlarm();
     },
+    // The operator's no-deploy antidote for a 3-strikes plateau: clear the
+    // crash-loop budget and pull the owed retry to the lead. Delegates
+    // wholesale to the keepalive (the budget's one owner).
+    resetBackoff: () => {
+      const record = readCurrentStoredRecord("resetting the backoff");
+      if (record === undefined) return;
+      keepaliveFor(record.streamId).resetBackoff();
+    },
   };
 
   // Boot-time reconcile (the host's post-construction block verbatim): a

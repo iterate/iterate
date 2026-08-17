@@ -30,8 +30,11 @@ test("can sign up with an email one-time passcode", async ({ page }, testInfo) =
 
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
     // The default config template handles project/created, creates its
-    // onboarding agent, and drives the connected OS tab to the new chat.
-    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
+    // onboarding agent, and drives the connected OS tab to the new chat. The
+    // composer is structural route chrome, independent of any LLM output;
+    // manual timeout covers the cold build, creation saga, and redirect while
+    // spinner-waiter is disabled for the unmarked intermediate skeleton.
+    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 }); // timeout: spinner-waiter is disabled for the intermediate skeleton
   });
   expect(new URL(page.url())).toMatchObject({
     pathname: `/projects/${slug}/agents/streams/agents/onboarding`,

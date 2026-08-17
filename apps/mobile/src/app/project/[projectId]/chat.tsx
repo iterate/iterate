@@ -56,6 +56,7 @@ import {
   type AgentUiMessageItem,
   type MobileFeedItem,
 } from "../../../lib/feed.ts";
+import { awaitingAgentActivity, latestAgentTitle } from "../../../lib/chat.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 // APPROVAL_STREAM_EVENT_TYPES is module-level (identity-stable) on purpose:
 // useLiveEvents folds eventTypes into its connection-hook deps, so an inline
@@ -158,19 +159,20 @@ export default function ChatScreen() {
       // requires an explicit create() before the first message either way.
       await agent.create();
       if (input.files.length === 0) {
-        await agent.message(input.message);
-        return;
+        const event = await agent.message(input.message);
+        return event.offset;
       }
       // Same shape as the web composer: ONE addFiles call → one input event
       // carrying every attachment → one feed message + one agent turn.
-      await agent.addFiles({
+      const added = await agent.addFiles({
         files: input.files.map((file) => ({
           contentType: file.contentType,
           data: base64ToUint8Array(file.base64),
           filename: file.filename,
         })),
-        ...(input.message ? { message: input.message } : {}),
+        ...(input.message && { message: input.message }),
       });
+      return added.event.offset;
     },
     onMutate: () => {
       setDraft("");
@@ -183,6 +185,8 @@ export default function ChatScreen() {
   });
 
   const feed = reduceFeed(path, events.data || []);
+  const sendPending =
+    send.isPending || (send.data ? awaitingAgentActivity(events.data || [], send.data) : false);
   const insets = useSafeAreaInsets();
   const streamUrl =
     baseUrl && slug ? buildStreamViewerUrl({ baseUrl, projectSlug: slug, streamPath: path }) : null;
@@ -229,7 +233,9 @@ export default function ChatScreen() {
     >
       <Stack.Screen
         options={{
-          title: path.replace(/^\/agents\//, ""),
+          // Agent-set title once the first-turn summary lands; the raw path
+          // (still one tap away in the ••• menu) until then.
+          title: latestAgentTitle(events.data || []) || path.replace(/^\/agents\//, ""),
           headerRight: () => (
             <Pressable
               accessibilityLabel="Stream actions"
@@ -277,7 +283,7 @@ export default function ChatScreen() {
             projectId,
             projectSlug: slug || "",
           }}
-          sendPending={send.isPending}
+          sendPending={sendPending}
           // The Meta tab replays each llm request's exact prompt from the
           // thread's own event window (same pure fold as the os trace panel).
           threadEvents={events.data || []}
@@ -303,7 +309,9 @@ export default function ChatScreen() {
       ) : null}
       <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
         <Pressable
-          onPress={async () => setAttachments([...attachments, ...(await pickImages())])}
+          onPress={async () =>
+            setAttachments([...attachments, ...(await pickImages({ selectionLimit: 6 }))])
+          }
           disabled={send.isPending}
           style={styles.attach}
         >

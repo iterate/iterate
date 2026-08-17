@@ -23,6 +23,10 @@ export const AppConfig = z.object({
   // generate-wrangler-config.ts), so runtime URL and route can never drift.
   // Optional because local dev has no deployed base URL.
   baseUrl: publicValue(z.url().optional()),
+  // The deployed worker script name (`semaphore-prd`), generated from the same
+  // envs.ts entry as the route. Absent in local dev. The browser PostHog
+  // client uses it as the app stage to decide whether events leave the device.
+  workerName: publicValue(z.string().trim().min(1).optional()),
   logs: AppLogsConfig.default({ stdoutFormat: "pretty", filtering: { rules: [] } }),
   posthog: z.object({
     apiKey: publicValue(z.string().trim().min(1)),

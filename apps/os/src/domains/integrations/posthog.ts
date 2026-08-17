@@ -1,4 +1,5 @@
 import { tracing } from "cloudflare:workers";
+import { shouldSendPosthogEvents } from "@iterate-com/shared/posthog";
 import { v5 as uuidv5 } from "uuid";
 import { z } from "zod";
 import type { StreamDeliveryBatch } from "iterate/processors";
@@ -222,6 +223,11 @@ export async function capturePosthogStreamEventBatch(
 ): Promise<void> {
   if (args.batch.events.length === 0) {
     throw new Error("PostHog stream delivery batch must contain an event");
+  }
+  // Non-production workers never report to PostHog; acknowledging the batch
+  // without egress keeps stream delivery semantics identical across envs.
+  if (!shouldSendPosthogEvents(args.workerName)) {
+    return;
   }
   await tracing.enterSpan("posthog.capture_stream_events", async (span) => {
     const streamPathId = posthogUuid([

@@ -668,7 +668,8 @@ export const CoreProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/stream/connection-opened": {
       description:
-        "A live connection from this stream to a processEventBatch callback opened. Appended by the stream itself once per actual open; reconnecting after a transient break is a new connection.",
+        "A live connection from this stream to a processEventBatch callback opened. Appended by the stream itself once per actual open; reconnecting after a transient break is a new connection. Ephemeral: runtime connection state is authoritative for presence, and a reconnect storm against a crash-looping host must not grow the durable journal (the 2026-08-11 revival death spiral journaled ~1500 durable open/close facts per revival cycle, making every replay heavier than the last).",
+      ephemeral: true,
       payloadSchema: z.object({
         connectionKey: z.string().trim().min(1),
         kind: StreamConnectionKind,
@@ -677,7 +678,8 @@ export const CoreProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/stream/connection-closed": {
       description:
-        "Observes that a live connection from this stream to a processEventBatch callback closed. Abrupt Durable Object teardown can end an in-memory connection without leaving this best-effort close fact; runtime connection state is authoritative for what is open now.",
+        "Observes that a live connection from this stream to a processEventBatch callback closed. Abrupt Durable Object teardown can end an in-memory connection without leaving this best-effort close fact; runtime connection state is authoritative for what is open now. Ephemeral, like connection-opened.",
+      ephemeral: true,
       payloadSchema: z.object({
         connectionKey: z.string().trim().min(1),
         reason: ConnectionCloseReason,

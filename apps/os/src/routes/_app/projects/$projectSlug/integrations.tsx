@@ -199,7 +199,6 @@ function ProjectIntegrationsContent() {
       if (!userId) throw new Error("You must be signed in to connect Slack.");
       return await itx.integrations.startOAuthFlow({
         provider: "slack",
-        userId,
         callbackUrl: window.location.href,
       });
     },
@@ -222,7 +221,6 @@ function ProjectIntegrationsContent() {
       if (!userId) throw new Error("You must be signed in to connect Google.");
       return await itx.integrations.startOAuthFlow({
         provider: "google",
-        userId,
         callbackUrl: window.location.href,
       });
     },
@@ -236,7 +234,6 @@ function ProjectIntegrationsContent() {
       if (!userId) throw new Error("You must be signed in to connect GitHub.");
       return await itx.integrations.startOAuthFlow({
         provider: "github",
-        userId,
         callbackUrl: window.location.href,
       });
     },

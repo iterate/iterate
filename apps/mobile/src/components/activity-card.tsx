@@ -1,8 +1,8 @@
 // One activity roll-up in the chat feed — the mobile rendering of the web's
 // "Ran code 2× · 3 requests · 7.4s" rows (packages/ui agent-ui-reducer items).
-// Collapsed: the one-line summary plus status glyphs (spinner while running,
-// approval marks once the run parked batches at the egress door). Expanded
-// (tap, or automatically while live-streaming): the run organized into
+// Collapsed (the default, live or settled): the one-line summary plus status
+// glyphs (spinner while running, approval marks once the run parked batches
+// at the egress door). Expanded (tap only): the run organized into
 // ROUNDS — the llm step that writes a script and the code step that runs it.
 // A single round shows its content directly; several rounds each collapse to
 // a "Round N · <summary status>" header (tap to expand; a running round
@@ -18,7 +18,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Document, Scalar, visit } from "yaml";
 import type { StreamEvent } from "iterate/sdk/itx/react";
-import { llmResponseForDisplay } from "../lib/activity-display.ts";
+import { looksLikeCode } from "../lib/activity-display.ts";
 import {
   deriveBatchesForExecution,
   summarizeBatchOutcomes,
@@ -57,9 +57,13 @@ export function ActivityCard({
 }) {
   const isLive = activity.status !== "done";
   const [toggled, setToggled] = useState<boolean | null>(null);
-  // Live activities stream open so you can watch the code being written;
-  // settled ones collapse to their summary until tapped.
-  const expanded = toggled ?? isLive;
+  // Collapsed by default, live or not: a streaming run used to auto-expand
+  // and balloon the chat as code filled in, then vanish back to one line on
+  // settle. The summary row already tells the live story small — spinner
+  // plus "writing code…" — so expansion is a deliberate tap, both ways.
+  // (Inside an opened card, a RUNNING round still streams open — that
+  // auto-expand is what the tap asked to watch.)
+  const expanded = toggled === true;
   const rounds = groupActivityRounds(activity.steps);
   const batchesByExecution = new Map(
     activity.steps
@@ -244,9 +248,12 @@ function liveSummary(activity: AgentUiActivity): string {
 }
 
 function LlmStepView({ code, step }: { code: AgentUiCodeStep | null; step: AgentUiLlmStep }) {
-  // Same next-step dedupe as before the rounds layout: the llm's response IS
-  // the round's script, so it renders only where it differs from the code.
-  const responseText = llmResponseForDisplay(step.responseText, code?.code);
+  // Once the round has a code step, the raw response is REDUNDANT here: the
+  // extracted script sits in the Script tab, extracted prose in the chat
+  // bubbles, and the verbatim text in Meta → response. It renders only for
+  // code-less moments — the live stream before a script lands, or a round
+  // whose code half never arrived.
+  const responseText = code === null ? step.responseText : "";
   return (
     <View style={styles.stepBody}>
       {/* Once the round has a code step, this stat line lives in its Meta
@@ -260,9 +267,14 @@ function LlmStepView({ code, step }: { code: AgentUiCodeStep | null; step: Agent
       {step.thinkingText !== "" ? (
         <Text style={styles.thinking}>{tail(step.thinkingText, 600)}</Text>
       ) : null}
-      {responseText !== "" ? (
-        <CodeBlock language="typescript" muted={false} text={responseText} />
-      ) : null}
+      {responseText === "" ? null : step.interpreted && !looksLikeCode(responseText) ? (
+        // An interpreted prose response (a userland format extracted the real
+        // reply into a chat bubble): source material, not code — muted text,
+        // parity with the os feed's LlmOnlyRound.
+        <Text style={styles.thinking}>{responseText}</Text>
+      ) : (
+        <CodeBlock language="typescript" muted={step.interpreted === true} text={responseText} />
+      )}
       {step.errorMessage ? <Text style={styles.error}>{step.errorMessage}</Text> : null}
     </View>
   );
@@ -373,6 +385,7 @@ function CodeStepTabs({
                         ? styles.approvedBadge
                         : styles.rejectedBadge,
                     ]}
+                    testID="approval-decision-badge"
                   >
                     {batch.resolved.decisionSummary}
                   </Text>
@@ -439,31 +452,32 @@ function metaYaml(
 ): string {
   const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
   const doc = new Document({
-    ...(llm
-      ? {
-          llm: {
-            ...(llm.model ? { model: llm.model } : {}),
-            ...(llm.durationMs == null ? {} : { duration: seconds(llm.durationMs) }),
-            ...(llm.inputTokens == null ? {} : { inputTokens: llm.inputTokens }),
-            ...(llm.outputTokens == null ? {} : { outputTokens: llm.outputTokens }),
-            ...(llm.outcome && llm.outcome !== "completed" ? { outcome: llm.outcome } : {}),
-            ...(llm.cancelReason ? { cancelReason: llm.cancelReason } : {}),
-          },
-        }
-      : {}),
+    ...(llm && {
+      llm: {
+        ...(llm.model && { model: llm.model }),
+        ...(llm.durationMs == null ? {} : { duration: seconds(llm.durationMs) }),
+        ...(llm.inputTokens == null ? {} : { inputTokens: llm.inputTokens }),
+        ...(llm.outputTokens == null ? {} : { outputTokens: llm.outputTokens }),
+        ...(llm.outcome && llm.outcome !== "completed" && { outcome: llm.outcome }),
+        ...(llm.cancelReason && { cancelReason: llm.cancelReason }),
+      },
+    }),
     code: {
-      ...(code.status === "running" ? { status: "running" } : {}),
+      ...(code.status === "running" && { status: "running" }),
       ...(code.durationMs == null ? {} : { duration: seconds(code.durationMs) }),
-      ...(code.status === "done" && code.success === false ? { failed: true } : {}),
+      ...(code.status === "done" && code.success === false && { failed: true }),
     },
-    ...(promptMessages && promptMessages.length > 0
-      ? {
-          prompt: promptMessages.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
-        }
-      : {}),
+    ...(promptMessages &&
+      promptMessages.length > 0 && {
+        prompt: promptMessages.map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+      }),
+    // The raw model response the round's consequences were derived from —
+    // after the prompt, so the doc reads request → answer (parity with the
+    // os feed's buildRoundMetaYaml).
+    ...(llm?.responseText && { response: llm.responseText }),
   });
   visit(doc, {
     // Multiline strings as |- blocks: readable and highlightable, instead of

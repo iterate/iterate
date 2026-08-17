@@ -108,7 +108,7 @@ describe("shared PostHog initialization", () => {
     });
 
     const { initPosthog } = await import("@iterate-com/ui/components/posthog");
-    initPosthog({ apiKey: "phc_test" });
+    initPosthog({ apiKey: "phc_test", appStage: "os-prd" });
 
     await vi.waitFor(() => expect(posthogInit).toHaveBeenCalledOnce());
     expect(posthogInit.mock.calls[0]?.[1]).toMatchObject({
@@ -127,7 +127,22 @@ describe("shared PostHog initialization", () => {
       strict_script_versioning: true,
     });
     expect(posthogInit.mock.calls[0]?.[1]).not.toHaveProperty("bootstrap");
+    expect(posthogInit.mock.calls[0]?.[1]).not.toHaveProperty("before_send");
   });
+
+  it.each(["os-preview-3", undefined])(
+    "drops every event and disables replay on non-production stage %s",
+    async (appStage) => {
+      await loadPosthog({ appStage });
+
+      const initOptions = posthogInit.mock.calls[0]?.[1] as {
+        before_send: (event: unknown) => unknown;
+        disable_session_recording: boolean;
+      };
+      expect(initOptions).toMatchObject({ disable_session_recording: true });
+      expect(initOptions.before_send({ event: "$pageview" })).toBeNull();
+    },
+  );
 
   it("supports manual TanStack pageviews and disabling replay", async () => {
     await loadPosthog({ capturePageviews: false, sessionRecording: false });

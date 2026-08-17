@@ -29,6 +29,6 @@ export async function backfillProjectIfMissing(
   if (project.deploymentStatus !== "missing") return;
   await itx.projects.get(project.slug).create({
     projectId: project.id,
-    ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
+    ...(project.organizationSlug && { organizationSlug: project.organizationSlug }),
   });
 }

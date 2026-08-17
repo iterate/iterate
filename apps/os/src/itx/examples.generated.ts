@@ -16,7 +16,7 @@ export const ITX_EXAMPLES: ItxExample[] = [
     description:
       "The top-level REPL holds the OS Session — the catalog authenticate() returned; it is not an itx. __describe() works on every node; on a Session its `principal` is who the socket carries.",
     context: "session",
-    runtimes: ["browser", "node", "cli"],
+    runtimes: ["node", "cli"],
     code: `
 const description = await itx.__describe();
 return description.principal;
@@ -29,7 +29,7 @@ return description.principal;
     description:
       "A Session vends itxs: projects.list() shows the projects you can reach (id, slug, org, deployment status), and projects.get(id) returns the project-scoped itx — the same handle a project REPL holds. Every project-context example starts there.",
     context: "session",
-    runtimes: ["browser", "node", "cli"],
+    runtimes: ["node", "cli"],
     code: `
 // Every project you have access to (admins see all; users see their own):
 // { id, slug, organizationId, organizationName, deploymentStatus }.
@@ -206,7 +206,7 @@ return {
     description:
       "provideCapability({ type: 'live', … }) mounts a plain object of functions (nested at any depth) on the project. The client gives the CapabilityHost a hibernatable Capability Provider Pager: after releasing ordinary RPC references, the host Pages that return channel when it needs the provider again. One Pager may back many mounts. The returned provision owns this mount: provision.revoke() removes it. Its calls go offline when that Pager disconnects.",
     context: "project",
-    runtimes: ["browser", "node", "cli"],
+    runtimes: ["node", "cli"],
     code: `
 // No wrapper, no registration ceremony — the object you already have is the
 // capability. Its methods run HERE, in your process; the project calls back
@@ -244,7 +244,7 @@ return { deep, revoked, ultimate };
     description:
       "flattenNestedPaths: true delivers the whole dotted path as data to ONE method, invokeCapability({ path, args }). This is how 'use itx.fakeSlack exactly like the Slack SDK' works — the public SDK docs become the tool docs, with a tiny forwarder.",
     context: "project",
-    runtimes: ["browser", "node", "cli"],
+    runtimes: ["node", "cli"],
     code: `
 // One method handles the entire method tree. itx.fakeSlack.chat.postMessage(x)
 // arrives here as { path: ["chat","postMessage"], args: [x] } — the provider
@@ -630,17 +630,15 @@ return await secret.__describe();
     e2eProven: false,
     title: "Make a plain HTTP request through project egress",
     description:
-      "itx.egress.fetch(request) is the raw outbound HTTP door: call an external API, download a file, GET or POST anything — every request project-attributed. It takes ONE argument, a Request (build headers/method/body onto it). Choosing a door: egress.fetch is the plain request; itx.browser.quickAction renders a JS-heavy page and can return markdown; itx.ai.toMarkdown converts documents. RETURN the response data (or just the fields you need) — never save a copy to a file first: script results are retained, and your next script reads them via the `results` preamble. Secret placeholders in headers and URL paths substitute at egress; exact JSON string values also substitute when x-iterate-secret-template: json is set (see secret-postman-echo). External service — interactive-only.",
+      "itx.egress.fetch(input, init?) is the raw outbound HTTP door: call an external API, download a file, GET or POST anything — every request project-attributed. It has the standard fetch signature: a URL plus optional init (headers/method/body), or a prebuilt Request. Choosing a door: egress.fetch is the plain request; itx.browser.quickAction renders a JS-heavy page and can return markdown; itx.ai.toMarkdown converts documents. RETURN the response data (or just the fields you need) — never save a copy to a file first: script results are retained, and your next script reads them via the `results` preamble. Secret placeholders in headers and URL paths substitute at egress; exact JSON string values also substitute when x-iterate-secret-template: json is set (see secret-postman-echo). External service — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
 const url = vars.url ?? "https://example.com/";
 
-// egress.fetch takes ONE argument — a Request. Options like headers
-// ride on the Request itself (a second fetch-style init is ignored).
-const response = await itx.egress.fetch(
-  new Request(url, { headers: { accept: "text/html" } }),
-);
+// egress.fetch has the standard fetch signature — a URL plus optional
+// init (or a prebuilt Request if you prefer).
+const response = await itx.egress.fetch(url, { headers: { accept: "text/html" } });
 const body = await response.text();
 
 return { status: response.status, bodyStart: body.slice(0, 200) };
@@ -832,7 +830,7 @@ return;
     id: "journal-is-the-record",
     title: "The stream IS the record: provide, revoke, read it back",
     description:
-      "provideCapability and revokeCapability are appends to the scope's stream (the project root, '/'). Read the stream back and watch the record happen — there is no hidden registry to drift from it.",
+      "provideCapability and revokeCapability are appends to YOUR scope's stream — the project root '/' for a plain project itx, your personal scope in the REPL. Read the stream back and watch the record happen — there is no hidden registry to drift from it.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
@@ -846,8 +844,10 @@ const provision = await itx.provideCapability({
 });
 await provision.revoke();
 
-// The scope's stream is an ordinary stream — same getEvents API as anything.
-const events = await itx.streams.get("/").getEvents();
+// The scope's stream is an ordinary stream — same getEvents API as
+// anything. capabilityHost.path names the scope this itx mounts on.
+const scopePath = await itx.capabilityHost.path;
+const events = await itx.streams.get(scopePath).getEvents();
 const record = events
   .filter(
     (event) => Array.isArray(event.payload?.path) && event.payload.path.join(".") === capPath,
@@ -1590,19 +1590,22 @@ return {
     e2eProven: false,
     title: "Convert a document or HTML to Markdown with Workers AI",
     description:
-      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). It also converts an in-hand HTML string — a fetched page, an email body — via new Blob([html], { type: 'text/html' }): never strip HTML with regex. conversionOptions.output.format 'text' returns plain text with link targets and image URLs stripped — often 10x smaller on emails and newsletters, whose bytes are mostly tracking links and base64 images. Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
+      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary; the extension in name picks the converter). It also converts an in-hand HTML string — a fetched page, an email body — via new TextEncoder().encode(html): never strip HTML with regex. conversionOptions.output.format 'text' returns plain text with link targets and image URLs stripped — often 10x smaller on emails and newsletters, whose bytes are mostly tracking links and base64 images. Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
 const supported = await itx.ai.toMarkdown();
-const csv = new Blob(["name,value\\nalpha,1\\nbeta,2\\n"], { type: "text/csv" });
+// blob takes bytes or base64 — the .csv/.html extension in \`name\`
+// picks the converter. (A Blob would die at the RPC boundary when this
+// runs in a script sandbox.)
+const csv = new TextEncoder().encode("name,value\\nalpha,1\\nbeta,2\\n");
 const converted = await itx.integrations.cf.ai.toMarkdown({ name: "sample.csv", blob: csv });
 
 // An HTML string already in hand (fetched page, email body) is a
-// document too — wrap it in a Blob instead of regex-stripping tags.
+// document too — encode it instead of regex-stripping tags.
 const html =
   '<h1>Report</h1><p><a href="https://example.com/very-long-tracking-url">Everything</a> is <em>fine</em>.</p>';
-const doc = { name: "page.html", blob: new Blob([html], { type: "text/html" }) };
+const doc = { name: "page.html", blob: new TextEncoder().encode(html) };
 const fromHtml = await itx.ai.toMarkdown(doc);
 // output.format "text": link/image URLs stripped, text kept — the
 // compact choice when the URLs don't matter (emails, newsletters).
@@ -1615,6 +1618,62 @@ return {
   fromHtml: fromHtml.data,
   asText: asText.data,
 };
+`.trim(),
+  },
+  {
+    id: "media-search",
+    e2eProven: false,
+    title: "Search captured media (screenshots/photos) by content",
+    description:
+      "The mobile app's Media screen captures screenshots and photos into project file storage and appends events.iterate.com/media/captured onto the /media stream (re-analyses append events.iterate.com/media/processed; the LATEST processed payload per stableKey supersedes the captured one). Each payload carries a vision-model description (markdown), a verbatim OCR transcript (transcript), tags, and the itx.files path holding the bytes — a media file's path is /media/<sha256>-<original-filename>, one flat content-addressed namespace. To answer questions like 'find my train ticket screenshot', FIRST try itx.media.search({ q }) — projects whose config worker mounts the MediaApp get that dotted surface with the same semantics and signed URLs. This script is the fallback when the mount is absent: read the stream, overlay processed results, filter over the text fields, and mint signed URLs with itx.files.get(path).url().",
+    context: "project",
+    runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
+    code: `
+const query = (vars.query ?? "ticket").toLowerCase();
+
+const events = [];
+let cursor = 0;
+while (true) {
+  const page = await itx.streams.get("/media").getEvents({
+    afterOffset: cursor,
+    eventTypes: ["events.iterate.com/media/captured", "events.iterate.com/media/processed"],
+  });
+  if (page.length === 0) break;
+  events.push(...page);
+  cursor = page[page.length - 1].offset;
+}
+
+// Latest processed result per item supersedes its captured payload
+// (events arrive offset-ascending, so later set() calls win).
+const processed = new Map();
+for (const event of events) {
+  if (event.type.endsWith("/processed")) {
+    const payload = event.payload || {};
+    processed.set(payload.stableKey, payload);
+  }
+}
+const items = events
+  .filter((event) => event.type.endsWith("/captured"))
+  .map((event) => {
+    const captured = event.payload || {};
+    return { ...captured, ...processed.get(captured.stableKey) };
+  });
+
+const hits = items.filter((item) =>
+  \`\${item.markdown} \${item.transcript} \${item.filename} \${item.tags.join(" ")}\`
+    .toLowerCase()
+    .includes(query),
+);
+return await Promise.all(
+  hits.slice(0, 5).map(async (hit) => ({
+    filename: hit.filename,
+    tags: hit.tags,
+    description: hit.markdown,
+    transcript: hit.transcript,
+    // Signed https URL — paste into chat to show the image.
+    url: await itx.files.get(hit.path).url(),
+  })),
+);
 `.trim(),
   },
   {

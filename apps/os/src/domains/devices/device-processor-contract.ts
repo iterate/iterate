@@ -34,7 +34,11 @@ export const DeviceProcessorContract = defineProcessorContract({
   // filtered on the enrollment's ownerId at reduce, and recentReplyClaims
   // closes the claim-before-intent race; the bump refolds persisted
   // reduction caches into the new shape.
-  version: "0.6.0",
+  // 0.7.0: approval claims may also reach the device before the notification
+  // intent they suppress. Pending claims plus the approval-offset high-water
+  // mark preserve that ordered-lane race without retaining late claims. The
+  // bump refolds persisted reduction caches into the new shape.
+  version: "0.7.0",
   description: "One enrolled installation and its durable push-notification obligations.",
   // ApprovalPresentedEvents is a standalone catalog, not a contract: the
   // project contract owns the claim event but already imports THIS module, so
@@ -164,6 +168,27 @@ export const DeviceProcessorContract = defineProcessorContract({
           "ISO timestamp of the newest notification-opened fact — the engagement signal the " +
           "dashboard shows.",
       }),
+    latestApprovalRequestEventOffset: z
+      .number()
+      .int()
+      .min(0)
+      .default(0)
+      .meta({
+        description:
+          "Highest project-root human-approval-requested offset observed on a copied " +
+          "notification intent. Claims at or below this frontier cannot be waiting for a " +
+          "future intent, so a claim matching no open obligation is safely a late no-op.",
+      }),
+    pendingApprovalPresentations: z
+      .record(z.string(), z.number().int().positive())
+      .default({})
+      .meta({
+        description:
+          "Foreground claims that crossed the ordered root-to-device copy lane before their " +
+          "matching notification intent. Keyed by project-root approval-request offset and " +
+          "deleted when that intent arrives; unresolved entries remain durable evidence of a " +
+          "missing later intent instead of silently allowing a push.",
+      }),
     notifications: z
       .record(
         z.string(),
@@ -186,10 +211,11 @@ export const DeviceProcessorContract = defineProcessorContract({
               .meta({
                 description:
                   "Epoch ms a matching presence claim (project/approval-presented, or " +
-                  "project/agent-reply-presented) reduced while the obligation was still " +
-                  "`requested` — the user is already looking at the content, so the send " +
-                  "pass settles it `suppressed` instead of attempting. Never set after an " +
-                  "attempt starts: a late claim is a no-op.",
+                  "project/agent-reply-presented) committed. A claim may reduce before its " +
+                  "intent and wait in the matching bounded claim state, or while the " +
+                  "obligation is still `requested`; either way, the user is already looking " +
+                  "at the content, so the send pass settles it `suppressed` instead of " +
+                  "attempting. Never set after an attempt starts: a late claim is a no-op.",
               }),
             status: z.enum(["requested", "started", "ticketed"]).meta({
               description:
@@ -243,9 +269,9 @@ export const DeviceProcessorContract = defineProcessorContract({
           "Recently reduced project/agent-reply-presented claims, kept so an intent COPIED " +
           "AFTER its claim still suppresses: a client watching the thread claims the moment " +
           "the reply renders, and that claim can beat the producer's intent down the same " +
-          "root→device lane (approvals accept the mirror-image race because their request " +
-          "always commits long before any client can render the batch; a reply's claim and " +
-          "intent are triggered by the same event, so here the race is real). Bounded: " +
+          "root→device lane. Approval claims use their root-request offset and a high-water " +
+          "mark instead; reply claims need the path/offset pair and bounded retention because " +
+          "their intent is triggered independently from the same reply event. Bounded: " +
           "pruned by age and count at reduce, deterministically.",
       }),
   }),

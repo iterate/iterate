@@ -259,6 +259,9 @@ test("a live filter failure closes the callback and records the concrete error",
         await stream.getEvents({
           afterOffset: 0,
           eventTypes: ["events.iterate.com/stream/connection-closed"],
+          // Presence facts are ephemeral: still buffered in this incarnation,
+          // but excluded from durable reads unless asked for.
+          includeEphemeral: true,
         })
       ).find((event) => event.payload?.connectionKey === connectionKey);
       return closed !== undefined;
@@ -303,6 +306,7 @@ test("waitForEvent records one open and close pair and cleans up after a timeout
           afterOffset,
           eventTypes: ["events.iterate.com/stream/connection-opened"],
           limit: 100,
+          includeEphemeral: true,
         })
       ).find((event) => {
         const payload = event.payload as {
@@ -336,6 +340,7 @@ test("waitForEvent records one open and close pair and cleans up after a timeout
           afterOffset,
           eventTypes: ["events.iterate.com/stream/connection-closed"],
           limit: 100,
+          includeEphemeral: true,
         })
       ).some(
         (event) => (event.payload as { connectionKey?: unknown }).connectionKey === connectionKey,
@@ -351,6 +356,7 @@ test("waitForEvent records one open and close pair and cleans up after a timeout
         "events.iterate.com/stream/connection-closed",
       ],
       limit: 100,
+      includeEphemeral: true,
     })
   ).filter(
     (event) => (event.payload as { connectionKey?: unknown }).connectionKey === connectionKey,
@@ -484,6 +490,7 @@ test("opening the same connection key atomically replaces the callback", async (
       await stream.getEvents({
         afterOffset: beforeReplacement,
         eventTypes: ["events.iterate.com/stream/connection-closed"],
+        includeEphemeral: true,
       })
     ).some(
       (event) =>
@@ -2125,6 +2132,7 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
       afterOffset: created!.offset,
       eventTypes: ["events.iterate.com/stream/connection-closed"],
       limit: 100,
+      includeEphemeral: true,
     })
   ).find(
     (event) =>
@@ -2133,14 +2141,23 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
   expect(idleClose).toBeDefined();
 
   // Cold-boot the Stream with no real work, then leave it completely
-  // untouched past the 21-second delivery-watchdog horizon. Its durable
-  // cursor must absorb the boot's `woken` fact without waking the hosted
-  // processor, and no stale alarm may create another incarnation or callback
-  // cycle during the quiet window. The final read can itself cold-boot the
-  // Stream, so compare event timestamps against the time captured BEFORE it.
+  // untouched past the 21-second delivery-watchdog horizon. `kill()` can
+  // settle before the next call reaches a fresh incarnation, so use the
+  // durable `woken` fact as the boot barrier. Its durable cursor must absorb
+  // that fact without waking the hosted processor, and no stale alarm may
+  // create another incarnation or callback cycle during the quiet window.
+  const beforeRestartOffset = coreState(await stream.runtimeState()).maxOffset;
   await stream.kill().catch(() => undefined);
+  const bootWoken = await stream.waitForEvent({
+    afterOffset: beforeRestartOffset,
+    eventTypes: ["events.iterate.com/stream/woken"],
+    timeoutMs: 30_000,
+  });
   const booted = runtimeState(await stream.runtimeState());
   expect(booted.coreProcessorState.subscriptions.outbound.byName[subscriptionName]).toBeDefined();
+  expect(booted.coreProcessorState.maxOffset).toBeGreaterThanOrEqual(bootWoken.offset);
+  // waitForEvent briefly opens and closes its own session after the boot fact;
+  // start the quiet window after those barrier-owned lifecycle facts too.
   const quietAfterOffset = booted.coreProcessorState.maxOffset;
   await new Promise((resolve) => setTimeout(resolve, 25_000));
   const quietEndedAt = Date.now();
@@ -2153,8 +2170,14 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
         "events.iterate.com/stream/connection-closed",
       ],
       limit: 100,
+      includeEphemeral: true,
     })
-  ).filter((event) => Date.parse(event.createdAt) < quietEndedAt);
+  )
+    // The final read can itself cold-boot the Stream. Cloudflare and the test
+    // runner have independent clocks, so leave one second of skew outside the
+    // assertion. A stale 21-second watchdog wake still lands at least three
+    // seconds inside this 25-second quiet window.
+    .filter((event) => Date.parse(event.createdAt) < quietEndedAt - 1_000);
   expect(lifecycleEventsDuringQuiet).toEqual([]);
   expect(
     runtimeState(await stream.runtimeState()).runtime.connections[subscriptionName],
@@ -2252,6 +2275,7 @@ test("an idle-torn session connection resumes on the next matching append withou
         await stream.getEvents({
           eventTypes: ["events.iterate.com/stream/connection-closed"],
           limit: 100,
+          includeEphemeral: true,
         })
       ).some(
         (event) =>
@@ -2344,7 +2368,11 @@ test("an idle close never Pages the subscriber it closed, even when its filter n
       runtimeState(await stream.runtimeState()).runtime.connections[connectionKey],
     ).toBeUndefined();
     const idleCloses = (
-      await stream.getEvents({ eventTypes: [CLOSED_EVENT_TYPE], limit: 100 })
+      await stream.getEvents({
+        eventTypes: [CLOSED_EVENT_TYPE],
+        limit: 100,
+        includeEphemeral: true,
+      })
     ).filter(
       (event) => event.payload?.connectionKey === connectionKey && event.payload?.reason === "idle",
     );

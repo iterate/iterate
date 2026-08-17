@@ -372,9 +372,11 @@ export interface Ai {
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
-  /** Convert one document (`{ name, blob }`) to Markdown — an in-hand HTML
-   * string (a fetched page, an email body) converts via
-   * `new Blob([html], { type: "text/html" })`; never strip HTML by hand.
+  /** Convert one document (`{ name, blob }`) to Markdown — `blob` accepts
+   * bytes or base64 (a Blob made in a script cannot cross the RPC
+   * boundary). An in-hand HTML string (a fetched page, an email body)
+   * converts via `new TextEncoder().encode(html)` with a `.html` name;
+   * never strip HTML by hand.
    * `{ conversionOptions: { output: { format: "text" } } }` returns plain
    * text with link targets and image URLs stripped — the compact choice for
    * emails and newsletters, whose bytes are mostly tracking links. */
@@ -697,7 +699,7 @@ export interface AgentCollection {
    */
   get(path: string): Agent;
   /** Known agents, read from the collection processor's reduced database. */
-  list(): Promise<StreamListItem[]>;
+  list(): Promise<AgentListItem[]>;
 }
 
 /**
@@ -731,10 +733,11 @@ export interface Clients {
  */
 export interface ProjectEgress {
   __describe(): Promise<Description>;
-  /** Outbound fetch with project identity and secret substitution. Set
+  /** Outbound fetch with project identity and secret substitution — the
+   * standard fetch signature: a Request, or a URL plus optional init. Set
    * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
    * values in an `application/json` (or `+json`) body. */
-  fetch(request: Request): Promise<EgressResponse>;
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<EgressResponse>;
   /** Install a live egress interceptor (last writer wins); returns a release handle. */
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
 }
@@ -883,10 +886,9 @@ export interface Files {
  * The SDK connection targets are thin dispatchers over the normal vendor
  * clients. A project extends the collection with ordinary
  * `provideCapability({ path: ["integrations", ...] })` — data, not deployment.
- * `completeConnect` is called by the app worker's
- * OAuth callback routes (/api/integrations/<provider>/callback); its
- * authority is the HMAC-signed OAuth state minted by startOAuthFlow,
- * verified itx-side.
+ * Native `completeConnect` calls are bound to this RPC target's authenticated
+ * user; browser callbacks use the same domain operation with their cookie
+ * session. Both re-verify the HMAC-signed state minted by startOAuthFlow.
  */
 export interface ProjectIntegrations {
   /** Slack WebClient connections. `get()` selects the first connected workspace. */
@@ -976,12 +978,10 @@ export interface ProjectIntegrations {
   startOAuthFlow(input: {
     callbackUrl?: string;
     provider: OAuthProviderSlug;
-    /** The user to bind the OAuth state to. Browser-supplied, not authority;
-     * the callback's check against the signed state is the backstop. */
-    userId: string;
   }): Promise<{ authorizationUrl: string }>;
-  /** Called by the app worker's OAuth callback route; authority is the
-   * HMAC-signed OAuth state minted by startOAuthFlow. */
+  /** Complete a native OAuth callback using this authenticated RPC session.
+   * Browser callbacks use the app worker route, which supplies its session
+   * identity directly to the same domain operation. */
   completeConnect(input: {
     /** OAuth authorization code (Slack/Google, or GitHub's proof callback). */
     code?: string;
@@ -989,7 +989,6 @@ export interface ProjectIntegrations {
     installationId?: string;
     provider: OAuthProviderSlug;
     state: string;
-    userId: string | null;
   }): Promise<CompleteConnectResult>;
   /** Move a GitHub installation after a signed, user-bound OAuth proof has
    * been returned to the dashboard for explicit confirmation. */
@@ -1645,8 +1644,9 @@ export interface Secret {
    * (audit, egress, whether material is present, the refresh strategy). The
    * raw value is never part of it. */
   __describe(): Promise<Description & SecretDescription>;
-  /** Egress fetch with this secret's placeholders substituted server-side. */
-  fetch(request: Request): Promise<Response>;
+  /** Egress fetch with this secret's placeholders substituted server-side —
+   * the standard fetch signature: a Request, or a URL plus optional init. */
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   /** Admin-only recovery read of the current encrypted cell. */
   exportForProjectSeed(): Promise<SecretProjectSeedExport>;
   /** Restart the secret's server-side object; the next request boots it fresh. */
@@ -1778,6 +1778,13 @@ export interface CfImagesCapability {
   info(image: ReadableStream<Uint8Array>): Promise<unknown>;
   /** Apply ordered image transforms/draws and output a Response. */
   transform(input: CfImageTransformInput): Promise<Response>;
+  /**
+   * `transform`, buffered: Response bodies (like streams and Blobs) cannot
+   * cross the RPC boundary back into a script sandbox, so scripts use this
+   * to get plain bytes — e.g. downscaling an oversized screenshot before a
+   * vision-model call.
+   */
+  transformBytes(input: CfImageTransformInput): Promise<{ bytes: Uint8Array; contentType: string }>;
 }
 
 /** Cloudflare Media Transformations binding exposed through itx as one-call helpers. */
@@ -2184,6 +2191,7 @@ export type ProjectProcessorState = {
     revokedAt: string | null;
   }[];
   notificationReady: boolean;
+  defaults: Record<string, unknown>;
 };
 
 /**
@@ -2483,11 +2491,14 @@ export type CfMarkdownSupportedFormat = {
 };
 
 /** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
- * a filename plus the raw bytes as a Blob. */
+ * a filename plus the raw bytes. */
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
   name: string;
-  blob: Blob;
+  /** The document bytes: any `FileData` shape (Uint8Array, base64 string,
+   * Blob, …), coerced server-side. Blob does not survive the capnweb hop
+   * from script sandboxes, so pass bytes or base64 from scripts. */
+  blob: FileData;
 };
 
 /** Per-format tuning for `ai.toMarkdown`: output format (markdown, or plain
@@ -2567,6 +2578,7 @@ export type AgentProcessorState = {
     maxAutonomousTurns: number;
     scriptResultHistoryLimit: number;
     compactionTriggerFraction: number;
+    driver: "agent" | "agent-headless";
   };
   contextItems: {
     offset: number;
@@ -2688,6 +2700,7 @@ export type AgentEventInput =
           maxAutonomousTurns?: number | undefined;
           scriptResultHistoryLimit?: number | undefined;
           compactionTriggerFraction?: number | undefined;
+          driver?: "agent" | "agent-headless" | undefined;
         };
       }
     >
@@ -2811,6 +2824,7 @@ export type AgentEventInput =
         files?:
           | { contentType: string; filename: string; path: string; size: number; url: string }[]
           | undefined;
+        llmRequestOffset?: number | undefined;
       }
     >
   | TypedConsumedEventInput<"events.iterate.com/capability-host/preamble-removed", { key: string }>
@@ -2960,6 +2974,15 @@ export type AgentCollectionProcessorState = {
     }
   >;
   waitingForSinceOffsets: Record<string, number>;
+};
+
+/** One row of `itx.agents.list()`: stream identity plus the agent-authored
+ * title when one has been set (agents set it on their first turn via
+ * `agent/summary-updated`). Clients fall back to the path when absent. */
+export type AgentListItem = {
+  path: string;
+  createdAt: string;
+  title?: string;
 };
 
 /** What `itx.clients.list()` returns per client: the catalog record minus reducer bookkeeping. */
@@ -5033,10 +5056,13 @@ type TypedStreamEventInput<Type extends string = string, Payload = Record<string
  * ordered transform steps, optional overlay draws (watermarks — each with its
  * own transforms), and the output encoding. */
 export type CfImageTransformInput = {
-  image: ReadableStream<Uint8Array>;
+  /** Source image: a stream, or any FileData shape (bytes/base64/Blob) —
+   * coerced server-side; streams and Blobs do not survive the RPC hop from
+   * script sandboxes, so pass bytes or base64 from scripts. */
+  image: ReadableStream<Uint8Array> | FileData;
   transforms?: CfImageTransformOptions[];
   draws?: Array<{
-    image: ReadableStream<Uint8Array>;
+    image: ReadableStream<Uint8Array> | FileData;
     options?: CfImageDrawOptions;
     transforms?: CfImageTransformOptions[];
   }>;

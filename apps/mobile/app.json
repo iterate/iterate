@@ -33,6 +33,12 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Iterate syncs the screenshots you choose into your project so you can search them by content."
+        }
       ]
     ],
     "experiments": {

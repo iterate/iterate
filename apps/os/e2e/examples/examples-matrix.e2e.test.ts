@@ -95,18 +95,22 @@ baseTest("every catalogue example is either matrix-tested or explicitly excluded
       `example "${example.id}" needs a case in example-cases.ts (or an explicit exclusion)`,
     ).toBeDefined();
   }
-  // The Playwright REPL spec runs every case through the project REPL, so a
-  // case's example must exist and be browser-runnable in a project context.
+  // Every case must point at a real example with at least one covered
+  // runtime. The Playwright REPL spec (specs/repl-examples.spec.ts) runs the
+  // browser-runnable subset through the project REPL; live-capability entries
+  // dropped that runtime when REPL runs moved server-side, and stay proven by
+  // the node/cli matrix here.
   for (const id of Object.keys(EXAMPLE_CASES)) {
     const example = ITX_EXAMPLES.find((candidate) => candidate.id === id);
     expect(example, `example-cases.ts references missing example "${id}"`).toBeDefined();
     expect(example!, `cased example "${id}" must be project-context`).toMatchObject({
       context: "project",
     });
-    expect(
-      example!.runtimes.includes("browser"),
-      `cased example "${id}" must be browser-runnable (specs/repl-examples.spec.ts)`,
-    ).toBe(true);
+    const covered = example!.runtimes.some(
+      (runtime) =>
+        runtime === "browser" || (MATRIX_RUNTIMES as readonly string[]).includes(runtime),
+    );
+    expect(covered, `cased example "${id}" is runnable in no covered runtime`).toBe(true);
   }
 });
 

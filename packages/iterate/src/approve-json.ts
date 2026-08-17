@@ -208,7 +208,7 @@ export async function runApprovalJson(input: {
       const offsetOnly = z.object({ offset: z.number() }).loose().safeParse(json);
       emit({
         type: "error",
-        ...(offsetOnly.success ? { offset: offsetOnly.data.offset } : {}),
+        ...(offsetOnly.success && { offset: offsetOnly.data.offset }),
         message: `malformed decision line: ${z.prettifyError(line.error)}`,
       });
       return;
@@ -313,7 +313,7 @@ function dispatch(
         offset,
         outcome: "rejected",
         reason: payload.decidedBy === "expiry" ? "expiry" : "human",
-        ...(typeof payload.reason === "string" ? { humanReason: payload.reason } : {}),
+        ...(typeof payload.reason === "string" && { humanReason: payload.reason }),
       });
       return;
     }

@@ -11,6 +11,7 @@
 // exact pkg.pr.new artifact produced by the pull request.
 import { DurableObject, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import type {
+  AgentEventInput,
   DynamicWorkerCapability,
   DynamicWorkerRef,
   ItxBinding,
@@ -45,6 +46,34 @@ import {
 // rewriteRelativeImportExtensions keeps the declaration emit for the published
 // dist/sdk.d.ts, where it must resolve to dist/itx-api.generated.d.ts.
 export type * from "./itx-api.generated.ts";
+
+/**
+ * Compile-time shape for the `"agents/birth-defaults"` value of a
+ * `project/defaults-configured` append — the project's standing contribution
+ * to every matching agent birth batch. The platform stores the value
+ * opaquely and validates it at the agent creation door (degrading to
+ * platform-default births on mismatch; runtime owner:
+ * apps/os/src/domains/agents/agent-defaults.ts), so this type exists to give
+ * config workers compile-time reassurance that what they publish will
+ * survive that check: agent-consumed events, plus the one allowlisted
+ * platform-lane exception — a builtin facet-processor subscription (the
+ * runtime additionally allowlists the subscription name).
+ */
+export type AgentBirthDefaultsValue = {
+  /** Which agents these defaults apply to; absent = every agent born through
+   * the generic creation door. */
+  matches?: { pathPrefix: string };
+  birthEvents: Array<
+    | AgentEventInput
+    | {
+        type: "events.iterate.com/stream/subscription-configured";
+        payload: {
+          name: string;
+          receiver: { action: "facet-processor"; source: { kind: "builtin" } };
+        };
+      }
+  >;
+};
 
 /**
  * What the platform supplies to every dynamic worker: the `ITX` binding

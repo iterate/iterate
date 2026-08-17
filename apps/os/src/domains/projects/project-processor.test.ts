@@ -959,3 +959,56 @@ describe("ProjectProcessor full replay", () => {
     });
   });
 });
+
+// =============================================================================
+// Generic per-key defaults fold
+// =============================================================================
+
+describe("ProjectProcessor generic defaults", () => {
+  it("stores the latest raw value per key, without interpreting any of it", async () => {
+    const h = makeProjectHarness();
+    await h.append({
+      type: "events.iterate.com/project/defaults-configured",
+      payload: {
+        key: "agents/birth-defaults",
+        value: {
+          birthEvents: [
+            {
+              type: "events.iterate.com/agent/configured",
+              payload: { config: { driver: "agent-headless" } },
+            },
+          ],
+        },
+      },
+    });
+    // A second key coexists — latest-wins is PER KEY, not per event type.
+    await h.append({
+      type: "events.iterate.com/project/defaults-configured",
+      payload: { key: "notifications/digest", value: { cadence: "daily" } },
+    });
+    expect(h.state().defaults).toMatchObject({
+      "agents/birth-defaults": {
+        birthEvents: [{ type: "events.iterate.com/agent/configured" }],
+      },
+      "notifications/digest": { cadence: "daily" },
+    });
+
+    // The project stores values it cannot interpret RAW — foreign vocabulary
+    // is the consuming domain's problem, at its read site. The raw latest
+    // replaces the previous raw value, so a consumer can never resurrect the
+    // stale predecessor this event was trying to replace.
+    await h.append({
+      type: "events.iterate.com/project/defaults-configured",
+      payload: {
+        key: "agents/birth-defaults",
+        value: { birthEvents: [{ type: "events.iterate.com/project/created", payload: {} }] },
+      },
+    });
+    expect(h.state().defaults).toMatchObject({
+      "agents/birth-defaults": {
+        birthEvents: [{ type: "events.iterate.com/project/created" }],
+      },
+      "notifications/digest": { cadence: "daily" },
+    });
+  });
+});

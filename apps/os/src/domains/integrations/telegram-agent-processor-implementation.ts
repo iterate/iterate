@@ -227,9 +227,9 @@ export class TelegramAgentProcessor extends StreamProcessor<
         content: telegramWebhookAgentInput(event.payload, { newCommand }),
         actor: {
           type: "telegram",
-          ...(typeof senderId === "number" || typeof senderId === "string"
-            ? { userId: String(senderId) }
-            : {}),
+          ...((typeof senderId === "number" || typeof senderId === "string") && {
+            userId: String(senderId),
+          }),
           ...(senderUsername == null ? {} : { username: senderUsername }),
         },
         refs: [
@@ -456,9 +456,9 @@ export class TelegramAgentProcessor extends StreamProcessor<
             : { messageThreadId: target.messageThreadId }),
           // Half of the deterministic reply_to_message_id rule: the newest
           // human message on this session.
-          ...(target.kind === "message" && !target.fromIsBot && target.messageId !== undefined
-            ? { latestInboundMessageId: target.messageId }
-            : {}),
+          ...(target.kind === "message" &&
+            !target.fromIsBot &&
+            target.messageId !== undefined && { latestInboundMessageId: target.messageId }),
         };
       }
       case "events.iterate.com/agent/llm-request-requested":
@@ -633,7 +633,7 @@ function telegramUpdateTarget(body: unknown): TelegramUpdateTarget | null {
       chatId,
       fromIsBot: from?.is_bot === true,
       kind,
-      ...(typeof messageId === "number" ? { messageId } : {}),
+      ...(typeof messageId === "number" && { messageId }),
       ...(messageThreadId === undefined ? {} : { messageThreadId }),
     };
   }

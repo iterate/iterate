@@ -34,8 +34,21 @@ const ALL_RUNTIMES: ItxExampleRuntime[] = [
   "project-worker",
 ];
 
-/** Live providers must outlive the calls, so these stay in caller-owned sessions. */
-const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["browser", "node", "cli"];
+/**
+ * Runtimes that hold a LIVE caller-owned session for the whole call: live
+ * capability providers must outlive the calls, and the Session catalog only
+ * exists where authenticate() ran. The browser REPL is no longer one of these
+ * — its Runs execute server-side as scope scripts — so these entries are
+ * reading material there.
+ */
+const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["node", "cli"];
+
+/**
+ * Entries the unattended matrix skips for practical reasons (remote models,
+ * connected accounts, long latency) but which are structurally fine to run
+ * interactively — including from the project REPL.
+ */
+const INTERACTIVE_RUNTIMES: ItxExampleRuntime[] = ["browser", "node", "cli"];
 
 /** The recursive MIME tree of a Gmail message payload (`format: "full"`);
  * body bytes are base64url in `body.data`. Used by gmail-search-inbox. */
@@ -709,16 +722,14 @@ return await itx.projects.get(pid).__describe();
     e2eProven: false,
     title: "Make a plain HTTP request through project egress",
     description:
-      "itx.egress.fetch(request) is the raw outbound HTTP door: call an external API, download a file, GET or POST anything — every request project-attributed. It takes ONE argument, a Request (build headers/method/body onto it). Choosing a door: egress.fetch is the plain request; itx.browser.quickAction renders a JS-heavy page and can return markdown; itx.ai.toMarkdown converts documents. RETURN the response data (or just the fields you need) — never save a copy to a file first: script results are retained, and your next script reads them via the `results` preamble. Secret placeholders in headers and URL paths substitute at egress; exact JSON string values also substitute when x-iterate-secret-template: json is set (see secret-postman-echo). External service — interactive-only.",
+      "itx.egress.fetch(input, init?) is the raw outbound HTTP door: call an external API, download a file, GET or POST anything — every request project-attributed. It has the standard fetch signature: a URL plus optional init (headers/method/body), or a prebuilt Request. Choosing a door: egress.fetch is the plain request; itx.browser.quickAction renders a JS-heavy page and can return markdown; itx.ai.toMarkdown converts documents. RETURN the response data (or just the fields you need) — never save a copy to a file first: script results are retained, and your next script reads them via the `results` preamble. Secret placeholders in headers and URL paths substitute at egress; exact JSON string values also substitute when x-iterate-secret-template: json is set (see secret-postman-echo). External service — interactive-only.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { url?: string }) => {
       const url = vars.url ?? "https://example.com/";
 
-      // egress.fetch takes ONE argument — a Request. Options like headers
-      // ride on the Request itself (a second fetch-style init is ignored).
-      const response = await itx.egress.fetch(
-        new Request(url, { headers: { accept: "text/html" } }),
-      );
+      // egress.fetch has the standard fetch signature — a URL plus optional
+      // init (or a prebuilt Request if you prefer).
+      const response = await itx.egress.fetch(url, { headers: { accept: "text/html" } });
       const body = await response.text();
 
       return { status: response.status, bodyStart: body.slice(0, 200) };
@@ -906,7 +917,7 @@ return await itx.projects.get(pid).__describe();
     id: "journal-is-the-record",
     title: "The stream IS the record: provide, revoke, read it back",
     description:
-      "provideCapability and revokeCapability are appends to the scope's stream (the project root, '/'). Read the stream back and watch the record happen — there is no hidden registry to drift from it.",
+      "provideCapability and revokeCapability are appends to YOUR scope's stream — the project root '/' for a plain project itx, your personal scope in the REPL. Read the stream back and watch the record happen — there is no hidden registry to drift from it.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { capPath?: string }) => {
       // Use a unique mount path so the record slice below is unambiguous.
@@ -919,8 +930,10 @@ return await itx.projects.get(pid).__describe();
       });
       await provision.revoke();
 
-      // The scope's stream is an ordinary stream — same getEvents API as anything.
-      const events = await itx.streams.get("/").getEvents();
+      // The scope's stream is an ordinary stream — same getEvents API as
+      // anything. capabilityHost.path names the scope this itx mounts on.
+      const scopePath = await itx.capabilityHost.path;
+      const events = await itx.streams.get(scopePath).getEvents();
       const record = events
         .filter(
           (event) => Array.isArray(event.payload?.path) && event.payload.path.join(".") === capPath,
@@ -1255,7 +1268,7 @@ return {
     title: "Workers AI is a built-in capability",
     description:
       "itx.ai proxies the platform's Workers AI binding: models() lists the catalog, run(model, body) executes one, toMarkdown() converts documents. Model availability and latency depend on the deployment's upstream account, so this entry is reading material for the matrix — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const models = await itx.ai.models();
       const list = Array.isArray(models) ? models : [];
@@ -1607,7 +1620,7 @@ return {
     title: "GitHub's MCP server as a provided integration",
     description:
       "The provided-integration lane, using GitHub's official MCP server: store a fine-grained PAT as a project secret, mount the server into the collection with one durable provideCapability, and call it through the same `.get(connection?)` selector a builtin uses. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. (The BUILT-IN github integration — dashboard connect, the wrapped Octokit at itx.integrations.github.get(), sandbox gh — is separate; this mounts under the github-mcp slug because built-in slugs cannot be shadowed.) Needs a real PAT in vars.githubPat — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx, vars: { connection?: string; githubPat?: string }) => {
       const connection = vars.connection ?? "main";
       const tokenPath = `/secrets/integrations/github-mcp/${connection}/token`;
@@ -1652,7 +1665,7 @@ return {
     title: "GitHub webhooks land on the project's own host",
     description:
       "Per-project webhook ingress already exists: every project host routes to the repo-backed worker.ts, whose fetch can append inbound requests to the connection's /integrations/github/{connection} stream. A configured worker or agent processor then receives those events. Point the GitHub repo/app webhook URL at https://<project-slug>.<base>/webhooks/github/<random-token> (the unguessable token in the path is the auth — worker code cannot hold the HMAC signing secret, by design). MUTATING: this REPLACES the seeded worker.ts (homepage + app router) wholesale — merge the route into your existing fetch instead if you have one. Run it interactively.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx, vars: { connection?: string; urlToken?: string }) => {
       const connection = vars.connection ?? "main";
       const urlToken = vars.urlToken ?? crypto.randomUUID();
@@ -1704,18 +1717,21 @@ export default class ProjectWorker extends WorkerEntrypoint {
     e2eProven: false,
     title: "Convert a document or HTML to Markdown with Workers AI",
     description:
-      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). It also converts an in-hand HTML string — a fetched page, an email body — via new Blob([html], { type: 'text/html' }): never strip HTML with regex. conversionOptions.output.format 'text' returns plain text with link targets and image URLs stripped — often 10x smaller on emails and newsletters, whose bytes are mostly tracking links and base64 images. Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary; the extension in name picks the converter). It also converts an in-hand HTML string — a fetched page, an email body — via new TextEncoder().encode(html): never strip HTML with regex. conversionOptions.output.format 'text' returns plain text with link targets and image URLs stripped — often 10x smaller on emails and newsletters, whose bytes are mostly tracking links and base64 images. Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const supported = await itx.ai.toMarkdown();
-      const csv = new Blob(["name,value\nalpha,1\nbeta,2\n"], { type: "text/csv" });
+      // blob takes bytes or base64 — the .csv/.html extension in `name`
+      // picks the converter. (A Blob would die at the RPC boundary when this
+      // runs in a script sandbox.)
+      const csv = new TextEncoder().encode("name,value\nalpha,1\nbeta,2\n");
       const converted = await itx.integrations.cf.ai.toMarkdown({ name: "sample.csv", blob: csv });
 
       // An HTML string already in hand (fetched page, email body) is a
-      // document too — wrap it in a Blob instead of regex-stripping tags.
+      // document too — encode it instead of regex-stripping tags.
       const html =
         '<h1>Report</h1><p><a href="https://example.com/very-long-tracking-url">Everything</a> is <em>fine</em>.</p>';
-      const doc = { name: "page.html", blob: new Blob([html], { type: "text/html" }) };
+      const doc = { name: "page.html", blob: new TextEncoder().encode(html) };
       const fromHtml = await itx.ai.toMarkdown(doc);
       // output.format "text": link/image URLs stripped, text kept — the
       // compact choice when the URLs don't matter (emails, newsletters).
@@ -1728,6 +1744,61 @@ export default class ProjectWorker extends WorkerEntrypoint {
         fromHtml: fromHtml.data,
         asText: asText.data,
       };
+    },
+  }),
+  projectExample({
+    id: "media-search",
+    e2eProven: false,
+    title: "Search captured media (screenshots/photos) by content",
+    description:
+      "The mobile app's Media screen captures screenshots and photos into project file storage and appends events.iterate.com/media/captured onto the /media stream (re-analyses append events.iterate.com/media/processed; the LATEST processed payload per stableKey supersedes the captured one). Each payload carries a vision-model description (markdown), a verbatim OCR transcript (transcript), tags, and the itx.files path holding the bytes — a media file's path is /media/<sha256>-<original-filename>, one flat content-addressed namespace. To answer questions like 'find my train ticket screenshot', FIRST try itx.media.search({ q }) — projects whose config worker mounts the MediaApp get that dotted surface with the same semantics and signed URLs. This script is the fallback when the mount is absent: read the stream, overlay processed results, filter over the text fields, and mint signed URLs with itx.files.get(path).url().",
+    runtimes: ALL_RUNTIMES,
+    fn: async (itx, vars: { query?: string }) => {
+      const query = (vars.query ?? "ticket").toLowerCase();
+
+      const events = [];
+      let cursor = 0;
+      while (true) {
+        const page = await itx.streams.get("/media").getEvents({
+          afterOffset: cursor,
+          eventTypes: ["events.iterate.com/media/captured", "events.iterate.com/media/processed"],
+        });
+        if (page.length === 0) break;
+        events.push(...page);
+        cursor = page[page.length - 1].offset;
+      }
+
+      // Latest processed result per item supersedes its captured payload
+      // (events arrive offset-ascending, so later set() calls win).
+      const processed = new Map();
+      for (const event of events) {
+        if (event.type.endsWith("/processed")) {
+          const payload = event.payload || {};
+          processed.set(payload.stableKey, payload);
+        }
+      }
+      const items = events
+        .filter((event) => event.type.endsWith("/captured"))
+        .map((event) => {
+          const captured = event.payload || {};
+          return { ...captured, ...processed.get(captured.stableKey) };
+        });
+
+      const hits = items.filter((item) =>
+        `${item.markdown} ${item.transcript} ${item.filename} ${item.tags.join(" ")}`
+          .toLowerCase()
+          .includes(query),
+      );
+      return await Promise.all(
+        hits.slice(0, 5).map(async (hit) => ({
+          filename: hit.filename,
+          tags: hit.tags,
+          description: hit.markdown,
+          transcript: hit.transcript,
+          // Signed https URL — paste into chat to show the image.
+          url: await itx.files.get(hit.path).url(),
+        })),
+      );
     },
   }),
   projectExample<{
@@ -1776,7 +1847,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Generate an image with a Workers AI model",
     description:
       "Generates an image with Cloudflare-hosted FLUX.2 [klein] 9B through itx.ai.run(). The model accepts multipart input and returns a base64 image in image. First-party docs: https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ . Uses paid/remote AI infrastructure — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const form = new FormData();
       form.append(
@@ -1811,7 +1882,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Generate speech audio with a Workers AI model",
     description:
       "Speaks text with xAI Grok TTS via itx.ai.run(). The model returns a hosted MP3 URL in result.audio. ElevenLabs is available through Cloudflare AI Gateway provider-native calls with an ElevenLabs token, not this zero-key env.AI.run path. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-tts/ . Uses paid/remote AI infrastructure — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const response = await itx.ai.run("xai/grok-tts", {
         text: "Hello from itx. This audio was generated with a Cloudflare Workers AI speech model.",
@@ -1844,7 +1915,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Transcribe audio with a Workers AI model",
     description:
       "Transcribes audio with xAI Grok STT via itx.ai.run() against a small public MP3 URL and returns the transcription. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-stt/ . Uses paid/remote AI infrastructure and a public fetch — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const response = await itx.ai.run("xai/grok-stt", {
         url: "https://storage.googleapis.com/cloud-samples-data/speech/brooklyn_bridge.mp3",
@@ -1872,7 +1943,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Generate video with a Workers AI model",
     description:
       "Runs xAI Grok Imagine Video through itx.ai.run(). The model returns a hosted MP4 URL in result.video. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ . Uses paid/remote AI infrastructure — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const response = await itx.ai.run("xai/grok-imagine-video", {
         prompt: "A slow cinematic dolly shot across a clean workspace with a glowing laptop screen",
@@ -1897,7 +1968,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Render a page to Markdown with Browser Run",
     description:
       "Cloudflare Browser Run quick actions are available as itx.browser.quickAction() and itx.integrations.cf.browser.quickAction(). This renders a real page and converts it to Markdown. External service — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const markdown = await itx.browser.quickAction("markdown", {
         url: "https://developers.cloudflare.com/browser-run/quick-actions/",
@@ -1925,7 +1996,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Resize and convert an image with Cloudflare Images",
     description:
       "Cloudflare Images transformations are available as itx.integrations.cf.images.transform({ image, transforms, output }). It accepts private streams too, not just public URLs. External fetch + Images binding — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const source = await fetch("https://developers.cloudflare.com/img/logo-cloudflare-dark.svg");
       const output = await itx.integrations.cf.images.transform({
@@ -1958,7 +2029,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Extract a video frame with Media Transformations",
     description:
       "Cloudflare Media Transformations are available as itx.integrations.cf.videos.transform({ video, transform, output }). Use output.mode = frame, spritesheet, audio, or video. External fetch + Media binding — interactive-only.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const source = await fetch(
         "https://pub-d9fcbc1abcd244c1821f38b99017347f.r2.dev/aus-mobile.mp4",
@@ -1980,7 +2051,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     title: "Send an email from the project's address",
     description:
       "itx.email.send() delivers real mail through Cloudflare Email Service from the project's own address (<slug>@<hostname base>); an explicit `from` must match it. Needs the deployment's sender domain onboarded for Email Sending, and it emails a real recipient — interactive-only, with an address you own.",
-    runtimes: LIVE_SESSION_RUNTIMES,
+    runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const receipt = await itx.email.send({
         to: "you@example.com", // a mailbox you own — this sends real mail
