@@ -5554,7 +5554,9 @@ type ProjectListEntryBase = Omit<ProjectListEntry, "deploymentStatus">;
  * The client scope's complete atomic birth batch, appended idempotently by
  * every `projects.connect`: the capability-host scope birth plus the
  * clients-to-root copy subscription feeding the project processor's clients
- * catalog. Keys derive from (projectId, path) only, so reconnects dedupe.
+ * catalog, plus the generic client-capabilities-to-root feed that lets
+ * userspace react only after a newly mounted live capability is callable.
+ * Keys derive from (projectId, path) only, so reconnects dedupe.
  */
 function clientScopeCreationEvents(input: { path: string; projectId: string }) {
   return [
@@ -5572,6 +5574,28 @@ function clientScopeCreationEvents(input: { path: string; projectId: string }) {
             "events.iterate.com/capability-host/capability-provider-pager-connected",
             "events.iterate.com/capability-host/capability-provider-pager-disconnected",
           ],
+        },
+        receiver: {
+          action: "copy-to-stream",
+          receivingStreamPath: "/",
+          delivery: {
+            // Configured in the same birth batch, so "beginning" is exact.
+            start: "beginning",
+            onFailingEvent: "halt",
+          },
+        },
+      },
+    },
+    {
+      type: "events.iterate.com/stream/subscription-configured",
+      idempotencyKey: "stream/subscription-configured:client-capabilities-to-root",
+      payload: {
+        name: "client-capabilities-to-root",
+        description:
+          "Copies this client scope's capability-provided facts to the project root after " +
+          "the provider has mounted them, for generic userspace client-ready reactions.",
+        filter: {
+          eventTypes: ["events.iterate.com/capability-host/capability-provided"],
         },
         receiver: {
           action: "copy-to-stream",
@@ -5644,12 +5668,13 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
    * platform-specific — it is a capability-host scope at the caller-chosen
    * `path` (e.g. `"/clients/desk-robot"`; encode a tab id or device serial in
    * the path if you want several). Connect appends the scope's idempotent
-   * birth batch (reconnecting dedupes to a no-op) plus one narrow copy
-   * subscription that sends the scope's provider connect/disconnect facts to
-   * the project root, where the project processor reduces the clients
-   * catalog (`itx.clients.list()`). When `capabilities` is passed, it is
-   * provided as a LIVE capability mounted at `capabilities` on the scope —
-   * the shipped capability machinery holds it behind a hibernating Provider
+   * birth batch (reconnecting dedupes to a no-op) plus narrow copy
+   * subscriptions that send provider presence and capability-provided facts
+   * to the project root. The project processor reduces presence into the
+   * clients catalog (`itx.clients.list()`); userspace can react to the generic
+   * capability fact after a new client is callable. When `capabilities` is
+   * passed, it is provided as a LIVE capability mounted at `capabilities` on
+   * the scope — the shipped capability machinery holds it behind a hibernating Provider
    * Pager (no pinned Durable Objects), journals the provision, and journals
    * the disconnect when this session's socket dies; the mount is retired
    * with it. Callers invoke it through the scope's capability host:

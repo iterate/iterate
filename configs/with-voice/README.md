@@ -17,4 +17,7 @@ This template opts into onboarding entirely in `worker.ts`: its
 `project/created` case creates `/agents/onboarding`, installs this repo's
 voice-specific `ONBOARDING.md`, starts the first agent turn, and opens the
 agent on each connected OS browser client that is still on the new project's
-landing page. Removing that case removes the behavior without changing OS.
+landing page. It also records a five-minute userspace open request: when the
+new route's generic browser capability mounts just after project creation, its
+copied `capability-provided` fact fulfills the same request. Removing these two
+event cases removes the behavior without changing OS.

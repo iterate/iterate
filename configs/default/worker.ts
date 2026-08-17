@@ -10,6 +10,9 @@ import {
 } from "iterate/sdk";
 import { TodoApp } from "iterate/starter-apps/todo";
 
+const ONBOARDING_OPEN_REQUEST_KEY = "iterate/config/onboarding-open-requested:v1";
+const ONBOARDING_OPEN_WINDOW_MS = 5 * 60 * 1_000;
+
 // An iterate project is, in the abstract, just a fetch function.
 // HTTP clients on the internet can send us Requests, and we will send responses and
 // occasionally send HTTP requests outwards to the world to take influence on it.
@@ -48,6 +51,41 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    * mints the document view, `link({ workspace, repo, task? })` the board. */
   get docs() {
     return this.#docsApp.rpc;
+  }
+
+  /** Open only tabs still sitting on this project's landing page. The same
+   * userspace action serves tabs present at creation and tabs whose generic
+   * browser capability finishes mounting moments later. */
+  async #openOnboardingOnProjectHome(clientPaths: string[]): Promise<void> {
+    const { slug } = await this.itx.identity();
+    const projectHomePath = `/projects/${slug}`;
+    const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;
+    await Promise.all(
+      clientPaths.map(async (clientPath) => {
+        const browserClient = this.itx.clients.get(clientPath);
+        const description = await browserClient.__describe();
+        if (
+          !description.capabilities.some(
+            (capability) => capability.path.length === 1 && capability.path[0] === "capabilities",
+          )
+        ) {
+          return;
+        }
+        const currentUrl = await browserClient.invokeCapability({
+          path: ["capabilities", "browser", "url"],
+        });
+        if (
+          typeof currentUrl !== "string" ||
+          new URL(currentUrl).pathname.replace(/\/$/, "") !== projectHomePath
+        ) {
+          return;
+        }
+        await browserClient.invokeCapability({
+          path: ["capabilities", "browser", "navigate"],
+          args: [onboardingUrl],
+        });
+      }),
+    );
   }
 
   /**
@@ -208,32 +246,38 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
           },
         );
 
-        const [{ slug }, clients] = await Promise.all([
-          this.itx.identity(),
-          this.itx.clients.list(),
-        ]);
-        const projectHomePath = `/projects/${slug}`;
-        const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;
-        await Promise.all(
+        // This durable userspace fact makes a just-after-creation client as
+        // actionable as one that happened to be connected already. It expires
+        // in the capability-provided case, so a later visit is never onboarding.
+        await this.itx.streams.get("/").append({
+          type: "events.iterate.com/config/onboarding-open-requested",
+          idempotencyKey: ONBOARDING_OPEN_REQUEST_KEY,
+        });
+        const clients = await this.itx.clients.list();
+        await this.#openOnboardingOnProjectHome(
           clients
             .filter((client) => client.connected && client.path.startsWith("/clients/os-app/"))
-            .map(async (client) => {
-              const browserClient = this.itx.clients.get(client.path);
-              const currentUrl = await browserClient.invokeCapability({
-                path: ["capabilities", "browser", "url"],
-              });
-              if (
-                typeof currentUrl !== "string" ||
-                new URL(currentUrl).pathname.replace(/\/$/, "") !== projectHomePath
-              ) {
-                return;
-              }
-              await browserClient.invokeCapability({
-                path: ["capabilities", "browser", "navigate"],
-                args: [onboardingUrl],
-              });
-            }),
+            .map((client) => client.path),
         );
+        break;
+      }
+      case "events.iterate.com/capability-host/capability-provided": {
+        if (event.path !== "/") break;
+        // projects.connect copies this generic, post-mount fact from the client
+        // scope. A short-lived userspace request bridges the ordinary race
+        // between project creation and the destination route mounting itself.
+        const source = event.source?.copiedFrom?.at(-1);
+        if (!source?.path.startsWith("/clients/os-app/")) break;
+        const openRequest = await this.itx.streams
+          .get("/")
+          .getEvent({ idempotencyKey: ONBOARDING_OPEN_REQUEST_KEY });
+        if (openRequest === undefined) break;
+        const requestedAt = Date.parse(openRequest.createdAt);
+        if (!Number.isFinite(requestedAt)) {
+          throw new Error("The onboarding open request has an invalid creation timestamp.");
+        }
+        if (Date.now() - requestedAt > ONBOARDING_OPEN_WINDOW_MS) break;
+        await this.#openOnboardingOnProjectHome([source.path]);
         break;
       }
       case "events.iterate.com/agent/created": {

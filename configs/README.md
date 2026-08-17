@@ -34,7 +34,9 @@ repository.
 
 Onboarding is a template choice, not an OS feature. A template opts in by
 handling the root `project/created` event in `worker.ts`. It can create any
-agent shape, append template-local instructions, and use `itx.clients` to open
-that agent on connected browser clients. `default` and `with-voice` demonstrate
-the pattern with different `ONBOARDING.md` prompts; a template without that
-event case, such as `codemode-tag`, has no onboarding agent or redirect.
+agent shape, append template-local instructions, and use `itx.clients` plus
+generic copied client-capability facts to open that agent even when the new
+route mounts just after project creation. `default` and `with-voice`
+demonstrate the pattern with different `ONBOARDING.md` prompts; a template
+without those cases, such as `codemode-tag`, has no onboarding agent or
+redirect.

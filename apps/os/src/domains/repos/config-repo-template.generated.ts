@@ -51,8 +51,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  template uses it to create `/agents/onboarding`, install the template-local\n" +
       "  `ONBOARDING.md` prompt, trigger the agent's first turn, and navigate each\n" +
       "  connected `/clients/os-app/**` browser client that is still on the new\n" +
-      "  project's landing page to its chat. A user who has already moved elsewhere\n" +
-      "  is not interrupted by a delayed lifecycle delivery.\n" +
+      "  project's landing page to its chat. A five-minute userspace open request\n" +
+      "  also lets a generic `capability-provided` client fact fulfill that navigation\n" +
+      "  when the new route mounts just after this event. A user who has already moved\n" +
+      "  elsewhere is not interrupted by a delayed lifecycle delivery.\n" +
       "\n" +
       "`project/create-requested` remains platform-only: it precedes the userspace\n" +
       "worker subscription. The terminal `project/created` certificate includes the\n" +
@@ -157,7 +159,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  template uses it to create `/agents/onboarding`, install the template-local\n" +
       "  `ONBOARDING.md` prompt, trigger the agent's first turn, and navigate each\n" +
       "  connected `/clients/os-app/**` browser client that is still on the new\n" +
-      "  project's landing page to its chat.\n" +
+      "  project's landing page to its chat. A five-minute userspace open request\n" +
+      "  also lets a generic `capability-provided` client fact fulfill that navigation\n" +
+      "  when the new route mounts just after this event.\n" +
       "\n" +
       "`project/create-requested` remains platform-only: it precedes the userspace\n" +
       "worker subscription. The terminal `project/created` certificate includes the\n" +
@@ -732,6 +736,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "} from \"iterate/sdk\";\n" +
       "import { TodoApp } from \"iterate/starter-apps/todo\";\n" +
       "\n" +
+      "const ONBOARDING_OPEN_REQUEST_KEY = \"iterate/config/onboarding-open-requested:v1\";\n" +
+      "const ONBOARDING_OPEN_WINDOW_MS = 5 * 60 * 1_000;\n" +
+      "\n" +
       "// An iterate project is, in the abstract, just a fetch function.\n" +
       "// HTTP clients on the internet can send us Requests, and we will send responses and\n" +
       "// occasionally send HTTP requests outwards to the world to take influence on it.\n" +
@@ -770,6 +777,41 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "   * mints the document view, `link({ workspace, repo, task? })` the board. */\n" +
       "  get docs() {\n" +
       "    return this.#docsApp.rpc;\n" +
+      "  }\n" +
+      "\n" +
+      "  /** Open only tabs still sitting on this project's landing page. The same\n" +
+      "   * userspace action serves tabs present at creation and tabs whose generic\n" +
+      "   * browser capability finishes mounting moments later. */\n" +
+      "  async #openOnboardingOnProjectHome(clientPaths: string[]): Promise<void> {\n" +
+      "    const { slug } = await this.itx.identity();\n" +
+      "    const projectHomePath = `/projects/${slug}`;\n" +
+      "    const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;\n" +
+      "    await Promise.all(\n" +
+      "      clientPaths.map(async (clientPath) => {\n" +
+      "        const browserClient = this.itx.clients.get(clientPath);\n" +
+      "        const description = await browserClient.__describe();\n" +
+      "        if (\n" +
+      "          !description.capabilities.some(\n" +
+      "            (capability) => capability.path.length === 1 && capability.path[0] === \"capabilities\",\n" +
+      "          )\n" +
+      "        ) {\n" +
+      "          return;\n" +
+      "        }\n" +
+      "        const currentUrl = await browserClient.invokeCapability({\n" +
+      "          path: [\"capabilities\", \"browser\", \"url\"],\n" +
+      "        });\n" +
+      "        if (\n" +
+      "          typeof currentUrl !== \"string\" ||\n" +
+      "          new URL(currentUrl).pathname.replace(/\\/$/, \"\") !== projectHomePath\n" +
+      "        ) {\n" +
+      "          return;\n" +
+      "        }\n" +
+      "        await browserClient.invokeCapability({\n" +
+      "          path: [\"capabilities\", \"browser\", \"navigate\"],\n" +
+      "          args: [onboardingUrl],\n" +
+      "        });\n" +
+      "      }),\n" +
+      "    );\n" +
       "  }\n" +
       "\n" +
       "  /**\n" +
@@ -930,32 +972,38 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          },\n" +
       "        );\n" +
       "\n" +
-      "        const [{ slug }, clients] = await Promise.all([\n" +
-      "          this.itx.identity(),\n" +
-      "          this.itx.clients.list(),\n" +
-      "        ]);\n" +
-      "        const projectHomePath = `/projects/${slug}`;\n" +
-      "        const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;\n" +
-      "        await Promise.all(\n" +
+      "        // This durable userspace fact makes a just-after-creation client as\n" +
+      "        // actionable as one that happened to be connected already. It expires\n" +
+      "        // in the capability-provided case, so a later visit is never onboarding.\n" +
+      "        await this.itx.streams.get(\"/\").append({\n" +
+      "          type: \"events.iterate.com/config/onboarding-open-requested\",\n" +
+      "          idempotencyKey: ONBOARDING_OPEN_REQUEST_KEY,\n" +
+      "        });\n" +
+      "        const clients = await this.itx.clients.list();\n" +
+      "        await this.#openOnboardingOnProjectHome(\n" +
       "          clients\n" +
       "            .filter((client) => client.connected && client.path.startsWith(\"/clients/os-app/\"))\n" +
-      "            .map(async (client) => {\n" +
-      "              const browserClient = this.itx.clients.get(client.path);\n" +
-      "              const currentUrl = await browserClient.invokeCapability({\n" +
-      "                path: [\"capabilities\", \"browser\", \"url\"],\n" +
-      "              });\n" +
-      "              if (\n" +
-      "                typeof currentUrl !== \"string\" ||\n" +
-      "                new URL(currentUrl).pathname.replace(/\\/$/, \"\") !== projectHomePath\n" +
-      "              ) {\n" +
-      "                return;\n" +
-      "              }\n" +
-      "              await browserClient.invokeCapability({\n" +
-      "                path: [\"capabilities\", \"browser\", \"navigate\"],\n" +
-      "                args: [onboardingUrl],\n" +
-      "              });\n" +
-      "            }),\n" +
+      "            .map((client) => client.path),\n" +
       "        );\n" +
+      "        break;\n" +
+      "      }\n" +
+      "      case \"events.iterate.com/capability-host/capability-provided\": {\n" +
+      "        if (event.path !== \"/\") break;\n" +
+      "        // projects.connect copies this generic, post-mount fact from the client\n" +
+      "        // scope. A short-lived userspace request bridges the ordinary race\n" +
+      "        // between project creation and the destination route mounting itself.\n" +
+      "        const source = event.source?.copiedFrom?.at(-1);\n" +
+      "        if (!source?.path.startsWith(\"/clients/os-app/\")) break;\n" +
+      "        const openRequest = await this.itx.streams\n" +
+      "          .get(\"/\")\n" +
+      "          .getEvent({ idempotencyKey: ONBOARDING_OPEN_REQUEST_KEY });\n" +
+      "        if (openRequest === undefined) break;\n" +
+      "        const requestedAt = Date.parse(openRequest.createdAt);\n" +
+      "        if (!Number.isFinite(requestedAt)) {\n" +
+      "          throw new Error(\"The onboarding open request has an invalid creation timestamp.\");\n" +
+      "        }\n" +
+      "        if (Date.now() - requestedAt > ONBOARDING_OPEN_WINDOW_MS) break;\n" +
+      "        await this.#openOnboardingOnProjectHome([source.path]);\n" +
       "        break;\n" +
       "      }\n" +
       "      case \"events.iterate.com/agent/created\": {\n" +

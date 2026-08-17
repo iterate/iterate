@@ -22,13 +22,15 @@ function pipelinedProject<Project extends object>(project: Project) {
 
 function deliver(
   worker: { processEventBatch(batch: never): Promise<void> },
-  event: {
+  event: Record<string, unknown> & {
     type: string;
     path: string;
     payload?: Record<string, unknown>;
   },
 ): Promise<void> {
-  return worker.processEventBatch({ events: [event] } as never);
+  return worker.processEventBatch({
+    events: [{ createdAt: "2026-08-07T10:00:00.000Z", offset: 1, ...event }],
+  } as never);
 }
 
 test.each([
@@ -58,14 +60,32 @@ test.each([
     const busyTabCapability = vi.fn(
       async (): Promise<string> => "https://os.iterate.test/projects/new-project/repl",
     );
+    const lateTabCapability = vi.fn(
+      async (call: { path: string[] }): Promise<string | undefined> =>
+        call.path.at(-1) === "url"
+          ? "https://os.iterate.test/projects/new-project?welcome=true"
+          : undefined,
+    );
+    const appendProjectEvent = vi.fn(async () => []);
+    const getProjectEvent = vi.fn(async () => ({
+      createdAt: new Date().toISOString(),
+      type: "events.iterate.com/config/onboarding-open-requested",
+    }));
     const project = {
       agents: {
         get: vi.fn(() => ({ append, create })),
       },
       clients: {
         get: vi.fn((path: string) => ({
+          __describe: vi.fn(async () => ({
+            capabilities: [{ path: ["capabilities"] }],
+          })),
           invokeCapability:
-            path === "/clients/os-app/landing-tab" ? landingTabCapability : busyTabCapability,
+            path === "/clients/os-app/landing-tab"
+              ? landingTabCapability
+              : path === "/clients/os-app/late-tab"
+                ? lateTabCapability
+                : busyTabCapability,
         })),
         list: vi.fn(async () => [
           {
@@ -93,6 +113,9 @@ test.each([
       identity: vi.fn(async () => ({ slug: "new-project" })),
       repo: {
         readFile: vi.fn(async () => ({ content: prompt })),
+      },
+      streams: {
+        get: vi.fn(() => ({ append: appendProjectEvent, getEvent: getProjectEvent })),
       },
       [Symbol.dispose]: vi.fn(),
     };
@@ -136,6 +159,10 @@ test.each([
         }),
       }),
     );
+    expect(appendProjectEvent).toHaveBeenCalledExactlyOnceWith({
+      type: "events.iterate.com/config/onboarding-open-requested",
+      idempotencyKey: "iterate/config/onboarding-open-requested:v1",
+    });
     expect(project.clients.get).toHaveBeenCalledTimes(2);
     expect(project.clients.get).toHaveBeenCalledWith("/clients/os-app/landing-tab");
     expect(project.clients.get).toHaveBeenCalledWith("/clients/os-app/busy-tab");
@@ -148,6 +175,27 @@ test.each([
     });
     expect(busyTabCapability).toHaveBeenCalledExactlyOnceWith({
       path: ["capabilities", "browser", "url"],
+    });
+
+    // Project creation can finish before the destination route mounts its
+    // live browser capability. The copied capability-provided fact must fulfill
+    // the userspace open request when that tab arrives moments later.
+    await deliver(instance, {
+      type: "events.iterate.com/capability-host/capability-provided",
+      path: "/",
+      source: {
+        copiedFrom: [{ path: "/clients/os-app/late-tab" }],
+      },
+    });
+    expect(getProjectEvent).toHaveBeenCalledExactlyOnceWith({
+      idempotencyKey: "iterate/config/onboarding-open-requested:v1",
+    });
+    expect(lateTabCapability).toHaveBeenNthCalledWith(1, {
+      path: ["capabilities", "browser", "url"],
+    });
+    expect(lateTabCapability).toHaveBeenNthCalledWith(2, {
+      path: ["capabilities", "browser", "navigate"],
+      args: ["/projects/new-project/agents/streams/agents/onboarding"],
     });
   },
 );
