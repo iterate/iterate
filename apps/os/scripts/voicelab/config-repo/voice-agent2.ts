@@ -1015,10 +1015,30 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * this same subscription, in order, ahead of the token it answers.
          */
         if (state.briefCurrent === null) return;
-        void append({
-          type: "events.iterate.com/voice-agent/warmup-ready",
-          idempotencyKey: this.idempotencyKey(`warmup:${event.payload.token}`),
-          payload: { token: event.payload.token },
+        const warmupToken = event.payload.token;
+        /*
+         * AND WHERE THIS PROCESS PHYSICALLY RUNS, because nothing else can
+         * say. This facet lives inside the stream's Durable Object, so a
+         * subrequest from here terminates at the DO's own colo — the trace's
+         * `colo=` line is the placement answer that no runtime-state surface
+         * carries. Best-effort with a hard timeout: a readiness probe that
+         * can be delayed by a diagnostics fetch has its priorities backwards.
+         */
+        runInBackground(async () => {
+          let colo = "unknown";
+          try {
+            const trace = await fetch("https://www.cloudflare.com/cdn-cgi/trace", {
+              signal: AbortSignal.timeout(1_500),
+            });
+            colo = /colo=([A-Z]{3})/.exec(await trace.text())?.[1] ?? "unparsed";
+          } catch (error) {
+            colo = `fetch-failed:${String(error).slice(0, 60)}`;
+          }
+          void append({
+            type: "events.iterate.com/voice-agent/warmup-ready",
+            idempotencyKey: this.idempotencyKey(`warmup:${warmupToken}`),
+            payload: { token: warmupToken, colo },
+          });
         });
         return;
       }
