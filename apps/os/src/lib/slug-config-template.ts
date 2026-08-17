@@ -19,7 +19,7 @@ const CANONICAL_TEMPLATE_REPOSITORY = { owner: "iterate", repo: "iterate" };
  * Parse the convention out of a slug. The FIRST `-template-` splits prefix
  * from template name; a `pr<digits>` prefix pins the ref to that pull
  * request's head (`pull/<N>/head` — a plain git ref the template downloader's
- * `commits/{ref}` lookup resolves), so in-flight template PRs are testable.
+ * anonymous Git transport resolves), so in-flight template PRs are testable.
  * Any other prefix leaves the ref unset and the downloader's HEAD default
  * (the default branch) applies. Null when the slug doesn't use the
  * convention.
