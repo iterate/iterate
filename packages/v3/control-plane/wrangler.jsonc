@@ -25,9 +25,9 @@
     { "binding": "OAUTH_KV", "id": "b8efbdc3253840fa95331a80efbeb03d" },
   ],
 
-  // Same-account dial to the project worker's runner. When present, ingress PREFERS this over the HTTP dial
-  // (PROJECT_WORKER_URL) — same behavior, lower overhead. Cross-account deploys omit this and use HTTP.
-  "services": [{ "binding": "RUNNER", "service": "project-worker", "entrypoint": "ProjectRunner" }],
+  // (The RUNNER service binding + the PROJECT_WORKER_URL/RUNNER_DIAL_SECRET HTTP dial were deleted in
+  // clean-room increment cook-1 — the project worker's pre-skeleton runner (`ProjectRunner` / POST /serve)
+  // no longer exists. Project serving returns via the capability host in a later control-plane increment.)
 
   "vars": {
     // Login backend: "email" (become the entered user) · "access" (read Cf-Access header) · "open" (anon).
@@ -36,9 +36,5 @@
     "SESSION_SECRET": "b3f1c0a7d2e94f6581ac37bde90f24a15c68d7e3049fba21c5e6d8790a1b2c3d",
     // This control plane's own origin — handed to the project worker so a private app can redirect to login.
     "CONTROL_PLANE_ORIGIN": "https://control-plane.iterate.workers.dev",
-    // The project worker (the runner) for the cross-account HTTP dial (fallback when RUNNER is unbound).
-    // Secret must match the project worker's RUNNER_DIAL_SECRET.
-    "PROJECT_WORKER_URL": "https://project-worker.iterate.workers.dev",
-    "RUNNER_DIAL_SECRET": "dial_9f3c1a7be0d24856b1f0a2c3d4e5f6079a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d",
   },
 }

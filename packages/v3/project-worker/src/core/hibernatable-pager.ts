@@ -3,15 +3,15 @@
 // A live capability's provider lives in a STATELESS relay (the /api worker, where capnweb terminates), NEVER in
 // the DO. The relay opens ONE WebSocket to the DO — the Hibernatable Pager — accepted through the DO's
 // hibernation API; the DO stores only its `{ socketId }` attachment, NO live stub, so it can hibernate. Over the
-// Pager the DO sends one-way PAGES ("wake" / "idle"): on "wake" the relay hands the DO a short Workers-RPC leg
-// (an Invoker) for one invocation burst, which the DO drops at quiescence. So the DO holds a live reference only
-// while a call is in flight, and hibernates in between (the 1000-idle-devices property).
+// Pager the DO sends the one-way "wake" PAGE: the relay hands the DO a short Workers-RPC leg (an Invoker) for
+// one invocation burst, which the DO silently drops at quiescence. So the DO holds a live reference only while
+// a call is in flight, and hibernates in between (the 1000-idle-devices property).
 
 export const PAGER_HEADER = "x-itx-pager";
 const PAGER_TAG = "itx-pager";
 
-/** A one-way DO→relay message over a Pager. Best-effort prompt; the record on the socket is the source of truth. */
-export type Page = { type: "wake" } | { type: "idle" };
+/** The one-way DO→relay message over a Pager. Best-effort prompt; the record on the socket is the source of truth. */
+export type Page = { type: "wake" };
 
 /** The socket's serialized attachment — the ONLY per-lease durable state, and it SURVIVES hibernation. The caller
  *  stamps its own record here (e.g. a lease); a fresh DO incarnation reads it straight back from the socket, so
@@ -22,7 +22,7 @@ export function parsePage(data: unknown): Page | undefined {
   if (typeof data !== "string") return undefined;
   try {
     const p = JSON.parse(data) as Page;
-    return p?.type === "wake" || p?.type === "idle" ? p : undefined;
+    return p?.type === "wake" ? p : undefined;
   } catch {
     return undefined;
   }

@@ -3,8 +3,8 @@
 // which reaches this DO only over Workers RPC. That keeps the DO hibernatable and is a hard rule.
 //   • NATIVE fetch — the ONE method a WS upgrade (101) can flow through. `x-itx-pager` → a HIBERNATABLE PAGER
 //     (a relay's hibernation-safe DO→relay back-channel — no pin); `x-itx-cap` → the FETCH LANE (a WS to a
-//     fetch-shaped capability); `/facet?path=` → a STATEFUL worker's facet fetch; a WS upgrade → ingress
-//     (acceptWebSocket echo); a non-WS request → EGRESS (secret-sub → fallback). `/state` → observability.
+//     fetch-shaped capability — code mounts AND stateful facets ride it); `/state` → observability; anything
+//     else → EGRESS (secret-sub → fallback).
 //   • invokeCapability — the single dispatch: built-ins (whoami/kv/secrets/streams/repo/provideCapability/
 //     clients/files/configure) → LIVE capabilities (a relay-owned provider, reached via its Pager + a short
 //     Workers-RPC leg on demand) → local mounts (alias/static/code/stateful) → fall back to the PARENT PATH,
@@ -13,9 +13,9 @@
 // DON'T-PIN (mirrors dont-pin-capability-host): a live capability's provider lives in the stateless relay, and
 // the DO holds it as a HIBERNATABLE STUB (core/hibernatable-stub.ts) — only a `{ socketId }` record on a
 // hibernatable Pager socket, NO stub — so it hibernates while idle. On an invocation it sends a "wake" Page; the
-// relay hands back a short Workers-RPC leg (an Invoker) for the burst; at quiescence the DO drops the leg and
-// sends "idle". A capability and a `.connect` client connection are both just parked stubs; `itx.clients` groups
-// the client stubs by path and fans out.
+// relay hands back a short Workers-RPC leg (an Invoker) for the burst; at quiescence the DO just drops the leg.
+// A capability and a `.connect` client connection are both just parked stubs; `itx.clients` groups the client
+// stubs by path and fans out.
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
@@ -63,9 +63,16 @@ export class Counter extends DurableObject {
   async increment(by) { const n = ((await this.ctx.storage.get("n")) ?? 0) + by; await this.ctx.storage.put("n", n); return n; }
   async value() { return (await this.ctx.storage.get("n")) ?? 0; }
   async whoAmI() { return await this.env.ITX.invokeCapability("itx.whoami", []); }
+  // A NESTED surface — proves the runner's deep dotted dispatch (itx.counter.counters.add walks "counters",
+  // then applies "add" on that receiver).
+  get counters() {
+    const self = this;
+    return { async add(by) { return self.increment(by); } };
+  }
 }`,
-  // A fetch-serving dynamic worker: an HTTP page AND a WebSocket upgrade (101). The stand-in for "a device
-  // presents a website with WebSocket functionality" — here served by in-mesh loaded code, reached by fetch.
+  // A fetch-serving dynamic worker (a `code` mount reached on the FETCH LANE): an HTTP page AND a WebSocket
+  // upgrade (101). The stand-in for "a device presents a website with WebSocket functionality" — here served
+  // by in-mesh loaded code, reached by fetch.
   "/site.js": `export default {
   async fetch(request) {
     if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
@@ -82,17 +89,17 @@ export class Counter extends DurableObject {
 // A mount (target-core §4.1). `itx-expression` = an ALIAS to another callPath. `static` = a plain value.
 // The DYNAMIC-WORKER kinds mirror apps/os's `DynamicWorkerRef` — their SOURCE is an itx EXPRESSION (data),
 // resolved to a `{ name: source }` modules map by evaluating it against this host (the loader is repo-agnostic).
-//   • `code` = STATELESS — entry `cap.js` default-exports `(itx, ...args) => result`.
+//   • `code` = STATELESS — on the RPC lane, entry `cap.js` default-exports `(itx, ...args) => result`; on the
+//     FETCH LANE it is fetch-shaped instead — `cap.js` default-exports `{ fetch(request, env) }` and a
+//     WebSocket upgrade (101) passes through natively. A fetch-shaped worker is just a code mount whose
+//     `fetch` you call (the former `web` kind, folded in).
 //   • `stateful` = a `DurableObject` class (`className`), run by the dedicated `StatefulWorkerDurableObject`.
-//   • `web` = FETCH-SHAPED — entry `cap.js` default-exports `{ fetch(request, env) }`; reached by the FETCH LANE
-//     so a WebSocket upgrade (101) passes through natively.
 // (LIVE capabilities aren't mounts — they're relay-owned hibernatable stubs; see `#stubs`.)
 type Mount =
   | { type: "itx-expression"; expression: ItxCallPath }
   | { type: "static"; value: unknown }
   | { type: "code"; source: ItxExpression }
-  | { type: "stateful"; source: ItxExpression; className: string }
-  | { type: "web"; source: ItxExpression };
+  | { type: "stateful"; source: ItxExpression; className: string };
 
 export type ProvideCapabilityInput = { path: ItxCallPath } & Mount;
 
@@ -146,45 +153,18 @@ export class ItxDurableObject extends DurableObject<Env> {
       return this.#fetchCapability(callPath, request);
     }
 
-    // The STATEFUL worker fetch lane: forward to the mount's runner DO (→ the facet's own `fetch`) — the ONLY
-    // lane that can carry a WS upgrade. `?path=<callPath>` names the mount; source + class ride in headers.
-    if (url.pathname === "/facet") {
-      const callPath = url.searchParams.get("path") ?? "";
-      const mount = this.#mounts.get(callPath);
-      if (!mount || mount.type !== "stateful")
-        return new Response(`no stateful mount at "${callPath}"\n`, { status: 404 });
-      const headers = new Headers(request.headers);
-      headers.set("x-itx-source", JSON.stringify(mount.source));
-      headers.set("x-itx-class", mount.className);
-      const fwd = new Request(request.url, {
-        method: request.method,
-        headers,
-        body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
-      });
-      return this.#statefulRunner(callPath).fetch(fwd);
-    }
-
     // Observability: incarnation (the hibernation tell) + the lease server's live state. `dormant` ⇒ no leg held.
     if (url.pathname === "/state")
       return Response.json({ incarnation: this.incarnation, ...this.#stubs.state() });
 
-    if ((request.headers.get("Upgrade") ?? "").toLowerCase() === "websocket") {
-      const pair = new WebSocketPair();
-      this.ctx.acceptWebSocket(pair[1], ["echo"]); // hibernatable ingress echo
-      return new Response(null, { status: 101, webSocket: pair[0] });
-    }
     const sub = await substituteHeaderSecrets(request, "project", (name) =>
       this.env.SECRETS_KV ? this.env.SECRETS_KV.get(`secret:${this.#projectId}:${name}`) : null,
     );
     return this.env.FALLBACK.fetch(sub);
   }
 
-  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
-    // Only the ingress-echo socket echoes. A Pager is DO→relay only (the relay sends nothing we act on).
-    if (this.ctx.getTags(ws).includes("echo")) {
-      const text = typeof message === "string" ? message : new TextDecoder().decode(message);
-      ws.send(`echo:${text}`);
-    }
+  webSocketMessage(): void {
+    // A Pager is DO→relay only — inbound frames carry nothing we act on.
   }
   webSocketClose(ws: WebSocket): void {
     this.#stubs.closed(ws); // a relay's Pager dropped → the stub vanishes with the socket
@@ -446,20 +426,27 @@ export class ItxDurableObject extends DurableObject<Env> {
     return (await evaluateItxExpression(root, source)) as Record<string, string>;
   }
 
+  /** Load a confined dynamic worker against THIS host: `itx.js` injected, env.ITX = globalOutbound = a
+   *  self-stub (the one option-object all three loads share). */
+  #worker(cacheKey: string, mainModule: string, modules: Record<string, string>) {
+    const self = this.env.ITX_HOST.getByName(this.ctx.id.name ?? "?");
+    return this.env.LOADER.get(cacheKey, () => ({
+      compatibilityDate: "2026-07-01",
+      mainModule,
+      modules: { "itx.js": ITX_SURFACE_MODULE, ...modules },
+      env: { ITX: self },
+      globalOutbound: self,
+    }));
+  }
+
   /** Run a stateless dynamic worker: resolve modules from the source expression, run `cap.js`'s
    *  `(itx, ...args) => result` default export confined (env.ITX = self-stub), return the result. */
   async #runCode(source: ItxExpression, args: unknown[]): Promise<unknown> {
     const modules = await this.#loadModules(source);
-    const self = this.env.ITX_HOST.getByName(this.ctx.id.name ?? "?");
-    const worker = this.env.LOADER.get(
+    const worker = this.#worker(
       `code:${this.ctx.id.name}:${hashSource(JSON.stringify(modules))}`,
-      () => ({
-        compatibilityDate: "2026-07-01",
-        mainModule: "run.js",
-        modules: { "run.js": CODE_CAP_RUNNER, "itx.js": ITX_SURFACE_MODULE, ...modules },
-        env: { ITX: self },
-        globalOutbound: self,
-      }),
+      "run.js",
+      { "run.js": CODE_CAP_RUNNER, ...modules },
     );
     const resp = await worker
       .getEntrypoint()
@@ -468,13 +455,25 @@ export class ItxDurableObject extends DurableObject<Env> {
   }
 
   /** THE FETCH LANE dispatch: resolve a fetch-shaped capability and forward the request NATIVELY so a 101
-   *  passes through. `web` → a loaded fetch worker; `stateful` → the runner's facet fetch; alias re-resolves; a
-   *  deep path falls back to its PARENT PATH (a native DO→DO fetch, so the 101 survives). */
+   *  passes through. `code` → the loaded worker's own `fetch` (a fetch-shaped worker is just a code mount whose
+   *  fetch you call); `stateful` → the runner's facet fetch; alias re-resolves; a deep path falls back to its
+   *  PARENT PATH (a native DO→DO fetch, so the 101 survives). */
   async #fetchCapability(callPath: string, request: Request): Promise<Response> {
     const mount = this.#mounts.get(callPath);
     if (mount) {
       if (mount.type === "itx-expression") return this.#fetchCapability(mount.expression, request); // alias
-      if (mount.type === "web") return this.#fetchWeb(mount.source, request);
+      if (mount.type === "code") {
+        // On this lane, entry `cap.js` default-exports `{ fetch(request, env) }`; its accept()ed 101 flows
+        // back out through this native binding call. (A distinct cacheKey from the RPC lane — same modules,
+        // different entry shape/wrapper.)
+        const modules = await this.#loadModules(mount.source);
+        const worker = this.#worker(
+          `code-fetch:${this.ctx.id.name}:${hashSource(JSON.stringify(modules))}`,
+          "cap.js",
+          modules,
+        );
+        return worker.getEntrypoint().fetch(request);
+      }
       if (mount.type === "stateful") {
         const headers = new Headers(request.headers);
         headers.set("x-itx-source", JSON.stringify(mount.source));
@@ -499,24 +498,6 @@ export class ItxDurableObject extends DurableObject<Env> {
     return this.env.ITX_HOST.getByName(
       stringifyName({ projectId: this.#projectId, path: parent }),
     ).fetch(new Request(request, { headers }));
-  }
-
-  /** Load a `web` capability's modules and forward the request to its fetch entrypoint (its `accept()`ed 101
-   *  flows back out through this native binding call). */
-  async #fetchWeb(source: ItxExpression, request: Request): Promise<Response> {
-    const modules = await this.#loadModules(source);
-    const self = this.env.ITX_HOST.getByName(this.ctx.id.name ?? "?");
-    const worker = this.env.LOADER.get(
-      `web:${this.ctx.id.name}:${hashSource(JSON.stringify(modules))}`,
-      () => ({
-        compatibilityDate: "2026-07-01",
-        mainModule: "cap.js",
-        modules: { "itx.js": ITX_SURFACE_MODULE, ...modules },
-        env: { ITX: self },
-        globalOutbound: self,
-      }),
-    );
-    return worker.getEntrypoint().fetch(request);
   }
 
   /** Longest dotted-prefix STATEFUL mount; the remaining segment(s) name the facet method. */
@@ -565,14 +546,9 @@ export class ItxDurableObject extends DurableObject<Env> {
   /** Execute code IN this context (target-core §4.1 mode 2 / D23): a confined dynamic worker whose ONLY binding
    *  is env.ITX = globalOutbound = a self-stub to THIS host. */
   async load(source: string, request?: Request): Promise<Response> {
-    const self = this.env.ITX_HOST.getByName(this.ctx.id.name ?? "?");
-    const worker = this.env.LOADER.get(`load:${this.ctx.id.name}:${hashSource(source)}`, () => ({
-      compatibilityDate: "2026-07-01",
-      mainModule: "agent.js",
-      modules: { "agent.js": source, "itx.js": ITX_SURFACE_MODULE },
-      env: { ITX: self },
-      globalOutbound: self,
-    }));
+    const worker = this.#worker(`load:${this.ctx.id.name}:${hashSource(source)}`, "agent.js", {
+      "agent.js": source,
+    });
     return worker.getEntrypoint().fetch(request ?? new Request("https://agent.local/"));
   }
 }

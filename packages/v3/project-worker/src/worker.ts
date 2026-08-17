@@ -11,8 +11,6 @@ import { ProjectSession } from "./core/itx-surface.ts";
 export { ItxDurableObject };
 export { StreamDurableObject } from "./stream-durable-object.ts";
 export { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
-// Preserve the pre-skeleton runner exports so a live control-plane RUNNER binding keeps resolving.
-export { ProjectRunner, ProjectEntrypoint, ProjectAuth } from "./index.ts";
 
 interface Env {
   ITX_HOST: DurableObjectNamespace<ItxDurableObject>;
@@ -34,7 +32,7 @@ export class DummyControlPlane extends WorkerEntrypoint<Env> {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "q4-1";
+const CODE_VERSION = "cook-1";
 
 /** The context host DO for a request's `?ctx=` (defaults to `prj_demo`). The DO does the real work. */
 function host(env: Env, url: URL) {
@@ -55,8 +53,8 @@ export default {
         new ProjectSession(env.ITX_HOST, url.searchParams.get("ctx") ?? "prj_demo", ctx),
       );
 
-    // THE FETCH LANE: reach a fetch-shaped capability (WS upgrades and all) by a serialized ItxExpression in
-    // `?cap=`. Set `x-itx-cap` and forward to the context host — checked before the generic WS catch below.
+    // THE FETCH LANE — the ONE fetch door: reach a fetch-shaped capability (WS upgrades and all) by a
+    // serialized ItxExpression in `?cap=`. Set `x-itx-cap` and forward to the context host.
     if (url.pathname === "/cap") {
       const headers = new Headers(request.headers);
       const cap = url.searchParams.get("cap");
@@ -64,35 +62,10 @@ export default {
       return host(env, url).fetch(new Request(request, { headers }));
     }
 
-    // /state (observability), /facet (the stateful WS lane), and any bare WS ingress forward straight to the DO.
-    if (
-      url.pathname === "/state" ||
-      url.pathname === "/facet" ||
-      url.pathname === "/ws" ||
-      (request.headers.get("Upgrade") ?? "").toLowerCase() === "websocket"
-    )
-      return host(env, url).fetch(request);
+    // Observability forwards straight to the DO.
+    if (url.pathname === "/state") return host(env, url).fetch(request);
 
-    // /call — invoke a capability by callPath (POST `{ path, args }` or `?path=&args=`). Used by agents/harnesses.
-    if (url.pathname === "/call") {
-      const body =
-        request.method === "POST"
-          ? ((await request.json()) as { path?: string; args?: unknown[] })
-          : {};
-      const path = body.path ?? url.searchParams.get("path") ?? "itx.whoami";
-      const argsRaw = url.searchParams.get("args"); // a JSON array, e.g. ?args=["k","v"]
-      const args = body.args ?? (argsRaw ? (JSON.parse(argsRaw) as unknown[]) : []);
-      try {
-        return Response.json({
-          ok: true,
-          value: await host(env, url).invokeCapability(path, args),
-        });
-      } catch (e) {
-        return Response.json({ ok: false, error: String((e as Error).message) });
-      }
-    }
-
-    return new Response("project-worker — /api (capnweb), /call, /cap, /facet, /state\n", {
+    return new Response("project-worker — /api (capnweb), /cap, /state, /version\n", {
       headers: { "content-type": "text/plain" },
     });
   },

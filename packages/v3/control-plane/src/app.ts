@@ -10,7 +10,7 @@ import { Os } from "./api.ts";
 import { directory } from "./directory.ts";
 import { sha256hex } from "./hash.ts";
 import { slugify } from "./ids.ts";
-import { dialProjectWorker, resolveHost, stampFor } from "./ingress.ts";
+import { resolveHost, stampFor } from "./ingress.ts";
 import { clearSessionCookie, currentSession, setSessionCookie, type Session } from "./session.ts";
 
 const esc = (s: string) =>
@@ -256,9 +256,10 @@ export const app: Handler = {
     }
 
     // PROJECT INGRESS. In a real deploy the control plane fronts project HOSTs (`<slug>.<base>`), resolves
-    // host→projectId via the routes table, and dials the project worker. On single-host workers.dev we
-    // demonstrate the same path via `/__ingress?host=<host>&path=<p>`: resolve the host, then dial. This
-    // proves directory-driven routing + the cross-account HTTP dial end to end.
+    // host→projectId via the routes table, and serves the project. On single-host workers.dev we demonstrate
+    // the routing half via `/__ingress?host=<host>`: resolve the host + stamp membership. The DIAL half was
+    // deleted in clean-room increment cook-1 (the pre-skeleton runner is gone); serving returns via the
+    // capability host in a later control-plane increment.
     if (url.pathname === "/__ingress") {
       const host = url.searchParams.get("host");
       if (!host) return new Response("missing ?host\n", { status: 400 });
@@ -267,12 +268,9 @@ export const app: Handler = {
       const actor = session?.sub ?? "user_anonymous";
       const email = session?.email ?? "anonymous";
       const caller = await stampFor(actor, email, resolved.projectId, env);
-      return dialProjectWorker(
-        env,
-        resolved.projectId,
-        resolved.app,
-        url.searchParams.get("path") ?? "/",
-        caller,
+      return Response.json(
+        { resolved, caller, error: "project dial removed (clean-room cook-1)" },
+        { status: 503 },
       );
     }
 

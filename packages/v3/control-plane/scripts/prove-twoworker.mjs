@@ -1,3 +1,5 @@
+// SKIP (clean-room cook-1): the pre-skeleton runner dial (/serve + RUNNER) this proof exercises was DELETED
+// from the project worker; this script is dead until the control plane's own next increment reworks serving.
 // Prove the TWO-WORKER split end to end: control plane (front desk: identity + D1 directory + routing)
 // dials the project worker (runner: loads + serves the confined config worker) over HTTP + a shared secret
 // — the cross-account-shaped dial (topology 4). Also proves confinement (config worker sees only ITX).

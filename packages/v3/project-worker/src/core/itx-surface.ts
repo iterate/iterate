@@ -77,7 +77,7 @@ async function startRelay(
   const disposeRetained = () => disposeStub(retained);
   pager.addEventListener("message", (event: MessageEvent) => {
     const page = parsePage(event.data);
-    if (page?.type !== "wake") return; // "idle" → the DO dropped its leg; keep the provider for the next wake
+    if (!page) return; // not a Page — a "wake" is the only page there is
     waitUntil(
       host.activateStub({ socketId, invoker: new Invoker(retained) }).catch(() => undefined), // a stale wake (nobody waiting) returns undefined; offline throws — ignore
     );

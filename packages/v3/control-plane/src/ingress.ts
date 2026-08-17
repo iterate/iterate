@@ -1,24 +1,23 @@
 // Project ingress — the control plane resolves a project HOST to a projectId via the D1 directory (the
-// routes table), resolves the caller's MEMBERSHIP of that project, then DIALS the project worker to run it.
-// This is the front-desk half of the two-worker split: the control plane owns identity + routing +
-// membership; the project worker owns execution. Two dial transports, one behavior:
-//   • same account  → the RUNNER service binding (env.RUNNER.serve).
-//   • cross account → HTTP POST /serve + a shared secret (service bindings don't cross CF accounts).
+// routes table) and resolves the caller's MEMBERSHIP of that project. The front-desk half: identity +
+// routing + membership.
+//
+// (The DIAL half — `dialProjectWorker` over the RUNNER service binding or the cross-account HTTP POST
+// /serve — was deleted in clean-room increment cook-1 along with the project worker's pre-skeleton runner
+// (`ProjectRunner` / `/serve`). Serving a resolved project returns via the capability host in a later
+// control-plane increment.)
 
-import {
-  APP_HEADER,
-  CALLER_HEADER,
-  CP_ORIGIN_HEADER,
-  DIAL_SECRET_HEADER,
-  PATH_HEADER,
-  PROJECT_ID_HEADER,
-  type StampedCaller,
-} from "@v3/shared/dial";
 import type { Env } from "./env.ts";
 import { directory } from "./directory.ts";
 
-// The shared home of the dial contract (headers + StampedCaller) — re-exported for local consumers.
-export type { StampedCaller };
+/** The non-secret caller identity + THIS project's membership (unforgeable by the browser — the control
+ *  plane recomputes it on every ingress). A private app reads `member` via itx.auth. */
+export interface StampedCaller {
+  actor: string;
+  email: string;
+  member: boolean;
+  role: string | null;
+}
 
 /** Resolve a project host → { projectId, app } via the directory routes table, else null. */
 export async function resolveHost(
@@ -38,41 +37,4 @@ export async function stampFor(
   const access =
     actor === "user_anonymous" ? { ok: false } : await directory(env.DB).access(actor, projectId);
   return { actor, email, member: access.ok, role: access.ok ? (access.role ?? "member") : null };
-}
-
-/** Dial the project worker to serve `projectId`. Prefers the same-account RUNNER binding; falls back to
- *  the cross-account HTTP dial. Both hand the runner the same (projectId, app, path, stamped caller). */
-export async function dialProjectWorker(
-  env: Env,
-  projectId: string,
-  app: string,
-  path: string,
-  caller: StampedCaller,
-): Promise<Response> {
-  const callerHeader = JSON.stringify(caller);
-  const request = new Request(`https://runner.internal${path}`, {
-    headers: {
-      [PROJECT_ID_HEADER]: projectId,
-      [APP_HEADER]: app,
-      [CALLER_HEADER]: callerHeader,
-      [CP_ORIGIN_HEADER]: env.CONTROL_PLANE_ORIGIN ?? "",
-    },
-  });
-
-  if (env.RUNNER) return env.RUNNER.serve(request, projectId, app, callerHeader);
-
-  if (!env.PROJECT_WORKER_URL || !env.RUNNER_DIAL_SECRET) {
-    return new Response("project worker not configured\n", { status: 503 });
-  }
-  return fetch(new URL("/serve", env.PROJECT_WORKER_URL), {
-    method: "POST",
-    headers: {
-      [DIAL_SECRET_HEADER]: env.RUNNER_DIAL_SECRET,
-      [PROJECT_ID_HEADER]: projectId,
-      [APP_HEADER]: app,
-      [PATH_HEADER]: path,
-      [CALLER_HEADER]: callerHeader,
-      [CP_ORIGIN_HEADER]: env.CONTROL_PLANE_ORIGIN ?? "",
-    },
-  });
 }

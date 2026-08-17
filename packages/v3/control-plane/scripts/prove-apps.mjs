@@ -1,3 +1,5 @@
+// SKIP (clean-room cook-1): this proof rides /__ingress → the runner dial, which was DELETED from the project
+// worker; this script is dead until the control plane's own next increment reworks serving.
 // Prove PUBLIC vs PRIVATE apps in a project worker. The default app is public (anyone); the "admin" app
 // is private — the config worker calls `env.ITX.auth.fetch(request)` (forward-auth partial fetch), which
 // returns null for an authorized member (proceed) or a login redirect otherwise. Membership is stamped by

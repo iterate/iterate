@@ -2,13 +2,12 @@
   "name": "@v3/shared",
   "private": true,
   "type": "module",
-  "description": "Clean-room shared code — pure library, no wrangler.jsonc (the cloudflare-os rule: a package is a worker iff it has one). Admission bar: code lives here only when two packages would otherwise hand-sync copies and disagreement would be a bug. Today: the egress secret-substitution door (both deployed workers) and the control-plane→project-worker dial contract (D40).",
+  "description": "Clean-room shared code — pure library, no wrangler.jsonc (the cloudflare-os rule: a package is a worker iff it has one). Admission bar: code lives here only when two packages would otherwise hand-sync copies and disagreement would be a bug. Today: the egress secret-substitution door (both deployed workers).",
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "exports": {
-    "./egress": "./src/egress.ts",
-    "./dial": "./src/dial.ts"
+    "./egress": "./src/egress.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260621.1",

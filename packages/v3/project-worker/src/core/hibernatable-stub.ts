@@ -77,7 +77,8 @@ export class HibernatableStubs {
       .filter((s): s is Stub => s !== undefined && Object.keys(s).length > 1);
   }
 
-  /** Invoke a parked stub on demand: wake it, borrow a short leg for the burst, release it at quiescence. */
+  /** Invoke a parked stub on demand: wake it, borrow a short leg for the burst, silently drop it at quiescence
+   *  (the relay keeps its retained provider for the next wake — no page needed). */
   async invoke(socketId: string, path: string[], args: unknown[]): Promise<unknown> {
     const leg = await this.#borrow(socketId);
     try {
@@ -86,8 +87,6 @@ export class HibernatableStubs {
       if (--leg.inFlight === 0 && this.#legs.get(socketId) === leg) {
         this.#legs.delete(socketId);
         dispose(leg.invoker);
-        const ws = pagerSocketFor(socketId, this.#hooks);
-        if (ws) sendPage(ws, { type: "idle" });
       }
     }
   }

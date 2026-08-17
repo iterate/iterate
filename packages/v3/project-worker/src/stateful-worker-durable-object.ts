@@ -56,7 +56,7 @@ function hashSource(s: string): string {
 export interface StatefulInvoke {
   source: ItxExpression; // a source EXPRESSION resolved (via the host) to the facet's modules — not a file path
   className: string;
-  method: string;
+  method: string; // may be DOTTED ("counters.add") — the host joins remaining path parts with "."
   args: unknown[];
 }
 
@@ -111,7 +111,8 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     return this.ctx.facets.get(FACET_NAME, () => ({ class: klass })) as unknown as Fetcher;
   }
 
-  /** RPC lane: resolve/restart the facet and call the method NATIVELY on it (apps/os `replayPath`). The awaited
+  /** RPC lane: resolve/restart the facet and call the method NATIVELY on it (apps/os `replayPath`). A DOTTED
+   *  `method` walks the intermediate segments receiver-preservingly before the terminal apply. The awaited
    *  result is plain data, so the facet stub never crosses back to the host. */
   async invokeCapability(input: StatefulInvoke): Promise<unknown> {
     const facet = this.#facet(await this.#loadModules(input.source), input.className);
@@ -125,11 +126,22 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // read, thisArg not serialized); a plain `await facet.increment(2)` is equally safe. This one idiom cost
     // a full investigation (we wrongly blamed account entitlement) — see FACET-RPC-INVESTIGATION.md. DO NOT
     // "simplify" this to `facet[input.method](...input.args)` captured into a variable and `.apply`-d.
+    // The SAME rule governs a DOTTED path: walk intermediates with awaited `Reflect.get(receiver, seg)` and
+    // apply ONLY the terminal — receiver-preserving, exactly apps/os `replayPath` (live-capability.ts).
     // ═══════════════════════════════════════════════════════════════════════════════════════════════════
-    const handler = Reflect.get(facet as object, input.method);
+    const path = input.method.split(".");
+    let receiver: unknown = facet;
+    for (let i = 0; i < path.length - 1; i++) {
+      receiver = await Reflect.get(receiver as object, path[i]);
+      if (receiver == null)
+        throw new Error(
+          `stateful worker: "${input.className}" path "${input.method}" hit ${String(receiver)} at "${path[i]}"`,
+        );
+    }
+    const handler = Reflect.get(receiver as object, path[path.length - 1]);
     if (typeof handler !== "function")
       throw new Error(`stateful worker: "${input.className}" has no method "${input.method}"`);
-    return await Reflect.apply(handler, facet, input.args ?? []);
+    return await Reflect.apply(handler, receiver, input.args ?? []);
   }
 
   /** WS/streaming lane: forward the request to the facet's own `fetch`. The module + class ride in headers set
