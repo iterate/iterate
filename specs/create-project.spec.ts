@@ -78,11 +78,14 @@ test("the config template opens a proactive onboarding conversation for a new pr
   using createdProject = admin.projects.get(slug);
   const onboardingAgent = createdProject.agents.get("/agents/onboarding");
 
-  // The userspace prompt starts the agent without waiting for the user. Wait
-  // for that unsolicited first turn to settle before answering it.
+  // The userspace prompt starts the agent without waiting for the user. Route
+  // chrome can render before Thinking starts, leaving a push-only gap with no
+  // spinner, so use an explicit bound for the unsolicited first turn.
   const assistantMessages = page.locator(assistantMessage);
-  await assistantMessages.first().waitFor();
-  await page.getByRole("button", { name: "Send message" }).waitFor();
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await assistantMessages.first().waitFor({ timeout: 120_000 }); // timeout: manual because the proactive turn can begin before spinner-waiter sees Thinking
+    await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 }); // timeout: manual because spinner-waiter is disabled for the proactive turn
+  });
   const assistantMessagesBeforeReply = await assistantMessages.count();
 
   const answer = "I want this project to help my small team plan and ship a product launch.";
