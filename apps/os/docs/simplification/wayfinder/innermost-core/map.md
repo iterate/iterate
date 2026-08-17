@@ -546,3 +546,16 @@ args)` — invokes `[[Call]]` directly, runs inside the owning DO, returns plain
   streams and computes spend/budget. Can live on the product shell (for now), or the project shell (as a core
   feature), never really the control plane. **Self-host = YOLO, don't track money** (you can run the innermost
   project alone). (Jonas.)
+- **D41 — cook-1: the pre-skeleton runner is DELETED; `code` is the only stateless dynamic-worker kind (a
+  fetch-shaped worker is just a code mount whose `fetch` you call); the edge is FOUR routes. (proven,
+  increment 22, `cook-1`.)** Deleted `index.ts`/`config-worker.ts` (`ProjectRunner`/`ProjectEntrypoint`/
+  `ProjectAuth`, POST `/serve`) + the worker.ts backcompat re-export (no-backcompat rule), cascading into the
+  July control plane repo-side (RUNNER binding + HTTP dial + `@v3/shared/dial` removed; its DEPLOYED runner
+  dial is dead until its own next increment). The `web` mount folded into `code` — Mount union
+  `itx-expression | static | code | stateful` (expressions-only collapse stays jam-gated). Edge routes
+  collapsed to `/version`, `/api`, `/cap` (THE one fetch door), `/state`; `/call`, `/ws`, `/facet` and the
+  DO's ingress-echo demo deleted — the stateful WS lane rides `x-itx-cap`. The stateful runner's dispatch now
+  walks DOTTED methods (awaited `Reflect.get` per segment, `Reflect.apply` on the terminal — apps/os
+  `replayPath`), proven by `itx.counter.counters.add`. The no-op `idle` Page deleted (`wake` is the only
+  page); `captureExpression` deleted (codec jam pending); the itx-DO's three `LOADER.get` blocks collapsed
+  into one `#worker` helper.

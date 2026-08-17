@@ -487,6 +487,57 @@ time-bound, renewable grant; this is just "alive while its socket is") and "serv
 
 ---
 
+## Increment 22 — cook-1: delete the pre-skeleton runner + the `web` mount + demo routes; deep facet dispatch; ONE fetch door
+
+**Commit** `dce86527b`. First cook-down increment of the clean-room platform ("cook-1"): six deletions/collapses,
+each proven on the deployment.
+
+- **Deleted `src/index.ts` + `src/config-worker.ts`** — the pre-skeleton two-worker runner
+  (`ProjectRunner`/`ProjectEntrypoint`/`ProjectAuth`, `CONFIG_WORKER_SOURCE`, the POST `/serve` cross-account
+  dial) — and the "keep a live RUNNER binding resolving" re-export in `worker.ts` (backcompat cruft; prod is
+  resettable). Cascade into the July control plane (repo-side only, NOT redeployed): the `RUNNER` service
+  binding + the `PROJECT_WORKER_URL`/`RUNNER_DIAL_SECRET` HTTP dial removed from its wrangler/env;
+  `dialProjectWorker` deleted; `/__ingress` still resolves host→project + stamps membership but returns 503
+  `project dial removed (clean-room cook-1)`. **The DEPLOYED `control-plane` worker's runner dial is now dead
+  until its own next increment.** `prove-twoworker.mjs`/`prove-apps.mjs` marked SKIP (one-line comments).
+  `@v3/shared/dial` deleted (`StampedCaller` moved into control-plane ingress — its one consumer).
+- **Deleted the `web` mount kind** — a fetch-shaped worker is just a `code` (stateless) mount whose `fetch`
+  you call. `#fetchWeb` folded into `#fetchCapability`'s `code` branch (load via LOADER, mainModule `cap.js`,
+  `getEntrypoint().fetch(request)`, a distinct `code-fetch:` cacheKey — same modules, different entry shape);
+  the RPC lane keeps `#runCode`. The Mount union is 4-way: `itx-expression | static | code | stateful` (the
+  further collapse to expressions-only is jam-gated).
+- **Route collapse.** The edge surface is exactly `/version`, `/api` (capnweb), `/cap` (THE one fetch door),
+  `/state`. Deleted `/call`, `/ws`, `/facet` at the worker AND, in the DO's `fetch`, the `/facet` branch + the
+  hibernatable ingress-echo demo (`acceptWebSocket ["echo"]` + the `webSocketMessage` echo). The stateful
+  fetch/WS lane rides `x-itx-cap` through `#fetchCapability`'s stateful branch — verified `/facet` carried
+  nothing the cap lane doesn't (same source/class headers, same runner forward).
+- **Deep dotted facet dispatch** (`StatefulWorkerDurableObject.invokeCapability`). `input.method` may be
+  dotted (`"counters.add"` — the host's join-with-`"."` wire format is KEPT); previously a single
+  `Reflect.get(facet, method)` missed and threw. Now: split on `"."`, walk intermediates with awaited
+  `Reflect.get(receiver, seg)`, `Reflect.apply` on the terminal — receiver-preserving, exactly apps/os
+  `replayPath` (live-capability.ts). The ⚠️ Reflect.apply GOTCHA block is preserved and extended with the
+  segment-walk line. The seeded `Counter` gained a nested `counters` sub-object so the deep call is provable.
+- **Deleted the no-op `idle` page.** `wake` is the only Page; at quiescence the DO silently drops its leg (the
+  relay kept its retained provider either way — the record on the socket is the source of truth).
+- **Small deletions:** unused `captureExpression` (the encode half; the codec is being redesigned in a jam);
+  the itx-DO's three near-identical `LOADER.get` option-object blocks collapsed into one 10-line `#worker`
+  helper (the stateful runner's stays where it is); project-worker's dead `RUNNER_DIAL_SECRET` var dropped.
+- **Proven** (deployed `cook-1`, fresh `prj_cook1`, real capnweb Node clients — **13/13 PASS**):
+  `connect() → itx → whoami` = `{projectId:"prj_cook1"}`; `itx.kv` put/get round-trips `"cook1-value"`; a live
+  cap provided by client A invoked from client B (`echo-from-provider:hi`, `add(2,3)→5`) with `/state` =
+  `{stubs:2, active:0, dormant:true}` (don't-pin intact); the seeded site as a **code** mount through the ONE
+  door — `GET /cap?cap=["site"]` → 200 HTML AND a WS upgrade through `/cap` → `site-echo:hello-from-eyeball`
+  (the web→code fold, a 101 through the graph); stateful shallow `increment(2)→2` AND the NEW deep
+  `counters.add(3)→5`, `value()→5` (the segment walk); `/call` + `/ws` fall through to the help text, a bare
+  WS to `/ws` gets no 101, `/version` + `/state` intact. (The ~50-client don't-pin mini-proof was skipped —
+  the `prove_1000.mjs` harness didn't survive the scratchpad and was not rebuilt, per instruction; increment
+  19's 1000-scale result stands.)
+- **Net:** `index.ts` −175, `config-worker.ts` −53, `shared/dial.ts` −23, `worker.ts` 99→72,
+  `itx-durable-object.ts` 578→554, `itx-expression.ts` 66→47, control-plane `ingress.ts` 79→40;
+  `stateful-worker-durable-object.ts` 146→158 (the walk + its comment).
+
+---
+
 ## Status after increment 13 — the inner core end to end
 
 A single `ItxDurableObject` is the host for a `{projectId, path}` context: **ingress WS**, **egress** (project
