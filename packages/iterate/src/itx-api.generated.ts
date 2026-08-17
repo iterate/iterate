@@ -280,8 +280,8 @@ export interface ProjectCollection {
    * to the project root. The project processor reduces presence into the
    * clients catalog (`itx.clients.list()`); userspace can react to the generic
    * capability fact after a new client is callable. When `capabilities` is
-   * passed, it is provided as a LIVE capability mounted at `capabilities` on the scope —
-   * the shipped capability machinery holds it behind a hibernating Provider
+   * passed, it is provided as a LIVE capability mounted at `capabilities` on
+   * the scope — the shipped capability machinery holds it behind a hibernating Provider
    * Pager (no pinned Durable Objects), journals the provision, and journals
    * the disconnect when this session's socket dies; the mount is retired
    * with it. Callers invoke it through the scope's capability host:
