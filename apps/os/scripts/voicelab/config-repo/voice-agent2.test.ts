@@ -17,7 +17,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeProcessorHarness } from "iterate/processors/testing";
 import {
-  dialGrokSocket,
+  dialProviderSocket,
   MAX_DEVICE_SPEAKER_BACKLOG_BYTES,
   MAX_SPEAKER_PAYLOAD_BYTES,
   VoiceAgent2Contract,
@@ -201,7 +201,7 @@ function makeHarness() {
         /* The REAL dial, so the mocked `fetch` above is what stands in for the
          * provider — including the `response.webSocket ?? null` line that has
          * broken in production. */
-        dialGrok: (baseUrl) => dialGrokSocket(baseUrl),
+        dialProvider: (provider, baseUrl, model) => dialProviderSocket(provider, baseUrl, model),
       }),
   });
   /* `grok` is always the socket of the CURRENT dial; `sockets` is every one
@@ -569,6 +569,76 @@ describe("opening a call", () => {
     });
     await open.settle();
     expect(open.grok.sentOfType("input_audio_buffer.commit")).toHaveLength(0);
+  });
+});
+
+/* ========================================================================== */
+/* THE OTHER PROVIDER                                                         */
+/* ========================================================================== */
+
+describe("the openai provider", () => {
+  /** A live call whose birth certificate names OpenAI. */
+  async function openaiCallIsLive(h: Harness): Promise<void> {
+    await h.append({
+      type: "events.iterate.com/voice-agent/created",
+      payload: { grokBaseUrl: "https://fake.grok.test/v1/realtime", provider: "openai" },
+    });
+    await h.append(micFrame(1));
+    await h.settle();
+    h.grok.completeHandshake();
+    await h.settle();
+  }
+
+  it("asks the session for 24 kHz audio and the provider's voice", async () => {
+    const h = makeHarness();
+    await openaiCallIsLive(h);
+    const update = h.grok.sentOfType("session.update")[0] as {
+      session: {
+        audio: {
+          input: { format: { rate: number } };
+          output: { format: { rate: number }; voice: string };
+        };
+      };
+    };
+    expect(update.session.audio.input.format.rate).toBe(24_000);
+    expect(update.session.audio.output.format.rate).toBe(24_000);
+    expect(update.session.audio.output.voice).toBe("marin");
+  });
+
+  it("upsamples the device's 16 kHz capture on its way in", async () => {
+    const h = makeHarness();
+    await openaiCallIsLive(h);
+    /* The held frame flushed at session.updated: 20 ms is 640 bytes at
+     * 16 kHz and 960 at 24. */
+    const flushed = h.grok.sentOfType("input_audio_buffer.append")[0] as { audio: string };
+    expect(atob(flushed.audio).length).toBe(960);
+    /* And the live path after the handshake does the same. */
+    await h.append(micFrame(2));
+    await h.settle();
+    const live = h.grok.sentOfType("input_audio_buffer.append")[1] as { audio: string };
+    expect(atob(live.audio).length).toBe(960);
+  });
+
+  it("downsamples the provider's 24 kHz answer before the device hears it", async () => {
+    const h = makeHarness();
+    await openaiCallIsLive(h);
+    /* 100 ms at 24 kHz: 2,400 samples, 4,800 bytes. */
+    const pcm = new Uint8Array(4_800);
+    for (let index = 0; index < pcm.length; index++) pcm[index] = index % 251;
+    h.grok.push({ type: "response.output_audio.delta", delta: base64(pcm) });
+    await h.settle();
+    await playOutEverything(h, 200);
+    const frames = speakerFrames(h).filter((frame) => frame.pcm !== "");
+    const deliveredBytes = frames.reduce((sum, frame) => sum + atob(frame.pcm).length, 0);
+    /* The same 100 ms, now at the pipeline's 16 kHz: 3,200 bytes. */
+    expect(deliveredBytes).toBe(3_200);
+  });
+
+  it("leaves grok's audio untouched", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    const flushed = h.grok.sentOfType("input_audio_buffer.append")[0] as { audio: string };
+    expect(atob(flushed.audio).length).toBe(640);
   });
 });
 
@@ -1389,16 +1459,25 @@ describe("edges nothing was holding down", () => {
     expect(speakerMsDelivered(h)).toBe(400);
   });
 
-  it("sends the credential to x.ai and to nobody else", async () => {
+  it("sends each provider's credential to its host and to nobody else", async () => {
     const seen: { url: string; headers: Record<string, string> }[] = [];
     vi.stubGlobal("fetch", async (url: string, init: { headers: Record<string, string> }) => {
       seen.push({ url: String(url), headers: init.headers });
       return { webSocket: new FakeGrok() } as unknown as Response;
     });
-    await dialGrokSocket("https://fake.grok.test/v1/realtime");
-    await dialGrokSocket(null);
+    await dialProviderSocket(
+      "grok",
+      "https://fake.grok.test/v1/realtime",
+      "grok-voice-think-fast-2.0",
+    );
+    await dialProviderSocket("grok", null, "grok-voice-think-fast-2.0");
+    await dialProviderSocket("openai", null, "gpt-realtime");
+    /* A test seam gets no credential, whichever provider it fakes. */
     expect(seen[0]!.headers.Authorization).toBeUndefined();
     expect(seen[1]!.headers.Authorization).toContain("/secrets/xai");
     expect(seen[1]!.url).toContain("model=grok-voice-think-fast-2.0");
+    expect(seen[2]!.headers.Authorization).toContain("/secrets/openai");
+    expect(seen[2]!.url).toContain("api.openai.com");
+    expect(seen[2]!.url).toContain("model=gpt-realtime");
   });
 });

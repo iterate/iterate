@@ -548,3 +548,32 @@ its next append and was killed. Two probe findings, both client-side: the
 awaited final append has no timeout (a dead itx socket hangs the probe
 forever), and one answer adjacent to the blip delivered fully but its
 end-of-answer marker was never seen. Neither touches the platform verdict.
+
+## Postscript 8: two providers, one birth certificate
+
+The birth certificate now names the provider: `created` carries
+`provider: "grok" | "openai"` plus optional `providerModel`/`providerVoice`,
+and everything provider-specific in the facet is one four-value table — URL,
+model, voice, and PCM rate. Grok's realtime API is a clone of OpenAI's GA
+interface (same handshake, same event names, same session shape), so the
+"abstraction" is that table plus the one real difference: OpenAI speaks
+24 kHz where this pipeline is 16, resampled linearly at the two doors
+(mic-in, delta-out). The credential follows the HOST, never the flag —
+`/secrets/xai` to `*.x.ai`, `/secrets/openai` to `api.openai.com`, nothing
+to a test seam.
+
+Time to first speech of the response heard (release → first audio at the
+listener), eight rounds each, same utterance, same hour, stream and direct
+alternating:
+
+| provider                           | via stream p50 | direct p50 | marginal | ours p50 | model thinking p50 |
+| ---------------------------------- | -------------: | ---------: | -------: | -------: | -----------------: |
+| grok (`grok-voice-think-fast-2.0`) |        1122 ms |    1043 ms |   +79 ms |    98 ms |             812 ms |
+| openai (`gpt-realtime`)            |     **691 ms** |     570 ms |  +121 ms |   118 ms |             408 ms |
+
+OpenAI reaches first speech ~430 ms sooner than Grok, and essentially all of
+it is the model thinking (408 vs 812 ms) — the wire terms are identical
+(both ~155 ms from the facet). Our machinery costs ~100-120 ms on either
+provider, with the OpenAI tail actually TIGHTER (ours p90 128 vs 232), so
+the 24 kHz resample is free at these scales. The first live OpenAI round
+ever attempted answered in 503 ms end to end through the stream.

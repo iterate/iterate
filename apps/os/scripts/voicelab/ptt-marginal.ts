@@ -56,9 +56,17 @@ export interface PttMarginalOptions extends VoicelabConnectOptions {
   settleMs?: number;
   /** Frames per append. Twelve is what the C client sends. */
   framesPerAppend?: number;
-  /** Provider endpoint for the direct half. Defaults to xAI's realtime API. */
+  /** Provider endpoint for the direct half. Defaults to the provider's own. */
   grokBaseUrl?: string;
   model?: string;
+  /**
+   * Which realtime voice provider BOTH halves speak to. The stream half's
+   * provider is set on its birth certificate at setup; passing the same name
+   * here makes the direct half dial the same provider so the comparison
+   * stays like for like. The probe does not verify the two agree — the
+   * per-round think times make a mismatch obvious in one glance.
+   */
+  provider?: "grok" | "openai";
   /**
    * MIXED SOAK: cycle short turns, very long answers, mid-answer
    * interjections, and quiet gaps that cross the idle-teardown boundary —
@@ -85,6 +93,42 @@ export interface PttMarginalOptions extends VoicelabConnectOptions {
 }
 
 const FRAME_MS = 20;
+
+/** The direct half's per-provider dial sheet. Mirrors voice-agent2.ts. */
+const DIRECT_PROVIDERS = {
+  grok: {
+    url: "https://api.x.ai/v1/realtime",
+    model: "grok-voice-think-fast-2.0",
+    voice: "eve",
+    rate: 16_000,
+    keyEnvs: ["APP_CONFIG_X_AI_API_KEY", "XAI_API_KEY"],
+  },
+  openai: {
+    url: "https://api.openai.com/v1/realtime",
+    model: "gpt-realtime",
+    voice: "marin",
+    rate: 24_000,
+    keyEnvs: ["OPENAI_API_KEY", "APP_CONFIG_OPENAI_API_KEY"],
+  },
+} as const;
+
+/** Linear PCM16 resample, for the provider that does not speak 16 kHz. */
+function resampleFrame(base64Frame: string, fromRate: number, toRate: number): string {
+  if (fromRate === toRate) return base64Frame;
+  const bytes = Buffer.from(base64Frame, "base64");
+  const samples = Math.floor(bytes.length / 2);
+  const outLength = Math.max(1, Math.round((samples * toRate) / fromRate));
+  const out = Buffer.alloc(outLength * 2);
+  for (let index = 0; index < outLength; index++) {
+    const position = outLength === 1 ? 0 : (index * (samples - 1)) / (outLength - 1);
+    const base = Math.floor(position);
+    const fraction = position - base;
+    const first = bytes.readInt16LE(base * 2);
+    const second = base + 1 < samples ? bytes.readInt16LE((base + 1) * 2) : first;
+    out.writeInt16LE((first + (second - first) * fraction) | 0, index * 2);
+  }
+  return out.toString("base64");
+}
 
 /** One scenario in the mixed soak. */
 type RoundKind = "short" | "long" | "barge";
@@ -250,19 +294,29 @@ interface DirectTurn extends Turn {
 }
 
 /** The session shape the facet sends, so both halves ask for the same thing. */
-const sessionUpdate = {
-  type: "session.update",
-  session: {
-    type: "realtime",
-    audio: {
-      input: { format: { type: "audio/pcm", rate: 16_000 }, turn_detection: null },
-      output: { format: { type: "audio/pcm", rate: 16_000 }, voice: "eve" },
+/** The session shape the facet sends, so both halves ask for the same thing. */
+function sessionUpdateFor(rate: number, voice: string) {
+  return {
+    type: "session.update",
+    session: {
+      type: "realtime",
+      audio: {
+        input: { format: { type: "audio/pcm", rate }, turn_detection: null },
+        output: { format: { type: "audio/pcm", rate }, voice },
+      },
     },
-  },
-};
+  };
+}
 
 /** One provider socket, held open across rounds exactly as the facet holds its own. */
-async function dialProvider(baseUrl: string, model: string, apiKey: string) {
+async function dialProvider(
+  baseUrl: string,
+  model: string,
+  apiKey: string,
+  rate: number,
+  voice: string,
+) {
+  const sessionUpdate = sessionUpdateFor(rate, voice);
   const target = new URL(baseUrl);
   target.searchParams.set("model", model);
   const { WebSocket } = await import("ws");
@@ -381,15 +435,28 @@ interface TurnMarks {
 }
 
 export async function pttMarginal(options: PttMarginalOptions) {
-  const apiKey = process.env.APP_CONFIG_X_AI_API_KEY?.trim() ?? "";
-  if (apiKey === "") throw new Error("APP_CONFIG_X_AI_API_KEY is required for the direct half.");
+  const providerName = options.provider ?? "grok";
+  const directProvider = DIRECT_PROVIDERS[providerName];
+  const keyEnv = directProvider.keyEnvs.find((name) => process.env[name]?.trim());
+  const apiKey = keyEnv === undefined ? "" : (process.env[keyEnv]?.trim() ?? "");
+  if (apiKey === "") {
+    throw new Error(
+      `one of ${directProvider.keyEnvs.join("/")} is required for the direct ${providerName} half.`,
+    );
+  }
   const streamPath = options.streamPath ?? "/agents/voice2/marginal-1";
   const rounds = options.rounds ?? 8;
   const settleMs = options.settleMs ?? 8_000;
   const batch = Math.max(1, options.framesPerAppend ?? 12);
-  const baseUrl = options.grokBaseUrl ?? "https://api.x.ai/v1/realtime";
-  const model = options.model ?? "grok-voice-think-fast-2.0";
+  const baseUrl = options.grokBaseUrl ?? directProvider.url;
+  const model = options.model ?? directProvider.model;
   const spoken = framesFromWav(options.micWav);
+  /* The direct half speaks at the provider's rate; the stream half stays
+   * 16 kHz and the facet resamples, exactly as a device would experience it. */
+  const toDirect = (frames: string[]) =>
+    directProvider.rate === 16_000
+      ? frames
+      : frames.map((frame) => resampleFrame(frame, 16_000, directProvider.rate));
   /* The scenario utterances. Everything falls back to the main one, so a
    * plain run needs nothing new; --mixed without --wav-dir soaks with one
    * voice, which still exercises every path, just monotonously. */
@@ -797,7 +864,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
 
   async function directTurn(
     session: Awaited<ReturnType<typeof dialProvider>>,
-    frames: string[] = spoken,
+    frames: string[] = toDirect(spoken),
   ): Promise<DirectTurn> {
     const pressedAtDeviceMs = Date.now();
     /* Paced exactly as the stream half paces it, so both put audio on the wire
@@ -834,7 +901,13 @@ export async function pttMarginal(options: PttMarginalOptions) {
     };
   }
 
-  const direct = await dialProvider(baseUrl, model, apiKey);
+  const direct = await dialProvider(
+    baseUrl,
+    model,
+    apiKey,
+    directProvider.rate,
+    directProvider.voice,
+  );
   const streamTurns: StreamTurn[] = [];
   const directTurns: DirectTurn[] = [];
 
@@ -864,7 +937,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
        * LONG prompt, so the long-answer parity still gets a sample. */
       const viaDirect = await directTurn(
         direct,
-        framesByKind[plan.kind === "barge" ? "long" : plan.kind],
+        toDirect(framesByKind[plan.kind === "barge" ? "long" : plan.kind]),
       );
       directTurns.push(viaDirect);
 
@@ -930,6 +1003,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
 
   const report = {
     kind: "ptt-marginal",
+    provider: providerName,
     streamPath,
     baseUrl,
     model,

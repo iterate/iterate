@@ -341,7 +341,27 @@ interface XaiSecret {
  * somebody ran a voice command would be a genuinely bad surprise.
  */
 export async function ensureXaiSecret(itx: unknown): Promise<string> {
-  const secret = (itx as { secrets: { get(path: string): XaiSecret } }).secrets.get(XAI_SECRET);
+  return await ensureProviderSecret(itx, {
+    path: XAI_SECRET,
+    envNames: [XAI_ENV],
+    egress: XAI_EGRESS,
+  });
+}
+
+/** The OpenAI twin of the xAI secret, for the voice provider comparison. */
+export async function ensureOpenaiSecret(itx: unknown): Promise<string> {
+  return await ensureProviderSecret(itx, {
+    path: "/secrets/openai",
+    envNames: ["OPENAI_API_KEY", "APP_CONFIG_OPENAI_API_KEY"],
+    egress: ["https://api.openai.com"],
+  });
+}
+
+async function ensureProviderSecret(
+  itx: unknown,
+  args: { path: string; envNames: string[]; egress: string[] },
+): Promise<string> {
+  const secret = (itx as { secrets: { get(path: string): XaiSecret } }).secrets.get(args.path);
   try {
     const described = await withRpcResult(secret.__describe(), ({ created, hasMaterial }) => ({
       created,
@@ -349,22 +369,23 @@ export async function ensureXaiSecret(itx: unknown): Promise<string> {
     }));
     if (described.created === true && described.hasMaterial === true) return "already set";
 
-    const material = process.env[XAI_ENV]?.trim();
-    if (!material) {
+    const envName = args.envNames.find((name) => process.env[name]?.trim());
+    const material = envName === undefined ? undefined : process.env[envName]?.trim();
+    if (!material || envName === undefined) {
       throw new Error(
-        `${XAI_SECRET} has no material and ${XAI_ENV} is not in this environment. ` +
-          `Either run inside a Doppler config that has it, or create the secret once by hand:\n` +
-          `  await itx.secrets.get("${XAI_SECRET}").create({ egress: { urls: ${JSON.stringify(XAI_EGRESS)} }, material: "<xAI API key>" })`,
+        `${args.path} has no material and none of ${args.envNames.join("/")} is in this environment. ` +
+          `Either run with one set, or create the secret once by hand:\n` +
+          `  await itx.secrets.get("${args.path}").create({ egress: { urls: ${JSON.stringify(args.egress)} }, material: "<API key>" })`,
       );
     }
     // A secret born without material takes it through update; create would
     // keep the empty material it already has rather than replace it.
     if (described.created === true) {
       await discardRpcResult(secret.update({ material }));
-      return `material set from ${XAI_ENV}`;
+      return `material set from ${envName}`;
     }
-    await discardRpcResult(secret.create({ egress: { urls: XAI_EGRESS }, material }));
-    return `created from ${XAI_ENV}, pinned to ${XAI_EGRESS.join(", ")}`;
+    await discardRpcResult(secret.create({ egress: { urls: args.egress }, material }));
+    return `created from ${envName}, pinned to ${args.egress.join(", ")}`;
   } finally {
     disposeIgnoredRpcResult(secret);
   }

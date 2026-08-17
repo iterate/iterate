@@ -40,6 +40,7 @@ import {
   resolveKitDir,
   runInherited,
   voicelabRunsDir,
+  ensureOpenaiSecret,
   type TalkOptions,
 } from "./talk.ts";
 import { voiceAgent2EntrypointRef } from "./voice-agent2-ref.ts";
@@ -68,6 +69,9 @@ interface VoiceAgent2Setup {
   setupVoiceAgent2(options?: {
     streamPath?: string;
     grokBaseUrl?: string;
+    provider?: "grok" | "openai";
+    providerModel?: string;
+    providerVoice?: string;
     grokInstructions?: string;
     clientTakesTurns?: boolean;
     reinstall?: boolean;
@@ -80,6 +84,11 @@ export interface Talk2Options extends TalkOptions {
   instructions?: string;
   /** Dial this instead of x.ai. Carries no credential. */
   grokBaseUrl?: string;
+  /** Which realtime voice provider the stream's birth certificate names. */
+  provider?: "grok" | "openai";
+  /** Model and voice overrides for that provider. */
+  providerModel?: string;
+  providerVoice?: string;
   /** Install the subscription under a fresh key even if an identical one exists. */
   reinstall?: boolean;
   /**
@@ -128,7 +137,11 @@ export async function talk2(options: Talk2Options = {}) {
       : `voice-agent2.ts already current (${install.commitOid.slice(0, 8)})`,
   );
 
-  console.log(`xai secret ${await ensureXaiSecret(itx)}`);
+  if (options.provider === "openai") {
+    console.log(`openai secret ${await ensureOpenaiSecret(itx)}`);
+  } else {
+    console.log(`xai secret ${await ensureXaiSecret(itx)}`);
+  }
 
   using voiceAgent = itx.workers.get(
     voiceAgent2EntrypointRef,
@@ -168,6 +181,9 @@ export async function talk2(options: Talk2Options = {}) {
        * never replies.
        */
       clientTakesTurns: options.openMic !== true,
+      ...(options.provider === undefined ? {} : { provider: options.provider }),
+      ...(options.providerModel === undefined ? {} : { providerModel: options.providerModel }),
+      ...(options.providerVoice === undefined ? {} : { providerVoice: options.providerVoice }),
       ...(options.grokBaseUrl === undefined ? {} : { grokBaseUrl: options.grokBaseUrl }),
       ...(options.reinstall === undefined ? {} : { reinstall: options.reinstall }),
     }),

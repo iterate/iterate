@@ -141,9 +141,37 @@ import { z } from "zod";
 /* ========================================================================== */
 
 const XAI_SECRET = "/secrets/xai";
-const GROK_REALTIME_URL = "https://api.x.ai/v1/realtime";
-const GROK_MODEL = "grok-voice-think-fast-2.0";
-const GROK_VOICE = "eve";
+const OPENAI_SECRET = "/secrets/openai";
+
+/** A realtime voice provider this agent can dial. */
+export type VoiceProvider = "grok" | "openai";
+
+/**
+ * EVERYTHING PROVIDER-SPECIFIC, IN ONE TABLE. Grok's realtime API is a
+ * deliberate clone of OpenAI's GA interface — same handshake, same event
+ * names, same session.update shape — so the abstraction the birth
+ * certificate selects is not an adapter layer, it is four values: where to
+ * dial, which model, which voice, and the ONE real difference, the PCM rate.
+ * OpenAI speaks 24 kHz where this whole pipeline is 16; the two resample
+ * sites below are the entire cost of supporting it.
+ */
+const PROVIDERS: Record<
+  VoiceProvider,
+  { url: string; model: string; voice: string; rate: number }
+> = {
+  grok: {
+    url: "https://api.x.ai/v1/realtime",
+    model: "grok-voice-think-fast-2.0",
+    voice: "eve",
+    rate: 16_000,
+  },
+  openai: {
+    url: "https://api.openai.com/v1/realtime",
+    model: "gpt-realtime",
+    voice: "marin",
+    rate: 24_000,
+  },
+};
 
 /**
  * Grok's own default threshold, restored.
@@ -299,6 +327,30 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/**
+ * Linear-interpolation PCM16 resampling, for the one provider that does not
+ * speak this pipeline's 16 kHz. Linear costs a little treble against a
+ * windowed-sinc kernel and nothing anybody hears on speech through these
+ * speakers; what matters is that it is allocation-light and runs per frame.
+ */
+function resamplePcm16(bytes: Uint8Array, fromRate: number, toRate: number): Uint8Array {
+  if (fromRate === toRate) return bytes;
+  const samples = Math.floor(bytes.byteLength / 2);
+  if (samples === 0) return new Uint8Array(0);
+  const source = new Int16Array(bytes.buffer, bytes.byteOffset, samples);
+  const outLength = Math.max(1, Math.round((samples * toRate) / fromRate));
+  const out = new Int16Array(outLength);
+  for (let index = 0; index < outLength; index++) {
+    const position = outLength === 1 ? 0 : (index * (samples - 1)) / (outLength - 1);
+    const base = Math.floor(position);
+    const fraction = position - base;
+    const first = source[base] ?? 0;
+    const second = source[base + 1] ?? first;
+    out[index] = (first + (second - first) * fraction) | 0;
+  }
+  return new Uint8Array(out.buffer);
+}
+
 /** Base64 back to bytes. */
 function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);
@@ -322,6 +374,11 @@ function base64ToBytes(base64: string): Uint8Array {
 const VoiceState = z.object({
   /** Dial this instead of x.ai. Test seam; carries no credential. */
   grokBaseUrl: z.string().nullable().default(null),
+  /** Which realtime voice provider this stream's calls dial. */
+  provider: z.enum(["grok", "openai"]).default("grok"),
+  /** Model and voice overrides; null takes the provider's default. */
+  providerModel: z.string().nullable().default(null),
+  providerVoice: z.string().nullable().default(null),
   /** What the model is told it is. Empty means Grok's own default. */
   grokInstructions: z.string().default(""),
   /** Which brief setup last marked current; the warm-up handshake answers it. */
@@ -396,6 +453,9 @@ export const VoiceAgent2Contract = defineProcessorContract({
       description: "The voice agent exists on this stream.",
       payloadSchema: z.strictObject({
         grokBaseUrl: z.string().optional(),
+        provider: z.enum(["grok", "openai"]).optional(),
+        providerModel: z.string().optional(),
+        providerVoice: z.string().optional(),
         grokInstructions: z.string().optional(),
         clientTakesTurns: z.boolean().optional(),
       }),
@@ -680,7 +740,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
     nowAtFacetMs(): number;
     /** The only way this processor waits, injected so tests use a fake clock. */
     sleep(ms: number): Promise<void>;
-    dialGrok(baseUrl: string | null): Promise<WebSocket | null>;
+    dialProvider(
+      provider: VoiceProvider,
+      baseUrl: string | null,
+      model: string,
+    ): Promise<WebSocket | null>;
   }
 > {
   readonly contract = VoiceAgent2Contract;
@@ -824,6 +888,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
         return {
           ...state,
           grokBaseUrl: event.payload.grokBaseUrl ?? null,
+          provider: event.payload.provider ?? "grok",
+          providerModel: event.payload.providerModel ?? null,
+          providerVoice: event.payload.providerVoice ?? null,
           grokInstructions: event.payload.grokInstructions ?? "",
           clientTakesTurns: event.payload.clientTakesTurns ?? false,
         };
@@ -1048,8 +1115,14 @@ export class VoiceAgent2Processor extends StreamProcessor<
         if (micPcm16 !== null) {
           const pcm = micPcm16;
           if (this.#grokReady && this.#grokSocket !== null) {
+            /* Held frames resample at the flush; live ones resample here.
+             * The queue itself stays 16 kHz so a re-dial to a DIFFERENT
+             * provider never replays audio at the wrong rate. */
             this.#grokSocket.send(
-              JSON.stringify({ type: "input_audio_buffer.append", audio: bytesToBase64(pcm) }),
+              JSON.stringify({
+                type: "input_audio_buffer.append",
+                audio: bytesToBase64(resamplePcm16(pcm, 16_000, PROVIDERS[state.provider].rate)),
+              }),
             );
           } else if (this.#micQueue.length < MAX_HELD_MIC_FRAMES) {
             this.#micQueue.push(pcm);
@@ -1136,8 +1209,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
      * not move on its own — reuses it. */
     const dialId = crypto.randomUUID();
     runInBackground(async () => {
+      const provider = PROVIDERS[state.provider];
       const socket = await this.deps
-        .dialGrok(state.grokBaseUrl)
+        .dialProvider(state.provider, state.grokBaseUrl, state.providerModel ?? provider.model)
         .finally(() => (this.#dialInFlight = false));
       if (socket === null) {
         void append({
@@ -1217,10 +1291,13 @@ export class VoiceAgent2Processor extends StreamProcessor<
                     : { instructions: state.grokInstructions }),
                   audio: {
                     input: {
-                      format: { type: "audio/pcm", rate: 16_000 },
+                      format: { type: "audio/pcm", rate: provider.rate },
                       turn_detection: state.clientTakesTurns ? null : GROK_SERVER_VAD,
                     },
-                    output: { format: { type: "audio/pcm", rate: 16_000 }, voice: GROK_VOICE },
+                    output: {
+                      format: { type: "audio/pcm", rate: provider.rate },
+                      voice: state.providerVoice ?? provider.voice,
+                    },
                   },
                 },
               }),
@@ -1235,7 +1312,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
               socket.send(
                 JSON.stringify({
                   type: "input_audio_buffer.append",
-                  audio: bytesToBase64(held),
+                  audio: bytesToBase64(resamplePcm16(held, 16_000, provider.rate)),
                 }),
               );
             }
@@ -1293,7 +1370,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * last piece of a delta being short costs nothing but one extra
              * append. Nothing is carried between deltas and nothing is padded.
              */
-            const pcm16 = base64ToBytes(grok.delta);
+            /* The pipeline is 16 kHz from here to the speaker; a provider
+             * that talks faster gets resampled at the door. */
+            const pcm16 = resamplePcm16(base64ToBytes(grok.delta), provider.rate, 16_000);
             for (let cut = 0; cut < pcm16.length; cut += MAX_SPEAKER_PAYLOAD_BYTES) {
               this.#speakerQueue.push({
                 fromGrokAudioDeltaSeq,
@@ -1738,12 +1817,21 @@ export class VoiceAgent2Processor extends StreamProcessor<
 /* FACET                                                                      */
 /* ========================================================================== */
 
-export async function dialGrokSocket(baseUrl: string | null): Promise<WebSocket | null> {
-  const target = new URL(baseUrl ?? GROK_REALTIME_URL);
-  target.searchParams.set("model", GROK_MODEL);
+export async function dialProviderSocket(
+  provider: VoiceProvider,
+  baseUrl: string | null,
+  model: string,
+): Promise<WebSocket | null> {
+  const target = new URL(baseUrl ?? PROVIDERS[provider].url);
+  target.searchParams.set("model", model);
   const headers: Record<string, string> = { Upgrade: "websocket" };
+  /* The credential follows the HOST, never the flag: a test seam pointing at
+   * a fake gets no Authorization header at all, whichever provider it fakes. */
   if (target.hostname === "api.x.ai" || target.hostname.endsWith(".x.ai")) {
     headers.Authorization = `Bearer getSecret("${XAI_SECRET}")`;
+  }
+  if (target.hostname === "api.openai.com") {
+    headers.Authorization = `Bearer getSecret("${OPENAI_SECRET}")`;
   }
   const response = await fetch(target.toString(), { headers });
   /* `?? null` rather than `=== null`: a runtime with no WebSockets in it has no
@@ -1831,11 +1919,16 @@ export interface SetupVoiceAgent2Options {
   /**
    * Dial THIS instead of x.ai, for a deterministic test.
    *
-   * NO CREDENTIAL FOLLOWS IT — see {@link dialGrokSocket}, where the rule is
+   * NO CREDENTIAL FOLLOWS IT — see {@link dialProviderSocket}, where the rule is
    * that a host which is not x.ai gets no Authorization header at all.
    */
   grokBaseUrl?: string;
-  /** What to tell the model it is. Empty leaves Grok on its own default. */
+  /** Which realtime voice provider the birth certificate names. Default grok. */
+  provider?: VoiceProvider;
+  /** Model and voice overrides for that provider. */
+  providerModel?: string;
+  providerVoice?: string;
+  /** What to tell the model it is. Empty leaves the provider's own default. */
   grokInstructions?: string;
   /**
    * This client segments its own turns with the push-to-talk verbs.
@@ -1930,6 +2023,9 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
        */
       const birthPayload = {
         ...(options.grokBaseUrl === undefined ? {} : { grokBaseUrl: options.grokBaseUrl }),
+        ...(options.provider === undefined ? {} : { provider: options.provider }),
+        ...(options.providerModel === undefined ? {} : { providerModel: options.providerModel }),
+        ...(options.providerVoice === undefined ? {} : { providerVoice: options.providerVoice }),
         ...(options.grokInstructions === undefined
           ? {}
           : { grokInstructions: options.grokInstructions }),
@@ -2061,7 +2157,7 @@ export class VoiceAgent2Facet extends StreamProcessorFacet {
        * the object is up to receive it and there is an I/O context to append
        * from. */
       sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
-      dialGrok: (baseUrl) => dialGrokSocket(baseUrl),
+      dialProvider: (provider, baseUrl, model) => dialProviderSocket(provider, baseUrl, model),
     });
   }
 }
