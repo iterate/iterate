@@ -1,0 +1,23 @@
+{
+  "name": "project-worker",
+  "private": true,
+  "type": "module",
+  "description": "The clean-room capability host — ONE worker, one package (D40): worker.ts (the stateless capnweb edge) + the three DO classes (itx-durable-object, stream-durable-object, stateful-worker-durable-object) + core/*. The control-plane shell it falls back to is its own package (packages/v3/control-plane-shell). See BUILD-LOG.md.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "exports": {
+    ".": "./src/worker.ts"
+  },
+  "dependencies": {
+    "@v3/shared": "workspace:*",
+    "capnweb": "npm:@iterate-com/capnweb@^0.10.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260621.1",
+    "typescript": "^5.9.3",
+    "wrangler": "4.107.0"
+  }
+}

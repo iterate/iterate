@@ -1,6 +1,6 @@
 # Clean-room inner core — architecture & API
 
-A stock-take of `apps/project-worker` as it stands (branch `wip/kernel-wayfinder-2026-07-30`). This is the
+A stock-take of `packages/v3/project-worker` as it stands (branch `wip/kernel-wayfinder-2026-07-30`). This is the
 clean-room rebuild of iterate's platform inner core: a capability host, a don't-pin live-capability transport,
 dynamic workers (stateless / stateful / fetch-shaped), streams, and the `connect → itx` + `itx.clients` client
 model. Design ledger: `apps/os/docs/simplification/wayfinder/innermost-core/map.md`. Increment-by-increment
@@ -10,12 +10,14 @@ history + proofs: [`BUILD-LOG.md`](./BUILD-LOG.md).
 
 ## 1. The big picture
 
-Two Cloudflare Workers, one npm package (`apps/project-worker`, decision D34):
+Two Cloudflare Workers, one package each (`packages/v3/*`, decision D40 — flat cloudflare-os-style layout,
+a package is a worker iff it has a `wrangler.jsonc`):
 
-- **`project-worker`** — the inner core. A stateless edge worker fronting one `ItxDurableObject` per
-  `{projectId, path}` context, plus dynamic-worker runner DOs and stream DOs.
-- **`iterate-control-plane`** — the outer shell a project falls back to (platform-secret substitution, the
-  capability fallthrough, cross-script stream writes). Minimal stand-in for the real control plane.
+- **`project-worker`** (this package) — the inner core. A stateless edge worker fronting one `ItxDurableObject`
+  per `{projectId, path}` context, plus dynamic-worker runner DOs and stream DOs.
+- **`iterate-control-plane`** (`packages/v3/control-plane-shell`) — the outer shell a project falls back to
+  (platform-secret substitution, the capability fallthrough, cross-script stream writes). Minimal stand-in for
+  the real control plane. Shared code (`egress`, the dial contract) lives in `packages/v3/shared`.
 
 Two hard rules run through everything:
 
@@ -56,8 +58,8 @@ flowchart LR
 
 ## 2. Deployment topology & bindings
 
-`project-worker` deploys via `wrangler.jsonc`; `iterate-control-plane` via `wrangler.control-plane.jsonc`. Both
-to POC account `04b3b57291ef2626c6a8daa9d47065a7`.
+Each worker deploys via its own package's `wrangler.jsonc` (`packages/v3/project-worker`,
+`packages/v3/control-plane-shell`). Both to POC account `04b3b57291ef2626c6a8daa9d47065a7`.
 
 ### `project-worker` (`main: src/worker.ts`)
 
@@ -72,7 +74,7 @@ to POC account `04b3b57291ef2626c6a8daa9d47065a7`.
 | `FALLBACK`            | Service → `iterate-control-plane#ControlPlaneShell` | egress + capability fallthrough                                   |
 | `CF_VERSION_METADATA` | version metadata                                    | folded into loader cacheKeys (fresh isolate per deploy)           |
 
-### `iterate-control-plane` (`main: src/control-plane-shell.ts`)
+### `iterate-control-plane` (`packages/v3/control-plane-shell`, `main: src/index.ts`)
 
 | Binding               | Kind                                                           | Purpose                                     |
 | --------------------- | -------------------------------------------------------------- | ------------------------------------------- |
@@ -215,7 +217,7 @@ interface ConnectOpts {
 }
 ```
 
-### 4.3 `ControlPlaneShell` (`src/control-plane-shell.ts`) — the FALLBACK
+### 4.3 `ControlPlaneShell` (`packages/v3/control-plane-shell/src/index.ts`) — the FALLBACK
 
 ```ts
 class ControlPlaneShell extends WorkerEntrypoint {

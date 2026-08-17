@@ -1,8 +1,8 @@
 {
-  // The control-plane shell — a SECOND worker the project worker falls back to (self-host / hosted topology).
-  // Same repo, deployed separately: `wrangler deploy --config wrangler.control-plane.jsonc`.
+  // The control-plane shell — the SECOND worker the project worker falls back to (self-host / hosted
+  // topology). Its own package (D40, one package per worker); the deployed worker name is unchanged.
   "name": "iterate-control-plane",
-  "main": "src/control-plane-shell.ts",
+  "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
   "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
   "workers_dev": true,

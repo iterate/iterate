@@ -4,12 +4,14 @@
 // hits terminal. Its `invokeCapability` is the capability fallthrough (auth + first-party caps).
 //
 // Minimal on purpose: no DOs, no loader — just the fallback contract `{ fetch; invokeCapability }`. The real
-// identity shell (OAuth AS + D1 directory) is the existing apps/control-plane; this proves the JOIN + the
+// identity shell (OAuth AS + D1 directory) is packages/v3/control-plane; this proves the JOIN + the
 // shell-onion secret layering. `firstParty` = whether PLATFORM_SECRETS_KV is bound (hosted) or not (self-host).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { substituteHeaderSecrets } from "./core/egress.ts";
-import type { StreamDurableObject } from "./stream-durable-object.ts";
+import { substituteHeaderSecrets } from "@v3/shared/egress";
+// Type-only: the class lives in (and stays deployed with) the project-worker script — see the
+// cross-script STREAM_DO binding in wrangler.jsonc.
+import type { StreamDurableObject } from "project-worker";
 
 interface Env {
   PLATFORM_SECRETS_KV?: KVNamespace; // first-party keys (hosted only); keyed by bare name (not project-prefixed)

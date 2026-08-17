@@ -4,6 +4,9 @@ packages:
   - apps/*
   - apps/kernel/mini-apps/*
   - packages/*
+  # The clean room (wip/kernel-wayfinder): flat cloudflare-os-style layout — one package per deployed
+  # worker (has a wrangler.jsonc) plus pure shared libraries (no wrangler.jsonc). See D40.
+  - packages/v3/*
   - lint
   - scripts
 

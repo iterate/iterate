@@ -13,6 +13,7 @@
     "sqlfu:check": "sqlfu check all"
   },
   "dependencies": {
+    "@v3/shared": "workspace:*",
     "@cloudflare/workers-oauth-provider": "^0.8.3",
     "@modelcontextprotocol/server": "2.0.0",
     "capnweb": "npm:@iterate-com/capnweb@^0.10.0",

@@ -18,7 +18,7 @@
 // the client stubs by path and fans out.
 
 import { DurableObject } from "cloudflare:workers";
-import { substituteHeaderSecrets } from "./core/egress.ts";
+import { substituteHeaderSecrets } from "@v3/shared/egress";
 import { ITX_SURFACE_MODULE, CODE_CAP_RUNNER } from "./core/agent-runtime.ts";
 import {
   evaluateItxExpression,

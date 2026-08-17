@@ -526,6 +526,21 @@ args)` — invokes `[[Call]]` directly, runs inside the owning DO, returns plain
   fan-out hit both, and `/state` = `{activeLegs:0, dormant:true}` WHILE connected (the DO holds no stub). Deferred:
   `processEventBatch` stream-inbox, the `authenticate→Session→projects` chain, pipelined `itx.a.b()` sugar,
   cross-deploy lease reconciliation.
+- **D40 — `packages/v3/*`, flat, ONE PACKAGE PER DEPLOYED WORKER + explicit shared packages. (Jonas,
+  2026-08-07; supersedes D34.)** Conventions copied from iterate/cloudflare-os (analyzed 2026-08-07): no
+  apps/-vs-packages/ split — a package IS a worker iff it has a `wrangler.jsonc`, else it's a pure library;
+  the granularity is per deployed WORKER, never per class (their `gatekeeper-slack` holds 13 classes in one
+  package); shared libs are consumed as raw `.ts` source via package `exports` maps (no dist builds — their
+  one dist-built package is their one build-order landmine); the contract package sits at the bottom of the
+  graph with zero workspace deps. Landed as: `packages/v3/project-worker` (worker `project-worker`, moved),
+  `packages/v3/control-plane-shell` (worker `iterate-control-plane`, split out of project-worker's second
+  wrangler config), `packages/v3/control-plane` (worker `control-plane`, moved), `packages/v3/shared`
+  (`@v3/shared` — pure lib; admission bar = two packages would otherwise hand-sync copies: `./egress`, and
+  `./dial` which replaced the twinned x-iterate-\* constants + `StampedCaller` in project-worker/index.ts and
+  control-plane/ingress.ts). Deployed WORKER NAMES unchanged (renaming a worker = a data migration for its
+  DOs; the cross-script `STREAM_DO` binding still says `script_name: "project-worker"`). Deliberately NOT
+  copied from cloudflare-os: committed per-worker `worker-configuration.d.ts` (18 files × ~14.7k lines,
+  drifting), tsconfig `paths` duplicating the exports maps, dist-built shared packages.
 - **D14 — Cost/billing is USERSPACE, not a control-plane primitive.** Budgets/spend limits are a key PRODUCT
   concern but implemented in userspace: a **stream processor that consumes cost-bearing events** across
   streams and computes spend/budget. Can live on the product shell (for now), or the project shell (as a core

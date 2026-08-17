@@ -33,7 +33,7 @@
   ],
 
   // The DO's fallback (target-core §4.4). SELF-HOST/HOSTED: a service binding to the real control-plane shell
-  // worker (deployed from wrangler.control-plane.jsonc). SOLO would instead bind
+  // worker (deployed from packages/v3/control-plane-shell). SOLO would instead bind
   // { service: "project-worker", entrypoint: "DummyControlPlane" } (this worker's own loopback).
   "services": [
     {

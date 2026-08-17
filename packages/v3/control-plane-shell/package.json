@@ -1,0 +1,20 @@
+{
+  "name": "control-plane-shell",
+  "private": true,
+  "type": "module",
+  "description": "The control-plane SHELL worker (deploys as \"iterate-control-plane\") — the outer onion layer a project worker falls back to: platform-secret substitution on egress, capability fallthrough, and outer→inner stream writes via the cross-script STREAM_DO binding. Minimal on purpose: no DOs of its own, no loader. The real identity shell (OAuth AS + D1 directory) is packages/v3/control-plane.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@v3/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260621.1",
+    "project-worker": "workspace:*",
+    "typescript": "^5.9.3",
+    "wrangler": "4.107.0"
+  }
+}

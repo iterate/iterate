@@ -5,17 +5,20 @@
 //   • same account  → the RUNNER service binding (env.RUNNER.serve).
 //   • cross account → HTTP POST /serve + a shared secret (service bindings don't cross CF accounts).
 
+import {
+  APP_HEADER,
+  CALLER_HEADER,
+  CP_ORIGIN_HEADER,
+  DIAL_SECRET_HEADER,
+  PATH_HEADER,
+  PROJECT_ID_HEADER,
+  type StampedCaller,
+} from "@v3/shared/dial";
 import type { Env } from "./env.ts";
 import { directory } from "./directory.ts";
 
-/** The non-secret caller identity + THIS project's membership, stamped through the dial (unforgeable by
- *  the browser — the control plane overwrites it; see app.ts). A private app reads `member` via itx.auth. */
-export interface StampedCaller {
-  actor: string;
-  email: string;
-  member: boolean;
-  role: string | null;
-}
+// The shared home of the dial contract (headers + StampedCaller) — re-exported for local consumers.
+export type { StampedCaller };
 
 /** Resolve a project host → { projectId, app } via the directory routes table, else null. */
 export async function resolveHost(
@@ -49,10 +52,10 @@ export async function dialProjectWorker(
   const callerHeader = JSON.stringify(caller);
   const request = new Request(`https://runner.internal${path}`, {
     headers: {
-      "x-iterate-project-id": projectId,
-      "x-iterate-app": app,
-      "x-iterate-caller": callerHeader,
-      "x-iterate-cp-origin": env.CONTROL_PLANE_ORIGIN ?? "",
+      [PROJECT_ID_HEADER]: projectId,
+      [APP_HEADER]: app,
+      [CALLER_HEADER]: callerHeader,
+      [CP_ORIGIN_HEADER]: env.CONTROL_PLANE_ORIGIN ?? "",
     },
   });
 
@@ -64,12 +67,12 @@ export async function dialProjectWorker(
   return fetch(new URL("/serve", env.PROJECT_WORKER_URL), {
     method: "POST",
     headers: {
-      "x-iterate-dial-secret": env.RUNNER_DIAL_SECRET,
-      "x-iterate-project-id": projectId,
-      "x-iterate-app": app,
-      "x-iterate-path": path,
-      "x-iterate-caller": callerHeader,
-      "x-iterate-cp-origin": env.CONTROL_PLANE_ORIGIN ?? "",
+      [DIAL_SECRET_HEADER]: env.RUNNER_DIAL_SECRET,
+      [PROJECT_ID_HEADER]: projectId,
+      [APP_HEADER]: app,
+      [PATH_HEADER]: path,
+      [CALLER_HEADER]: callerHeader,
+      [CP_ORIGIN_HEADER]: env.CONTROL_PLANE_ORIGIN ?? "",
     },
   });
 }

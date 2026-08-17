@@ -10,6 +10,14 @@
 // SEPARATE account" work (topology 4).
 
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+import {
+  APP_HEADER,
+  CALLER_HEADER,
+  DIAL_SECRET_HEADER,
+  PATH_HEADER,
+  PROJECT_ID_HEADER,
+  type StampedCaller,
+} from "@v3/shared/dial";
 import { CONFIG_WORKER_SOURCE } from "./config-worker.ts";
 
 interface Env {
@@ -20,15 +28,6 @@ interface Env {
 
 type ProjectProps = { projectId: string };
 
-// The dial contract — header names shared with the control plane's ingress.ts (keep in sync; a shared
-// package is the eventual home). CALLER/APP/CP_ORIGIN are handed INTO the sandbox (trusted, set by us);
-// DIAL_SECRET/PROJECT_ID/PATH are the runner ENVELOPE and must NEVER reach the sandbox.
-const CALLER_HEADER = "x-iterate-caller";
-const APP_HEADER = "x-iterate-app";
-// `x-iterate-cp-origin` (trusted, rides into the sandbox) is read by the config worker for the login URL.
-const DIAL_SECRET_HEADER = "x-iterate-dial-secret";
-const PROJECT_ID_HEADER = "x-iterate-project-id";
-const PATH_HEADER = "x-iterate-path";
 // Envelope + credential headers stripped before the confined config worker sees the request. The dial
 // secret especially: leaking it to untrusted project code would let it impersonate the control plane.
 const STRIP_INTO_SANDBOX = [
@@ -38,15 +37,6 @@ const STRIP_INTO_SANDBOX = [
   "cookie",
   "authorization",
 ];
-
-/** The stamped caller the control plane put on the request (unforgeable by the browser). Mirrors
- *  control-plane/src/ingress.ts StampedCaller — keep the two in sync. */
-interface StampedCaller {
-  actor: string;
-  email: string;
-  member: boolean;
-  role: string | null;
-}
 
 // A stable hash of the config-worker source => the loader cache key changes when the source changes.
 function hashSource(s: string): string {
