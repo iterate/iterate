@@ -511,3 +511,40 @@ alternation — provider noise, not plumbing.
 The `keepalive` contract event died the same hour it was born, as intended:
 a contract should never need to say "I am still here" — the platform can see
 a working facet from the alarm desire it already maintains.
+
+## Postscript 7: the soak — long conversations, long answers, interjections
+
+`ptt-marginal --mixed` cycles the shapes a real conversation is made of:
+short turns, prompts that provoke 27–37 second answers, mid-answer
+interjections, and quiet gaps of 8 s and 30 s that cross the old teardown
+boundary — stream and direct alternating per scenario kind so parity is
+judged like for like. Twenty-four rounds on a fresh stream (one conversation,
+25 presses, ~25 minutes), twelve on the ex-bad host.
+
+Fresh stream, all 24 rounds answered, zero faults:
+
+| scenario  | stream p50 | direct p50 |   marginal |
+| --------- | ---------: | ---------: | ---------: |
+| short     |    1113 ms |    1135 ms | **−22 ms** |
+| long      |    1262 ms |    1331 ms | **−69 ms** |
+| interject |    1462 ms |    1511 ms | **−49 ms** |
+
+- **Ours: p50 75 ms, p90 194 ms** — floor 50 ms. Uplink ~230 ms AHEAD of the
+  microphone every round.
+- **No degradation over the call:** ours p50 75 ms in the first half,
+  78 ms in the second.
+- **Interjections:** the old answer shuts up in **93 ms p50 (max 95)** —
+  the clear frame reaching the listener — and the interjection's answer
+  arrives in ~1.0–1.2 s.
+- **Long answers:** 27–37 s of audio per answer, delivered end to end with a
+  worst mid-answer gap of p50 271 ms / max 1233 ms against the four-second
+  head start — an audible stutter is arithmetically impossible.
+
+The ex-bad host ran eleven rounds at the same figures (ours 78–222 ms, barge
+clears 110–122 ms) before this LAPTOP's network blipped: one round read
+29.5 s — and its direct twin stalled 1.6 s in the same instant, convicting
+the shared client network, not either path — after which the probe hung on
+its next append and was killed. Two probe findings, both client-side: the
+awaited final append has no timeout (a dead itx socket hangs the probe
+forever), and one answer adjacent to the blip delivered fully but its
+end-of-answer marker was never seen. Neither touches the platform verdict.

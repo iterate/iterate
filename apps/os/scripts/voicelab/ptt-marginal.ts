@@ -60,6 +60,17 @@ export interface PttMarginalOptions extends VoicelabConnectOptions {
   grokBaseUrl?: string;
   model?: string;
   /**
+   * MIXED SOAK: cycle short turns, very long answers, mid-answer
+   * interjections, and quiet gaps that cross the idle-teardown boundary —
+   * the conversation shapes a real call is made of, not just the easy one.
+   * Needs --wav-dir holding short.wav, long.wav and barge.wav.
+   */
+  mixed?: boolean;
+  /** Directory with the scenario utterances (PCM16 mono 16 kHz WAVs). */
+  wavDir?: string;
+  /** How far into an answer the interjection presses (ms). */
+  bargeDelayMs?: number;
+  /**
    * Also measure the bare append round trip, before each press.
    *
    * OFF BY DEFAULT BECAUSE IT IS NOT FREE. The only event v2 consumes that
@@ -74,6 +85,24 @@ export interface PttMarginalOptions extends VoicelabConnectOptions {
 }
 
 const FRAME_MS = 20;
+
+/** One scenario in the mixed soak. */
+type RoundKind = "short" | "long" | "barge";
+
+/**
+ * The mixed cycle: the shapes a real conversation is made of. The 8s and 30s
+ * gaps deliberately cross the old five-second idle-teardown boundary, and the
+ * long prompt asks for an answer measured in tens of seconds so the downlink
+ * is judged under sustained egress rather than a two-second reply.
+ */
+const MIXED_CYCLE: { kind: RoundKind; preGapMs: number }[] = [
+  { kind: "short", preGapMs: 0 },
+  { kind: "long", preGapMs: 0 },
+  { kind: "barge", preGapMs: 0 },
+  { kind: "short", preGapMs: 8_000 },
+  { kind: "long", preGapMs: 2_000 },
+  { kind: "short", preGapMs: 30_000 },
+];
 /** 20 ms of 16 kHz PCM16 = 320 samples = 640 bytes. */
 const FRAME_SAMPLES = 320;
 /** Round-trip probes per round; the median of three beats any one. */
@@ -180,6 +209,24 @@ interface StreamTurn extends Turn {
   maxFrameGapMs: number | null;
   /** Where that gap fell. Near zero means the lane was asleep, not slow. */
   maxFrameGapAfterFrames: number | null;
+  /** Which scenario this round played. */
+  kind: RoundKind;
+  /**
+   * THE ANSWER'S DELIVERY HEALTH, judged where the listener sits. `pcmMs` is
+   * how much audio arrived, `wallMs` how long arriving took from first frame
+   * to the end-of-answer marker; a rate at or above one means delivery kept
+   * pace with playback for the WHOLE answer, however long. `maxAnswerGapMs`
+   * is the longest silence between two audio frames mid-answer — the
+   * would-be stutter (the head start the pacer grants absorbs gaps up to
+   * four seconds, so the number to fear is 4000, not 200).
+   */
+  answerPcmMs: number | null;
+  answerWallMs: number | null;
+  maxAnswerGapMs: number | null;
+  sawEndOfAnswer: boolean;
+  /** Interjection metrics; null on rounds that did not interject. */
+  bargeClearMs: number | null;
+  bargeAnswerMs: number | null;
   /**
    * RAW CROSS-CLOCK LAGS, useless alone and decisive together.
    *
@@ -272,6 +319,12 @@ export interface HeardFrame {
   fromGrokAudioDeltaSeq: number;
   /** False for a frame whose only job is a clear or an end-of-answer marker. */
   hasAudio: boolean;
+  /** The frame asks the device to drop everything queued first. */
+  clearsBuffer: boolean;
+  /** Nothing more is coming for this answer. */
+  lastOfAnswer: boolean;
+  /** Milliseconds of audio this frame carries. */
+  pcmMs: number;
 }
 
 /** A chunk of generated audio's identity on the wire: a call, and a delta in it. */
@@ -337,6 +390,26 @@ export async function pttMarginal(options: PttMarginalOptions) {
   const baseUrl = options.grokBaseUrl ?? "https://api.x.ai/v1/realtime";
   const model = options.model ?? "grok-voice-think-fast-2.0";
   const spoken = framesFromWav(options.micWav);
+  /* The scenario utterances. Everything falls back to the main one, so a
+   * plain run needs nothing new; --mixed without --wav-dir soaks with one
+   * voice, which still exercises every path, just monotonously. */
+  const wavFor = (name: string) => {
+    if (options.wavDir === undefined) return spoken;
+    const file = path.join(options.wavDir, name);
+    return fs.existsSync(file) ? framesFromWav(file) : spoken;
+  };
+  const framesByKind: Record<RoundKind, string[]> = {
+    short: spoken,
+    long: wavFor("long.wav"),
+    barge: spoken,
+  };
+  const bargeFrames = wavFor("barge.wav");
+  const bargeDelayMs = options.bargeDelayMs ?? 1_500;
+  const plans = Array.from({ length: rounds }, (_, index): { kind: RoundKind; preGapMs: number } =>
+    options.mixed === true
+      ? MIXED_CYCLE[index % MIXED_CYCLE.length]!
+      : { kind: "short", preGapMs: 0 },
+  );
   console.log(
     `  ${spoken.length} frames (${((spoken.length * FRAME_MS) / 1000).toFixed(1)}s) from ` +
       `${options.micWav}, ${rounds} rounds, alternating stream and direct\n`,
@@ -381,13 +454,23 @@ export async function pttMarginal(options: PttMarginalOptions) {
         delivered.set(event.type, (delivered.get(event.type) ?? 0) + 1);
         if (event.type === "events.iterate.com/voice-agent/spk-frame") {
           lastSpkAtDeviceMs = atDeviceMs;
+          const pcm = typeof payload.pcm === "string" ? payload.pcm : "";
           const frame: HeardFrame = {
             atDeviceMs,
             sentAtFacetMs:
               typeof payload.sentAtFacetMs === "number" ? payload.sentAtFacetMs : Number.NaN,
             conversationId: String(payload.conversationId ?? ""),
             fromGrokAudioDeltaSeq: Number(payload.fromGrokAudioDeltaSeq ?? 0),
-            hasAudio: typeof payload.pcm === "string" && payload.pcm !== "",
+            hasAudio: pcm !== "",
+            clearsBuffer: payload.clearSpeakerBufferBeforeFrame === true,
+            lastOfAnswer: payload.lastFrameOfAnswer === true,
+            /* base64 -> bytes -> ms of 16 kHz PCM16 (32 bytes/ms). */
+            pcmMs:
+              pcm === ""
+                ? 0
+                : (Math.floor(pcm.length / 4) * 3 -
+                    (pcm.endsWith("==") ? 2 : pcm.endsWith("=") ? 1 : 0)) /
+                  32,
           };
           spkAt.push(frame);
           if (frame.hasAudio) answersSeen.add(answerKey(frame));
@@ -491,25 +574,25 @@ export async function pttMarginal(options: PttMarginalOptions) {
    * the answer. Riding in the final batch makes the ordering a fact rather
    * than a hope, and costs a round trip less than sending it separately.
    */
-  async function speakToStream(pressedAtDeviceMs: number): Promise<number> {
-    for (let index = 0; index < spoken.length; index += batch) {
+  async function speakToStream(pressedAtDeviceMs: number, frames: string[]): Promise<number> {
+    for (let index = 0; index < frames.length; index += batch) {
       /* A batch cannot be sent before the audio in it has been captured. */
-      const due = pressedAtDeviceMs + Math.min(index + batch, spoken.length) * FRAME_MS;
+      const due = pressedAtDeviceMs + Math.min(index + batch, frames.length) * FRAME_MS;
       const wait = due - Date.now();
       if (wait > 0) await sleep(wait);
       const events = [];
-      for (let offset = 0; offset < batch && index + offset < spoken.length; offset++) {
+      for (let offset = 0; offset < batch && index + offset < frames.length; offset++) {
         events.push({
           type: "events.iterate.com/voice-agent/mic-frame" as const,
           ephemeral: true as const,
           payload: {
             deviceMicFrameSeq: index + offset,
-            pcm: spoken[index + offset]!,
+            pcm: frames[index + offset]!,
             capturedAtDeviceMs: pressedAtDeviceMs + (index + offset) * FRAME_MS,
           },
         });
       }
-      if (index + batch >= spoken.length) {
+      if (index + batch >= frames.length) {
         const releasedAtDeviceMs = Date.now();
         await discardRpcResult(
           stream.append(...events, {
@@ -525,11 +608,8 @@ export async function pttMarginal(options: PttMarginalOptions) {
     return Date.now();
   }
 
-  async function streamTurn(appendRttMs: number | null = null): Promise<StreamTurn> {
-    spkAt = [];
-    timing.length = 0;
-    faultThisTurn = false;
-    const answersBefore = new Set(answersSeen);
+  /** One press: ptt-start, the utterance paced to real time, ptt-end. */
+  async function press(frames: string[]): Promise<number> {
     const pressedAtDeviceMs = Date.now();
     await discardRpcResult(
       stream.append({
@@ -538,15 +618,33 @@ export async function pttMarginal(options: PttMarginalOptions) {
         payload: {},
       }),
     );
-    const releasedAtDeviceMs = await speakToStream(pressedAtDeviceMs);
+    return await speakToStream(pressedAtDeviceMs, frames);
+  }
 
+  /** Wait for the first frame that answers a press released at `releasedAt`. */
+  async function hearAnswer(
+    answersBefore: ReadonlySet<string>,
+    releasedAtDeviceMs: number,
+  ): Promise<HeardFrame | undefined> {
     const deadline = Date.now() + 30_000;
-    let heard: HeardFrame | undefined;
     while (Date.now() < deadline) {
-      heard = firstFrameOfNewAnswer(spkAt, answersBefore, releasedAtDeviceMs);
-      if (heard !== undefined) break;
+      const heard = firstFrameOfNewAnswer(spkAt, answersBefore, releasedAtDeviceMs);
+      if (heard !== undefined) return heard;
       await sleep(5);
     }
+    return undefined;
+  }
+
+  async function streamTurn(
+    kind: RoundKind = "short",
+    appendRttMs: number | null = null,
+  ): Promise<StreamTurn> {
+    spkAt = [];
+    timing.length = 0;
+    faultThisTurn = false;
+    const answersBefore = new Set(answersSeen);
+    const releasedAtDeviceMs = await press(framesByKind[kind]);
+    const heard = await hearAnswer(answersBefore, releasedAtDeviceMs);
     /*
      * THE ANSWER ARRIVING IS NOT THE REPORT ARRIVING. The facet appends
      * `turn-timing` just before the first frame of audio, but the two are
@@ -578,7 +676,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
           : Math.round(
               marks.endSeenAtFacetMs -
                 marks.firstMicFrameAtFacetMs -
-                (spoken.length - 1) * FRAME_MS,
+                (framesByKind[kind].length - 1) * FRAME_MS,
             ),
       micFramesSeen: marks?.micFrames ?? null,
       maxFrameGapMs: marks?.maxMicFrameGapMs ?? null,
@@ -586,16 +684,90 @@ export async function pttMarginal(options: PttMarginalOptions) {
     };
     if (heard === undefined) {
       return {
+        kind,
         totalMs: null,
         ourMs: null,
         appendRttMs,
         clean: !faultThisTurn,
         downlinkLagMs: null,
         uplinkLagMs: null,
+        answerPcmMs: null,
+        answerWallMs: null,
+        maxAnswerGapMs: null,
+        sawEndOfAnswer: false,
+        bargeClearMs: null,
+        bargeAnswerMs: null,
         ...facetSide,
       };
     }
     const totalMs = heard.atDeviceMs - releasedAtDeviceMs;
+
+    /*
+     * THE INTERJECTION, on rounds that make one: wait until the long answer
+     * is mid-flight, press again, and measure the two things a person feels —
+     * how fast the old answer SHUTS UP (the clear frame reaching this
+     * listener) and how fast the new one arrives. The clear rides a numbered
+     * frame, so hearing it here is the same fact the device acts on.
+     */
+    let bargeClearMs: number | null = null;
+    let bargeAnswerMs: number | null = null;
+    /** Where the answer whose delivery health we judge begins. */
+    let healthFromAtMs = heard.atDeviceMs;
+    if (kind === "barge") {
+      await sleep(bargeDelayMs);
+      const answersBeforeBarge = new Set(answersSeen);
+      const bargePressedAtMs = Date.now();
+      const bargeReleasedAtMs = await press(bargeFrames);
+      const clearDeadline = Date.now() + 10_000;
+      while (Date.now() < clearDeadline) {
+        const clear = spkAt.find(
+          (frame) => frame.clearsBuffer && frame.atDeviceMs >= bargePressedAtMs,
+        );
+        if (clear !== undefined) {
+          bargeClearMs = Math.round(clear.atDeviceMs - bargePressedAtMs);
+          break;
+        }
+        await sleep(5);
+      }
+      const bargeHeard = await hearAnswer(answersBeforeBarge, bargeReleasedAtMs);
+      if (bargeHeard !== undefined) {
+        bargeAnswerMs = Math.round(bargeHeard.atDeviceMs - bargeReleasedAtMs);
+        healthFromAtMs = bargeHeard.atDeviceMs;
+      }
+    }
+
+    /*
+     * HEAR THE ANSWER OUT. Long answers are the point of the soak, and the
+     * delivery health of second forty is worth as much as second one. Ends on
+     * the end-of-answer marker, or on the lane going quiet, or at a ceiling
+     * that only a wedge would reach.
+     */
+    const answerCeilingAtMs = Date.now() + (kind === "short" ? 45_000 : 150_000);
+    let sawEndOfAnswer = false;
+    while (Date.now() < answerCeilingAtMs) {
+      if (spkAt.some((frame) => frame.lastOfAnswer && frame.atDeviceMs >= healthFromAtMs)) {
+        sawEndOfAnswer = true;
+        break;
+      }
+      if (Date.now() - lastSpkAtDeviceMs > 2_500 && Date.now() > healthFromAtMs + 3_000) break;
+      await sleep(50);
+    }
+    const answerAudio = spkAt.filter(
+      (frame) => frame.hasAudio && frame.atDeviceMs >= healthFromAtMs,
+    );
+    let maxAnswerGapMs = 0;
+    for (let index = 1; index < answerAudio.length; index++) {
+      const gap = answerAudio[index]!.atDeviceMs - answerAudio[index - 1]!.atDeviceMs;
+      if (gap > maxAnswerGapMs) maxAnswerGapMs = gap;
+    }
+    const answerPcmMs =
+      answerAudio.length === 0
+        ? null
+        : Math.round(answerAudio.reduce((sum, frame) => sum + frame.pcmMs, 0));
+    const answerWallMs =
+      answerAudio.length < 2
+        ? null
+        : Math.round(answerAudio.at(-1)!.atDeviceMs - answerAudio[0]!.atDeviceMs);
     const downlinkLagMs = Number.isNaN(heard.sentAtFacetMs)
       ? null
       : Math.round(heard.atDeviceMs - heard.sentAtFacetMs);
@@ -606,27 +778,35 @@ export async function pttMarginal(options: PttMarginalOptions) {
         ? null
         : facetSide.providerRttMs + facetSide.providerThinkMs;
     return {
+      kind,
       totalMs,
       ourMs: provider === null ? null : totalMs - provider,
       appendRttMs,
       clean: !faultThisTurn,
       downlinkLagMs,
       uplinkLagMs,
+      answerPcmMs,
+      answerWallMs,
+      maxAnswerGapMs: answerAudio.length < 2 ? null : Math.round(maxAnswerGapMs),
+      sawEndOfAnswer,
+      bargeClearMs,
+      bargeAnswerMs,
       ...facetSide,
     };
   }
 
   async function directTurn(
     session: Awaited<ReturnType<typeof dialProvider>>,
+    frames: string[] = spoken,
   ): Promise<DirectTurn> {
     const pressedAtDeviceMs = Date.now();
     /* Paced exactly as the stream half paces it, so both put audio on the wire
      * at the same rate rather than one of them dumping it in a burst. */
-    for (let index = 0; index < spoken.length; index++) {
+    for (let index = 0; index < frames.length; index++) {
       const due = pressedAtDeviceMs + index * FRAME_MS;
       const wait = due - Date.now();
       if (wait > 0) await sleep(wait);
-      session.send({ type: "input_audio_buffer.append", audio: spoken[index]! });
+      session.send({ type: "input_audio_buffer.append", audio: frames[index]! });
     }
     const releasedAtDeviceMs = Date.now();
     session.send({ type: "input_audio_buffer.commit" });
@@ -674,17 +854,26 @@ export async function pttMarginal(options: PttMarginalOptions) {
     await settle();
 
     for (let round = 0; round < rounds; round++) {
-      const viaStream = await streamTurn(await probeAppendRtt());
+      const plan = plans[round]!;
+      if (plan.preGapMs > 0) await sleep(plan.preGapMs);
+      const viaStream = await streamTurn(plan.kind, await probeAppendRtt());
       streamTurns.push(viaStream);
       await settle();
 
-      const viaDirect = await directTurn(direct);
+      /* The interjection has no direct twin; its direct half speaks the same
+       * LONG prompt, so the long-answer parity still gets a sample. */
+      const viaDirect = await directTurn(
+        direct,
+        framesByKind[plan.kind === "barge" ? "long" : plan.kind],
+      );
       directTurns.push(viaDirect);
 
       const show = (value: number | null, unit = "ms") =>
         value === null ? "     -" : `${String(value).padStart(4)}${unit}`;
       console.log(
-        `  round ${String(round + 1).padStart(2)}  ` +
+        `  round ${String(round + 1).padStart(2)} ${plan.kind.padEnd(5)} ` +
+          `${viaStream.bargeClearMs === null ? "" : `[clear ${viaStream.bargeClearMs}ms answer ${String(viaStream.bargeAnswerMs ?? "-")}ms] `}` +
+          `${viaStream.answerPcmMs === null ? "" : `[ans ${(viaStream.answerPcmMs / 1000).toFixed(1)}s gap ${String(viaStream.maxAnswerGapMs ?? "-")}ms${viaStream.sawEndOfAnswer ? "" : " NOEND"}] `}` +
           `stream ${show(viaStream.totalMs)} = ours ${show(viaStream.ourMs)} + ` +
           `xai-rtt ${show(viaStream.providerRttMs)} + think ${show(viaStream.providerThinkMs)} ` +
           `(facet ${show(viaStream.facetMs)}) ` +
@@ -710,6 +899,30 @@ export async function pttMarginal(options: PttMarginalOptions) {
   }
 
   const cleanStream = streamTurns.filter((turn) => turn.clean);
+  /** Stream/direct pairs by round, so parity is judged per scenario kind. */
+  const pairsByKind = new Map<RoundKind, { stream: number[]; direct: number[] }>();
+  streamTurns.forEach((turn, index) => {
+    const bucket = pairsByKind.get(turn.kind) ?? { stream: [], direct: [] };
+    if (turn.totalMs !== null) bucket.stream.push(turn.totalMs);
+    const twin = directTurns[index]?.totalMs;
+    if (twin !== null && twin !== undefined) bucket.direct.push(twin);
+    pairsByKind.set(turn.kind, bucket);
+  });
+  const half = Math.floor(streamTurns.length / 2);
+  const ourHalves = {
+    firstHalf: summarize(
+      streamTurns
+        .slice(0, half)
+        .map((t) => t.ourMs)
+        .filter((v): v is number => v !== null),
+    ),
+    secondHalf: summarize(
+      streamTurns
+        .slice(half)
+        .map((t) => t.ourMs)
+        .filter((v): v is number => v !== null),
+    ),
+  };
   const streamTotals = cleanStream.map((t) => t.totalMs).filter((v): v is number => v !== null);
   const directTotals = directTurns.map((t) => t.totalMs).filter((v): v is number => v !== null);
   const streamP50 = median(streamTotals);
@@ -806,6 +1019,36 @@ export async function pttMarginal(options: PttMarginalOptions) {
      */
     callsStarted: delivered.get("events.iterate.com/voice-agent/call-started") ?? 0,
     callsEnded: delivered.get("events.iterate.com/voice-agent/conversation-ended") ?? 0,
+    /** Per-scenario parity: the soak's whole point. */
+    perKind: Object.fromEntries(
+      [...pairsByKind].map(([kind, bucket]) => [
+        kind,
+        {
+          stream: summarize(bucket.stream),
+          direct: summarize(bucket.direct),
+          marginalMs:
+            median(bucket.stream) === null || median(bucket.direct) === null
+              ? null
+              : median(bucket.stream)! - median(bucket.direct)!,
+        },
+      ]),
+    ),
+    /** Degradation check: a long call's second half against its first. */
+    ourHalves,
+    /** Interjections: old answer shut up, new answer arrived. */
+    bargeClearMs: summarize(
+      cleanStream.map((t) => t.bargeClearMs).filter((v): v is number => v !== null),
+    ),
+    bargeAnswerMs: summarize(
+      cleanStream.map((t) => t.bargeAnswerMs).filter((v): v is number => v !== null),
+    ),
+    /** The would-be stutter: worst mid-answer delivery gap, across all answers. */
+    maxAnswerGapMs: summarize(
+      cleanStream.map((t) => t.maxAnswerGapMs).filter((v): v is number => v !== null),
+    ),
+    answersWithoutEndMarker: cleanStream.filter((t) => t.totalMs !== null && !t.sawEndOfAnswer)
+      .length,
+    plans,
     streamTurns,
     directTurns,
   };
@@ -849,6 +1092,26 @@ export async function pttMarginal(options: PttMarginalOptions) {
   line("  append to DO only", report.appendRttMs);
   if (report.marginalMs !== null) {
     console.log(`\n  MARGINAL OVERHEAD  ${report.marginalMs > 0 ? "+" : ""}${report.marginalMs}ms`);
+  }
+  for (const [kind, parity] of Object.entries(report.perKind)) {
+    console.log(
+      `    ${kind.padEnd(6)} stream p50 ${String(parity.stream?.p50 ?? "-").padStart(5)}ms  ` +
+        `direct p50 ${String(parity.direct?.p50 ?? "-").padStart(5)}ms  ` +
+        `marginal ${parity.marginalMs === null ? "-" : `${parity.marginalMs > 0 ? "+" : ""}${parity.marginalMs}ms`}  ` +
+        `(n=${parity.stream?.n ?? 0}/${parity.direct?.n ?? 0})`,
+    );
+  }
+  if (report.ourHalves.firstHalf !== null && report.ourHalves.secondHalf !== null) {
+    console.log(
+      `  DEGRADATION  ours p50 first half ${report.ourHalves.firstHalf.p50}ms -> ` +
+        `second half ${report.ourHalves.secondHalf.p50}ms`,
+    );
+  }
+  line("interject: shut up in", report.bargeClearMs);
+  line("interject: answer in", report.bargeAnswerMs);
+  line("worst mid-answer gap", report.maxAnswerGapMs);
+  if (report.answersWithoutEndMarker > 0) {
+    console.log(`  ANSWERS MISSING END MARKER  ${report.answersWithoutEndMarker}`);
   }
   /*
    * A COUNT OF ZERO IS NOT A COUNT OF RE-DIALS, and this line used to say it

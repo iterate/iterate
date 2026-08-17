@@ -33,6 +33,9 @@ const frame = (
   conversationId,
   fromGrokAudioDeltaSeq,
   hasAudio,
+  clearsBuffer: !hasAudio,
+  lastOfAnswer: false,
+  pcmMs: hasAudio ? 20 : 0,
 });
 
 /** What the probe knew before the button went down. */
