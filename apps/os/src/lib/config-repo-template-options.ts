@@ -3,9 +3,8 @@ import { CONFIG_REPO_TEMPLATE_CATALOG } from "../domains/repos/config-repo-templ
 import { formatConfigRepoTemplateReference } from "./config-repo-template-reference.ts";
 
 export type ConfigRepoTemplateOption = {
-  id: string;
   label: string;
-  reference?: string;
+  reference: string;
 };
 
 /**
@@ -17,19 +16,14 @@ export type ConfigRepoTemplateOption = {
 export function configRepoTemplateOptionsForDeployment(
   sourceRef?: string,
 ): ConfigRepoTemplateOption[] {
-  return CONFIG_REPO_TEMPLATE_CATALOG.map(({ id, label, path }) => ({
-    id,
+  return CONFIG_REPO_TEMPLATE_CATALOG.map(({ label, path }) => ({
     label,
-    ...(id === "default"
-      ? {}
-      : {
-          reference: formatConfigRepoTemplateReference({
-            owner: "iterate",
-            repo: "iterate",
-            path,
-            ...(sourceRef && { ref: sourceRef }),
-          }),
-        }),
+    reference: formatConfigRepoTemplateReference({
+      owner: "iterate",
+      repo: "iterate",
+      path,
+      ...(sourceRef && { ref: sourceRef }),
+    }),
   }));
 }
 

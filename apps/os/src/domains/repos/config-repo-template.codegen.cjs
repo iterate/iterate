@@ -82,7 +82,7 @@ exports.projectRepoTemplateCatalog = ({ meta }) => {
     "export const CONFIG_REPO_TEMPLATE_CATALOG = [",
     ...templateIds.map((id) => {
       const label = id.charAt(0).toUpperCase() + id.slice(1).replaceAll("-", " ");
-      return `  { id: ${JSON.stringify(id)}, label: ${JSON.stringify(label)}, path: ${JSON.stringify(`configs/${id}`)} },`;
+      return `  { label: ${JSON.stringify(label)}, path: ${JSON.stringify(`configs/${id}`)} },`;
     }),
     "] as const;",
   ].join("\n");
