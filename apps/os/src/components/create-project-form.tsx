@@ -23,7 +23,6 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
 import { connectIterateSession, reconnectIterateSession } from "iterate/sdk/itx/react";
 import { parseConfigRepoTemplateReference } from "~/lib/config-repo-template-reference.ts";
-import type { ConfigRepoTemplateOption } from "~/lib/config-repo-template-options.ts";
 import { projectsListQueryKey } from "~/lib/projects-query.ts";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -55,7 +54,7 @@ export function CreateProjectForm({
   configRepoTemplates,
   onPendingChange,
 }: {
-  configRepoTemplates: ConfigRepoTemplateOption[];
+  configRepoTemplates: Array<{ label: string; reference: string }>;
   /** Fired when create submit starts/ends so a host sheet can block dismiss. */
   onPendingChange?: (pending: boolean) => void;
 }) {

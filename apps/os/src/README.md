@@ -245,10 +245,8 @@ The seeded worker's literal switch exposes `project/created`,
 whatever calls belong to that lifecycle event. There is no reconciliation
 framework or shared hook. `project/create-requested` remains platform-only
 because it precedes the userspace feed. The default template uses
-`project/created` to create and start its onboarding agent and records its own
-short-lived navigation request. Generic copied client-capability facts let
-that userspace code drive an OS browser that mounts just after creation;
-templates can change or omit the entire behavior.
+`project/created` to create and start its onboarding agent and to navigate
+connected OS browser clients; templates can change or omit that behavior.
 
 The seeded `project/worker-updated` case calls `scheduler.set(...)` for one
 15-minute heartbeat whose script appends

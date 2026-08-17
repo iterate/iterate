@@ -32,18 +32,6 @@ const TreeResponse = z.object({
 
 type GithubFetch = (url: string, init: RequestInit) => Promise<Response>;
 
-/** The exact first-party namespace that may use the deployment GitHub App.
- * Keeping this predicate narrow prevents a user-supplied template reference
- * from turning platform credentials into access to another repository. */
-export function isIterateConfigTemplate(reference: ConfigRepoTemplateReference): boolean {
-  return (
-    reference.owner === "iterate" &&
-    reference.repo === "iterate" &&
-    reference.path !== undefined &&
-    /^configs\/[^/]+$/.test(reference.path)
-  );
-}
-
 /**
  * Copy a public GitHub repository folder into the same text-file structure as
  * the generated default config template. GitHub is used only to enumerate and
@@ -51,22 +39,19 @@ export function isIterateConfigTemplate(reference: ConfigRepoTemplateReference):
  */
 export async function downloadPublicGithubTemplate(
   reference: ConfigRepoTemplateReference,
-  options: { accessToken?: string; githubFetch?: GithubFetch } = {},
+  githubFetch: GithubFetch = globalThis.fetch,
 ): Promise<Array<{ content: string; path: string }>> {
-  const githubFetch = options.githubFetch ?? globalThis.fetch;
   const repository = `${encodeURIComponent(reference.owner)}/${encodeURIComponent(reference.repo)}`;
   const requestedRef = encodeURIComponent(reference.ref ?? "HEAD");
   const commit = await fetchGithubJson(
     githubFetch,
     `https://api.github.com/repos/${repository}/commits/${requestedRef}`,
     CommitResponse,
-    options.accessToken,
   );
   const tree = await fetchGithubJson(
     githubFetch,
     `https://api.github.com/repos/${repository}/git/trees/${commit.commit.tree.sha}?recursive=1`,
     TreeResponse,
-    options.accessToken,
   );
 
   if (tree.truncated) {
@@ -143,18 +128,11 @@ export async function downloadPublicGithubTemplate(
       ...(await Promise.all(
         files.slice(index, index + DOWNLOAD_CONCURRENCY).map(async (file) => {
           const rawPath = file.sourcePath.split("/").map(encodeURIComponent).join("/");
-          const url =
-            options.accessToken === undefined
-              ? `https://raw.githubusercontent.com/${repository}/${commit.sha}/${rawPath}`
-              : `https://api.github.com/repos/${repository}/contents/${rawPath}?ref=${commit.sha}`;
-          const bytes = await fetchGithub(githubFetch, url, MAX_FILE_BYTES, {
-            ...(options.accessToken === undefined
-              ? {}
-              : {
-                  accessToken: options.accessToken,
-                  accept: "application/vnd.github.raw+json",
-                }),
-          });
+          const bytes = await fetchGithub(
+            githubFetch,
+            `https://raw.githubusercontent.com/${repository}/${commit.sha}/${rawPath}`,
+            MAX_FILE_BYTES,
+          );
           downloadedBytes += bytes.byteLength;
           if (downloadedBytes > MAX_TEMPLATE_BYTES) {
             throw new Error(`The selected config template exceeds ${MAX_TEMPLATE_BYTES} bytes.`);
@@ -180,11 +158,8 @@ async function fetchGithubJson<T>(
   githubFetch: GithubFetch,
   url: string,
   schema: z.ZodType<T>,
-  accessToken?: string,
 ): Promise<T> {
-  const responseBytes = await fetchGithub(githubFetch, url, MAX_GITHUB_API_RESPONSE_BYTES, {
-    ...(accessToken === undefined ? {} : { accessToken }),
-  });
+  const responseBytes = await fetchGithub(githubFetch, url, MAX_GITHUB_API_RESPONSE_BYTES);
   const responseText = new TextDecoder().decode(responseBytes);
   let body: unknown;
   try {
@@ -205,20 +180,15 @@ async function fetchGithub(
   githubFetch: GithubFetch,
   url: string,
   maximumBytes: number,
-  options: { accept?: string; accessToken?: string } = {},
 ): Promise<Uint8Array> {
   let response: Response;
   try {
-    const headers = new Headers({
-      Accept: options.accept ?? "application/vnd.github+json",
-      "User-Agent": "iterate-os",
-      "X-GitHub-Api-Version": "2022-11-28",
-    });
-    if (options.accessToken !== undefined) {
-      headers.set("Authorization", `Bearer ${options.accessToken}`);
-    }
     response = await githubFetch(url, {
-      headers,
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "iterate-os",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (error) {

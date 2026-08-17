@@ -2,8 +2,8 @@
 
 Each child directory is a complete project config repository:
 
-- `default/` is embedded into the OS worker at build time and remains the
-  project-creation default.
+- `default/` is the first picker choice. It is also embedded into the OS worker
+  as the fallback for API callers that omit a template reference.
 - `with-voice/` is a small alternate template used to prove public GitHub
   template creation end to end.
 - `codemode-tag/` is the `<codemode status="...">` response-format
@@ -16,8 +16,8 @@ them against the current workspace packages.
 
 The OS project-creation form catalogs every direct child of `configs/` through
 Oxlint codegen. Adding a template directory therefore adds it to the same PR's
-preview dropdown, where non-default templates are pinned to that preview's
-exact GitHub commit before they are copied.
+preview dropdown. Every choice uses its actual GitHub reference, pinned to the
+preview's exact commit before it is copied.
 
 Project creation accepts pnpm-style public GitHub references:
 
@@ -34,9 +34,7 @@ repository.
 
 Onboarding is a template choice, not an OS feature. A template opts in by
 handling the root `project/created` event in `worker.ts`. It can create any
-agent shape, append template-local instructions, and use `itx.clients` plus
-generic copied client-capability facts to open that agent even when the new
-route mounts just after project creation. `default` and `with-voice`
-demonstrate the pattern with different `ONBOARDING.md` prompts; a template
-without those cases, such as `codemode-tag`, has no onboarding agent or
-redirect.
+agent shape, append template-local instructions, and use `itx.clients` to open
+that agent on connected browser clients. `default` and `with-voice` demonstrate
+the pattern with different `ONBOARDING.md` prompts; a template without that
+event case, such as `codemode-tag`, has no onboarding agent or redirect.

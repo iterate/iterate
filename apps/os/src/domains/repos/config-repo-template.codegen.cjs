@@ -64,25 +64,25 @@ exports.projectRepoTemplateFiles = ({ meta }) => {
  */
 exports.projectRepoTemplateCatalog = ({ meta }) => {
   const configsDir = path.resolve(path.dirname(meta.filename), "../../../../../configs");
-  const templateIds = fs
+  const templateNames = fs
     .readdirSync(configsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
     .map((entry) => entry.name)
     .sort();
-  const invalidId = templateIds.find((id) => !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id));
-  if (invalidId !== undefined) {
-    throw new Error(`config template directory must be lowercase kebab-case: ${invalidId}`);
+  const invalidName = templateNames.find((name) => !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name));
+  if (invalidName !== undefined) {
+    throw new Error(`config template directory must be lowercase kebab-case: ${invalidName}`);
   }
-  const defaultIndex = templateIds.indexOf("default");
+  const defaultIndex = templateNames.indexOf("default");
   if (defaultIndex === -1) throw new Error("configs/default is missing");
-  templateIds.splice(defaultIndex, 1);
-  templateIds.unshift("default");
+  templateNames.splice(defaultIndex, 1);
+  templateNames.unshift("default");
 
   return [
     "export const CONFIG_REPO_TEMPLATE_CATALOG = [",
-    ...templateIds.map((id) => {
-      const label = id.charAt(0).toUpperCase() + id.slice(1).replaceAll("-", " ");
-      return `  { label: ${JSON.stringify(label)}, path: ${JSON.stringify(`configs/${id}`)} },`;
+    ...templateNames.map((name) => {
+      const label = name.charAt(0).toUpperCase() + name.slice(1).replaceAll("-", " ");
+      return `  { label: ${JSON.stringify(label)}, path: ${JSON.stringify(`configs/${name}`)} },`;
     }),
     "] as const;",
   ].join("\n");

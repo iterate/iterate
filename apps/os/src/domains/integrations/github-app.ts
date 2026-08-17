@@ -1,23 +1,14 @@
-// GitHub App installation-token minting for trusted first-party Durable Object
-// code: the Secret DO's refresh strategy, the Repo DO's GitHub mirror push,
-// and first-party config-template downloads. The App private key comes from
-// deployment config and never reaches a caller.
+// GitHub App installation-token minting, shared by the two trusted callers:
+// the Secret DO's `github-app-installation` refresh strategy (Octokit's REST
+// transport) and the Repo DO's GitHub mirror push (git-over-HTTPS, where
+// isomorphic-git needs the token as a Basic password and no placeholder
+// substitution is possible). Both run in first-party Durable Object code; the
+// App private key comes from deployment config and never reaches a caller.
 
-import { z } from "zod";
 import { computeSignatureBase64Url } from "../secrets/utils.ts";
 import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
 import type { PlatformCredsRef } from "../secrets/types.ts";
 import { lookupConnectionClaim } from "./integration-streams.ts";
-
-const GithubRepositoryInstallation = z.object({
-  id: z.number().int().positive(),
-});
-
-const GithubInstallationAccessToken = z.object({
-  token: z.string().trim().min(1),
-});
-
-type GithubAppFetcher = (request: Request) => Promise<Response>;
 
 /**
  * Platform App authority follows the deployment-wide integration claim. A
@@ -52,83 +43,7 @@ function base64UrlOfJson(value: unknown): string {
 export async function mintGithubInstallationToken(input: {
   apiBase: string;
   appId: string;
-  fetcher?: GithubAppFetcher;
   installationId: string;
-  privateKeyPem: string;
-}): Promise<string> {
-  const appJwt = await createGithubAppJwt(input);
-  const response = await fetchWithCredentialRedirects(
-    new Request(
-      `${input.apiBase.replace(/\/$/, "")}/app/installations/${input.installationId}/access_tokens`,
-      {
-        method: "POST",
-        headers: {
-          accept: "application/vnd.github+json",
-          authorization: `Bearer ${appJwt}`,
-          "user-agent": "iterate-os",
-        },
-      },
-    ),
-    input.fetcher === undefined ? {} : { fetcher: input.fetcher },
-  );
-  if (!response.ok) {
-    throw new Error(`github installation token mint failed: HTTP ${response.status}`);
-  }
-  const parsed = GithubInstallationAccessToken.safeParse(await response.json());
-  if (!parsed.success) {
-    throw new Error("github installation token mint returned an invalid response", {
-      cause: parsed.error,
-    });
-  }
-  return parsed.data.token;
-}
-
-/** Resolve the App installation that owns one repository, then mint a
- * short-lived token for it. This is for platform-owned repositories where the
- * installation is deployment authority, not a user/project connection claim. */
-export async function mintGithubRepositoryInstallationToken(input: {
-  apiBase: string;
-  appId: string;
-  fetcher?: GithubAppFetcher;
-  owner: string;
-  privateKeyPem: string;
-  repo: string;
-}): Promise<string> {
-  const apiBase = input.apiBase.replace(/\/$/, "");
-  const appJwt = await createGithubAppJwt(input);
-  const repository = `${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}`;
-  const response = await fetchWithCredentialRedirects(
-    new Request(`${apiBase}/repos/${repository}/installation`, {
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${appJwt}`,
-        "user-agent": "iterate-os",
-      },
-    }),
-    input.fetcher === undefined ? {} : { fetcher: input.fetcher },
-  );
-  if (!response.ok) {
-    throw new Error(
-      `github repository installation lookup failed for ${input.owner}/${input.repo}: HTTP ${response.status}`,
-    );
-  }
-  const parsed = GithubRepositoryInstallation.safeParse(await response.json());
-  if (!parsed.success) {
-    throw new Error("github repository installation lookup returned an invalid response", {
-      cause: parsed.error,
-    });
-  }
-  return await mintGithubInstallationToken({
-    apiBase,
-    appId: input.appId,
-    ...(input.fetcher === undefined ? {} : { fetcher: input.fetcher }),
-    installationId: String(parsed.data.id),
-    privateKeyPem: input.privateKeyPem,
-  });
-}
-
-async function createGithubAppJwt(input: {
-  appId: string;
   privateKeyPem: string;
 }): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
@@ -141,5 +56,25 @@ async function createGithubAppJwt(input: {
     payload: signingInput,
     privateKeyPem: input.privateKeyPem,
   });
-  return `${signingInput}.${signature}`;
+  const response = await fetchWithCredentialRedirects(
+    new Request(
+      `${input.apiBase.replace(/\/$/, "")}/app/installations/${input.installationId}/access_tokens`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${signingInput}.${signature}`,
+          "user-agent": "iterate-os",
+        },
+      },
+    ),
+  );
+  if (!response.ok) {
+    throw new Error(`github installation token mint failed: HTTP ${response.status}`);
+  }
+  const data = (await response.json()) as { token?: string };
+  if (typeof data.token !== "string") {
+    throw new Error("github installation token mint returned no token");
+  }
+  return data.token;
 }

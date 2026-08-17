@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { downloadPublicGithubTemplate, isIterateConfigTemplate } from "./public-github-template.ts";
+import { downloadPublicGithubTemplate } from "./public-github-template.ts";
 import { RetryableRepoCreationError } from "./utils.ts";
 
 const COMMIT_SHA = "1".repeat(40);
@@ -50,7 +50,7 @@ describe("downloadPublicGithubTemplate", () => {
           ref: "feature/voice",
           repo: "iterate",
         },
-        { githubFetch },
+        githubFetch,
       ),
     ).resolves.toEqual([
       { content: "agents\n", path: "AGENTS.md" },
@@ -74,7 +74,7 @@ describe("downloadPublicGithubTemplate", () => {
     });
 
     await expect(
-      downloadPublicGithubTemplate({ owner: "iterate", repo: "config" }, { githubFetch }),
+      downloadPublicGithubTemplate({ owner: "iterate", repo: "config" }, githubFetch),
     ).resolves.toEqual([{ content: "worker", path: "worker.ts" }]);
   });
 
@@ -85,7 +85,7 @@ describe("downloadPublicGithubTemplate", () => {
       .mockResolvedValueOnce(jsonResponse({ tree: [], truncated: true }));
 
     await expect(
-      downloadPublicGithubTemplate({ owner: "iterate", repo: "huge" }, { githubFetch }),
+      downloadPublicGithubTemplate({ owner: "iterate", repo: "huge" }, githubFetch),
     ).rejects.toThrow("tree is too large");
   });
 
@@ -102,7 +102,7 @@ describe("downloadPublicGithubTemplate", () => {
       .mockResolvedValueOnce(new Response(new Uint8Array([0xff, 0xfe])));
 
     await expect(
-      downloadPublicGithubTemplate({ owner: "iterate", repo: "binary" }, { githubFetch }),
+      downloadPublicGithubTemplate({ owner: "iterate", repo: "binary" }, githubFetch),
     ).rejects.toThrow("is not UTF-8 text");
   });
 
@@ -111,7 +111,7 @@ describe("downloadPublicGithubTemplate", () => {
 
     const error = await downloadPublicGithubTemplate(
       { owner: "iterate", repo: "rate-limited" },
-      { githubFetch },
+      githubFetch,
     ).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(RetryableRepoCreationError);
@@ -130,7 +130,7 @@ describe("downloadPublicGithubTemplate", () => {
 
     const error = await downloadPublicGithubTemplate(
       { owner: "iterate", repo: "interrupted" },
-      { githubFetch },
+      githubFetch,
     ).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(RetryableRepoCreationError);
@@ -149,7 +149,7 @@ describe("downloadPublicGithubTemplate", () => {
       .mockResolvedValueOnce(new Response("worker"));
 
     await expect(
-      downloadPublicGithubTemplate({ owner: "iterate", repo: "config" }, { githubFetch }),
+      downloadPublicGithubTemplate({ owner: "iterate", repo: "config" }, githubFetch),
     ).resolves.toEqual([{ content: "worker", path: "worker.ts" }]);
   });
 
@@ -166,65 +166,8 @@ describe("downloadPublicGithubTemplate", () => {
       .mockResolvedValueOnce(new Response(new Uint8Array(2 * 1024 * 1024 + 1)));
 
     await expect(
-      downloadPublicGithubTemplate({ owner: "iterate", repo: "oversized" }, { githubFetch }),
+      downloadPublicGithubTemplate({ owner: "iterate", repo: "oversized" }, githubFetch),
     ).rejects.toThrow("more than 2097152 bytes");
-  });
-
-  it("uses authenticated GitHub API content reads when given an installation token", async () => {
-    const githubFetch = vi.fn(async (url: string, init: RequestInit) => {
-      const authorization = new Headers(init.headers).get("authorization");
-      expect(authorization).toBe("Bearer installation-token");
-      if (url.endsWith("/commits/HEAD")) {
-        return jsonResponse({ commit: { tree: { sha: TREE_SHA } }, sha: COMMIT_SHA });
-      }
-      if (url.includes(`/git/trees/${TREE_SHA}`)) {
-        return jsonResponse({
-          tree: [{ mode: "100644", path: "worker.ts", size: 6, type: "blob" }],
-          truncated: false,
-        });
-      }
-      expect(url).toBe(
-        `https://api.github.com/repos/iterate/config/contents/worker.ts?ref=${COMMIT_SHA}`,
-      );
-      expect(new Headers(init.headers).get("accept")).toBe("application/vnd.github.raw+json");
-      return new Response("worker");
-    });
-
-    await expect(
-      downloadPublicGithubTemplate(
-        { owner: "iterate", repo: "config" },
-        { accessToken: "installation-token", githubFetch },
-      ),
-    ).resolves.toEqual([{ content: "worker", path: "worker.ts" }]);
-    expect(githubFetch).toHaveBeenCalledTimes(3);
-  });
-});
-
-describe("isIterateConfigTemplate", () => {
-  it("allows only direct templates in iterate/iterate's configs folder", () => {
-    expect(
-      isIterateConfigTemplate({
-        owner: "iterate",
-        path: "configs/with-voice",
-        repo: "iterate",
-      }),
-    ).toBe(true);
-    expect(
-      isIterateConfigTemplate({ owner: "customer", path: "configs/private", repo: "iterate" }),
-    ).toBe(false);
-    expect(
-      isIterateConfigTemplate({ owner: "iterate", path: "configs/private", repo: "customer" }),
-    ).toBe(false);
-    expect(
-      isIterateConfigTemplate({ owner: "iterate", path: "other/private", repo: "iterate" }),
-    ).toBe(false);
-    expect(
-      isIterateConfigTemplate({
-        owner: "iterate",
-        path: "configs/nested/private",
-        repo: "iterate",
-      }),
-    ).toBe(false);
   });
 });
 

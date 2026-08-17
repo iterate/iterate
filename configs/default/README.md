@@ -41,9 +41,7 @@ configuration-reconciliation framework around them.
   template uses it to create `/agents/onboarding`, install the template-local
   `ONBOARDING.md` prompt, trigger the agent's first turn, and navigate each
   connected `/clients/os-app/**` browser client that is still on the new
-  project's landing page to its chat. A five-minute userspace open request
-  also lets a generic `capability-provided` client fact fulfill that navigation
-  when the new route mounts just after this event.
+  project's landing page to its chat.
 
 `project/create-requested` remains platform-only: it precedes the userspace
 worker subscription. The terminal `project/created` certificate includes the
