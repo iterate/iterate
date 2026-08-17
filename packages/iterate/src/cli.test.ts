@@ -172,7 +172,7 @@ describe("verifyOsSession", () => {
 });
 
 describe("defaultBareInvocationToChat", () => {
-  test("runs chat for a bare invocation", () => {
+  test("runs generic chat for a bare invocation", () => {
     expect(defaultBareInvocationToChat([])).toEqual(["chat"]);
   });
 

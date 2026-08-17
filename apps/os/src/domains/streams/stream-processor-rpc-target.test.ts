@@ -395,7 +395,7 @@ describe("StreamRpcTarget", () => {
     const event = {
       createdAt: new Date(0).toISOString(),
       offset: 9,
-      path: "/agents/onboarding",
+      path: "/agents/demo",
       type: "events.iterate.com/test/recovered",
     } satisfies StreamEvent;
     let acquisitions = 0;
@@ -409,7 +409,7 @@ describe("StreamRpcTarget", () => {
     }
     const stream = new TestStreamRpcTarget({
       auth: { assertCanAccessProject: vi.fn() } as never,
-      path: "/agents/onboarding",
+      path: "/agents/demo",
       projectId: "prj_test",
     });
 

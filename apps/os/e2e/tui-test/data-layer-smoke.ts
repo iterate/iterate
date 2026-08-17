@@ -20,12 +20,12 @@ import {
   type ItxRecoverableConnectionHandle,
 } from "iterate/client";
 import { createAgentFeedModel } from "../../../../packages/iterate/src/stream-tui/agent-feed-model.ts";
+import { ensureAgentFeedReady } from "../../../../packages/iterate/src/stream-tui/agent-feed-query.ts";
 import { resolveItxAuth } from "../../../../packages/iterate/src/stream-tui/itx-auth.ts";
-import { ensureOnboardingAgentReady } from "../../src/lib/onboarding-agent.ts";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 
-const AGENT_PATH = "/agents/onboarding";
+const AGENT_PATH = "/agents/tui-smoke";
 const REPLY_TIMEOUT_MS = 120_000;
 const startedAt = Date.now();
 
@@ -60,10 +60,9 @@ const agent = itx.agents.get(AGENT_PATH);
 let subscription: ItxRecoverableConnectionHandle | undefined;
 
 try {
-  // Fresh project: birth the onboarding agent with the real birth batch when
-  // unborn — the same create-if-unborn the TUI's subscribeAgentFeed performs
-  // (births are deferred to first chat-open; they cost a real LLM turn).
-  await ensureOnboardingAgentReady({ agent });
+  // Fresh project: use the same generic create-if-unborn initialization as
+  // the TUI's finite history query.
+  await ensureAgentFeedReady(agent);
   subscription = await agent.stream.openConnection({
     processEventBatch: (batch) => {
       if (model.applyEvents(batch.events)) notifyChange();
@@ -73,15 +72,8 @@ try {
   });
   log("subscribed on the shared keeper socket");
 
-  // 1. Feed renders live: the onboarding bootstrap greets unprompted, so the
-  //    subscription must deliver events and the reducer must fold them —
-  //    including the greeting as a settled assistant item — before we type.
-  //    Sending earlier races the bootstrap trigger and the agent coalesces
-  //    both inputs into one greeting-only reply.
+  // 1. Feed renders the agent's durable creation events.
   await waitFor("first feed fold", 60_000, () => model.snapshot().lastOffset > 0);
-  await waitFor("onboarding greeting settles as an assistant item", REPLY_TIMEOUT_MS, () =>
-    model.snapshot().items.some((item) => item.kind === "assistant"),
-  );
 
   // 2. Send through the same door the TUI composer uses.
   const message = "Reply with exactly: pong";

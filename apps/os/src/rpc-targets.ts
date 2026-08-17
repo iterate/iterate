@@ -323,11 +323,9 @@ import {
   authenticateProjectRequest,
   handleProjectAuthFetch,
   parseProjectAuthPolicy,
-  projectAuthRequestFromRpc,
   type ProjectAuthActor,
   type ProjectAuthCredentials,
   type ProjectAuthPolicy,
-  type ProjectAuthRpcMetadata,
 } from "./auth/project-auth.ts";
 import {
   localProjectAppSessionValidator,
@@ -6151,30 +6149,29 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
    * unauthenticated Cap'n Web root uses this to construct its own session
    * RpcTarget; the browser never receives the project's itx.
    */
-  authenticate(request: Request, credentials: ProjectAuthCredentials): Promise<ProjectAuthActor>;
   async authenticate(
-    request: ProjectAuthRpcMetadata | Request,
+    request: Request,
     credentials: ProjectAuthCredentials,
   ): Promise<ProjectAuthActor> {
     return await authenticateProjectRequest({
       credentials,
       projectId: this.props.projectId,
-      request: projectAuthRequestFromRpc(request),
+      request,
       validateSession: projectAppSessionValidator(),
     });
   }
 
   /**
    * Own login, callback, logout, and the host-only cookie. Returns null only
-   * when this request belongs to a current project member. Like any partial
-   * fetch, a null result leaves the request body untouched for the app.
+   * when this request belongs to a current project member. Config workers
+   * should compose it through `IterateWorkerEntrypoint.fetchProjectAuth()`,
+   * which preserves the app request's body when auth returns null.
    */
-  fetch(request: Request): Promise<Response | null>;
-  async fetch(request: ProjectAuthRpcMetadata | Request): Promise<Response | null> {
+  async fetch(request: Request): Promise<Response | null> {
     return await handleProjectAuthFetch({
       osBaseUrl: parseConfig(env).baseUrl,
       projectId: this.props.projectId,
-      request: projectAuthRequestFromRpc(request),
+      request,
       validateSession: projectAppSessionValidator(),
     });
   }
@@ -6464,7 +6461,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           projectId: registered.projectId,
           payload: {
             config: {
-              onboardingActive: true,
               slug: registered.slug,
               ...(creatorEmail === undefined ? {} : { creatorEmail }),
               ...(configRepoTemplate === undefined ? {} : { configRepoTemplate }),

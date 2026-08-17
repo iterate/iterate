@@ -9,9 +9,7 @@ const userMessage = '[data-testid="agent-feed-message"][data-kind="user"]';
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
 
 test("agent replies to a browser chat message in the feed", async ({ helpers, page, baseURL }) => {
-  // One LLM turn plus UI paint. Onboarding birth and its automatic greeting
-  // are independently covered; repeating that turn made this routing proof
-  // the preview critical path.
+  // One LLM turn plus UI paint.
   test.setTimeout(240_000);
   await using fixture = await helpers.createFixture("agent-chat");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");

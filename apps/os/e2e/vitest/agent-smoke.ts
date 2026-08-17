@@ -1,20 +1,19 @@
 /**
- * Smoke: create a project as admin and watch the onboarding agent greet.
+ * Smoke: create a project as admin, create an agent, and receive one reply.
  * Runs manually and as an independent preview sub-lane alongside the other
  * isolated suites.
  *
- *   doppler run -- pnpm exec tsx e2e/vitest/onboarding-smoke.ts [baseUrl]
+ *   doppler run -- pnpm exec tsx e2e/vitest/agent-smoke.ts [baseUrl]
  *
- * Expected stream-incarnation rollover is recovered once inside each
- * idempotent startup/wait operation. Two whole attempts, a fresh project each,
- * remain for unexpected failures — an attempt IS this gate's "test", so per
+ * Two whole attempts, with a fresh project each, cover unexpected failures —
+ * an attempt IS this gate's "test", so per
  * the fleet retry policy (docs/testing.md#retries-and-timeouts) it gets exactly
  * one retry, same as every vitest/playwright test. It used to run
- * with none at all: a single 90s greeting tail took down the whole run, as
+ * with none at all: a single 90s reply tail took down the whole run, as
  * an uncaught remote rejection crashing the process no less
  * (docs/preview-e2e-flake-hunt.md run log, marathon6 run 26). A genuinely
  * broken slot still fails both attempts inside ~3.5 minutes, and a slow
- * greeting that needs attempt 2 is logged as retry telemetry rather than
+ * reply that needs attempt 2 is logged as retry telemetry rather than
  * silently absorbed — the 90s tail is a real product-latency signal.
  */
 import { fileURLToPath } from "node:url";
@@ -30,10 +29,6 @@ import {
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
 import { connectItx } from "iterate/node";
-import {
-  ensureOnboardingAgentReady,
-  waitForOnboardingGreeting,
-} from "../../src/lib/onboarding-agent.ts";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -46,7 +41,7 @@ if (!secret) throw new Error("need APP_CONFIG_ADMIN_API_SECRET (run under dopple
 
 type SmokePhase = { name: string; durationMs: number; category: string };
 
-async function attemptOnboardingSmoke(phases: SmokePhase[]): Promise<void> {
+async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
   const marker = Math.random().toString(36).slice(2, 8);
 
   // Edge readiness does not mean a freshly deployed Durable Object namespace
@@ -60,38 +55,32 @@ async function attemptOnboardingSmoke(phases: SmokePhase[]): Promise<void> {
   });
   const start = Date.now();
   using root = session.authenticate({ type: "admin-secret", secret: secret! });
-  using project = await root.projects.get(`onboarding-smoke-${marker}`).create({});
+  using project = await root.projects.get(`agent-smoke-${marker}`).create({});
   const description = await project.__describe();
   phases.push({ name: "create project", category: "fixture", durationMs: Date.now() - start });
   console.log(`project created in ${Date.now() - start}ms:`, description.projectId);
 
-  using agent = project.agents.get("/agents/onboarding");
-  // Match the dashboard's explicit onboarding flow: agent birth is generic,
-  // then this caller appends the onboarding prompt and startup input.
+  using agent = project.agents.get("/agents/smoke");
   const readyStartedAt = Date.now();
-  await ensureOnboardingAgentReady({ agent });
+  await agent.create();
   phases.push({
-    name: "ensure onboarding agent ready",
+    name: "create agent",
     category: "runtime",
     durationMs: Date.now() - readyStartedAt,
   });
-  const greetingStartedAt = Date.now();
-  const greeting = await waitForOnboardingGreeting({
-    stream: agent.stream,
+  const replyStartedAt = Date.now();
+  await agent.message("Reply with exactly: pong");
+  const reply = await agent.stream.waitForEvent({
+    eventTypes: ["events.iterate.com/agents/web-message-sent"],
     timeoutMs: 90_000,
-    onRetry: (error) => {
-      console.info("onboarding greeting stream rolled; re-arming from its durable cursor once", {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    },
   });
   phases.push({
-    name: "wait for onboarding greeting",
+    name: "wait for agent reply",
     category: "runtime",
-    durationMs: Date.now() - greetingStartedAt,
+    durationMs: Date.now() - replyStartedAt,
   });
-  console.log(`onboarding agent greeted in ${Date.now() - start}ms:`);
-  console.log(JSON.stringify(greeting.payload, null, 2));
+  console.log(`agent replied in ${Date.now() - start}ms:`);
+  console.log(JSON.stringify(reply.payload, null, 2));
 
   const events = await agent.stream.getEvents({});
   console.log(
@@ -107,18 +96,18 @@ const workspace =
   process.env.TEST_TELEMETRY_WORKSPACE ?? process.env.npm_package_name ?? "@iterate-com/os";
 const telemetryContext = testTelemetryContextFromEnvironment("script", {
   testKind: "e2e",
-  lane: "onboarding-smoke",
+  lane: "agent-smoke",
   workspace,
   app: "os",
 });
-const telemetryArtifactId = testTelemetryArtifactId("onboarding-smoke", process.pid, runStartedAt);
+const telemetryArtifactId = testTelemetryArtifactId("agent-smoke", process.pid, runStartedAt);
 const telemetryCi = ciTelemetrySourceFromEnvironment(
   process.env,
-  `local-onboarding-smoke-${process.pid}-${runStartedAt}`,
+  `local-agent-smoke-${process.pid}-${runStartedAt}`,
 );
 writeTestTelemetryFailureSentinel({
   artifactId: telemetryArtifactId,
-  producer: "onboarding-smoke",
+  producer: "agent-smoke",
   startedAt: new Date(runStartedAt).toISOString(),
   ci: telemetryCi,
   context: telemetryContext,
@@ -129,7 +118,7 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
   const attemptStartedAt = Date.now();
   const phases: SmokePhase[] = [];
   try {
-    await attemptOnboardingSmoke(phases);
+    await attemptAgentSmoke(phases);
     attempts.push({
       attemptIndex: attempt - 1,
       state: "passed",
@@ -140,7 +129,7 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     });
     if (attempt > 1) {
       console.log(
-        `[retry-telemetry] onboarding smoke passed on attempt ${attempt}/${ATTEMPTS} — ` +
+        `[retry-telemetry] agent smoke passed on attempt ${attempt}/${ATTEMPTS} — ` +
           `attempt 1's failure above is a real (absorbed) failure`,
       );
     }
@@ -155,7 +144,7 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     process.exit(0);
   } catch (error) {
     lastError = error;
-    const normalized = normalizeTestTelemetryError(error, "Unknown onboarding smoke error");
+    const normalized = normalizeTestTelemetryError(error, "Unknown agent smoke error");
     errors.push(normalized);
     attempts.push({
       attemptIndex: attempt - 1,
@@ -166,7 +155,7 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
       error: normalized,
       phases,
     });
-    console.error(`onboarding smoke attempt ${attempt}/${ATTEMPTS} failed:`, error);
+    console.error(`agent smoke attempt ${attempt}/${ATTEMPTS} failed:`, error);
   }
 }
 writeSmokeTelemetry({
@@ -177,7 +166,7 @@ writeSmokeTelemetry({
   retryCount: ATTEMPTS - 1,
   state: "failed",
 });
-console.error(`onboarding smoke failed after ${ATTEMPTS} attempts`);
+console.error(`agent smoke failed after ${ATTEMPTS} attempts`);
 console.error(lastError);
 process.exit(1);
 
@@ -192,7 +181,7 @@ function writeSmokeTelemetry(input: {
   const moduleId = fileURLToPath(import.meta.url);
   const finishedAtMs = Date.now();
   const test = {
-    fullName: "onboarding smoke > creates a project and receives the greeting",
+    fullName: "agent smoke > creates a project and receives an agent reply",
     moduleId,
     tags: [],
     annotations: [],
@@ -214,7 +203,7 @@ function writeSmokeTelemetry(input: {
   writeTestTelemetryArtifact({
     artifactSchemaVersion: 1,
     artifactId: telemetryArtifactId,
-    producer: "onboarding-smoke",
+    producer: "agent-smoke",
     createdAt: new Date(finishedAtMs).toISOString(),
     ci: telemetryCi,
     context: telemetryContext,

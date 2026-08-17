@@ -1,17 +1,28 @@
 import { expect } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
+import { spinnerWaiter } from "middlewright";
 import {
   signUpWithEmailOtp,
   startEmailOtpSignIn,
   uniqueSignupEmail,
 } from "./test-support/email-otp-signup.ts";
+import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
+
+const assistantMessage = '[data-testid="agent-feed-message"][data-kind="assistant"]';
+const userMessage = '[data-testid="agent-feed-message"][data-kind="user"]';
 
 // Deviation from the suite's forged-session fixture pattern: this spec uses a
 // freshly signed-up user, not a forged session. Creating a project mints new
 // auth claims, and only a real session can refresh its access token to pick
 // up the new project claim the post-create navigation authorizes with.
-test("a new user can create a project through the UI form", async ({ page }, testInfo) => {
+test("the config template opens a proactive onboarding conversation for a new project", async ({
+  baseURL,
+  page,
+}, testInfo) => {
+  // Two LLM turns plus two project-creation sagas and their UI transitions.
+  test.setTimeout(240_000);
+  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
   test.skip(
     !(await startEmailOtpSignIn(page, testInfo)),
     "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
@@ -23,34 +34,82 @@ test("a new user can create a project through the UI form", async ({ page }, tes
     testInfo,
   });
 
-  const slug = uniqueFixtureSlug("create-project");
-  // The spinner-waiter runs here like everywhere else — the /projects pending
-  // state and the agent page's loading state are honest loading UI, and
-  // middlewright's spinner check has been multi-element-safe since
-  // iterate/middlewright#3 (this spec used to sit the middleware out).
-  //
-  // Back on OS after auth first-run onboarding: a single project enters its
-  // creation flow, which hands off to the onboarding agent once ready. The
-  // composer is that route's structural chrome (renders on mount, no LLM
-  // output involved); 60s carried over from the waitForURL this replaced —
-  // cold-slot bootstrap + redirect straggle can outlast the spinner-waiter's 30s timeout ceiling.
-  await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
-  // The composer only renders under an agent-stream route, so the URL has
-  // settled — assert we landed on the FIRST project's onboarding agent.
-  expect(page.url()).toContain(`/projects/${firstSlug}/agents/streams/agents/onboarding`);
+  // The config worker receives project/created, creates the onboarding agent,
+  // and redirects the connected OS client. The composer is structural route
+  // chrome, so this does not wait for an LLM response. Manual timeout: the
+  // cold creation saga and redirect can outlast spinner-waiter's ceiling.
+  await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 }); // timeout: cold creation and redirect can outlast spinner-waiter's ceiling
+  expect(new URL(page.url())).toMatchObject({
+    pathname: `/projects/${firstSlug}/agents/streams/agents/onboarding`,
+  });
+  using admin = await connectAdminItx(baseURL);
+  using firstProject = admin.projects.get(firstSlug);
+  // Manual timeout: this ITX event poll has no browser loading UI for
+  // spinner-waiter to observe.
+  await expect
+    .poll(
+      async () => {
+        const event = await firstProject.agents.get("/agents/onboarding").stream.getEvent({
+          idempotencyKey: "iterate/config/onboarding-instructions:v1",
+        });
+        return event?.payload?.content;
+      },
+      { timeout: 60_000, intervals: [500] }, // timeout: ITX polling has no browser UI for spinner-waiter
+    )
+    .toContain("# Onboarding Agent");
 
+  const slug = uniqueFixtureSlug("create-project");
   // /new-project is the deep-linked create sheet (sidebar + projects list
   // both link here). Navigate directly so strict-mode locators don't have
   // to disambiguate multiple "Create project" controls.
   await page.goto("/new-project");
 
   await page.getByLabel("Slug").fill(slug);
-  // Create resolves after the atomic birth batch, then project home shows
-  // the bootstrap saga and hands off to onboarding once ready. The composer
-  // is that destination's structural chrome; 60s covers the cold birth +
-  // saga + handoff — past the spinner-waiter's 30s timeout ceiling.
+  // Create resolves after the atomic birth batch, then the userspace config
+  // worker handles project/created and drives this connected OS tab to its
+  // onboarding agent. Manual timeout: cold build + saga + redirect can
+  // outlast spinner-waiter's ceiling.
   await page.getByRole("button", { name: "Create project" }).click();
-  await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 }); // timeout: cold birth + saga + handoff outlast the spinner-waiter's 30s ceiling
-  // After the checklist completes, welcome handoff lands on onboarding.
-  expect(page.url()).toContain(`/projects/${slug}/agents/streams/agents/onboarding`);
+  await page.getByPlaceholder("Message this agent").waitFor({ timeout: 90_000 }); // timeout: cold build and userspace redirect can outlast spinner-waiter's ceiling
+  expect(new URL(page.url())).toMatchObject({
+    pathname: `/projects/${slug}/agents/streams/agents/onboarding`,
+  });
+
+  using createdProject = admin.projects.get(slug);
+  const onboardingAgent = createdProject.agents.get("/agents/onboarding");
+
+  // The userspace prompt starts the agent without waiting for the user. Route
+  // chrome can render before Thinking starts, leaving a push-only gap with no
+  // spinner, so use an explicit bound for the unsolicited first turn.
+  const assistantMessages = page.locator(assistantMessage);
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await assistantMessages.first().waitFor({ timeout: 120_000 }); // timeout: manual because the proactive turn can begin before spinner-waiter sees Thinking
+    await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 }); // timeout: manual because spinner-waiter is disabled for the proactive turn
+  });
+  const assistantMessagesBeforeReply = await assistantMessages.count();
+
+  const answer = "I want this project to help my small team plan and ship a product launch.";
+  await page.getByPlaceholder("Message this agent").fill(answer);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await page.locator(userMessage).getByText(answer).waitFor();
+
+  // The second settled assistant row proves the onboarding agent received the
+  // user's answer and continued the conversation in the same browser feed.
+  // This onboarding turn may commit stable project facts before replying, so
+  // it can legitimately outlast spinner-waiter's generic 30-second ceiling.
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await assistantMessages.nth(assistantMessagesBeforeReply).waitFor({ timeout: 120_000 }); // timeout: manual because spinner-waiter is disabled for the multi-tool onboarding turn
+    await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 }); // timeout: manual because spinner-waiter is disabled for the multi-tool onboarding turn
+  });
+
+  const [createdEvent, promptEvent] = await Promise.all([
+    onboardingAgent.stream.getEvents({ eventTypes: ["events.iterate.com/agent/created"] }),
+    onboardingAgent.stream.getEvent({
+      idempotencyKey: "iterate/config/onboarding-instructions:v1",
+    }),
+  ]);
+  expect(
+    createdEvent.find((event) => event.type === "events.iterate.com/agent/created")?.payload,
+  ).toEqual({});
+  expect(promptEvent?.payload?.content).toContain("# Onboarding Agent");
 });

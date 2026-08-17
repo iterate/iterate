@@ -25,10 +25,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "## Project lifecycle hooks\n" +
       "\n" +
       "The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each\n" +
-      "case is ordinary userspace TypeScript: `const itx = await this.itx` gives that\n" +
-      "stateless invocation one memoized project-root session, then write whatever\n" +
-      "calls the project needs. There is no configuration-reconciliation framework\n" +
-      "around them.\n" +
+      "case is ordinary userspace TypeScript: call through `this.itx` directly, such\n" +
+      "as `await this.itx.scheduler.set(...)`. The getter memoizes the native Workers\n" +
+      "RPC promise-proxy for that stateless invocation, so nested calls pipeline\n" +
+      "without first awaiting the project root. There is no\n" +
+      "configuration-reconciliation framework around them.\n" +
       "\n" +
       "- `project/heartbeat-triggered` is the ordinary event appended by that\n" +
       "  Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary\n" +
@@ -44,10 +45,19 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  deliberately a reconcile-current-config hook, not an exact per-commit\n" +
       "  activation callback. The seeded example calls\n" +
       "  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.\n" +
+      "- `project/created` is the first userspace event. The root worker subscription\n" +
+      "  is installed immediately before it in the same atomic append, so the seeded\n" +
+      "  worker receives it after the platform creation saga has completed. This\n" +
+      "  template uses it to create `/agents/onboarding`, install the template-local\n" +
+      "  `ONBOARDING.md` prompt, trigger the agent's first turn, and navigate each\n" +
+      "  connected `/clients/os-app/**` browser client that is still on the new\n" +
+      "  project's landing page to its chat. A user who has already moved elsewhere\n" +
+      "  is not interrupted by a delayed lifecycle delivery.\n" +
       "\n" +
-      "`project/create-requested` and `project/created` belong to the platform's\n" +
-      "creation saga. They are not userspace lifecycle hooks and the config worker\n" +
-      "does not handle them.\n" +
+      "`project/create-requested` remains platform-only: it precedes the userspace\n" +
+      "worker subscription. The terminal `project/created` certificate includes the\n" +
+      "birth configuration, including `config.configRepoTemplate` when the project\n" +
+      "was created from a public template.\n" +
       "\n" +
       "The heartbeat uses the Scheduler's native recurrence shape:\n" +
       "`{ every: seconds }`, `{ cron, timezone? }`, or `{ at: ISO timestamp }`. Copy\n" +
@@ -95,9 +105,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  dependencies both work — the platform builds the repo into the running\n" +
       "  worker).\n" +
       "- After you have captured the project purpose, working agreements, and first\n" +
-      "  tasks, append events.iterate.com/project/onboarding-completed on the root\n" +
-      "  project stream (itx.streams.get(\"/\")) with payload\n" +
-      "  { agentPath: \"/agents/onboarding\" }.\n" +
+      "  tasks, tell the owner that their project is ready and summarize what you\n" +
+      "  recorded. Onboarding completion is conversational; there is no platform\n" +
+      "  onboarding state to update.\n" +
       "\n" +
       "Do not mark onboarding complete just because the first message was answered.\n",
   },
@@ -121,10 +131,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "## Project lifecycle hooks\n" +
       "\n" +
       "The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each\n" +
-      "case is ordinary userspace TypeScript: `const itx = await this.itx` gives that\n" +
-      "stateless invocation one memoized project-root session, then write whatever\n" +
-      "calls the project needs. There is no configuration-reconciliation framework\n" +
-      "around them.\n" +
+      "case is ordinary userspace TypeScript: call through `this.itx` directly, such\n" +
+      "as `await this.itx.scheduler.set(...)`. The getter memoizes the native Workers\n" +
+      "RPC promise-proxy for that stateless invocation, so nested calls pipeline\n" +
+      "without first awaiting the project root. There is no\n" +
+      "configuration-reconciliation framework around them.\n" +
       "\n" +
       "- `project/heartbeat-triggered` is the ordinary event appended by that\n" +
       "  Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary\n" +
@@ -140,10 +151,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  deliberately a reconcile-current-config hook, not an exact per-commit\n" +
       "  activation callback. The seeded example calls\n" +
       "  `itx.scheduler.set(...)` here to install one 15-minute heartbeat.\n" +
+      "- `project/created` is the first userspace event. The root worker subscription\n" +
+      "  is installed immediately before it in the same atomic append, so the seeded\n" +
+      "  worker receives it after the platform creation saga has completed. This\n" +
+      "  template uses it to create `/agents/onboarding`, install the template-local\n" +
+      "  `ONBOARDING.md` prompt, trigger the agent's first turn, and navigate each\n" +
+      "  connected `/clients/os-app/**` browser client that is still on the new\n" +
+      "  project's landing page to its chat.\n" +
       "\n" +
-      "`project/create-requested` and `project/created` belong to the platform's\n" +
-      "creation saga. They are not userspace lifecycle hooks and the config worker\n" +
-      "does not handle them.\n" +
+      "`project/create-requested` remains platform-only: it precedes the userspace\n" +
+      "worker subscription. The terminal `project/created` certificate includes the\n" +
+      "birth configuration, including `config.configRepoTemplate` when the project\n" +
+      "was created from a public template.\n" +
       "\n" +
       "The heartbeat uses the Scheduler's native recurrence shape:\n" +
       "`{ every: seconds }`, `{ cron, timezone? }`, or `{ at: ISO timestamp }`. Copy\n" +
@@ -773,7 +792,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "   */\n" +
       "  async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {\n" +
       "    if (agentPaths.length === 0) return;\n" +
-      "    const itx = await this.itx;\n" +
+      "    const itx = this.itx;\n" +
       "    const file = await itx.repo.readFile({ path: \"AGENTS.md\" });\n" +
       "    const content =\n" +
       "      file === null\n" +
@@ -829,7 +848,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "   * cost — keep it lean.\n" +
       "   */\n" +
       "  async #publishAgentBirthDefaults(): Promise<void> {\n" +
-      "    const itx = await this.itx;\n" +
+      "    const itx = this.itx;\n" +
       "    const file = await itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
       "    const birthEvents: AgentBirthDefaultsValue[\"birthEvents\"] =\n" +
       "      file === null\n" +
@@ -878,6 +897,67 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  // per-stream order.\n" +
       "  protected override async processEvent(event: StreamEvent): Promise<void> {\n" +
       "    switch (event.type) {\n" +
+      "      case \"events.iterate.com/project/created\": {\n" +
+      "        if (event.path !== \"/\") break;\n" +
+      "        const instructions = await this.itx.repo.readFile({ path: \"ONBOARDING.md\" });\n" +
+      "        if (instructions === null) {\n" +
+      "          throw new Error(\"The default template enables onboarding but ONBOARDING.md is missing.\");\n" +
+      "        }\n" +
+      "\n" +
+      "        const onboardingAgent = this.itx.agents.get(\"/agents/onboarding\");\n" +
+      "        await onboardingAgent.create();\n" +
+      "        await onboardingAgent.append(\n" +
+      "          {\n" +
+      "            type: \"events.iterate.com/agents/context-added\",\n" +
+      "            idempotencyKey: \"iterate/config/onboarding-instructions:v1\",\n" +
+      "            payload: {\n" +
+      "              role: \"system\",\n" +
+      "              key: \"config/onboarding-instructions\",\n" +
+      "              content: instructions.content,\n" +
+      "              llmRequestPolicy: { behaviour: \"dont-trigger-request\" },\n" +
+      "            },\n" +
+      "          },\n" +
+      "          {\n" +
+      "            type: \"events.iterate.com/agents/context-added\",\n" +
+      "            idempotencyKey: \"iterate/config/onboarding-start:v1\",\n" +
+      "            payload: {\n" +
+      "              role: \"developer\",\n" +
+      "              key: \"config/onboarding-start\",\n" +
+      "              content:\n" +
+      "                \"Begin onboarding now. The project owner just created this project. Welcome them, then follow the onboarding instructions one question at a time.\",\n" +
+      "              llmRequestPolicy: { behaviour: \"after-current-request\" },\n" +
+      "            },\n" +
+      "          },\n" +
+      "        );\n" +
+      "\n" +
+      "        const [{ slug }, clients] = await Promise.all([\n" +
+      "          this.itx.identity(),\n" +
+      "          this.itx.clients.list(),\n" +
+      "        ]);\n" +
+      "        const projectHomePath = `/projects/${slug}`;\n" +
+      "        const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;\n" +
+      "        await Promise.all(\n" +
+      "          clients\n" +
+      "            .filter((client) => client.connected && client.path.startsWith(\"/clients/os-app/\"))\n" +
+      "            .map(async (client) => {\n" +
+      "              const browserClient = this.itx.clients.get(client.path);\n" +
+      "              const currentUrl = await browserClient.invokeCapability({\n" +
+      "                path: [\"capabilities\", \"browser\", \"url\"],\n" +
+      "              });\n" +
+      "              if (\n" +
+      "                typeof currentUrl !== \"string\" ||\n" +
+      "                new URL(currentUrl).pathname.replace(/\\/$/, \"\") !== projectHomePath\n" +
+      "              ) {\n" +
+      "                return;\n" +
+      "              }\n" +
+      "              await browserClient.invokeCapability({\n" +
+      "                path: [\"capabilities\", \"browser\", \"navigate\"],\n" +
+      "                args: [onboardingUrl],\n" +
+      "              });\n" +
+      "            }),\n" +
+      "        );\n" +
+      "        break;\n" +
+      "      }\n" +
       "      case \"events.iterate.com/agent/created\": {\n" +
       "        // The birth event on the agent's own stream (copies carry\n" +
       "        // source.copiedFrom and must not re-target the collection stream).\n" +
@@ -889,7 +969,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        // Any config-repo commit MAY have changed AGENTS.md — the sync's\n" +
       "        // read-compare step turns the ones that didn't into no-ops.\n" +
       "        if (event.path !== \"/repos/config\") break;\n" +
-      "        const itx = await this.itx;\n" +
+      "        const itx = this.itx;\n" +
       "        const agents = await itx.agents.list();\n" +
       "        await this.#syncAgentsMdContext(agents.map((agent) => agent.path));\n" +
       "        break;\n" +
@@ -898,13 +978,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        if (event.path !== \"/\") break;\n" +
       "        console.log(\"Project heartbeat fired\", { scheduleKey: event.payload?.scheduleKey });\n" +
       "        // Write arbitrary periodic work against itx here:\n" +
-      "        // const itx = await this.itx;\n" +
+      "        // await this.itx.scheduler.set(/* ... */);\n" +
       "        break;\n" +
       "      }\n" +
       "      case \"events.iterate.com/stream/woken\": {\n" +
       "        if (event.path !== \"/\") break;\n" +
       "        // Write arbitrary project-stream wake work against itx here:\n" +
-      "        // const itx = await this.itx;\n" +
+      "        // await this.itx.streams.get(\"/\").append(/* ... */);\n" +
       "        break;\n" +
       "      }\n" +
       "      case \"events.iterate.com/project/worker-updated\": {\n" +
@@ -912,8 +992,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        // The platform appends this only after the current config worker has\n" +
       "        // built, loaded, and answered. Put arbitrary idempotent ITX calls\n" +
       "        // directly in this case.\n" +
-      "        const itx = await this.itx;\n" +
-      "        await itx.scheduler.set({\n" +
+      "        await this.itx.scheduler.set({\n" +
       "          key: \"iterate/config/heartbeat/every-15-minutes\",\n" +
       "          recurrence: { every: 15 * 60 },\n" +
       "          script: `async (itx, schedule, trigger) => {\n" +
@@ -942,8 +1021,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  async fetch(req: Request): Promise<Response> {\n" +
       "    const app = req.headers.get(\"x-iterate-app\");\n" +
       "    if (app === \"todo\") {\n" +
-      "      const itx = await this.itx;\n" +
-      "      const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
+      "      const authResponse = await this.fetchProjectAuth(req, { policy: \"project-member\" });\n" +
       "      if (authResponse) return authResponse;\n" +
       "      return this.#todoApp.fetch(req);\n" +
       "    }\n" +

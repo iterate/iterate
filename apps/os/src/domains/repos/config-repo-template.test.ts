@@ -7,6 +7,7 @@
 // the template live.
 import { afterEach, expect, test, vi } from "vitest";
 import ProjectWorker from "../../../../../configs/default/worker.ts";
+import VoiceProjectWorker from "../../../../../configs/with-voice/worker.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -15,8 +16,12 @@ function templateFile(path: string): string {
   return PROJECT_REPO_INITIAL_FILES.find((file) => file.path === path)!.content;
 }
 
+function pipelinedProject<Project extends object>(project: Project) {
+  return Object.assign(Promise.resolve(project), project);
+}
+
 function deliver(
-  worker: ProjectWorker,
+  worker: { processEventBatch(batch: never): Promise<void> },
   event: {
     type: string;
     path: string;
@@ -25,6 +30,127 @@ function deliver(
 ): Promise<void> {
   return worker.processEventBatch({ events: [event] } as never);
 }
+
+test.each([
+  {
+    name: "default",
+    prompt: "Default onboarding instructions",
+    start: "The project owner just created this project.",
+    worker: (env: never) => new ProjectWorker({} as never, env),
+  },
+  {
+    name: "with-voice",
+    prompt: "Voice-specific onboarding instructions",
+    start: "The project owner just created this voice project.",
+    worker: (env: never) => new VoiceProjectWorker({} as never, env),
+  },
+])(
+  "$name template owns onboarding agent creation, startup, and new-project client redirects",
+  async ({ name, prompt, start, worker: makeWorker }) => {
+    const create = vi.fn(async () => undefined);
+    const append = vi.fn(async () => []);
+    const landingTabCapability = vi.fn(
+      async (call: { path: string[] }): Promise<string | undefined> =>
+        call.path.at(-1) === "url"
+          ? "https://os.iterate.test/projects/new-project?welcome=true"
+          : undefined,
+    );
+    const busyTabCapability = vi.fn(
+      async (): Promise<string> => "https://os.iterate.test/projects/new-project/repl",
+    );
+    const project = {
+      agents: {
+        get: vi.fn(() => ({ append, create })),
+      },
+      clients: {
+        get: vi.fn((path: string) => ({
+          invokeCapability:
+            path === "/clients/os-app/landing-tab" ? landingTabCapability : busyTabCapability,
+        })),
+        list: vi.fn(async () => [
+          {
+            path: "/clients/os-app/landing-tab",
+            connected: true,
+            lastConnectedAt: "2026-08-07T10:00:00.000Z",
+          },
+          {
+            path: "/clients/os-app/busy-tab",
+            connected: true,
+            lastConnectedAt: "2026-08-07T10:00:00.000Z",
+          },
+          {
+            path: "/clients/os-app/closed-tab",
+            connected: false,
+            lastConnectedAt: "2026-08-07T09:00:00.000Z",
+          },
+          {
+            path: "/clients/terminal",
+            connected: true,
+            lastConnectedAt: "2026-08-07T10:00:00.000Z",
+          },
+        ]),
+      },
+      identity: vi.fn(async () => ({ slug: "new-project" })),
+      repo: {
+        readFile: vi.fn(async () => ({ content: prompt })),
+      },
+      [Symbol.dispose]: vi.fn(),
+    };
+    const instance = makeWorker({
+      ITERATE_WORKER_VERSION: "test",
+      ITX: { get: vi.fn(() => pipelinedProject(project)) },
+    } as never);
+
+    await deliver(instance, {
+      type: "events.iterate.com/project/created",
+      path: "/",
+      payload: {
+        config: {
+          slug: "new-project",
+          configRepoTemplate: `github:iterate/iterate#main&path:configs/${name}`,
+        },
+        createRequestedAtOffset: 4,
+      },
+    });
+
+    expect(create).toHaveBeenCalledExactlyOnceWith();
+    expect(append).toHaveBeenCalledWith(
+      {
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: "iterate/config/onboarding-instructions:v1",
+        payload: {
+          role: "system",
+          key: "config/onboarding-instructions",
+          content: prompt,
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
+      },
+      expect.objectContaining({
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: "iterate/config/onboarding-start:v1",
+        payload: expect.objectContaining({
+          role: "developer",
+          key: "config/onboarding-start",
+          content: expect.stringContaining(start),
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        }),
+      }),
+    );
+    expect(project.clients.get).toHaveBeenCalledTimes(2);
+    expect(project.clients.get).toHaveBeenCalledWith("/clients/os-app/landing-tab");
+    expect(project.clients.get).toHaveBeenCalledWith("/clients/os-app/busy-tab");
+    expect(landingTabCapability).toHaveBeenNthCalledWith(1, {
+      path: ["capabilities", "browser", "url"],
+    });
+    expect(landingTabCapability).toHaveBeenNthCalledWith(2, {
+      path: ["capabilities", "browser", "navigate"],
+      args: ["/projects/new-project/agents/streams/agents/onboarding"],
+    });
+    expect(busyTabCapability).toHaveBeenCalledExactlyOnceWith({
+      path: ["capabilities", "browser", "url"],
+    });
+  },
+);
 
 test("template ships packaged apps behind a thin router", () => {
   // Vendor SDK surfaces are NOT seeded (built-ins live at
@@ -81,7 +207,7 @@ test("project lifecycle cases directly install and handle the default heartbeat"
     capabilityHosts: { get: () => ({ provideCapability: async () => null }) },
     [Symbol.dispose]: vi.fn(),
   };
-  const get = vi.fn(async () => project);
+  const get = vi.fn(() => pipelinedProject(project));
   const worker = new ProjectWorker(
     {} as never,
     {
@@ -165,10 +291,6 @@ test("project lifecycle cases directly install and handle the default heartbeat"
       path: "/",
     },
     {
-      type: "events.iterate.com/project/created",
-      path: "/",
-    },
-    {
       type: "events.iterate.com/project/heartbeat-triggered",
       path: "/agents/not-the-project-root",
     },
@@ -221,7 +343,7 @@ test.each([null, ""])(
       {} as never,
       {
         ITERATE_WORKER_VERSION: "test",
-        ITX: { get: vi.fn(async () => project) },
+        ITX: { get: vi.fn(() => pipelinedProject(project)) },
       } as never,
     );
 
@@ -238,6 +360,74 @@ test.each([null, ""])(
     );
   },
 );
+
+test("the project auth helper leaves a declined request body for the app", async () => {
+  const authFetch = vi.fn(async (_request: Request) => null);
+  const todoFetch = vi.fn(async (request: Request) => new Response(await request.text()));
+  const project = {
+    auth: { get: vi.fn(() => ({ fetch: authFetch })) },
+    [Symbol.dispose]: vi.fn(),
+  };
+  const worker = new ProjectWorker(
+    {} as never,
+    {
+      ITERATE_WORKER_VERSION: "test",
+      ITX: {
+        fetch: todoFetch,
+        get: vi.fn(() => pipelinedProject(project)),
+      },
+    } as never,
+  );
+  const request = new Request("https://todo--example.iterate.app/items", {
+    body: "still here",
+    headers: { "content-type": "text/plain", "x-iterate-app": "todo" },
+    method: "POST",
+  });
+
+  await expect(worker.fetch(request).then((response) => response.text())).resolves.toBe(
+    "still here",
+  );
+  expect(authFetch).toHaveBeenCalledOnce();
+  const authRequest = authFetch.mock.calls[0]![0];
+  expect(authRequest).not.toBe(request);
+  expect(authRequest.body).toBeNull();
+  expect(authRequest.method).toBe("POST");
+  expect(authRequest.url).toBe("https://todo--example.iterate.app/items");
+  expect(Object.fromEntries(authRequest.headers)).toEqual({
+    "content-type": "text/plain",
+    "x-iterate-app": "todo",
+  });
+});
+
+test("the project auth helper transfers the callback POST that auth owns", async () => {
+  const appFetch = vi.fn();
+  const authFetch = vi.fn(async (request: Request) => new Response(await request.text()));
+  const project = {
+    auth: { get: vi.fn(() => ({ fetch: authFetch })) },
+    [Symbol.dispose]: vi.fn(),
+  };
+  const worker = new ProjectWorker(
+    {} as never,
+    {
+      ITERATE_WORKER_VERSION: "test",
+      ITX: {
+        fetch: appFetch,
+        get: vi.fn(() => pipelinedProject(project)),
+      },
+    } as never,
+  );
+  const request = new Request("https://todo--example.iterate.app/_iterate/auth/callback", {
+    body: "auth token",
+    headers: { "x-iterate-app": "todo" },
+    method: "POST",
+  });
+
+  await expect(worker.fetch(request).then((response) => response.text())).resolves.toBe(
+    "auth token",
+  );
+  expect(authFetch).toHaveBeenCalledExactlyOnceWith(request);
+  expect(appFetch).not.toHaveBeenCalled();
+});
 
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {
   // Seeded repos used to carry a 2000-line sdk.ts frozen at seed time. Now

@@ -26,8 +26,8 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "scripts/cli.ts",
       "scripts/dev.ts",
       "scripts/itx.ts",
-      // Operational smoke for the create-project -> onboarding-greeting path.
-      "e2e/vitest/onboarding-smoke.ts",
+      // Operational smoke for the create-project -> generic agent reply path.
+      "e2e/vitest/agent-smoke.ts",
     ],
     ignoreDependencies: [
       ...(base.ignoreDependencies ?? []),

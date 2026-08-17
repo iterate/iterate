@@ -70,7 +70,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    */
   async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {
     if (agentPaths.length === 0) return;
-    const itx = await this.itx;
+    const itx = this.itx;
     const file = await itx.repo.readFile({ path: "AGENTS.md" });
     const content =
       file === null
@@ -126,7 +126,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    * cost — keep it lean.
    */
   async #publishAgentBirthDefaults(): Promise<void> {
-    const itx = await this.itx;
+    const itx = this.itx;
     const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
     const birthEvents: AgentBirthDefaultsValue["birthEvents"] =
       file === null
@@ -175,6 +175,67 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   // per-stream order.
   protected override async processEvent(event: StreamEvent): Promise<void> {
     switch (event.type) {
+      case "events.iterate.com/project/created": {
+        if (event.path !== "/") break;
+        const instructions = await this.itx.repo.readFile({ path: "ONBOARDING.md" });
+        if (instructions === null) {
+          throw new Error("The default template enables onboarding but ONBOARDING.md is missing.");
+        }
+
+        const onboardingAgent = this.itx.agents.get("/agents/onboarding");
+        await onboardingAgent.create();
+        await onboardingAgent.append(
+          {
+            type: "events.iterate.com/agents/context-added",
+            idempotencyKey: "iterate/config/onboarding-instructions:v1",
+            payload: {
+              role: "system",
+              key: "config/onboarding-instructions",
+              content: instructions.content,
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            },
+          },
+          {
+            type: "events.iterate.com/agents/context-added",
+            idempotencyKey: "iterate/config/onboarding-start:v1",
+            payload: {
+              role: "developer",
+              key: "config/onboarding-start",
+              content:
+                "Begin onboarding now. The project owner just created this project. Welcome them, then follow the onboarding instructions one question at a time.",
+              llmRequestPolicy: { behaviour: "after-current-request" },
+            },
+          },
+        );
+
+        const [{ slug }, clients] = await Promise.all([
+          this.itx.identity(),
+          this.itx.clients.list(),
+        ]);
+        const projectHomePath = `/projects/${slug}`;
+        const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;
+        await Promise.all(
+          clients
+            .filter((client) => client.connected && client.path.startsWith("/clients/os-app/"))
+            .map(async (client) => {
+              const browserClient = this.itx.clients.get(client.path);
+              const currentUrl = await browserClient.invokeCapability({
+                path: ["capabilities", "browser", "url"],
+              });
+              if (
+                typeof currentUrl !== "string" ||
+                new URL(currentUrl).pathname.replace(/\/$/, "") !== projectHomePath
+              ) {
+                return;
+              }
+              await browserClient.invokeCapability({
+                path: ["capabilities", "browser", "navigate"],
+                args: [onboardingUrl],
+              });
+            }),
+        );
+        break;
+      }
       case "events.iterate.com/agent/created": {
         // The birth event on the agent's own stream (copies carry
         // source.copiedFrom and must not re-target the collection stream).
@@ -186,7 +247,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // Any config-repo commit MAY have changed AGENTS.md — the sync's
         // read-compare step turns the ones that didn't into no-ops.
         if (event.path !== "/repos/config") break;
-        const itx = await this.itx;
+        const itx = this.itx;
         const agents = await itx.agents.list();
         await this.#syncAgentsMdContext(agents.map((agent) => agent.path));
         break;
@@ -195,13 +256,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         if (event.path !== "/") break;
         console.log("Project heartbeat fired", { scheduleKey: event.payload?.scheduleKey });
         // Write arbitrary periodic work against itx here:
-        // const itx = await this.itx;
+        // await this.itx.scheduler.set(/* ... */);
         break;
       }
       case "events.iterate.com/stream/woken": {
         if (event.path !== "/") break;
         // Write arbitrary project-stream wake work against itx here:
-        // const itx = await this.itx;
+        // await this.itx.streams.get("/").append(/* ... */);
         break;
       }
       case "events.iterate.com/project/worker-updated": {
@@ -209,8 +270,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // The platform appends this only after the current config worker has
         // built, loaded, and answered. Put arbitrary idempotent ITX calls
         // directly in this case.
-        const itx = await this.itx;
-        await itx.scheduler.set({
+        await this.itx.scheduler.set({
           key: "iterate/config/heartbeat/every-15-minutes",
           recurrence: { every: 15 * 60 },
           script: `async (itx, schedule, trigger) => {
@@ -239,8 +299,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   async fetch(req: Request): Promise<Response> {
     const app = req.headers.get("x-iterate-app");
     if (app === "todo") {
-      const itx = await this.itx;
-      const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
+      const authResponse = await this.fetchProjectAuth(req, { policy: "project-member" });
       if (authResponse) return authResponse;
       return this.#todoApp.fetch(req);
     }

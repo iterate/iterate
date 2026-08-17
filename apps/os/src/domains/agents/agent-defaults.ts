@@ -115,8 +115,8 @@ export const AGENT_SUMMARY_INSTRUCTION = [
 ].join("\n");
 
 /**
- * The default codemode system prompt for web-chat agents (child agents, MCP
- * session agents, and the onboarding agent build on it), sourced from the
+ * The default codemode system prompt for web-chat agents (child agents, MCP,
+ * and session agents build on it), sourced from the
  * config-repo template file `prompts/agent-system-prompt.md` — the ONE home
  * for its text. The platform reads the build-time embedded copy here (the
  * birth-batch fallback); the template's own worker.ts publishes the same file
@@ -159,12 +159,6 @@ type AgentSystemPromptPolicy = {
   /** Exact shipped payload revision; bump it when `content` changes. */
   revision: string;
 };
-
-// The onboarding script ships INSIDE the seeded repo (the agent can read the
-// same file the prompt embeds); the prompt below needs its text at build time.
-const PROJECT_REPO_ONBOARDING_MD = PROJECT_REPO_INITIAL_FILES.find(
-  (file) => file.path === "ONBOARDING.md",
-)!.content;
 
 /**
  * Agents under `/agents/slack/**` are Slack-thread agents: the slack webhook
@@ -228,20 +222,6 @@ export const MCP_AGENT_SYSTEM_PROMPT = [
   "This overrides the multi-message chat and every-turn progress-update guidance above: send NO acknowledgements or progress updates — the first sendMessage ends the caller's wait, so it must BE the complete answer. Reply exactly once per request with await itx.chat.sendMessage(message). Do the requested work directly with your capabilities; only ask a clarifying question when the request is genuinely ambiguous.",
 ].join("\n");
 export const MCP_AGENT_SYSTEM_PROMPT_REVISION = contentHash(MCP_AGENT_SYSTEM_PROMPT);
-
-/**
- * The onboarding agent is a normal web-chat agent whose system prompt embeds
- * the seeded ONBOARDING.md script. Same codemode contract as every agent.
- */
-export const ONBOARDING_AGENT_SYSTEM_PROMPT = [
-  DEFAULT_AGENT_SYSTEM_PROMPT,
-  "",
-  "You are this project's onboarding agent. Follow the onboarding script below.",
-  "On a brand-new project, the project repo and worker may still be seeding during your first turn. If a repo or worker capability reports that it is missing or not ready, keep onboarding conversational and retry shortly instead of treating that as a fatal setup failure.",
-  "",
-  PROJECT_REPO_ONBOARDING_MD,
-].join("\n");
-export const ONBOARDING_AGENT_SYSTEM_PROMPT_REVISION = contentHash(ONBOARDING_AGENT_SYSTEM_PROMPT);
 
 /**
  * One exact, retryable occurrence updating the agent runtime's keyed

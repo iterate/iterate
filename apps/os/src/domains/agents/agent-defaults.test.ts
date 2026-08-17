@@ -62,7 +62,7 @@ describe("agentCreationForPath", () => {
   test("does not infer agent policy or startup events from the stream path", () => {
     const paths = [
       "/agents/email/t42",
-      "/agents/onboarding",
+      "/agents/web/demo",
       "/agents/repos/config/pr/7",
       "/agents/slack/main/C123/ts-99/helper",
     ];
@@ -71,11 +71,6 @@ describe("agentCreationForPath", () => {
       const defaults = defaultsFor(path);
       expect(defaults.systemPrompt).toBe(DEFAULT_AGENT_SYSTEM_PROMPT);
       expect(createdEvent(path)?.payload).toEqual({});
-      expect(
-        defaults.events.some((event) =>
-          String(event.idempotencyKey).startsWith("project-onboarding-start:"),
-        ),
-      ).toBe(false);
     }
   });
 

@@ -24,7 +24,6 @@ export const PROJECT_CREATE_REQUESTED = {
   payload: {
     config: {
       creatorEmail: "owner@example.com",
-      onboardingActive: true,
       slug: "demo",
     },
   },

@@ -1,7 +1,64 @@
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 
 export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
-  protected override async processEvent(_event: StreamEvent): Promise<void> {}
+  protected override async processEvent(event: StreamEvent): Promise<void> {
+    if (event.type !== "events.iterate.com/project/created" || event.path !== "/") return;
+
+    const instructions = await this.itx.repo.readFile({ path: "ONBOARDING.md" });
+    if (instructions === null) {
+      throw new Error("The voice template enables onboarding but ONBOARDING.md is missing.");
+    }
+
+    const onboardingAgent = this.itx.agents.get("/agents/onboarding");
+    await onboardingAgent.create();
+    await onboardingAgent.append(
+      {
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: "iterate/config/onboarding-instructions:v1",
+        payload: {
+          role: "system",
+          key: "config/onboarding-instructions",
+          content: instructions.content,
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: "iterate/config/onboarding-start:v1",
+        payload: {
+          role: "developer",
+          key: "config/onboarding-start",
+          content:
+            "Begin onboarding now. The project owner just created this voice project. Welcome them, then follow the onboarding instructions one question at a time.",
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+      },
+    );
+
+    const [{ slug }, clients] = await Promise.all([this.itx.identity(), this.itx.clients.list()]);
+    const projectHomePath = `/projects/${slug}`;
+    const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;
+    await Promise.all(
+      clients
+        .filter((client) => client.connected && client.path.startsWith("/clients/os-app/"))
+        .map(async (client) => {
+          const browserClient = this.itx.clients.get(client.path);
+          const currentUrl = await browserClient.invokeCapability({
+            path: ["capabilities", "browser", "url"],
+          });
+          if (
+            typeof currentUrl !== "string" ||
+            new URL(currentUrl).pathname.replace(/\/$/, "") !== projectHomePath
+          ) {
+            return;
+          }
+          await browserClient.invokeCapability({
+            path: ["capabilities", "browser", "navigate"],
+            args: [onboardingUrl],
+          });
+        }),
+    );
+  }
 
   async fetch(): Promise<Response> {
     return new Response(

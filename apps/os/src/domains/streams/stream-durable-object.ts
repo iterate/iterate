@@ -1123,7 +1123,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     // the project creation saga only after the seeded worker has built. That
     // keeps an unavailable worker from looking broken during its own build;
     // project/created means the worker was reachable and its permanent feed
-    // was committed, not that userspace consumed a platform creation event.
+    // was committed. Because it follows the subscription in the same append,
+    // it is also the first fact delivered to userspace; creation does not wait
+    // for that userspace consequence to finish.
     if (this.#coreProcessorState.eventCount === 0) {
       this.#append({ authority: "core-event" }, [
         {
