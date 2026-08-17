@@ -1152,8 +1152,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
        * than stylistic: the ephemeral lane coalesces, delivering in clumps
        * seconds late. Routing an audio delta through it before acting on it
        * would put a second full stream round trip in front of the first word
-       * of every answer. The deltas are still appended verbatim for
-       * instruments — just not waited for.
+       * of every answer. The provider's timeline is still appended for
+       * instruments — just not waited for, and see `#forwardGrokEvent` for the
+       * one part of it that is not.
        */
       socket.addEventListener("message", (message: MessageEvent) => {
         /*
@@ -1176,10 +1177,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
         }
         const grokEventType = String(grok.type ?? "");
         const receivedAtFacetMs = this.deps.nowAtFacetMs();
-        void append({
-          type: "events.iterate.com/voice-agent/grok-event",
-          payload: { ...grok, conversationId, receivedAtFacetMs },
-        });
+        this.#forwardGrokEvent(grok, grokEventType, conversationId, receivedAtFacetMs, append);
 
         switch (grokEventType) {
           case "session.created":
@@ -1385,6 +1383,40 @@ export class VoiceAgent2Processor extends StreamProcessor<
         });
         return;
       }
+    });
+  }
+
+  /**
+   * The provider's timeline, for instruments — WITHOUT the audio in it.
+   *
+   * This lane forwarded every message verbatim, `delta` included, which means
+   * every answer went out twice: once cut up and paced on `spk-frame`, and
+   * once again whole, in tens of kilobytes of base64 per chunk, hundreds of
+   * chunks an answer, on a lane no client subscribes to. v1 learned this the
+   * expensive way and strips it; v2 was written fresh and did not, so the
+   * lesson had to be paid for a second time.
+   *
+   * What a reader of this lane actually wants is the TRANSITIONS — the edges
+   * that diagnose a silent call, which is what proved a barge-in one
+   * millisecond after `response.created` was cancelling four answers in six.
+   * The audio's content is already on `spk-frame`, and when its first byte
+   * arrived is already on `turn-timing`. So the delta rides as its LENGTH: the
+   * shape of the answer stays visible and the bytes go once.
+   */
+  #forwardGrokEvent(
+    grok: Record<string, unknown>,
+    grokEventType: string,
+    conversationId: string,
+    receivedAtFacetMs: number,
+    append: ProcessEventArgs<VoiceAgent2Contract>["append"],
+  ): void {
+    const body =
+      grokEventType === "response.output_audio.delta"
+        ? { ...grok, delta: undefined, deltaBytes: String(grok.delta ?? "").length }
+        : grok;
+    void append({
+      type: "events.iterate.com/voice-agent/grok-event",
+      payload: { ...body, conversationId, receivedAtFacetMs },
     });
   }
 

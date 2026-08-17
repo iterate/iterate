@@ -165,11 +165,14 @@ export async function direct(options: DirectOptions = {}) {
         }
       }
       if (answering !== null) {
-        if (answering.firstAudioAtMs === null) answering.firstAudioAtMs = now;
-        /* Within THIS answer only. Pooling across answers folded the pause
-         * between turns into a jitter figure, where it is the largest sample
-         * by an order of magnitude and describes nothing. */ else if (lastAudioAt !== null)
+        if (answering.firstAudioAtMs === null) {
+          answering.firstAudioAtMs = now;
+        } else if (lastAudioAt !== null) {
+          /* Within THIS answer only. Pooling across answers folded the pause
+           * between turns into a jitter figure, where it is the largest sample
+           * by an order of magnitude and describes nothing. */
           answering.gapsMs.push(now - lastAudioAt);
+        }
       }
       lastAudioAt = now;
       spkMessages++;

@@ -59,6 +59,18 @@ export interface PttMarginalOptions extends VoicelabConnectOptions {
   /** Provider endpoint for the direct half. Defaults to xAI's realtime API. */
   grokBaseUrl?: string;
   model?: string;
+  /**
+   * Also measure the bare append round trip, before each press.
+   *
+   * OFF BY DEFAULT BECAUSE IT IS NOT FREE. The only event v2 consumes that
+   * starts nothing is `warmup`, and `warmup` is DURABLE — so each probe is a
+   * one-at-a-time delivery to the facet, which answers with a durable
+   * `warmup-ready`, which is another. Six of those land immediately before the
+   * button goes down, in front of the microphone frames, on the lane whose
+   * stalling is the thing under investigation. A probe that can produce the
+   * effect it is measuring has to be something you turn on deliberately.
+   */
+  appendProbe?: boolean;
 }
 
 const FRAME_MS = 20;
@@ -66,6 +78,8 @@ const FRAME_MS = 20;
 const FRAME_SAMPLES = 320;
 /** Round-trip probes per round; the median of three beats any one. */
 const APPEND_PROBES = 3;
+/** How long to wait for a turn's attribution after its audio has arrived. */
+const TURN_REPORT_GRACE_MS = 750;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -415,6 +429,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
    * dialling it.
    */
   async function probeAppendRtt(): Promise<number | null> {
+    if (options.appendProbe !== true) return null;
     const trips: number[] = [];
     for (let probe = 0; probe < APPEND_PROBES; probe++) {
       const atDeviceMs = Date.now();
@@ -510,6 +525,20 @@ export async function pttMarginal(options: PttMarginalOptions) {
     while (Date.now() < deadline) {
       heard = firstFrameOfNewAnswer(spkAt, answersBefore, releasedAtDeviceMs);
       if (heard !== undefined) break;
+      await sleep(5);
+    }
+    /*
+     * THE ANSWER ARRIVING IS NOT THE REPORT ARRIVING. The facet appends
+     * `turn-timing` just before the first frame of audio, but the two are
+     * separate appends on a lane that batches, so the frame can be delivered
+     * in one batch and the report in the next. Breaking out of the loop the
+     * instant audio is heard therefore drops the attribution for that round —
+     * observed as a round with a perfectly good `totalMs` and every term null.
+     * A short grace period costs nothing and is not part of any measurement:
+     * the total was stamped from `heard`, before this wait began.
+     */
+    const reportDeadline = Date.now() + TURN_REPORT_GRACE_MS;
+    while (timing.length === 0 && heard !== undefined && Date.now() < reportDeadline) {
       await sleep(5);
     }
     const marks = timing.at(-1) ?? null;
@@ -763,10 +792,25 @@ export async function pttMarginal(options: PttMarginalOptions) {
   if (report.marginalMs !== null) {
     console.log(`\n  MARGINAL OVERHEAD  ${report.marginalMs > 0 ? "+" : ""}${report.marginalMs}ms`);
   }
+  /*
+   * A COUNT OF ZERO IS NOT A COUNT OF RE-DIALS, and this line used to say it
+   * was. `call-started` is DURABLE, and a run whose connection received only
+   * the ephemeral lanes reports zero of them while the facet was answering
+   * every press — measured, on a run where 541 speaker frames and 21 turn
+   * reports arrived and not one call event did. "Re-dialled mid-run" is a
+   * diagnosis; "nobody told us" is the absence of one.
+   */
+  const heardCallEvents = report.callsStarted + report.callsEnded > 0;
   console.log(
     `\n  CALLS  ${report.callsStarted} started, ${report.callsEnded} ended, ` +
       `for ${rounds + 1} presses` +
-      `${report.callsStarted === 1 ? "  (one conversation, as designed)" : "  [RE-DIALLED MID-RUN]"}`,
+      `${
+        !heardCallEvents
+          ? "  [no call events delivered here; says nothing either way]"
+          : report.callsStarted === 1
+            ? "  (one conversation, as designed)"
+            : "  [RE-DIALLED MID-RUN]"
+      }`,
   );
   if (report.deliveredNothing) {
     console.log(
