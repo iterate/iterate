@@ -1,0 +1,555 @@
+// core/expression.ts — THE expression codec: capability calls and capability mounts as data.
+//
+// One grammar does three jobs:
+//   1. a CALL      — "invoke this":  itx.streams.get('/logs').append({ type: 'hi' })
+//   2. a PATTERN   — the left side of a mount row: what calls it claims (may contain holes)
+//   3. a TARGET    — the right side of a mount row: what to run instead (holes reference caller args)
+//
+// The op-set is get + call + hole, and NEVER grows (Cap'n Proto kept pipelining to one op for 13
+// years; anything smarter belongs in the project's config worker as real code, mounted plainly).
+// An expression is a persisted NAME for a capability, never captured authority: every evaluation
+// re-derives authority from the scope roots it is handed, so deleting a stored expression IS
+// revocation (apps/os's load-bearing rule, kept).
+//
+// TWO INTERCHANGEABLE HALVES (it is a two-way codec):
+//   string     "itx.openai.chat({ model: 'grok-4', messages: ? })"      ← what humans write
+//   structured ["itx", "openai", ["chat", { model: "grok-4", messages: { "?": 0 } }]]
+// `parse` and `print` round-trip; the structured half is canonical for storage (structurally
+// diffable, no re-parsing in folds); the string half is the authoring surface (config, CLI, docs).
+//
+// HOLES (explicit, never tacit — the Hack-pipes verdict: mark the hole, fail early):
+//   ?        positional  → { "?": n }        (auto-numbered left-to-right by the parser)
+//   ?0 ?1    ordinal     → { "?": 0 }        (repeatable)
+//   ?name    capture     → { "?": "name" }   (pattern side binds it; target side references it)
+//   ...?     rest        → { "...": true }   in a call-arg position: splice remaining caller args
+//   ...?     spread      → { "...": 0 }      in an object position: shallow-merge caller arg n
+//                                            under the frozen keys (frozen wins — the mount is
+//                                            the authority)
+//   { "$": v }           literal escape: v verbatim (only needed by PROGRAMMATIC writers whose
+//                                        data could collide with the tagged shapes above; in the
+//                                        string half holes are syntax and can never collide)
+//
+// MATCHING (the routing table's resolver): a pattern claims a call by binding a prefix of its
+// steps. Literals bind harder than holes; longer bound prefixes beat shorter; the table breaks
+// exact ties by recency (the shadow stack). The unmatched tail of the call is the REMAINDER,
+// replayed on the evaluated target — which is how a bare default route `itx ⇒ itx.cd('/')`
+// forwards a whole missed call with zero special machinery.
+
+/** One step: a property read (string) or a call (`[method, ...args]`). Args are plain JSON. */
+export type Step = string | [method: string, ...args: unknown[]];
+export type Expression = Step[];
+
+/** A hole/spread/escape marker inside an arg tree (see the header table). */
+type Hole = { "?": number | string } | { "...": true | number } | { $: unknown };
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+const holeKind = (v: unknown): "arg" | "rest" | "literal" | null => {
+  if (!isPlainObject(v) || Object.keys(v).length !== 1) return null;
+  if ("?" in v) return "arg";
+  if ("..." in v) return "rest";
+  if ("$" in v) return "literal";
+  return null;
+};
+
+// ─────────────────────────────────────────────── parse ───────────────────────────────────────────────
+// The string half: dotted identifier segments; call parens with JSON5-ish literals (single or
+// double quoted strings, numbers, true/false/null, objects, arrays); the hole tokens above.
+// Hand-rolled recursive descent — no dependencies (this package is pure-play).
+
+export function parse(source: string): Expression {
+  const p = new Parser(source);
+  const expr = p.expression();
+  p.expectEnd();
+  return expr;
+}
+
+class Parser {
+  #s: string;
+  #i = 0;
+  #autoArg = 0; // `?` holes are auto-numbered left-to-right across the whole expression
+
+  constructor(s: string) {
+    this.#s = s;
+  }
+
+  expression(): Expression {
+    const steps: Expression = [];
+    steps.push(this.#ident());
+    for (;;) {
+      this.#ws();
+      if (this.#peek() === "(") {
+        // turn the preceding property step into a call step
+        const name = steps.pop();
+        if (typeof name !== "string") throw this.#err("call must follow a name");
+        steps.push([name, ...this.#args()]);
+      } else if (this.#peek() === ".") {
+        this.#i++;
+        steps.push(this.#ident());
+      } else {
+        return steps;
+      }
+    }
+  }
+
+  #args(): unknown[] {
+    this.#expect("(");
+    const args: unknown[] = [];
+    this.#ws();
+    if (this.#peek() === ")") {
+      this.#i++;
+      return args;
+    }
+    for (;;) {
+      args.push(this.#value());
+      this.#ws();
+      if (this.#peek() === ",") {
+        this.#i++;
+        continue;
+      }
+      this.#expect(")");
+      return args;
+    }
+  }
+
+  /** One JSON5-ish value, which may itself be (or contain) a hole. */
+  #value(): unknown {
+    this.#ws();
+    const c = this.#peek();
+    if (c === "?") return this.#hole();
+    if (c === ".") {
+      // `...?` — rest (in call args) / spread (in objects); optionally `...?2`
+      this.#expect("...");
+      this.#expect("?");
+      const n = this.#number();
+      return n === null ? { "...": true } : { "...": n };
+    }
+    if (c === "'" || c === '"') return this.#string(c);
+    if (c === "{") return this.#object();
+    if (c === "[") return this.#array();
+    if (c === "-" || (c >= "0" && c <= "9")) {
+      const n = this.#number();
+      if (n === null) throw this.#err("number expected");
+      return n;
+    }
+    const word = this.#word();
+    if (word === "true") return true;
+    if (word === "false") return false;
+    if (word === "null") return null;
+    throw this.#err(`unexpected value ${JSON.stringify(word || c)}`);
+  }
+
+  #hole(): Hole {
+    this.#expect("?");
+    const n = this.#number();
+    if (n !== null) return { "?": n }; // ?0 ordinal
+    const name = this.#maybeWord();
+    if (name) return { "?": name }; // ?name capture
+    return { "?": this.#autoArg++ }; // ? positional (auto-numbered)
+  }
+
+  #object(): Record<string, unknown> {
+    this.#expect("{");
+    const out: Record<string, unknown> = {};
+    this.#ws();
+    if (this.#peek() === "}") {
+      this.#i++;
+      return out;
+    }
+    for (;;) {
+      this.#ws();
+      if (this.#peek() === ".") {
+        // `...?` spread entry — stored under the reserved "..." key
+        this.#expect("...");
+        this.#expect("?");
+        out["..."] = this.#number() ?? 0;
+      } else {
+        const key =
+          this.#peek() === "'" || this.#peek() === '"'
+            ? (this.#string(this.#peek() as '"') as string)
+            : this.#word();
+        this.#ws();
+        this.#expect(":");
+        out[key] = this.#value();
+      }
+      this.#ws();
+      if (this.#peek() === ",") {
+        this.#i++;
+        continue;
+      }
+      this.#expect("}");
+      return out;
+    }
+  }
+
+  #array(): unknown[] {
+    this.#expect("[");
+    const out: unknown[] = [];
+    this.#ws();
+    if (this.#peek() === "]") {
+      this.#i++;
+      return out;
+    }
+    for (;;) {
+      out.push(this.#value());
+      this.#ws();
+      if (this.#peek() === ",") {
+        this.#i++;
+        continue;
+      }
+      this.#expect("]");
+      return out;
+    }
+  }
+
+  #string(quote: string): string {
+    this.#expect(quote);
+    let out = "";
+    while (this.#i < this.#s.length) {
+      const c = this.#s[this.#i++];
+      if (c === quote) return out;
+      if (c === "\\") {
+        const e = this.#s[this.#i++];
+        out += e === "n" ? "\n" : e === "t" ? "\t" : e; // \' \" \\ \n \t
+      } else out += c;
+    }
+    throw this.#err("unterminated string");
+  }
+
+  #number(): number | null {
+    const m = /^-?\d+(\.\d+)?/.exec(this.#s.slice(this.#i));
+    if (!m) return null;
+    this.#i += m[0].length;
+    return Number(m[0]);
+  }
+
+  #ident(): string {
+    this.#ws();
+    const w = this.#word();
+    if (!w) throw this.#err("name expected");
+    if (w === "__proto__" || w === "constructor" || w === "prototype")
+      throw this.#err(`reserved name "${w}"`);
+    return w;
+  }
+
+  #word(): string {
+    const m = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(this.#s.slice(this.#i));
+    if (!m) return "";
+    this.#i += m[0].length;
+    return m[0];
+  }
+  #maybeWord(): string {
+    return this.#word();
+  }
+
+  #ws() {
+    while (this.#i < this.#s.length && /\s/.test(this.#s[this.#i])) this.#i++;
+  }
+  #peek(): string {
+    this.#ws();
+    return this.#s[this.#i] ?? "";
+  }
+  #expect(tok: string) {
+    this.#ws();
+    if (!this.#s.startsWith(tok, this.#i)) throw this.#err(`expected "${tok}"`);
+    this.#i += tok.length;
+  }
+  expectEnd() {
+    this.#ws();
+    if (this.#i < this.#s.length) throw this.#err("trailing input");
+  }
+  #err(msg: string): Error {
+    return new Error(
+      `expression parse error at ${this.#i}: ${msg} — in ${JSON.stringify(this.#s)}`,
+    );
+  }
+}
+
+/** Accept either half anywhere an expression is accepted; normalize to the structured form. */
+export function toExpression(input: string | Expression): Expression {
+  return typeof input === "string" ? parse(input) : input;
+}
+
+// ─────────────────────────────────────────────── print ───────────────────────────────────────────────
+
+/** Canonical string form (single quotes, minimal spacing). `parse(print(e))` round-trips. */
+export function print(expr: Expression): string {
+  return expr
+    .map((step, i) => {
+      const dot = i === 0 ? "" : ".";
+      if (typeof step === "string") return dot + step;
+      const [method, ...args] = step;
+      return `${dot}${method}(${args.map(printValue).join(", ")})`;
+    })
+    .join("");
+}
+
+function printValue(v: unknown): string {
+  switch (holeKind(v)) {
+    case "arg": {
+      const h = (v as { "?": number | string })["?"];
+      return typeof h === "number" ? `?${h}` : `?${h}`;
+    }
+    case "rest": {
+      const n = (v as { "...": true | number })["..."];
+      return n === true ? "...?" : `...?${n}`;
+    }
+    case "literal":
+      return printValue((v as { $: unknown }).$);
+  }
+  if (typeof v === "string") return `'${v.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
+  if (Array.isArray(v)) return `[${v.map(printValue).join(", ")}]`;
+  if (isPlainObject(v))
+    return `{ ${Object.entries(v)
+      .map(([k, val]) => (k === "..." ? printValue({ "...": val }) : `${k}: ${printValue(val)}`))
+      .join(", ")} }`;
+  return JSON.stringify(v);
+}
+
+// ─────────────────────────────────────────────── match ───────────────────────────────────────────────
+
+/** A successful claim of `call` by `pattern`. */
+export type Match = {
+  /** Per-step scores, literal-heavier is bigger; compare with `compareSpecificity`. */
+  specificity: number[];
+  /** Values bound by `?name` captures in the pattern. */
+  captures: Record<string, unknown>;
+  /** The call's invocation args at the boundary, when the matched call step carried args the
+   *  pattern did not consume (pattern `itx.grok` vs call `itx.grok({...})`). */
+  boundaryArgs?: unknown[];
+  /** The call's unmatched tail, replayed on the evaluated target. */
+  remainder: Expression;
+};
+
+/**
+ * Try to claim `call` with `pattern`. Rules:
+ *  - a string pattern step matches a string call step of the same name, or — at the FINAL pattern
+ *    step only — a call step of the same method (consuming the name; the args become boundaryArgs);
+ *  - a call pattern step `[m, ...pargs]` matches a call step `[m, ...cargs]` by unifying args:
+ *    literals must deep-equal, `?`-holes bind anything (captures record it), `...?` binds the rest;
+ *    without a rest hole the arities must be equal;
+ *  - specificity per step: 1 for a name bind, +1 per literal arg bound (holes add nothing).
+ */
+export function match(pattern: Expression, call: Expression): Match | null {
+  const specificity: number[] = [];
+  const captures: Record<string, unknown> = {};
+  let boundaryArgs: unknown[] | undefined;
+
+  for (let i = 0; i < pattern.length; i++) {
+    const p = pattern[i];
+    const c = call[i];
+    if (c === undefined) return null; // pattern longer than call
+    if (typeof p === "string") {
+      if (typeof c === "string") {
+        if (p !== c) return null;
+        specificity.push(1);
+      } else {
+        if (c[0] !== p || i !== pattern.length - 1) return null; // name-only consume: final step only
+        boundaryArgs = c.slice(1);
+        specificity.push(1);
+      }
+    } else {
+      if (typeof c === "string" || c[0] !== p[0]) return null;
+      const pargs = p.slice(1);
+      const cargs = c.slice(1);
+      let score = 1;
+      const rest = pargs.findIndex((a) => holeKind(a) === "rest");
+      if (rest === -1 && pargs.length !== cargs.length) return null;
+      if (rest !== -1 && cargs.length < rest) return null;
+      const n = rest === -1 ? pargs.length : rest;
+      for (let j = 0; j < n; j++) {
+        const kind = holeKind(pargs[j]);
+        if (kind === "arg") {
+          const h = (pargs[j] as { "?": number | string })["?"];
+          if (typeof h === "string") captures[h] = cargs[j];
+        } else if (deepEqual(unliteral(pargs[j]), cargs[j])) {
+          score += 1;
+        } else return null;
+      }
+      specificity.push(score);
+    }
+  }
+  return { specificity, captures, boundaryArgs, remainder: call.slice(pattern.length) };
+}
+
+/** Longest-bound-prefix, literal-beats-hole ordering. Returns >0 when `a` is more specific. */
+export function compareSpecificity(a: number[], b: number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] ?? -1) - (b[i] ?? -1);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+const unliteral = (v: unknown): unknown =>
+  holeKind(v) === "literal" ? (v as { $: unknown }).$ : v;
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) && Array.isArray(b))
+    return a.length === b.length && a.every((x, i) => deepEqual(x, b[i]));
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const ka = Object.keys(a);
+    return ka.length === Object.keys(b).length && ka.every((k) => deepEqual(a[k], b[k]));
+  }
+  return false;
+}
+
+// ────────────────────────────────────────────── substitute ──────────────────────────────────────────────
+
+/**
+ * Make a target expression concrete: replace every hole with the caller's values.
+ *  - `{ "?": n }`      → args[n]           (missing → undefined, like JS)
+ *  - `{ "?": "name" }` → captures[name]    (unbound capture → registration bug, throws)
+ *  - `{ "...": true }` in a call-arg list  → splice args from (highest numbered hole in that
+ *                                            list)+1, or all args when none are numbered
+ *  - `{ "...": n }` in an object           → shallow-merge args[n] (must be an object) under the
+ *                                            frozen keys — FROZEN WINS
+ *  - `{ "$": v }`      → v verbatim
+ */
+export function substitute(
+  target: Expression,
+  ctx: { args: unknown[]; captures: Record<string, unknown> },
+): Expression {
+  return target.map((step) =>
+    typeof step === "string" ? step : ([step[0], ...substituteArgList(step.slice(1), ctx)] as Step),
+  );
+}
+
+function substituteArgList(
+  list: unknown[],
+  ctx: { args: unknown[]; captures: Record<string, unknown> },
+): unknown[] {
+  let highest = -1;
+  for (const v of list) {
+    if (holeKind(v) === "arg") {
+      const h = (v as { "?": number | string })["?"];
+      if (typeof h === "number") highest = Math.max(highest, h);
+    }
+  }
+  const out: unknown[] = [];
+  for (const v of list) {
+    if (holeKind(v) === "rest" && (v as { "...": true | number })["..."] === true) {
+      out.push(...ctx.args.slice(highest + 1));
+    } else out.push(substituteValue(v, ctx));
+  }
+  return out;
+}
+
+function substituteValue(
+  v: unknown,
+  ctx: { args: unknown[]; captures: Record<string, unknown> },
+): unknown {
+  switch (holeKind(v)) {
+    case "arg": {
+      const h = (v as { "?": number | string })["?"];
+      if (typeof h === "number") return ctx.args[h];
+      if (!(h in ctx.captures)) throw new Error(`unbound capture "?${h}" — pattern never bound it`);
+      return ctx.captures[h];
+    }
+    case "literal":
+      return (v as { $: unknown }).$;
+    case "rest":
+      break; // object-spread handled below; bare rest outside a call list is meaningless
+  }
+  if (Array.isArray(v)) return v.map((x) => substituteValue(x, ctx));
+  if (isPlainObject(v)) {
+    const spreadArg = "..." in v && Object.keys(v).length >= 1 ? (v["..."] as number) : undefined;
+    const out: Record<string, unknown> = {};
+    if (spreadArg !== undefined) {
+      const src = ctx.args[spreadArg];
+      if (!isPlainObject(src))
+        throw new Error(`...?${spreadArg} spread: caller arg is not an object`);
+      Object.assign(out, src);
+    }
+    for (const [k, val] of Object.entries(v)) {
+      if (k === "...") continue;
+      out[k] = substituteValue(val, ctx); // frozen keys overwrite spread — frozen wins
+    }
+    return out;
+  }
+  return v;
+}
+
+// ─────────────────────────────────────────────── evaluate ───────────────────────────────────────────────
+
+/**
+ * Walk a CONCRETE expression (no holes — `substitute` first) against named scope roots. The first
+ * step names a root (`itx`, and `roots` for config-provenance expressions — evaluation for event
+ * provenance simply does not have `roots` in scope: unspellable, not policed). Property steps
+ * `Reflect.get` with the receiver carried; call steps `Reflect.apply` ON that receiver (detaching
+ * a method from a Workers-RPC receiver breaks it); every step is awaited so stub-returning calls
+ * pipeline naturally.
+ */
+export async function evaluate(
+  scope: Record<string, unknown>,
+  expr: Expression,
+): Promise<{ value: unknown; receiver: unknown }> {
+  const [root, ...steps] = expr;
+  if (typeof root !== "string" || !(root in scope))
+    throw new Error(`expression root ${JSON.stringify(root)} is not in scope`);
+  let value: unknown = scope[root];
+  let receiver: unknown = undefined;
+  for (const step of steps) {
+    value = await value;
+    if (value == null)
+      throw new Error(`expression hit ${String(value)} before ${JSON.stringify(step)}`);
+    if (typeof step === "string") {
+      receiver = value;
+      value = Reflect.get(value as object, step);
+    } else {
+      const [method, ...args] = step;
+      const fn = Reflect.get(value as object, method);
+      if (typeof fn !== "function")
+        throw new Error(`expression: ${JSON.stringify(method)} is not a method`);
+      receiver = undefined;
+      value = await Reflect.apply(fn, value, args);
+    }
+  }
+  return { value: await value, receiver };
+}
+
+/**
+ * Finish a matched call: evaluate the (already substituted) target, then replay the remainder on
+ * the result. Boundary args (caller invoked at the mount itself) apply the evaluated value as a
+ * function on its carried receiver — and if it is not callable that is a LOUD error (never the
+ * silent arg-drop apps/os shipped).
+ */
+export async function apply(
+  scope: Record<string, unknown>,
+  target: Expression,
+  m: Pick<Match, "boundaryArgs" | "remainder">,
+): Promise<unknown> {
+  let { value, receiver } = await evaluate(scope, target);
+  if (m.boundaryArgs) {
+    if (typeof value !== "function")
+      throw new Error(
+        `mount target is not callable but the call passed ${m.boundaryArgs.length} arg(s) — ` +
+          `did the target forget a hole (?) for them?`,
+      );
+    value = await Reflect.apply(value, receiver, m.boundaryArgs);
+  }
+  for (const step of m.remainder) {
+    value = await value;
+    if (value == null) throw new Error(`remainder hit ${String(value)} at ${JSON.stringify(step)}`);
+    if (typeof step === "string") {
+      receiver = value;
+      value = Reflect.get(value as object, step);
+    } else {
+      const [method, ...args] = step;
+      const fn = Reflect.get(value as object, method);
+      if (typeof fn !== "function")
+        throw new Error(`remainder: ${JSON.stringify(method)} is not a method`);
+      receiver = undefined;
+      value = await Reflect.apply(fn, value, args);
+    }
+  }
+  return await value;
+}
+
+/** Does a resolved call ride the fetch lane? Exactly when the terminal method is `fetch` — the one
+ *  method workerd grants 101/upgrade semantics. Check AFTER alias resolution, on the final shape. */
+export function isFetchTerminal(expr: Expression): boolean {
+  const last = expr.at(-1);
+  return last === "fetch" || (Array.isArray(last) && last[0] === "fetch");
+}

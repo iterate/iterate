@@ -6,18 +6,21 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "exports": {
     ".": "./src/worker.ts"
   },
   "dependencies": {
     "@v3/shared": "workspace:*",
-    "capnweb": "npm:@iterate-com/capnweb@^0.10.0"
+    "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
+    "zod": "^4.1.5"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260621.1",
     "typescript": "^5.9.3",
+    "vitest": "^4.1.7",
     "wrangler": "4.107.0"
   }
 }
