@@ -960,6 +960,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       subscriberPagerConnectionKeys: () => this.#subscriberPagers.connectionKeys(),
       onSessionsIdleClosed: (connectionKeys) =>
         this.#subscriberPagers.recordIdleClosed(connectionKeys),
+      facetWorkArmedAtMs: () => this.#readFacetAlarmAtMs(),
       pageDormantSubscribers: (justCommitted) =>
         this.#subscriberPagers.pageDormant(justCommitted.map((entry) => entry.event)),
     },

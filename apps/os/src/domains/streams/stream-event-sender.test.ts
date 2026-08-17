@@ -101,6 +101,7 @@ function harness(args: {
   >[0]["hooks"]["appendDeliveryEvent"];
   /** Share durable cursor rows with an earlier sender: the post-eviction rebuild. */
   store?: SqliteSubscriptionCursorStore;
+  facetWorkArmedAtMs?: () => number | null;
 }) {
   let now = 10_000;
   const configuration = args.configuration ?? hostedConfig(args.filter);
@@ -140,6 +141,7 @@ function harness(args: {
   };
   const eventSender = new StreamEventSender({
     hooks: {
+      facetWorkArmedAtMs: args.facetWorkArmedAtMs ?? (() => null),
       readEvents: ({ afterOffset, beforeOffset, limit }) =>
         args.events
           .filter((entry) => entry.offset > afterOffset && entry.offset < beforeOffset)
@@ -1940,6 +1942,7 @@ function connectionsHarness(
     events?: StreamEvent[];
     subscriberPagerConnectionKeys?: () => ReadonlySet<string>;
     onSessionsIdleClosed?: (connectionKeys: readonly string[]) => void;
+    facetWorkArmedAtMs?: () => number | null;
     readBatch?: ConstructorParameters<typeof StreamConnections>[0]["hooks"]["readBatch"];
     onAppend?: (args: {
       connections: StreamConnections;
@@ -1981,6 +1984,7 @@ function connectionsHarness(
   let connections!: StreamConnections;
   connections = new StreamConnections({
     hooks: {
+      facetWorkArmedAtMs: options.facetWorkArmedAtMs ?? (() => null),
       // Force several batches so the test can observe the one-at-a-time gate.
       readBatch:
         options.readBatch ??
@@ -2491,6 +2495,124 @@ describe("StreamConnections hosted delivery watchdog", () => {
       scannedAfterOffset: 3,
       scannedThroughOffset: 4,
     });
+  });
+
+  it("delivers an all-ephemeral batch without the durable in-flight insurance", async () => {
+    /*
+     * An ephemeral event's body cannot be redelivered by anyone, so the
+     * in-flight row and its settling write were crash insurance on a
+     * guarantee that does not exist — two output-gated storage commits per
+     * batch of audio, serialized inside the acknowledgement cycle.
+     */
+    const events = [
+      { ...streamEvent(1), ephemeral: true as const },
+      { ...streamEvent(2), ephemeral: true as const },
+    ];
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    connection.sendQueued();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.batch.events).toHaveLength(2);
+    /* No mark: the row never learned a batch was in flight. */
+    expect(h.store.get("processor")?.inFlightDeadlineAt ?? null).toBeNull();
+    calls[0]!.report("ok");
+    await flushMicrotasks();
+    /* And the lane keeps moving: the ack dispatched the next scan. */
+    expect(h.store.get("processor")?.inFlightDeadlineAt ?? null).toBeNull();
+  });
+
+  it("keeps the insurance for a durable batch", () => {
+    const events = [streamEvent(1)];
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({ events });
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    connection.sendQueued();
+    expect(calls).toHaveLength(1);
+    expect(h.store.get("processor")?.inFlightDeadlineAt ?? null).not.toBeNull();
+  });
+
+  it("merges consecutive all-filtered windows into the next real batch", async () => {
+    /*
+     * The scan pages a hundred offsets at a time, and every page used to be
+     * a callback — empty when nothing in it was consumed. On a voice stream
+     * the processor's own answer fills those pages, so the answer streaming
+     * down was starving the microphone lane of its round trips. Skipped
+     * windows now fold into the next dispatched batch, whose
+     * scannedAfterOffset stays pinned where the last report ended — the
+     * runner's contiguity check holds by construction.
+     */
+    const events: StreamEvent[] = [];
+    for (let offset = 1; offset <= 250; offset++) {
+      events.push(streamEvent(offset, "events.example.com/ignored"));
+    }
+    events.push(streamEvent(251, "events.example.com/matching"));
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+    h.state.maxOffset = 251;
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/matching"] }),
+    });
+    connection.sendQueued();
+    /* The wake's greeting window always dispatches — that contract holds. */
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.batch).toMatchObject({ scannedAfterOffset: 0, scannedThroughOffset: 100 });
+    calls[0]!.report("ok");
+    await flushMicrotasks();
+    /* Then ONE batch spanning both remaining filtered pages and the match —
+     * the old code paid a full acknowledgement cycle per page. */
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.batch).toMatchObject({
+      scannedAfterOffset: 100,
+      scannedThroughOffset: 251,
+      events: [{ offset: 251 }],
+    });
+  });
+
+  it("defers idle teardown while a facet holds work, and runs it after", () => {
+    let facetWork: number | null = 60_000;
+    const h = connectionsHarness({ facetWorkArmedAtMs: () => facetWork });
+    const calls: DeliveryCall[] = [];
+    h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+    });
+    calls[0]?.report("ok");
+    /* The alarm lands while the facet is mid-call: stand down. */
+    expect(h.connections.runIdleTeardownNow()).toEqual([]);
+    /* The facet settled and disarmed: the next firing tears down as before. */
+    facetWork = null;
+    expect(h.connections.runIdleTeardownNow()).toEqual(["processor"]);
   });
 
   it("classifies a broken hosted callback capability as lifecycle unavailability", () => {

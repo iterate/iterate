@@ -434,6 +434,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
     };
     const eventSender = new StreamEventSender({
       hooks: {
+        facetWorkArmedAtMs: () => null,
         readEvents: ({ afterOffset, beforeOffset, limit }) =>
           sourceEvents
             .filter((entry) => entry.offset > afterOffset && entry.offset < beforeOffset)

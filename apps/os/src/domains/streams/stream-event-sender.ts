@@ -392,6 +392,22 @@ type StreamEventSenderHooks = {
    */
   onSessionsIdleClosed(connectionKeys: readonly string[]): void;
   /**
+   * The shared facet keepalive-alarm slot, or null when no facet holds work.
+   *
+   * Non-null means some processor facet has in-flight work — a voice call's
+   * provider socket, an agent's tool call — and is re-asserting its keepalive
+   * (see stream-processor-keepalive.ts: every tracked closure keeps the alarm
+   * armed until it settles). While that is true the Durable Object cannot
+   * hibernate ANYWAY, so tearing down idle delivery connections saves nothing
+   * and charges the resurrection — an alarm hop plus a facet re-dial on the
+   * hosted lane, a page plus a relay re-dial on the session lane — against
+   * the very next event. Measured on a push-to-talk voice stream: the
+   * teardown fired in every between-turn gap and its resurrection was the
+   * whole of the latency tail (uplink lateness p90 188ms -> 38ms with the
+   * lanes held open).
+   */
+  facetWorkArmedAtMs(): number | null;
+  /**
    * Post-commit: offer just-committed events to dormant Pager-backed
    * subscribers (stream-subscriber-pager.ts). Edge-triggered by design — a Page lost to
    * a crash between commit and send is repaired by the next qualifying
@@ -1744,6 +1760,7 @@ type StreamConnectionsHooks = Pick<
   | "keepAlive"
   | "subscriberPagerConnectionKeys"
   | "onSessionsIdleClosed"
+  | "facetWorkArmedAtMs"
 > & {
   readBatch(afterOffset: number, beforeOffset: number, limit: number): SizedStreamEvent[];
   hostedDeliveryStillMatches(
@@ -2108,11 +2125,32 @@ export class StreamConnections {
     }
     this.#idleTeardownAtMs =
       (lastActivityMs === 0 ? this.#hooks.now() : lastActivityMs) + IDLE_CONNECTION_TEARDOWN_MS;
+    /*
+     * A STREAM WITH A WORKING FACET IS NOT IDLE, whatever the delivery lanes
+     * say. The facet's in-flight work pins this Durable Object awake, so the
+     * teardown would save nothing — and a voice call's between-turn quiet is
+     * longer than the idle window, so it would charge its resurrection to
+     * every single turn. Chase the keepalive by one step instead: the
+     * deadline lands just after the facet's own alarm, so the moment the
+     * facet settles clean and disarms, the very next firing finds the lanes
+     * genuinely idle and tears them down as before.
+     */
+    const facetWorkArmedAtMs = this.#hooks.facetWorkArmedAtMs();
+    if (facetWorkArmedAtMs !== null && facetWorkArmedAtMs + 1 > this.#idleTeardownAtMs) {
+      this.#idleTeardownAtMs = facetWorkArmedAtMs + 1;
+    }
     this.#hooks.armAlarm(Math.max(this.#hooks.now(), this.#idleTeardownAtMs));
   }
 
   runIdleTeardownNow(): string[] {
     this.#idleTeardownAtMs = null;
+    /* Level-triggered twin of the deferral in armOrClearIdleAlarm: an alarm
+     * armed before the facet took up work can still land here while the work
+     * runs. Re-derive the pushed-out deadline and stand down. */
+    if (this.#hooks.facetWorkArmedAtMs() !== null) {
+      this.armOrClearIdleAlarm();
+      return [];
+    }
     const { hosted, session } = this.#idleEligibleConnectionKeys();
     // This alarm can be due because a quiet sibling armed it. Never let that
     // sibling's lease dispose a different callback whose batch is still live.
@@ -2258,18 +2296,60 @@ export class StreamConnections {
     let open = true;
     let hostedBatchPending = false;
     let hostedBatchToken: symbol | null = null;
+    let hostedBatchEphemeral = false;
+    /** Start of the un-reported scan window; null once a batch reported it. */
+    let scanWindowStartOffset: number | null = null;
     let hostedBatchStartedAtMs: number | null = null;
     let hostedBatchDeadlineAtMs: number | null = null;
     let connection!: StreamConnection;
 
     const sendQueuedBatches = async () => {
+      /*
+       * THE UNINSURED BATCH'S WATCHDOG IS THIS CHECK. An all-ephemeral batch
+       * dispatches without the durable in-flight row, so nothing else notices
+       * if its ack never comes back from a facet that hung without dying (a
+       * dead one surfaces as rpc-broken on its own). This lane's next
+       * dispatch attempt — every append tries one — is the detector: past
+       * the deadline, fail the batch the way the durable watchdog would
+       * have, which closes and replaces the connection.
+       */
+      if (
+        kind === "hosted" &&
+        hostedBatchPending &&
+        hostedBatchEphemeral &&
+        hostedBatchDeadlineAtMs !== null &&
+        this.#hooks.now() > hostedBatchDeadlineAtMs &&
+        args.expectedHostedDelivery !== undefined
+      ) {
+        hostedBatchPending = false;
+        hostedBatchToken = null;
+        hostedBatchEphemeral = false;
+        hostedBatchStartedAtMs = null;
+        hostedBatchDeadlineAtMs = null;
+        this.onHostedDeliveryError(
+          connectionKey,
+          new Error(`ephemeral hosted batch unacknowledged for ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`),
+          args.expectedHostedDelivery,
+        );
+        return;
+      }
       if (sendLoopRunning || (kind === "hosted" && hostedBatchPending)) return;
       sendLoopRunning = true;
       try {
         while (open) {
           let events: StreamEvent[] = [];
           let deliveredBytes = 0;
-          const scannedAfterOffset = deliveredThroughOffset;
+          /*
+           * THE SCAN WINDOW IS PINNED ACROSS SKIPPED PASSES. The runner
+           * throws on `scannedAfterOffset > committedThroughOffset`, so a
+           * batch may never begin after a window the consumer was not told
+           * about. Skipping an all-filtered window therefore does not move
+           * the window's START — the next dispatched batch simply spans
+           * every window skipped before it, contiguous by construction.
+           */
+          if (scanWindowStartOffset === null) scanWindowStartOffset = deliveredThroughOffset;
+          const scannedAfterOffset = scanWindowStartOffset;
+          const cursorBeforeScan = deliveredThroughOffset;
           if (deliverEvents) {
             const readEvents = this.#hooks.readBatch(
               deliveredThroughOffset,
@@ -2328,6 +2408,33 @@ export class StreamConnections {
             await Promise.resolve();
             continue;
           }
+          if (
+            kind === "hosted" &&
+            deliverEvents &&
+            events.length === 0 &&
+            !initialBatchPending &&
+            deliveredThroughOffset > cursorBeforeScan &&
+            deliveredThroughOffset < this.#hooks.coreState().maxOffset
+          ) {
+            /*
+             * AN INTERMEDIATE ALL-FILTERED WINDOW IS NOT A DELIVERY, so stop
+             * paying a round trip for one. Every <=100-offset scan window
+             * used to become a callback — empty when nothing in it was
+             * consumed — and each cost the full acknowledgement cycle. On a
+             * voice stream the processor's OWN OUTPUT fills such windows: the
+             * answer streaming down starved the microphone lane of its round
+             * trips (measured: 225 batches for 194 events). The window that
+             * REACHES THE HEAD still always dispatches, empty or not: it is
+             * the only carrier of `scannedThroughOffset` across a filtered
+             * tail and of the runner's eventless caught-up pass — withhold it
+             * and obligations strand (the late-agent regression). The pinned
+             * scanWindowStartOffset above keeps that batch contiguous over
+             * everything skipped here.
+             */
+            await Promise.resolve();
+            continue;
+          }
+          const isInitialBatch = initialBatchPending;
           initialBatchPending = false;
           connection.batchesSent += 1;
           connection.eventsSent += events.length;
@@ -2356,22 +2463,52 @@ export class StreamConnections {
             // opts out of the reduced-state snapshot riding every batch.
             state: args.includeState === false ? null : currentState,
           } satisfies StreamEventBatch;
+          scanWindowStartOffset = null;
           if (kind === "hosted") {
             const expectedDelivery = args.expectedHostedDelivery!;
             const deliveryToken = Symbol("hosted stream delivery");
+            /*
+             * AN ALL-EPHEMERAL BATCH RIDES WITHOUT THE CRASH INSURANCE. The
+             * in-flight row and its watchdog alarm exist so a vanished
+             * isolate's DURABLE batch is redelivered — but an ephemeral
+             * event's body lives only in this incarnation's memory and cannot
+             * be redelivered by anyone, so the insurance protects a guarantee
+             * that does not exist. What it cost: two output-gated storage
+             * writes holding the dispatch RPC, and two more settling the ack
+             * — per 240 ms of audio, serialized, on the lane's critical path.
+             * Measured at 339-600 ms per cycle against the ~25 ms the code
+             * once recorded. `hostedDeliveryLimit` already guarantees a batch
+             * is either a run of ephemeral events or a single durable one, so
+             * the check is the first event's flag; `every` keeps it honest.
+             * The wake's first batch and every durable batch keep the full
+             * machinery. Liveness without the alarm: the wedge check at the
+             * top of this loop, plus rpc-broken detection when the isolate
+             * actually dies.
+             */
+            const uninsuredEphemeral =
+              events.length > 0
+                ? events.every((event) => event.ephemeral === true)
+                : !isInitialBatch;
             hostedBatchPending = true;
             hostedBatchToken = deliveryToken;
+            hostedBatchEphemeral = uninsuredEphemeral;
             hostedBatchStartedAtMs = this.#hooks.now();
             hostedBatchDeadlineAtMs = hostedBatchStartedAtMs + DEFAULT_DELIVERY_TIMEOUT_MS;
-            // This SQLite write and the native alarm are both issued before
-            // the callback leaves the source DO. The output gate therefore
-            // makes a vanished isolate recover as an expired durable attempt,
-            // not as an unbounded series of first-attempt wake calls.
-            this.#hooks.store.markInFlight(connectionKey, {
-              deadlineAt: hostedBatchDeadlineAtMs,
-              connectionGeneration: expectedDelivery.connectionGeneration,
-              cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
-            });
+            if (!uninsuredEphemeral) {
+              // This SQLite write and the native alarm are both issued before
+              // the callback leaves the source DO. The output gate therefore
+              // makes a vanished isolate recover as an expired durable attempt,
+              // not as an unbounded series of first-attempt wake calls.
+              this.#hooks.store.markInFlight(connectionKey, {
+                deadlineAt: hostedBatchDeadlineAtMs,
+                connectionGeneration: expectedDelivery.connectionGeneration,
+                cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
+              });
+            }
+            // Armed for BOTH kinds — for the uninsured it is the backstop
+            // that gets the wedge check a turn when no append ever comes,
+            // and it is free whenever any earlier alarm is already armed
+            // (armNoLaterThan skips the write).
             this.#hooks.armAlarm(hostedBatchDeadlineAtMs);
             (processEventBatch as unknown as RetainedProcessEventBatch<StreamWakeEventBatch>)({
               ...batch,
@@ -2382,6 +2519,7 @@ export class StreamConnections {
                 if (hostedBatchToken !== deliveryToken) return;
                 hostedBatchPending = false;
                 hostedBatchToken = null;
+                hostedBatchEphemeral = false;
                 hostedBatchStartedAtMs = null;
                 hostedBatchDeadlineAtMs = null;
                 const parsed = parseWakeDeliveryResult(deliveryResult);
@@ -2391,18 +2529,20 @@ export class StreamConnections {
                   this.#connections.get(connectionKey) === connection &&
                   this.#hooks.hostedDeliveryStillMatches(connectionKey, expectedDelivery)
                 ) {
-                  // The batch ack settles the watchdog and failure streak.
-                  // The receiver's durable claim (processed_through_offset) only
-                  // moves on reported checkpoints — the wake response's
-                  // checkpoint — so an eviction redelivers anything
-                  // unconfirmed (at-least-once).
-                  this.#hooks.store.clearInFlight(connectionKey, {
-                    connectionGeneration: expectedDelivery.connectionGeneration,
-                    cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
-                  });
-                  // The batch's pre-armed watchdog is now moot; let the full
-                  // recomputation decide whether anything still needs a turn.
-                  this.#hooks.reconcileAlarm();
+                  if (!uninsuredEphemeral) {
+                    // The batch ack settles the watchdog and failure streak.
+                    // The receiver's durable claim (processed_through_offset) only
+                    // moves on reported checkpoints — the wake response's
+                    // checkpoint — so an eviction redelivers anything
+                    // unconfirmed (at-least-once).
+                    this.#hooks.store.clearInFlight(connectionKey, {
+                      connectionGeneration: expectedDelivery.connectionGeneration,
+                      cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
+                    });
+                    // The batch's pre-armed watchdog is now moot; let the full
+                    // recomputation decide whether anything still needs a turn.
+                    this.#hooks.reconcileAlarm();
+                  }
                   if (newestCreatedAtMs !== undefined && Number.isFinite(newestCreatedAtMs)) {
                     const completedAtMs = this.#hooks.now();
                     connection.completionLatency.record(

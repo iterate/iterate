@@ -101,6 +101,13 @@ type ProcessorKeepaliveHooks = {
  * revival latency; a deploy mid-agent-turn recovers within roughly this. */
 export const KEEPALIVE_ALARM_LEAD_MS = 10_000;
 
+/**
+ * Floor between redundant re-assertions of an already-sufficient alarm.
+ * See #ensureArmedForWork: the re-assert exists to heal a lost platform
+ * write, and healing within a fraction of the lead is as good as instantly.
+ */
+const KEEPALIVE_REASSERT_MIN_INTERVAL_MS = 2_500;
+
 /** Revival backoff by attempt number (1-based); past the table, the plateau. */
 const REVIVAL_BACKOFF_MS = [10_000, 60_000, 5 * 60_000, 30 * 60_000];
 export const REVIVAL_BACKOFF_PLATEAU_MS = 6 * 60 * 60_000;
@@ -164,6 +171,10 @@ export class ProcessorKeepalive {
    * in-memory copy would be one more thing to drift after an eviction, and
    * stale copied state is exactly the failure class this module hunts.
    */
+  /** When an already-armed desire was last re-asserted; in-memory on purpose
+   * (a fresh incarnation should re-assert on its first tracked work). */
+  #lastReassertAtMs = 0;
+
   get armedAtMs(): number | null {
     return this.#hooks.readRecord()?.armedAtMs ?? null;
   }
@@ -313,7 +324,8 @@ export class ProcessorKeepalive {
    * during a revival pass (its backoff safety net must govern). */
   #ensureArmedForWork(): void {
     if (this.#reviving) return;
-    const atMs = this.#hooks.now() + KEEPALIVE_ALARM_LEAD_MS;
+    const nowMs = this.#hooks.now();
+    const atMs = nowMs + KEEPALIVE_ALARM_LEAD_MS;
     const armedAt = this.armedAtMs;
     if (armedAt !== null && armedAt <= atMs) {
       // The record says a sufficient alarm exists — but the record proves the
@@ -324,9 +336,20 @@ export class ProcessorKeepalive {
       // when a previous one failed. Without this, a lost alarm in a WARM
       // incarnation stays lost until the next boot — the boot-time reconcile
       // only covers fresh incarnations.
+      //
+      // RATE-LIMITED, because for a facet this re-assert is not free: it is
+      // an RPC to the parent Durable Object plus two output-gated storage
+      // writes there — and `track` runs once per delivered batch, which on a
+      // 50 Hz audio lane put that RPC inside every delivery acknowledgement.
+      // Healing a lost platform alarm within a couple of seconds of tracked
+      // work is every bit as good as healing it instantly: the alarm being
+      // guarded fires ten seconds out.
+      if (nowMs - this.#lastReassertAtMs < KEEPALIVE_REASSERT_MIN_INTERVAL_MS) return;
+      this.#lastReassertAtMs = nowMs;
       this.#hooks.armAlarm(armedAt);
       return;
     }
+    this.#lastReassertAtMs = nowMs;
     this.#arm(atMs);
   }
 
