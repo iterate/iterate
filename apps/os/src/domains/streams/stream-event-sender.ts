@@ -143,6 +143,16 @@ const MAX_FAILING_EVENT_SKIPS_SINCE_LAST_SUCCESS = 3;
 const DELIVERY_BATCH_LIMIT = 1000;
 
 /**
+ * Uninsured (all-ephemeral) hosted batches in flight at once. The ack gate
+ * exists for DURABLE bookkeeping; an uninsured batch's ack settles nothing,
+ * so waiting for it before dispatching the next was pure serialization — one
+ * facet round trip per 240ms of audio. Order still holds (calls on one
+ * retained callback arrive in sequence, and the runner queues batches); the
+ * bound is backpressure, not correctness.
+ */
+const MAX_UNINSURED_HOSTED_BATCHES_IN_FLIGHT = 4;
+
+/**
  * Hosted processors can turn one event into arbitrary Durable Object and
  * external work. Give each matching event its own acknowledgement boundary so
  * a slow event cannot make already-processed siblings time out and replay.
@@ -2296,7 +2306,8 @@ export class StreamConnections {
     let open = true;
     let hostedBatchPending = false;
     let hostedBatchToken: symbol | null = null;
-    let hostedBatchEphemeral = false;
+    /** Pipelined uninsured batches awaiting acks, token -> deadline. */
+    const uninsuredInFlight = new Map<symbol, { startedAtMs: number; deadlineAtMs: number }>();
     /** Start of the un-reported scan window; null once a batch reported it. */
     let scanWindowStartOffset: number | null = null;
     let hostedBatchStartedAtMs: number | null = null;
@@ -2315,25 +2326,27 @@ export class StreamConnections {
        */
       if (
         kind === "hosted" &&
-        hostedBatchPending &&
-        hostedBatchEphemeral &&
-        hostedBatchDeadlineAtMs !== null &&
-        this.#hooks.now() > hostedBatchDeadlineAtMs &&
+        uninsuredInFlight.size > 0 &&
         args.expectedHostedDelivery !== undefined
       ) {
-        hostedBatchPending = false;
-        hostedBatchToken = null;
-        hostedBatchEphemeral = false;
-        hostedBatchStartedAtMs = null;
-        hostedBatchDeadlineAtMs = null;
-        this.onHostedDeliveryError(
-          connectionKey,
-          new Error(`ephemeral hosted batch unacknowledged for ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`),
-          args.expectedHostedDelivery,
-        );
+        const nowMs = this.#hooks.now();
+        if ([...uninsuredInFlight.values()].some((flight) => nowMs > flight.deadlineAtMs)) {
+          uninsuredInFlight.clear();
+          this.onHostedDeliveryError(
+            connectionKey,
+            new Error(`ephemeral hosted batch unacknowledged for ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`),
+            args.expectedHostedDelivery,
+          );
+          return;
+        }
+      }
+      if (
+        sendLoopRunning ||
+        (kind === "hosted" &&
+          (hostedBatchPending || uninsuredInFlight.size >= MAX_UNINSURED_HOSTED_BATCHES_IN_FLIGHT))
+      ) {
         return;
       }
-      if (sendLoopRunning || (kind === "hosted" && hostedBatchPending)) return;
       sendLoopRunning = true;
       try {
         while (open) {
@@ -2489,18 +2502,26 @@ export class StreamConnections {
               events.length > 0
                 ? events.every((event) => event.ephemeral === true)
                 : !isInitialBatch;
-            hostedBatchPending = true;
-            hostedBatchToken = deliveryToken;
-            hostedBatchEphemeral = uninsuredEphemeral;
-            hostedBatchStartedAtMs = this.#hooks.now();
-            hostedBatchDeadlineAtMs = hostedBatchStartedAtMs + DEFAULT_DELIVERY_TIMEOUT_MS;
+            const dispatchedAtMs = this.#hooks.now();
+            const batchDeadlineAtMs = dispatchedAtMs + DEFAULT_DELIVERY_TIMEOUT_MS;
+            if (uninsuredEphemeral) {
+              uninsuredInFlight.set(deliveryToken, {
+                startedAtMs: dispatchedAtMs,
+                deadlineAtMs: batchDeadlineAtMs,
+              });
+            } else {
+              hostedBatchPending = true;
+              hostedBatchToken = deliveryToken;
+              hostedBatchStartedAtMs = dispatchedAtMs;
+              hostedBatchDeadlineAtMs = batchDeadlineAtMs;
+            }
             if (!uninsuredEphemeral) {
               // This SQLite write and the native alarm are both issued before
               // the callback leaves the source DO. The output gate therefore
               // makes a vanished isolate recover as an expired durable attempt,
               // not as an unbounded series of first-attempt wake calls.
               this.#hooks.store.markInFlight(connectionKey, {
-                deadlineAt: hostedBatchDeadlineAtMs,
+                deadlineAt: batchDeadlineAtMs,
                 connectionGeneration: expectedDelivery.connectionGeneration,
                 cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
               });
@@ -2509,19 +2530,22 @@ export class StreamConnections {
             // that gets the wedge check a turn when no append ever comes,
             // and it is free whenever any earlier alarm is already armed
             // (armNoLaterThan skips the write).
-            this.#hooks.armAlarm(hostedBatchDeadlineAtMs);
+            this.#hooks.armAlarm(batchDeadlineAtMs);
             (processEventBatch as unknown as RetainedProcessEventBatch<StreamWakeEventBatch>)({
               ...batch,
               reportDeliveryResult: (deliveryResult) => {
                 // Each callback belongs to exactly one batch. Duplicate or
                 // late reports cannot complete a replacement connection or the
                 // next batch on this connection.
-                if (hostedBatchToken !== deliveryToken) return;
-                hostedBatchPending = false;
-                hostedBatchToken = null;
-                hostedBatchEphemeral = false;
-                hostedBatchStartedAtMs = null;
-                hostedBatchDeadlineAtMs = null;
+                if (uninsuredEphemeral) {
+                  if (!uninsuredInFlight.delete(deliveryToken)) return;
+                } else {
+                  if (hostedBatchToken !== deliveryToken) return;
+                  hostedBatchPending = false;
+                  hostedBatchToken = null;
+                  hostedBatchStartedAtMs = null;
+                  hostedBatchDeadlineAtMs = null;
+                }
                 const parsed = parseWakeDeliveryResult(deliveryResult);
                 if (
                   parsed.outcome === "ok" &&
@@ -2571,7 +2595,12 @@ export class StreamConnections {
           // Hosted processors acknowledge in order, one batch at a time. Do
           // not await the remote promise in this invocation tree; the result callback
           // or the native-alarm watchdog starts the next state transition.
-          if (kind === "hosted") return;
+          if (kind === "hosted") {
+            if (hostedBatchPending) return;
+            if (uninsuredInFlight.size >= MAX_UNINSURED_HOSTED_BATCHES_IN_FLIGHT) return;
+            /* An uninsured dispatch does not wait for its ack: keep scanning
+             * and pipeline the next batch behind it, bounded above. */
+          }
           await Promise.resolve();
         }
       } catch (error) {
@@ -2610,9 +2639,22 @@ export class StreamConnections {
       pingRtt: new LatencyRing(),
       sendQueued: () => void sendQueuedBatches(),
       isLive: () => open,
-      hasPendingDelivery: () => (kind === "hosted" ? hostedBatchPending : false),
-      pendingDeliveryStartedAtMs: () => hostedBatchStartedAtMs,
-      pendingDeliveryDeadlineAtMs: () => hostedBatchDeadlineAtMs,
+      hasPendingDelivery: () =>
+        kind === "hosted" ? hostedBatchPending || uninsuredInFlight.size > 0 : false,
+      pendingDeliveryStartedAtMs: () =>
+        hostedBatchStartedAtMs ??
+        [...uninsuredInFlight.values()].reduce<number | null>(
+          (earliest, flight) =>
+            earliest === null ? flight.startedAtMs : Math.min(earliest, flight.startedAtMs),
+          null,
+        ),
+      pendingDeliveryDeadlineAtMs: () =>
+        hostedBatchDeadlineAtMs ??
+        [...uninsuredInFlight.values()].reduce<number | null>(
+          (earliest, flight) =>
+            earliest === null ? flight.deadlineAtMs : Math.min(earliest, flight.deadlineAtMs),
+          null,
+        ),
       close: (reason, error) => {
         if (!open) return;
         open = false;
