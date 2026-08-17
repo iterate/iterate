@@ -2724,7 +2724,15 @@ describe("StreamConnections hosted delivery watchdog", () => {
     errorLog.mockRestore();
   });
 
-  it("dispatches one hosted batch at a time and clears the durable marker before the next", async () => {
+  it("pipelines durable batches; the marker tracks the oldest outstanding", async () => {
+    /*
+     * DISPATCH NEVER WAITS FOR AN ACK. Delivery is at-least-once by
+     * construction, consumers own idempotence, and the ack settles
+     * bookkeeping — it does not gate the lane. What the durable marker means
+     * under pipelining: it always names the OLDEST unacknowledged insured
+     * batch, so eviction recovery starts from the first thing that might not
+     * have landed, and it clears only when the pipeline drains.
+     */
     const h = connectionsHarness();
     h.store.nack("processor", {
       attempt: 14,
@@ -2740,6 +2748,8 @@ describe("StreamConnections hosted delivery watchdog", () => {
       replayAfterOffset: 0,
     });
 
+    /* The wake's FIRST batch alone is single-flight — the handshake that
+     * proves the facet is up before anything pipelines behind it. */
     connection.sendQueued();
     expect(calls).toHaveLength(1);
     expect(calls[0]!.batch.events.map((event) => event.offset)).toEqual([1]);
@@ -2751,15 +2761,18 @@ describe("StreamConnections hosted delivery watchdog", () => {
       inFlightConnectionGeneration: 7,
     });
 
-    connection.sendQueued();
-    expect(calls).toHaveLength(1);
-
+    /* Its ack opens the pipeline: both remaining events dispatch back to
+     * back, one durable event per batch, with no ack in between. The ack
+     * also clears the failure streak, re-points the marker at the oldest
+     * outstanding batch, and moves no cursor — confirmed advances only on
+     * reported checkpoints, never on batch acknowledgements. */
     calls[0]!.report("ok");
     await flushMicrotasks();
-    expect(calls).toHaveLength(2);
-    expect(calls[1]!.batch.events.map((event) => event.offset)).toEqual([2]);
-    // The batch ack cleared the failure state but not the cursor: confirmed
-    // advances only on reported checkpoints, never on batch acknowledgements.
+    expect(calls).toHaveLength(3);
+    expect(calls.slice(1).map((call) => call.batch.events.map((event) => event.offset))).toEqual([
+      [2],
+      [3],
+    ]);
     expect(h.store.get("processor")).toMatchObject({
       confirmedOffset: 0,
       attempt: 0,
@@ -2768,6 +2781,12 @@ describe("StreamConnections hosted delivery watchdog", () => {
       inFlightDeadlineAt: 1_000 + DEFAULT_DELIVERY_TIMEOUT_MS,
       inFlightConnectionGeneration: 7,
     });
+
+    /* Draining the pipeline clears the marker entirely. */
+    calls[1]!.report("ok");
+    calls[2]!.report("ok");
+    await flushMicrotasks();
+    expect(h.store.get("processor")).toMatchObject({ inFlightDeadlineAt: null });
     expect(disposed).not.toHaveBeenCalled();
   });
 
@@ -2798,21 +2817,26 @@ describe("StreamConnections hosted delivery watchdog", () => {
       filter: compileEventFilter({ eventTypes: ["events.example.com/matched"] }),
     });
 
+    /* The greeting batch carries the first match and is single-flight. */
     connection.sendQueued();
+    expect(calls).toHaveLength(1);
     expect(calls[0]!.batch).toMatchObject({
       scannedAfterOffset: 0,
       scannedThroughOffset: 2,
     });
     expect(calls[0]!.batch.events.map((event) => event.offset)).toEqual([2]);
 
+    /* Its ack releases the pipeline; the next match rides its own batch with
+     * a contiguous window, and non-matches are never rescanned. */
     calls[0]!.report("ok");
     await flushMicrotasks();
+    expect(calls).toHaveLength(2);
     expect(calls[1]!.batch).toMatchObject({
       scannedAfterOffset: 2,
       scannedThroughOffset: 4,
     });
     expect(calls[1]!.batch.events.map((event) => event.offset)).toEqual([3]);
-    expect(readLimits).toEqual([100, 100]);
+    expect(readLimits).toEqual([100, 100, 100]);
   });
 
   it("turns a live callback timeout into a counted failure and ignores its late result", async () => {

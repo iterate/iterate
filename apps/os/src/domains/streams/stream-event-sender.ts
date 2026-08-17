@@ -143,14 +143,20 @@ const MAX_FAILING_EVENT_SKIPS_SINCE_LAST_SUCCESS = 3;
 const DELIVERY_BATCH_LIMIT = 1000;
 
 /**
- * Uninsured (all-ephemeral) hosted batches in flight at once. The ack gate
- * exists for DURABLE bookkeeping; an uninsured batch's ack settles nothing,
- * so waiting for it before dispatching the next was pure serialization — one
- * facet round trip per 240ms of audio. Order still holds (calls on one
- * retained callback arrive in sequence, and the runner queues batches); the
- * bound is backpressure, not correctness.
+ * Hosted batches in flight at once, of every kind but the wake greeting.
+ *
+ * DISPATCH NEVER WAITS FOR AN ACK. Delivery is at-least-once by construction
+ * — an eviction already redelivers everything unacknowledged — so gating
+ * batch N+1 on batch N's acknowledgement bought no guarantee a consumer
+ * could rely on, and cost one facet round trip per batch on the lane's
+ * critical path. Consumers own idempotence; the platform owns order (calls
+ * on one retained callback arrive in sequence, and the runner queues
+ * batches) and self-healing (a mid-pipeline failure makes the NEXT batch
+ * trip the runner's contiguity check, which closes the connection and
+ * redelivers from the durable cursor). The bound is backpressure, not
+ * correctness.
  */
-const MAX_UNINSURED_HOSTED_BATCHES_IN_FLIGHT = 4;
+const MAX_HOSTED_BATCHES_IN_FLIGHT = 4;
 
 /**
  * Hosted processors can turn one event into arbitrary Durable Object and
@@ -2304,14 +2310,20 @@ export class StreamConnections {
     let initialBatchPending = true;
     let sendLoopRunning = false;
     let open = true;
-    let hostedBatchPending = false;
-    let hostedBatchToken: symbol | null = null;
-    /** Pipelined uninsured batches awaiting acks, token -> deadline. */
-    const uninsuredInFlight = new Map<symbol, { startedAtMs: number; deadlineAtMs: number }>();
+    /**
+     * Every hosted batch awaiting its ack, in dispatch order. `insured`
+     * marks batches whose durable in-flight row is maintained below — the
+     * row always names the OLDEST outstanding insured batch, so eviction
+     * recovery starts from the first thing that might not have landed.
+     */
+    const hostedInFlight = new Map<
+      symbol,
+      { startedAtMs: number; deadlineAtMs: number; insured: boolean }
+    >();
+    /** The wake greeting's token while unacknowledged: it alone is single-flight. */
+    let greetingToken: symbol | null = null;
     /** Start of the un-reported scan window; null once a batch reported it. */
     let scanWindowStartOffset: number | null = null;
-    let hostedBatchStartedAtMs: number | null = null;
-    let hostedBatchDeadlineAtMs: number | null = null;
     let connection!: StreamConnection;
 
     const sendQueuedBatches = async () => {
@@ -2326,15 +2338,16 @@ export class StreamConnections {
        */
       if (
         kind === "hosted" &&
-        uninsuredInFlight.size > 0 &&
+        hostedInFlight.size > 0 &&
         args.expectedHostedDelivery !== undefined
       ) {
         const nowMs = this.#hooks.now();
-        if ([...uninsuredInFlight.values()].some((flight) => nowMs > flight.deadlineAtMs)) {
-          uninsuredInFlight.clear();
+        if ([...hostedInFlight.values()].some((flight) => nowMs > flight.deadlineAtMs)) {
+          hostedInFlight.clear();
+          greetingToken = null;
           this.onHostedDeliveryError(
             connectionKey,
-            new Error(`ephemeral hosted batch unacknowledged for ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`),
+            new Error(`hosted batch unacknowledged for ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`),
             args.expectedHostedDelivery,
           );
           return;
@@ -2343,7 +2356,7 @@ export class StreamConnections {
       if (
         sendLoopRunning ||
         (kind === "hosted" &&
-          (hostedBatchPending || uninsuredInFlight.size >= MAX_UNINSURED_HOSTED_BATCHES_IN_FLIGHT))
+          (greetingToken !== null || hostedInFlight.size >= MAX_HOSTED_BATCHES_IN_FLIGHT))
       ) {
         return;
       }
@@ -2502,24 +2515,26 @@ export class StreamConnections {
               events.length > 0
                 ? events.every((event) => event.ephemeral === true)
                 : !isInitialBatch;
+            const insured = !uninsuredEphemeral;
             const dispatchedAtMs = this.#hooks.now();
             const batchDeadlineAtMs = dispatchedAtMs + DEFAULT_DELIVERY_TIMEOUT_MS;
-            if (uninsuredEphemeral) {
-              uninsuredInFlight.set(deliveryToken, {
-                startedAtMs: dispatchedAtMs,
-                deadlineAtMs: batchDeadlineAtMs,
-              });
-            } else {
-              hostedBatchPending = true;
-              hostedBatchToken = deliveryToken;
-              hostedBatchStartedAtMs = dispatchedAtMs;
-              hostedBatchDeadlineAtMs = batchDeadlineAtMs;
-            }
-            if (!uninsuredEphemeral) {
+            const insuredAlreadyOutstanding = [...hostedInFlight.values()].some(
+              (flight) => flight.insured,
+            );
+            hostedInFlight.set(deliveryToken, {
+              startedAtMs: dispatchedAtMs,
+              deadlineAtMs: batchDeadlineAtMs,
+              insured,
+            });
+            if (isInitialBatch) greetingToken = deliveryToken;
+            if (insured && !insuredAlreadyOutstanding) {
               // This SQLite write and the native alarm are both issued before
               // the callback leaves the source DO. The output gate therefore
               // makes a vanished isolate recover as an expired durable attempt,
-              // not as an unbounded series of first-attempt wake calls.
+              // not as an unbounded series of first-attempt wake calls. The
+              // row names the OLDEST outstanding insured batch — a younger
+              // sibling dispatching behind it writes nothing, because
+              // recovery must start from the first thing unconfirmed.
               this.#hooks.store.markInFlight(connectionKey, {
                 deadlineAt: batchDeadlineAtMs,
                 connectionGeneration: expectedDelivery.connectionGeneration,
@@ -2537,15 +2552,8 @@ export class StreamConnections {
                 // Each callback belongs to exactly one batch. Duplicate or
                 // late reports cannot complete a replacement connection or the
                 // next batch on this connection.
-                if (uninsuredEphemeral) {
-                  if (!uninsuredInFlight.delete(deliveryToken)) return;
-                } else {
-                  if (hostedBatchToken !== deliveryToken) return;
-                  hostedBatchPending = false;
-                  hostedBatchToken = null;
-                  hostedBatchStartedAtMs = null;
-                  hostedBatchDeadlineAtMs = null;
-                }
+                if (!hostedInFlight.delete(deliveryToken)) return;
+                if (greetingToken === deliveryToken) greetingToken = null;
                 const parsed = parseWakeDeliveryResult(deliveryResult);
                 if (
                   parsed.outcome === "ok" &&
@@ -2553,19 +2561,32 @@ export class StreamConnections {
                   this.#connections.get(connectionKey) === connection &&
                   this.#hooks.hostedDeliveryStillMatches(connectionKey, expectedDelivery)
                 ) {
-                  if (!uninsuredEphemeral) {
-                    // The batch ack settles the watchdog and failure streak.
-                    // The receiver's durable claim (processed_through_offset) only
-                    // moves on reported checkpoints — the wake response's
-                    // checkpoint — so an eviction redelivers anything
-                    // unconfirmed (at-least-once).
-                    this.#hooks.store.clearInFlight(connectionKey, {
-                      connectionGeneration: expectedDelivery.connectionGeneration,
-                      cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
-                    });
-                    // The batch's pre-armed watchdog is now moot; let the full
-                    // recomputation decide whether anything still needs a turn.
-                    this.#hooks.reconcileAlarm();
+                  if (insured) {
+                    // The ack settles this batch; the row goes on naming the
+                    // OLDEST insured batch still out, or clears when none is.
+                    // Same write count as the old single-flight pairing — one
+                    // row write per insured ack — just no longer a gate. The
+                    // receiver's durable claim (processed_through_offset)
+                    // only moves on reported checkpoints, so an eviction
+                    // still redelivers anything unconfirmed (at-least-once).
+                    const oldestInsured = [...hostedInFlight.values()].find(
+                      (flight) => flight.insured,
+                    );
+                    if (oldestInsured === undefined) {
+                      this.#hooks.store.clearInFlight(connectionKey, {
+                        connectionGeneration: expectedDelivery.connectionGeneration,
+                        cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
+                      });
+                      // The pre-armed watchdogs are now moot; let the full
+                      // recomputation decide whether anything needs a turn.
+                      this.#hooks.reconcileAlarm();
+                    } else {
+                      this.#hooks.store.markInFlight(connectionKey, {
+                        deadlineAt: oldestInsured.deadlineAtMs,
+                        connectionGeneration: expectedDelivery.connectionGeneration,
+                        cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
+                      });
+                    }
                   }
                   if (newestCreatedAtMs !== undefined && Number.isFinite(newestCreatedAtMs)) {
                     const completedAtMs = this.#hooks.now();
@@ -2596,10 +2617,12 @@ export class StreamConnections {
           // not await the remote promise in this invocation tree; the result callback
           // or the native-alarm watchdog starts the next state transition.
           if (kind === "hosted") {
-            if (hostedBatchPending) return;
-            if (uninsuredInFlight.size >= MAX_UNINSURED_HOSTED_BATCHES_IN_FLIGHT) return;
-            /* An uninsured dispatch does not wait for its ack: keep scanning
-             * and pipeline the next batch behind it, bounded above. */
+            /* The greeting alone is single-flight — it is the handshake that
+             * proves the facet is up. Everything after it pipelines: keep
+             * scanning and dispatch the next batch behind the last, bounded
+             * above; acks settle bookkeeping as they arrive. */
+            if (greetingToken !== null) return;
+            if (hostedInFlight.size >= MAX_HOSTED_BATCHES_IN_FLIGHT) return;
           }
           await Promise.resolve();
         }
@@ -2639,18 +2662,15 @@ export class StreamConnections {
       pingRtt: new LatencyRing(),
       sendQueued: () => void sendQueuedBatches(),
       isLive: () => open,
-      hasPendingDelivery: () =>
-        kind === "hosted" ? hostedBatchPending || uninsuredInFlight.size > 0 : false,
+      hasPendingDelivery: () => kind === "hosted" && hostedInFlight.size > 0,
       pendingDeliveryStartedAtMs: () =>
-        hostedBatchStartedAtMs ??
-        [...uninsuredInFlight.values()].reduce<number | null>(
+        [...hostedInFlight.values()].reduce<number | null>(
           (earliest, flight) =>
             earliest === null ? flight.startedAtMs : Math.min(earliest, flight.startedAtMs),
           null,
         ),
       pendingDeliveryDeadlineAtMs: () =>
-        hostedBatchDeadlineAtMs ??
-        [...uninsuredInFlight.values()].reduce<number | null>(
+        [...hostedInFlight.values()].reduce<number | null>(
           (earliest, flight) =>
             earliest === null ? flight.deadlineAtMs : Math.min(earliest, flight.deadlineAtMs),
           null,
@@ -2658,10 +2678,8 @@ export class StreamConnections {
       close: (reason, error) => {
         if (!open) return;
         open = false;
-        hostedBatchPending = false;
-        hostedBatchToken = null;
-        hostedBatchStartedAtMs = null;
-        hostedBatchDeadlineAtMs = null;
+        hostedInFlight.clear();
+        greetingToken = null;
         if (this.#connections.get(connectionKey) === connection) {
           this.#connections.delete(connectionKey);
           this.#hooks.runtimeChanged();
