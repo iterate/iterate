@@ -30,7 +30,7 @@
  *
  *   `deviceMicFrameSeq`      device microphone -> facet -> Grok. Minted by the
  *                            DEVICE; the facet never renumbers it.
- *   `grokAudioDeltaSeq`      Grok -> facet. One per `response.output_audio.delta`
+ *   `providerDeltaSeq`      Grok -> facet. One per `response.output_audio.delta`
  *                            as the facet received it, counted per call.
  *   `deviceSpeakerFrameSeq`  facet -> device speaker. One per paced, mu-law
  *                            encoded chunk. A single Grok delta usually becomes
@@ -48,7 +48,7 @@
  *                     there are two clients.
  *   `...AtFacetMs`    read inside this processor, `deps.nowAtFacetMs()`
  *   `...AtStreamMs`   the Stream Durable Object's commit stamp (`event.createdAt`)
- *   `...AtGrokMs`     a stamp the PROVIDER put on its own event
+ *   `...AtProviderMs`     a stamp the PROVIDER put on its own event
  *
  * None of them is synchronised with any other. A duration is only meaningful
  * between two stamps with the SAME suffix; subtracting across them is the
@@ -183,7 +183,7 @@ const PROVIDERS: Record<
  * being wrong more often. `prefix_padding_ms` keeps the audio just BEFORE the
  * detector fired, so the first consonant of an interruption survives.
  */
-const GROK_SERVER_VAD = { type: "server_vad", threshold: 0.85, prefix_padding_ms: 333 } as const;
+const SERVER_VAD = { type: "server_vad", threshold: 0.85, prefix_padding_ms: 333 } as const;
 
 /**
  * The most unplayed audio the device may be holding, in wire bytes.
@@ -333,7 +333,7 @@ function bytesToBase64(bytes: Uint8Array): string {
  * windowed-sinc kernel and nothing anybody hears on speech through these
  * speakers; what matters is that it is allocation-light and runs per frame.
  */
-function resamplePcm16(bytes: Uint8Array, fromRate: number, toRate: number): Uint8Array {
+export function resamplePcm16(bytes: Uint8Array, fromRate: number, toRate: number): Uint8Array {
   if (fromRate === toRate) return bytes;
   const samples = Math.floor(bytes.byteLength / 2);
   if (samples === 0) return new Uint8Array(0);
@@ -373,14 +373,14 @@ function base64ToBytes(base64: string): Uint8Array {
  */
 const VoiceState = z.object({
   /** Dial this instead of x.ai. Test seam; carries no credential. */
-  grokBaseUrl: z.string().nullable().default(null),
+  providerBaseUrl: z.string().nullable().default(null),
   /** Which realtime voice provider this stream's calls dial. */
   provider: z.enum(["grok", "openai"]).default("grok"),
   /** Model and voice overrides; null takes the provider's default. */
   providerModel: z.string().nullable().default(null),
   providerVoice: z.string().nullable().default(null),
   /** What the model is told it is. Empty means Grok's own default. */
-  grokInstructions: z.string().default(""),
+  instructions: z.string().default(""),
   /** Which brief setup last marked current; the warm-up handshake answers it. */
   briefCurrent: z
     .strictObject({ setupId: z.string(), briefKey: z.string(), contentHash: z.string() })
@@ -445,18 +445,24 @@ export const VoiceAgent2Contract = defineProcessorContract({
    * revived one could replay an answer the listener had already talked over.
    * A persisted 2.x fold is missing or misnaming most of this, so bumping the
    * major is how the runner is told to re-reduce rather than load it. */
-  version: "3.0.0",
+  /* 4.0.0: the provider abstraction finished what it started — the fold's
+   * `grokBaseUrl`/`grokInstructions` became `providerBaseUrl`/`instructions`
+   * and the speaker frame's `fromGrokAudioDeltaSeq` became
+   * `fromProviderDeltaSeq`, because half the streams this serves no longer
+   * dial Grok. A persisted 3.x fold misnames those; the major bump re-reduces
+   * instead of loading it. Clean break, no aliases. */
+  version: "4.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
     "events.iterate.com/voice-agent/created": {
       description: "The voice agent exists on this stream.",
       payloadSchema: z.strictObject({
-        grokBaseUrl: z.string().optional(),
+        providerBaseUrl: z.string().optional(),
         provider: z.enum(["grok", "openai"]).optional(),
         providerModel: z.string().optional(),
         providerVoice: z.string().optional(),
-        grokInstructions: z.string().optional(),
+        instructions: z.string().optional(),
         clientTakesTurns: z.boolean().optional(),
       }),
     },
@@ -556,7 +562,7 @@ export const VoiceAgent2Contract = defineProcessorContract({
         /** Monotonic within the call. The only ordering the device trusts. */
         deviceSpeakerFrameSeq: z.number(),
         /** Which Grok delta this chunk was cut from. Debugging, not ordering. */
-        fromGrokAudioDeltaSeq: z.number(),
+        fromProviderDeltaSeq: z.number(),
         /**
          * 16 kHz mono PCM16, base64, of no particular length — the device
          * appends it to a byte ring. EMPTY on a frame whose only job is the
@@ -754,9 +760,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * must outlive an eviction is in the fold above. */
 
   /** Grok's socket, or null when this incarnation is not holding one. */
-  #grokSocket: WebSocket | null = null;
+  #providerSocket: WebSocket | null = null;
   /** True once Grok's handshake completed and audio may flow. */
-  #grokReady = false;
+  #providerReady = false;
   /** One dial at a time: two caught-up deliveries must not open two sockets. */
   #dialInFlight = false;
 
@@ -772,7 +778,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * seven-minute call where nothing had actually gone missing.
    */
   #speakerQueue: {
-    fromGrokAudioDeltaSeq: number;
+    fromProviderDeltaSeq: number;
     pcm16: Uint8Array;
   }[] = [];
   /**
@@ -811,7 +817,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
   #turn: TurnTiming = freshTurn();
 
   /** Last sequence number minted on each lane, for this call. */
-  #lastGrokAudioDeltaSeq = 0;
+  #lastProviderDeltaSeq = 0;
   #lastDeviceSpeakerFrameSeq = 0;
   /**
    * How far a clear has already been declared, so a jittery detector is free.
@@ -887,11 +893,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
       case "events.iterate.com/voice-agent/created":
         return {
           ...state,
-          grokBaseUrl: event.payload.grokBaseUrl ?? null,
+          providerBaseUrl: event.payload.providerBaseUrl ?? null,
           provider: event.payload.provider ?? "grok",
           providerModel: event.payload.providerModel ?? null,
           providerVoice: event.payload.providerVoice ?? null,
-          grokInstructions: event.payload.grokInstructions ?? "",
+          instructions: event.payload.instructions ?? "",
           clientTakesTurns: event.payload.clientTakesTurns ?? false,
         };
 
@@ -1081,7 +1087,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
         if (
           event.type === "events.iterate.com/voice-agent/ptt-end" &&
           state.clientTakesTurns &&
-          !this.#grokReady
+          !this.#providerReady
         ) {
           this.#turnEndedDuringHandshake = true;
         }
@@ -1134,11 +1140,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
 
         if (micPcm16 !== null) {
           const pcm = micPcm16;
-          if (this.#grokReady && this.#grokSocket !== null) {
+          if (this.#providerReady && this.#providerSocket !== null) {
             /* Held frames resample at the flush; live ones resample here.
              * The queue itself stays 16 kHz so a re-dial to a DIFFERENT
              * provider never replays audio at the wrong rate. */
-            this.#grokSocket.send(
+            this.#providerSocket.send(
               JSON.stringify({
                 type: "input_audio_buffer.append",
                 audio: bytesToBase64(resamplePcm16(pcm, 16_000, PROVIDERS[state.provider].rate)),
@@ -1153,11 +1159,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * its buttons — if it has any — say nothing, because server VAD on top
          * of a button answers halfway through a sentence. */
         if (event.type === "events.iterate.com/voice-agent/ptt-end" && state.clientTakesTurns) {
-          if (this.#grokReady && this.#grokSocket !== null) {
-            this.#askForAnswer(this.#grokSocket);
+          if (this.#providerReady && this.#providerSocket !== null) {
+            this.#askForAnswer(this.#providerSocket);
           } else {
             /* HELD, EXACTLY LIKE THE AUDIO IT BELONGS TO. This arm used to be
-             * `&& this.#grokReady` on the condition above, so a turn that
+             * `&& this.#providerReady` on the condition above, so a turn that
              * ended before the handshake completed was not deferred, it was
              * DISCARDED — every frame of it delivered and none of it asked
              * about. See #turnEndedDuringHandshake. */
@@ -1220,7 +1226,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgent2Contract>["runInBackground"],
   ): void {
-    if (this.#grokSocket !== null || this.#dialInFlight) return;
+    if (this.#providerSocket !== null || this.#dialInFlight) return;
     this.#dialInFlight = true;
     const dialStartedAtFacetMs = this.deps.nowAtFacetMs();
     /* THIS DIAL'S OWN IDENTITY, for keys that must not collide with the
@@ -1231,7 +1237,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
     runInBackground(async () => {
       const provider = PROVIDERS[state.provider];
       const socket = await this.deps
-        .dialProvider(state.provider, state.grokBaseUrl, state.providerModel ?? provider.model)
+        .dialProvider(state.provider, state.providerBaseUrl, state.providerModel ?? provider.model)
         .finally(() => (this.#dialInFlight = false));
       if (socket === null) {
         void append({
@@ -1241,10 +1247,10 @@ export class VoiceAgent2Processor extends StreamProcessor<
         });
         return;
       }
-      this.#grokSocket = socket;
-      this.#grokReady = false;
+      this.#providerSocket = socket;
+      this.#providerReady = false;
       this.#speakerQueue = [];
-      this.#lastGrokAudioDeltaSeq = 0;
+      this.#lastProviderDeltaSeq = 0;
       this.#deviceBufferEmptyAtFacetMs = 0;
       this.#clearedThroughDeviceSpeakerFrameSeq = 0;
       this.#lastDeviceSpeakerFrameSeq = 0;
@@ -1271,7 +1277,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
        * seconds late. Routing an audio delta through it before acting on it
        * would put a second full stream round trip in front of the first word
        * of every answer. The provider's timeline is still appended for
-       * instruments — just not waited for, and see `#forwardGrokEvent` for the
+       * instruments — just not waited for, and see `#forwardProviderEvent` for the
        * one part of it that is not.
        */
       socket.addEventListener("message", (message: MessageEvent) => {
@@ -1285,7 +1291,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * the first was still delivering. The close listener has always had
          * this check; the message listener is the one that needed it.
          */
-        if (this.#grokSocket !== socket) return;
+        if (this.#providerSocket !== socket) return;
         if (typeof message.data !== "string") return;
         let grok: Record<string, unknown>;
         try {
@@ -1293,11 +1299,17 @@ export class VoiceAgent2Processor extends StreamProcessor<
         } catch {
           return;
         }
-        const grokEventType = String(grok.type ?? "");
+        const providerEventType = String(grok.type ?? "");
         const receivedAtFacetMs = this.deps.nowAtFacetMs();
-        this.#forwardGrokEvent(grok, grokEventType, conversationId, receivedAtFacetMs, append);
+        this.#forwardProviderEvent(
+          grok,
+          providerEventType,
+          conversationId,
+          receivedAtFacetMs,
+          append,
+        );
 
-        switch (grokEventType) {
+        switch (providerEventType) {
           case "session.created":
             /* The one edge that makes us configure the session; miss it and
              * the handshake never completes and the call hangs, silently. */
@@ -1306,13 +1318,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
                 type: "session.update",
                 session: {
                   type: "realtime",
-                  ...(state.grokInstructions === ""
-                    ? {}
-                    : { instructions: state.grokInstructions }),
+                  ...(state.instructions === "" ? {} : { instructions: state.instructions }),
                   audio: {
                     input: {
                       format: { type: "audio/pcm", rate: provider.rate },
-                      turn_detection: state.clientTakesTurns ? null : GROK_SERVER_VAD,
+                      turn_detection: state.clientTakesTurns ? null : SERVER_VAD,
                     },
                     output: {
                       format: { type: "audio/pcm", rate: provider.rate },
@@ -1326,7 +1336,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
 
           case "session.updated": {
             /* Usable. Everything the handshake made us hold goes now. */
-            this.#grokReady = true;
+            this.#providerReady = true;
             const heldMicFrames = this.#micQueue.length;
             for (const held of this.#micQueue) {
               socket.send(
@@ -1372,7 +1382,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
 
           case "input_audio_buffer.speech_started":
           case "response.created":
-            this.#dropAnswerInFlight(conversationId, grokEventType, receivedAtFacetMs, append);
+            this.#dropAnswerInFlight(conversationId, providerEventType, receivedAtFacetMs, append);
             return;
 
           case "response.output_audio.delta": {
@@ -1381,7 +1391,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * goes out before this delta is cut up and paced — which can take
              * as long as the answer is. */
             this.#reportTurnTiming(conversationId, receivedAtFacetMs, append);
-            const fromGrokAudioDeltaSeq = ++this.#lastGrokAudioDeltaSeq;
+            const fromProviderDeltaSeq = ++this.#lastProviderDeltaSeq;
             /*
              * CUT ONLY TO FIT THE DEVICE'S RECEIVE BUFFER. A delta is audio
              * of no particular length — measured against the real provider,
@@ -1395,7 +1405,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
             const pcm16 = resamplePcm16(base64ToBytes(grok.delta), provider.rate, 16_000);
             for (let cut = 0; cut < pcm16.length; cut += MAX_SPEAKER_PAYLOAD_BYTES) {
               this.#speakerQueue.push({
-                fromGrokAudioDeltaSeq,
+                fromProviderDeltaSeq,
                 pcm16: pcm16.subarray(cut, Math.min(cut + MAX_SPEAKER_PAYLOAD_BYTES, pcm16.length)),
               });
             }
@@ -1440,9 +1450,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
       });
 
       socket.addEventListener("close", () => {
-        if (this.#grokSocket !== socket) return;
-        this.#grokSocket = null;
-        this.#grokReady = false;
+        if (this.#providerSocket !== socket) return;
+        this.#providerSocket = null;
+        this.#providerReady = false;
         void append({
           type: "events.iterate.com/voice-agent/conversation-end-requested",
           idempotencyKey: this.idempotencyKey(`socket-closed:${conversationId}`),
@@ -1460,7 +1470,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
        */
       for (;;) {
         await this.deps.sleep(IDLE_TICK_MS);
-        if (this.#grokSocket !== socket) return;
+        if (this.#providerSocket !== socket) return;
         const nowAtFacetMs = this.deps.nowAtFacetMs();
         /*
          * IDLE SINCE THE LAST THING THAT HAPPENED, whichever end it happened
@@ -1526,15 +1536,15 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * arrived is already on `turn-timing`. So the delta rides as its LENGTH: the
    * shape of the answer stays visible and the bytes go once.
    */
-  #forwardGrokEvent(
+  #forwardProviderEvent(
     grok: Record<string, unknown>,
-    grokEventType: string,
+    providerEventType: string,
     conversationId: string,
     receivedAtFacetMs: number,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
     let body = grok;
-    if (grokEventType === "response.output_audio.delta") {
+    if (providerEventType === "response.output_audio.delta") {
       const { delta, ...rest } = grok;
       const base64 = typeof delta === "string" ? delta : "";
       /* DECODED length, not the base64 string's: the field says bytes and it
@@ -1677,7 +1687,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
         payload: {
           conversationId,
           deviceSpeakerFrameSeq: clearFrameSeq,
-          fromGrokAudioDeltaSeq: this.#lastGrokAudioDeltaSeq,
+          fromProviderDeltaSeq: this.#lastProviderDeltaSeq,
           pcm: "",
           clearSpeakerBufferBeforeFrame: true,
           sentAtFacetMs: decidedAtFacetMs,
@@ -1779,7 +1789,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
             payload: {
               conversationId,
               deviceSpeakerFrameSeq: ++this.#lastDeviceSpeakerFrameSeq,
-              fromGrokAudioDeltaSeq: frame.fromGrokAudioDeltaSeq,
+              fromProviderDeltaSeq: frame.fromProviderDeltaSeq,
               pcm: bytesToBase64(frame.pcm16),
               ...(clearFirst ? { clearSpeakerBufferBeforeFrame: true } : {}),
               sentAtFacetMs: nowAtFacetMs,
@@ -1802,7 +1812,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
             payload: {
               conversationId,
               deviceSpeakerFrameSeq: this.#lastDeviceSpeakerFrameSeq,
-              fromGrokAudioDeltaSeq: this.#lastGrokAudioDeltaSeq,
+              fromProviderDeltaSeq: this.#lastProviderDeltaSeq,
               pcm: "",
               ...(clearFirst ? { clearSpeakerBufferBeforeFrame: true } : {}),
               lastFrameOfAnswer: true,
@@ -1818,13 +1828,13 @@ export class VoiceAgent2Processor extends StreamProcessor<
 
   /** Let the socket and everything hanging off it go. Safe to call twice. */
   #hangUp(): void {
-    this.#grokReady = false;
+    this.#providerReady = false;
     this.#speakerQueue = [];
     this.#micQueue = [];
     this.#turnEndedDuringHandshake = false;
     this.#turn = freshTurn();
-    const socket = this.#grokSocket;
-    this.#grokSocket = null;
+    const socket = this.#providerSocket;
+    this.#providerSocket = null;
     try {
       socket?.close();
     } catch {
@@ -1942,14 +1952,14 @@ export interface SetupVoiceAgent2Options {
    * NO CREDENTIAL FOLLOWS IT — see {@link dialProviderSocket}, where the rule is
    * that a host which is not x.ai gets no Authorization header at all.
    */
-  grokBaseUrl?: string;
+  providerBaseUrl?: string;
   /** Which realtime voice provider the birth certificate names. Default grok. */
   provider?: VoiceProvider;
   /** Model and voice overrides for that provider. */
   providerModel?: string;
   providerVoice?: string;
   /** What to tell the model it is. Empty leaves the provider's own default. */
-  grokInstructions?: string;
+  instructions?: string;
   /**
    * This client segments its own turns with the push-to-talk verbs.
    *
@@ -2042,13 +2052,13 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
        * that had closed an hour before.
        */
       const birthPayload = {
-        ...(options.grokBaseUrl === undefined ? {} : { grokBaseUrl: options.grokBaseUrl }),
+        ...(options.providerBaseUrl === undefined
+          ? {}
+          : { providerBaseUrl: options.providerBaseUrl }),
         ...(options.provider === undefined ? {} : { provider: options.provider }),
         ...(options.providerModel === undefined ? {} : { providerModel: options.providerModel }),
         ...(options.providerVoice === undefined ? {} : { providerVoice: options.providerVoice }),
-        ...(options.grokInstructions === undefined
-          ? {}
-          : { grokInstructions: options.grokInstructions }),
+        ...(options.instructions === undefined ? {} : { instructions: options.instructions }),
         ...(options.clientTakesTurns === undefined
           ? {}
           : { clientTakesTurns: options.clientTakesTurns }),
@@ -2101,8 +2111,8 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
           idempotencyKey: `voice-agent2/brief-current:${setupId}`,
           payload: {
             setupId,
-            briefKey: `voice-agent2/instructions:${contentHash(options.grokInstructions ?? "")}`,
-            contentHash: contentHash(options.grokInstructions ?? ""),
+            briefKey: `voice-agent2/instructions:${contentHash(options.instructions ?? "")}`,
+            contentHash: contentHash(options.instructions ?? ""),
           },
         },
       );

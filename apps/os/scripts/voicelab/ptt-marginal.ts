@@ -1,13 +1,14 @@
 // MARGINAL overhead: how much longer does an answer take because our stream
 // is in the middle?
 //
-// `ptt-latency` and `ptt-baseline` each answer half of this, in separate runs,
-// minutes apart, against a provider whose own think time wanders by hundreds
-// of milliseconds between rounds. Subtracting two such numbers measures the
+// Two probes used to answer half of this each, in separate runs minutes
+// apart, against a provider whose think time wanders by hundreds of
+// milliseconds between rounds — subtracting two such numbers measured the
 // provider's mood as much as our plumbing. This runs BOTH halves in one
-// process, alternating turn by turn, speaking the identical audio at identical
-// pacing — so the difference between the two medians is ours and not the
-// weather.
+// process, alternating turn by turn, speaking the identical audio at
+// identical pacing, so the difference between the two medians is ours and
+// not the weather. (Those probes, `ptt-latency` and `ptt-baseline`, are
+// deleted; this file replaced them.)
 //
 // BOTH HALVES HOLD ONE SOCKET FOR THE WHOLE RUN. The direct half dials xAI
 // once; the v2 facet opens a call when somebody first talks and keeps it until
@@ -36,6 +37,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { resamplePcm16 } from "./config-repo/voice-agent2.ts";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 import { closeAndDisposeRpcHandle, discardRpcResult } from "./rpc-ownership.ts";
 
@@ -57,7 +59,7 @@ export interface PttMarginalOptions extends VoicelabConnectOptions {
   /** Frames per append. Twelve is what the C client sends. */
   framesPerAppend?: number;
   /** Provider endpoint for the direct half. Defaults to the provider's own. */
-  grokBaseUrl?: string;
+  providerBaseUrl?: string;
   model?: string;
   /**
    * Which realtime voice provider BOTH halves speak to. The stream half's
@@ -112,22 +114,11 @@ const DIRECT_PROVIDERS = {
   },
 } as const;
 
-/** Linear PCM16 resample, for the provider that does not speak 16 kHz. */
+/** The agent's linear PCM16 resampler, over base64 for the direct socket. */
 function resampleFrame(base64Frame: string, fromRate: number, toRate: number): string {
   if (fromRate === toRate) return base64Frame;
-  const bytes = Buffer.from(base64Frame, "base64");
-  const samples = Math.floor(bytes.length / 2);
-  const outLength = Math.max(1, Math.round((samples * toRate) / fromRate));
-  const out = Buffer.alloc(outLength * 2);
-  for (let index = 0; index < outLength; index++) {
-    const position = outLength === 1 ? 0 : (index * (samples - 1)) / (outLength - 1);
-    const base = Math.floor(position);
-    const fraction = position - base;
-    const first = bytes.readInt16LE(base * 2);
-    const second = base + 1 < samples ? bytes.readInt16LE((base + 1) * 2) : first;
-    out.writeInt16LE((first + (second - first) * fraction) | 0, index * 2);
-  }
-  return out.toString("base64");
+  const bytes = new Uint8Array(Buffer.from(base64Frame, "base64"));
+  return Buffer.from(resamplePcm16(bytes, fromRate, toRate)).toString("base64");
 }
 
 /** One scenario in the mixed soak. */
@@ -370,7 +361,7 @@ export interface HeardFrame {
    * needs no counting of its own. It restarts at zero on a fresh socket, which
    * is why the key below is scoped to the call.
    */
-  fromGrokAudioDeltaSeq: number;
+  fromProviderDeltaSeq: number;
   /** False for a frame whose only job is a clear or an end-of-answer marker. */
   hasAudio: boolean;
   /** The frame asks the device to drop everything queued first. */
@@ -382,8 +373,8 @@ export interface HeardFrame {
 }
 
 /** A chunk of generated audio's identity on the wire: a call, and a delta in it. */
-export const answerKey = (frame: Pick<HeardFrame, "conversationId" | "fromGrokAudioDeltaSeq">) =>
-  `${frame.conversationId}:${frame.fromGrokAudioDeltaSeq}`;
+export const answerKey = (frame: Pick<HeardFrame, "conversationId" | "fromProviderDeltaSeq">) =>
+  `${frame.conversationId}:${frame.fromProviderDeltaSeq}`;
 
 /**
  * The first frame that can only belong to the answer this press asked for.
@@ -448,7 +439,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
   const rounds = options.rounds ?? 8;
   const settleMs = options.settleMs ?? 8_000;
   const batch = Math.max(1, options.framesPerAppend ?? 12);
-  const baseUrl = options.grokBaseUrl ?? directProvider.url;
+  const baseUrl = options.providerBaseUrl ?? directProvider.url;
   const model = options.model ?? directProvider.model;
   const spoken = framesFromWav(options.micWav);
   /* The direct half speaks at the provider's rate; the stream half stays
@@ -527,7 +518,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
             sentAtFacetMs:
               typeof payload.sentAtFacetMs === "number" ? payload.sentAtFacetMs : Number.NaN,
             conversationId: String(payload.conversationId ?? ""),
-            fromGrokAudioDeltaSeq: Number(payload.fromGrokAudioDeltaSeq ?? 0),
+            fromProviderDeltaSeq: Number(payload.fromProviderDeltaSeq ?? 0),
             hasAudio: pcm !== "",
             clearsBuffer: payload.clearSpeakerBufferBeforeFrame === true,
             lastOfAnswer: payload.lastFrameOfAnswer === true,

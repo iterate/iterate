@@ -25,13 +25,13 @@ import { answerKey, type HeardFrame, firstFrameOfNewAnswer } from "./ptt-margina
 const frame = (
   atDeviceMs: number,
   conversationId: string,
-  fromGrokAudioDeltaSeq: number,
+  fromProviderDeltaSeq: number,
   hasAudio = true,
 ): HeardFrame => ({
   atDeviceMs,
   sentAtFacetMs: atDeviceMs,
   conversationId,
-  fromGrokAudioDeltaSeq,
+  fromProviderDeltaSeq,
   hasAudio,
   clearsBuffer: !hasAudio,
   lastOfAnswer: false,

@@ -16,8 +16,6 @@ export { reliability } from "./reliability.ts";
 export { talk } from "./talk.ts";
 export { talk2 } from "./talk2.ts";
 export { teardown } from "./teardown.ts";
-export { pttBaseline } from "./ptt-baseline.ts";
-export { pttLatency } from "./ptt-latency.ts";
 export { pttMarginal } from "./ptt-marginal.ts";
 export { timeline } from "./timeline.ts";
 export { utterances } from "./utterances.ts";

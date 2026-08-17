@@ -61,7 +61,7 @@ const IDLE_TIMEOUT_MS = 60_000;
  * `addEventListener`, `send`, `close` and `accept`, and a fake that offers
  * exactly those is a readable statement of the surface being depended on.
  */
-class FakeGrok {
+class FakeProvider {
   /** Everything the facet sent us, parsed, oldest first. */
   readonly sent: Record<string, unknown>[] = [];
   /** True once the facet closed its end. */
@@ -178,16 +178,16 @@ function makeHarness() {
    * push reaches two processors and the suite quietly tests a situation that
    * cannot happen. It also makes "the old socket goes quiet" unassertable.
    */
-  const sockets: FakeGrok[] = [];
-  const grokDialledUrls: string[] = [];
+  const sockets: FakeProvider[] = [];
+  const dialledUrls: string[] = [];
   /*
    * `fetch` IS THE SEAM, because that is what `dialGrokSocket` uses. Mocking
    * the dial dependency instead would leave the one function that has actually
    * broken in production — the `response.webSocket ?? null` line — untested.
    */
   vi.stubGlobal("fetch", async (url: string) => {
-    grokDialledUrls.push(String(url));
-    const socket = new FakeGrok();
+    dialledUrls.push(String(url));
+    const socket = new FakeProvider();
     sockets.push(socket);
     return { webSocket: socket } as unknown as Response;
   });
@@ -209,10 +209,10 @@ function makeHarness() {
   return {
     ...harness,
     sockets,
-    get grok() {
+    get provider() {
       return sockets[sockets.length - 1]!;
     },
-    grokDialledUrls,
+    dialledUrls,
   };
 }
 
@@ -230,7 +230,7 @@ function speakerFrames(h: Harness) {
       (event) =>
         event.payload as {
           deviceSpeakerFrameSeq: number;
-          fromGrokAudioDeltaSeq: number;
+          fromProviderDeltaSeq: number;
           pcm: string;
           clearSpeakerBufferBeforeFrame?: boolean;
           lastFrameOfAnswer?: boolean;
@@ -281,11 +281,11 @@ function micFrame(deviceMicFrameSeq: number) {
 async function callIsLive(h: Harness, clientTakesTurns = GROK_LISTENS): Promise<string> {
   await h.append({
     type: "events.iterate.com/voice-agent/created",
-    payload: { grokBaseUrl: "https://fake.grok.test/v1/realtime", clientTakesTurns },
+    payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime", clientTakesTurns },
   });
   await h.append(micFrame(1));
   await h.settle();
-  h.grok.completeHandshake();
+  h.provider.completeHandshake();
   await h.settle();
   const started = eventsOfType(h, "call-started");
   return (started[0]!.payload as { conversationId: string }).conversationId;
@@ -358,11 +358,11 @@ describe("opening a call", () => {
     await h.append(micFrame(1), micFrame(2), micFrame(3));
     await h.settle();
     /* Nothing has reached the provider: it has not finished handshaking. */
-    expect(h.grok.sentOfType("input_audio_buffer.append")).toHaveLength(0);
+    expect(h.provider.sentOfType("input_audio_buffer.append")).toHaveLength(0);
 
-    h.grok.completeHandshake();
+    h.provider.completeHandshake();
     await h.settle();
-    expect(h.grok.sentOfType("input_audio_buffer.append")).toHaveLength(3);
+    expect(h.provider.sentOfType("input_audio_buffer.append")).toHaveLength(3);
     const accepted = eventsOfType(h, "conversation-accepted")[0]!.payload as {
       heldMicFrames: number;
     };
@@ -387,16 +387,16 @@ describe("opening a call", () => {
     await h.append(micFrame(1), micFrame(2), micFrame(3));
     await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
     await h.settle();
-    expect(h.grok.sentOfType("response.create")).toHaveLength(0);
+    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
 
-    h.grok.completeHandshake();
+    h.provider.completeHandshake();
     await h.settle();
     /* Every frame, and then exactly one question about them. */
-    expect(h.grok.sentOfType("input_audio_buffer.append")).toHaveLength(3);
-    expect(h.grok.sentOfType("input_audio_buffer.commit")).toHaveLength(1);
-    expect(h.grok.sentOfType("response.create")).toHaveLength(1);
+    expect(h.provider.sentOfType("input_audio_buffer.append")).toHaveLength(3);
+    expect(h.provider.sentOfType("input_audio_buffer.commit")).toHaveLength(1);
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
     /* THE COMMIT COMES AFTER THE AUDIO IT COMMITS. */
-    const order = h.grok.sent.map((message) => message.type);
+    const order = h.provider.sent.map((message) => message.type);
     expect(order.lastIndexOf("input_audio_buffer.append")).toBeLessThan(
       order.indexOf("input_audio_buffer.commit"),
     );
@@ -412,24 +412,24 @@ describe("opening a call", () => {
     await h.append(micFrame(1));
     await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
     await h.settle();
-    h.grok.completeHandshake();
+    h.provider.completeHandshake();
     await h.settle();
-    expect(h.grok.sentOfType("input_audio_buffer.commit")).toHaveLength(0);
+    expect(h.provider.sentOfType("input_audio_buffer.commit")).toHaveLength(0);
   });
 
   it("sends later capture straight through", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    const before = h.grok.sentOfType("input_audio_buffer.append").length;
+    const before = h.provider.sentOfType("input_audio_buffer.append").length;
     await h.append(micFrame(2), micFrame(3));
     await h.settle();
-    expect(h.grok.sentOfType("input_audio_buffer.append")).toHaveLength(before + 2);
+    expect(h.provider.sentOfType("input_audio_buffer.append")).toHaveLength(before + 2);
   });
 
   it("lets Grok listen by default and stands down when the client owns turns", async () => {
     const open = makeHarness();
     await callIsLive(open, GROK_LISTENS);
-    const openSession = open.grok.sentOfType("session.update")[0] as {
+    const openSession = open.provider.sentOfType("session.update")[0] as {
       session: { audio: { input: { turn_detection: unknown } } };
     };
     expect(openSession.session.audio.input.turn_detection).toMatchObject({
@@ -439,7 +439,7 @@ describe("opening a call", () => {
 
     const button = makeHarness();
     await callIsLive(button, CLIENT_TAKES_TURNS);
-    const buttonSession = button.grok.sentOfType("session.update")[0] as {
+    const buttonSession = button.provider.sentOfType("session.update")[0] as {
       session: { audio: { input: { turn_detection: unknown } } };
     };
     expect(buttonSession.session.audio.input.turn_detection).toBeNull();
@@ -458,7 +458,7 @@ describe("opening a call", () => {
     const h = makeHarness();
     await h.append({
       type: "events.iterate.com/voice-agent/created",
-      payload: { grokBaseUrl: "https://fake.grok.test/v1/realtime" },
+      payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime" },
     });
     const pcmBytes = 320;
     await h.append({
@@ -470,10 +470,10 @@ describe("opening a call", () => {
       },
     });
     await h.settle();
-    h.grok.completeHandshake();
+    h.provider.completeHandshake();
     await h.settle();
 
-    const appended = h.grok.sentOfType("input_audio_buffer.append") as { audio: string }[];
+    const appended = h.provider.sentOfType("input_audio_buffer.append") as { audio: string }[];
     expect(appended).toHaveLength(1);
     expect(atob(appended[0]!.audio).length).toBe(pcmBytes);
   });
@@ -497,12 +497,12 @@ describe("opening a call", () => {
      * against the real provider, 0 of 77 deltas in one answer were. */
     const sizes = [1234, 999, 4567, 321];
     for (const pcmBytes of sizes) {
-      h.grok.push({
+      h.provider.push({
         type: "response.output_audio.delta",
         delta: base64(new Uint8Array(pcmBytes * 2)),
       });
     }
-    h.grok.answerComplete();
+    h.provider.answerComplete();
     await playOutEverything(h, 5_000);
     const frames = speakerFrames(h).filter((frame) => frame.pcm !== "");
     expect(frames.length).toBeGreaterThan(0);
@@ -533,7 +533,7 @@ describe("opening a call", () => {
      * of manufactured silence appended to somebody's last syllable. It is now
      * simply a short frame, sent as soon as the pacer reaches it.
      */
-    h.grok.push({
+    h.provider.push({
       type: "response.output_audio.delta",
       delta: base64(new Uint8Array(200)),
     });
@@ -553,8 +553,8 @@ describe("opening a call", () => {
       payload: {},
     });
     await button.settle();
-    expect(button.grok.sentOfType("input_audio_buffer.commit")).toHaveLength(1);
-    expect(button.grok.sentOfType("response.create")).toHaveLength(1);
+    expect(button.provider.sentOfType("input_audio_buffer.commit")).toHaveLength(1);
+    expect(button.provider.sentOfType("response.create")).toHaveLength(1);
 
     /*
      * AND A BUTTON PRESS ON AN OPEN MICROPHONE SAYS NOTHING, which is the half
@@ -568,7 +568,7 @@ describe("opening a call", () => {
       payload: {},
     });
     await open.settle();
-    expect(open.grok.sentOfType("input_audio_buffer.commit")).toHaveLength(0);
+    expect(open.provider.sentOfType("input_audio_buffer.commit")).toHaveLength(0);
   });
 });
 
@@ -581,18 +581,18 @@ describe("the openai provider", () => {
   async function openaiCallIsLive(h: Harness): Promise<void> {
     await h.append({
       type: "events.iterate.com/voice-agent/created",
-      payload: { grokBaseUrl: "https://fake.grok.test/v1/realtime", provider: "openai" },
+      payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime", provider: "openai" },
     });
     await h.append(micFrame(1));
     await h.settle();
-    h.grok.completeHandshake();
+    h.provider.completeHandshake();
     await h.settle();
   }
 
   it("asks the session for 24 kHz audio and the provider's voice", async () => {
     const h = makeHarness();
     await openaiCallIsLive(h);
-    const update = h.grok.sentOfType("session.update")[0] as {
+    const update = h.provider.sentOfType("session.update")[0] as {
       session: {
         audio: {
           input: { format: { rate: number } };
@@ -610,12 +610,12 @@ describe("the openai provider", () => {
     await openaiCallIsLive(h);
     /* The held frame flushed at session.updated: 20 ms is 640 bytes at
      * 16 kHz and 960 at 24. */
-    const flushed = h.grok.sentOfType("input_audio_buffer.append")[0] as { audio: string };
+    const flushed = h.provider.sentOfType("input_audio_buffer.append")[0] as { audio: string };
     expect(atob(flushed.audio).length).toBe(960);
     /* And the live path after the handshake does the same. */
     await h.append(micFrame(2));
     await h.settle();
-    const live = h.grok.sentOfType("input_audio_buffer.append")[1] as { audio: string };
+    const live = h.provider.sentOfType("input_audio_buffer.append")[1] as { audio: string };
     expect(atob(live.audio).length).toBe(960);
   });
 
@@ -625,7 +625,7 @@ describe("the openai provider", () => {
     /* 100 ms at 24 kHz: 2,400 samples, 4,800 bytes. */
     const pcm = new Uint8Array(4_800);
     for (let index = 0; index < pcm.length; index++) pcm[index] = index % 251;
-    h.grok.push({ type: "response.output_audio.delta", delta: base64(pcm) });
+    h.provider.push({ type: "response.output_audio.delta", delta: base64(pcm) });
     await h.settle();
     await playOutEverything(h, 200);
     const frames = speakerFrames(h).filter((frame) => frame.pcm !== "");
@@ -637,7 +637,7 @@ describe("the openai provider", () => {
   it("leaves grok's audio untouched", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    const flushed = h.grok.sentOfType("input_audio_buffer.append")[0] as { audio: string };
+    const flushed = h.provider.sentOfType("input_audio_buffer.append")[0] as { audio: string };
     expect(atob(flushed.audio).length).toBe(640);
   });
 });
@@ -655,7 +655,7 @@ describe("the grok-event lane", () => {
      */
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(100);
+    h.provider.answerAudio(100);
     await h.settle();
     const deltas = eventsOfType(h, "grok-event")
       .map((event) => event.payload as Record<string, unknown>)
@@ -670,7 +670,7 @@ describe("the grok-event lane", () => {
   it("still carries every other provider event whole", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.push({ type: "response.done", usage: { total_tokens: 7 } });
+    h.provider.push({ type: "response.done", usage: { total_tokens: 7 } });
     await h.settle();
     const done = eventsOfType(h, "grok-event")
       .map((event) => event.payload as Record<string, unknown>)
@@ -722,10 +722,10 @@ describe("turn timing", () => {
 
     /* The provider takes 50ms to acknowledge and 300ms more to think. */
     await h.advanceTime(50);
-    h.grok.push({ type: "input_audio_buffer.committed" });
+    h.provider.push({ type: "input_audio_buffer.committed" });
     await h.settle();
     await h.advanceTime(300);
-    h.grok.answerAudio(100);
+    h.provider.answerAudio(100);
     await h.settle();
 
     const [turn] = turnReports(h);
@@ -740,7 +740,7 @@ describe("turn timing", () => {
     await callIsLive(h, CLIENT_TAKES_TURNS);
     await speakATurn(h, 2);
     for (let delta = 0; delta < 5; delta++) {
-      h.grok.answerAudio(40);
+      h.provider.answerAudio(40);
       await h.settle();
     }
     expect(turnReports(h)).toHaveLength(1);
@@ -752,7 +752,7 @@ describe("turn timing", () => {
      * puts a row in a median that describes nothing. */
     const h = makeHarness();
     await callIsLive(h, GROK_LISTENS);
-    h.grok.answerAudio(100);
+    h.provider.answerAudio(100);
     await h.settle();
     expect(turnReports(h)).toHaveLength(0);
   });
@@ -774,7 +774,7 @@ describe("turn timing", () => {
     }
     await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
     await h.settle();
-    h.grok.answerAudio(40);
+    h.provider.answerAudio(40);
     await h.settle();
     const [turn] = turnReports(h);
     expect(turn!.maxMicFrameGapMs).toBe(240);
@@ -794,7 +794,7 @@ describe("turn timing", () => {
     await speakATurn(h, 4);
     await h.advanceTime(500);
     await speakATurn(h, 1);
-    h.grok.answerAudio(40);
+    h.provider.answerAudio(40);
     await h.settle();
 
     const reports = turnReports(h);
@@ -811,8 +811,8 @@ describe("the speaker lane", () => {
   it("numbers every frame contiguously from one", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(1_000);
-    h.grok.answerComplete();
+    h.provider.answerAudio(1_000);
+    h.provider.answerComplete();
     await playOutEverything(h, 2_000);
 
     const seqs = speakerFrames(h).map((frame) => frame.deviceSpeakerFrameSeq);
@@ -823,15 +823,15 @@ describe("the speaker lane", () => {
   it("says which Grok delta each frame was cut from", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(400); /* delta 1 -> four 100ms frames */
-    h.grok.answerAudio(400); /* delta 2 -> four 100ms frames */
-    h.grok.answerComplete();
+    h.provider.answerAudio(400); /* delta 1 -> four 100ms frames */
+    h.provider.answerAudio(400); /* delta 2 -> four 100ms frames */
+    h.provider.answerComplete();
     await playOutEverything(h, 2_000);
 
     const frames = speakerFrames(h);
     /* The audio frames, by which delta they were cut from. */
     expect(
-      frames.filter((frame) => frame.pcm !== "").map((frame) => frame.fromGrokAudioDeltaSeq),
+      frames.filter((frame) => frame.pcm !== "").map((frame) => frame.fromProviderDeltaSeq),
     ).toEqual([1, 1, 1, 1, 2, 2, 2, 2]);
     /* And behind them the end-of-answer marker, carrying no audio of its own.
      * It is numbered like any other frame, because a device that skipped it
@@ -844,8 +844,8 @@ describe("the speaker lane", () => {
   it("delivers every millisecond the provider generated", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(3_000);
-    h.grok.answerComplete();
+    h.provider.answerAudio(3_000);
+    h.provider.answerComplete();
     await playOutEverything(h, 5_000);
     expect(speakerMsDelivered(h)).toBe(3_000);
   });
@@ -855,7 +855,7 @@ describe("the speaker lane", () => {
     await callIsLive(h);
     /* Ten seconds of answer, generated in one burst, as the real provider
      * does — the whole point of pacing is that the device does not get it. */
-    h.grok.answerAudio(10_000);
+    h.provider.answerAudio(10_000);
     await h.settle();
     expect(speakerMsDelivered(h)).toBeLessThanOrEqual(
       MAX_DEVICE_SPEAKER_BUFFER_MS + SPEAKER_FRAME_MS,
@@ -869,8 +869,8 @@ describe("the speaker lane", () => {
      * start. Nothing in the payload should have come back. */
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(1_000);
-    h.grok.answerComplete();
+    h.provider.answerAudio(1_000);
+    h.provider.answerComplete();
     await playOutEverything(h, 3_000);
     expect(speakerMsDelivered(h)).toBe(1_000);
     for (const frame of speakerFrames(h)) {
@@ -887,7 +887,7 @@ describe("the speaker lane", () => {
      */
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(90_000);
+    h.provider.answerAudio(90_000);
     let elapsedMs = 0;
     let worstOutstandingBytes = 0;
     for (let tick = 0; tick < 60; tick++) {
@@ -914,7 +914,7 @@ describe("the speaker lane", () => {
      * given more than the head start beyond what it has had time to play. */
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(30_000);
+    h.provider.answerAudio(30_000);
     let elapsedMs = 0;
     for (let tick = 0; tick < 40; tick++) {
       await h.advanceTime(SPEAKER_FRAME_MS);
@@ -948,11 +948,11 @@ describe("a flush names a sequence number", () => {
     const h = makeHarness();
     await callIsLive(h);
 
-    h.grok.answerAudio(4_000);
+    h.provider.answerAudio(4_000);
     await playOutEverything(h, 600);
 
     for (let blip = 0; blip < 5; blip++) {
-      h.grok.speechStarted();
+      h.provider.speechStarted();
       await h.settle();
     }
     expect(speakerFlushes(h)).toHaveLength(1);
@@ -960,8 +960,8 @@ describe("a flush names a sequence number", () => {
     /* The answer continues — the provider never cancelled it — and every
      * millisecond after the flush still reaches the device. */
     const before = speakerMsDelivered(h);
-    h.grok.answerAudio(1_000);
-    h.grok.answerComplete();
+    h.provider.answerAudio(1_000);
+    h.provider.answerComplete();
     await playOutEverything(h, 3_000);
     expect(speakerMsDelivered(h) - before).toBe(1_000);
   });
@@ -969,11 +969,11 @@ describe("a flush names a sequence number", () => {
   it("flushes through the highest frame minted at that moment, and no further", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(2_000);
+    h.provider.answerAudio(2_000);
     await playOutEverything(h, 600);
     const mintedBefore = Math.max(...speakerFrames(h).map((frame) => frame.deviceSpeakerFrameSeq));
 
-    h.grok.speechStarted();
+    h.provider.speechStarted();
     await h.settle();
     const flush = speakerFlushes(h)[0]!;
     expect(flush.clearedThroughDeviceSpeakerFrameSeq).toBeGreaterThanOrEqual(mintedBefore);
@@ -981,9 +981,9 @@ describe("a flush names a sequence number", () => {
 
     /* Everything the device is sent from now on is beyond the watermark, so
      * nothing it plays was ever declared dead. */
-    h.grok.responseCreated();
-    h.grok.answerAudio(1_000);
-    h.grok.answerComplete();
+    h.provider.responseCreated();
+    h.provider.answerAudio(1_000);
+    h.provider.answerComplete();
     await playOutEverything(h, 3_000);
     const afterFlush = speakerFrames(h).filter(
       (frame) => frame.deviceSpeakerFrameSeq > flush.clearedThroughDeviceSpeakerFrameSeq,
@@ -999,11 +999,11 @@ describe("a flush names a sequence number", () => {
   it("drops the queued tail of the answer that was interrupted", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(8_000);
+    h.provider.answerAudio(8_000);
     await playOutEverything(h, 600);
     const deliveredBeforeBarge = speakerMsDelivered(h);
 
-    h.grok.speechStarted();
+    h.provider.speechStarted();
     await h.settle();
     /* Time passes with nothing new generated. A lane that had merely stopped
      * being topped up would keep playing out the eight seconds it holds. */
@@ -1024,7 +1024,7 @@ describe("a flush names a sequence number", () => {
   it("drops the answer when a push-to-talk client takes the floor", async () => {
     const h = makeHarness();
     await callIsLive(h, CLIENT_TAKES_TURNS);
-    h.grok.answerAudio(8_000);
+    h.provider.answerAudio(8_000);
     await playOutEverything(h, 600);
     const deliveredBeforeBarge = speakerMsDelivered(h);
     expect(deliveredBeforeBarge).toBeGreaterThan(0);
@@ -1066,9 +1066,9 @@ describe("a flush names a sequence number", () => {
   it("treats a new answer as a flush of the old one", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(2_000);
+    h.provider.answerAudio(2_000);
     await playOutEverything(h, 400);
-    h.grok.responseCreated();
+    h.provider.responseCreated();
     await h.settle();
     expect(speakerFlushes(h).map((flush) => flush.reason)).toEqual(["response.created"]);
   });
@@ -1105,7 +1105,7 @@ describe("ending a call", () => {
     const h = makeHarness();
     await callIsLive(h);
     /* Three minutes of answer, which is longer than the deadline. */
-    h.grok.answerAudio(180_000);
+    h.provider.answerAudio(180_000);
     await h.settle();
     await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
     await h.settle();
@@ -1148,7 +1148,7 @@ describe("ending a call", () => {
   it("asks to end when the provider hangs up", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.close();
+    h.provider.close();
     await h.settle();
     const requested = eventsOfType(h, "conversation-end-requested");
     expect(requested).toHaveLength(1);
@@ -1163,14 +1163,14 @@ describe("ending a call", () => {
       payload: { conversationId, reason: "the person said goodbye" },
     });
     await h.settle();
-    expect(h.grok.closed).toBe(true);
+    expect(h.provider.closed).toBe(true);
     expect(h.state().call).toBeNull();
   });
 
   it("writes the provider's error where somebody can read it", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.push({ type: "error", error: { message: "commit on an empty buffer" } });
+    h.provider.push({ type: "error", error: { message: "commit on an empty buffer" } });
     await h.settle();
     const errors = eventsOfType(h, "provider-error");
     expect(errors).toHaveLength(1);
@@ -1186,13 +1186,13 @@ describe("eviction", () => {
   it("re-dials a call the log still says is open", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    const dialsBefore = h.grokDialledUrls.length;
+    const dialsBefore = h.dialledUrls.length;
 
     h.crash();
     await h.append(micFrame(9));
     await h.settle();
 
-    expect(h.grokDialledUrls.length).toBe(dialsBefore + 1);
+    expect(h.dialledUrls.length).toBe(dialsBefore + 1);
   });
 
   it("does not re-dial a call that has been ended", async () => {
@@ -1203,7 +1203,7 @@ describe("eviction", () => {
       payload: { conversationId, reason: "done" },
     });
     await h.settle();
-    const dialsBefore = h.grokDialledUrls.length;
+    const dialsBefore = h.dialledUrls.length;
 
     h.crash();
     await h.append(micFrame(9));
@@ -1213,7 +1213,7 @@ describe("eviction", () => {
       (event) => (event.payload as { conversationId: string }).conversationId === conversationId,
     );
     expect(revived).toHaveLength(1);
-    expect(h.grokDialledUrls.length).toBeGreaterThanOrEqual(dialsBefore);
+    expect(h.dialledUrls.length).toBeGreaterThanOrEqual(dialsBefore);
   });
 });
 
@@ -1225,11 +1225,11 @@ describe("what the device is told", () => {
   it("carries the clear on a numbered frame, not on a lane of its own", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(2_000);
+    h.provider.answerAudio(2_000);
     await playOutEverything(h, 600);
     const highestBefore = Math.max(...speakerFrames(h).map((frame) => frame.deviceSpeakerFrameSeq));
 
-    h.grok.speechStarted();
+    h.provider.speechStarted();
     await h.settle();
 
     /* The instruction is a frame: empty, numbered, and above everything it
@@ -1249,8 +1249,8 @@ describe("what the device is told", () => {
      * clear at all — a clear mid-answer is the stutter. */
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(1_000);
-    h.grok.answerComplete();
+    h.provider.answerAudio(1_000);
+    h.provider.answerComplete();
     await playOutEverything(h, 3_000);
     const frames = speakerFrames(h);
     expect(frames[0]!.clearSpeakerBufferBeforeFrame).toBe(true);
@@ -1265,7 +1265,7 @@ describe("what the device is told", () => {
      * that crossed it. */
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(20_000);
+    h.provider.answerAudio(20_000);
     let played = 0;
     for (let tick = 0; tick < 20; tick++) {
       await h.advanceTime(SPEAKER_FRAME_MS);
@@ -1287,7 +1287,7 @@ describe("recovery holes the review found", () => {
      * belonged to an answer whose socket is gone. */
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(2_000);
+    h.provider.answerAudio(2_000);
     await playOutEverything(h, 600);
     const framesBefore = speakerFrames(h).length;
     expect(framesBefore).toBeGreaterThan(0);
@@ -1295,8 +1295,8 @@ describe("recovery holes the review found", () => {
     h.crash();
     await h.append(micFrame(9));
     await h.settle();
-    h.grok.completeHandshake();
-    h.grok.answerAudio(1_000);
+    h.provider.completeHandshake();
+    h.provider.answerAudio(1_000);
     await h.settle();
 
     const afterRecovery = speakerFrames(h).slice(framesBefore);
@@ -1328,7 +1328,7 @@ describe("recovery holes the review found", () => {
   it("ignores a superseded socket that is still talking", async () => {
     const h = makeHarness();
     const conversationId = await callIsLive(h);
-    const abandoned = h.grok;
+    const abandoned = h.provider;
     await h.append({
       type: "events.iterate.com/voice-agent/conversation-end-requested",
       payload: { conversationId, reason: "done" },
@@ -1358,7 +1358,7 @@ describe("bugs the review proved", () => {
      * where the end-of-answer marker went missing. */
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(600);
+    h.provider.answerAudio(600);
     await h.settle();
     expect(speakerMsDelivered(h)).toBe(600);
   });
@@ -1374,11 +1374,11 @@ describe("bugs the review proved", () => {
 
     await h.append(micFrame(20));
     await h.settle();
-    h.grok.completeHandshake();
+    h.provider.completeHandshake();
     await h.settle();
     const live = h.state().call!.conversationId;
     expect(live).not.toBe(first);
-    const sentBefore = h.grok.sentOfType("input_audio_buffer.append").length;
+    const sentBefore = h.provider.sentOfType("input_audio_buffer.append").length;
 
     /* At-least-once delivery means the first call's obituary can arrive
      * again — or a replay from offset 0 can. It named a call that is over. */
@@ -1390,8 +1390,8 @@ describe("bugs the review proved", () => {
     await h.settle();
 
     expect(h.state().call!.conversationId).toBe(live);
-    expect(h.grok.closed).toBe(false);
-    expect(h.grok.sentOfType("input_audio_buffer.append").length).toBeGreaterThan(sentBefore);
+    expect(h.provider.closed).toBe(false);
+    expect(h.provider.sentOfType("input_audio_buffer.append").length).toBeGreaterThan(sentBefore);
   });
 
   it("lets a re-dial record its own handshake", async () => {
@@ -1400,7 +1400,7 @@ describe("bugs the review proved", () => {
     h.crash();
     await h.append(micFrame(9));
     await h.settle();
-    h.grok.completeHandshake();
+    h.provider.completeHandshake();
     await h.settle();
     /* Keyed on the conversation alone, the second acceptance is refused and
      * the number a cold call is judged on is lost. */
@@ -1412,8 +1412,8 @@ describe("edges nothing was holding down", () => {
   it("sends the short tail of an answer that is not a whole number of frames", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.answerAudio(250);
-    h.grok.answerComplete();
+    h.provider.answerAudio(250);
+    h.provider.answerComplete();
     await playOutEverything(h, 1_000);
     /*
      * 250 ms is 8,000 bytes of PCM16, and the only thing that shapes it on the
@@ -1450,11 +1450,11 @@ describe("edges nothing was holding down", () => {
   it("survives a malformed provider message and keeps listening", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    h.grok.pushRaw("{not json");
-    h.grok.pushRaw(new ArrayBuffer(8));
+    h.provider.pushRaw("{not json");
+    h.provider.pushRaw(new ArrayBuffer(8));
     await h.settle();
-    h.grok.answerAudio(400);
-    h.grok.answerComplete();
+    h.provider.answerAudio(400);
+    h.provider.answerComplete();
     await playOutEverything(h, 1_000);
     expect(speakerMsDelivered(h)).toBe(400);
   });
@@ -1463,11 +1463,11 @@ describe("edges nothing was holding down", () => {
     const seen: { url: string; headers: Record<string, string> }[] = [];
     vi.stubGlobal("fetch", async (url: string, init: { headers: Record<string, string> }) => {
       seen.push({ url: String(url), headers: init.headers });
-      return { webSocket: new FakeGrok() } as unknown as Response;
+      return { webSocket: new FakeProvider() } as unknown as Response;
     });
     await dialProviderSocket(
       "grok",
-      "https://fake.grok.test/v1/realtime",
+      "https://fake.provider.test/v1/realtime",
       "grok-voice-think-fast-2.0",
     );
     await dialProviderSocket("grok", null, "grok-voice-think-fast-2.0");

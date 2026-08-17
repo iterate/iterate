@@ -68,11 +68,11 @@ interface VoiceAgent2Setup {
   health(): Promise<{ ok: true; projectId: string; xaiSecretReady: boolean }>;
   setupVoiceAgent2(options?: {
     streamPath?: string;
-    grokBaseUrl?: string;
+    providerBaseUrl?: string;
     provider?: "grok" | "openai";
     providerModel?: string;
     providerVoice?: string;
-    grokInstructions?: string;
+    instructions?: string;
     clientTakesTurns?: boolean;
     reinstall?: boolean;
   }): Promise<{ streamPath: string; warmMs: number }>;
@@ -83,7 +83,7 @@ export interface Talk2Options extends TalkOptions {
   /** What the model is told it is. Defaults to a short assistant prompt. */
   instructions?: string;
   /** Dial this instead of x.ai. Carries no credential. */
-  grokBaseUrl?: string;
+  providerBaseUrl?: string;
   /** Which realtime voice provider the stream's birth certificate names. */
   provider?: "grok" | "openai";
   /** Model and voice overrides for that provider. */
@@ -168,7 +168,7 @@ export async function talk2(options: Talk2Options = {}) {
   const setup = await withRpcResult(
     voiceAgent.setupVoiceAgent2({
       streamPath,
-      grokInstructions: options.instructions ?? DEFAULT_INSTRUCTIONS,
+      instructions: options.instructions ?? DEFAULT_INSTRUCTIONS,
       /*
        * THIS CLI SEGMENTS ITS OWN TURNS, in both of its modes.
        *
@@ -184,7 +184,9 @@ export async function talk2(options: Talk2Options = {}) {
       ...(options.provider === undefined ? {} : { provider: options.provider }),
       ...(options.providerModel === undefined ? {} : { providerModel: options.providerModel }),
       ...(options.providerVoice === undefined ? {} : { providerVoice: options.providerVoice }),
-      ...(options.grokBaseUrl === undefined ? {} : { grokBaseUrl: options.grokBaseUrl }),
+      ...(options.providerBaseUrl === undefined
+        ? {}
+        : { providerBaseUrl: options.providerBaseUrl }),
       ...(options.reinstall === undefined ? {} : { reinstall: options.reinstall }),
     }),
     ({ streamPath: resultPath, warmMs }) => ({ streamPath: resultPath, warmMs }),
