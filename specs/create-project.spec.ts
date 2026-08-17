@@ -64,11 +64,15 @@ test("the config template opens a proactive onboarding conversation for a new pr
   // to disambiguate multiple "Create project" controls.
   await page.goto("/new-project");
 
+  await page.getByLabel("Project template").click();
+  await page.getByRole("option", { name: "Default" }).waitFor();
+  await page.getByRole("option", { name: "Codemode tag" }).waitFor();
+  await page.getByRole("option", { name: "With voice" }).click();
   await page.getByLabel("Slug").fill(slug);
-  // Create resolves after the atomic birth batch, then the userspace config
-  // worker handles project/created and drives this connected OS tab to its
-  // onboarding agent. Manual timeout: cold build + saga + redirect can
-  // outlast spinner-waiter's ceiling.
+  // Create resolves after the atomic birth batch. The selected voice template
+  // then handles project/created in userspace and drives this connected OS tab
+  // to its own onboarding agent. Manual timeout: cold build + saga + redirect
+  // can outlast spinner-waiter's ceiling.
   await page.getByRole("button", { name: "Create project" }).click();
   await page.getByPlaceholder("Message this agent").waitFor({ timeout: 90_000 }); // timeout: cold build and userspace redirect can outlast spinner-waiter's ceiling
   expect(new URL(page.url())).toMatchObject({
@@ -88,7 +92,7 @@ test("the config template opens a proactive onboarding conversation for a new pr
   });
   const assistantMessagesBeforeReply = await assistantMessages.count();
 
-  const answer = "I want this project to help my small team plan and ship a product launch.";
+  const answer = "I want it to welcome visitors and collect a short spoken response.";
   await page.getByPlaceholder("Message this agent").fill(answer);
   await page.getByRole("button", { name: "Send message" }).click();
   await page.locator(userMessage).getByText(answer).waitFor();
@@ -102,7 +106,10 @@ test("the config template opens a proactive onboarding conversation for a new pr
     await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 }); // timeout: manual because spinner-waiter is disabled for the multi-tool onboarding turn
   });
 
-  const [createdEvent, promptEvent] = await Promise.all([
+  const [projectCreatedEvents, createdEvent, promptEvent] = await Promise.all([
+    createdProject.streams
+      .get("/")
+      .getEvents({ eventTypes: ["events.iterate.com/project/created"] }),
     onboardingAgent.stream.getEvents({ eventTypes: ["events.iterate.com/agent/created"] }),
     onboardingAgent.stream.getEvent({
       idempotencyKey: "iterate/config/onboarding-instructions:v1",
@@ -111,5 +118,9 @@ test("the config template opens a proactive onboarding conversation for a new pr
   expect(
     createdEvent.find((event) => event.type === "events.iterate.com/agent/created")?.payload,
   ).toEqual({});
-  expect(promptEvent?.payload?.content).toContain("# Onboarding Agent");
+  expect(
+    projectCreatedEvents.find((event) => event.type === "events.iterate.com/project/created")
+      ?.payload?.config?.configRepoTemplate,
+  ).toMatch(/^github:iterate\/iterate#(?:[0-9a-f]{40}&)?path:configs\/with-voice$/);
+  expect(promptEvent?.payload?.content).toContain("# Voice Project Onboarding");
 });
