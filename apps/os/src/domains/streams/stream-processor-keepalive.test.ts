@@ -14,7 +14,7 @@ const T0 = Date.parse("2026-07-09T12:00:00Z");
 /**
  * The keepalive is clock/storage/transport-free by construction, so the whole
  * failure matrix runs against a mutable clock and scripted hooks — the same
- * harness shape as scheduler-processor.test.ts and stream-subscribers.test.ts.
+ * harness shape as scheduler-processor.test.ts.
  */
 function makeHarness(options: { version?: string; revive?: () => Promise<void> } = {}) {
   const clock = { now: T0 };
@@ -26,6 +26,7 @@ function makeHarness(options: { version?: string; revive?: () => Promise<void> }
     kept: Promise<unknown>[];
     version: string;
     revive: () => Promise<void>;
+    discardFailedRevival: ((error: unknown, record: KeepaliveRecord) => boolean) | undefined;
   } = {
     record: undefined,
     armCalls: [],
@@ -34,6 +35,7 @@ function makeHarness(options: { version?: string; revive?: () => Promise<void> }
     kept: [],
     version: options.version ?? "v1",
     revive: options.revive ?? (() => Promise.resolve()),
+    discardFailedRevival: undefined,
   };
   const build = () =>
     new ProcessorKeepalive({
@@ -52,6 +54,7 @@ function makeHarness(options: { version?: string; revive?: () => Promise<void> }
         state.reviveCalls.push(record);
         await state.revive();
       },
+      discardFailedRevival: (error, record) => state.discardFailedRevival?.(error, record) ?? false,
       appendFact: (event) => {
         state.facts.push(event);
       },
@@ -181,6 +184,38 @@ describe("revival", () => {
     expect(h.state.reviveCalls).toHaveLength(1);
   });
 
+  test("a permanently invalid revival is discarded and does not poison later clean work", async () => {
+    const stale = new Error("the stream lifetime was replaced");
+    const h = makeHarness({ revive: () => Promise.reject(stale) });
+    const keepalive = h.build();
+    const failedWork = deferred();
+    keepalive.track(failedWork.promise);
+    await settle({ reject: failedWork.reject });
+
+    const discarded: KeepaliveRecord[] = [];
+    h.state.discardFailedRevival = (error, record) => {
+      expect(error).toBe(stale);
+      discarded.push(record);
+      h.state.record = undefined;
+      h.state.armCalls.push(null);
+      return true;
+    };
+
+    h.clock.now = T0 + KEEPALIVE_ALARM_LEAD_MS;
+    await expect(keepalive.onAlarm()).resolves.toBe("revival_discarded");
+    expect(discarded).toHaveLength(1);
+    expect(keepalive.armedAtMs).toBeNull();
+
+    // The discarded attempt clears the previous failure flags. Fresh clean
+    // work on the same incarnation can confirm and disarm normally.
+    const cleanWork = deferred();
+    keepalive.track(cleanWork.promise);
+    await settle({ resolve: cleanWork.resolve });
+    h.clock.now = keepalive.armedAtMs!;
+    await expect(keepalive.onAlarm()).resolves.toBe("clean_disarmed");
+    expect(h.state.reviveCalls).toHaveLength(1);
+  });
+
   test("one clean settle does not mask a failure in the same window", async () => {
     const h = makeHarness();
     const keepalive = h.build();
@@ -247,7 +282,7 @@ describe("the crash-loop breaker", () => {
   });
 
   test("crash-loop evidence lands once at the threshold, keyed on version", async () => {
-    const h = makeHarness({ revive: () => Promise.reject(new Error("poison")) });
+    const h = makeHarness({ revive: () => Promise.reject(new Error("revival failed")) });
     h.build().track(deferred().promise);
     for (let i = 0; i < 5; i += 1) {
       const fresh = h.build();
@@ -261,8 +296,48 @@ describe("the crash-loop breaker", () => {
     });
   });
 
+  test("resetBackoff clears the crash-loop budget without a deploy and pulls the owed retry in", async () => {
+    // Prod 2026-08-11: three consecutive revival failures parked an agent at
+    // the 6-hour plateau, and the ONLY documented antidote was a deploy. The
+    // operator seam must reset the budget and retry promptly, in place.
+    const h = makeHarness({ revive: () => Promise.reject(new Error("storage reset")) });
+    h.build().track(deferred().promise);
+    for (let i = 0; i < 5; i += 1) {
+      const fresh = h.build();
+      h.clock.now = fresh.armedAtMs!;
+      await fresh.onAlarm();
+    }
+    expect(h.state.record?.revivals).toBe(5);
+    expect(h.state.record!.armedAtMs! - h.clock.now).toBe(REVIVAL_BACKOFF_PLATEAU_MS);
+
+    h.state.revive = () => Promise.resolve();
+    const fresh = h.build();
+    fresh.resetBackoff();
+    expect(h.state.record).toMatchObject({ revivals: 0 });
+    expect(h.state.record!.armedAtMs! - h.clock.now).toBe(KEEPALIVE_ALARM_LEAD_MS);
+
+    // The pulled-in fire revives on the fresh budget.
+    h.clock.now = fresh.armedAtMs!;
+    await expect(fresh.onAlarm()).resolves.toBe("revived");
+    expect(h.state.record?.revivals).toBe(1);
+  });
+
+  test("resetBackoff on a disarmed record only clears the stale budget", () => {
+    const h = makeHarness();
+    h.state.record = {
+      revivals: 4,
+      lastRevivalAt: T0 - 60_000,
+      version: "v1",
+      armedAtMs: null,
+    };
+    const keepalive = h.build();
+    keepalive.resetBackoff();
+    expect(h.state.record).toMatchObject({ revivals: 0, armedAtMs: null });
+    expect(h.state.armCalls).toEqual([]);
+  });
+
   test("a new worker version resets the budget (the antidote deployed)", async () => {
-    const h = makeHarness({ revive: () => Promise.reject(new Error("poison")) });
+    const h = makeHarness({ revive: () => Promise.reject(new Error("revival failed")) });
     h.build().track(deferred().promise);
     for (let i = 0; i < 4; i += 1) {
       const fresh = h.build();

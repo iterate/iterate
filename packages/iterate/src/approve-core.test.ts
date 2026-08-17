@@ -1,7 +1,14 @@
 import { describe, expect, test } from "vitest";
 import type { RpcStub } from "@iterate-com/capnweb";
 import type { Stream, StreamEvent } from "./itx-api.generated.ts";
-import { awaitSettlement, EVENT, reconcileBacklog, safeHost } from "./approve-core.ts";
+import {
+  awaitSettlement,
+  decide,
+  EVENT,
+  reconcileBacklog,
+  safeHost,
+  summarizeRequests,
+} from "./approve-core.ts";
 
 // A minimal stand-in for a project stream. `waitForEvent` replays from
 // `afterOffset` in order and the earliest match wins — exactly the durable
@@ -42,8 +49,85 @@ const REQUEST_OFFSET = 10;
 // A short settlement window so the no-match cases resolve fast under test.
 const WINDOW_MS = 40;
 
+test("decide keys the submitted decision, so a corrected retry does not collide", async () => {
+  const appended: any[] = [];
+  const stream: any = {
+    append: async (event: any) => {
+      appended.push(event);
+      return [];
+    },
+  };
+  const request: any = {
+    stream,
+    projectId: "prj_test",
+    offset: 41,
+    payload: {
+      requests: [],
+      ruleKey: "needs-human",
+      ruleDescription: "needs a human",
+      streamContext: { kind: "client-session", principal: "admin", admin: true },
+      expiresAt: "2026-08-10T15:00:00.000Z",
+    },
+    verdicts: [],
+  };
+
+  // A stale client can submit an unsigned decision after the project has
+  // enrolled a key. The door ignores it, then the client reloads the key and
+  // submits the corrected signed decision for the same request offset.
+  await decide({ ...request, key: null });
+  await decide({
+    ...request,
+    key: {
+      kind: "secure-enclave",
+      keyId: "approval-key-1",
+      publicKey: "public-key",
+      label: "Test key",
+      keyBlob: "key-blob",
+    },
+    verdicts: ["approve"],
+    signature: "correct-signature",
+  });
+  await decide({
+    ...request,
+    key: {
+      kind: "secure-enclave",
+      keyId: "approval-key-1",
+      publicKey: "public-key",
+      label: "Test key",
+      keyBlob: "key-blob",
+    },
+    verdicts: ["approve"],
+    signature: "correct-signature",
+  });
+
+  expect(appended[0]).toMatchObject({
+    type: EVENT.decided,
+    payload: { approvalRequestEventOffset: 41, decidedBy: "human" },
+  });
+  expect(appended[1]).toMatchObject({
+    type: EVENT.decided,
+    payload: {
+      approvalRequestEventOffset: 41,
+      decidedBy: "human",
+      keyId: "approval-key-1",
+      signature: "correct-signature",
+    },
+  });
+  expect(appended[0].idempotencyKey).not.toBe(appended[1].idempotencyKey);
+  expect(appended[1].idempotencyKey).toBe(appended[2].idempotencyKey);
+});
+
 test("safeHost preserves the port that identifies a destination", () => {
   expect(safeHost("http://localhost:8080/refund")).toBe("localhost:8080");
+});
+
+test("summarizeRequests names a batch of one plainly and a burst by host, busiest first", () => {
+  const gmail = { method: "POST", url: "https://gmail.googleapis.com/send" };
+  const stripe = { method: "POST", url: "https://api.stripe.com/v1/transfers" };
+  expect(summarizeRequests([stripe] as never)).toBe("POST api.stripe.com");
+  expect(summarizeRequests([gmail, stripe, gmail] as never)).toBe(
+    "3 requests (2x gmail.googleapis.com, 1x api.stripe.com)",
+  );
 });
 
 function event(type: string, offset: number, payload: Record<string, unknown>): StreamEvent {
@@ -57,120 +141,184 @@ function event(type: string, offset: number, payload: Record<string, unknown>): 
 
 const settled = (offset: number, payload: Record<string, unknown>) =>
   event(EVENT.settled, offset, payload);
-const rejected = (offset: number) => event(EVENT.rejected, offset, { reason: "human" });
 
-describe("awaitSettlement — `settled` is authoritative over a stray reject", () => {
-  test("released with the upstream status when the door settles", async () => {
-    await expect(
-      awaitSettlement(fakeStream([settled(11, { status: 200 })]), REQUEST_OFFSET, WINDOW_MS),
-    ).resolves.toEqual({ kind: "released", status: 200 });
-  });
-
-  test("delivery-failed when the door settles with an error", async () => {
-    await expect(
-      awaitSettlement(fakeStream([settled(11, { error: "boom" })]), REQUEST_OFFSET, WINDOW_MS),
-    ).resolves.toEqual({ kind: "delivery-failed", error: "boom" });
-  });
-
-  test("rejected only when no grant ever settled", async () => {
-    await expect(
-      awaitSettlement(fakeStream([rejected(11)]), REQUEST_OFFSET, WINDOW_MS),
-    ).resolves.toEqual({ kind: "rejected", reason: "human" });
-  });
-
-  test("a reject that lands BEFORE a winning grant's settle still reports released", async () => {
-    // A second approver's veto (offset 11) beat the door's settle (offset 12),
-    // but the grant won — the re-scan finds the settled and released wins.
+describe("awaitSettlement — every approved index must settle", () => {
+  test("released with per-index outcomes once every approved index settles", async () => {
     await expect(
       awaitSettlement(
-        fakeStream([rejected(11), settled(12, { status: 204 })]),
+        fakeStream([
+          settled(11, { index: 0, status: 200 }),
+          settled(12, { index: 1, status: 204 }),
+        ]),
         REQUEST_OFFSET,
+        ["approve", "approve"],
         WINDOW_MS,
       ),
-    ).resolves.toEqual({ kind: "released", status: 204 });
-  });
-
-  test("a settle already committed before a stray reject reports released", async () => {
-    await expect(
-      awaitSettlement(
-        fakeStream([settled(11, { status: 200 }), rejected(12)]),
-        REQUEST_OFFSET,
-        WINDOW_MS,
-      ),
-    ).resolves.toEqual({ kind: "released", status: 200 });
-  });
-
-  test("unsettled when nothing lands in the window", async () => {
-    await expect(awaitSettlement(fakeStream([]), REQUEST_OFFSET, WINDOW_MS)).resolves.toEqual({
-      kind: "unsettled",
+    ).resolves.toEqual({
+      kind: "released",
+      outcomes: [
+        { index: 0, status: 200, error: null },
+        { index: 1, status: 204, error: null },
+      ],
     });
+  });
+
+  test("a delivery failure rides its index's outcome", async () => {
+    await expect(
+      awaitSettlement(
+        fakeStream([settled(11, { index: 0, error: "boom" })]),
+        REQUEST_OFFSET,
+        ["approve"],
+        WINDOW_MS,
+      ),
+    ).resolves.toEqual({
+      kind: "released",
+      outcomes: [{ index: 0, status: null, error: "boom" }],
+    });
+  });
+
+  test("mixed verdicts wait only for the approved indexes", async () => {
+    await expect(
+      awaitSettlement(
+        fakeStream([settled(11, { index: 1, status: 200 })]),
+        REQUEST_OFFSET,
+        ["reject", "approve"],
+        WINDOW_MS,
+      ),
+    ).resolves.toEqual({
+      kind: "released",
+      outcomes: [{ index: 1, status: 200, error: null }],
+    });
+  });
+
+  test("an all-reject decision is terminal on the spot — nothing settles", async () => {
+    await expect(
+      awaitSettlement(fakeStream([]), REQUEST_OFFSET, ["reject", "reject"], WINDOW_MS),
+    ).resolves.toEqual({ kind: "rejected", decidedBy: "human" });
+  });
+
+  test("the door's expiry decision mid-watch reports rejected/expiry", async () => {
+    await expect(
+      awaitSettlement(
+        fakeStream([event(EVENT.decided, 11, { verdicts: ["reject"], decidedBy: "expiry" })]),
+        REQUEST_OFFSET,
+        ["approve"],
+        WINDOW_MS,
+      ),
+    ).resolves.toEqual({ kind: "rejected", decidedBy: "expiry" });
+  });
+
+  test("unsettled when an approved index never settles in the window", async () => {
+    await expect(
+      awaitSettlement(
+        fakeStream([settled(11, { index: 0, status: 200 })]),
+        REQUEST_OFFSET,
+        ["approve", "approve"],
+        WINDOW_MS,
+      ),
+    ).resolves.toEqual({ kind: "unsettled" });
   });
 });
 
-describe("reconcileBacklog — the door's first resolution is authoritative", () => {
-  const req = (offset: number, expiresInMs = 600_000): StreamEvent =>
+describe("reconcileBacklog — the door honors the FIRST decision", () => {
+  const req = (offset: number, count = 1, expiresInMs = 600_000): StreamEvent =>
     ({
       type: EVENT.requested,
       offset,
       payload: {
-        method: "POST",
-        url: "https://api.stripe.com/v1/transfers",
-        secretPaths: [],
+        requests: Array.from({ length: count }, () => ({
+          method: "POST",
+          url: "https://api.stripe.com/v1/transfers",
+          secretPaths: [],
+          body: null,
+        })),
         ruleKey: "r",
         expiresAt: new Date(Date.now() + expiresInMs).toISOString(),
-        body: null,
       },
       createdAt: "2026-01-01T00:00:00.000Z",
     }) as unknown as StreamEvent;
-  const resolution = (type: string, offset: number, ref: number): StreamEvent =>
+  const decidedOf = (offset: number, ref: number, verdicts: string[]): StreamEvent =>
     ({
-      type,
+      type: EVENT.decided,
       offset,
-      payload: { approvalRequestEventOffset: ref, status: 200, reason: "human" },
+      payload: { approvalRequestEventOffset: ref, verdicts, decidedBy: "human" },
       createdAt: "2026-01-01T00:00:00.000Z",
     }) as unknown as StreamEvent;
-  const grantOf = (offset: number, ref: number) => resolution(EVENT.granted, offset, ref);
-  const rejectOf = (offset: number, ref: number) => resolution(EVENT.rejected, offset, ref);
+  const settledOf = (offset: number, ref: number, index: number): StreamEvent =>
+    ({
+      type: EVENT.settled,
+      offset,
+      payload: { approvalRequestEventOffset: ref, index, status: 200 },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }) as unknown as StreamEvent;
 
   const openShape = async (log: StreamEvent[]) =>
-    (await reconcileBacklog(fakeStream(log))).open.map((o) => ({
-      offset: o.offset,
-      submitted: o.submitted,
+    (await reconcileBacklog(fakeStream(log))).open.map((batch) => ({
+      offset: batch.offset,
+      submitted: batch.submitted,
     }));
 
-  test("a bare requested is open, not submitted", async () => {
+  test("a bare requested batch is open, not submitted", async () => {
     expect(await openShape([req(10)])).toEqual([{ offset: 10, submitted: false }]);
   });
 
-  test("a grant with no settle is open AND submitted (awaiting the door)", async () => {
-    expect(await openShape([req(10), grantOf(11, 10)])).toEqual([{ offset: 10, submitted: true }]);
+  test("a decision whose approvals have not all settled is open AND submitted", async () => {
+    expect(
+      await openShape([
+        req(10, 2),
+        decidedOf(11, 10, ["approve", "approve"]),
+        settledOf(12, 10, 0),
+      ]),
+    ).toEqual([{ offset: 10, submitted: true }]);
   });
 
-  test("a settled request is terminal — excluded", async () => {
-    expect(await openShape([req(10), grantOf(11, 10), resolution(EVENT.settled, 12, 10)])).toEqual(
-      [],
-    );
+  test("a fully settled decision is terminal — excluded", async () => {
+    expect(
+      await openShape([
+        req(10, 2),
+        decidedOf(11, 10, ["approve", "approve"]),
+        settledOf(12, 10, 0),
+        settledOf(13, 10, 1),
+      ]),
+    ).toEqual([]);
   });
 
-  test("a reject with no competing grant is terminal — excluded", async () => {
-    expect(await openShape([req(10), rejectOf(11, 10)])).toEqual([]);
+  test("mixed verdicts settle on the approved indexes only", async () => {
+    expect(
+      await openShape([req(10, 2), decidedOf(11, 10, ["reject", "approve"]), settledOf(12, 10, 1)]),
+    ).toEqual([]);
   });
 
-  test("grant THEN a stray reject (no settle) stays open+submitted — the release can still land", async () => {
-    expect(await openShape([req(10), grantOf(11, 10), rejectOf(12, 10)])).toEqual([
-      { offset: 10, submitted: true },
+  test("an all-reject decision is terminal — excluded", async () => {
+    expect(await openShape([req(10), decidedOf(11, 10, ["reject"])])).toEqual([]);
+  });
+
+  test("only the FIRST decision counts; a later contradiction is dead weight", async () => {
+    expect(
+      await openShape([req(10), decidedOf(11, 10, ["reject"]), decidedOf(12, 10, ["approve"])]),
+    ).toEqual([]);
+  });
+
+  test("a length-mismatched decision is ignored like the door ignores it — the batch stays open", async () => {
+    expect(await openShape([req(10, 3), decidedOf(11, 10, ["reject"])])).toEqual([
+      { offset: 10, submitted: false },
     ]);
+    expect(
+      await openShape([
+        req(10, 3),
+        decidedOf(11, 10, ["reject"]),
+        decidedOf(12, 10, ["reject", "reject", "reject"]),
+      ]),
+    ).toEqual([]);
   });
 
-  test("reject THEN grant (the reject won at the door) is terminal — excluded", async () => {
-    expect(await openShape([req(10), rejectOf(11, 10), grantOf(12, 10)])).toEqual([]);
-  });
-
-  test("expired requests are excluded; cursor is the highest offset seen", async () => {
+  test("expired undecided batches are excluded; cursor is the highest offset seen", async () => {
     const { open, cursor } = await reconcileBacklog(
-      fakeStream([req(10, -1000), req(20), grantOf(21, 20)]),
+      fakeStream([req(10, 1, -1000), req(20), decidedOf(21, 20, ["approve"])]),
     );
-    expect(open.map((o) => o.offset)).toEqual([20]);
+    expect(open.map((batch) => ({ offset: batch.offset, verdicts: batch.verdicts }))).toEqual([
+      { offset: 20, verdicts: ["approve"] },
+    ]);
     expect(cursor).toBe(21);
   });
 });

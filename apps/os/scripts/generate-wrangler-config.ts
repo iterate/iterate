@@ -179,9 +179,6 @@ const SANDBOX_SSH_AUTHORIZED_KEYS: { name: string; public_key: string }[] = [
 ];
 
 const DO_CLASSES = {
-  AGENT: "AgentDurableObject",
-  AGENT_COLLECTION: "AgentCollectionDurableObject",
-  CAPABILITY_HOST: "CapabilityHostDurableObject",
   DEVICE: "DeviceDurableObject",
   PROJECT: "ProjectDurableObject",
   REPO: "RepoDurableObject",
@@ -232,6 +229,19 @@ const DO_EXPORTS = {
   // namespace on the next deploy of each env. Remove once every deployed env
   // reports "Safe to remove from `exports`".
   WorkspaceDurableObject: { type: "durable-object", state: "deleted" },
+  // The retired processor-hosting shell DOs: all first-party processor
+  // hosting moved onto Stream DO facets (src/processor-facet.ts). Their
+  // storage was checkpoints/progress rebuilt from stream events; production
+  // is reset at this deploy by design. Remove once every deployed env
+  // reports "Safe to remove from `exports`".
+  AgentDurableObject: { type: "durable-object", state: "deleted" },
+  AgentCollectionDurableObject: { type: "durable-object", state: "deleted" },
+  CapabilityHostDurableObject: { type: "durable-object", state: "deleted" },
+  // An earlier revision of the public-template branch provisioned a
+  // coordinator before that path was simplified back onto the existing repo
+  // saga. Retire that preview namespace while keeping the coordinator code
+  // deleted.
+  RepoCreationCoordinatorDurableObject: { type: "durable-object", state: "deleted" },
 };
 
 /**
@@ -319,7 +329,7 @@ function workerBindings(input: {
       {
         binding: "AUTH",
         service: input.authWorkerName,
-        ...(input.authRemote ? { remote: true } : {}),
+        ...(input.authRemote && { remote: true }),
       },
       // The typechecker sidecar (src/typechecker.ts,
       // wrangler.typechecker.jsonc): the one script carrying the TypeScript
@@ -501,7 +511,7 @@ function localDevBindings() {
     ...authBinding,
   });
   const localAuthJwks = localDevAuthJwks({
-    forgePrivateJwk: process.env.AUTH_FORGE_PRIVATE_JWK,
+    forgePrivateJwk: process.env.AUTH_FORGE_ES256_PRIVATE_JWK,
     deployedEnv: process.env.CLOUDFLARE_ENV,
   });
   return {
@@ -515,23 +525,19 @@ function localDevBindings() {
       // local dev has no envs.ts entry.
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: "byok",
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
-      ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
-      ...(process.env.APP_CONFIG_ITERATE_REPO_PKG_REF?.trim()
-        ? {
-            APP_CONFIG_ITERATE_REPO_PKG_REF: process.env.APP_CONFIG_ITERATE_REPO_PKG_REF.trim(),
-          }
-        : {}),
+      ...(process.env.PORT && { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` }),
+      ...(process.env.APP_CONFIG_ITERATE_REPO_PKG_REF?.trim() && {
+        APP_CONFIG_ITERATE_REPO_PKG_REF: process.env.APP_CONFIG_ITERATE_REPO_PKG_REF.trim(),
+      }),
       // Local dev's SDK tarball lockstep (dev.ts + lib/dev-sdk-tarball.ts).
-      ...(process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES?.trim()
-        ? {
-            APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES:
-              process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES.trim(),
-          }
-        : {}),
+      ...(process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES?.trim() && {
+        APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES:
+          process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES.trim(),
+      }),
       // Local dev trusts forge-minted sessions by deriving the public key from
-      // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
-      // Doppler here: stale snapshots caused login verification failures.
-      ...(localAuthJwks ? { APP_CONFIG_ITERATE_AUTH__JWKS: localAuthJwks } : {}),
+      // AUTH_FORGE_ES256_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS
+      // from Doppler here: stale snapshots caused login verification failures.
+      ...(localAuthJwks && { APP_CONFIG_ITERATE_AUTH__JWKS: localAuthJwks }),
     },
   };
 }
@@ -555,7 +561,7 @@ export function localDevAuthJwks(input: {
   return bakeStaticAuthJwks({
     envName: "dev",
     dopplerConfig: process.env.DOPPLER_CONFIG ?? "local dev",
-    secrets: { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk },
+    secrets: { AUTH_FORGE_ES256_PRIVATE_JWK: forgePrivateJwk },
   });
 }
 
@@ -576,6 +582,11 @@ export const config = {
   // subrequests (including project egress) must traverse Worker routes
   // instead of going to origin.
   compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
+  // A long-lived /api WebSocket invocation can legitimately relay sustained
+  // stream callbacks. Use Cloudflare's finite platform maximum instead of the
+  // paid-plan 10,000-subrequest default so that traffic cannot strand an
+  // otherwise-healthy socket after only seconds or minutes of delivery.
+  limits: { subrequests: 10_000_000 },
   // No `assets` here: the vite plugin injects the client build's assets
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
   // SSR + API paths reach the worker because no asset file matches them.

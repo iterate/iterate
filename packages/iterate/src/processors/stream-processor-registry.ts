@@ -2,10 +2,10 @@
 // every processor-hosting Durable Object runs one. WIRED INTO: the secret DO
 // (secret-durable-object.ts — the reference wiring), the project DO
 // (multi-processor), the scheduler DO (domain alarm slice), the
-// capability-host DO (the recovery template), the repo DO (at-head reconcile
+// capability-host DO (the recovery template), the repo DO (caught-up processing
 // inside processEvent), and the
 // agent DO (agent-durable-object.ts — multi-processor with per-processor
-// recovery on its registered processors; the spine's redelivery alone cannot
+// recovery on its registered processors; stream redelivery alone cannot
 // cover a SIMULTANEOUS
 // Agent+Stream DO death mid-blocker — codex review P1).
 //
@@ -22,8 +22,8 @@
 //      that read their own fold via `#reads.snapshot()`, and `getLiveState`
 //      closures via `#reads.currentState`. The runner owns the cursors; the
 //      processor instance holds no fold to read (see `reads` below).
-//   4. `alarm()` → `registry.handleAlarm(alarmInfo)`, `wakeStreamSubscriber`
-//      → `registry.wakeStreamSubscriber`, `.liveState` →
+//   4. `alarm()` → `registry.handleAlarm(alarmInfo)`, `wakeStreamProcessor`
+//      → `registry.wakeStreamProcessor`, `.liveState` →
 //      `new LiveStateRpcTarget(registry)`.
 //
 // The redesign (docs/stream-processor-runner-redesign.md, "option B") allows
@@ -33,20 +33,20 @@
 //      `setAlarm` clobbers it, so every subsystem's desire (each runner's
 //      keepalive, the scheduler) goes through a named slice and the earliest
 //      wins;
-//   2. slug→runner ROUTING — wake handshakes to the poked runner, alarm fires
+//   2. slug→runner ROUTING — wake calls to the named runner, alarm fires
 //      to every runner (each keepalive self-gates on its persisted armed
 //      time);
 //   3. building each runner's `durability` adapters from `ctx`
 //      (durable-object-processor-durability.ts);
 //   4. the DO transport boundary — wake sink calls return immediately and
 //      their eventual runner outcome crosses an independent one-way
-//      settlement capability. This must remain transport adaptation only;
+//      result callback. This must remain transport adaptation only;
 //      frame semantics stay in the runner.
 //
 // plus the two responsibilities that live ABOVE any single runner and so
 // cannot move into one: the node's LIVE-STATE assembly and the catch-up door.
-// Everything per-processor — sink serialization, offset
-// dedupe, keepalive tracking of the whole frame attempt, the trailing
+// Everything per-processor — processEventBatch serialization, offset
+// dedupe, keepalive tracking of the whole event-batch attempt, the trailing
 // type-unfiltered catch-up behind a consumes-filtered wake batch, cold-load /
 // schema-refold handling, read-your-writes waiters — lives in the RUNNER
 // (stream-processor-runner.ts); the registry must not re-implement any of it.
@@ -64,29 +64,32 @@
 // reacts to that fact itself. Otherwise its append still wakes delivery, and
 // the runner's eventless at-head pass gives recovery its turn.
 //
-// KNOWN LIMITATION — retry vs transport parking (codex review §4/#7): a
-// permanently failing frame is rethrown by the runner's sink, and the
-// existing subscription spine still backs off and eventually PARKS the
-// subscription as a durable fact (stream-subscribers.ts). The registry does
+// KNOWN LIMITATION — processor retry vs stream-delivery halt (codex review §4/#7): a
+// permanently failing batch is rethrown by the runner's processEventBatch, and the
+// stream's durable sending loop still backs off and eventually HALTS the
+// subscription as a durable event (stream-event-sender.ts). The registry does
 // NOT deliver the redesign's "retry blockers indefinitely" policy — transport
-// park semantics are deliberately unchanged in this slice, and the spine's
-// park-resume controls remain the operator escape. Do not read this file as
+// halt semantics are deliberately unchanged in this slice, and the stream's
+// halt-resume controls remain the operator escape. Do not read this file as
 // retry-forever.
 
 import * as cloudflareWorkers from "cloudflare:workers";
+import { z } from "zod";
 import { disposeIgnoredRpcResult, retainCallback } from "../sdk/capnweb/live-state/retain.ts";
 import { LiveState } from "../sdk/capnweb/live-state/engine.ts";
 import type { ProcessorStream } from "./stream-handle.ts";
 import type { StreamEvent } from "./schemas.ts";
 import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
+  StreamEventBatch,
+  StreamProcessorWakeRequest,
+  StreamProcessorWakeResponse,
   StreamWakeDeliveryError,
-  StreamWakeDeliverySettlement,
+  StreamWakeDeliveryResult,
+  StreamWakeEventBatch,
 } from "./rpc-types.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
 import type { ProcessorReads, StreamProcessor } from "./stream-processor.ts";
-import { StreamProcessorRunner } from "./stream-processor-runner.ts";
+import { StreamProcessorRunner, type ProcessorRecovery } from "./stream-processor-runner.ts";
 import {
   durableObjectProgressStore,
   durableObjectRecovery,
@@ -111,13 +114,13 @@ const tracing: {
 /**
  * What `register` accepts: a real {@link StreamProcessor} subclass instance
  * that also carries the hosted-capability surface — contract description,
- * runtime state, subscriber metrics — the wake handshake shares with the
+ * runtime state, event-consumption metrics — the wake call shares with the
  * browser host. The bound is STRUCTURAL ({@link AnyHostedProcessor})
  * because the class itself cannot appear here: it is
  * invariant in its contract parameter (private state storage holds `State` in
  * both positions), so no single instantiation is a supertype of all
  * processors. The "must be a real StreamProcessor" half is enforced at
- * construction instead — the runner's `StreamProcessor.runnerDriver` reaches
+ * construction instead — the runner's `StreamProcessor.runnerHooks` reaches
  * the class's own private hooks and throws on a structural impostor.
  */
 export type RegisterableProcessor = AnyHostedProcessor;
@@ -167,45 +170,72 @@ export type RegisteredProcessorReads<State> = Omit<ProcessorReads<State>, "waitU
 type RegistryEntry = {
   processor: RegisterableProcessor;
   runner: StreamProcessorRunner<any>;
+  /** Present when registered with `{ recovery: true }` — the keepalive-backed
+   * recovery adapter, kept for the operator reset seam. */
+  recovery?: ProcessorRecovery;
 };
 
+/**
+ * Options for {@link StreamProcessorRegistry.register}. A processor registers
+ * under its contract slug by default — which IS the subscription name under the
+ * identity doctrine (docs/stream-subscription-model-redesign.md): the same
+ * string as the stream's catalog key, the facet name under facet placement,
+ * and the progress-key component. Pass an explicit `name` to register a second
+ * instance of one contract under a distinct name; reads, wake routing, and
+ * progress storage all already key by that name (see `reads`, `resolveProcessorName`,
+ * and `durableObjectProgressStore`), so the instances stay independent.
+ */
+export type RegisterProcessorOptions = {
+  /** Post-eviction keepalive recovery — REQUIRED for consequential
+   * `runInBackground` work (see the module doc). */
+  recovery?: boolean;
+  /** Registered/progress name for this instance. Defaults to the contract slug
+   * (name === slug, the identity-doctrine default). Supply a distinct name to
+   * host two instances of one contract on one registry without colliding. */
+  name?: string;
+};
+
+const WakeDeliveryThrowableFields = z.object({
+  durableObjectReset: z.unknown().optional(),
+  itxCallId: z.unknown().optional(),
+  message: z.unknown().optional(),
+  name: z.unknown().optional(),
+  overloaded: z.unknown().optional(),
+  retryable: z.unknown().optional(),
+});
+
 function serializeWakeDeliveryError(error: unknown): StreamWakeDeliveryError {
-  const candidate =
-    typeof error === "object" && error !== null
-      ? (error as {
-          durableObjectReset?: unknown;
-          message?: unknown;
-          name?: unknown;
-          overloaded?: unknown;
-          retryable?: unknown;
-        })
-      : undefined;
+  const parsed = WakeDeliveryThrowableFields.safeParse(error);
+  const candidate = parsed.success ? parsed.data : undefined;
   return {
     name: typeof candidate?.name === "string" ? candidate.name : "Error",
     message:
       typeof candidate?.message === "string"
         ? candidate.message
         : String(error) || "unknown delivery failure",
-    ...(candidate?.durableObjectReset === true ? { durableObjectReset: true as const } : {}),
-    ...(candidate?.overloaded === true ? { overloaded: true as const } : {}),
-    ...(candidate?.retryable === true ? { retryable: true as const } : {}),
+    ...(typeof candidate?.itxCallId === "string" &&
+      candidate.itxCallId.length > 0 &&
+      candidate.itxCallId.length <= 200 && { itxCallId: candidate.itxCallId }),
+    ...(candidate?.durableObjectReset === true && { durableObjectReset: true as const }),
+    ...(candidate?.overloaded === true && { overloaded: true as const }),
+    ...(candidate?.retryable === true && { retryable: true as const }),
   };
 }
 
 /**
- * Report one terminal wake-delivery outcome without pulling the report call's
- * result. The report itself is the message; waiting for its return value would
- * merely move the actor-drain cycle to the acknowledgement lane.
+ * Report one final wake-delivery result without awaiting the report call's
+ * return value. Calling the callback sends the result; awaiting it would keep
+ * the original cross-Durable-Object call chain open.
  */
-function reportWakeDeliverySettlement(
-  settleDelivery: (settlement: StreamWakeDeliverySettlement) => unknown,
-  settlement: StreamWakeDeliverySettlement,
+function reportWakeDeliveryResult(
+  reportDeliveryResult: (result: StreamWakeDeliveryResult) => unknown,
+  deliveryResult: StreamWakeDeliveryResult,
 ): void {
   let result: unknown;
   try {
-    result = settleDelivery(settlement);
+    result = reportDeliveryResult(deliveryResult);
   } catch (error) {
-    console.warn("stream wake delivery settlement could not be dispatched", { error });
+    console.warn("stream wake delivery result could not be reported", { error });
     return;
   }
   try {
@@ -213,7 +243,7 @@ function reportWakeDeliverySettlement(
   } catch (error) {
     // The message was already dispatched. Cleanup failure must not turn a
     // completed processor attempt into a second, contradictory failure.
-    console.warn("stream wake delivery settlement result disposal failed", { error });
+    console.warn("stream wake delivery report result disposal failed", { error });
   }
 }
 
@@ -233,23 +263,26 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
   refreshLive(): void;
   /**
    * `refreshLive`'s cold-start sibling: LOAD every runner's progress, THEN
-   * reassemble — so the first read/subscription reflects committed writes
+   * reassemble — so the first read or connection reflects committed writes
    * even on a cold DO. (Distinct names because the difference — one awaits
    * storage, one must not — is exactly what a call site gets wrong.)
    */
   loadAndRefreshLive(): Promise<void>;
+  /** Registered processor names, in registration order. */
+  readonly names: readonly string[];
   /**
    * Register a processor (constructed by the DO — the processor is the star,
-   * the registry is plumbing) under its contract slug and build its runner:
-   * durable two-cursor progress in DO KV keyed by the slug, plus — WHEN THE
+   * the registry is plumbing) under its contract slug (= subscription name —
+   * see {@link RegisterProcessorOptions}) and build its runner: durable
+   * two-cursor progress in DO KV keyed by the name, plus — WHEN THE
    * DO PASSES `{ recovery: true }` — the per-runner recovery adapter
    * (keepalive + the core `stream/processor-revived` fact). See the module
    * doc: recovery is REQUIRED for any processor whose `runInBackground` work
    * is consequential; the registry cannot infer that.
-   * Duplicate slugs throw. Returns the processor, so DOs keep their
-   * `field = registry.register(new XProcessor(...))` shape.
+   * Duplicate names (and re-registering the same instance) throw. Returns the
+   * processor, so DOs keep their `field = registry.register(new XProcessor(...))` shape.
    */
-  register<P extends RegisterableProcessor>(processor: P, opts?: { recovery?: boolean }): P;
+  register<P extends RegisterableProcessor>(processor: P, opts?: RegisterProcessorOptions): P;
   /**
    * The runner-backed READ surface for one registered processor. The runner
    * owns both cursors and the fold — the processor instance holds no
@@ -259,24 +292,27 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
    * progress; `getRuntimeState` assembles the processor's contributed
    * runtime bag under the runner's snapshot; `currentState` / `isLoaded`
    * serve `getLiveState` closures without an async hop. Takes the registered
-   * instance (not a slug) so the state type flows through.
+   * instance so the state type flows through, or a registered NAME for hosts
+   * that route doors by subscription name (the facet) — the name form cannot
+   * carry the state type, so its reads publish `unknown` state.
    */
   reads<P extends RegisterableProcessor>(
     processor: P,
   ): RegisteredProcessorReads<RegisteredProcessorState<P>>;
+  reads(name: string): RegisteredProcessorReads<unknown>;
   /** Observe committed fold changes for one registered processor. */
   observeStateChanges<P extends RegisterableProcessor>(
     processor: P,
     observer: (snapshot: { offset: number; state: RegisteredProcessorState<P> }) => void,
   ): () => void;
   /**
-   * Wire this to the host DO's wakeStreamSubscriber RPC method. Resolves the
-   * poked runner (by the request's `processorSlug`, or the only registered
-   * one) and answers with its acknowledged cursor and a fresh sink.
+   * Wire this to the host DO's wakeStreamProcessor RPC method. Resolves the
+   * woken runner by the request's `name` (= contract slug) and answers with
+   * its acknowledged cursor and a fresh processEventBatch.
    */
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
+  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse>;
   /**
-   * Pull any events the push delivery has not (yet) brought this runner and
+   * Pull any events stream delivery has not (yet) brought this runner and
    * drive them now. Call before serving a read that must reflect a write the
    * caller just made (read-your-writes): push delivery is asynchronous. The
    * pull is serialized with live frames on the runner's chain, so racing a
@@ -285,6 +321,13 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
    * availability failure throw. Stale state is never presented as success.
    */
   catchUp(name: string): Promise<void>;
+  /**
+   * Operator seam: clear one runner's revival crash-loop budget and pull its
+   * owed retry in to the confirmation lead — the no-deploy antidote for a
+   * 3-strikes plateau ("backing off (plateau 360m). A deploy resets the
+   * budget."). No-op for a recovery-less runner.
+   */
+  resetRecoveryBackoff(name: string): void;
   /**
    * Wire this to the host DO's `alarm()` handler — REQUIRED on every hosting
    * class. The fire routes to EVERY runner (each keepalive self-gates on its
@@ -314,7 +357,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
   options: {
     stream: ProcessorStream;
     /** Path of the hosted stream. The registry fences every
-     * `wakeStreamSubscriber` against this exact `(projectId, path)`: a wake
+     * `wakeStreamProcessor` against this exact `(projectId, path)`: a wake
      * carrying a matching processor slug but a DIFFERENT coordinate is
      * rejected, so a stale or miswired subscription can never fold a foreign
      * stream into this processor. (Provenance stamping still lives in the
@@ -326,7 +369,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     /** Worker deploy version; a change resets each keepalive's crash-loop
      * budget (the antidote deploy). Pass `workerVersion(env)`. REQUIRED: a
      * registry that silently defaulted this could never take the
-     * version-reset lane, so a deterministic crash loop would wait out the
+     * version-reset path, so a deterministic crash loop would wait out the
      * full plateau even after the fixing deploy shipped. */
     version: string;
     /** Injected clock for the node test harness; production uses Date.now. */
@@ -340,6 +383,17 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
      * redacted view or fold in extras (e.g. a streams index).
      */
     getLiveState?: () => Live;
+    /**
+     * Fires after every `assembleLive` pass — with `skippedUnloadedRunners:
+     * false` when the live state was actually reassembled, `true` when the
+     * pass no-oped on the unloaded-runner wall (a fresh incarnation woken by
+     * one runner's delivery while other runners are still cold). A host that
+     * pushes live state to external watchers (the liveState socket lane)
+     * needs the skipped signal: without it, a change committed behind the
+     * wall would never reach them. A dumb callback — policy lives with the
+     * caller.
+     */
+    onLiveAssembled?: (assembly: { skippedUnloadedRunners: boolean }) => void;
   },
 ): StreamProcessorRegistry<Live> {
   const entries = new Map<string, RegistryEntry>();
@@ -408,21 +462,40 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     const entry = entries.get(name);
     if (entry === undefined) {
       throw new Error(
-        `Unknown stream processor "${name}" on this registry (registered: ${[...entries.keys()].join(", ") || "none"})`,
+        `Unknown stream processor name "${name}" on this registry (registered: ${[...entries.keys()].join(", ") || "none"})`,
       );
     }
     return entry;
   }
 
-  function resolveProcessorName(args: StreamSubscriberWakeRequest): string {
-    if (args.processorSlug !== undefined) {
-      requireEntry(args.processorSlug);
-      return args.processorSlug;
+  function requireEntryForInstance(processor: RegisterableProcessor, verb: string): RegistryEntry {
+    for (const entry of entries.values()) {
+      if (entry.processor === processor) return entry;
     }
-    if (entries.size === 1) return [...entries.keys()][0]!;
+    // Instance identity, not slug lookup: two instances of one contract can be
+    // registered under two names, so only the exact registered instance names
+    // its runner.
     throw new Error(
-      `wakeStreamSubscriber for "${args.subscriptionKey}" needs a processorSlug on a multi-processor registry (registered: ${[...entries.keys()].join(", ")})`,
+      `stream processor "${processor.contract.slug}" instance passed to ${verb}() is not ` +
+        `registered on this registry — pass the exact instance register() returned ` +
+        `(registered names: ${[...entries.keys()].join(", ") || "none"})`,
     );
+  }
+
+  /**
+   * Route a wake to a registered entry. The subscription NAME is the key —
+   * and equals the contract slug (enforced at configure time; under facet
+   * placement it is also the facet name). An unknown name is a loud error.
+   */
+  function resolveProcessorName(args: StreamProcessorWakeRequest): string {
+    const named = entries.get(args.name);
+    if (named === undefined) {
+      throw new Error(
+        `wakeStreamProcessor for unknown name "${args.name}" — ` +
+          `subscribe by registered name (registered: ${[...entries.keys()].join(", ") || "none"})`,
+      );
+    }
+    return args.name;
   }
 
   // The node's live-state engine. Seeded empty; assembled from runner state
@@ -435,14 +508,16 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
   function assembleLive(): void {
     // An unloaded runner reports the schema DEFAULT as currentState —
     // assembling from that would push patches that wipe real facts to live
-    // subscribers (e.g. a cold DO whose first wake is a touchStreamActivity).
+    // LiveState clients (e.g. a cold DO whose first wake is a touchStreamActivity).
     // Only loadAndRefreshLive may cross storage; once it completes this
     // reassembly runs with every real fold.
     if ([...entries.values()].some((entry) => !entry.runner.isLoaded)) {
+      options.onLiveAssembled?.({ skippedUnloadedRunners: true });
       return;
     }
     const primary = [...entries.values()][0]?.runner.currentState as Live | undefined;
     live.setState(options.getLiveState?.() ?? primary ?? ({} as Live));
+    options.onLiveAssembled?.({ skippedUnloadedRunners: false });
   }
   async function loadThenAssemble(): Promise<void> {
     // Loading is all-or-nothing: publishing a projection assembled from only
@@ -460,10 +535,25 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     refreshLive: assembleLive,
     loadAndRefreshLive: loadThenAssemble,
 
+    get names() {
+      return [...entries.keys()];
+    },
+
     register(processor, opts) {
-      const { slug } = processor.contract;
-      if (entries.has(slug)) {
-        throw new Error(`Stream processor "${slug}" is already registered on this registry`);
+      // The registered name defaults to the contract slug (one identity — see
+      // RegisterProcessorOptions); an explicit name hosts a second instance of
+      // one contract without colliding.
+      const name = opts?.name ?? processor.contract.slug;
+      if (entries.has(name)) {
+        throw new Error(`Stream processor name "${name}" is already registered on this registry`);
+      }
+      for (const [registeredName, entry] of entries) {
+        if (entry.processor === processor) {
+          throw new Error(
+            `this exact processor instance is already registered as "${registeredName}" — ` +
+              `construct one instance per registration`,
+          );
+        }
       }
       // Recovery FIRST, because durableObjectRecovery's construction re-issues
       // a persisted alarm desire (the lost-platform-alarm heal) through this
@@ -471,17 +561,17 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       const recovery = opts?.recovery
         ? durableObjectRecovery({
             storage: ctx.storage,
-            slug,
+            name,
             stream: options.stream,
             version: options.version,
-            armAlarm: (atMs) => void setAlarmSlice(`keepalive:${slug}`, atMs),
+            armAlarm: (atMs) => void setAlarmSlice(`keepalive:${name}`, atMs),
             waitUntil: (work) => ctx.waitUntil(work),
             now,
           })
         : undefined;
       const runner = new StreamProcessorRunner({
         // See RegisterableProcessor: the class is invariant in its contract,
-        // so the structural door narrows back to the class here; runnerDriver
+        // so the structural door narrows back to the class here; runnerHooks
         // (inside the constructor) fails loudly on anything that is not a
         // real StreamProcessor instance.
         processor: processor as unknown as StreamProcessor<any, any>,
@@ -489,7 +579,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         durability: {
           progress: durableObjectProgressStore({
             storage: ctx.storage,
-            slug,
+            name,
           }),
           ...(recovery === undefined ? {} : { recovery }),
         },
@@ -499,28 +589,24 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         keepAlive: (work) => ctx.waitUntil(work()),
         now,
       });
-      entries.set(slug, { processor, runner });
+      entries.set(name, { processor, runner, ...(recovery === undefined ? {} : { recovery }) });
       // Any runner's committed-state change reassembles the node's live state.
       runner.observeStateChanges(() => assembleLive());
       return processor;
     },
 
-    reads(processor) {
-      const entry = requireEntry(processor.contract.slug);
-      if (entry.processor !== processor) {
-        throw new Error(
-          `stream processor "${processor.contract.slug}" is registered on this registry, ` +
-            `but reads() was passed a DIFFERENT instance — build reads from the exact ` +
-            `processor register() returned`,
-        );
-      }
+    reads(processorOrName: RegisterableProcessor | string) {
+      const entry =
+        typeof processorOrName === "string"
+          ? requireEntry(processorOrName)
+          : requireEntryForInstance(processorOrName, "reads");
       const { runner } = entry;
       const reads: RegisteredProcessorReads<unknown> = {
         snapshot: () => runner.snapshot(),
         getRuntimeState: async () => {
           // The processor contributes only its runtime bag; the SNAPSHOT half
           // comes from the runner's committed progress — the same assembly
-          // the wake handshake's capability performs (metrics excluded here:
+          // the wake response's capability performs (metrics excluded here:
           // this is the inspection read, not the wake capability).
           const contributed = await entry.processor.getRuntimeState();
           return { ...contributed, snapshot: await runner.snapshot() };
@@ -538,21 +624,16 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         },
       };
       // The runner is stored under the type-erased `RegistryEntry` (a map of
-      // heterogeneous processors), so the concrete state type re-enters here:
-      // the registered instance's contract carries it, and `reads()` promised
-      // it in the signature.
-      return reads as RegisteredProcessorReads<RegisteredProcessorState<typeof processor>>;
+      // heterogeneous processors), so the concrete state type re-enters at the
+      // overloaded signature: the registered instance's contract carries it
+      // and `reads()` promised it there; the name form honestly publishes
+      // `unknown` state.
+      return reads as RegisteredProcessorReads<any>;
     },
 
     observeStateChanges(processor, observer) {
-      const entry = requireEntry(processor.contract.slug);
-      if (entry.processor !== processor) {
-        throw new Error(
-          `stream processor "${processor.contract.slug}" is registered on this registry, ` +
-            "but observeStateChanges() was passed a DIFFERENT instance",
-        );
-      }
-      // The identity check above restores the relationship erased by the
+      const entry = requireEntryForInstance(processor, "observeStateChanges");
+      // The instance-identity lookup restores the relationship erased by the
       // registry's heterogeneous entry map: this runner and observer share the
       // state type carried by the exact registered processor instance.
       return entry.runner.observeStateChanges(
@@ -566,6 +647,10 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     // state as success.
     async catchUp(name: string): Promise<void> {
       await requireEntry(name).runner.catchUp();
+    },
+
+    resetRecoveryBackoff(name: string): void {
+      requireEntry(name).recovery?.resetBackoff?.();
     },
 
     handleAlarm(alarmInfo) {
@@ -619,36 +704,96 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     setAlarmSlice,
     getAlarmSlice: (name) => alarmSlices.get(name) ?? null,
 
-    async wakeStreamSubscriber(args) {
+    async wakeStreamProcessor(args) {
       // Coordinate fence. A wake is only legitimate from the EXACT stream this
-      // registry hosts, `(projectId, path)`. The poke is a trusted-internal
+      // registry hosts, `(projectId, path)`. The wake is a trusted-internal
       // RPC, but a stale, malformed, hand-configured, or copied subscription
       // can still target this registry's slug from a DIFFERENT coordinate —
-      // and the delivery spine would invoke it. Without this fence the mismatch
+      // and the stream event sender would invoke it. Without this check the mismatch
       // is accepted: foreign events fold into this processor's state, its
       // consequences run against this processor's fixed Stream capability, and
       // its checkpoint advances on foreign offsets. Reject before resolving the
-      // processor or opening delivery. (Selecting by `processorSlug` alone is
-      // the gap this closes — the slug is not unique across streams.)
+      // processor or opening delivery. (Selecting by name alone is the gap
+      // this closes — a name is not unique across streams.)
       if (args.stream.projectId !== options.projectId || args.stream.path !== options.path) {
         throw new Error(
-          `wakeStreamSubscriber coordinate mismatch: wake for ${args.stream.projectId ?? "null"}:${args.stream.path} does not match registry ${options.projectId ?? "null"}:${options.path}`,
+          `wakeStreamProcessor coordinate mismatch: wake for ${args.stream.projectId ?? "null"}:${args.stream.path} does not match registry ${options.projectId ?? "null"}:${options.path}`,
         );
       }
       const name = resolveProcessorName(args);
       const entry = requireEntry(name);
-      // The runner owns all frame semantics: serialization, offset dedupe,
-      // whole-attempt keepalive, and the trailing unfiltered catch-up. The
-      // registry adds only the transport boundary: the stream's sink call
-      // returns immediately, while this DO reports the eventual attempt
-      // outcome through the batch's independent one-shot capability.
+      if (!z.uuid().safeParse(args.stream.streamId).success) {
+        throw new Error(`wakeStreamProcessor streamId must be a UUID`);
+      }
+      // The runner owns frame serialization, offset dedupe, and whole-attempt
+      // keepalive. The hosted source owns catch-up: it scans every raw offset
+      // and sends empty frames for configured-filter gaps, so an unfiltered
+      // runner pull would bypass that filter. The registry otherwise adds only
+      // the transport boundary: the stream's callback call returns
+      // immediately, while this DO reports the eventual attempt outcome
+      // through the batch's independent one-shot capability.
       //
       // That separation is load-bearing. Processor blockers routinely append
       // back to the same stream that delivered them. Returning `attempt` from
       // this RPC makes the stream pull a result that cannot settle until the
       // nested append reaches the stream again — a cyclic actor-drain tree
       // that workerd can retain until idle teardown.
-      const opened = await entry.runner.openDelivery();
+      const opened = await entry.runner.openHostedEventBatchCallback(args.stream.streamId);
+      const processEventBatch = (batch: StreamWakeEventBatch) => {
+        const { reportDeliveryResult, ...frame } = batch;
+        if (
+          frame.projectId !== options.projectId ||
+          frame.path !== options.path ||
+          frame.streamId !== args.stream.streamId
+        ) {
+          throw new Error(
+            `hosted processor "${name}" received batch for ${frame.projectId ?? "null"}:${frame.path}:${frame.streamId}; ` +
+              `expected ${options.projectId ?? "null"}:${options.path}:${args.stream.streamId}`,
+          );
+        }
+
+        let retainedResultCallback;
+        try {
+          retainedResultCallback = retainCallback<StreamWakeDeliveryResult>(reportDeliveryResult);
+        } catch (error) {
+          // Processing a batch that can never report its result would strand
+          // the source's pending attempt. Leave the processor checkpoint
+          // untouched so the source watchdog can wake it again.
+          console.error("stream wake delivery result callback could not be retained", {
+            error,
+          });
+          return;
+        }
+
+        let attempt: Promise<void>;
+        try {
+          attempt = opened.processEventBatch(frame satisfies StreamEventBatch);
+        } catch (error) {
+          attempt = Promise.reject(error);
+        }
+        const report = attempt.then(
+          () =>
+            reportWakeDeliveryResult(retainedResultCallback, {
+              outcome: "ok",
+            }),
+          (error: unknown) =>
+            reportWakeDeliveryResult(retainedResultCallback, {
+              outcome: "error",
+              error: serializeWakeDeliveryError(error),
+            }),
+        );
+        ctx.waitUntil(
+          report.finally(() => {
+            try {
+              retainedResultCallback[Symbol.dispose]();
+            } catch (error) {
+              console.warn("stream wake delivery result callback disposal failed", {
+                error,
+              });
+            }
+          }),
+        );
+      };
       // The capability assembles runtime state from its two honest sources:
       // the SNAPSHOT from the runner (the cursor owner) and the runtime bag +
       // metrics from the processor. Same Cloudflare clock domain, so the
@@ -659,65 +804,13 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         snapshot: () => entry.runner.snapshot(),
       });
       return {
+        streamId: args.stream.streamId,
         // The PROCESSING cursor — the stream persists this as its delivery
-        // watermark, and a reduction-pinned offset could skip events whose
+        // checkpoint, and a reduction-pinned offset could skip events whose
         // effects were never acknowledged (codex review §2).
         checkpointOffset: opened.checkpointOffset,
-        sink: (batch) => {
-          const { settleDelivery, ...frame } = batch;
-          let retainedSettlement;
-          try {
-            // This callback parameter must outlive the one-way sink call. One
-            // retained duplicate is owned by exactly this frame and released
-            // immediately after its terminal report.
-            retainedSettlement = retainCallback<StreamWakeDeliverySettlement>(settleDelivery);
-          } catch (error) {
-            // Do not process a frame whose result can never be reported. The
-            // stream keeps it pending and its bounded idle recovery re-pokes
-            // from the processor's unchanged durable checkpoint.
-            console.error("stream wake delivery settlement capability could not be retained", {
-              error,
-            });
-            return;
-          }
-
-          let attempt: Promise<void>;
-          try {
-            attempt = opened.sink(frame);
-          } catch (error) {
-            attempt = Promise.reject(error);
-          }
-          const report = attempt.then(
-            () =>
-              reportWakeDeliverySettlement(retainedSettlement, {
-                outcome: "ok",
-              }),
-            (error: unknown) =>
-              reportWakeDeliverySettlement(retainedSettlement, {
-                outcome: "error",
-                error: serializeWakeDeliveryError(error),
-              }),
-          );
-          // The sink response is already complete, but the subscriber
-          // incarnation must survive long enough to send its independent
-          // terminal report. The runner separately tracks the actual attempt
-          // and its crash-recovery alarm.
-          ctx.waitUntil(
-            report.finally(() => {
-              try {
-                retainedSettlement[Symbol.dispose]();
-              } catch (error) {
-                // The terminal report was already dispatched. A cleanup
-                // failure is observable, but cannot rewrite its verdict or
-                // reject the hosting waitUntil continuation.
-                console.warn("stream wake delivery settlement capability disposal failed", {
-                  error,
-                });
-              }
-            }),
-          );
-        },
-        subscriber: {
+        processEventBatch,
+        openedBy: {
           processor: { announcement: announceContract(entry.processor.contract) },
         },
         ...capabilities,

@@ -1,184 +1,235 @@
-// The project processor's executable spec, on the generic step harness from
-// iterate/processors/testing: the REAL StreamProcessorRunner over the shared
-// MemoryStream (production idempotency semantics: a same-key append with a
-// different body is REJECTED). The harness stream is joined to a
-// MemoryStreamNetwork so the birth saga's cross-stream appends (scheduler,
-// config repo, email router) are observable per path. The project-specific
-// fakes — the itx sibling facades, the worker probe, the Cloudflare
-// custom-domain provisioner — are defined here and wired in createProcessor.
-
-import { describe, expect, it, vi } from "vitest";
-import type { ConsumedInput } from "iterate/processors";
-import {
-  makeMemoryProgressStore,
-  makeProcessorHarness,
-  MemoryStreamNetwork,
-  type HarnessSubstrate,
-} from "iterate/processors/testing";
-import type { ProjectDirectoryRecord } from "../../project-directory.ts";
-import type { ProjectRpcTarget } from "../../rpc-targets.ts";
+import { describe, expect, it } from "vitest";
+import { makeMemoryProgressStore } from "iterate/processors/testing";
+import { WorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { workerBuildingResponse } from "../workers/worker-fetch-dispatch.ts";
+import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import { projectCreationEvents } from "./project-defaults.ts";
-import type {
-  ProjectProcessorContract,
-  ProjectCustomDomainCloudflareSnapshot,
-} from "./project-processor-contract.ts";
-import { ProjectProcessor } from "./project-processor-implementation.ts";
+import {
+  CONFIG_REPO_COMMIT_COMPLETED,
+  CONFIG_REPO_CREATED,
+  CONFIG_REPO_CREATE_FAILED,
+  PROJECT,
+  PROJECT_CREATED,
+  PROJECT_CREATE_REQUESTED,
+  makeProjectHarness,
+  type ProjectEventInput,
+} from "./project-processor-test-harness.ts";
+import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
-type ProjectEventInput = ConsumedInput<ProjectProcessorContract>;
+// =============================================================================
+// Project worker lifecycle
+// =============================================================================
 
-const PROJECT_CREATED = {
-  type: "events.iterate.com/project/created",
-  payload: {
-    config: {
-      creatorEmail: "owner@example.com",
-      onboardingActive: true,
-      slug: "demo",
-    },
-  },
-} satisfies ProjectEventInput;
+describe("ProjectProcessor worker lifecycle", () => {
+  it("publishes the seed worker update from the creation terminal without reacting to its raw commit", async () => {
+    const h = makeProjectHarness();
+    await h.play([
+      "append",
+      PROJECT_CREATE_REQUESTED,
+      CONFIG_REPO_COMMIT_COMPLETED,
+      CONFIG_REPO_CREATED,
+    ]);
 
-/** The cross-posted copy of the config repo's terminal creation certificate,
- * as the `cross-post:/` rule lands it on the project root. */
-const CONFIG_REPO_READY = {
-  type: "events.iterate.com/repos/created",
-  payload: {
-    request: { type: "empty" },
-    artifactName: "prj_test--L3JlcG9zL2NvbmZpZw",
-    defaultBranch: "main",
-    remote: "https://example.artifacts.cloudflare.net/git/ns/x.git",
-  },
-  source: {
-    crossPostedFrom: [
+    // Only the repos/created terminal probes the seed worker. Translating the
+    // earlier seed commit would add a second probe and could hold the project
+    // processor cursor ahead of the event that terminalizes creation. The
+    // successful creation probe supplies the first clean lifecycle fact.
+    expect(h.workerFetchCalls()).toBe(1);
+    expect(h.events("events.iterate.com/project/worker-updated")).toMatchObject([
       {
-        subscriptionKey: "cross-post:/",
-        createdAt: new Date(2).toISOString(),
-        offset: 4,
-        path: "/repos/config",
-        projectId: "prj_test",
-        type: "events.iterate.com/repos/created",
+        idempotencyKey: internalStreamId("project-worker-update", "b".repeat(40)),
+        payload: { commitOid: "b".repeat(40) },
       },
-    ],
-  },
-} satisfies ProjectEventInput;
-
-const PROJECT: ProjectDirectoryRecord = {
-  id: "prj_garple",
-  name: "Garple",
-  organizationId: "org_1",
-  slug: "garple",
-};
-
-function customDomainSnapshot(
-  input: Partial<ProjectCustomDomainCloudflareSnapshot> = {},
-): ProjectCustomDomainCloudflareSnapshot {
-  return {
-    cloudflareHostnameId: "custom-hostname-1",
-    error: null,
-    hostname: "garple.com",
-    hostnameStatus: "active",
-    ownershipVerification: null,
-    sslStatus: "active",
-    status: "active",
-    validationRecords: [],
-    wildcard: true,
-    ...input,
-  };
-}
-
-type SiblingName = "capability-host" | "scheduler" | "repo" | "email";
-const SIBLINGS = ["capability-host", "scheduler", "repo", "email"] as const;
-
-/** The generic harness plus the project's fakes (itx sibling facades, worker
- * probe, custom-domain provisioner), wired in createProcessor. */
-function makeProjectHarness(
-  options: {
-    substrate?: HarnessSubstrate;
-    /** Served to successive worker readiness probes; a 204 after the list runs out. */
-    workerResponses?: Response[];
-    /** Parks the named sibling's waitUntilProcessed until the promise resolves. */
-    siblingWaitBarriers?: Partial<Record<SiblingName, Promise<void>>>;
-    /** Advance the virtual clock by this much inside the named sibling's wait,
-     * to observe the shrinking birth-barrier budget. */
-    clockAdvanceBySibling?: Partial<Record<SiblingName, number>>;
-    processorClass?: typeof ProjectProcessor;
-  } = {},
-) {
-  let workerFetchCalls = 0;
-  const siblingWaits: { processor: SiblingName; offset: number; timeoutMs?: number }[] = [];
-  const siblingWaitStarted = {} as Record<SiblingName, Promise<void>>;
-  const resolveSiblingWaitStarted = {} as Record<SiblingName, () => void>;
-  for (const sibling of SIBLINGS) {
-    siblingWaitStarted[sibling] = new Promise<void>((resolve) => {
-      resolveSiblingWaitStarted[sibling] = resolve;
-    });
-  }
-  const clockBox = { advance: (_ms: number) => {} };
-  const waitUntilProcessed =
-    (sibling: SiblingName) => async (input: { offset: number; timeoutMs?: number }) => {
-      siblingWaits.push({ processor: sibling, offset: input.offset, timeoutMs: input.timeoutMs });
-      resolveSiblingWaitStarted[sibling]();
-      clockBox.advance(options.clockAdvanceBySibling?.[sibling] ?? 0);
-      await options.siblingWaitBarriers?.[sibling];
-    };
-  const customDomains = {
-    ensure: vi.fn(async () =>
-      customDomainSnapshot({
-        hostnameStatus: "pending",
-        sslStatus: "pending_validation",
-        status: "pending_validation",
-      }),
-    ),
-    readProject: vi.fn(async (): Promise<ProjectDirectoryRecord | null> => PROJECT),
-    refresh: vi.fn(async () => customDomainSnapshot()),
-    remove: vi.fn(async () => {}),
-  };
-  const itx = {
-    capabilityHost: { processor: { waitUntilProcessed: waitUntilProcessed("capability-host") } },
-    email: { processor: { waitUntilProcessed: waitUntilProcessed("email") } },
-    projectId: "prj_test",
-    repo: { processor: { waitUntilProcessed: waitUntilProcessed("repo") } },
-    scheduler: { processor: { waitUntilProcessed: waitUntilProcessed("scheduler") } },
-    worker: {
-      fetch: async () => {
-        const response = options.workerResponses?.[workerFetchCalls];
-        workerFetchCalls += 1;
-        return response ?? new Response(null, { status: 204 });
-      },
-    },
-  } as unknown as ProjectRpcTarget;
-  const Processor = options.processorClass ?? ProjectProcessor;
-  const harness = makeProcessorHarness<ProjectProcessorContract>({
-    path: "/",
-    ...(options.substrate === undefined ? {} : { substrate: options.substrate }),
-    createProcessor: (deps) =>
-      new Processor({
-        ...deps,
-        // The worker probe's retry pause: immediate but still async. The
-        // project processor is not time-driven, so nothing here needs the
-        // virtual clock's advanceTime choreography.
-        sleep: () => new Promise((resolve) => setTimeout(resolve, 0)),
-        itx,
-        customDomains,
-      }),
+    ]);
+    expect(h.events("events.iterate.com/project/created")).toHaveLength(1);
   });
-  clockBox.advance = (ms) => {
-    harness.clock.now += ms;
-  };
-  // Join the harness stream into a network so the saga's cross-stream appends
-  // (stream.at(path).append) land on observable sibling streams.
-  const network = new MemoryStreamNetwork(() => harness.clock.now);
-  network.streams.set("/", harness.stream);
-  harness.stream.network = network;
-  return {
-    ...harness,
-    network,
-    customDomains,
-    siblingWaits,
-    siblingWaitStarted,
-    workerFetchCalls: () => workerFetchCalls,
-  };
-}
+
+  it("publishes project/worker-updated only after the changed config worker answers", async () => {
+    const h = makeProjectHarness({
+      workerOutcomes: [
+        workerBuildingResponse(),
+        Response.json({ app: "hello", projectId: "prj_test" }),
+      ],
+    });
+    await h.play([
+      "append",
+      PROJECT_CREATE_REQUESTED,
+      PROJECT_CREATED,
+      CONFIG_REPO_COMMIT_COMPLETED,
+    ]);
+
+    expect(h.workerFetchCalls()).toBe(2);
+    expect(h.events("events.iterate.com/project/worker-updated")).toMatchObject([
+      {
+        idempotencyKey: internalStreamId("project-worker-update", "b".repeat(40)),
+        payload: { commitOid: "b".repeat(40) },
+      },
+    ]);
+  });
+
+  it("publishes the worker identity actually served when HEAD advances past the triggering commit", async () => {
+    const servedCommitOid = "c".repeat(40);
+    const h = makeProjectHarness({ workerCommitOids: [servedCommitOid] });
+    await h.play([
+      "append",
+      PROJECT_CREATE_REQUESTED,
+      PROJECT_CREATED,
+      CONFIG_REPO_COMMIT_COMPLETED,
+    ]);
+
+    expect(h.events("events.iterate.com/project/worker-updated")).toMatchObject([
+      {
+        idempotencyKey: internalStreamId(
+          "project-worker-update",
+          CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid,
+        ),
+        payload: { commitOid: servedCommitOid },
+      },
+    ]);
+  });
+
+  it("does not reprobe a coalesced config trigger after losing its checkpoint", async () => {
+    const servedCommitOid = "c".repeat(40);
+    const h = makeProjectHarness({ workerCommitOids: [servedCommitOid] });
+    await h.play([
+      "append",
+      PROJECT_CREATE_REQUESTED,
+      PROJECT_CREATED,
+      CONFIG_REPO_COMMIT_COMPLETED,
+    ]);
+    expect(h.workerFetchCalls()).toBe(1);
+
+    const replay = makeProjectHarness({
+      substrate: {
+        clock: h.clock,
+        stream: h.stream,
+        progress: makeMemoryProgressStore(ProjectProcessorContract),
+      },
+      workerOutcomes: [
+        new WorkerBuildFailedError({ kind: "source", message: "new HEAD is broken" }),
+      ],
+    });
+    await replay.settle();
+
+    expect(replay.workerFetchCalls()).toBe(0);
+    expect(replay.events("events.iterate.com/project/worker-updated")).toMatchObject([
+      {
+        idempotencyKey: internalStreamId(
+          "project-worker-update",
+          CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid,
+        ),
+        payload: { commitOid: servedCommitOid },
+      },
+    ]);
+    expect(replay.events("events.iterate.com/project/worker-update-failed")).toEqual([]);
+  });
+
+  it("does not probe again when a committed worker update is redelivered", async () => {
+    const h = makeProjectHarness();
+    await h.play([
+      "append",
+      PROJECT_CREATE_REQUESTED,
+      PROJECT_CREATED,
+      CONFIG_REPO_COMMIT_COMPLETED,
+    ]);
+    expect(h.workerFetchCalls()).toBe(1);
+
+    const replay = makeProjectHarness({
+      substrate: {
+        clock: h.clock,
+        stream: h.stream,
+        progress: makeMemoryProgressStore(ProjectProcessorContract),
+      },
+    });
+    await replay.settle();
+
+    expect(replay.workerFetchCalls()).toBe(0);
+    expect(replay.events("events.iterate.com/project/worker-updated")).toHaveLength(1);
+  });
+
+  it("does not translate a commit from another repo", async () => {
+    const h = makeProjectHarness();
+    await h.play([
+      "append",
+      PROJECT_CREATE_REQUESTED,
+      PROJECT_CREATED,
+      {
+        ...CONFIG_REPO_COMMIT_COMPLETED,
+        source: {
+          copiedFrom: [
+            {
+              ...CONFIG_REPO_COMMIT_COMPLETED.source.copiedFrom[0],
+              path: "/repos/application",
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(h.workerFetchCalls()).toBe(0);
+    expect(h.events("events.iterate.com/project/worker-updated")).toEqual([]);
+  });
+
+  it("records a deterministic update failure without blocking a later fixed commit", async () => {
+    const fixedCommit = {
+      ...CONFIG_REPO_COMMIT_COMPLETED,
+      payload: {
+        ...CONFIG_REPO_COMMIT_COMPLETED.payload,
+        beforeCommitOid: CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid,
+        commitOid: "c".repeat(40),
+      },
+      source: {
+        copiedFrom: [
+          {
+            ...CONFIG_REPO_COMMIT_COMPLETED.source.copiedFrom[0],
+            offset: 6,
+          },
+        ],
+      },
+    } satisfies ProjectEventInput;
+    const h = makeProjectHarness({
+      workerOutcomes: [
+        new WorkerBuildFailedError({ kind: "source", message: "Expected ; but found is" }),
+        Response.json({ app: "fixed" }),
+      ],
+      workerCommitOids: ["b".repeat(40), "c".repeat(40)],
+    });
+    await h.play(
+      ["append", PROJECT_CREATE_REQUESTED, PROJECT_CREATED, CONFIG_REPO_COMMIT_COMPLETED],
+      ["append", fixedCommit],
+    );
+
+    expect(h.events("events.iterate.com/project/worker-update-failed")).toMatchObject([
+      {
+        idempotencyKey: internalStreamId("project-worker-update", "b".repeat(40)),
+        payload: {
+          commitOid: "b".repeat(40),
+          error: "Expected ; but found is",
+        },
+      },
+    ]);
+    expect(h.events("events.iterate.com/project/worker-updated")).toMatchObject([
+      {
+        idempotencyKey: internalStreamId("project-worker-update", "c".repeat(40)),
+        payload: { commitOid: "c".repeat(40) },
+      },
+    ]);
+  });
+
+  it("leaves a transient update probe failure open for durable redelivery", async () => {
+    const h = makeProjectHarness({
+      workerOutcomes: [new Error("temporary worker dispatch outage")],
+    });
+    await h.stream.append(PROJECT_CREATE_REQUESTED, PROJECT_CREATED, CONFIG_REPO_COMMIT_COMPLETED);
+
+    await expect(h.settle()).rejects.toThrow("temporary worker dispatch outage");
+    expect(h.events("events.iterate.com/project/worker-updated")).toEqual([]);
+    expect(h.events("events.iterate.com/project/worker-update-failed")).toEqual([]);
+
+    await h.settle();
+    expect(h.events("events.iterate.com/project/worker-updated")).toHaveLength(1);
+  });
+});
 
 // =============================================================================
 // Bootstrap
@@ -191,12 +242,15 @@ describe("ProjectProcessor bootstrap", () => {
     });
 
     await h.stream.append(
-      ...projectCreationEvents({ projectId: "prj_test", payload: PROJECT_CREATED.payload }),
+      ...projectCreationEvents({
+        projectId: "prj_test",
+        payload: PROJECT_CREATE_REQUESTED.payload,
+      }),
     );
     await h.settle();
 
     expect(h.network.eventsAt("/").map((event) => event.type)).toEqual([
-      "events.iterate.com/project/created",
+      "events.iterate.com/project/create-requested",
       "events.iterate.com/notification/created",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
@@ -214,8 +268,12 @@ describe("ProjectProcessor bootstrap", () => {
     ]);
     expect(h.network.eventsAt("/repos/config")[2]).toMatchObject({
       payload: {
-        deliver: "new",
-        subscriptionKey: "cross-post:/",
+        name: "project-config-to-root",
+        receiver: {
+          action: "copy-to-stream",
+          receivingStreamPath: "/",
+          delivery: { start: "now" },
+        },
       },
     });
     expect(h.network.eventsAt("/integrations/email").map((event) => event.type)).toEqual([
@@ -235,10 +293,38 @@ describe("ProjectProcessor bootstrap", () => {
     ]);
 
     expect(h.state()).toMatchObject({
-      birthCertificate: PROJECT_CREATED.payload,
+      createRequest: PROJECT_CREATE_REQUESTED.payload,
+      birthCertificate: null,
       onboardingActive: true,
-      ready: false,
       notificationReady: true,
+    });
+  });
+
+  it("births the config repo from the requested public GitHub template", async () => {
+    const h = makeProjectHarness();
+    const configRepoTemplate = "github:iterate/iterate#main&path:configs/with-voice";
+    await h.stream.append(
+      ...projectCreationEvents({
+        projectId: "prj_test",
+        payload: {
+          config: {
+            ...PROJECT_CREATE_REQUESTED.payload.config,
+            configRepoTemplate,
+          },
+        },
+      }),
+    );
+    await h.settle();
+
+    expect(h.network.eventsAt("/repos/config")[0]).toMatchObject({
+      type: "events.iterate.com/repos/create-requested",
+      payload: {
+        type: "github-public-template",
+        owner: "iterate",
+        path: "configs/with-voice",
+        ref: "main",
+        repo: "iterate",
+      },
     });
   });
 
@@ -249,7 +335,7 @@ describe("ProjectProcessor bootstrap", () => {
     });
     const h = makeProjectHarness({ siblingWaitBarriers: { email: emailBarrier } });
 
-    await h.stream.append(PROJECT_CREATED);
+    await h.stream.append(PROJECT_CREATE_REQUESTED);
     let settled = false;
     const settling = h.settle().then(() => {
       settled = true;
@@ -273,23 +359,320 @@ describe("ProjectProcessor bootstrap", () => {
 
   it("ignores a second project birth certificate during reduction", async () => {
     const h = makeProjectHarness();
-    await h.play(["append", PROJECT_CREATED]);
+    await h.play(["append", PROJECT_CREATE_REQUESTED, PROJECT_CREATED]);
     await h.play(["append", PROJECT_CREATED]);
     expect(h.state().birthCertificate).toEqual(PROJECT_CREATED.payload);
   });
 
-  it("waits through a cold-build probe response before marking the project ready", async () => {
+  it("does not reopen onboarding when project/created follows an early completion", async () => {
+    const h = makeProjectHarness();
+    await h.play([
+      "append",
+      PROJECT_CREATE_REQUESTED,
+      {
+        type: "events.iterate.com/project/onboarding-completed",
+        payload: { agentPath: "/agents/onboarding" },
+      },
+      PROJECT_CREATED,
+    ]);
+
+    expect(h.state()).toMatchObject({
+      birthCertificate: PROJECT_CREATED.payload,
+      onboardingActive: false,
+      onboardingCompletedAt: expect.any(String),
+    });
+  });
+
+  it("only the first project/create-requested event can drive sibling creation", async () => {
+    const h = makeProjectHarness();
+    await h.play(["append", PROJECT_CREATE_REQUESTED]);
+    const configRepoEventCount = h.network.eventsAt("/repos/config").length;
+
+    await h.play([
+      "append",
+      {
+        ...PROJECT_CREATE_REQUESTED,
+        payload: {
+          config: {
+            ...PROJECT_CREATE_REQUESTED.payload.config,
+            creatorEmail: "different@example.com",
+          },
+        },
+      },
+    ]);
+
+    expect(h.network.eventsAt("/repos/config")).toHaveLength(configRepoEventCount);
+  });
+
+  it("waits through a cold build before installing the userspace feed and appending project/created", async () => {
     const h = makeProjectHarness({
-      workerResponses: [
+      workerOutcomes: [
         workerBuildingResponse(),
         Response.json({ app: "hello", projectId: "prj_test" }),
       ],
     });
-    await h.play(["append", PROJECT_CREATED], ["append", CONFIG_REPO_READY]);
+    await h.play(["append", PROJECT_CREATE_REQUESTED], ["append", CONFIG_REPO_CREATED]);
 
-    expect(h.events("events.iterate.com/project/ready")).toHaveLength(1);
+    expect(h.events("events.iterate.com/project/created")).toHaveLength(1);
     expect(h.workerFetchCalls()).toBe(2);
-    expect(h.state().ready).toBe(true);
+    expect(
+      h
+        .events("events.iterate.com/stream/subscription-configured")
+        .filter((event) => event.payload.name === "project-worker"),
+    ).toMatchObject([
+      {
+        idempotencyKey: "project-worker-subscription:prj_test",
+        payload: {
+          receiver: {
+            action: "itx-call",
+            expression: ["processEventBatch"],
+            delivery: {
+              start: "now",
+              onFailingEvent: "skip",
+            },
+          },
+        },
+      },
+    ]);
+    expect(h.state().birthCertificate).toEqual(PROJECT_CREATED.payload);
+  });
+
+  it("terminalizes a deterministic worker source-build failure", async () => {
+    const h = makeProjectHarness({
+      workerOutcomes: [
+        new WorkerBuildFailedError({ kind: "source", message: "Expected ; but found is" }),
+      ],
+      workerRetrySleep: async () => undefined,
+    });
+    await h.stream.append(PROJECT_CREATE_REQUESTED, CONFIG_REPO_CREATED);
+
+    await h.settle();
+    expect(h.workerFetchCalls()).toBe(1);
+    expect(h.events("events.iterate.com/project/created")).toEqual([]);
+    expect(h.events("events.iterate.com/stream/subscription-removed")).toEqual([]);
+    expect(h.events("events.iterate.com/project/create-failed")).toMatchObject([
+      {
+        idempotencyKey: internalStreamId("project-creation-terminal", "prj_test", "failed"),
+        payload: {
+          createRequestedAtOffset: 1,
+          error: "Default project worker bootstrap failed: Expected ; but found is",
+          request: PROJECT_CREATE_REQUESTED.payload,
+        },
+      },
+    ]);
+  });
+
+  it("does not re-probe after a failed terminal committed but its checkpoint was lost", async () => {
+    const h = makeProjectHarness({
+      workerOutcomes: [
+        new WorkerBuildFailedError({ kind: "source", message: "Expected ; but found is" }),
+      ],
+    });
+    await h.stream.append(PROJECT_CREATE_REQUESTED, CONFIG_REPO_CREATED);
+    await h.settle();
+
+    // A fresh progress store replays from before the config-repo certificate,
+    // while the failed terminal remains durable later in the same stream.
+    // The default worker would now answer successfully if the reaction
+    // incorrectly ran it again.
+    const replay = makeProjectHarness({
+      substrate: {
+        clock: h.clock,
+        stream: h.stream,
+        progress: makeMemoryProgressStore(ProjectProcessorContract),
+      },
+    });
+    await replay.settle();
+
+    expect(replay.workerFetchCalls()).toBe(0);
+    expect(replay.events("events.iterate.com/project/created")).toEqual([]);
+    expect(replay.events("events.iterate.com/project/create-failed")).toHaveLength(1);
+    expect(replay.state().createFailure).toMatchObject({
+      error: "Default project worker bootstrap failed: Expected ; but found is",
+    });
+  });
+
+  it("leaves a transient worker dispatch failure open for durable redelivery", async () => {
+    const h = makeProjectHarness({
+      workerOutcomes: [new Error("temporary worker dispatch outage")],
+    });
+    await h.stream.append(PROJECT_CREATE_REQUESTED, CONFIG_REPO_CREATED);
+
+    await expect(h.settle()).rejects.toThrow("temporary worker dispatch outage");
+    expect(h.events("events.iterate.com/project/create-failed")).toEqual([]);
+    expect(h.state().createFailure).toBeNull();
+
+    await h.settle();
+    expect(h.events("events.iterate.com/project/created")).toHaveLength(1);
+  });
+
+  it("leaves a worker that is still building open and completes on durable redelivery", async () => {
+    const h = makeProjectHarness({
+      workerOutcomes: Array.from({ length: 20 }, () => workerBuildingResponse()),
+      workerRetrySleep: async () => undefined,
+    });
+    await h.stream.append(PROJECT_CREATE_REQUESTED, CONFIG_REPO_CREATED);
+
+    await expect(h.settle()).rejects.toMatchObject({ name: "WorkerBuildInProgressError" });
+    expect(h.workerFetchCalls()).toBe(20);
+    expect(h.events("events.iterate.com/project/create-failed")).toEqual([]);
+
+    await h.settle();
+    expect(h.workerFetchCalls()).toBe(21);
+    expect(h.events("events.iterate.com/project/created")).toHaveLength(1);
+  });
+
+  it("treats any application response as proof that the worker built and loaded", async () => {
+    const h = makeProjectHarness({
+      workerOutcomes: [new Response("userspace route failed", { status: 500 })],
+    });
+    await h.play(["append", PROJECT_CREATE_REQUESTED], ["append", CONFIG_REPO_CREATED]);
+
+    expect(h.workerFetchCalls()).toBe(1);
+    expect(h.events("events.iterate.com/project/create-failed")).toEqual([]);
+    expect(h.events("events.iterate.com/project/created")).toHaveLength(1);
+  });
+
+  it("settles a terminal config-repo failure as project/create-failed and closes the saga", async () => {
+    const h = makeProjectHarness();
+    await h.play(["append", PROJECT_CREATE_REQUESTED], ["append", CONFIG_REPO_CREATE_FAILED]);
+
+    expect(h.events("events.iterate.com/project/create-failed")).toMatchObject([
+      {
+        idempotencyKey: internalStreamId("project-creation-terminal", "prj_test", "failed"),
+        payload: {
+          createRequestedAtOffset: 1,
+          error: "Config repo creation failed: The backing repository could not be created.",
+          request: PROJECT_CREATE_REQUESTED.payload,
+        },
+      },
+    ]);
+    expect(h.workerFetchCalls()).toBe(0);
+    expect(h.state()).toMatchObject({
+      birthCertificate: null,
+      createFailure: {
+        createRequestedAtOffset: 1,
+        error: "Config repo creation failed: The backing repository could not be created.",
+        request: PROJECT_CREATE_REQUESTED.payload,
+      },
+    });
+
+    await h.play(
+      ["append", PROJECT_CREATED],
+      [
+        "append",
+        {
+          type: "events.iterate.com/project/custom-domain-add-requested",
+          payload: { hostname: "after-failure.example.com" },
+        },
+      ],
+    );
+    expect(h.state().birthCertificate).toBeNull();
+    expect(h.customDomains.ensure).not.toHaveBeenCalled();
+  });
+
+  it("does not let a public processor-source claim settle project creation", async () => {
+    const h = makeProjectHarness();
+    await h.play(
+      ["append", PROJECT_CREATE_REQUESTED],
+      [
+        "append",
+        {
+          ...PROJECT_CREATED,
+          idempotencyKey: "project-created:prj_test",
+          source: {
+            processor: {
+              slug: ProjectProcessorContract.slug,
+              version: ProjectProcessorContract.version,
+              stream: {
+                path: "/",
+                projectId: "prj_test",
+                streamId: "00000000-0000-4000-8000-000000000001",
+              },
+              whileProcessing: { offset: 2, type: "events.iterate.com/repos/created" },
+            },
+          },
+        },
+      ],
+    );
+
+    expect(h.state().birthCertificate).toBeNull();
+    expect(h.state().createFailure).toBeNull();
+  });
+
+  it("reduces only a terminal fact that exactly settles the open creation request", async () => {
+    const failure = {
+      type: "events.iterate.com/project/create-failed",
+      idempotencyKey: internalStreamId("project-creation-terminal", "prj_test", "failed"),
+      payload: {
+        createRequestedAtOffset: 1,
+        error: "not this request",
+        request: PROJECT_CREATE_REQUESTED.payload,
+      },
+    } satisfies ProjectEventInput;
+    const copiedSource = {
+      copiedFrom: [
+        {
+          name: "project-config-to-root",
+          streamId: "00000000-0000-4000-8000-000000000003",
+          streamCreatedAt: new Date(1).toISOString(),
+          cursorChangedAtSourceOffset: 1,
+          createdAt: new Date(2).toISOString(),
+          offset: 2,
+          path: "/elsewhere",
+          projectId: "prj_test",
+          type: "events.iterate.com/project/created",
+        },
+      ],
+    } satisfies NonNullable<ProjectEventInput["source"]>;
+
+    for (const counterfeit of [
+      { ...PROJECT_CREATED, idempotencyKey: "project-created:prj_test" },
+      { ...PROJECT_CREATED, source: copiedSource },
+      { ...failure, idempotencyKey: "project/create-failed" },
+      { ...failure, source: copiedSource },
+    ] satisfies ProjectEventInput[]) {
+      const h = makeProjectHarness();
+      await h.play(["append", PROJECT_CREATE_REQUESTED], ["append", counterfeit]);
+      expect(h.state().birthCertificate).toBeNull();
+      expect(h.state().createFailure).toBeNull();
+    }
+
+    for (const mismatched of [
+      {
+        ...PROJECT_CREATED,
+        payload: { ...PROJECT_CREATED.payload, createRequestedAtOffset: 999 },
+      },
+      {
+        ...PROJECT_CREATED,
+        payload: {
+          config: { ...PROJECT_CREATED.payload.config, slug: "different" },
+          createRequestedAtOffset: 1,
+        },
+      },
+      {
+        ...failure,
+        payload: { ...failure.payload, createRequestedAtOffset: 999 },
+      },
+      {
+        ...failure,
+        payload: {
+          ...failure.payload,
+          request: {
+            config: { ...PROJECT_CREATE_REQUESTED.payload.config, slug: "different" },
+          },
+        },
+      },
+    ] satisfies ProjectEventInput[]) {
+      const h = makeProjectHarness();
+      await h.play(["append", PROJECT_CREATE_REQUESTED], ["append", mismatched]);
+      expect(h.state().birthCertificate).toBeNull();
+      expect(h.state().createFailure).toBeNull();
+    }
+
+    const h = makeProjectHarness();
+    await h.play(["append", PROJECT_CREATE_REQUESTED], ["append", PROJECT_CREATED]);
+    expect(h.state().birthCertificate).toEqual(PROJECT_CREATED.payload);
   });
 });
 
@@ -298,10 +681,10 @@ describe("ProjectProcessor bootstrap", () => {
 // =============================================================================
 
 describe("ProjectProcessor catalogs", () => {
-  it("catalogs physical paths and cross-posted domain objects without reducing agent collection facts", async () => {
+  it("catalogs physical paths and received domain objects without reducing agent collection facts", async () => {
     const h = makeProjectHarness();
     await h.play(
-      ["append", PROJECT_CREATED],
+      ["append", PROJECT_CREATE_REQUESTED, PROJECT_CREATED],
       [
         "append",
         {
@@ -312,9 +695,12 @@ describe("ProjectProcessor catalogs", () => {
           type: "events.iterate.com/agent/created",
           payload: {},
           source: {
-            crossPostedFrom: [
+            copiedFrom: [
               {
-                subscriptionKey: "cross-post:/",
+                name: "agent-catalog",
+                streamId: "11111111-1111-4111-8111-111111111111",
+                streamCreatedAt: new Date(1).toISOString(),
+                cursorChangedAtSourceOffset: 1,
                 createdAt: new Date(3).toISOString(),
                 offset: 1,
                 path: "/agents/slack/main/C123/ts-1",
@@ -333,9 +719,12 @@ describe("ProjectProcessor catalogs", () => {
             remote: "https://example.artifacts.cloudflare.net/git/ns/side.git",
           },
           source: {
-            crossPostedFrom: [
+            copiedFrom: [
               {
-                subscriptionKey: "repo-catalog",
+                name: "repo-catalog",
+                streamId: "11111111-1111-4111-8111-111111111111",
+                streamCreatedAt: new Date(1).toISOString(),
+                cursorChangedAtSourceOffset: 1,
                 createdAt: new Date(4).toISOString(),
                 offset: 1,
                 path: "/repos/side-repo",
@@ -362,10 +751,10 @@ describe("ProjectProcessor catalogs", () => {
 // =============================================================================
 
 describe("ProjectProcessor custom domains", () => {
-  it("provisions an add request and reduces the observed Cloudflare status onto state", async () => {
+  it("provisions and catalogs a Cloudflare hostname", async () => {
     const h = makeProjectHarness();
     await h.play(
-      ["append", PROJECT_CREATED],
+      ["append", PROJECT_CREATE_REQUESTED, PROJECT_CREATED],
       [
         "append",
         {
@@ -379,34 +768,22 @@ describe("ProjectProcessor custom domains", () => {
       hostname: "garple.com",
       project: PROJECT,
     });
-    expect(h.events("events.iterate.com/project/custom-domain-cloudflare-observed")).toMatchObject([
+    expect(h.events("events.iterate.com/project/custom-domain-configured")).toMatchObject([
       {
         payload: {
-          cloudflareHostnameId: "custom-hostname-1",
           hostname: "garple.com",
-          status: "pending_validation",
-          wildcard: true,
+          kind: "cloudflare",
         },
       },
     ]);
-    // The add request reduced to `requested` first, then the observation
-    // replaced it with the Cloudflare snapshot.
-    expect(h.state().customDomains).toMatchObject([
-      {
-        cloudflareHostnameId: "custom-hostname-1",
-        hostname: "garple.com",
-        kind: "cloudflare",
-        status: "pending_validation",
-        wildcard: true,
-      },
-    ]);
+    expect(h.state().customDomains).toEqual([{ hostname: "garple.com", kind: "cloudflare" }]);
   });
 
-  it("falls back to a directory record built from state when the project directory has no entry", async () => {
+  it("uses the creation-request slug before terminal creation when the directory has no entry", async () => {
     const h = makeProjectHarness();
     h.customDomains.readProject.mockResolvedValueOnce(null);
     await h.play(
-      ["append", PROJECT_CREATED],
+      ["append", PROJECT_CREATE_REQUESTED],
       [
         "append",
         {
@@ -416,16 +793,18 @@ describe("ProjectProcessor custom domains", () => {
       ],
     );
 
+    expect(h.state().birthCertificate).toBeNull();
     expect(h.customDomains.ensure).toHaveBeenCalledWith({
       hostname: "garple.com",
       project: { id: "prj_test", slug: "demo", organizationId: null, name: "demo" },
     });
   });
 
-  it("preserves the last Cloudflare snapshot when a refresh fails", async () => {
+  it("records provisioning failure without inventing configured state", async () => {
     const h = makeProjectHarness();
+    h.customDomains.ensure.mockRejectedValueOnce(new Error("Cloudflare is unavailable"));
     await h.play(
-      ["append", PROJECT_CREATED],
+      ["append", PROJECT_CREATE_REQUESTED, PROJECT_CREATED],
       [
         "append",
         {
@@ -433,261 +812,61 @@ describe("ProjectProcessor custom domains", () => {
           payload: { hostname: "garple.com" },
         },
       ],
-      // A later observation saw the domain go fully active.
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-cloudflare-observed",
-          payload: customDomainSnapshot(),
-        },
-      ],
     );
-    expect(h.state().customDomains).toMatchObject([{ hostname: "garple.com", status: "active" }]);
 
-    h.customDomains.refresh.mockRejectedValueOnce(new Error("Cloudflare is unavailable"));
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/project/custom-domain-refresh-requested",
-        payload: { hostname: "garple.com" },
-      },
-    ]);
-
-    expect(h.customDomains.refresh).toHaveBeenCalledWith({
-      cloudflareHostnameId: "custom-hostname-1",
-      hostname: "garple.com",
-      project: PROJECT,
-    });
     expect(h.events("events.iterate.com/project/custom-domain-provision-failed")).toMatchObject([
       { payload: { error: "Cloudflare is unavailable", hostname: "garple.com" } },
     ]);
-    // The failure recorded the error but kept the active snapshot: an active
-    // domain must not drop off routing because one re-poll failed.
-    expect(h.state().customDomains).toMatchObject([
-      {
-        cloudflareHostnameId: "custom-hostname-1",
-        error: "Cloudflare is unavailable",
-        hostname: "garple.com",
-        status: "active",
-      },
-    ]);
+    expect(h.state().customDomains).toEqual([]);
   });
 
-  it("removes a domain through the provisioner and drops it from state; a failed removal records the error instead", async () => {
+  it("removes Cloudflare hostnames while direct hostnames remain operator-managed", async () => {
     const h = makeProjectHarness();
     await h.play(
-      ["append", PROJECT_CREATED],
+      ["append", PROJECT_CREATE_REQUESTED, PROJECT_CREATED],
+      [
+        "append",
+        {
+          type: "events.iterate.com/project/custom-domain-configured",
+          payload: { hostname: "garple.com", kind: "cloudflare" },
+        },
+        {
+          type: "events.iterate.com/project/custom-domain-configured",
+          payload: { hostname: "iterate.com", kind: "direct" },
+        },
+      ],
       [
         "append",
         {
           type: "events.iterate.com/project/custom-domain-add-requested",
+          payload: { hostname: "iterate.com" },
+        },
+      ],
+      [
+        "append",
+        {
+          type: "events.iterate.com/project/custom-domain-remove-requested",
+          payload: { hostname: "iterate.com" },
+        },
+      ],
+      [
+        "append",
+        {
+          type: "events.iterate.com/project/custom-domain-remove-requested",
           payload: { hostname: "garple.com" },
         },
       ],
     );
 
-    // First removal attempt fails at Cloudflare: the failure is recorded and
-    // the domain stays (marked removing by the request's own reduction).
-    h.customDomains.remove.mockRejectedValueOnce(new Error("Cloudflare is unavailable"));
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/project/custom-domain-remove-requested",
-        payload: { hostname: "garple.com" },
-      },
-    ]);
-    expect(h.events("events.iterate.com/project/custom-domain-provision-failed")).toMatchObject([
-      { payload: { error: "Cloudflare is unavailable", hostname: "garple.com" } },
-    ]);
-    expect(h.state().customDomains).toMatchObject([{ hostname: "garple.com", status: "failed" }]);
-
-    // The retried removal succeeds and the domain leaves state entirely.
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/project/custom-domain-remove-requested",
-        payload: { hostname: "garple.com" },
-      },
-    ]);
+    expect(h.customDomains.ensure).not.toHaveBeenCalled();
     expect(h.customDomains.remove).toHaveBeenCalledWith({
-      cloudflareHostnameId: "custom-hostname-1",
       hostname: "garple.com",
       project: PROJECT,
     });
     expect(h.events("events.iterate.com/project/custom-domain-removed")).toMatchObject([
       { payload: { hostname: "garple.com" } },
     ]);
-    expect(h.state().customDomains).toEqual([]);
-  });
-
-  it("records a failure for a remove request naming a domain the project does not have", async () => {
-    const h = makeProjectHarness();
-    await h.play(
-      ["append", PROJECT_CREATED],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-remove-requested",
-          payload: { hostname: "nobody.example.com" },
-        },
-      ],
-    );
-
-    expect(h.customDomains.remove).not.toHaveBeenCalled();
-    expect(h.events("events.iterate.com/project/custom-domain-provision-failed")).toMatchObject([
-      {
-        payload: {
-          error: 'Custom domain "nobody.example.com" is not configured on this project.',
-          hostname: "nobody.example.com",
-        },
-      },
-    ]);
-  });
-});
-
-// =============================================================================
-// Direct custom domains
-// =============================================================================
-
-describe("ProjectProcessor direct custom domains", () => {
-  it("reduces an operator's direct-observed fact to an active direct entry without touching the provisioner", async () => {
-    const h = makeProjectHarness();
-    await h.play(
-      ["append", PROJECT_CREATED],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-direct-observed",
-          payload: { hostname: "iterate.com" },
-        },
-        {
-          type: "events.iterate.com/project/custom-domain-direct-observed",
-          payload: { hostname: "www.iterate.com" },
-        },
-      ],
-    );
-
-    expect(h.state().customDomains).toMatchObject([
-      {
-        cloudflareHostnameId: null,
-        error: null,
-        hostname: "iterate.com",
-        kind: "direct",
-        status: "active",
-        validationRecords: [],
-        wildcard: false,
-      },
-      { hostname: "www.iterate.com", kind: "direct", status: "active" },
-    ]);
-    // A pure reduction: no Cloudflare call, no observed/failed follow-up.
-    expect(h.customDomains.ensure).not.toHaveBeenCalled();
-    expect(h.customDomains.refresh).not.toHaveBeenCalled();
-    expect(h.customDomains.remove).not.toHaveBeenCalled();
-    expect(h.events("events.iterate.com/project/custom-domain-cloudflare-observed")).toEqual([]);
-    expect(h.events("events.iterate.com/project/custom-domain-provision-failed")).toEqual([]);
-  });
-
-  it("keeps a direct entry when a stray Cloudflare snapshot names the same hostname", async () => {
-    const h = makeProjectHarness();
-    await h.play(
-      ["append", PROJECT_CREATED],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-direct-observed",
-          payload: { hostname: "iterate.com" },
-        },
-      ],
-    );
-    const before = h.state().customDomains;
-
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/project/custom-domain-cloudflare-observed",
-        payload: customDomainSnapshot({ hostname: "iterate.com" }),
-      },
-    ]);
-
-    // Direct outranks any snapshot: lifecycle fields (and the UI's
-    // refresh/remove affordances) must not resurrect.
-    expect(h.state().customDomains).toEqual(before);
-  });
-
-  it("keeps add/refresh/remove requests for a direct hostname away from the provisioner and the routing registration", async () => {
-    // The trap this guards: ensure() for an already-live direct registration
-    // creates a pending Cloudflare-for-SaaS hostname, and the non-active
-    // snapshot's reconciliation DELETES the live KV registration — taking the
-    // domain down. Requests naming a direct hostname must be inert.
-    const h = makeProjectHarness();
-    await h.play(
-      ["append", PROJECT_CREATED],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-direct-observed",
-          payload: { hostname: "iterate.com" },
-        },
-      ],
-    );
-    const before = h.state().customDomains;
-
-    await h.play(
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-add-requested",
-          payload: { hostname: "iterate.com" },
-        },
-      ],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-refresh-requested",
-          payload: { hostname: "iterate.com" },
-        },
-      ],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-remove-requested",
-          payload: { hostname: "iterate.com" },
-        },
-      ],
-    );
-
-    expect(h.customDomains.ensure).not.toHaveBeenCalled();
-    expect(h.customDomains.refresh).not.toHaveBeenCalled();
-    expect(h.customDomains.remove).not.toHaveBeenCalled();
-    expect(h.events("events.iterate.com/project/custom-domain-cloudflare-observed")).toEqual([]);
-    expect(h.events("events.iterate.com/project/custom-domain-provision-failed")).toEqual([]);
-    expect(h.events("events.iterate.com/project/custom-domain-removed")).toEqual([]);
-    // Not flipped to requested/removing: the entry stays exactly as observed.
-    expect(h.state().customDomains).toEqual(before);
-  });
-
-  it("retires a direct entry through an operator-appended custom-domain-removed, a pure reduction", async () => {
-    const h = makeProjectHarness();
-    await h.play(
-      ["append", PROJECT_CREATED],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-direct-observed",
-          payload: { hostname: "iterate.com" },
-        },
-      ],
-      [
-        "append",
-        {
-          type: "events.iterate.com/project/custom-domain-removed",
-          payload: { hostname: "iterate.com" },
-        },
-      ],
-    );
-
-    expect(h.state().customDomains).toEqual([]);
-    expect(h.customDomains.remove).not.toHaveBeenCalled();
+    expect(h.state().customDomains).toEqual([{ hostname: "iterate.com", kind: "direct" }]);
   });
 });
 
@@ -699,7 +878,7 @@ describe("ProjectProcessor egress policy", () => {
   it("replaces egress rules wholesale, deduplicates key enrollment, and marks revocations", async () => {
     const h = makeProjectHarness();
     await h.play(
-      ["append", PROJECT_CREATED],
+      ["append", PROJECT_CREATE_REQUESTED, PROJECT_CREATED],
       [
         "append",
         {
@@ -736,6 +915,7 @@ describe("ProjectProcessor egress policy", () => {
         match: {},
         verdict: "deny",
         approvalTimeoutMs: 600_000,
+        debounceMs: 100,
       },
     ]);
     // Re-enrolling an existing keyId is a no-op (the first enrollment's
@@ -754,17 +934,20 @@ describe("ProjectProcessor full replay", () => {
   it("a full replay (fresh cursor over the same stream) redelivers every event without wedging or duplicating", async () => {
     // The harshest at-least-once redelivery: a fresh progress store over the
     // SAME stream replays every event, so every blocked per-event append (the
-    // whole birth saga, the ready fact, the custom-domain observations)
+    // whole birth saga, the terminal certificate, the custom-domain configuration)
     // re-runs. Each must produce a body IDENTICAL to the committed one so the
     // idempotency keys dedupe — a same-key-different-body append would be
     // REJECTED and wedge the frame.
     const h = makeProjectHarness();
     await h.stream.append(
-      ...projectCreationEvents({ projectId: "prj_test", payload: PROJECT_CREATED.payload }),
+      ...projectCreationEvents({
+        projectId: "prj_test",
+        payload: PROJECT_CREATE_REQUESTED.payload,
+      }),
     );
     await h.settle();
     await h.play(
-      ["append", CONFIG_REPO_READY],
+      ["append", CONFIG_REPO_CREATED],
       [
         "append",
         {
@@ -774,18 +957,78 @@ describe("ProjectProcessor full replay", () => {
       ],
     );
     const committedOffsets = h.events().map((row) => row.offset);
-    expect(h.state()).toMatchObject({ ready: true, notificationReady: true });
+    expect(h.state()).toMatchObject({
+      birthCertificate: PROJECT_CREATED.payload,
+      notificationReady: true,
+    });
 
     const replay = makeProjectHarness({
-      substrate: { clock: h.clock, stream: h.stream, progress: makeMemoryProgressStore() },
+      substrate: {
+        clock: h.clock,
+        stream: h.stream,
+        progress: makeMemoryProgressStore(ProjectProcessorContract),
+      },
     });
     await replay.settle(); // replays the whole stream; a wedge would throw here
 
     expect(replay.events().map((row) => row.offset)).toEqual(committedOffsets);
     expect(replay.state()).toMatchObject({
-      ready: true,
+      birthCertificate: PROJECT_CREATED.payload,
       notificationReady: true,
-      customDomains: [{ hostname: "garple.com", status: "pending_validation" }],
+      customDomains: [{ hostname: "garple.com", kind: "cloudflare" }],
+    });
+  });
+});
+
+// =============================================================================
+// Generic per-key defaults fold
+// =============================================================================
+
+describe("ProjectProcessor generic defaults", () => {
+  it("stores the latest raw value per key, without interpreting any of it", async () => {
+    const h = makeProjectHarness();
+    await h.append({
+      type: "events.iterate.com/project/defaults-configured",
+      payload: {
+        key: "agents/birth-defaults",
+        value: {
+          birthEvents: [
+            {
+              type: "events.iterate.com/agent/configured",
+              payload: { config: { driver: "agent-headless" } },
+            },
+          ],
+        },
+      },
+    });
+    // A second key coexists — latest-wins is PER KEY, not per event type.
+    await h.append({
+      type: "events.iterate.com/project/defaults-configured",
+      payload: { key: "notifications/digest", value: { cadence: "daily" } },
+    });
+    expect(h.state().defaults).toMatchObject({
+      "agents/birth-defaults": {
+        birthEvents: [{ type: "events.iterate.com/agent/configured" }],
+      },
+      "notifications/digest": { cadence: "daily" },
+    });
+
+    // The project stores values it cannot interpret RAW — foreign vocabulary
+    // is the consuming domain's problem, at its read site. The raw latest
+    // replaces the previous raw value, so a consumer can never resurrect the
+    // stale predecessor this event was trying to replace.
+    await h.append({
+      type: "events.iterate.com/project/defaults-configured",
+      payload: {
+        key: "agents/birth-defaults",
+        value: { birthEvents: [{ type: "events.iterate.com/project/created", payload: {} }] },
+      },
+    });
+    expect(h.state().defaults).toMatchObject({
+      "agents/birth-defaults": {
+        birthEvents: [{ type: "events.iterate.com/project/created" }],
+      },
+      "notifications/digest": { cadence: "daily" },
     });
   });
 });

@@ -1,5 +1,5 @@
 diff --git a/dist/index.mjs b/dist/index.mjs
-index 4bf5e0b9ef270f1a3ad50cd10d417c05575be3c7..8665ae8c125fdd191288bea0a5131485e4266bc6 100644
+index 4bf5e0b9ef270f1a3ad50cd10d417c05575be3c7..9785b3affcec543f2aea67a6114bec3408383865 100644
 --- a/dist/index.mjs
 +++ b/dist/index.mjs
 @@ -91,8 +91,11 @@ async function consentEndpoint(ctx, opts) {
@@ -16,7 +16,17 @@ index 4bf5e0b9ef270f1a3ad50cd10d417c05575be3c7..8665ae8c125fdd191288bea0a5131485
  	return {
  		redirect: true,
  		url
-@@ -423,7 +426,11 @@ async function createRefreshToken(ctx, opts, user, referenceId, client, scopes,
+@@ -177,6 +180,9 @@ const oauthAuthorizationQuerySchema = z.object({
+ 	max_age: z.coerce.number().optional(),
+ 	acr_values: z.string().optional(),
+ 	login_hint: z.string().optional(),
++	// iterate patch: project_hint rides the authorize query like login_hint —
++	// a non-binding suggested project slug the /project-access page prefills.
++	project_hint: z.string().optional(),
+ 	id_token_hint: z.string().optional(),
+ 	code_challenge: z.string().optional(),
+ 	code_challenge_method: z.literal("S256").optional(),
+@@ -423,7 +429,11 @@ async function createRefreshToken(ctx, opts, user, referenceId, client, scopes,
  	const exp = payload?.exp ?? iat + (opts.refreshTokenExpiresIn ?? 2592e3);
  	const token = opts.generateRefreshToken ? await opts.generateRefreshToken() : generateRandomString(32, "A-Z", "a-z");
  	const sessionId = payload?.sid;
@@ -29,7 +39,7 @@ index 4bf5e0b9ef270f1a3ad50cd10d417c05575be3c7..8665ae8c125fdd191288bea0a5131485
  		model: "oauthRefreshToken",
  		where: [{
  			field: "id",
-@@ -745,20 +752,32 @@ async function handleRefreshTokenGrant(ctx, opts) {
+@@ -745,20 +755,32 @@ async function handleRefreshTokenGrant(ctx, opts) {
  		error: "invalid_grant"
  	});
  	if (refreshToken.revoked) {
@@ -76,7 +86,25 @@ index 4bf5e0b9ef270f1a3ad50cd10d417c05575be3c7..8665ae8c125fdd191288bea0a5131485
  	}
  	const scopes = refreshToken?.scopes;
  	const requestedScopes = scope?.split(" ");
-@@ -3761,7 +3780,7 @@ async function authorizeEndpoint(ctx, opts, settings) {
+@@ -2840,6 +2862,17 @@ const oauthProvider = (options) => {
+ 					code_challenge: z.string().optional(),
+ 					code_challenge_method: z.enum(["S256"]).optional(),
+ 					nonce: z.string().optional(),
++					// iterate patch: better-call strips query keys the endpoint schema
++					// doesn't declare, so login_hint never reached ctx.query — and the
++					// signed /login redirect (signParams serializes ctx.query) dropped
++					// it. The package's own oauthAuthorizationQuerySchema (types/zod)
++					// declares login_hint and the authorize flow tolerates it; only
++					// this endpoint schema was missing it.
++					login_hint: z.string().optional(),
++					// iterate patch: same treatment for project_hint (suggested project
++					// slug for /project-access) — it must survive the signed /login
++					// redirect and the post-login authorize re-entry the same way.
++					project_hint: z.string().optional(),
+ 					prompt: z.enum([
+ 						"none",
+ 						"consent",
+@@ -3761,7 +3794,7 @@ async function authorizeEndpoint(ctx, opts, settings) {
  		try {
  			const registered = new URL(url);
  			const requested = new URL(query.redirect_uri);

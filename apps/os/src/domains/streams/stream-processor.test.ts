@@ -1,6 +1,6 @@
 // The StreamProcessor base class under REAL runner drive. Everything here
-// exercises the KEPT authoring surface — the append lanes with provenance
-// stamping, idempotency keys, the self-measured subscriber metrics, and the
+// exercises the KEPT authoring surface — the append methods with provenance
+// stamping, idempotency keys, self-measured event-consumption metrics, and the
 // runner's committed-state observation. Delivery mechanics (cursors, refolds,
 // parse-failure skipping, crash/redelivery, onCaughtUp gating) live in
 // stream-processor-runner.test.ts, the executable spec.
@@ -28,6 +28,8 @@ const CounterContract = defineProcessorContract({
   emits: [],
 });
 
+const TEST_STREAM_ID = "11111111-1111-4111-8111-111111111111";
+
 class CounterProcessor extends StreamProcessor<typeof CounterContract> {
   readonly contract = CounterContract;
 
@@ -42,13 +44,23 @@ class CounterProcessor extends StreamProcessor<typeof CounterContract> {
   }
 }
 
-const neverStream = new Proxy({} as Stream, {
-  get(_target, property) {
-    throw new Error(`Unexpected stream access: ${String(property)}`);
+const neverStream = new Proxy(
+  {
+    getEventPage: async () => ({
+      streamId: TEST_STREAM_ID,
+      streamMaxOffset: 0,
+      events: [],
+    }),
+  } as unknown as Stream,
+  {
+    get(target, property, receiver) {
+      if (property in target) return Reflect.get(target, property, receiver);
+      throw new Error(`Unexpected stream access: ${String(property)}`);
+    },
   },
-});
+);
 
-/** REAL runner drive with hand-built frames (offsets preserved verbatim). */
+/** REAL runner drive with hand-built batches (offsets preserved verbatim). */
 function drive<Contract extends StreamProcessorContract, Deps extends object>(
   processor: StreamProcessor<Contract, Deps>,
   stream: Stream = neverStream,
@@ -56,12 +68,13 @@ function drive<Contract extends StreamProcessorContract, Deps extends object>(
   const runner = new StreamProcessorRunner({ processor, stream });
   return {
     runner,
-    async deliver(frame: { events: StreamEvent[]; streamMaxOffset: number }) {
-      const opened = await runner.openDelivery();
-      await opened.sink({
-        ...frame,
+    async deliver(batch: { events: StreamEvent[]; streamMaxOffset: number }) {
+      const opened = await runner.openEventBatchCallback();
+      await opened.processEventBatch({
+        ...batch,
+        streamId: TEST_STREAM_ID,
         scannedAfterOffset: opened.checkpointOffset,
-        scannedThroughOffset: frame.events.at(-1)?.offset ?? opened.checkpointOffset,
+        scannedThroughOffset: batch.events.at(-1)?.offset ?? opened.checkpointOffset,
       });
     },
   };
@@ -97,7 +110,7 @@ function counter() {
 }
 
 describe("committed-state observation under runner drive", () => {
-  it("notifies the observer with the new snapshot after every state-changing frame", async () => {
+  it("notifies the observer with the new snapshot after every state-changing batch", async () => {
     const { runner, deliver } = counter();
     const snapshots: { offset: number; state: { count: number } }[] = [];
     runner.observeStateChanges((snapshot) => void snapshots.push(snapshot));
@@ -114,7 +127,7 @@ describe("committed-state observation under runner drive", () => {
     ]);
   });
 
-  it("does not notify when a frame leaves state unchanged", async () => {
+  it("does not notify when a batch leaves state unchanged", async () => {
     const { runner, deliver } = counter();
     const snapshots: unknown[] = [];
     runner.observeStateChanges((snapshot) => void snapshots.push(snapshot));
@@ -125,31 +138,31 @@ describe("committed-state observation under runner drive", () => {
     await expect(runner.snapshot()).resolves.toEqual({ offset: 1, state: { count: 0 } });
   });
 
-  it("stops notifying after unsubscribe; currentState reflects the fold", async () => {
+  it("stops notifying after the observer is removed; currentState reflects the fold", async () => {
     const { runner, deliver } = counter();
     const snapshots: unknown[] = [];
-    const unsubscribe = runner.observeStateChanges((snapshot) => void snapshots.push(snapshot));
+    const stopObserving = runner.observeStateChanges((snapshot) => void snapshots.push(snapshot));
 
     await deliver({ events: [incrementedEvent(1)], streamMaxOffset: 1 });
     expect(snapshots).toHaveLength(1);
     expect(runner.currentState).toEqual({ count: 1 });
 
-    unsubscribe();
+    stopObserving();
     await deliver({ events: [incrementedEvent(1)], streamMaxOffset: 2 });
     expect(snapshots).toHaveLength(1);
   });
 });
 
-// Every append a processor makes through the emitted lanes carries
+// Every append a processor makes through its event-type handles carries
 // `source.processor`: who appended (slug/version + home stream) and — on the
-// per-event lanes — while processing which event. These tests pin the stamp's
-// shape, the overwrite rule, and the at-head lane's omission of
+// per-event handles — while processing which event. These tests pin the stamp's
+// shape, the overwrite rule, and the caught-up call's omission of
 // `whileProcessing`.
 describe("StreamProcessor provenance stamping", () => {
   const EchoContract = defineProcessorContract({
     slug: "test-echo",
     version: "0.0.1",
-    description: "Echoes triggers; exists to test append-lane provenance stamping.",
+    description: "Echoes triggers; exists to test append provenance stamping.",
     stateSchema: z.object({ seen: z.number().default(0) }),
     events: {
       "events.iterate.com/test/triggered": {
@@ -166,7 +179,11 @@ describe("StreamProcessor provenance stamping", () => {
   });
 
   const HOME = { path: "/tests/echo", projectId: "prj_echo" };
-  const STAMP = { slug: "test-echo", version: "0.0.1", stream: HOME };
+  const STAMP = {
+    slug: "test-echo",
+    version: "0.0.1",
+    stream: { ...HOME, streamId: TEST_STREAM_ID },
+  };
 
   function triggeredEvent(offset: number): StreamEvent {
     return {
@@ -182,26 +199,48 @@ describe("StreamProcessor provenance stamping", () => {
   // tagged with the destination path.
   function recordingNetwork() {
     const appends: { path: string; event: StreamEventInput }[] = [];
+    const guardedAppends: string[] = [];
+    const commit = (path: string, events: StreamEventInput[]) => {
+      appends.push(...events.map((event) => ({ path, event })));
+      return Promise.resolve(
+        events.map((event, index) => ({
+          ...event,
+          offset: 1_000 + appends.length + index,
+          createdAt: new Date(0).toISOString(),
+          path,
+        })),
+      );
+    };
     const streamAt = (path: string): Stream =>
       ({
-        append: (...events: StreamEventInput[]) => {
-          appends.push(...events.map((event) => ({ path, event })));
-          return Promise.resolve(
-            events.map((event, index) => ({
-              ...event,
-              offset: 1_000 + appends.length + index,
-              createdAt: new Date(0).toISOString(),
-              path,
-            })),
-          );
+        append: (...events: StreamEventInput[]) => commit(path, events),
+        appendIfStreamId: (args: { streamId: string; events: StreamEventInput[] }) => {
+          if (args.streamId !== TEST_STREAM_ID) {
+            throw new Error(`unexpected stream ID ${args.streamId}`);
+          }
+          guardedAppends.push(path);
+          return commit(path, args.events);
         },
         at: (child: string) => streamAt(child),
+        getEventPage: async () => ({
+          streamId: TEST_STREAM_ID,
+          streamMaxOffset: 0,
+          events: [],
+        }),
       }) as unknown as Stream;
-    return { appends, stream: streamAt(HOME.path) };
+    return { appends, guardedAppends, stream: streamAt(HOME.path) };
   }
 
   class EchoProcessor extends StreamProcessor<typeof EchoContract> {
     readonly contract = EchoContract;
+
+    appendToPath(path: string) {
+      return this.appendTo(path, {
+        type: "events.iterate.com/test/echoed",
+        idempotencyKey: this.idempotencyKey("same-path"),
+        payload: { id: "same-path" },
+      });
+    }
 
     protected override processEvent({
       event,
@@ -209,7 +248,7 @@ describe("StreamProcessor provenance stamping", () => {
       appendTo,
       blockProcessorWhile,
     }: Parameters<StreamProcessor<typeof EchoContract>["processEvent"]>[0]): undefined {
-      if (event === null) return; // event-less at-head pass: no per-event echo
+      if (event === null) return; // event-less caught-up call: no per-event echo
       const echo = {
         type: "events.iterate.com/test/echoed" as const,
         idempotencyKey: this.idempotencyKey("echo", event),
@@ -220,17 +259,23 @@ describe("StreamProcessor provenance stamping", () => {
         await appendTo("/tests/echo-sibling", {
           ...echo,
           // The caller's stamp claim must lose to the framework's.
-          source: { processor: { slug: "forged", version: "9", stream: HOME } },
+          source: {
+            processor: {
+              slug: "forged",
+              version: "9",
+              stream: { ...HOME, streamId: TEST_STREAM_ID },
+            },
+          },
         });
       });
     }
   }
 
   // At-head appends are derived from the whole fold, not one event — the
-  // at-head reconcile (processEvent under `delivery.caughtUp`) runs them,
-  // riding the LAST CONSUMED event of a head-reaching batch. That event is the
+  // caught-up processing (processEvent under `delivery.caughtUp`) runs them,
+  // riding the LAST CONSUMED event of a caught-up batch. That event is the
   // one the append is stamped with (the reconcile has no batch-level unstamped
-  // lane; obligation-stability comes from the idempotency KEY, not the stamp).
+  // append; obligation-stability comes from the idempotency KEY, not the stamp).
   class CaughtUpEchoProcessor extends StreamProcessor<typeof EchoContract> {
     readonly contract = EchoContract;
 
@@ -276,7 +321,7 @@ describe("StreamProcessor provenance stamping", () => {
     // 1001 in the recording network) plus a sibling copy — only the HOME
     // append is timed: the sibling never loops back through this subscription.
     await deliver({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
-    let report = processor.subscriberMetrics.report();
+    let report = processor.eventConsumptionMetrics.report();
     expect(report.appendRoundTripMs).toMatchObject({ samples: 1 });
     expect(report.consumeOwnAppendMs).toBeNull(); // echo not delivered back yet
     expect(report.batchesIngested).toBe(1);
@@ -298,7 +343,7 @@ describe("StreamProcessor provenance stamping", () => {
       ],
       streamMaxOffset: 1_500,
     });
-    report = processor.subscriberMetrics.report();
+    report = processor.eventConsumptionMetrics.report();
     expect(report.consumeOwnAppendMs).toMatchObject({ samples: 1 });
     expect(report.appendRoundTripMs).toMatchObject({ samples: 1 });
   });
@@ -311,13 +356,36 @@ describe("StreamProcessor provenance stamping", () => {
 
     const sibling = appends.filter(({ path }) => path === "/tests/echo-sibling");
     expect(sibling).toHaveLength(1);
+    expect(sibling[0]!.event.idempotencyKey).toBe(
+      `test-echo/echo@/tests/echo:7@source-stream:${TEST_STREAM_ID}`,
+    );
     expect(sibling[0]!.event.source?.processor).toEqual({
       ...STAMP,
       whileProcessing: { offset: 7, type: "events.iterate.com/test/triggered" },
     });
   });
 
-  it("runs the at-head reconcile on the last consumed event of a head-reaching batch, keyed by the fold not the event", async () => {
+  it.each([".", HOME.path])(
+    "appendTo(%s) keeps guarded home-stream semantics after path resolution",
+    async (path) => {
+      const { appends, guardedAppends, stream } = recordingNetwork();
+      const processor = new EchoProcessor({ stream, ...HOME });
+
+      await processor.appendToPath(path);
+
+      expect(guardedAppends).toEqual([HOME.path]);
+      expect(appends).toHaveLength(1);
+      expect(appends[0]).toMatchObject({
+        path: HOME.path,
+        event: {
+          idempotencyKey: "test-echo/same-path",
+          source: { processor: STAMP },
+        },
+      });
+    },
+  );
+
+  it("runs the caught-up processing on the last consumed event of a caught-up batch, keyed by the fold not the event", async () => {
     const { appends, stream } = recordingNetwork();
     const { deliver } = drive(new CaughtUpEchoProcessor({ stream, ...HOME }), stream);
 
@@ -336,7 +404,7 @@ describe("StreamProcessor provenance stamping", () => {
     });
   });
 
-  it("refuses to append an event type missing from emits, on both lanes", () => {
+  it("refuses to append an event type missing from emits through either append method", () => {
     const { stream } = recordingNetwork();
     const processor = new (class extends StreamProcessor<typeof EchoContract> {
       readonly contract = EchoContract;
@@ -362,7 +430,7 @@ describe("StreamProcessor provenance stamping", () => {
 describe("contract event-input envelope", () => {
   it("accepts ephemeral: true on an emitted input (the strict envelope must know the key)", () => {
     // Load-bearing: getEventInputSchema is .strict(), so without `ephemeral`
-    // in the envelope every processor-lane ephemeral append (the agent's LLM
+    // in every processor-authored ephemeral append (the agent's LLM
     // chunks) would throw "Unrecognized key" at parse.
     const parsed = CounterContract.parseEventInput({
       type: "events.iterate.com/test/incremented",

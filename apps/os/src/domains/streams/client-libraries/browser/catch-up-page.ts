@@ -6,12 +6,13 @@ const SERIALIZED_RPC_VALUE_TOO_LARGE = "Serialized RPC arguments or return value
  */
 export async function readCatchUpPage<T>(
   limit: number,
-  read: (limit: number) => Promise<T[]>,
-): Promise<{ limit: number; page: T[] }> {
+  read: (limit: number) => Promise<{ streamId: string; events: T[] }>,
+): Promise<{ limit: number; streamId: string; page: T[] }> {
   let nextLimit = limit;
   for (;;) {
     try {
-      return { limit: nextLimit, page: await read(nextLimit) };
+      const result = await read(nextLimit);
+      return { limit: nextLimit, streamId: result.streamId, page: result.events };
     } catch (error) {
       if (
         nextLimit <= 1 ||
@@ -26,24 +27,24 @@ export async function readCatchUpPage<T>(
 }
 
 /**
- * Repeatedly catch a browser mirror up to a captured head until the remaining
- * atomic live replay fits the server's admitted gap. The head is re-read after
+ * Repeatedly copy stored events through a captured maximum offset until the remaining
+ * replay fits the server's admitted gap. The maximum offset is re-read after
  * every pass because a busy stream can move substantially while SQLite applies
- * history. A stream recreation aborts the attempt: history from two
- * incarnations must never be combined in one local projection.
+ * history. A stream recreation aborts the attempt: history from two stream
+ * lifetimes must never be combined in one local projection.
  */
 export async function catchUpToLiveReplayBoundary(args: {
   afterOffset: number;
   throughOffset: number;
   pageLimit: number;
   maxReplayOffsetGap: number;
-  expectedIncarnation: string | undefined;
+  expectedStreamId: string | undefined;
   catchUp: (input: {
     afterOffset: number;
     throughOffset: number;
     pageLimit: number;
   }) => Promise<{ pageLimit: number; replayAfterOffset: number } | undefined>;
-  readHead: () => Promise<{ createdAt?: string; maxOffset: number }>;
+  readLatestOffset: () => Promise<{ streamId?: string; maxOffset: number }>;
   shouldContinue?: () => boolean;
 }): Promise<{ pageLimit: number; replayAfterOffset: number } | undefined> {
   const shouldContinue = args.shouldContinue ?? (() => true);
@@ -62,11 +63,11 @@ export async function catchUpToLiveReplayBoundary(args: {
     replayAfterOffset = catchUp.replayAfterOffset;
     pageLimit = catchUp.pageLimit;
 
-    const latest = await args.readHead();
+    const latest = await args.readLatestOffset();
     if (!shouldContinue()) return undefined;
-    if (latest.createdAt !== args.expectedIncarnation) {
+    if (latest.streamId !== args.expectedStreamId) {
       throw new Error(
-        `stream incarnation changed during catch-up (${args.expectedIncarnation} -> ${latest.createdAt})`,
+        `stream ID changed during catch-up (${args.expectedStreamId} -> ${latest.streamId})`,
       );
     }
     if (latest.maxOffset - replayAfterOffset <= args.maxReplayOffsetGap) {
@@ -77,19 +78,23 @@ export async function catchUpToLiveReplayBoundary(args: {
 }
 
 /**
- * Pull the durable history that existed when a browser connection began.
+ * Pull every event still available when a browser connection began.
  *
- * Range reads omit ephemeral rows by default. Once every durable survivor at
- * or below `throughOffset` has been applied, the caller opens its live
- * subscription AFTER that captured head. That boundary is load-bearing: old
- * streaming chunks are never replayed, while anything appended after the
- * connection began (ephemeral or durable) still arrives on the live lane.
+ * The caller supplies an ephemeral-including read, so currently buffered
+ * streaming events reach the browser's in-memory projection alongside durable
+ * history. Missing offsets are expected: an older ephemeral event may already
+ * have been evicted or belong to a previous Durable Object incarnation.
  */
-export async function catchUpDurableHistory<T extends { offset: number }>(args: {
+export async function catchUpAvailableHistory<T extends { offset: number }>(args: {
   afterOffset: number;
   throughOffset: number;
   pageLimit: number;
-  read: (input: { afterOffset: number; beforeOffset: number; limit: number }) => Promise<T[]>;
+  expectedStreamId: string;
+  read: (input: {
+    afterOffset: number;
+    beforeOffset: number;
+    limit: number;
+  }) => Promise<{ streamId: string; events: T[] }>;
   ingest: (input: {
     events: readonly T[];
     scannedAfterOffset: number;
@@ -109,6 +114,11 @@ export async function catchUpDurableHistory<T extends { offset: number }>(args: 
       args.read({ afterOffset: cursor, beforeOffset, limit }),
     );
     if (!shouldContinue()) return undefined;
+    if (result.streamId !== args.expectedStreamId) {
+      throw new Error(
+        `stream ID changed during catch-up page read (${args.expectedStreamId} -> ${result.streamId})`,
+      );
+    }
     if (result.limit < pageLimit) args.onPageLimitReduced?.(pageLimit, result.limit);
     pageLimit = result.limit;
     if (result.page.length === 0) {
@@ -127,8 +137,8 @@ export async function catchUpDurableHistory<T extends { offset: number }>(args: 
         `historical catch-up returned invalid final offset ${nextCursor}; expected (${cursor}, ${args.throughOffset}]`,
       );
     }
-    // A short page proves there are no more durable survivors in the bounded
-    // range, so its scan also covers any trailing ephemeral-only suffix.
+    // A short page proves there are no more available events in the bounded
+    // range, so its scan also covers any trailing forgotten offset suffix.
     const scannedThroughOffset =
       result.page.length < result.limit ? args.throughOffset : nextCursor;
     await args.ingest({

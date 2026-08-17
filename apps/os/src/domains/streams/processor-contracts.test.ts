@@ -180,4 +180,38 @@ describe("contract event helpers", () => {
     expectTypeOf(built.ephemeral).toEqualTypeOf<true>();
     expect(built.ephemeral).toBe(true);
   });
+
+  test("rejects idempotency keys on ephemeral contract events", () => {
+    const input = {
+      type: "events.iterate.com/test/transient" as const,
+      payload: { value: "temporary" },
+      idempotencyKey: "temporary-1",
+    };
+
+    expect(() => ParserInferenceContract.parseEventInput(input)).toThrow(
+      "ephemeral events cannot have an idempotencyKey",
+    );
+    // A COMMITTED row keeps its stored flag verbatim — the definition's
+    // forced default applies to inputs only. A durable keyed row committed
+    // before its definition became ephemeral must replay as it was folded,
+    // not be rewritten into an (invalid) keyed ephemeral event.
+    const committed = ParserInferenceContract.parseEvent({
+      ...input,
+      offset: 1,
+      createdAt: new Date(0).toISOString(),
+      path: "/tests/parser-inference",
+    });
+    expect(committed).toMatchObject({ idempotencyKey: "temporary-1" });
+    expect(committed.ephemeral).toBeUndefined();
+    // A row that WAS committed ephemeral (explicit flag) still rejects a key.
+    expect(() =>
+      ParserInferenceContract.parseEvent({
+        ...input,
+        ephemeral: true,
+        offset: 1,
+        createdAt: new Date(0).toISOString(),
+        path: "/tests/parser-inference",
+      }),
+    ).toThrow("ephemeral events cannot have an idempotencyKey");
+  });
 });

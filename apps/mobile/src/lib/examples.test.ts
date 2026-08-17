@@ -6,6 +6,10 @@ test("includes project-scoped, run-script-capable examples", () => {
   const ids = phoneRunnableExamples().map((example) => example.id);
   expect(ids).toContain("egress-rules-configured");
   expect(ids).toContain("append-and-read-stream");
+  // The grouped-approvals demo exists FOR the phone: burst → one push →
+  // Approve all. run-script is its only runtime (the grouping needs
+  // script-execution provenance), so it must survive this filter.
+  expect(ids).toContain("grouped-approvals-demo");
 });
 
 test("excludes session-context examples (no project itx to run them against)", () => {

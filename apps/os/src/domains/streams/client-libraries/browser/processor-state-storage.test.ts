@@ -7,7 +7,7 @@
 // The load-bearing regressions pinned here:
 //   - bumping BROWSER_RAW_EVENTS_SCHEMA_VERSION drops the events table, so it
 //     must also REWIND the resume cursor in the same transaction — a stale
-//     cursor over an empty mirror would skip historical replay and silently
+//     cursor over an empty event table would skip historical replay and silently
 //     rebuild without the skipped prefix (the gap-tolerant trigger accepts
 //     the hole);
 //   - a commit that fails for ANY reason (revision fence, projection trigger)
@@ -43,6 +43,8 @@ import type { SqlClient, SqlValue } from "./stream-browser-db.ts";
 // node:sqlite rejects the number[] member of SqlValue; these tests never use it.
 type ScalarSqlValue = Exclude<SqlValue, number[]>;
 
+const TEST_STREAM_ID = "11111111-1111-4111-8111-111111111111";
+
 // Minimal SqlClient over node:sqlite. Each call to wrap() returns a distinct
 // client object, which matters: createSchemaEnsurer memoizes per client, so a
 // fresh client simulates a fresh page load over the same persisted database.
@@ -67,11 +69,16 @@ function wrap(db: DatabaseSync): SqlClient {
 }
 
 /** Minimal stream stub: the runner only reaches for it on refolds/self-pulls,
- * which these tests never trigger (frames are stamped at their own tail and
+ * which these tests never trigger (event batches are stamped at their own tail and
  * resets rewind to offset 0, where the refold reads nothing). */
 const stream = () =>
   ({
     append: async () => [],
+    getEventPage: async () => ({
+      streamId: TEST_STREAM_ID,
+      streamMaxOffset: 0,
+      events: [],
+    }),
     at() {
       return this;
     },
@@ -116,10 +123,11 @@ function rawEventsLoad(db: DatabaseSync) {
     processor,
     progress,
     runner,
-    /** Deliver one frame, stamped at its own tail unless overridden. */
+    /** Deliver one batch, stamped at its own tail unless overridden. */
     async deliver(events: StreamEvent[], streamMaxOffset?: number) {
-      const opened = await runner.openDelivery();
-      await opened.sink({
+      const opened = await runner.openEventBatchCallback();
+      await opened.processEventBatch({
+        streamId: TEST_STREAM_ID,
         events,
         scannedAfterOffset: opened.checkpointOffset,
         scannedThroughOffset: events.at(-1)?.offset ?? opened.checkpointOffset,
@@ -131,32 +139,32 @@ function rawEventsLoad(db: DatabaseSync) {
 
 const readProgressRow = (sql: SqlClient, slug: string) =>
   sql.exec(
-    `SELECT reducer_version, reduced_through_offset, acknowledged_through_offset, cursor_revision
+    `SELECT stream_id, reducer_version, reduced_through_offset, acknowledged_through_offset, cursor_revision
      FROM processor_progress WHERE processor_slug = ?`,
     [slug],
   );
 
-const mirroredOffsets = async (sql: SqlClient) =>
+const storedOffsets = async (sql: SqlClient) =>
   (await sql.exec(`SELECT offset FROM events ORDER BY offset`)).map((row) => Number(row.offset));
 
 describe("deleteBrowserProcessorState", () => {
-  it("deletes one subscription key, or every row for a slug when the key is omitted", async () => {
+  it("deletes one progress key, or every row for a slug when the key is omitted", async () => {
     const sql = wrap(new DatabaseSync(":memory:"));
     await ensureBrowserProcessorProgressSchema(sql);
-    // Raw progress rows (the retired-slug lane this function exists for).
+    // Raw progress rows (including retired processor slugs this function removes).
     const write = (slug: string, key: string) =>
       sql.exec(
         `INSERT INTO processor_progress (
-           processor_slug, subscription_key, reducer_version, reduced_through_offset,
+           processor_slug, progress_key, stream_id, reducer_version, reduced_through_offset,
            reduced_state, acknowledged_through_offset, cursor_revision
-         ) VALUES (?, ?, 'v', 1, '{}', 1, 0)`,
-        [slug, key],
+         ) VALUES (?, ?, ?, 'v', 1, '{}', 1, 0)`,
+        [slug, key, TEST_STREAM_ID],
       );
     const read = async (slug: string, key: string) =>
       (
         await sql.exec(
           `SELECT 1 AS present FROM processor_progress
-           WHERE processor_slug = ? AND subscription_key = ?`,
+           WHERE processor_slug = ? AND progress_key = ?`,
           [slug, key],
         )
       )[0];
@@ -165,7 +173,7 @@ describe("deleteBrowserProcessorState", () => {
     await write("proc-a", "sub-2");
     await write("proc-b", "sub-1");
 
-    await deleteBrowserProcessorState({ sql, processorSlug: "proc-a", subscriptionKey: "sub-1" });
+    await deleteBrowserProcessorState({ sql, processorSlug: "proc-a", progressKey: "sub-1" });
     expect(await read("proc-a", "sub-1")).toBeUndefined();
     expect(await read("proc-a", "sub-2")).toBeDefined();
 
@@ -176,14 +184,14 @@ describe("deleteBrowserProcessorState", () => {
 });
 
 describe("browser raw events schema version reset", () => {
-  it("mirrors a frame and commits the cursor through the transactional progress store", async () => {
+  it("stores a batch and commits the cursor through the transactional progress store", async () => {
     const db = new DatabaseSync(":memory:");
     const load = rawEventsLoad(db);
 
     await load.deliver([rawEvent(1), rawEvent(2)]);
 
     expect(await load.runner.snapshot()).toMatchObject({ offset: 2 });
-    expect(await mirroredOffsets(load.sql)).toEqual([1, 2]);
+    expect(await storedOffsets(load.sql)).toEqual([1, 2]);
     const [progress] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
     expect(progress).toMatchObject({ acknowledged_through_offset: 2, cursor_revision: 0 });
   });
@@ -191,7 +199,7 @@ describe("browser raw events schema version reset", () => {
   it("rewinds the cursor together with the dropped table on a version bump (regression)", async () => {
     const db = new DatabaseSync(":memory:");
 
-    // First "page load": mirror two events at the current schema version.
+    // First "page load": store two events at the current schema version.
     const firstLoad = rawEventsLoad(db);
     await firstLoad.deliver([rawEvent(1), rawEvent(2)]);
     expect(await firstLoad.runner.snapshot()).toMatchObject({ offset: 2 });
@@ -202,9 +210,9 @@ describe("browser raw events schema version reset", () => {
 
     // Second "page load" (fresh SqlClient, so the schema ensurer re-runs): the
     // version reset must rewind the cursor, not just drop the table. Before
-    // the fix this cursor reported offset 2 over an empty mirror, so the
+    // the fix this cursor reported offset 2 over an empty event table, so the
     // server skipped historical replay — a permanent silent hole in the
-    // mirror (the gap-tolerant trigger accepts it).
+    // local table (the gap-tolerant trigger accepts it).
     const secondLoad = rawEventsLoad(db);
     expect(await secondLoad.runner.snapshot()).toMatchObject({ offset: 0 });
     // The rewind BUMPS the revision (never deletes the row): an in-flight
@@ -212,14 +220,14 @@ describe("browser raw events schema version reset", () => {
     const [progress] = await readProgressRow(secondLoad.sql, BrowserRawEventsContract.slug);
     expect(progress).toMatchObject({ acknowledged_through_offset: 0, cursor_revision: 1 });
 
-    // Full replay from the server rebuilds the mirror from offset 1.
+    // Full replay from the server rebuilds the local event table from offset 1.
     await secondLoad.deliver([rawEvent(1), rawEvent(2), rawEvent(3)]);
-    expect(await mirroredOffsets(secondLoad.sql)).toEqual([1, 2, 3]);
+    expect(await storedOffsets(secondLoad.sql)).toEqual([1, 2, 3]);
     const [version] = await secondLoad.sql.exec(`PRAGMA user_version`);
     expect(Number(version?.user_version)).toBe(BROWSER_RAW_EVENTS_SCHEMA_VERSION);
   });
 
-  it("resets before the cursor is read even when frames arrive without a snapshot read", async () => {
+  it("resets before the cursor is read even when event batches arrive without a snapshot read", async () => {
     const db = new DatabaseSync(":memory:");
 
     const firstLoad = rawEventsLoad(db);
@@ -227,17 +235,17 @@ describe("browser raw events schema version reset", () => {
 
     db.exec(`PRAGMA user_version = ${BROWSER_RAW_EVENTS_SCHEMA_VERSION - 1}`);
 
-    // Straight to a delivered frame, no snapshot() first: the schema ensure
+    // Straight to a delivered batch, no snapshot() first: the schema ensure
     // must still run the version reset before the stale cursor is memoized.
     // Without that, offsets 1-2 are filtered out against the stale cursor and
-    // the mirror keeps a permanent silent hole below offset 3.
+    // the local event table keeps a permanent silent hole below offset 3.
     const secondLoad = rawEventsLoad(db);
     await secondLoad.deliver([rawEvent(1), rawEvent(2), rawEvent(3)]);
 
-    expect(await mirroredOffsets(secondLoad.sql)).toEqual([1, 2, 3]);
+    expect(await storedOffsets(secondLoad.sql)).toEqual([1, 2, 3]);
   });
 
-  it("leaves the mirror and cursor untouched when the version matches", async () => {
+  it("leaves the local event table and cursor untouched when the version matches", async () => {
     const db = new DatabaseSync(":memory:");
 
     const firstLoad = rawEventsLoad(db);
@@ -248,7 +256,7 @@ describe("browser raw events schema version reset", () => {
 
     // Resume strictly after the committed scan cursor.
     await secondLoad.deliver([rawEvent(3)]);
-    expect(await mirroredOffsets(secondLoad.sql)).toEqual([1, 2, 3]);
+    expect(await storedOffsets(secondLoad.sql)).toEqual([1, 2, 3]);
   });
 
   it("the trigger accepts gaps (evicted ephemeral offsets never replay) but rejects out-of-order inserts", async () => {
@@ -262,25 +270,25 @@ describe("browser raw events schema version reset", () => {
       ]);
 
     await insert(1);
-    // Offset 2 was an ephemeral event later evicted server-side: the offset
-    // stays consumed but there is no row to replay, so the mirror must accept
-    // the gap.
+    // Offset 2 was a memory-only ephemeral event that is no longer available:
+    // the offset stays consumed but there is no event to replay, so the local
+    // durable event table must accept the gap.
     await insert(3);
-    expect(await mirroredOffsets(sql)).toEqual([1, 3]);
+    expect(await storedOffsets(sql)).toEqual([1, 3]);
     // Order still holds: a new row below the local head is a delivery bug.
     await expect(insert(2)).rejects.toThrow(/offsets must increase/);
   });
 
   it("advances across offsets omitted by an explicit scan envelope", async () => {
-    // Offset 3 was ephemeral and therefore omitted from durable catch-up. The
-    // frame's scan coordinates prove that it was examined, so durable rows
-    // after the gap can land without replaying the historical ephemeral row.
+    // Offset 3 was a memory-only ephemeral event and therefore omitted from
+    // durable catch-up. The batch's scan coordinates prove the gap was
+    // examined, so durable rows after it can land without an event body.
     const db = new DatabaseSync(":memory:");
     const load = rawEventsLoad(db);
     await load.deliver([rawEvent(1), rawEvent(2)]);
 
     await load.deliver([rawEvent(4), rawEvent(5)]);
-    expect(await mirroredOffsets(load.sql)).toEqual([1, 2, 4, 5]);
+    expect(await storedOffsets(load.sql)).toEqual([1, 2, 4, 5]);
     expect(await load.runner.snapshot()).toMatchObject({ offset: 5 });
     const [progress] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
     expect(progress).toMatchObject({ acknowledged_through_offset: 5 });
@@ -300,10 +308,10 @@ describe("transactional projection commit", () => {
       [BrowserRawEventsContract.slug],
     );
 
-    // The stale runner's next frame must not land ANY of its transaction:
-    // not the mirror row, not the counts, not the cursor.
+    // The stale runner's next batch must not land ANY of its transaction:
+    // not the event row, not the counts, not the cursor.
     await expect(load.deliver([rawEvent(3)])).rejects.toThrow(/fenced/);
-    expect(await mirroredOffsets(load.sql)).toEqual([1, 2]);
+    expect(await storedOffsets(load.sql)).toEqual([1, 2]);
     const counts = await load.sql.exec(`SELECT n FROM event_type_counts WHERE type = 'test/raw'`);
     expect(Number(counts[0]?.n)).toBe(2);
     const [progress] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
@@ -316,24 +324,24 @@ describe("transactional projection commit", () => {
     await load.deliver([rawEvent(1), rawEvent(2)]);
 
     // A conflicting row at offset 3 (same offset, different JSON) makes the
-    // mirror trigger ABORT the insert mid-transaction.
+    // event-table trigger ABORT the insert mid-transaction.
     await load.sql.exec(`INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`, [
       2,
       JSON.stringify({ ...rawEvent(3), payload: { tampered: true } }),
     ]);
 
     await expect(load.deliver([rawEvent(3), rawEvent(4)])).rejects.toThrow(
-      /replay changed an existing offset/,
+      /browser event replay changed an existing stream offset/,
     );
-    // Neither event 4's row nor the cursor advanced — the frame is whole.
-    expect(await mirroredOffsets(load.sql)).toEqual([1, 2, 3]);
+    // Neither event 4's row nor the cursor advanced — the batch is whole.
+    expect(await storedOffsets(load.sql)).toEqual([1, 2, 3]);
     const [progress] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
     expect(progress).toMatchObject({ acknowledged_through_offset: 2, cursor_revision: 0 });
 
-    // Clear the conflict; the SAME runner retries the frame and it lands whole.
+    // Clear the conflict; the SAME runner retries the batch and it lands whole.
     await load.sql.exec(`DELETE FROM events WHERE offset = 3`);
     await load.deliver([rawEvent(3), rawEvent(4)]);
-    expect(await mirroredOffsets(load.sql)).toEqual([1, 2, 3, 4]);
+    expect(await storedOffsets(load.sql)).toEqual([1, 2, 3, 4]);
     const [retried] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
     expect(retried).toMatchObject({ acknowledged_through_offset: 4, cursor_revision: 0 });
   });
@@ -345,6 +353,7 @@ describe("transactional projection commit", () => {
       ack: number,
       cursorRevision: number,
     ): ProcessorProgress<BrowserRawEventsState> => ({
+      streamId: TEST_STREAM_ID,
       reduction: {
         reducerVersion: load.processor.contract.version,
         reducedThroughOffset: ack,
@@ -353,18 +362,30 @@ describe("transactional projection commit", () => {
       processing: { acknowledgedThroughOffset: ack, cursorRevision },
     });
 
-    await load.progress.commit(record(5, 0), { expectedCursorRevision: 0 });
+    await load.progress.commit(record(5, 0), {
+      expectedCursorRevision: 0,
+      expectedStreamId: undefined,
+    });
     // Stale incarnation rolling the cursor back at the same revision: fenced.
-    await expect(load.progress.commit(record(3, 0), { expectedCursorRevision: 0 })).rejects.toThrow(
-      /backward/,
-    );
+    await expect(
+      load.progress.commit(record(3, 0), {
+        expectedCursorRevision: 0,
+        expectedStreamId: TEST_STREAM_ID,
+      }),
+    ).rejects.toThrow(/backward/);
     // An operator-style rewind (revision bump, committed under the OLD
     // expected revision) is the one legal backward move.
-    await load.progress.commit(record(3, 1), { expectedCursorRevision: 0 });
+    await load.progress.commit(record(3, 1), {
+      expectedCursorRevision: 0,
+      expectedStreamId: TEST_STREAM_ID,
+    });
     // And from here the old revision's continuations are fenced out.
-    await expect(load.progress.commit(record(9, 0), { expectedCursorRevision: 0 })).rejects.toThrow(
-      /cursorRevision/,
-    );
+    await expect(
+      load.progress.commit(record(9, 0), {
+        expectedCursorRevision: 0,
+        expectedStreamId: TEST_STREAM_ID,
+      }),
+    ).rejects.toThrow(/cursorRevision/);
     expect(await load.progress.read()).toMatchObject({
       processing: { acknowledgedThroughOffset: 3, cursorRevision: 1 },
     });
@@ -385,7 +406,7 @@ describe("output-schema reset (fenced rewind)", () => {
         { sql: `DELETE FROM event_type_counts` },
       ],
     });
-    expect(await mirroredOffsets(load.sql)).toEqual([]);
+    expect(await storedOffsets(load.sql)).toEqual([]);
     const [progress] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
     expect(progress).toMatchObject({
       acknowledged_through_offset: 0,
@@ -395,15 +416,15 @@ describe("output-schema reset (fenced rewind)", () => {
 
     // The pre-reset runner incarnation still holds revision 0 in memory: its
     // next commit is fenced, and its projection write rolls back WITH it —
-    // nothing from the stale incarnation lands on the rebuilt mirror.
+    // nothing from the stale incarnation lands in the rebuilt event table.
     await expect(load.deliver([rawEvent(3)])).rejects.toThrow(/fenced/);
-    expect(await mirroredOffsets(load.sql)).toEqual([]);
+    expect(await storedOffsets(load.sql)).toEqual([]);
 
     // A fresh load reads the rewound cursor and rebuilds from offset 1.
     const rebuilt = rawEventsLoad(db);
     expect(await rebuilt.runner.snapshot()).toMatchObject({ offset: 0 });
     await rebuilt.deliver([rawEvent(1), rawEvent(2), rawEvent(3)]);
-    expect(await mirroredOffsets(rebuilt.sql)).toEqual([1, 2, 3]);
+    expect(await storedOffsets(rebuilt.sql)).toEqual([1, 2, 3]);
     const [rebuiltProgress] = await readProgressRow(rebuilt.sql, BrowserRawEventsContract.slug);
     expect(rebuiltProgress).toMatchObject({ acknowledged_through_offset: 3, cursor_revision: 1 });
   });
@@ -424,7 +445,7 @@ describe("output-schema reset (fenced rewind)", () => {
       }),
     ).rejects.toThrow();
     // The DELETE that ran before the failure rolled back with it.
-    expect(await mirroredOffsets(load.sql)).toEqual([1, 2]);
+    expect(await storedOffsets(load.sql)).toEqual([1, 2]);
     const [progress] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
     expect(progress).toMatchObject({ acknowledged_through_offset: 2, cursor_revision: 0 });
   });
@@ -449,10 +470,10 @@ describe("discardBrowserProcessorProjection", () => {
     await ensureBrowserProcessorProgressSchema(sql);
     await sql.exec(
       `INSERT INTO processor_progress (
-         processor_slug, subscription_key, reducer_version, reduced_through_offset,
+         processor_slug, progress_key, stream_id, reducer_version, reduced_through_offset,
          reduced_state, acknowledged_through_offset, cursor_revision
-       ) VALUES (?, '', 'v', 2, '{}', 2, 0)`,
-      [BrowserRawEventsContract.slug],
+       ) VALUES (?, '', ?, 'v', 2, '{}', 2, 0)`,
+      [BrowserRawEventsContract.slug, TEST_STREAM_ID],
     );
 
     await discardBrowserProcessorProjection({
@@ -470,11 +491,11 @@ describe("discardBrowserProcessorProjection", () => {
     const [progress] = await readProgressRow(sql, BrowserRawEventsContract.slug);
     expect(progress).toMatchObject({ acknowledged_through_offset: 0, cursor_revision: 1 });
 
-    // The rebuilt mirror's replay from offset 1 recounts from zero — nothing
+    // Replaying the rebuilt event table from offset 1 recounts from zero — nothing
     // stale survived for the count trigger to sit on.
     const load = rawEventsLoad(db);
     await load.deliver([rawEvent(1), rawEvent(2)]);
-    expect(await mirroredOffsets(sql)).toEqual([1, 2]);
+    expect(await storedOffsets(sql)).toEqual([1, 2]);
     expect(await sql.exec(`SELECT type, n FROM event_type_counts`)).toEqual([
       { type: "test/raw", n: 2 },
     ]);
@@ -482,7 +503,7 @@ describe("discardBrowserProcessorProjection", () => {
 });
 
 // The event_type_counts table replaces the UI's reactive COUNT(*) full scans
-// (they starve ingest on deep mirrors — see the schema comment). Its one
+// (they starve ingest on large local event tables — see the schema comment). Its one
 // invariant: it always equals what COUNT(*) GROUP BY type would return.
 describe("browser raw events incremental type counts", () => {
   const typedEvent = (offset: number, type: string): StreamEvent => rawEvent(offset, type);
@@ -495,7 +516,7 @@ describe("browser raw events incremental type counts", () => {
       ]),
     );
 
-  it("tracks per-type counts through delivered frames, matching COUNT(*)", async () => {
+  it("tracks per-type counts through delivered event batches, matching COUNT(*)", async () => {
     const db = new DatabaseSync(":memory:");
     const load = rawEventsLoad(db);
 
@@ -532,7 +553,7 @@ describe("browser raw events incremental type counts", () => {
     expect(await countsByType(wrap(db))).toEqual({ a: 3 });
   });
 
-  it("a schema version reset drops the counts with the mirror", async () => {
+  it("a schema version reset drops the counts with the event table", async () => {
     const db = new DatabaseSync(":memory:");
     const firstLoad = rawEventsLoad(db);
     await firstLoad.deliver([typedEvent(1, "a")]);
@@ -542,7 +563,7 @@ describe("browser raw events incremental type counts", () => {
     const secondLoad = rawEventsLoad(db);
     await secondLoad.deliver([typedEvent(1, "b"), typedEvent(2, "b")]);
 
-    // Only the rebuilt mirror's counts survive; nothing carried over from the
+    // Only the rebuilt event table's counts survive; nothing carried over from the
     // dropped generation.
     expect(await countsByType(wrap(db))).toEqual({ b: 2 });
   });
@@ -572,8 +593,9 @@ describe("browser feed processor under runner drive", () => {
       sql,
       runner,
       async deliver(events: StreamEvent[]) {
-        const opened = await runner.openDelivery();
-        await opened.sink({
+        const opened = await runner.openEventBatchCallback();
+        await opened.processEventBatch({
+          streamId: TEST_STREAM_ID,
           events,
           scannedAfterOffset: opened.checkpointOffset,
           scannedThroughOffset: events.at(-1)?.offset ?? opened.checkpointOffset,
@@ -587,7 +609,7 @@ describe("browser feed processor under runner drive", () => {
     const db = new DatabaseSync(":memory:");
     const load = feedLoad(db);
 
-    // Frame 1 opens a raw group; frame 2 extends it across the frame boundary
+    // Batch 1 opens a raw group; batch 2 extends it across the batch boundary
     // and then opens a second group — the extension must UPSERT the existing
     // row (a plain UPDATE against a not-yet-committed row would be lost, a
     // duplicate INSERT would conflict; the coalesced upsert handles both).

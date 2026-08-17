@@ -8,7 +8,7 @@ tags: [os, template, observability, fleet]
 # Patch existing projects' seeded worker.ts (template fixes only reach new projects)
 
 Every project repo carries its own frozen copy of the seeded
-`config-repo-template/worker.ts`; template fixes only apply to projects
+`configs/default/worker.ts`; template fixes only apply to projects
 created after the fix ships. Known drift in old copies:
 
 - **Stub-disposal leak (#1845 follow-up)**: the agent-birth reaction drops its

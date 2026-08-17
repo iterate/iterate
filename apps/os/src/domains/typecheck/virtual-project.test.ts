@@ -11,12 +11,14 @@ import { createCompiler } from "tswasm";
 import { beforeAll, expect, test } from "vitest";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { openApiCapabilityTypeReference } from "../itx/capability-type-declarations.ts";
+import { assemblePreamble } from "../capability-host/capability-host-preamble.ts";
 import type { CompileFn } from "./run-typecheck.ts";
 import { runTypecheck, npmPackagesMentioned } from "./run-typecheck.ts";
 import {
   checkCapabilityTypes,
   checkItxScript,
   checkItxScriptForExecution,
+  checkPreamble,
   mountModuleText,
   type Typechecker,
 } from "./virtual-project.ts";
@@ -122,7 +124,7 @@ async function fakeRegistryFetch(url: string): Promise<Response> {
 
 const WEATHER_MOUNT: CapabilityDescription = {
   path: ["tools", "weather"],
-  type: "itx-expression",
+  type: "itx-call",
   instructions: "Three-day forecasts.",
   types: "export type Forecast = { forecast(input: { city: string }): Promise<string> };",
 };
@@ -254,7 +256,7 @@ test("npm-backed mount types acquire real .d.ts and typecheck against them", asy
   const capabilities: CapabilityDescription[] = [
     {
       path: ["pets"],
-      type: "itx-expression",
+      type: "itx-call",
       types: 'export type Pets = import("fake-pets").PetsClient;',
     },
   ];
@@ -420,7 +422,7 @@ test("the checker enforces the runtime's block shape and size cap up front", asy
 test("npm acquisition failures surface as notes alongside the module error", async () => {
   const problems = await checkItxScript({
     capabilities: [
-      { path: ["gone"], type: "itx-expression", types: 'export type G = import("fake-gone").X;' },
+      { path: ["gone"], type: "itx-call", types: 'export type G = import("fake-gone").X;' },
     ],
     code: "async (itx) => itx.gone",
     typechecker, // fake registry 404s anything but fake-pets
@@ -433,7 +435,7 @@ test("openapi: references materialize at check time — schemas never ride the j
   expect(reference.length).toBeLessThan(300); // what the journal carries
 
   const capabilities: CapabilityDescription[] = [
-    { path: ["store"], type: "itx-expression", types: reference },
+    { path: ["store"], type: "itx-call", types: reference },
   ];
   const ok = await checkItxScript({
     capabilities,
@@ -455,7 +457,7 @@ test("openapi: references materialize at check time — schemas never ride the j
     capabilities: [
       {
         path: ["gone"],
-        type: "itx-expression",
+        type: "itx-call",
         types: openApiCapabilityTypeReference("https://specs.example.com/missing.json"),
       },
     ],
@@ -533,7 +535,7 @@ const GATE_ROWS: Array<{
     name: "provide-then-use in one script stays green",
     code: `async (itx) => {
       await itx.capabilityHost.provideCapability({
-        type: "itx-expression",
+        type: "itx-call",
         path: ["demoStream"],
         expression: ["streams", ["get", "/"]],
       });
@@ -560,7 +562,7 @@ const GATE_ROWS: Array<{
     name: "unresolved modules never block",
     code: 'async (itx) => { const m = await import("fake-gone"); return m; }',
     capabilities: [
-      { path: ["gone"], type: "itx-expression", types: 'export type G = import("fake-gone").X;' },
+      { path: ["gone"], type: "itx-call", types: 'export type G = import("fake-gone").X;' },
     ],
     expected: "clean",
   },
@@ -695,7 +697,7 @@ const GATE_ROWS: Array<{
     // root is runtime-extensible, so this must run.
     name: "regression: a provided root mount near-missing a real member runs",
     code: `async (itx) => {
-    await itx.capabilityHost.provideCapability({ type: "itx-expression", path: ["agentz"], expression: ["streams", ["get", "/"]] });
+    await itx.capabilityHost.provideCapability({ type: "itx-call", path: ["agentz"], expression: ["streams", ["get", "/"]] });
     return typeof itx.agentz;
   }`,
     expected: "clean",
@@ -838,4 +840,198 @@ test("execution gate regression: pathologically-nested scripts bail to unchecked
   // A normal script with ordinary nesting still reaches the real checker.
   const shallow = await gate("async (itx) => itx.streams.gett('/')");
   expect(shallow.verdict).toBe("problems");
+});
+
+// ---------------------------------------------------------------------------
+// The scope preamble: injected code above the script, its attribution
+// boundary, and the gate's never-block-on-scope-code policy.
+
+test("a script referencing preamble symbols compiles clean and the emitted module carries the preamble", async () => {
+  const checked = await checkItxScriptForExecution({
+    capabilities: [],
+    code: "async (itx) => TECH_CHANNEL_ID.toUpperCase()",
+    preamble: 'const TECH_CHANNEL_ID = "c1234";',
+    typechecker,
+  });
+  expect(checked).toMatchObject({ verdict: "clean" });
+  // The emitted module includes the preamble — the execution harness imports
+  // it, so what runs is exactly what was checked.
+  expect((checked as { emittedJs?: string }).emittedJs).toContain(
+    'const TECH_CHANNEL_ID = "c1234"',
+  );
+});
+
+test("the assembled results preamble typechecks end to end: literal data, typed loaders, error rows", async () => {
+  const preamble = assemblePreamble({
+    entries: [],
+    results: [
+      // state order: oldest first; the assembler renders newest first
+      {
+        kind: "error",
+        executionId: "agent-output:33",
+        settledAtOffset: 33,
+        error: "TypeError: boom",
+      },
+      {
+        kind: "large",
+        executionId: "agent-output:42",
+        settledAtOffset: 42,
+        typeText: "{ items: { id: string }[] }",
+      },
+      {
+        kind: "data",
+        executionId: "agent-output:57",
+        settledAtOffset: 57,
+        resultJson: '{"users":["amy","bob"]}',
+      },
+    ],
+  });
+  const ok = await checkItxScript({
+    capabilities: [],
+    code: `async (itx) => {
+      const name: string = results[0].data.users[0];
+      const big = await results[1].load(itx);
+      const id: string = big.items[0].id;
+      const failed: string = results[2].error;
+      return { name, id, failed };
+    }`,
+    preamble: preamble!.ts,
+    typechecker,
+  });
+  expect(ok).toEqual([]);
+
+  // A large result's .data is a typed trap (never): touching it is a compile
+  // error steering the model to the loader.
+  const trapped = await checkItxScript({
+    capabilities: [],
+    code: "async (itx) => results[1].data.items",
+    preamble: preamble!.ts,
+    typechecker,
+  });
+  expect(trapped.length).toBeGreaterThan(0);
+  expect(trapped[0]).toContain("never");
+
+  // Stable addressing keeps EXACT per-offset row types: byOffset(57) is the
+  // data row alone — the retained error row at 33 must not widen it to a
+  // union that would poison `.data` for every stable read.
+  const stable = await checkItxScript({
+    capabilities: [],
+    code: `async (itx) => {
+      const name: string = results.byOffset(57).data.users[0];
+      const failed: string = results.byOffset(33).error;
+      const big = await results.byOffset(42).load(itx);
+      return { name, failed, ids: big.items.map((item) => item.id) };
+    }`,
+    preamble: preamble!.ts,
+    typechecker,
+  });
+  expect(stable).toEqual([]);
+
+  // An offset outside the retained window is a compile error before it is a
+  // runtime throw.
+  const unknownOffset = await checkItxScript({
+    capabilities: [],
+    code: "async (itx) => results.byOffset(999)",
+    preamble: preamble!.ts,
+    typechecker,
+  });
+  expect(unknownOffset.length).toBeGreaterThan(0);
+});
+
+test("a broken preamble never blocks a script: the gate downgrades to unchecked", async () => {
+  const checked = await checkItxScriptForExecution({
+    capabilities: [],
+    code: "async (itx) => 1",
+    preamble: "const broken: NoSuchType = 1;",
+    typechecker,
+  });
+  expect(checked).toMatchObject({
+    verdict: "unchecked",
+    reason: "the scope's preamble does not compile",
+  });
+});
+
+test("the advisory door labels preamble-line errors preamble:N while script errors keep script coordinates", async () => {
+  const problems = await checkItxScript({
+    capabilities: [],
+    code: `async (itx) => {\n  return await itx.streams.gett("/");\n}`,
+    preamble: "const one = 1;\nconst broken: Missing = one;",
+    typechecker,
+  });
+  expect(problems.some((p) => p.includes("preamble:2") && p.includes("Missing"))).toBe(true);
+  expect(problems.some((p) => p.includes("script:2") && p.includes("Did you mean 'get'"))).toBe(
+    true,
+  );
+});
+
+test("checkPreamble rejects a candidate that does not compile, attributed to preamble lines", async () => {
+  const problems = await checkPreamble({
+    capabilities: [],
+    preamble: "const x: Missing = 1;",
+    typechecker,
+  });
+  expect(problems).toHaveLength(1);
+  expect(problems[0]).toContain("preamble:1");
+  expect(problems[0]).toContain("Missing");
+});
+
+test("checkPreamble ignores problems outside the preamble — a broken mount must not veto a set", async () => {
+  const problems = await checkPreamble({
+    capabilities: [{ path: ["stale"], type: "live", types: "export type Stale = Goone;" }],
+    preamble: "const ok = 1;",
+    typechecker,
+  });
+  expect(problems).toEqual([]);
+});
+
+test("a preamble whose syntax errors cascade past its own lines still never blocks a script", async () => {
+  // An unclosed brace reports NOTHING inside the preamble's range — every
+  // diagnostic lands on later script lines or EOF. Blocking there would blame
+  // an innocent script forever (including the one trying to removePreamble).
+  const checked = await checkItxScriptForExecution({
+    capabilities: [],
+    code: "async (itx) => 1",
+    preamble: "const broken = {",
+    typechecker,
+  });
+  expect(checked.verdict).toBe("unchecked");
+  expect((checked as { reason: string }).reason).toContain("preamble");
+});
+
+test("a script's OWN provable error still blocks when a valid preamble is present", async () => {
+  const checked = await checkItxScriptForExecution({
+    capabilities: [],
+    code: `async (itx) => {\n  return await itx.streams.gett("/");\n}`,
+    preamble: 'const TECH_CHANNEL_ID = "c1234";',
+    typechecker,
+  });
+  expect(checked.verdict).toBe("problems");
+  // The blame re-check runs without the preamble, so reported line numbers
+  // match the code the model sent.
+  expect((checked as { problems: string[] }).problems[0]).toContain("script:2");
+  expect((checked as { problems: string[] }).problems[0]).toContain("Did you mean 'get'");
+});
+
+test("checkPreamble catches syntax errors that report outside the preamble's own lines", async () => {
+  const problems = await checkPreamble({
+    capabilities: [],
+    preamble: "const broken = {",
+    typechecker,
+  });
+  expect(problems.length).toBeGreaterThan(0);
+});
+
+test("a typo near-missing a preamble name still blocks with its did-you-mean", async () => {
+  // The blame probe compiles the preamble ALONE: a clean probe proves the
+  // blockers are the script's, and they report from the WITH-preamble check —
+  // a bare re-check would demote this TS2552 to a non-blocking TS2304 and
+  // run the script into a ReferenceError instead.
+  const checked = await checkItxScriptForExecution({
+    capabilities: [],
+    code: "async (itx) => resultz[0]",
+    preamble: "const results = [{ data: 1 }];",
+    typechecker,
+  });
+  expect(checked.verdict).toBe("problems");
+  expect((checked as { problems: string[] }).problems[0]).toContain("Did you mean 'results'");
 });

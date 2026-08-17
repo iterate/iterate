@@ -33,7 +33,7 @@ import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presenc
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "5.0.0",
+  version: "5.2.0",
   description:
     "Maintains model-visible history, schedules debounced offset-identified LLM turns, runs " +
     "them through the Workers AI transport, and executes scripts through the capability host.",
@@ -65,10 +65,10 @@ export const AgentProcessorContract = defineProcessorContract({
             model: z
               .string()
               .min(1)
-              .default("openai/gpt-5.6-sol")
+              .default("openai/gpt-5.6-terra")
               .meta({ description: "Model identifier passed to the LLM transport." }),
           })
-          .default({ model: "openai/gpt-5.6-sol" })
+          .default({ model: "openai/gpt-5.6-terra" })
           .meta({ description: "LLM transport selection." }),
         llmRequestDebounceMs: z
           .number()
@@ -156,6 +156,18 @@ export const AgentProcessorContract = defineProcessorContract({
               "turns before the window actually fills, so a slow or failed summary attempt " +
               "never races an imminent context overflow.",
           }),
+        driver: z
+          .enum(["agent", "agent-headless"])
+          .default("agent")
+          .meta({
+            description:
+              "Which registered agent processor DRIVES this stream (by contract slug); the " +
+              "other stands down entirely. Hosted-processor subscriptions cannot be removed, " +
+              "so a stream subscribed to both processors needs exactly one to act — this knob " +
+              "is that selection, and appending it is the public half of the headless " +
+              "handover (see agent-headless-processor.ts). Format-agnostic on purpose: what " +
+              "a headless stream's responses MEAN is decided in userland, never here.",
+          }),
       })
       .prefault({})
       .meta({ description: "The agent's complete configuration, every knob defaulted." }),
@@ -189,6 +201,16 @@ export const AgentProcessorContract = defineProcessorContract({
           "by a compaction item). Context items at or below it have been covered by a " +
           "request: a keyed update to a covered item appends instead of replacing in place, " +
           "keeping every covered prompt reconstructible.",
+      }),
+    latestExternalTriggerOffset: z
+      .number()
+      .int()
+      .nonnegative()
+      .default(0)
+      .meta({
+        description:
+          "Offset of the newest external context trigger. A delayed autonomous-breaker pause " +
+          "whose causal trigger is older than this input is stale and reduces to nothing.",
       }),
     pendingLlmRequestTrigger: z
       .object({
@@ -349,6 +371,7 @@ export const AgentProcessorContract = defineProcessorContract({
             maxAutonomousTurns: z.number().int().positive().optional(),
             scriptResultHistoryLimit: z.number().int().positive().optional(),
             compactionTriggerFraction: z.number().positive().max(1).optional(),
+            driver: z.enum(["agent", "agent-headless"]).optional(),
           })
           .strict()
           .meta({ description: "Partial patch, deep-merged into the current config." }),
@@ -356,14 +379,28 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agents/web-message-sent": {
       description:
-        "A visible agent message was sent to the web UI (itx.chat.sendMessage). The processor " +
-        "mirrors it back into context as assistant history so the model sees what it sent.",
+        "A visible agent message was sent to the web UI — by a script (itx.chat.sendMessage), " +
+        "or by a userland response interpreter delivering prose extracted straight from an " +
+        "assistant output. The processor mirrors script-sent messages back into context as " +
+        "assistant history so the model sees what it sent; extracted messages carry " +
+        "llmRequestOffset and are NOT mirrored — their raw text is already in history as the " +
+        "assistant context item.",
       payloadSchema: z.object({
         message: z.string().meta({ description: "The visible chat message (markdown)." }),
         files: z
           .array(agentFileAttachmentSchema())
           .optional()
           .meta({ description: "Files attached to the message." }),
+        llmRequestOffset: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .meta({
+            description:
+              "Present when the message was extracted from the identified LLM response rather " +
+              "than sent by a script. Suppresses the assistant-history mirror.",
+          }),
       }),
     },
     "events.iterate.com/agent/llm-request-requested": {
@@ -437,8 +474,8 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-response-chunk": {
       description:
         "One streamed chunk received from the transport, verbatim. Ephemeral: it reaches " +
-        "ephemeral subscriptions (browser feed, TUI) but is excluded from default reads, never " +
-        "delivered to durable subscribers, and evictable — the durable truth is the assistant " +
+        "open browser/TUI connections but is excluded from default reads and durable subscriptions, " +
+        "and may be evicted — the durable truth is the assistant " +
         "context item / llm-request-settled pair.",
       // FORCIBLY EPHEMERAL: the contract, not the append site, decides.
       // Every append/parse lane built from this definition defaults the
@@ -522,9 +559,21 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/paused": {
       description:
         "The agent stopped scheduling turns (autonomous-loop breaker, or an operator). Mirrors " +
-        "stream/paused. The next external message resumes it; self-driven triggers stay parked.",
+        "stream/paused. A breaker pause names its causal trigger and reduces to nothing if newer " +
+        "external input already superseded it. The next external message resumes an applied pause; " +
+        "self-driven triggers stay parked.",
       payloadSchema: z.object({
         reason: z.string().trim().min(1).optional().meta({ description: "Why the loop paused." }),
+        triggerOffset: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .meta({
+            description:
+              "Self-driven context offset that tripped the autonomous breaker; absent for an " +
+              "operator-authored pause.",
+          }),
       }),
     },
     "events.iterate.com/agent/resumed": {
@@ -547,14 +596,22 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/resumed",
     "events.iterate.com/capability-host/script-run-requested",
     "events.iterate.com/capability-host/script-run-settled",
+    // Preamble changes on the agent's own scope transcribe into model-visible
+    // context (the model must know which symbols its scripts can reference).
+    "events.iterate.com/capability-host/preamble-set",
+    "events.iterate.com/capability-host/preamble-removed",
     // Every error on the stream — the processor's own emissions, the runner's
-    // poison skips, anything else — is transcribed into model-visible context.
+    // repeatedly failing events that were skipped, anything else — is transcribed into model-visible context.
     "events.iterate.com/stream/error-occurred",
     // Recovery relies on the eventless at-head pass, not consumption of the
     // platform revival fact, to find and re-run orphaned work after eviction.
   ],
   emits: [
     "events.iterate.com/agents/context-added",
+    // Emitted by userland response interpreters through this vocabulary (the
+    // platform components never emit it themselves today); listed so variant
+    // hosts and tests can validate the full loop's appends in one place.
+    "events.iterate.com/agents/web-message-sent",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-settled",
     "events.iterate.com/agent/llm-response-chunk",
@@ -675,6 +732,15 @@ function agentContextItemSchema() {
             origin: z
               .enum(["web", "mcp"])
               .meta({ description: "Which surface the user wrote from." }),
+            userId: z
+              .string()
+              .optional()
+              .meta({
+                description:
+                  "The authenticated principal who wrote the message — the same identity " +
+                  "device enrollments record as ownerId, so a chat-reply push can be " +
+                  "addressed to the sender's devices only.",
+              }),
           }),
           z.object({
             type: z.literal("agent"),

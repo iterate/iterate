@@ -23,7 +23,7 @@ export function isStreamSessionBrokenError(error: unknown): boolean {
 }
 
 /**
- * The deadline lane's own error class, so catch blocks can tell "the far side
+ * The deadline helper's own error class, so catch blocks can tell "the far side
  * answered nothing" (transport suspect — a half-open socket swallows calls
  * forever) apart from "the far side answered with a failure" (transport fine,
  * reconnect is enough).

@@ -17,7 +17,7 @@ import {
   EmailAgentProcessor,
   type EmailAgentDeps,
 } from "./email-agent-processor-implementation.ts";
-import type { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
+import { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
 import type { InboundEmailPayload } from "./email-processor-contract.ts";
 
 // -----------------------------------------------------------------------------
@@ -429,7 +429,11 @@ describe("EmailAgentProcessor", () => {
 
     const replay = makeEmailAgentHarness({
       resolveStoredAttachments,
-      substrate: { clock: h.clock, stream: h.stream, progress: makeMemoryProgressStore() },
+      substrate: {
+        clock: h.clock,
+        stream: h.stream,
+        progress: makeMemoryProgressStore(EmailAgentProcessorContract),
+      },
     });
     await replay.settle(); // replays the whole stream; a wedge would throw here
 

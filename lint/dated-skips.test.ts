@@ -50,14 +50,24 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     match: "Email OTP sign-in is disabled for this deployment",
     note: "env-gated: the authenticated seeded app proof requires a real signup",
   },
+  {
+    file: "specs/mobile/expected-backend-signin.spec.ts",
+    match: "needs APP_CONFIG_BASE_URL pointing at a deployed preview slot",
+    note: "env-gated: the bundle stamp must name an envs.ts preview preset and prd keeps the fixed test OTP off",
+  },
+  {
+    file: "specs/mobile/media.spec.ts",
+    match: "structural: seeding needs the deployment's admin API secret",
+    note: "env-gated: the deterministic lane seeds media over the admin API; environments without the secret cannot run it",
+  },
+  {
+    file: "specs/workspace-lens-board.spec.ts",
+    match: "demo recording — run locally with DEMO_RECORDING=1",
+    note: "env-gated: a demo RECORDING, never a CI test (drives a standing preview project)",
+  },
   // -- Grandfathered parked markers (predate the convention, 2026-07-15).
   // Do NOT add entries here — date new parked markers instead. This list
   // only shrinks.
-  {
-    file: "apps/os/e2e/vitest/stream-lifecycle.e2e.test.ts",
-    match: "dropping a WebSocket waitForEvent caller cleans up",
-    note: "KNOWN GAP 2026-07-02: waitForEvent has no abort on transport drop",
-  },
   {
     file: "apps/streams-example-app/e2e/playwright/stream-browser.spec.ts",
     match: "expanded tail rows can grow under the sticky composer",

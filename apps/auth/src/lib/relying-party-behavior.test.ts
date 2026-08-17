@@ -66,6 +66,11 @@ describe("relying-party routes and sessions", () => {
       forwarded: "google" as string | null,
     },
     {
+      name: "forwards email-address login hints (preview click-and-login deep links)",
+      hint: encodeURIComponent("pr123+test@nustom.com"),
+      forwarded: "pr123+test@nustom.com",
+    },
+    {
       name: "drops unknown login hints from the auth worker authorization request",
       hint: "github",
       forwarded: null,
@@ -81,6 +86,31 @@ describe("relying-party routes and sessions", () => {
       assert.equal(response.status, 302);
       const location = new URL(response.headers.get("location") ?? "");
       assert.equal(location.searchParams.get("login_hint"), forwarded);
+    });
+  }
+
+  for (const { name, hint, forwarded } of [
+    {
+      name: "forwards slug-shaped project hints (template-carrying login links)",
+      hint: "pr2477-template-waiter-chef",
+      forwarded: "pr2477-template-waiter-chef" as string | null,
+    },
+    {
+      name: "drops project hints that are not slug-shaped",
+      hint: encodeURIComponent("Not A Slug!"),
+      forwarded: null,
+    },
+  ]) {
+    it(name, async () => {
+      const handler = testAuthHandler(config);
+
+      const response = await handler(
+        new Request(`http://localhost:65455/api/iterate-auth/login?project_hint=${hint}`),
+      );
+
+      assert.equal(response.status, 302);
+      const location = new URL(response.headers.get("location") ?? "");
+      assert.equal(location.searchParams.get("project_hint"), forwarded);
     });
   }
 

@@ -32,6 +32,14 @@ export type AgentUiLlmStep = {
   thinkingText: string;
   /** Streamed response text — for code-mode agents this is source code. */
   responseText: string;
+  /** Offset of the committed assistant context-added event carrying this
+   * step's final text; links interpretation events back to the step. */
+  assistantEventOffset?: number;
+  /** True once ANOTHER event derived from this response committed (an
+   * extracted chat message pointing at the request, or a script extracted
+   * from the assistant event). The derived views are then the story: pretty
+   * rendering collapses the raw response text behind the raw toggles. */
+  interpreted?: boolean;
   inputTokens?: number;
   outputTokens?: number;
   durationMs?: number;
@@ -57,6 +65,12 @@ export type AgentUiCodeStep = {
   startedAtMs: number;
   /** Absolute server-side execution deadline from the strict request contract. */
   expiresAtMs: number;
+  /**
+   * The agent's summary `activity` line as of this step (the latest
+   * agent/summary-updated fold when the step settled — scripts usually append
+   * it mid-run). Round headers show this instead of a bare start time.
+   */
+  activitySummary?: string;
 };
 
 export type AgentUiStep = AgentUiLlmStep | AgentUiCodeStep;
@@ -144,6 +158,36 @@ export function formatAgentUiActivitySummary(
     activity.endedAtMs == null ? null : Math.max(0, activity.endedAtMs - activity.startedAtMs);
   if (totalMs != null && totalMs > 0) parts.push(formatAgentUiDuration(totalMs));
   return parts.join(" · ");
+}
+
+/** One activity round: the llm step that writes a script and the code step that runs it. */
+export type AgentUiActivityRound = {
+  llm: AgentUiLlmStep | null;
+  code: AgentUiCodeStep | null;
+};
+
+/**
+ * Group an activity's steps into ROUNDS: the llm step that writes a script
+ * and the code step that runs it belong together, and an agent that returns
+ * itself a value for the next attempt produces round 2, 3, … A round opens at
+ * every llm step (or at a code step with no llm before it — replays can drop
+ * the llm half). Both round renderers — mobile's activity card
+ * (apps/mobile/src/components/activity-card.tsx) and the os web feed
+ * (apps/os/src/components/agent-feed.tsx) — group through this one function.
+ */
+export function groupActivityRounds(steps: readonly AgentUiStep[]) {
+  const rounds: AgentUiActivityRound[] = [];
+  for (const step of steps) {
+    const current = rounds.at(-1);
+    if (step.kind === "llm") {
+      rounds.push({ llm: step, code: null });
+    } else if (current !== undefined && current.code === null) {
+      current.code = step;
+    } else {
+      rounds.push({ llm: null, code: step });
+    }
+  }
+  return rounds;
 }
 
 export function formatAgentUiDuration(durationMs: number): string {
@@ -255,8 +299,8 @@ export type AgentUiProcessorAnnouncement = {
 };
 
 export type AgentUiPresenceEntry = {
-  subscriptionKey: string;
-  direction: "inbound" | "outbound";
+  connectionKey: string;
+  connectionKind: "hosted" | "session";
   connected: boolean;
   description?: string;
   user?: { id?: string; email: string; name?: string; picture?: string };
@@ -301,7 +345,7 @@ export type AgentUiState = {
   /** User messages that landed while the current request was already running. */
   queuedUserMessages: AgentUiMessageItem[];
   eventCount: number;
-  /** Connection roster reduced from subscriber-connected/disconnected facts. */
+  /** Connection roster reduced from connection-opened/connection-closed facts. */
   presence: AgentUiPresenceEntry[];
   /** Lifetime token totals + the latest report (context fullness). */
   tokenUsage: AgentUiTokenUsage;
@@ -311,6 +355,8 @@ export type AgentUiState = {
    * same feed item instead of leaving the inferred failure as permanent truth.
    */
   provisionalActivities: Record<string, AgentUiActivity>;
+  /** Latest agent/summary-updated `activity` text — stamped onto code steps. */
+  summaryActivity: string | null;
 };
 
 const AgentUiLlmStepSchema = z
@@ -322,6 +368,8 @@ const AgentUiLlmStepSchema = z
     model: z.string().optional(),
     thinkingText: z.string(),
     responseText: z.string(),
+    assistantEventOffset: z.number().int().positive().optional(),
+    interpreted: z.boolean().optional(),
     inputTokens: z.number().int().nonnegative().optional(),
     outputTokens: z.number().int().nonnegative().optional(),
     durationMs: z.number().finite().nonnegative().optional(),
@@ -348,6 +396,7 @@ const AgentUiCodeStepSchema = z.strictObject({
   outcomeSource: z.enum(["durable", "inferred"]).optional(),
   startedAtMs: z.number().finite(),
   expiresAtMs: z.number().finite(),
+  activitySummary: z.string().optional(),
 }) satisfies z.ZodType<AgentUiCodeStep>;
 
 export const AgentUiActivitySchema = z.strictObject({
@@ -391,8 +440,8 @@ const AgentUiProcessorAnnouncementSchema = z.strictObject({
 }) satisfies z.ZodType<AgentUiProcessorAnnouncement>;
 
 const AgentUiPresenceEntrySchema = z.strictObject({
-  subscriptionKey: z.string(),
-  direction: z.enum(["inbound", "outbound"]),
+  connectionKey: z.string(),
+  connectionKind: z.enum(["hosted", "session"]),
   connected: z.boolean(),
   description: z.string().optional(),
   user: z
@@ -430,6 +479,7 @@ export const AgentUiStateSchema = z
     presence: z.array(AgentUiPresenceEntrySchema),
     tokenUsage: AgentUiTokenUsageSchema,
     provisionalActivities: z.record(z.string(), AgentUiActivitySchema),
+    summaryActivity: z.string().nullable(),
   })
   .superRefine((state, context) => {
     for (const [id, activity] of Object.entries(state.provisionalActivities)) {
@@ -468,6 +518,7 @@ export function initialAgentUiState(): AgentUiState {
     presence: [],
     tokenUsage: initialAgentUiTokenUsage(),
     provisionalActivities: {},
+    summaryActivity: null,
   };
 }
 
@@ -546,8 +597,8 @@ const SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/capability-host/script-ru
 const SLACK_WEBHOOK_RECEIVED = "events.iterate.com/slack/webhook-received";
 const TELEGRAM_WEBHOOK_RECEIVED = "events.iterate.com/telegram/webhook-received";
 const TELEGRAM_SEND_REQUESTED = "events.iterate.com/telegram/send-requested";
-const STREAM_SUBSCRIBER_CONNECTED = "events.iterate.com/stream/subscriber-connected";
-const STREAM_SUBSCRIBER_DISCONNECTED = "events.iterate.com/stream/subscriber-disconnected";
+const STREAM_CONNECTION_OPENED = "events.iterate.com/stream/connection-opened";
+const STREAM_CONNECTION_CLOSED = "events.iterate.com/stream/connection-closed";
 const STREAM_WOKEN = "events.iterate.com/stream/woken";
 const STREAM_PROCESSOR_REVIVED = "events.iterate.com/stream/processor-revived";
 const STREAM_CHILD_STREAM_CREATED = "events.iterate.com/stream/child-stream-created";
@@ -555,6 +606,7 @@ const STREAM_PAUSED = "events.iterate.com/stream/paused";
 const STREAM_RESUMED = "events.iterate.com/stream/resumed";
 const AGENT_PAUSED = "events.iterate.com/agent/paused";
 const AGENT_RESUMED = "events.iterate.com/agent/resumed";
+const AGENT_SUMMARY_UPDATED = "events.iterate.com/agent/summary-updated";
 const STREAM_WAKE_LABEL = "Stream durable object woke";
 
 // ---------------------------------------------------------------------------
@@ -603,7 +655,9 @@ function reduceAgentUiEvent(
         const llmRequestOffset = readLlmRequestOffset(event);
         if (llmRequestOffset == null) return contextState;
         return updateLlmStep(contextState, llmRequestOffset, (step) =>
-          step.status === "running" ? { ...step, responseText: text } : step,
+          step.status === "running"
+            ? { ...step, responseText: text, assistantEventOffset: event.offset }
+            : step,
         );
       }
       if (role === "system") return contextState;
@@ -655,6 +709,14 @@ function reduceAgentUiEvent(
     case "events.iterate.com/agents/web-message-sent": {
       const text = readString(event, "message");
       if (text == null) return state;
+      // An llmRequestOffset marks the message as EXTRACTED from that request's
+      // response (a userland response interpreter) — the raw response text is
+      // now redundant in pretty rendering.
+      const extractedFromRequest = readLlmRequestOffset(event);
+      const marked =
+        extractedFromRequest == null
+          ? state
+          : updateLlmStep(state, extractedFromRequest, (step) => ({ ...step, interpreted: true }));
       const files = readFileAttachments(event);
       const item: AgentUiMessageItem = {
         kind: "assistant",
@@ -663,7 +725,7 @@ function reduceAgentUiEvent(
         ...(files.length === 0 ? {} : { files }),
         timestampMs,
       };
-      return emitAssistantMessageItem(state, items, item);
+      return emitAssistantMessageItem(marked, items, item);
     }
 
     case AGENT_LLM_REQUEST_REQUESTED: {
@@ -729,9 +791,8 @@ function reduceAgentUiEvent(
               status: "done",
               outcome:
                 status === "succeeded" ? "completed" : status === "failed" ? "failed" : "cancelled",
-              ...(partialText !== null && step.responseText === ""
-                ? { responseText: partialText }
-                : {}),
+              ...(partialText !== null &&
+                step.responseText === "" && { responseText: partialText }),
               ...(typeof payload.durationMs === "number"
                 ? { durationMs: payload.durationMs }
                 : status === "cancelled"
@@ -759,7 +820,15 @@ function reduceAgentUiEvent(
       ) {
         return state;
       }
-      const live = ensureLive(state, event.offset, timestampMs);
+      // A script extracted from an assistant response (`agent-output:<offset>`)
+      // marks that response's llm step interpreted: the Script tab now carries
+      // the code, so pretty rendering can fold the raw response away.
+      const extractedFromAssistantOffset = /^agent-output:(\d+)$/.exec(executionId);
+      const interpretedState =
+        extractedFromAssistantOffset === null
+          ? state
+          : markLlmStepInterpretedByAssistantOffset(state, Number(extractedFromAssistantOffset[1]));
+      const live = ensureLive(interpretedState, event.offset, timestampMs);
       const step: AgentUiCodeStep = {
         kind: "code",
         id: `code-${executionId}`,
@@ -768,8 +837,11 @@ function reduceAgentUiEvent(
         code,
         startedAtMs: timestampMs,
         expiresAtMs,
+        // Inherit the stream's summary status from birth, so live headers and
+        // inferred (deadline/idle) closes carry it — not only durable settles.
+        ...(state.summaryActivity == null ? {} : { activitySummary: state.summaryActivity }),
       };
-      return { ...state, live: { ...live, steps: [...live.steps, step] } };
+      return { ...interpretedState, live: { ...live, steps: [...live.steps, step] } };
     }
 
     case SCRIPT_EXECUTION_COMPLETED: {
@@ -791,8 +863,43 @@ function reduceAgentUiEvent(
       if (step == null || step.kind !== "code") {
         return correctProvisionalCodeStep(state, executionId, outcome, timestampMs, items);
       }
-      steps[index] = applyDurableCodeOutcome(step, outcome, timestampMs);
-      return { ...state, live: { ...state.live, steps } };
+      steps[index] = {
+        ...applyDurableCodeOutcome(step, outcome, timestampMs),
+        // The stream's summary status as of this round — inherited from an
+        // earlier round when this one's script didn't update it.
+        ...(state.summaryActivity == null ? {} : { activitySummary: state.summaryActivity }),
+      };
+      const next = { ...state, live: { ...state.live, steps } };
+      // A visible reply the script sent was deferred while its step ran (see
+      // emitAssistantMessageItem). If this settle is the turn's last journal
+      // fact — nothing running, no follow-up round — no later event exists to
+      // flush it, and the runtime-transition flush is a transient overlay on
+      // a lane that can lag or wedge independently. Journal facts alone must
+      // surface a sent message: settle the activity here and flush.
+      if (
+        (next.deferredAssistantMessages.length > 0 || next.queuedUserMessages.length > 0) &&
+        !steps.some((candidate) => candidate.status === "running")
+      ) {
+        return flushDeferredMessages(settleLive(next, timestampMs, items), items);
+      }
+      return next;
+    }
+
+    case AGENT_SUMMARY_UPDATED: {
+      const activity = readString(event, "activity");
+      if (activity == null || activity === "") return state;
+      // Summaries are usually appended by the running script itself, so the
+      // running code step picks the new text up immediately (live rounds show
+      // it before the settle stamp lands).
+      if (state.live != null) {
+        const steps = state.live.steps.map((step) =>
+          step.kind === "code" && step.status === "running"
+            ? { ...step, activitySummary: activity }
+            : step,
+        );
+        return { ...state, summaryActivity: activity, live: { ...state.live, steps } };
+      }
+      return { ...state, summaryActivity: activity };
     }
 
     case AGENT_TOKEN_USAGE_REPORTED: {
@@ -870,39 +977,35 @@ function reduceAgentUiEvent(
       });
     }
 
-    case STREAM_SUBSCRIBER_CONNECTED: {
+    case STREAM_CONNECTION_OPENED: {
       const payload = readPayloadRecord(event);
       if (payload == null) return state;
-      const subscriptionKey =
-        typeof payload.subscriptionKey === "string" ? payload.subscriptionKey : null;
-      if (subscriptionKey == null) return state;
-      const direction = payload.direction === "inbound" ? "inbound" : "outbound";
-      const subscriber = isRecord(payload.subscriber) ? payload.subscriber : undefined;
-      const announcement = readProcessorAnnouncement(subscriber?.processor);
-      const subscriberUser = isRecord(subscriber?.user) ? subscriber.user : undefined;
+      const connectionKey =
+        typeof payload.connectionKey === "string" ? payload.connectionKey : null;
+      if (connectionKey == null) return state;
+      const connectionKind = payload.kind === "hosted" ? "hosted" : "session";
+      const openedBy = isRecord(payload.openedBy) ? payload.openedBy : undefined;
+      const announcement = readProcessorAnnouncement(openedBy?.processor);
+      const openerUser = isRecord(openedBy?.user) ? openedBy.user : undefined;
       const user =
-        typeof subscriberUser?.email === "string"
+        typeof openerUser?.email === "string"
           ? {
-              ...(typeof subscriberUser.id === "string" ? { id: subscriberUser.id } : {}),
-              email: subscriberUser.email,
-              ...(typeof subscriberUser.name === "string" ? { name: subscriberUser.name } : {}),
-              ...(typeof subscriberUser.picture === "string"
-                ? { picture: subscriberUser.picture }
-                : {}),
+              ...(typeof openerUser.id === "string" && { id: openerUser.id }),
+              email: openerUser.email,
+              ...(typeof openerUser.name === "string" && { name: openerUser.name }),
+              ...(typeof openerUser.picture === "string" && { picture: openerUser.picture }),
             }
           : undefined;
       const entry: AgentUiPresenceEntry = {
-        subscriptionKey,
-        direction,
+        connectionKey,
+        connectionKind,
         connected: true,
-        ...(typeof subscriber?.description === "string"
-          ? { description: subscriber.description }
-          : {}),
+        ...(typeof openedBy?.description === "string" && { description: openedBy.description }),
         ...(user === undefined ? {} : { user }),
         ...(announcement == null ? {} : { processor: announcement }),
       };
       const existingIndex = state.presence.findIndex(
-        (candidate) => candidate.subscriptionKey === subscriptionKey,
+        (candidate) => candidate.connectionKey === connectionKey,
       );
       const presence =
         existingIndex === -1
@@ -911,13 +1014,13 @@ function reduceAgentUiEvent(
       return { ...state, presence };
     }
 
-    case STREAM_SUBSCRIBER_DISCONNECTED: {
-      const subscriptionKey = readString(event, "subscriptionKey");
-      if (subscriptionKey == null) return state;
+    case STREAM_CONNECTION_CLOSED: {
+      const connectionKey = readString(event, "connectionKey");
+      if (connectionKey == null) return state;
       return {
         ...state,
         presence: state.presence.map((entry) =>
-          entry.subscriptionKey === subscriptionKey ? { ...entry, connected: false } : entry,
+          entry.connectionKey === connectionKey ? { ...entry, connected: false } : entry,
         ),
       };
     }
@@ -1226,6 +1329,20 @@ function applyDurableCodeOutcome(
   };
 }
 
+/** Mark the llm step whose committed assistant event is `assistantEventOffset`
+ * as interpreted (a script was extracted from it). */
+function markLlmStepInterpretedByAssistantOffset(
+  state: AgentUiState,
+  assistantEventOffset: number,
+): AgentUiState {
+  if (state.live == null) return state;
+  const match = state.live.steps.find(
+    (step) => step.kind === "llm" && step.assistantEventOffset === assistantEventOffset,
+  );
+  if (match == null || match.kind !== "llm") return state;
+  return updateLlmStep(state, match.llmRequestOffset, (step) => ({ ...step, interpreted: true }));
+}
+
 function updateLlmStep(
   state: AgentUiState,
   llmRequestOffset: number,
@@ -1290,7 +1407,7 @@ function readCodeOutcome(payload: Record<string, unknown>): Partial<AgentUiCodeS
   if (settlement.status === "succeeded") {
     return {
       success: true,
-      ...(Object.hasOwn(settlement, "result") ? { result: settlement.result } : {}),
+      ...(Object.hasOwn(settlement, "result") && { result: settlement.result }),
     };
   }
   return { success: false, errorMessage: settlement.error };
@@ -1300,8 +1417,8 @@ function readUsageTokens(usage: unknown): { input?: number; output?: number } {
   if (!isRecord(usage)) return {};
   // The settled event's normalized usage (the contract's camelCase shape).
   return {
-    ...(typeof usage.inputTokens === "number" ? { input: usage.inputTokens } : {}),
-    ...(typeof usage.outputTokens === "number" ? { output: usage.outputTokens } : {}),
+    ...(typeof usage.inputTokens === "number" && { input: usage.inputTokens }),
+    ...(typeof usage.outputTokens === "number" && { output: usage.outputTokens }),
   };
 }
 
@@ -1322,7 +1439,7 @@ function readProcessorAnnouncement(value: unknown): AgentUiProcessorAnnouncement
           .filter((owned) => typeof owned.type === "string")
           .map((owned) => ({
             type: owned.type as string,
-            ...(typeof owned.description === "string" ? { description: owned.description } : {}),
+            ...(typeof owned.description === "string" && { description: owned.description }),
           }))
       : [],
   };

@@ -7,8 +7,9 @@
  * them (D1, KV). Everything here is non-secret and reviewed like any other
  * code; secrets live in Doppler (one config per env per app, named below).
  *
- * Each app has its own map (envs/os, authEnvs, semaphoreEnvs, tunnelsEnvs,
- * streamsExampleEnvs, dummyPetshopEnvs) because apps deploy to different
+ * Each app has its own map (envs/os, authEnvs, semaphoreEnvs, kitEnvs,
+ * tunnelsEnvs, streamsExampleEnvs, dummyPetshopEnvs, docsEnvs) because apps
+ * deploy to different
  * subsets of environments — forcing them into one record would mean optional
  * fields that lie. Hostnames follow conventions (`previewSlot(n)` derives them);
  * resource IDs are Cloudflare-assigned and must be spelled out.
@@ -186,9 +187,9 @@ export const envs = {
     authDbId: "bd115332-9515-4bbf-96d5-f041e628bcf9",
   }),
   preview_5: previewSlot(5, {
-    projectDirectoryKvId: "a0f87dc67b39465bb9c00bd05587eadc",
-    workerBuildCacheKvId: "34f27e888b6243189e42a0ea5a93291f",
-    authDbId: "f8542574-48e3-4374-910f-3186293137f0",
+    projectDirectoryKvId: "3757821220854587ae92231688119d86",
+    workerBuildCacheKvId: "d006c8418cd14779957cd63db8c9063b",
+    authDbId: "c3ecc175-3bc2-4d78-ae89-733de3863563",
   }),
   preview_6: previewSlot(6, {
     projectDirectoryKvId: "e414e68c13e1471a8a3c41f5e50136e4",
@@ -256,9 +257,9 @@ export const envs = {
     authDbId: "2f61f8f0-b16a-4d53-89ef-b75b2982452c",
   }),
   preview_19: previewSlot(19, {
-    projectDirectoryKvId: "916fa97c2ec84067997012702f242646",
-    workerBuildCacheKvId: "a22450ba186a40549cfe2cff29079aca",
-    authDbId: "f9facd1f-0699-4766-8aa4-b00c7a59ff34",
+    projectDirectoryKvId: "7d77673aae074ee593e308a4fcb01f07",
+    workerBuildCacheKvId: "75c6150b88a346f9a5f582b5b9943be8",
+    authDbId: "42efe1e4-194f-4c61-8e62-810ec35fbf43",
   }),
 } satisfies Record<string, DeployedEnv>;
 
@@ -381,7 +382,7 @@ export const semaphoreEnvs = {
   preview_2: semaphorePreviewSlot(2, "711994bd-4faa-42f0-80ac-fc292d68569d"),
   preview_3: semaphorePreviewSlot(3, "17493958-1589-4a2c-a280-0a55bc11a92c"),
   preview_4: semaphorePreviewSlot(4, "f61083ef-23b5-4201-8731-8d3d46ebfeaa"),
-  preview_5: semaphorePreviewSlot(5, "eea19312-34e2-4e5c-be19-fe6929636544"),
+  preview_5: semaphorePreviewSlot(5, "25c934d2-cf2e-41b2-be33-3e8348d96365"),
   preview_6: semaphorePreviewSlot(6, "eff27a10-2f52-4077-9372-05dcf1c77ccd"),
   preview_7: semaphorePreviewSlot(7, "f4b1b641-71bd-4952-8726-3c2c543383fe"),
   preview_8: semaphorePreviewSlot(8, "77af433e-c870-43a6-be8e-1d2452feb23d"),
@@ -395,8 +396,31 @@ export const semaphoreEnvs = {
   preview_16: semaphorePreviewSlot(16, "69bd6563-c889-484e-ada3-d0e3f94021b9"),
   preview_17: semaphorePreviewSlot(17, "8fc3a6ff-f42b-4215-b6e5-aaacba27b82c"),
   preview_18: semaphorePreviewSlot(18, "c8762bd2-f4d0-4207-b038-0c03a83aabed"),
-  preview_19: semaphorePreviewSlot(19, "d1eab1d5-8a03-46b7-9c43-73b10f6133e0"),
+  preview_19: semaphorePreviewSlot(19, "84bc6ce0-ef76-43b6-8fc0-19cc4e0a6db0"),
 } satisfies Record<EnvName, SemaphoreEnv>;
+
+/**
+ * apps/kit — the browser device installer. Production only: it intentionally
+ * has no preview fleet and owns no stateful Cloudflare resources.
+ */
+export interface KitEnv {
+  cloudflareAccountId: string;
+  /** Doppler config (project `kit`) supplying deploy credentials. */
+  dopplerConfig: string;
+  workerName: string;
+  baseUrl: string;
+}
+
+export const kitEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    // The production account's workers.dev subdomain is `iterate`, making
+    // this worker available at kiterate.iterate.workers.dev as well.
+    workerName: "kiterate",
+    baseUrl: "https://k.iterate.com",
+  },
+} satisfies Record<string, KitEnv>;
 
 /**
  * apps/tunnels — the captun gateway. prd only; dev tunnels ride prd.
@@ -499,3 +523,43 @@ export const streamsExampleEnvs = {
   },
   ...mapDeployedPreviewEnvs((env) => streamsExamplePreviewSlot(previewEnvironmentSlotNumber(env))),
 } satisfies Record<EnvName, StreamsExampleEnv>;
+
+/**
+ * apps/docs — the stateless workspace-document vessel. Project-facing
+ * traffic arrives through each project's `docs--<slug>` config-worker proxy;
+ * these workers.dev origins are the independently deployed upstreams.
+ *
+ * Docs owns no storage. All document content and annotations remain in the
+ * OS workspace selected by the deep link.
+ */
+export interface DocsEnv {
+  cloudflareAccountId: string;
+  /** Doppler config (project `docs`) supplying deploy credentials. */
+  dopplerConfig: string;
+  workerName: string;
+  /** Direct vessel origin used by the project config-worker proxy. */
+  baseUrl: string;
+  /** OS deployment that owns the workspaces this vessel addresses. */
+  osBaseUrl: string;
+}
+
+function docsPreviewSlot(n: number): DocsEnv {
+  return {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: `preview_${n}`,
+    workerName: `docs-preview-${n}`,
+    baseUrl: `https://docs-preview-${n}.iterate-dev-preview.workers.dev`,
+    osBaseUrl: `https://os.iterate-preview-${n}.com`,
+  };
+}
+
+export const docsEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "docs",
+    baseUrl: "https://docs.iterate.workers.dev",
+    osBaseUrl: "https://os.iterate.com",
+  },
+  ...mapDeployedPreviewEnvs((env) => docsPreviewSlot(previewEnvironmentSlotNumber(env))),
+} satisfies Record<EnvName, DocsEnv>;

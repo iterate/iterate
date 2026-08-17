@@ -77,7 +77,7 @@ const physicalWorkerBundles: BundleManifestEntry[] = [
     ),
     followRelativeImports: true,
     name: "configured GitHub AI linter worker",
-    requiredSource: [],
+    requiredSource: ["review-bot"],
     target: "physical-worker",
   },
   {
@@ -86,7 +86,7 @@ const physicalWorkerBundles: BundleManifestEntry[] = [
     entrypoint: new URL("../dist/starter-apps/guestbook/configured-worker.mjs", import.meta.url),
     followRelativeImports: true,
     name: "configured Guestbook worker",
-    requiredSource: ["Guestbook connection is not ready", "guestbook/subscription-removed:v2"],
+    requiredSource: ["Guestbook connection is not ready", "guestbook/created"],
     target: "physical-worker",
   },
   {

@@ -1,14 +1,25 @@
 import { expect, test } from "vitest";
 import type { StreamEvent, StreamEventInput } from "../../sdk.ts";
 import { GithubAiLinter } from "./index.ts";
+import { mightWakePullRequestAgent } from "./review-bot.ts";
 
-test("a declared GitHub AI linter subscribes each linked connection without config-owned plumbing", async () => {
+test("a linked connection gets a hosted review processor", async () => {
   const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
   const app = GithubAiLinter.create(
-    projectEnv((path, ...events) => appended.push({ events, path })),
+    projectEnv(
+      (path, ...events) => appended.push({ events, path }),
+      {},
+      { "/integrations/github/iterate-installation": { maxOffset: 8_123 } },
+    ),
     {
       policyVersion: "2",
-      rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+      rules: {
+        paths: [
+          "rules/structure/no-small-single-use-helper.md",
+          "rules/typescript/no-inferable-type-annotation.md",
+        ],
+        repoPath: "/repos/config",
+      },
     },
   );
 
@@ -19,117 +30,147 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
   await app.processEvent({ ...githubLinkConfigured("ignored", 2), payload: { connection: "" } });
   await app.processEvent(githubLinkConfigured("iterate-installation", 3));
 
-  expect(appended).toMatchObject([
-    {
-      path: "/integrations/github/iterate-installation",
-      events: [
-        {
-          idempotencyKey: "review-bot/subscription:v4:/:3",
-          payload: {
-            delivery: {
-              mode: "wake",
-              expression: [
-                "workers",
-                [
-                  "get",
-                  {
-                    className: "ReviewBotApp",
-                    durableWorkerKey: "app-review-bot-iterate--installation",
-                    path: "/",
-                    type: "stateful",
-                  },
-                ],
-                "processor",
-                "wakeStreamSubscriber",
+  expect(appended).toHaveLength(1);
+  expect(appended[0]).toMatchObject({
+    path: "/integrations/github/iterate-installation",
+    events: [
+      {
+        idempotencyKey: "review-bot/subscription:/:3",
+        payload: {
+          receiver: {
+            action: "wake-processor",
+            expression: [
+              "workers",
+              [
+                "get",
+                {
+                  className: "ReviewBotApp",
+                  durableWorkerKey: expect.stringMatching(
+                    /^github-ai-linter-review-bot-[0-9a-f]{32}$/,
+                  ),
+                  path: "/",
+                  type: "stateful",
+                },
               ],
-              processorSlug: "review-bot",
-            },
-            subscriptionKey: "app-review-bot#review-bot",
+              "processor",
+              "wakeStreamProcessor",
+            ],
           },
-          type: "events.iterate.com/stream/subscription-configured",
+          filter: {
+            eventTypes: ["events.iterate.com/github/webhook-received"],
+            jsonataCondition: expect.stringMatching(/^offset > 8123 and /),
+          },
+          name: "review-bot",
         },
-      ],
-    },
-  ]);
-  const subscription: any = appended[0]?.events[0];
-  const ref: any = subscription.payload.delivery.expression[1][1];
-  expect(ref).toMatchObject({
-    source: {
-      createWorker: {
-        entryPoint: "node_modules/iterate/dist/starter-apps/github-ai-linter/configured-worker.mjs",
-        files: {
-          include: ["package.json"],
-          repoPath: "/repos/config",
-          type: "repo",
-        },
+        type: "events.iterate.com/stream/subscription-configured",
       },
+    ],
+  });
+
+  const subscription = appended[0]!.events[0]!;
+  const receiver = subscription.payload?.receiver;
+  if (
+    typeof receiver !== "object" ||
+    receiver === null ||
+    !("expression" in receiver) ||
+    !Array.isArray(receiver.expression)
+  ) {
+    throw new Error("test subscription has no processor expression");
+  }
+  const getStep = receiver.expression[1];
+  if (!Array.isArray(getStep) || typeof getStep[1] !== "object" || getStep[1] === null) {
+    throw new Error("test subscription has no worker ref");
+  }
+  const ref = getStep[1] as {
+    source?: {
+      createWorker?: {
+        entryPoint?: string;
+        files?: unknown;
+        virtualModules?: Record<string, string>;
+      };
+    };
+  };
+  expect(ref.source?.createWorker).toMatchObject({
+    entryPoint: "node_modules/iterate/dist/starter-apps/github-ai-linter/configured-worker.mjs",
+    files: {
+      include: ["package.json"],
+      repoPath: "/repos/config",
+      type: "repo",
     },
   });
-  const virtualConfig = ref.source.createWorker.virtualModules["iterate:github-ai-linter-config"];
-  expect(virtualConfig).toContain('"policyVersion":"2"');
-  expect(virtualConfig).toContain('"glob":"rules/**/*.md"');
-  expect(virtualConfig).toContain('"repoPath":"/repos/iterate"');
+  expect(ref.source?.createWorker?.virtualModules?.["iterate:github-ai-linter-config"]).toContain(
+    '"paths":["rules/structure/no-small-single-use-helper.md",',
+  );
 });
 
-test("each link event can replace the stable subscription, including a config rollback", async () => {
-  const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
-  const env = projectEnv((path, ...events) => appended.push({ events, path }));
-
-  await GithubAiLinter.create(env, {
-    policyVersion: "2",
-    rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
-  }).processEvent(githubLinkConfigured("iterate-installation", 41));
-  await GithubAiLinter.create(env, {
-    policyVersion: "3",
-    rules: { glob: "review-rules/**/*.md", repoPath: "/repos/product" },
-  }).processEvent(githubLinkConfigured("iterate-installation", 42));
-  await GithubAiLinter.create(env, {
-    policyVersion: "2",
-    rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
-  }).processEvent(githubLinkConfigured("iterate-installation", 43));
-
-  expect(
-    appended.map(({ events }) => ({
-      idempotencyKey: events[0]?.idempotencyKey,
-      subscriptionKey: events[0]?.payload?.subscriptionKey,
-    })),
-  ).toEqual([
-    {
-      idempotencyKey: "review-bot/subscription:v4:/:41",
-      subscriptionKey: "app-review-bot#review-bot",
-    },
-    {
-      idempotencyKey: "review-bot/subscription:v4:/:42",
-      subscriptionKey: "app-review-bot#review-bot",
-    },
-    {
-      idempotencyKey: "review-bot/subscription:v4:/:43",
-      subscriptionKey: "app-review-bot#review-bot",
-    },
-  ]);
-});
-
-test("connection slugs with underscores produce distinct runtime-valid durable keys", async () => {
+test("a config worker update refreshes every linked connection processor", async () => {
   const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
   const app = GithubAiLinter.create(
-    projectEnv((path, ...events) => appended.push({ events, path })),
+    projectEnv(
+      (path, ...events) => appended.push({ events, path }),
+      {
+        "/repos/config": "iterate-installation",
+        "/repos/product": "iterate-installation",
+      },
+      {
+        "/integrations/github/iterate-installation": {
+          existingReviewBotCutoff: 7_500,
+          maxOffset: 9_000,
+        },
+      },
+    ),
     {
-      policyVersion: "2",
-      rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+      policyVersion: "3",
+      rules: {
+        paths: ["rules/structure/no-small-single-use-helper.md"],
+        repoPath: "/repos/config",
+      },
     },
   );
 
-  await app.processEvent(githubLinkConfigured("install-42-a_b", 1));
-  await app.processEvent(githubLinkConfigured("install-42-a-ub", 2));
-
-  const durableWorkerKeys = appended.map((append) => {
-    const subscription: any = append.events[0];
-    return subscription.payload.delivery.expression[1][1].durableWorkerKey;
+  await app.processEvent({
+    ...githubLinkConfigured("ignored", 4),
+    type: "events.iterate.com/project/worker-updated",
   });
-  expect(durableWorkerKeys).toEqual([
-    "app-review-bot-install--42--a-ub",
-    "app-review-bot-install--42--a--ub",
-  ]);
+
+  expect(appended).toHaveLength(1);
+  expect(appended[0]).toMatchObject({
+    path: "/integrations/github/iterate-installation",
+    events: [
+      {
+        idempotencyKey: "review-bot/subscription:/:4",
+        payload: {
+          receiver: {
+            action: "wake-processor",
+          },
+          filter: {
+            eventTypes: ["events.iterate.com/github/webhook-received"],
+            jsonataCondition: expect.stringMatching(/^offset > 7500 and /),
+          },
+          name: "review-bot",
+        },
+      },
+    ],
+  });
+  expect(JSON.stringify(appended[0])).toContain('\\"policyVersion\\":\\"3\\"');
+});
+
+test("the processor prefilter admits only review lifecycle events and explicit mentions", () => {
+  expect(
+    mightWakePullRequestAgent(
+      webhookEvent({ action: "completed", name: "check_run", mentionedUsers: [] }),
+    ),
+  ).toBe(false);
+  expect(
+    mightWakePullRequestAgent(
+      webhookEvent({ action: "opened", name: "pull_request", mentionedUsers: [] }),
+    ),
+  ).toBe(true);
+  expect(
+    mightWakePullRequestAgent(
+      webhookEvent({ action: "created", name: "issue_comment", mentionedUsers: ["iterate"] }),
+    ),
+  ).toBe(true);
 });
 
 function githubLinkConfigured(connection: string, offset: number): StreamEvent {
@@ -142,17 +183,78 @@ function githubLinkConfigured(connection: string, offset: number): StreamEvent {
   };
 }
 
-function projectEnv(append: (path: string, ...events: StreamEventInput[]) => void): any {
+function webhookEvent(input: {
+  action: string;
+  mentionedUsers: string[];
+  name: string;
+}): StreamEvent {
+  return {
+    createdAt: "2026-07-29T06:00:00.000Z",
+    offset: 1,
+    path: "/integrations/github/iterate-installation",
+    payload: {
+      associations: { mentionedUsers: input.mentionedUsers },
+      body: { action: input.action },
+      delivery: { name: input.name },
+    },
+    type: "events.iterate.com/github/webhook-received",
+  };
+}
+
+function projectEnv(
+  append: (path: string, ...events: StreamEventInput[]) => void,
+  repoConnections: Record<string, string> = {},
+  connectionStreams: Record<string, { existingReviewBotCutoff?: number; maxOffset: number }> = {},
+) {
   return {
     ITX: {
       get: async () => ({
         [Symbol.dispose]() {},
+        repos: {
+          get: (path: string) => ({
+            processor: {
+              snapshot: async () => ({
+                state: {
+                  github: {
+                    connection: repoConnections[path],
+                  },
+                },
+              }),
+            },
+          }),
+          list: async () => Object.keys(repoConnections).map((path) => ({ path })),
+        },
         streams: {
           get: (path: string) => ({
             append: async (...events: StreamEventInput[]) => append(path, ...events),
+            runtimeState: async () => {
+              const fixture = connectionStreams[path];
+              const existingReviewBotCutoff = fixture?.existingReviewBotCutoff;
+              return {
+                coreProcessorState: {
+                  maxOffset: fixture?.maxOffset ?? 0,
+                  subscriptions: {
+                    outbound: {
+                      byName:
+                        existingReviewBotCutoff === undefined
+                          ? {}
+                          : {
+                              "review-bot": {
+                                configuration: {
+                                  filter: {
+                                    jsonataCondition: `offset > ${existingReviewBotCutoff}`,
+                                  },
+                                },
+                              },
+                            },
+                    },
+                  },
+                },
+              };
+            },
           }),
         },
       }),
     },
-  };
+  } as never;
 }

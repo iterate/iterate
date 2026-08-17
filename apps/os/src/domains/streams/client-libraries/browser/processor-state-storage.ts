@@ -1,20 +1,20 @@
 // Durable progress for browser-hosted stream processors, in the per-stream
-// OPFS SQLite mirror.
+// OPFS SQLite database.
 //
 // One table lives here: `processor_progress` — the two-cursor
 // {@link ProcessorProgress} record the StreamProcessorRunner commits (one row
-// per processor slug + subscription key). `browserProcessorProgressStore` is
+// per processor slug + progress key). `browserProcessorProgressStore` is
 // the runner's {@link ProcessorProgressStore} over it, and its `commit` folds
 // the processor's buffered projection writes (projection-write-buffer.ts) and
-// this record into ONE SQLite transaction — the mirror rows and the resume
+// this record into ONE SQLite transaction — projection rows and the resume
 // cursor move together or not at all. The commit is CAS-fenced by
 // `cursorRevision` and monotonic-guarded exactly like the Durable Object
 // store (durable-object-processor-durability.ts), but the fence is enforced
 // INSIDE the transaction by SQL (fence statements that abort via trigger),
 // because unlike DO KV the browser's SqlClient is asynchronous and cross-tab
 // writers exist: a read-check-then-write in JS would leave a window a stale
-// leader could slip a commit through. The row also carries `reduced_state`:
-// the stream view's live agent tail reads it reactively per commit.
+// writer could slip a commit through. The row also carries `reduced_state`:
+// the stream view reads the latest agent state reactively after each commit.
 //
 // Resets NEVER delete a live progress row — they REWIND it
 // (`browserProcessorProgressRewindStatements`): acknowledgement to 0 and
@@ -22,7 +22,7 @@
 // projection tables. Deleting the row would reset the revision to 0, and a
 // stale runner incarnation (an old-deploy tab sharing the OPFS file, a
 // superseded election's trailing pull) could then commit its stale forward
-// cursor over the rebuilt mirror; worse, its higher acknowledgement would
+// cursor over the rebuilt tables; worse, its higher acknowledgement would
 // fence the REBUILDING runner's commits as "backward". The revision bump
 // points the fence at the stale writer instead.
 
@@ -31,7 +31,7 @@ import { createSchemaEnsurer } from "./ensure-schema-once.ts";
 import type { BrowserProjectionWriteBuffer } from "./projection-write-buffer.ts";
 import type { SqlClient, SqlValue } from "./stream-browser-db.ts";
 
-const DEFAULT_SUBSCRIPTION_KEY = "";
+const DEFAULT_PROGRESS_KEY = "";
 
 /**
  * Sentinel `reducer_version` written by rewinds and stored for unreadable
@@ -55,14 +55,15 @@ export const ensureBrowserProcessorProgressSchema = createSchemaEnsurer({
           sql: `
             CREATE TABLE IF NOT EXISTS processor_progress (
               processor_slug TEXT NOT NULL,
-              subscription_key TEXT NOT NULL DEFAULT '',
+              progress_key TEXT NOT NULL DEFAULT '',
+              stream_id TEXT NOT NULL,
               reducer_version TEXT NOT NULL,
               reduced_through_offset INTEGER NOT NULL CHECK (reduced_through_offset >= 0),
               reduced_state TEXT NOT NULL,
               acknowledged_through_offset INTEGER NOT NULL CHECK (acknowledged_through_offset >= 0),
               cursor_revision INTEGER NOT NULL CHECK (cursor_revision >= 0),
               updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-              PRIMARY KEY (processor_slug, subscription_key),
+              PRIMARY KEY (processor_slug, progress_key),
               -- The persisted two-cursor invariant (stream-processor-runner.ts):
               -- a fold AHEAD of acknowledged effects must never be committed.
               CHECK (reduced_through_offset <= acknowledged_through_offset)
@@ -86,6 +87,7 @@ export const ensureBrowserProcessorProgressSchema = createSchemaEnsurer({
             BEFORE INSERT ON processor_progress_fence
             BEGIN
               SELECT CASE NEW.reason
+                WHEN 'stream-id' THEN RAISE(ABORT, 'stream processor progress commit fenced: expectedStreamId does not match the persisted streamId - the stream lifetime changed after this continuation began')
                 WHEN 'revision' THEN RAISE(ABORT, 'stream processor progress commit fenced: expectedCursorRevision does not match the persisted cursorRevision - a cursor rewind landed after this continuation began')
                 ELSE RAISE(ABORT, 'stream processor progress commit fenced: acknowledgedThroughOffset would move backward without a cursorRevision bump - a stale incarnation is rolling the cursor back')
               END;
@@ -111,7 +113,8 @@ export const ensureBrowserProcessorProgressSchema = createSchemaEnsurer({
  */
 function progressFenceStatements(args: {
   processorSlug: string;
-  subscriptionKey: string;
+  progressKey: string;
+  expectedStreamId: string | undefined;
   expectedCursorRevision: number;
   acknowledgedThroughOffset: number;
   cursorRevision: number;
@@ -120,14 +123,26 @@ function progressFenceStatements(args: {
     {
       sql: `
         INSERT INTO processor_progress_fence (reason)
+        SELECT 'stream-id'
+        WHERE COALESCE(
+          (SELECT stream_id FROM processor_progress
+           WHERE processor_slug = ? AND progress_key = ?),
+          ''
+        ) <> COALESCE(?, '')
+      `,
+      params: [args.processorSlug, args.progressKey, args.expectedStreamId ?? null],
+    },
+    {
+      sql: `
+        INSERT INTO processor_progress_fence (reason)
         SELECT 'revision'
         WHERE COALESCE(
           (SELECT cursor_revision FROM processor_progress
-           WHERE processor_slug = ? AND subscription_key = ?),
+           WHERE processor_slug = ? AND progress_key = ?),
           0
         ) <> ?
       `,
-      params: [args.processorSlug, args.subscriptionKey, args.expectedCursorRevision],
+      params: [args.processorSlug, args.progressKey, args.expectedCursorRevision],
     },
     {
       sql: `
@@ -135,14 +150,14 @@ function progressFenceStatements(args: {
         SELECT 'backward-acknowledgement'
         WHERE EXISTS (
           SELECT 1 FROM processor_progress
-          WHERE processor_slug = ? AND subscription_key = ?
+          WHERE processor_slug = ? AND progress_key = ?
             AND acknowledged_through_offset > ?
             AND cursor_revision >= ?
         )
       `,
       params: [
         args.processorSlug,
-        args.subscriptionKey,
+        args.progressKey,
         args.acknowledgedThroughOffset,
         args.cursorRevision,
       ],
@@ -154,22 +169,24 @@ function progressFenceStatements(args: {
  * The fenced cursor REWIND, as statements for composition into a caller's
  * transaction (a projection reset must drop rows and rewind the cursor
  * atomically — a crash between the two is exactly the stale-checkpoint-over-
- * empty-mirror hole this file exists to prevent). Semantics: a full rewind —
+ * empty-table hole this file exists to prevent). Semantics: a full rewind —
  * acknowledgement to 0, `cursor_revision + 1` so every
  * in-flight continuation of the old cursor fails its commit's CAS fence, and
  * the fold cache marked stale (the runner's next load rebuilds reduce-only —
  * through offset 0 that is just the schema default, no journal reads).
- * Rewinds every subscription key for the slug: the projection tables are
+ * Rewinds every progress key for the slug: the projection tables are
  * shared per-slug.
  */
 export function browserProcessorProgressRewindStatements(
   processorSlug: string,
+  streamId?: string,
 ): { sql: string; params: SqlValue[] }[] {
   return [
     {
       sql: `
         UPDATE processor_progress
-        SET reducer_version = '${STALE_REDUCER_VERSION}',
+        SET ${streamId === undefined ? "" : "stream_id = ?,"}
+            reducer_version = '${STALE_REDUCER_VERSION}',
             reduced_through_offset = 0,
             reduced_state = '{}',
             acknowledged_through_offset = 0,
@@ -177,7 +194,7 @@ export function browserProcessorProgressRewindStatements(
             updated_at = datetime('now')
         WHERE processor_slug = ?
       `,
-      params: [processorSlug],
+      params: streamId === undefined ? [processorSlug] : [streamId, processorSlug],
     },
   ];
 }
@@ -186,20 +203,21 @@ export function browserProcessorProgressRewindStatements(
  * Reset a browser processor's projection: run the caller's projection reset
  * statements (DELETE FROM / DROP TABLE of the slug's tables) and the fenced
  * cursor rewind in ONE transaction. All-or-nothing by construction — no crash
- * window can separate the cleared mirror from the rewound cursor, so no path
+ * window can separate cleared tables from the rewound cursor, so no path
  * drops committed projection rows without also resetting the cursor that
  * would otherwise skip their rebuild.
  */
 export async function resetBrowserProcessorProjection(args: {
   sql: SqlClient;
   processorSlug: string;
+  streamId?: string;
   projectionResetStatements: { sql: string; params?: SqlValue[] }[];
 }): Promise<void> {
   await ensureBrowserProcessorProgressSchema(args.sql);
   await args.sql.batch(
     [
       ...args.projectionResetStatements,
-      ...browserProcessorProgressRewindStatements(args.processorSlug),
+      ...browserProcessorProgressRewindStatements(args.processorSlug, args.streamId),
     ],
     { transaction: true },
   );
@@ -214,7 +232,7 @@ export async function resetBrowserProcessorProjection(args: {
  *
  * The ensure-first step is load-bearing, not cosmetic: deriving the delete
  * set from per-table `sqlite_master` probes instead is NON-ATOMIC — a
- * follower's clear (no writer lock) can interleave with a writer tab creating
+ * reader's clear (no writer lock) can interleave with a writer tab creating
  * the tables, probe `events` before it exists and `event_type_counts` after,
  * and delete only the counts. Replay from the rewound cursor then re-inserts
  * the surviving `events` rows into the identical-replay RAISE(IGNORE) arm, so
@@ -226,6 +244,7 @@ export async function resetBrowserProcessorProjection(args: {
 export async function discardBrowserProcessorProjection(args: {
   sql: SqlClient;
   processorSlug: string;
+  streamId?: string;
   tables: readonly string[];
   ensureProjectionSchema: (sql: SqlClient) => Promise<void>;
 }): Promise<void> {
@@ -233,18 +252,19 @@ export async function discardBrowserProcessorProjection(args: {
   await resetBrowserProcessorProjection({
     sql: args.sql,
     processorSlug: args.processorSlug,
+    streamId: args.streamId,
     projectionResetStatements: args.tables.map((table) => ({ sql: `DELETE FROM ${table}` })),
   });
 }
 
 /**
  * The browser {@link ProcessorProgressStore}: the runner's durable progress
- * over the shared mirror SQLite, with the transactional projection committer.
+ * over the shared browser SQLite database, with the transactional projection committer.
  *
  * `read` runs the schema work first — the progress schema, then the
  * processor's own `ensureProjectionSchema`: projection version resets must
  * land BEFORE the first checkpoint read, or a stale cursor gets memoized as
- * the replay watermark and the mirror silently rebuilds without the skipped
+ * the replay checkpoint and the local tables silently rebuild without the skipped
  * prefix. A missing row is genuinely fresh (undefined). Every read also
  * re-hydrates the shared projection buffer's covered offset.
  *
@@ -252,20 +272,20 @@ export async function discardBrowserProcessorProjection(args: {
  * buffer's drained projection writes, and the progress upsert (whose
  * `reduced_state` the stream view reads reactively). A mid-transaction
  * failure — fence, projection trigger, OPFS error — rolls back ALL of it; the
- * runner never advances past a failed commit, so the redelivered frame
+ * runner never advances past a failed commit, so the redelivered batch
  * regenerates the drained writes.
  */
 export function browserProcessorProgressStore<State = unknown>(args: {
   sql: SqlClient;
   processorSlug: string;
-  subscriptionKey?: string;
+  progressKey?: string;
   /** The processor's projection schema/reset. */
   ensureProjectionSchema?: (sql: SqlClient) => Promise<void>;
   /** The shared projection-write buffer this store drains at commit. */
   projection?: BrowserProjectionWriteBuffer;
 }): ProcessorProgressStore<State> {
   const { sql, processorSlug, ensureProjectionSchema, projection } = args;
-  const subscriptionKey = args.subscriptionKey ?? DEFAULT_SUBSCRIPTION_KEY;
+  const progressKey = args.progressKey ?? DEFAULT_PROGRESS_KEY;
 
   const ensureSchemas = async () => {
     // Progress schema FIRST: a projection ensurer's version reset composes the
@@ -292,13 +312,13 @@ export function browserProcessorProgressStore<State = unknown>(args: {
       await ensureSchemas();
       const [row] = await sql.exec(
         `
-          SELECT reducer_version, reduced_through_offset, reduced_state,
+          SELECT stream_id, reducer_version, reduced_through_offset, reduced_state,
                  acknowledged_through_offset, cursor_revision
           FROM processor_progress
-          WHERE processor_slug = ? AND subscription_key = ?
+          WHERE processor_slug = ? AND progress_key = ?
           LIMIT 1
         `,
-        [processorSlug, subscriptionKey],
+        [processorSlug, progressKey],
       );
       if (row === undefined) {
         projection?.hydrate(0);
@@ -308,6 +328,7 @@ export function browserProcessorProgressStore<State = unknown>(args: {
       projection?.hydrate(acknowledgedThroughOffset);
       const parsed = parsePersistedState(row.reduced_state);
       return {
+        streamId: String(row.stream_id),
         reduction: parsed.readable
           ? {
               reducerVersion: String(row.reducer_version),
@@ -334,13 +355,14 @@ export function browserProcessorProgressStore<State = unknown>(args: {
       const stateJson = JSON.stringify(progress.reduction.state);
       // Drain BEFORE building the batch: if the transaction fails, the
       // drained writes are lost on purpose — the cursor did not advance, so
-      // the redelivered frame re-derives them from the committed state.
+      // the redelivered batch re-derives them from the committed state.
       const projectionStatements = projection?.drainThrough(acknowledgedThroughOffset) ?? [];
       await sql.batch(
         [
           ...progressFenceStatements({
             processorSlug,
-            subscriptionKey,
+            progressKey,
+            expectedStreamId: opts.expectedStreamId,
             expectedCursorRevision: opts.expectedCursorRevision,
             acknowledgedThroughOffset,
             cursorRevision: progress.processing.cursorRevision,
@@ -349,11 +371,12 @@ export function browserProcessorProgressStore<State = unknown>(args: {
           {
             sql: `
               INSERT INTO processor_progress (
-                processor_slug, subscription_key, reducer_version, reduced_through_offset,
+                processor_slug, progress_key, stream_id, reducer_version, reduced_through_offset,
                 reduced_state, acknowledged_through_offset, cursor_revision, updated_at
               )
-              VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-              ON CONFLICT(processor_slug, subscription_key) DO UPDATE SET
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+              ON CONFLICT(processor_slug, progress_key) DO UPDATE SET
+                stream_id = excluded.stream_id,
                 reducer_version = excluded.reducer_version,
                 reduced_through_offset = excluded.reduced_through_offset,
                 reduced_state = excluded.reduced_state,
@@ -363,7 +386,8 @@ export function browserProcessorProgressStore<State = unknown>(args: {
             `,
             params: [
               processorSlug,
-              subscriptionKey,
+              progressKey,
+              progress.streamId,
               progress.reduction.reducerVersion,
               progress.reduction.reducedThroughOffset,
               stateJson,
@@ -379,7 +403,7 @@ export function browserProcessorProgressStore<State = unknown>(args: {
 }
 
 /**
- * Deletes stored processor progress rows; with no `subscriptionKey`, all rows
+ * Deletes stored processor progress rows; with no `progressKey`, all rows
  * for the slug. For RETIRED processor slugs (browser-feed's schema ensurer
  * clears the old agent-ui rows). A LIVE processor's reset must use
  * {@link resetBrowserProcessorProjection} instead: deleting a live progress
@@ -389,15 +413,15 @@ export function browserProcessorProgressStore<State = unknown>(args: {
 export async function deleteBrowserProcessorState(args: {
   sql: SqlClient;
   processorSlug: string;
-  subscriptionKey?: string;
+  progressKey?: string;
 }): Promise<void> {
   await ensureBrowserProcessorProgressSchema(args.sql);
   const scope =
-    args.subscriptionKey === undefined
+    args.progressKey === undefined
       ? { where: `processor_slug = ?`, params: [args.processorSlug] }
       : {
-          where: `processor_slug = ? AND subscription_key = ?`,
-          params: [args.processorSlug, args.subscriptionKey],
+          where: `processor_slug = ? AND progress_key = ?`,
+          params: [args.processorSlug, args.progressKey],
         };
   await args.sql.exec(`DELETE FROM processor_progress WHERE ${scope.where}`, scope.params);
 }

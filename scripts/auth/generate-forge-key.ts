@@ -15,9 +15,10 @@ import { exportJWK, generateKeyPair } from "jose";
 //
 //   pnpm tsx scripts/auth/generate-forge-key.ts --kid iterate-forge-prd
 //
-// Store the printed JWK as AUTH_FORGE_PRIVATE_JWK in the target Doppler config
-// (for prod, also set AUTH_FORGE_ALLOW_PRODUCTION=true). The deploy strips the
-// private `d` field before shipping the public half — nothing else to do.
+// Store the printed JWK as AUTH_FORGE_ES256_PRIVATE_JWK in the target Doppler
+// config (for prod, also set AUTH_FORGE_ALLOW_PRODUCTION=true). The deploy
+// strips the private `d` field before shipping the public half — nothing else
+// to do.
 
 const { values: args } = parseArgs({
   options: {
@@ -30,13 +31,13 @@ if (args.help || !args.kid) {
   console.log(
     "Usage: pnpm tsx scripts/auth/generate-forge-key.ts --kid <key-id>\n" +
       "  e.g. --kid iterate-forge-prd\n\n" +
-      "Prints a private Ed25519 JWK to stdout. Store it as AUTH_FORGE_PRIVATE_JWK\n" +
-      "in the target Doppler config.",
+      "Prints a private ES256 (P-256) JWK to stdout. Store it as\n" +
+      "AUTH_FORGE_ES256_PRIVATE_JWK in the target Doppler config.",
   );
   process.exit(args.kid ? 0 : 1);
 }
 
-const { privateKey } = await generateKeyPair("EdDSA", { crv: "Ed25519", extractable: true });
+const { privateKey } = await generateKeyPair("ES256", { extractable: true });
 const jwk = await exportJWK(privateKey);
 
 // Order matches the existing keys for easy diffing; alg/kid are what the mint
@@ -45,9 +46,10 @@ const forgeJwk = {
   crv: jwk.crv,
   d: jwk.d,
   x: jwk.x,
+  y: jwk.y,
   kty: jwk.kty,
   kid: args.kid,
-  alg: "EdDSA",
+  alg: "ES256",
 };
 
 console.log(JSON.stringify(forgeJwk));

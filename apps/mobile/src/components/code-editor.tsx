@@ -11,6 +11,7 @@ import { html } from "@codemirror/lang-html";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
+import { yaml } from "@codemirror/lang-yaml";
 import { Compartment, type Extension } from "@codemirror/state";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -19,6 +20,11 @@ type Props = {
   dom?: import("expo/dom").DOMProps;
   editable: boolean;
   onChange: (content: string) => Promise<void>;
+  /** Fired once the EditorView has mounted INSIDE the webview — the positive
+   * signal that the DOM bundle actually loaded (progressive-enhancement
+   * consumers keep their native fallback until it arrives). Marshaled across
+   * the expo/dom bridge like `onChange`, hence async. */
+  onReady: () => Promise<void>;
   path: string;
   value: string;
 };
@@ -58,6 +64,7 @@ export default class CodeEditor extends Component<Props> {
         }),
       ],
     });
+    this.props.onReady().catch((error) => console.error("CodeMirror ready signal failed", error));
   }
 
   componentDidUpdate(previous: Props) {
@@ -108,6 +115,7 @@ function languageForPath(path: string): Extension {
   if (extension === "json") return json();
   if (["md", "mdx"].includes(extension || "")) return markdown();
   if (extension === "css") return css();
+  if (["yaml", "yml"].includes(extension || "")) return yaml();
   if (["html", "htm"].includes(extension || "")) return html();
   return [];
 }

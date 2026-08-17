@@ -52,6 +52,12 @@
 //   email-send      sends real outbound mail through Cloudflare Email Service;
 //                   needs an onboarded sender domain and a real recipient
 //                   mailbox, so keep it interactive.
+//   grouped-approvals-demo
+//                   parks a burst of egress holds that only a HUMAN approval
+//                   (phone push → Approve all) releases, and it REPLACES the
+//                   project's egress rules; interactive by definition. The
+//                   debounced-push pipeline it demos is covered by
+//                   egress-approvals.e2e.test.ts's grouped-burst smoke.
 
 import { ITX_EXAMPLES } from "../../src/itx/examples.ts";
 
@@ -99,22 +105,22 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set(
 );
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
-  "stream-cross-post": {
-    // Project pools are reused; per-runtime paths keep every lease independent.
+  "stream-receive-events-from": {
+    // Matrix runtimes share a project; per-runtime paths keep each durable
+    // relationship and its received events isolated from sibling runtimes.
     vars: ({ marker }) => ({
-      source: `/examples/cross-post/source-${marker}`,
-      target: `/examples/cross-post/target-${marker}`,
+      source: `/examples/receive-events/source-${marker}`,
+      target: `/examples/receive-events/target-${marker}`,
     }),
-    assert: (result, ctx, expect) => {
+    assert: (result, _ctx, expect) => {
       const shaped = result as {
         copied: { importance: string; text: string };
-        provenance: Array<{ subscriptionKey: string }>;
+        copiedFrom: Array<{ name: string }>;
       };
       expect(shaped.copied).toMatchObject({ importance: "high", text: "copied" });
-      expect(shaped.provenance).toHaveLength(1);
-      // crossPostTo without an explicit key defaults to cross-post:<target>.
-      expect(shaped.provenance[0]).toMatchObject({
-        subscriptionKey: `cross-post:/examples/cross-post/target-${ctx.marker}`,
+      expect(shaped.copiedFrom).toHaveLength(1);
+      expect(shaped.copiedFrom[0]).toMatchObject({
+        name: "example/high-importance-notes",
       });
     },
   },
@@ -166,7 +172,9 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
         rootChildren: Record<string, string>;
         scope: string;
       };
-      expect(shaped.scope).toBe("/");
+      // "/" when the harness holds a plain project itx (node, run-script,
+      // project-worker); the REPL runs in a session scope /repl/<timestamp>.
+      expect(shaped.scope).toMatch(/^\/(repl\/.+)?$/);
       expect(Object.keys(shaped.rootChildren)).toEqual(
         expect.arrayContaining(["capabilityHost", "capabilityHosts", "streams"]),
       );
@@ -267,7 +275,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "provide-itx-expression": {
     vars: ({ marker }) => ({ note: marker, path: `/repl/expression-${marker}` }),
     assert: (result, { marker }, expect) => {
-      expect(result).toMatchObject({ mountType: "itx-expression", note: marker });
+      expect(result).toMatchObject({ mountType: "itx-call", note: marker });
       expect((result as { offset: number }).offset).toBeGreaterThan(0);
     },
   },
@@ -319,7 +327,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({
         readmePresent: true,
-        edited: { occurrenceCount: 1, path: "/notes/workspace-example.md" },
+        edited: { occurrenceCount: 1, path: "/repos/config/notes/workspace-example.md" },
       });
       const typed = result as {
         commitOid: string;
@@ -330,12 +338,13 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       // #1831: commits land straight on the mounted repo's default branch —
       // there is no per-workspace branch. #2095: status groups changes by
       // owning mount, and the commit names the mount it was scoped to.
+      // Post-namespace-unification: mount path = repo stream path, verbatim.
       expect(typed.committedTo).toMatch(/^\S+$/);
       expect(typed.commitOid).toMatch(/^[0-9a-f]{40}$/);
-      expect(typed.committedMount).toBe("/");
-      const rootMount = typed.status.mounts.find((mount) => mount.path === "/");
-      expect(rootMount?.changes.map((change) => change.path)).toContain(
-        "/notes/workspace-example.md",
+      expect(typed.committedMount).toBe("/repos/config");
+      const configMount = typed.status.mounts.find((mount) => mount.path === "/repos/config");
+      expect(configMount?.changes.map((change) => change.path)).toContain(
+        "/repos/config/notes/workspace-example.md",
       );
     },
   },
@@ -357,6 +366,25 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       });
       expect((result as { published: { size: number } }).published.size).toBeGreaterThan(0);
       expect((result as { urlHost: string }).urlHost).toContain("iterate-files--");
+    },
+  },
+  "use-project-skill": {
+    // A marker-salted skill name keeps pooled-project reuse additive; the
+    // config-repo commit lane needs the same cold-tail budget as
+    // workspace-edit-and-push.
+    completionTimeoutMs: 120_000,
+    vars: ({ marker }) => ({
+      skill: `greeting-${marker}`,
+      workspacePath: `/workspaces/examples/skill-${marker}`,
+    }),
+    assert: (result, ctx, expect) => {
+      // The example script returns this literal object shape after reading
+      // the skill; the assertions below are the runtime guard.
+      const typed = result as { instructions: string | null; skillFiles: string[] };
+      expect(typed.skillFiles).toContain(
+        `/repos/config/.agents/skills/greeting-${ctx.marker}/SKILL.md`,
+      );
+      expect(typed.instructions).toContain("Greet warmly");
     },
   },
   "repo-commit-files": {
@@ -420,9 +448,10 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toMatchObject({
         examplePasteReady: true,
         streamTypesIncludeAppend: true,
+        topDocInlined: true,
       });
       expect((result as { hitCount: number }).hitCount).toBeGreaterThan(0);
-      expect(result).toHaveProperty("firstHit.fetchCall");
+      expect((result as { firstHitName: string | null }).firstHitName).toBeTruthy();
     },
   },
   "typed-capability-mount": {

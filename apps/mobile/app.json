@@ -33,6 +33,12 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Iterate syncs the screenshots you choose into your project so you can search them by content."
+        }
       ]
     ],
     "experiments": {
@@ -44,6 +50,12 @@
         "projectId": "cfe38002-5822-4465-94d4-7223a2002280"
       }
     },
-    "owner": "mishanustom"
+    "owner": "mishanustom",
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/cfe38002-5822-4465-94d4-7223a2002280"
+    }
   }
 }

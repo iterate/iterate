@@ -2,16 +2,17 @@ import { DurableObject } from "cloudflare:workers";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type {
   ProcessorSnapshot,
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
+  StreamProcessorWakeRequest,
+  StreamProcessorWakeResponse,
 } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
-import type { ScheduleView } from "./types.ts";
+import { sameScheduleDefinition, type ScheduleView } from "./types.ts";
 import { SchedulerProcessor } from "./scheduler-processor-implementation.ts";
 import {
+  parseScheduleSetPayload,
   SchedulerProcessorContract,
   type ScheduleSetPayload,
   type SchedulerProcessorState,
@@ -115,6 +116,7 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   // read this DO serves (snapshots, the processor facade, the command
   // surface's read-your-writes wait) goes through the runner's progress.
   readonly #reads = this.#registry.reads(this.#schedulerProcessor);
+  #writeChain: Promise<unknown> = Promise.resolve();
 
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     // The shared alarm may be firing for a keepalive slice, the scheduler's,
@@ -137,11 +139,20 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     }
   }
 
-  async setSchedule(input: ScheduleSetPayload): Promise<ScheduleView> {
-    await this.#registry.catchUp(PROCESSOR_SLUG);
-    await this.#schedulerProcessor.assertCreated();
-    // Fail loudly at set time; raw appends bypass this and park via reduce.
-    assertValidRecurrence(input.recurrence);
+  setSchedule(input: ScheduleSetPayload): Promise<ScheduleView> {
+    return this.#serializeWrite(async () => {
+      await this.#registry.catchUp(PROCESSOR_SLUG);
+      await this.#schedulerProcessor.assertCreated();
+      // Fail loudly at set time; raw appends bypass this and park via reduce.
+      const definition = parseScheduleSetPayload(input);
+      assertValidRecurrence(definition.recurrence);
+      const current = await this.#schedulerProcessor.getScheduleView(definition.key);
+      if (current !== undefined && sameScheduleDefinition(current, definition)) return current;
+      return await this.#commitSchedule(definition);
+    });
+  }
+
+  async #commitSchedule(input: ScheduleSetPayload): Promise<ScheduleView> {
     const [event] = await this.#stream.append(
       SchedulerProcessorContract.buildEvent({
         type: "events.iterate.com/scheduler/schedule-set",
@@ -154,26 +165,30 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     return view;
   }
 
-  async cancelSchedule(key: string): Promise<void> {
-    await this.#registry.catchUp(PROCESSOR_SLUG);
-    await this.#schedulerProcessor.assertCreated();
-    const [event] = await this.#stream.append(
-      SchedulerProcessorContract.buildEvent({
-        type: "events.iterate.com/scheduler/schedule-cancelled",
-        payload: { key },
-      }),
-    );
-    await this.#waitUntilProcessed(event!.offset);
+  cancelSchedule(key: string): Promise<void> {
+    return this.#serializeWrite(async () => {
+      await this.#registry.catchUp(PROCESSOR_SLUG);
+      await this.#schedulerProcessor.assertCreated();
+      const [event] = await this.#stream.append(
+        SchedulerProcessorContract.buildEvent({
+          type: "events.iterate.com/scheduler/schedule-cancelled",
+          payload: { key },
+        }),
+      );
+      await this.#waitUntilProcessed(event!.offset);
+    });
   }
 
   /** Manual "run now" for an existing key; the Trigger executes like any other. */
-  async triggerSchedule(key: string): Promise<{ executionId: string }> {
-    await this.#registry.catchUp(PROCESSOR_SLUG);
-    await this.#schedulerProcessor.assertCreated();
-    const { event, executionId } = await this.#schedulerProcessor.buildManualTriggerEvent(key);
-    const [committed] = await this.#stream.append(event);
-    await this.#waitUntilProcessed(committed!.offset);
-    return { executionId };
+  triggerSchedule(key: string): Promise<{ executionId: string }> {
+    return this.#serializeWrite(async () => {
+      await this.#registry.catchUp(PROCESSOR_SLUG);
+      await this.#schedulerProcessor.assertCreated();
+      const { event, executionId } = await this.#schedulerProcessor.buildManualTriggerEvent(key);
+      const [committed] = await this.#stream.append(event);
+      await this.#waitUntilProcessed(committed!.offset);
+      return { executionId };
+    });
   }
 
   async listSchedules(): Promise<ScheduleView[]> {
@@ -182,8 +197,8 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     return await this.#schedulerProcessor.listScheduleViews();
   }
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#registry.wakeStreamSubscriber(args);
+  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
+    return this.#registry.wakeStreamProcessor(args);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -203,5 +218,11 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   // timeout. Do not put an unbounded catch-up RPC in front of it.
   async #waitUntilProcessed(offset: number): Promise<void> {
     await this.#reads.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
+  }
+
+  #serializeWrite<T>(write: () => Promise<T>): Promise<T> {
+    const result = this.#writeChain.then(write, write);
+    this.#writeChain = result.catch(() => {});
+    return result;
   }
 }

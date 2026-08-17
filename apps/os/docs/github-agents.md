@@ -10,21 +10,33 @@ what the agent should do.
 GitHub App webhook
   -> /integrations/github/<connection>       verified original fact
        |-> /repos/<project path>              default-branch pushes only
-       `-> ReviewBotApp (packaged userspace DO, wake subscription per connection)
-            -> ReviewBotProcessor -> handleGithubPullRequestWebhook
+       `-> ReviewBotApp                       hosted processor for this connection
+            -> handleGithubPullRequestWebhook
                  -> match itx.repos.list() links
                       -> /agents/repos/<project path>/pr/<n>
-                                                PR history and agent loop
+                           |                         conversational PR agent
+                           `-> /ai-linter
+                                |                    generic Agent emits diagnostics
+                                `-> GithubAiLinterApp per-PR reducer and publisher
+                                      -> GitHub review
 ```
 
-The review bot is a USERSPACE stream processor: `ReviewBotProcessor` (the
-same `iterate/processors` machinery as the seeded guestbook) hosted by a
-`ReviewBotApp` Durable Object, one instance per GitHub connection, attached
-to that connection's webhook stream through a durable wake subscription. The
-platform still has no pull-request processor of its own. The agent stream
-remains the durable journal and execution loop for its pull request; the
-bot's processor folds no state — every durable fact it produces lives on
-agent streams, under stable idempotency keys.
+The review bot remains userspace project policy. When the config worker sees a
+repository link, `GithubAiLinter` configures a hosted-processor subscription on
+that connection stream. Its stateful worker contains one `ReviewBotProcessor`
+Durable Object whose durable checkpoint survives worker deployments and
+evictions. Each non-draft pull request also gets a child `GithubAiLinterApp`
+Durable Object. The child stream is the durable analysis journal; the generic
+Agent and the linter reducer consume it independently. The platform still has
+no pull-request processor of its own.
+
+This proof of concept assumes a freshly recreated production data plane.
+Hosted processors therefore use their normal beginning-of-stream checkpoint;
+there is no compatibility checkpoint or version-fenced Durable Object identity
+for an earlier deployment. The processor rejects irrelevant webhook envelopes
+before opening ITX. Structural review rules are read from the config's explicit
+paths as one commit-pinned snapshot, so routing a webhook never enumerates or
+clones the linked product repository.
 
 ## The webhook fact
 
@@ -67,42 +79,28 @@ not change agent identity.
 ## Repo import is separate
 
 Linking `/repos/config` records the connection, installation, numeric
-repository ID, and current owner/name. It installs one cross-post filtered to
-`push` deliveries whose raw `body.repository.id` matches the link. The repo
+repository ID, and current owner/name. It configures the repo stream to receive
+only `push` deliveries whose raw `body.repository.id` matches the link. The repo
 processor additionally verifies the provenance, connection, installation,
 repository ID, and default branch before importing the push.
 
-That cross-post exists only for default-branch import. Pull-request userspace
-consumes the original connection event and rejects every cross-posted copy.
+That stream relationship exists only for default-branch import. Pull-request
+userspace consumes the original connection event and rejects every received copy.
 
 ## The userspace router
 
-The router and its host live in
+The router lives in
 [`iterate/starter-apps/github-ai-linter`](../../../packages/iterate/src/starter-apps/github-ai-linter/review-bot.ts).
-The package contains the `ReviewBotProcessorContract` (consuming
-`events.iterate.com/github/webhook-received`), the processor, and the
-`handleGithubPullRequestWebhook` router it runs per delivered webhook inside
-`blockProcessorWhile` — short must-happen work, so the cursor is held, a crash
-redelivers the frame, and the router's stable idempotency keys collapse the
-re-run.
-
-Delivery is the guestbook's wake lane, with one difference: webhook streams
-are per connection and no user action touches them directly, so nothing can
-configure the subscription at creation time. Instead the config worker passes
-its environment and app config to `GithubAiLinter.create`, keeps the returned
-app in a private field, and calls its dependency-free `processEvent(event)`
-method explicitly. On a `repo/github-link-configured` event
-(whose payload names the connection), it idempotently appends the bot's
-`stream/subscription-configured` event to that
-connection's webhook stream, once per (re-)link rather than once per webhook.
-The stream spine pokes the new wake subscriber immediately, and a fresh
-subscription replays from offset zero, so pull requests opened shortly before
-the link are still delivered. Because that replay covers the stream's whole
-history, the processor drops webhooks older than a freshness horizon
-(`reviewBotFreshnessHorizonMs`) — attaching to an old stream must not review
-long-dead pull requests. A project that already had linked repos before
-adopting this template picks the bot up by re-running `linkGithub` (re-links
-replace subscriptions by key and repair by design).
+The package contains the hosted processor, the
+`handleGithubPullRequestWebhook` router, and the rule loader it calls. The
+config worker passes its environment and app config to `GithubAiLinter.create`
+and forwards project events to it. A repository-link event installs or
+replaces the connection-specific subscription. A root
+`project/worker-updated` event also reapplies subscriptions for every current
+repo link, so a policy version or rule-path change takes effect without
+relinking GitHub. The source stream then wakes the hosted processor with
+verified first-hand webhooks. The router's stable idempotency keys collapse
+redelivery, and copied webhooks are ignored.
 
 The router lists the project's repos, reads their current links, and accepts
 the event only when one link's stream path, installation, and stable repository
@@ -115,25 +113,30 @@ project-controlled repo path:
 /repos/team/service -> /agents/repos/team/service/pr/42
 ```
 
-Only `pull_request:opened` or a trusted explicit mention calls the idempotent,
-zero-argument `agent.create()`. The router then uses `agent.append(...)` for
-the stable policy and agent summary consumed by the Agent processor.
-It appends the GitHub binding, raw webhook copy, and referencing task
-atomically through `agent.stream.append`; the raw API is needed because the
-webhook sits outside the Agent processor's vocabulary, while valid binding and
-context events retain exactly the same reducer meaning through either append
-API. Other later events require the canonical agent birth event, so they cannot
-create an agent by accident. A valid delivery can append the following groups
-of facts to the PR stream:
+`pull_request:opened`, `ready_for_review`, and `synchronize` deliveries create
+the parent agent when it is missing. This matters after a deliberate production
+recreation: the next push repairs the route without replaying the historical
+`opened` delivery. A trusted explicit mention can also create the parent. The
+router then uses `agent.append(...)` for the stable policy and summary consumed
+by the Agent processor. It appends the GitHub binding and any authorized
+mention context through `agent.stream.append`.
 
 - a keyed, versioned developer-policy context item;
 - a stable agent summary and a GitHub pull-request binding;
-- the complete webhook with explicit cross-post provenance; and
-- when appropriate, trusted developer instructions and one externally authored
-  request that wakes or interrupts the agent.
+- a subscription which copies complete, verified PR webhook history; and
+- when appropriate, trusted developer instructions plus one externally
+  authored request that wakes the conversational agent.
 
-The path itself is the association. There is no second association record,
-route plan, rejection protocol, or state reducer.
+For an open, non-draft lifecycle delivery the router also creates
+`<parent>/ai-linter`, configures its per-PR linter processor, appends one
+`github-ai-linter/analysis-requested` fact, and then appends a developer task
+which references that committed request offset. Splitting those last two
+appends is intentional: the task needs the canonical offset, and webhook
+redelivery safely retries a missing task because both appends are
+idempotently keyed.
+
+The paths themselves are the associations. There is no second route plan or
+mutable association record.
 
 Context references retain the original stream coordinate for provenance. A
 rendered ref such as `/integrations/github/acme@81` means exactly event offset
@@ -144,13 +147,14 @@ directly rather than spending an agent turn fetching the same webhook again.
 
 ## Structural reviews
 
-Rules are Markdown files in the repo and glob declared by the config worker.
-Frontmatter IDs are stable keys used in suppressions, comments, idempotency,
-and future analytics:
+Rules are Markdown files at the explicit paths declared by the config worker.
+Frontmatter IDs are stable rule names used in diagnostics and suppressions.
+Severity is explicit rather than inferred from prose:
 
 ```md
 ---
 id: typescript/explain-type-cast
+severity: error
 files:
   - "**/*.{ts,tsx,mts,cts}"
   - "!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"
@@ -170,33 +174,87 @@ each agent path from the matched Iterate repo path; GitHub owner/name changes
 therefore do not move its history.
 
 An open, non-draft `opened`, `ready_for_review`, or `synchronize` delivery adds
-a review task with `interrupt-current-request`. The task tells the existing
-agent loop to inspect the immutable head, complete changed-file inputs, prior
-reviews and native thread resolution, apply matching rules and suppressions,
-then either remain silent or publish one consolidated `COMMENT` review.
+an analysis task to the child stream with `interrupt-current-request`. The
+request pins the base SHA, head SHA, policy version, prompt version, and
+rules-commit snapshot. Its committed stream offset is the analysis ID. A newer
+request interrupts the generic Agent and the linter processor settles the
+previous unfinished analysis as cancelled.
+
+The Agent has no privileged linter or GitHub-write capability. It reads the
+pull request through Octokit, analyses the complete head while restricting
+primary locations to changed RIGHT-side lines, and appends ordinary stream
+events:
+
+```text
+github-ai-linter/analysis-requested
+  -> github-ai-linter/diagnostic-reported       zero or more
+  -> github-ai-linter/diagnostic-suppressed     zero or more, referencing diagnostics
+  -> github-ai-linter/analysis-settled          exactly one terminal result
+  -> github-ai-linter/review-publication-requested
+  -> github-ai-linter/review-publication-settled
+```
+
+Diagnostics use Oxlint-style terminology: `ruleName`, severity, message,
+optional help, and one or more labelled source spans. `diagnosticKey` is a
+semantic cross-analysis identity made from the rule, filename, and stable code
+anchor, not a line number. The reducer uses that identity to classify visible
+diagnostics as new, persistent, or reintroduced and to identify resolved
+diagnostics. It retains lightweight headers for every analysis and fully
+materializes only the active and latest successful results so the per-PR
+Durable Object does not accumulate every prompt and diagnostic forever.
+
+A diagnostic may also carry one exact contiguous replacement:
+
+```ts
+{
+  kind: "suggestion",
+  span: { startLine: 10, endLine: 12 },
+  content: "the exact replacement source",
+}
+```
+
+The publisher translates that value mechanically into GitHub's fenced
+suggested-change format. It first rechecks that the pull request is still open,
+non-draft, and on the pinned base/head. A clean analysis (`approve` assessment
+and no visible diagnostics) publishes a successful `Iterate GitHub AI linter`
+Check Run and no review. Findings publish a neutral Check Run plus a
+non-blocking `COMMENT` review. Errors, warnings, and qualitative concerns never
+approve or request changes. Suppressed diagnostics do not cause a review or
+produce inline comments.
 
 Suppressions are source comments:
 
 ```ts
 // iterate-lint-disable typescript/explain-type-cast -- generated SDK boundary
+// iterate-lint-enable typescript/explain-type-cast
+// iterate-lint-disable-line typescript/explain-type-cast -- deliberate compatibility cast
 // iterate-lint-disable-next-line typescript/explain-type-cast -- checked above
 ```
 
-The task idempotency key is semantic: connection, stable repository ID,
-current owner/name coordinates, App slug, policy version, and head SHA.
-Repeated webhooks for the same route and policy/head cannot restart a clean
-review. A different head, route or App change, or explicit policy-version bump
-can. Including every call coordinate keeps an idempotency key from ever naming
-two different task payloads. A hidden marker on reviews provides a second
-publication guard if an already-running task is retried:
+The Agent records a separate `diagnostic-suppressed` event after the diagnostic
+so the audit trail preserves both the violation and the source directive which
+hid it. In this first version the LLM interprets the Oxlint-like grammar; the
+event protocol deliberately allows a deterministic parser to replace that
+step later without changing publication or reduced state.
+
+The analysis idempotency key includes connection, App slug, stable repository
+ID, current owner/name coordinates, pull-request number, policy and prompt
+versions, rules commit, base SHA, and head SHA. Repeated webhooks for the same
+immutable inputs therefore return the same analysis offset and task identity.
+A hidden marker on the immutable GitHub review and the same value as the Check
+Run's `external_id` provide publication guards if either write landed but the
+settlement append was interrupted:
 
 ```html
-<!-- iterate-ai-lint:<repository-id>:policy:<version>:head:<sha> -->
+<!-- iterate-github-ai-linter:<repository-id>:analysis:<offset>:head:<sha> -->
 ```
 
-The prompt also treats resolved threads and trusted human dispositions as
-durable evidence unless the relevant code changes. Together these rules stop
-the nondeterministic reviewer oscillating on an unchanged head.
+The parent PR agent remains a normal conversational agent throughout. Mentions
+go to the parent and can discuss qualitative or borderline issues without
+being forced through the rule-diagnostic protocol. It may publish PR
+conversation comments and replies, but it cannot create, submit, or dismiss a
+GitHub review; the `/ai-linter` processor alone owns linter review publication
+state.
 
 ## Mentions
 
@@ -217,14 +275,21 @@ instruction precedence.
 
 ## Proof-of-concept limits
 
-- PRs opened before the worker observed `opened` are backfilled only by a
-  trusted explicit mention.
-- Globs, suppressions, and findings are enforced by the agent contract, not a
-  deterministic validation engine.
-- Reviews are advisory `COMMENT` reviews; there is no Check Run, commit status,
-  blocking policy, PostHog feed, rule fan-out, or typed timeout yet.
-- A repository linked to multiple Iterate projects can be reviewed once by
-  each project/App.
+- A later `ready_for_review` or `synchronize` delivery repairs missing parent
+  and child agents, but there is no periodic crawler for completely inactive
+  pull requests.
+- File globs, changed-line eligibility, suppression parsing, and diagnostics
+  are enforced by the LLM contract, not a deterministic validation engine.
+  The stream shapes are intended to survive that later automation.
+- The latest successful analysis compares semantic diagnostic keys with the
+  previous result. It does not yet ingest GitHub thread resolution or other
+  human dispositions when deciding whether an issue is persistent.
+- There is no PostHog feed, rule fan-out, automatic fix application, or typed
+  analysis-expiry event yet. Failures and cancelled publications are
+  nevertheless explicit terminal stream facts.
+- The review marker does not yet include an Iterate project identity. Separate
+  projects with identical repository, head, and stream-offset coordinates can
+  therefore converge on one existing review instead of publishing duplicates.
 
 This is a breaking replacement for the removed platform GitHub-agent
 processor. There is no historical compatibility path.

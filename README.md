@@ -101,22 +101,12 @@ pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
 ```
 
 How to open a PR (branch hygiene, body shape, **screenshots that actually
-render**, drafts/previews) — and **after open**: wait for Iterate Review /
+render**, previews) — and **after open**: wait for Iterate Review /
 review bots, address **every** CI/review comment (fix or reply + resolve),
 **never leave threads standing**, **never merge on red CI** unless the human
 explicitly said so: **[Pull requests](docs/pull-requests.md)**.
 
-**Browser testing:** use an isolated, headed `agent-browser` Chrome for Testing
-session by default so the developer can watch it. Give every concurrent agent
-a unique session; use headless mode only when explicitly requested or in CI.
-This does not mean attach to a developer's actual Chrome. See
-[Browser testing](docs/browser-testing.md). Keep the CLI and its corresponding
-agent skills up to date.
-
-**Draft PRs don't get a preview deployment** (or preview e2e). If you open a
-PR as a draft and want a preview environment, add the `preview` label; marking
-the PR ready for review also starts previews. Lease model details:
-[Dev environments](docs/dev-environments.md).
+**Browser testing:** use **Playwriter** with an isolated headless session by default (or an authorized real-Chrome session when explicitly requested). Give every concurrent agent a unique Playwriter session id. See [Browser testing](docs/browser-testing.md). Keep the Playwriter CLI and skill current.
 
 ## Repository map
 
@@ -125,6 +115,7 @@ the PR ready for review also starts previews. Lease model details:
 | Path                | What                                                                               |
 | ------------------- | ---------------------------------------------------------------------------------- |
 | `apps/os/`          | **Main app** — product dashboard (`os.iterate.com`; local dev: `localhost:<port>`) |
+| `apps/kit/`         | Browser installer for supported devices (`k.iterate.com`)                          |
 | `packages/iterate/` | `iterate` CLI — delegates to local source when run inside this repo                |
 | `docs/`             | Detailed documentation                                                             |
 | `tasks/`            | Work tracking (markdown + frontmatter)                                             |
@@ -165,8 +156,8 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 
 ### Development
 
-- [Pull requests](docs/pull-requests.md) — opening PRs, absolute screenshot URLs, drafts/previews, body hygiene; after open: wait for Iterate Review, address every thread, no merge on red CI
-- [Browser testing](docs/browser-testing.md) — isolated agent-browser sessions, visible watch mode, and reusable test logins
+- [Pull requests](docs/pull-requests.md) — opening PRs, absolute screenshot URLs, previews, body hygiene; after open: wait for Iterate Review, address every thread, no merge on red CI
+- [Browser testing](docs/browser-testing.md) — isolated Playwriter sessions, and reusable test logins
 - [Dev environments](docs/dev-environments.md) — local dev, minting identities, opening project-scoped or platform-wide operator sessions, browsers for agents, preview-from-local
 - [Tunnels](docs/tunnels.md) — public HTTPS URLs for local dev, webhooks, OAuth callbacks, and CI/e2e fixtures
 - [Coding style](docs/coding-style.md)
@@ -198,9 +189,11 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 ### App-specific
 
 - [OS app](apps/os/AGENTS.md)
+- [Kit device installer](apps/kit/README.md)
 - [Auth app](apps/auth/README.md) — public OIDC/oRPC plus OS-only Workers RPC for the org/project directory
 - [itx](apps/os/src/README.md) — the `/api/itx` surface and its public contract (`types.ts`)
 - [OS worker topology](apps/os/docs/worker-topology.md)
 - [OS architecture & operations](apps/os/docs/architecture-and-operations.md)
 - [Debugging deployed OS workers](apps/os/docs/debugging-deployed-os-workers.md)
 - [Doppler-backed scripts](apps/os/docs/doppler-backed-scripts.md)
+- [Project seeds](apps/os/docs/project-seeds.md) — capture and semantically restore selected projects across deliberate production erases

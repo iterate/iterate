@@ -99,7 +99,7 @@ export function StreamViewHeader({
   } = useStreamViewPanels();
   const caps = modeCapabilities(search, streamPath);
   // Presence = who is here NOW. The reduced roster keeps disconnected
-  // entries (the panel needs them for asleep/parked rows), but avatars and
+  // entries (the panel needs them for asleep rows), but avatars and
   // the +N overflow must not count corpses — a listing stream accumulates
   // every browser tab that ever visited.
   const connectedPresence = presence.filter((entry) => entry.connected);
@@ -122,13 +122,13 @@ export function StreamViewHeader({
         {isMobile || connectedPresence.length === 0 ? null : (
           <div className="flex items-center pl-1.5">
             {connectedPresence.slice(0, MAX_PRESENCE_AVATARS).map((entry) => {
-              const selected = entry.subscriptionKey === focusedProcessorKey;
+              const selected = entry.connectionKey === focusedProcessorKey;
               return (
                 <button
-                  key={entry.subscriptionKey}
+                  key={entry.connectionKey}
                   type="button"
                   aria-label={`${presenceLabel(entry)} — open processor`}
-                  onClick={() => focusProcessor(entry.subscriptionKey)}
+                  onClick={() => focusProcessor(entry.connectionKey)}
                   className={cn("-ml-1.5 rounded-full", selected && "relative z-10")}
                 >
                   <PresenceAvatar
@@ -321,7 +321,7 @@ function StreamOverflowMenu({
   };
   latencyLabel: string;
   metrics: BrowserStreamMetricsView;
-  onFocusPresence: (subscriptionKey: string) => void;
+  onFocusPresence: (connectionKey: string) => void;
   /** Present only on agent streams — opens the agent details sheet. */
   onOpenAgentDetails?: () => void;
   onOpenStreamState: () => void;
@@ -372,9 +372,9 @@ function StreamOverflowMenu({
                   </DropdownMenuLabel>
                   {connectedPresence.slice(0, 8).map((entry) => (
                     <DropdownMenuItem
-                      key={entry.subscriptionKey}
+                      key={entry.connectionKey}
                       closeOnClick
-                      onClick={() => onFocusPresence(entry.subscriptionKey)}
+                      onClick={() => onFocusPresence(entry.connectionKey)}
                     >
                       <PresenceAvatar
                         entry={entry}
@@ -382,7 +382,7 @@ function StreamOverflowMenu({
                         className="size-5 text-[8px]"
                       />
                       <span className="min-w-0 truncate">{presenceLabel(entry)}</span>
-                      {entry.subscriptionKey === focusedProcessorKey ? (
+                      {entry.connectionKey === focusedProcessorKey ? (
                         <span className="ml-auto text-[10px] text-muted-foreground">open</span>
                       ) : null}
                     </DropdownMenuItem>

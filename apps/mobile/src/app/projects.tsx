@@ -5,9 +5,10 @@
 // own their teardown when sign-out replaces this route.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { router, Stack } from "expo-router";
+import { router, Stack, useLocalSearchParams } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import type { ProjectListEntry } from "iterate/sdk/itx/react";
+import { AppDrawerButton } from "../components/project-drawer.tsx";
 import { SignInRequiredError, signOut } from "../lib/auth.ts";
 import { disconnectItxSession, getItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing } from "../lib/open-project.ts";
@@ -18,13 +19,30 @@ import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function ProjectsScreen() {
   const queryClient = useQueryClient();
+  // Set by the sign-in screen's post-login navigation: an account with
+  // exactly one project skips the picker — a single-item list is a pointless
+  // tap. Only fresh sign-ins carry it, so Back from a project (plain
+  // /projects) always shows the picker.
+  const { autoOpen } = useLocalSearchParams<{ autoOpen?: string }>();
   const projects = useQuery({
-    queryKey: ["projects"],
+    queryKey: ["projects", { autoOpen: Boolean(autoOpen) }],
     queryFn: async () => {
       const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
       try {
         const itx = await getItxSession(baseUrl);
         const list = await itx.projects.list({ scope: "mine" });
+        // Navigate from the query, not render (same rationale as the
+        // sign-in redirect below) — and from HERE rather than the sign-in
+        // mutation so the cold-itx first list gets this query's retries.
+        if (autoOpen && list.length === 1) {
+          const project = list[0];
+          await backfillProjectIfMissing(itx, project);
+          await setLastProject(baseUrl, { id: project.id, slug: project.slug });
+          router.replace({
+            pathname: "/project/[projectId]",
+            params: { projectId: project.id, slug: project.slug },
+          });
+        }
         return { baseUrl, list };
       } catch (error) {
         // Redirect from the async failure, not render: render-time
@@ -56,11 +74,17 @@ export default function ProjectsScreen() {
       <Stack.Screen
         options={{
           title: "Projects",
+          // Build info stays reachable before a project is picked.
+          headerLeft: () => <AppDrawerButton />,
           headerRight: () => (
             <Pressable
               onPress={async () => {
                 const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
-                await revokeEnrolledPushDevices(baseUrl);
+                // Server-side cleanup is best-effort: an unreachable server
+                // must never trap the user in a signed-in state.
+                await revokeEnrolledPushDevices(baseUrl).catch((error) => {
+                  console.log(`[auth] push revocation skipped on sign-out: ${String(error)}`);
+                });
                 await signOut(baseUrl);
                 disconnectItxSession();
                 queryClient.clear();
@@ -75,7 +99,7 @@ export default function ProjectsScreen() {
       {open.isError ? <Text style={styles.error}>{String(open.error.message)}</Text> : null}
       {projects.isPending ? (
         <View style={styles.center}>
-          <ActivityIndicator color={colors.textMuted} />
+          <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
         </View>
       ) : projects.isError ? (
         <View style={styles.center}>

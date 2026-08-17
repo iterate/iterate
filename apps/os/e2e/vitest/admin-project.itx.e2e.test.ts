@@ -13,7 +13,7 @@ import {
   buildIntegrationRouterCreatedEvent,
   buildIntegrationRouterSubscriptionConfiguredEvent,
 } from "../../src/domains/integrations/integration-router-events.ts";
-import type { WakeableStreamProcessorRpc } from "../../src/itx-api.generated.ts";
+import type { StreamProcessorRpc } from "../../src/itx-api.generated.ts";
 
 test("creates a disposable project and uses project streams through itx", async ({ expect }) => {
   await using handle = await createTestProject({ slugPrefix: "admin-fixture" });
@@ -36,13 +36,11 @@ test("creates a disposable project and uses project streams through itx", async 
   // Project processor sharing that Durable Object instance.
   for (const router of [
     {
-      processorSlug: "slack",
       slug: "slack",
       state: { routes: {} },
       processor: (connection: string) => itx.integrations.slack.get(connection).processor,
     },
     {
-      processorSlug: "telegram",
       slug: "telegram",
       state: { sentMessages: {}, sessionsByChat: {} },
       processor: (connection: string) => itx.integrations.telegram.get(connection).processor,
@@ -53,14 +51,13 @@ test("creates a disposable project and uses project streams through itx", async 
       buildIntegrationRouterCreatedEvent({ connection, slug: router.slug }),
       buildIntegrationRouterSubscriptionConfiguredEvent({
         connection,
-        processorSlug: router.processorSlug,
+        // The router subscription's NAME selects the contract (name == slug).
+        name: router.slug,
         projectId: handle.project.id,
         slug: router.slug,
       }),
     );
-    const processor = router.processor(
-      connection,
-    ) as unknown as RpcStub<WakeableStreamProcessorRpc>;
+    const processor = router.processor(connection) as unknown as RpcStub<StreamProcessorRpc>;
     await processor.waitUntilProcessed({
       offset: Math.max(...committed.map((event) => event.offset)),
     });
@@ -77,7 +74,7 @@ test("creates a disposable project and uses project streams through itx", async 
 
   // The one subscription primitive replays history and tails live appends.
   const seen: StreamEvent[] = [];
-  const subscription = await stream.subscribe({
+  const subscription = await stream.openConnection({
     replayAfterOffset: 0,
     processEventBatch: (batch) => {
       seen.push(...batch.events);
@@ -108,7 +105,7 @@ test("creates a disposable project and uses project streams through itx", async 
     { description: "the subscription to deliver the appended event", timeoutMs: 1_000 },
   );
 
-  subscription.unsubscribe();
+  subscription.close();
 
   // The project processor folds the new stream into its reduced state.
   await waitForCondition(

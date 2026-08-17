@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import {
+  groupActivityRounds,
   collapseConsecutiveStreamWakes,
   reduceFeed,
   summarizeActivity,
@@ -173,3 +174,19 @@ function event(offset: number, type: string, payload: Record<string, unknown>): 
     path: PATH,
   };
 }
+
+test("activity steps group into rounds: llm+code pairs, stray steps get their own", () => {
+  const llm = (id: string) => ({ kind: "llm", id }) as any;
+  const code = (id: string) => ({ kind: "code", id }) as any;
+  expect(groupActivityRounds([llm("l1"), code("c1"), llm("l2"), code("c2")])).toMatchObject([
+    { llm: { id: "l1" }, code: { id: "c1" } },
+    { llm: { id: "l2" }, code: { id: "c2" } },
+  ]);
+  // A trailing llm still writing its script is its own round; a code step
+  // with no llm before it (replay gaps) is too.
+  expect(groupActivityRounds([code("c1"), llm("l1")])).toMatchObject([
+    { llm: null, code: { id: "c1" } },
+    { llm: { id: "l1" }, code: null },
+  ]);
+  expect(groupActivityRounds([])).toEqual([]);
+});

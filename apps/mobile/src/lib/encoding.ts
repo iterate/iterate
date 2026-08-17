@@ -9,3 +9,14 @@ export function base64ToUint8Array(base64: string): Uint8Array {
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
 }
+
+/** Bytes → base64 (chunked: Hermes has btoa but String.fromCharCode has an
+ * argument-count ceiling). The sync engine hashes and uploads base64, same
+ * as the picker path, so content hashes stay comparable. */
+export function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 32768) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+  }
+  return btoa(binary);
+}

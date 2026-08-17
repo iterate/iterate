@@ -111,10 +111,10 @@ The order is:
    OAuth redirect URIs. Verify the GitHub App through its API.
 9. Present the ledger and obtain separate approval for the production
    Semaphore lease write.
-10. Add the `preview` label to a draft canary whose body contains exactly
+10. Open a canary PR whose body contains exactly
     `preview_environment=preview-20`, then prove deploy, e2e, one real
-    Google/GitHub/Slack round trip, and cleanup. Remove the label after cleanup
-    so the still-open draft cannot immediately reacquire a slot.
+    Google/GitHub/Slack round trip, and cleanup. Close the canary after
+    cleanup so it cannot immediately reacquire a slot.
 
 Each failed checkpoint stops the rehearsal. Fix the runbook or automation at
 the point of failure before retrying the slot.
@@ -263,7 +263,7 @@ Doppler state, so its exact config list belongs in the approved plan.
 Verify names, inheritance, and required-secret presence without printing
 values. Auth must have its OAuth seed and runtime secrets; OS, Semaphore, and
 Streams must have matching per-slot Auth client IDs and secrets; Semaphore and
-Streams must have `AUTH_FORGE_PRIVATE_JWK`. OS must also have
+Streams must have `AUTH_FORGE_ES256_PRIVATE_JWK`. OS must also have
 `APP_CONFIG_INTEGRATIONS__PETSHOP`; an OS deploy cannot infer the Dummy Petshop
 client.
 
@@ -542,15 +542,14 @@ handover erase.
 
 ## 9. Prove the normal lifecycle
 
-Use a small draft canary PR that touches a preview-shared path. The normal CI
-path is a standalone body directive plus the `preview` label:
+Use a small canary PR that touches a preview-shared path. The normal CI
+path is a standalone body directive:
 
 ```text
 preview_environment=preview-20
 ```
 
-Markdown examples and comments do not count. The directive selects a slot but
-does not make a draft eligible; the label does that. For a fleet sweep, pin,
+Markdown examples and comments do not count. For a fleet sweep, pin,
 run, and clean one new slot at a time:
 
 ```bash
@@ -561,7 +560,7 @@ for n in $(seq 10 19); do
     pnpm preview assign --pull-request-number "$PR" --slot "$n"
 
   doppler run --project _shared --config prd -- \
-    pnpm preview run --pull-request-number "$PR" --allow-draft --all-apps
+    pnpm preview run --pull-request-number "$PR" --all-apps
 
   doppler run --project _shared --config prd -- \
     pnpm preview cleanup --pull-request-number "$PR"
@@ -582,9 +581,9 @@ event window and investigate or explicitly track them before declaring the
 expansion complete.
 
 Close the canary only after all ten slots have passed. Run `status` and
-`reconcile` once more. If the canary is a real work PR rather than a disposable
-one, remove its `preview` label after cleanup instead of closing it; otherwise
-the next preview dispatch can claim another slot for the still-eligible draft.
+`reconcile` once more. Any open PR reacquires a slot on its next preview run,
+so keep that in mind if the canary is a real work PR rather than a disposable
+one.
 
 ## Resuming safely
 

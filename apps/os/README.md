@@ -172,6 +172,8 @@ doppler run --project os --config dev -- sh -lc '
 
 The script pattern is documented in
 [`docs/doppler-backed-scripts.md`](./docs/doppler-backed-scripts.md).
+Semantic restoration after deliberate production erases is documented in
+[`docs/project-seeds.md`](./docs/project-seeds.md).
 Project-scoped and platform-wide operator browser sessions are documented in
 [`docs/operator-sessions.md`](./docs/operator-sessions.md).
 
@@ -214,7 +216,8 @@ test coverage removed without replacement is
 - [Smoke-Testing A Deployment](../../docs/smoke-testing.md) — deploy-inline probes + manual recipes
 - [Agent Smoke Testing](./docs/agent-smoke-testing.md)
 - [Doppler-Backed Scripts](./docs/doppler-backed-scripts.md)
-- [Preview Agent Browser Smoke](./docs/preview-agent-browser-smoke.md)
+- [Project Seeds](./docs/project-seeds.md) — capture and restore selected projects across a deliberate data erase without replaying old streams
+- [Preview browser smoke](./docs/preview-browser-smoke.md)
 - [Headless Local Debugging](./docs/headless-local-debugging.md)
 - [Domain Context](./CONTEXT.md)
 

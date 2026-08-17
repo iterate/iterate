@@ -27,8 +27,13 @@ export interface CloudflareEnv {
   APP_CONFIG_PUBLIC_URL?: string;
   /** better-auth signing secret (sessions, JWTs, project-ingress tokens). */
   APP_CONFIG_BETTER_AUTH_SECRET: string;
-  /** Doppler-owned Ed25519 key used for OAuth/OIDC JWT signatures. */
-  AUTH_FORGE_PRIVATE_JWK: string;
+  /**
+   * The single Doppler-owned ES256 (P-256) key used for OAuth/OIDC JWT
+   * signatures — the sole forge/signing key now that the old EdDSA key is
+   * retired. Cloudflare Access rejects EdDSA, so ES256 is the only algorithm;
+   * its public half is the only key in the JWKS.
+   */
+  AUTH_FORGE_ES256_PRIVATE_JWK: string;
   /** Dedicated project-app-session signing secret, shared with os for local
    * verification. Optional: unset falls back to APP_CONFIG_BETTER_AUTH_SECRET. */
   APP_CONFIG_PROJECT_APP_SESSION_SECRET?: string;

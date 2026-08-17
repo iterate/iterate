@@ -7,7 +7,7 @@ import { parseStreamRpcRequest } from "./lib/stream-rpc.ts";
 import { parseConfig } from "./config.ts";
 import { createStreamsIterateAuth, resolveRequestAdmin } from "./iterate-auth.ts";
 import { trustedInternalAuthContext } from "~/auth.ts";
-import { StreamRpcTarget } from "~/rpc-targets.ts";
+import { STREAM_DURABLE_OBJECT_STUB, StreamRpcTarget } from "~/rpc-targets.ts";
 import { resolveStreamPath } from "~/domains/streams/utils.ts";
 
 export { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts";
@@ -38,12 +38,12 @@ class PlaygroundStreamRpcTarget extends StreamRpcTarget {
 
   /** Abort the stream DO; the durable log is kept and a woken event is appended on restart. */
   kill() {
-    return this.durableObjectStub.kill();
+    return this[STREAM_DURABLE_OBJECT_STUB].kill();
   }
 
   /** Wipe all stream DO storage, then abort — the next connection starts a fresh stream. */
   reset() {
-    return this.durableObjectStub.reset();
+    return this[STREAM_DURABLE_OBJECT_STUB].reset();
   }
 }
 
@@ -145,7 +145,7 @@ export default createServerEntry({
       return withAuthHeaders(notAnAdminResponse(admin.email));
     }
 
-    // No COOP/COEP on purpose: the browser SQLite mirror uses wa-sqlite's OPFSCoopSyncVFS,
+    // No COOP/COEP on purpose: the browser SQLite database uses wa-sqlite's OPFSCoopSyncVFS,
     // which needs no SharedArrayBuffer and no cross-origin isolation. (Isolation is what
     // made @sqlite.org/sqlite-wasm auto-install its async-proxy OPFS VFS and deadlock in
     // production builds.) Leaving it off also keeps OPFS working the same way

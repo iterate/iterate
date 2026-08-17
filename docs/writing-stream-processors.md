@@ -26,8 +26,8 @@ package (`packages/iterate/src/processors`, imported as `iterate/processors`).
 apps/os hosts its domain processors on it, and a project's own worker can
 host processors on exactly the same code through the ordinary published
 dependency. The config-repo template's guestbook app
-(`apps/os/config-repo-template/apps/guestbook` — `processor.ts` plus the
-`GuestbookApp` server in `server.tsx`, bundled with its browser client by
+(`configs/default/apps/guestbook` — the `GuestbookApp` server in `server.tsx`,
+bundled with `client.tsx` by
 `createApp` and rendered via Cap'n Web + `useLiveState`) is the reference for
 that userspace hosting shape. Reduced state lives on the project stream at
 `/guestbook`.
@@ -86,6 +86,45 @@ The reference implementations, in reading order: the `delivery.caughtUp`
 branch in `AgentProcessor.processEvent` (start/settle LLM obligations, then
 derive scheduling) and `CapabilityHostProcessor` (scripts — same shape,
 different settle policy).
+
+## Userspace project lifecycle hooks
+
+The default worker in each project's config repo handles raw lifecycle events
+in its literal `processEvent` switch. There is no userspace configuration
+framework: each case can `await this.itx` and run arbitrary project code
+directly. `IterateWorkerEntrypoint` memoizes that project-root session for its
+one stateless invocation; Cloudflare releases the RPC stubs with the execution
+context. This is deliberately not a Durable Object lifetime contract.
+
+- `project/heartbeat-triggered` is appended to `/` by a project-owned Scheduler
+  script and carries only `{ scheduleKey }`.
+- `stream/woken` on `/` exposes project-stream wakes, including after an OS
+  deployment.
+- `project/worker-updated` on `/` is the config-application hook.
+  Creation's successful worker probe publishes the first one using the
+  OS-stamped seed commit; the platform does not separately translate the raw
+  seed commit. For each later copied config repo
+  `repo/commit-completed`, the Project processor first waits for the
+  authoritative current worker to build, load, and answer. Head convergence
+  and in-progress builds keep the platform processor cursor behind for retry;
+  deterministic source failure becomes `project/worker-update-failed`. A later
+  HEAD may satisfy an earlier commit fact, so this certifies runnable current
+  configuration rather than activating one exact artifact.
+
+`project/create-requested` and `project/created` belong to the platform's
+creation saga; the userspace worker does not handle them. The seeded
+worker-update case directly calls `scheduler.set(...)` for one 15-minute
+heartbeat. This is ordinary itx code, not declarative desired state. Copy the
+call for multiple schedules, use `{ every: 1 }` for a fast test, or remove it
+for no heartbeat. Changing an existing project's schedules is explicit too:
+call `set(...)` or `cancel(...)` from the lifecycle case where that action
+belongs. `set(...)` preserves the clock, run count, and defining event when the
+canonical definition already matches.
+
+The heartbeat action appends one durable `project/heartbeat-triggered` event,
+using the Scheduler execution ID for append idempotency. Missed interval
+occurrences coalesce into the Scheduler's next trigger; there is no heartbeat
+backfill.
 
 ## Two primitives, two guarantees
 

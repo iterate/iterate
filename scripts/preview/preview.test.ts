@@ -29,6 +29,7 @@ const PreviewWorkflowConcurrency = z.object({
 const {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
+  announceRetryTelemetry,
   adoptLeaseHeldBySemaphore,
   claimEnvironmentConfigLease,
   describeForcePushCompareHazard,
@@ -198,8 +199,8 @@ test("Preview provisioning includes the Dummy Petshop client OS deploys require"
 });
 
 describe("preview app dependency expansion", () => {
-  test("expands os to include its auth and dummy-petshop dependencies", () => {
-    expect(expandPreviewDependencies(["os"])).toEqual(["os", "auth", "dummy-petshop"]);
+  test("expands os to include the apps exercised by its end-to-end suite", () => {
+    expect(expandPreviewDependencies(["os"])).toEqual(["os", "docs", "auth", "dummy-petshop"]);
   });
 
   test("expands semaphore to include its auth dependency", () => {
@@ -213,9 +214,14 @@ describe("preview app dependency expansion", () => {
     ]);
   });
 
+  test("expands docs to include its OS workspace backend", () => {
+    expect(expandPreviewDependencies(["docs"])).toEqual(["os", "docs", "auth", "dummy-petshop"]);
+  });
+
   test("deduplicates dependencies", () => {
     expect(expandPreviewDependencies(["os", "os", "auth"])).toEqual([
       "os",
+      "docs",
       "auth",
       "dummy-petshop",
     ]);
@@ -242,22 +248,24 @@ describe("preview deploy ordering", () => {
     expect(
       orderPreviewDeployBatches([
         cloudflarePreviewApps.os,
+        cloudflarePreviewApps.docs,
         cloudflarePreviewApps.auth,
         cloudflarePreviewApps["dummy-petshop"],
       ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([["os", "auth", "dummy-petshop"]]);
+    ).toEqual([["os", "docs", "auth", "dummy-petshop"]]);
   });
 
   test("deploys the whole selected fleet in one batch", () => {
     expect(
       orderPreviewDeployBatches([
         cloudflarePreviewApps.os,
+        cloudflarePreviewApps.docs,
         cloudflarePreviewApps.semaphore,
         cloudflarePreviewApps["streams-example-app"],
         cloudflarePreviewApps.auth,
         cloudflarePreviewApps["dummy-petshop"],
       ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([["os", "semaphore", "streams-example-app", "auth", "dummy-petshop"]]);
+    ).toEqual([["os", "docs", "semaphore", "streams-example-app", "auth", "dummy-petshop"]]);
   });
 });
 
@@ -292,6 +300,10 @@ describe("preview workflow scope", () => {
         baseUrl: "https://auth.iterate-preview-3.com",
         workerName: "auth-preview-3",
       },
+      docs: {
+        baseUrl: "https://docs-preview-3.iterate-dev-preview.workers.dev",
+        workerName: "docs-preview-3",
+      },
       "dummy-petshop": {
         baseUrl: "https://dummy-petshop.iterate-preview-3.com",
         workerName: "dummy-petshop-preview-3",
@@ -325,6 +337,7 @@ describe("preview workflow scope", () => {
       ),
     ).toEqual({
       auth: ["vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/auth"],
+      docs: ["vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/docs"],
       "dummy-petshop": [
         "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/dummy-petshop",
       ],
@@ -433,7 +446,7 @@ describe("preview workflow scope", () => {
         "packages/iterate/**",
         "specs/**",
       ]),
-      previewDependencies: ["auth", "dummy-petshop"],
+      previewDependencies: ["auth", "docs", "dummy-petshop"],
       previewTestDependencyBaseUrlEnvVars: {
         "dummy-petshop": "PETSHOP_BASE_URL",
       },
@@ -484,7 +497,7 @@ describe("preview workflow scope", () => {
       probeAppServing: async () => ({ ok: true, detail: "HTTP 200" }),
     });
 
-    expect(apps.map((app) => app.slug)).toEqual(["os", "auth", "dummy-petshop"]);
+    expect(apps.map((app) => app.slug)).toEqual(["os", "docs", "auth", "dummy-petshop"]);
   });
 
   test("pins tests to every current-head deployment's exact Worker version", () => {
@@ -693,57 +706,15 @@ describe("preview workflow scope", () => {
   });
 });
 
-describe("draft preview policy", () => {
-  const { decideDraftPreviewPolicy } = previewInternals;
-
-  test.for([
-    {
-      name: "deploys ready PRs regardless of labels or leases",
-      input: { allowDraft: false, holdsSlot: false, isDraft: false, labels: [] },
-      expected: "deploy",
-    },
-    {
-      name: "skips drafts that hold no slot",
-      input: { allowDraft: false, holdsSlot: false, isDraft: true, labels: ["bug"] },
-      expected: "skip",
-    },
-    {
-      name: "gives a draft's slot back when the semaphore says it holds one without asking",
-      input: { allowDraft: false, holdsSlot: true, isDraft: true, labels: [] },
-      expected: "teardown",
-    },
-    {
-      name: "deploys drafts wearing the preview label",
-      input: { allowDraft: false, holdsSlot: false, isDraft: true, labels: ["preview"] },
-      expected: "deploy",
-    },
-    {
-      name: "deploys drafts when the caller explicitly allows it",
-      input: { allowDraft: true, holdsSlot: false, isDraft: true, labels: [] },
-      expected: "deploy",
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(decideDraftPreviewPolicy(input)).toBe(expected);
-  });
-
-  test("wires the lifecycle events and the dispatch override into the workflow", () => {
+describe("preview workflow dispatch", () => {
+  test("a manual dispatch redeploys the full fleet", () => {
     const workflow = readFileSync(
       resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
       "utf8",
     );
 
-    // Draft/label transitions must re-run the policy so a PR can claim a
-    // slot (ready_for_review, labeled) or give one back (converted_to_draft,
-    // unlabeled).
-    expect(workflow).toContain("- ready_for_review");
-    expect(workflow).toContain("- converted_to_draft");
-    expect(workflow).toContain("- labeled");
-    expect(workflow).toContain("- unlabeled");
-    // A manual dispatch is an explicit ask for a fresh preview: it bypasses
-    // the draft policy and cannot false-green after cleanup recorded this
-    // exact head as released.
     expect(workflow).toContain(
-      "${{ github.event_name == 'workflow_dispatch' && '--allow-draft --all-apps' || '' }}",
+      "${{ github.event_name == 'workflow_dispatch' && '--all-apps' || '' }}",
     );
   });
 });
@@ -788,6 +759,54 @@ describe("preview test commands", () => {
     const source = readFileSync(resolve(repoRoot, "scripts/preview/preview.ts"), "utf8");
 
     expect(source).not.toContain("E2E_RETRY_TELEMETRY_FILE");
+  });
+
+  test("announces a recovered retry as a notice without overriding the command exit code", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      announceRetryTelemetry("os", {
+        retried: [
+          {
+            lane: "vitest",
+            name: "recovers",
+            retryCount: 1,
+            passedAfterRetry: true,
+          },
+        ],
+      });
+
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "::notice title=Preview e2e retries::os: 1 retried: recovers (vitest x1). Every listed retry passed;",
+        ),
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test("warns when retry telemetry still contains a failed test", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      announceRetryTelemetry("os", {
+        retried: [
+          {
+            lane: "playwright",
+            name: "still broken",
+            retryCount: 1,
+            passedAfterRetry: false,
+          },
+        ],
+      });
+
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "::warning title=Preview e2e retries::os: 1 retried: still broken (playwright x1, still failed). At least one listed retry still failed;",
+        ),
+      );
+    } finally {
+      log.mockRestore();
+    }
   });
 
   test("builds a focused Vitest invocation from the OS app", () => {
@@ -842,8 +861,6 @@ describe("preview test commands", () => {
           pullRequestBody: "",
           pullRequestHeadSha: "head-sha",
           pullRequestHeadRef: "telemetry-branch",
-          pullRequestIsDraft: false,
-          pullRequestLabels: [],
           pullRequestNumber: 2237,
           repositoryFullName: "iterate/iterate",
           workflowRunUrl: "https://github.com/iterate/iterate/actions/runs/123",
@@ -1186,7 +1203,7 @@ describe("preview retry selection", () => {
         headSha: "current-head",
         status: "tests-failed" as const,
       },
-      expected: ["os", "auth", "dummy-petshop"],
+      expected: ["os", "docs", "auth", "dummy-petshop"],
     },
     {
       // Semaphore's retry pulls in its auth dependency (relying-party JWKS).
@@ -1211,7 +1228,7 @@ describe("preview retry selection", () => {
         headSha: "old-head",
         status: "deploy-failed" as const,
       },
-      expected: ["os", "auth", "dummy-petshop"],
+      expected: ["os", "docs", "auth", "dummy-petshop"],
     },
     {
       // An awaiting-tests entry at any head is a deploy whose tests never ran
@@ -1226,7 +1243,7 @@ describe("preview retry selection", () => {
         headSha: "old-head",
         status: "awaiting-tests" as const,
       },
-      expected: ["os", "auth", "dummy-petshop"],
+      expected: ["os", "docs", "auth", "dummy-petshop"],
     },
     {
       name: "redeploys legacy green rows that cannot pin an immutable Worker version",
@@ -1237,7 +1254,7 @@ describe("preview retry selection", () => {
         publicUrl: "https://os.iterate-preview-7.com",
         status: "deployed" as const,
       },
-      expected: ["os", "auth", "dummy-petshop"],
+      expected: ["os", "docs", "auth", "dummy-petshop"],
     },
   ])("$name", ({ recorded, expected }) => {
     expect(
@@ -1323,7 +1340,25 @@ describe("preview deploy selection", () => {
       probeAppServing: everythingServing,
     });
 
-    expect(apps.map((app) => app.slug)).toEqual(["os", "auth", "dummy-petshop"]);
+    expect(apps.map((app) => app.slug)).toEqual(["os", "docs", "auth", "dummy-petshop"]);
+  });
+
+  test("selects Docs for an auth-only change because OS Playwright reviews a seeded document", async () => {
+    const apps = await selectPreviewAppsForPullRequest({
+      ...selectionInput,
+      previousState: {
+        apps: {},
+        environmentConfigLease: null,
+        notice: null,
+      },
+      fetchCompare: async () => ({
+        status: "ahead",
+        changedFilenames: ["apps/auth-contract/src/worker.ts", "apps/auth/src/server/worker.ts"],
+      }),
+      probeAppServing: everythingServing,
+    });
+
+    expect(apps.map((app) => app.slug)).toEqual(["os", "docs", "auth", "dummy-petshop"]);
   });
 
   test("selects the full fleet for an e2e policy-only change", async () => {
@@ -1343,6 +1378,7 @@ describe("preview deploy selection", () => {
 
     expect(apps.map((app) => app.slug)).toEqual([
       "os",
+      "docs",
       "semaphore",
       "auth",
       "streams-example-app",
@@ -1384,6 +1420,7 @@ describe("preview deploy selection", () => {
 
     expect(apps.map((app) => app.slug)).toEqual([
       "os",
+      "docs",
       "auth",
       "streams-example-app",
       "dummy-petshop",
@@ -1416,7 +1453,13 @@ describe("preview deploy selection", () => {
       probeAppServing: everythingServing,
     });
 
-    expect(apps.map((app) => app.slug)).toEqual(["os", "semaphore", "auth", "dummy-petshop"]);
+    expect(apps.map((app) => app.slug)).toEqual([
+      "os",
+      "docs",
+      "semaphore",
+      "auth",
+      "dummy-petshop",
+    ]);
   });
 
   test("deploys the full fleet when the compare 404s because a force-push rewrote the deployed head away", async () => {
@@ -1437,6 +1480,7 @@ describe("preview deploy selection", () => {
 
     expect(apps.map((app) => app.slug)).toEqual([
       "os",
+      "docs",
       "semaphore",
       "auth",
       "streams-example-app",
@@ -1463,6 +1507,7 @@ describe("preview deploy selection", () => {
 
     expect(apps.map((app) => app.slug)).toEqual([
       "os",
+      "docs",
       "semaphore",
       "auth",
       "streams-example-app",
@@ -1536,11 +1581,14 @@ describe("cloudflare preview state helpers", () => {
     const body = renderCloudflarePreviewPullRequestBody(
       "## Summary\n\nExisting user-authored description.",
       state,
+      2474,
     );
 
     expect(parseCloudflarePreviewState(body)).toEqual(state);
     expect(body).toContain("## Summary");
-    expect(body).toContain("## Environment Config Lease");
+    expect(body).toContain(
+      "## Environment Config Lease [Login ↗](https://auth.iterate-preview-2.com/test-login?email=pr2474%2Btest%40nustom.com&project=pr2474&return_to=https%3A%2F%2Fos.iterate-preview-2.com%2Fapi%2Fiterate-auth%2Flogin)",
+    );
     expect(body).toContain(
       "<summary>Slot: preview-2 | Doppler config: preview_2</summary>\n\n| app | status | commit | preview | size (gzip) | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
     );
@@ -1568,24 +1616,31 @@ describe("cloudflare preview state helpers", () => {
       "Footer",
     ].join("\n");
 
-    const body = renderCloudflarePreviewPullRequestBody(initialBody, {
-      apps: {
-        os: CloudflarePreviewAppEntry.parse({
-          appDisplayName: "OS",
-          appSlug: "os",
-          message: "AssertionError: expected 2 to be +0",
-          runUrl: "https://github.com/iterate/iterate/actions/runs/456",
-          shortSha: "1234567",
-          status: "tests-failed" as const,
-          updatedAt: "2026-04-02T10:00:00.000Z",
-        }),
+    const body = renderCloudflarePreviewPullRequestBody(
+      initialBody,
+      {
+        apps: {
+          os: CloudflarePreviewAppEntry.parse({
+            appDisplayName: "OS",
+            appSlug: "os",
+            message: "AssertionError: expected 2 to be +0",
+            runUrl: "https://github.com/iterate/iterate/actions/runs/456",
+            shortSha: "1234567",
+            status: "tests-failed" as const,
+            updatedAt: "2026-04-02T10:00:00.000Z",
+          }),
+        },
+        environmentConfigLease: null,
+        notice: null,
       },
-      environmentConfigLease: null,
-      notice: null,
-    });
+      9999,
+    );
 
     expect(body).toContain("# User content");
     expect(body).toContain("Footer");
+    // No lease recorded — the heading carries no login link.
+    expect(body).toContain("## Environment Config Lease\n");
+    expect(body).not.toContain("[Login ↗]");
     expect(body).toContain("<summary>No preview slot recorded.</summary>");
     expect(body).toContain(
       "| OS | tests failed | `1234567` |  |  |  |  |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/456) | 2026-04-02T10:00:00.000Z | AssertionError: expected 2 to be +0 |",
@@ -1606,23 +1661,43 @@ describe("cloudflare preview state helpers", () => {
     // Old bodies persisted the full lease (leaseId, leasedUntil, type). The
     // display schema keeps only slot + doppler config; the rest must parse
     // away cleanly rather than blanking the whole recorded state.
-    const body = renderCloudflarePreviewPullRequestBody("", {
-      apps: {},
-      environmentConfigLease: {
-        dopplerConfig: "preview_2",
-        leasedUntil: 1_700_000_000_000,
-        leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
-        slug: "preview-2",
-        type: "environment-config-lease",
-        // oxlint-disable-next-line no-explicit-any
-      } as any,
-      notice: null,
-    });
+    const body = renderCloudflarePreviewPullRequestBody(
+      "",
+      {
+        apps: {},
+        environmentConfigLease: {
+          dopplerConfig: "preview_2",
+          leasedUntil: 1_700_000_000_000,
+          leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+          slug: "preview-2",
+          type: "environment-config-lease",
+          // oxlint-disable-next-line no-explicit-any
+        } as any,
+        notice: null,
+      },
+      9999,
+    );
 
     expect(parseCloudflarePreviewState(body).environmentConfigLease).toEqual({
       dopplerConfig: "preview_2",
       slug: "preview-2",
     });
+  });
+
+  test("skips the heading login link when the lease's doppler config is unknown", () => {
+    const body = renderCloudflarePreviewPullRequestBody(
+      "",
+      {
+        apps: {},
+        environmentConfigLease: { dopplerConfig: "preview_999", slug: "preview-999" },
+        notice: null,
+        // oxlint-disable-next-line no-explicit-any
+      } as any,
+      9999,
+    );
+
+    expect(body).toContain("## Environment Config Lease\n");
+    expect(body).not.toContain("[Login ↗]");
   });
 
   test("returns empty state when the managed state block is malformed", () => {
@@ -1913,6 +1988,7 @@ describe("preview section notice banner", () => {
         environmentConfigLease: null,
         notice: "All preview slots are leased.\n  preview-1  leased by pr-1601",
       } as any,
+      9999,
     );
     expect(body).toContain("> [!CAUTION]");
     expect(body).toContain("> All preview slots are leased.");
@@ -1924,6 +2000,7 @@ describe("preview section notice banner", () => {
       "",
       // oxlint-disable-next-line no-explicit-any
       { apps: {}, environmentConfigLease: null, notice: null } as any,
+      9999,
     );
     expect(body).not.toContain("[!CAUTION]");
   });
@@ -2442,42 +2519,7 @@ describe("lease reclaim verdicts", () => {
 });
 
 describe("preview fleet capacity diagnosis", () => {
-  const { diagnosePreviewFleetCapacity, pullRequestWouldClaimPreviewSlot } = previewInternals;
-
-  test("treats ready PRs and preview-labeled drafts as slot-eligible", () => {
-    expect(pullRequestWouldClaimPreviewSlot({ isDraft: false, labels: [] })).toBe(true);
-    expect(pullRequestWouldClaimPreviewSlot({ isDraft: true, labels: ["preview"] })).toBe(true);
-    expect(pullRequestWouldClaimPreviewSlot({ isDraft: true, labels: [] })).toBe(false);
-  });
-
-  test("does not call a label-less draft slot-less when it actually holds one (--allow-draft)", () => {
-    const diagnosis = diagnosePreviewFleetCapacity({
-      openPullRequests: [
-        {
-          number: 4242,
-          title: "draft dispatched with --allow-draft",
-          url: "https://github.com/iterate/iterate/pull/4242",
-          isDraft: true,
-          labels: [],
-        },
-      ],
-      slots: [
-        {
-          slug: "preview-1",
-          verdict: "active",
-          holder: "pr-4242",
-          pullRequestUrl: "https://github.com/iterate/iterate/pull/4242",
-          pullRequestState: "open",
-          leasedUntil: "2026-07-16T09:20:18.639Z",
-          lastUsedAgo: "2m ago",
-        },
-      ],
-    });
-
-    // It holds a slot, so it must not be reported as "correctly claims no slot".
-    expect(diagnosis.holdersWithOpenPrs).toContain(4242);
-    expect(diagnosis.reasons.some((reason) => reason.includes("claim no slot"))).toBe(false);
-  });
+  const { diagnosePreviewFleetCapacity } = previewInternals;
 
   test("explains a full fleet held mostly by closed PRs despite few open ones", () => {
     const diagnosis = diagnosePreviewFleetCapacity({
@@ -2486,15 +2528,11 @@ describe("preview fleet capacity diagnosis", () => {
           number: 2008,
           title: "ready pr without a slot",
           url: "https://github.com/iterate/iterate/pull/2008",
-          isDraft: false,
-          labels: [],
         },
         {
           number: 1983,
-          title: "draft without opt-in",
+          title: "draft pr without a slot",
           url: "https://github.com/iterate/iterate/pull/1983",
-          isDraft: true,
-          labels: [],
         },
       ],
       slots: [
@@ -2522,7 +2560,7 @@ describe("preview fleet capacity diagnosis", () => {
     expect(diagnosis.availableCount).toBe(0);
     expect(diagnosis.leasedCount).toBe(2);
     expect(diagnosis.orphanedCount).toBe(1);
-    expect(diagnosis.previewEligibleWithoutSlotCount).toBe(1);
+    expect(diagnosis.openWithoutSlotCount).toBe(2);
     expect(diagnosis.reclaimCommands).toEqual(["pnpm preview reclaim --slot preview-1 --force"]);
     expect(diagnosis.reasons.some((reason) => reason.includes("closed/merged"))).toBe(true);
     expect(diagnosis.reasons.some((reason) => reason.includes("#2008"))).toBe(true);

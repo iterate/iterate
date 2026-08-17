@@ -6,7 +6,7 @@
 #   https://pkg.pr.new/iterate/iterate/iterate@main            (latest main build)
 #   https://pkg.pr.new/iterate/iterate/iterate@<sha>           (specific commit)
 #   https://pkg.pr.new/iterate/iterate/iterate@<pr>            (latest build of a PR)
-#   https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main (Tasks config connector)
+#   https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main  (Docs config connector)
 #
 # The seeded project-repo-template depends on the iterate @main URL — that's how
 # customer repos get `iterate/sdk` types without a manual npm release.
@@ -16,10 +16,9 @@
 # — do not add a `paths:` filter, or previews of unrelated PRs would seed
 # repos with a dangling @<sha> ref.
 #
-# @iterate-com/tasks is the config-side connector for the Tasks app. OS itself
-# never depends on it — it exists for external project config repos (e.g.
-# iterate/config), which install it from the @main URL above. Keeping it out
-# of the seeded template keeps the OS kernel free of any tasks-app knowledge.
+# @iterate-com/docs is the config-side connector for the independently
+# deployed docs app (which serves both the docs and tasks views). The seeded
+# worker installs it for its proxy and agent-facing link capabilities.
 #
 # This lives in .github/workflows (real GitHub Actions, like
 # claude-assistant.yml) rather than .depot/workflows: pkg.pr.new's backend
@@ -44,10 +43,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: pnpm install --frozen-lockfile --filter iterate-root --filter iterate... --filter @iterate-com/tasks...
+      - run: pnpm install --frozen-lockfile --filter iterate-root --filter iterate... --filter @iterate-com/docs...
       - run: pnpm --dir packages/iterate build
-      - run: pnpm --dir apps/tasks build:package
+      - run: pnpm --dir apps/docs build:package
       # --pnpm: pack with `pnpm pack` so publishConfig.exports (dist remap)
       # is applied — `npm pack` would ship the dev exports pointing at src/.
       # pkg.pr.new requires every monorepo package in one invocation.
-      - run: pnpm exec pkg-pr-new publish --pnpm ./packages/iterate ./apps/tasks
+      - run: pnpm exec pkg-pr-new publish --pnpm ./packages/iterate ./apps/docs

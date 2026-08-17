@@ -627,7 +627,7 @@ defects:
   90-second caller watchdog canceled it. The durable event history is
   conclusive: config-repo creation began, Cloudflare Artifacts returned
   `INTERNAL_ERROR` after 32.7 seconds, and the repo processor journaled
-  `repos/create-failed`. No `repos/created` or `project/ready` fact followed,
+  `repos/create-failed`. No `repos/created` or terminal project creation fact followed,
   even after later wakes. The Playwright retry created a different project and
   passed, masking the permanently poisoned first project.
 
@@ -1239,7 +1239,7 @@ race, creation fails instead of replacing it.
 
 The same retries-disabled run found an independent first-use secret race. A
 GitHub App token mint read secret state at offset 5; a
-`subscriber-connected` telemetry fact advanced the raw stream to offset 6;
+`connection-opened` telemetry fact advanced the raw stream to offset 6;
 the material append's explicit offset then conflicted and was incorrectly
 reported as `secret_not_found`. Refreshed material now retries bounded offset
 conflicts while the reduced secret's `updatedOffset` and refresh policy remain

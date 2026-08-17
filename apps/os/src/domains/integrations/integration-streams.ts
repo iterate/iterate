@@ -16,13 +16,17 @@ export function integrationStreamStub(projectId: string | null, path: string) {
   );
 }
 
-/** All events of one stream, oldest first, paged through the getEvents cursor. */
-async function readAllStreamEvents(projectId: string | null, path: string): Promise<StreamEvent[]> {
+/** All selected events of one stream, oldest first, paged through the getEvents cursor. */
+async function readAllStreamEvents(
+  projectId: string | null,
+  path: string,
+  eventTypes: readonly string[],
+): Promise<StreamEvent[]> {
   const stream = integrationStreamStub(projectId, path);
   const events: StreamEvent[] = [];
   let afterOffset = 0;
   for (;;) {
-    const page = await stream.getEvents({ afterOffset, limit: 500 });
+    const page = await stream.getEvents({ afterOffset, eventTypes, limit: 500 });
     events.push(...page);
     if (page.length < 500) return events;
     afterOffset = page[page.length - 1]!.offset;
@@ -30,6 +34,10 @@ async function readAllStreamEvents(projectId: string | null, path: string): Prom
 }
 
 const FILTERED_PAGE_SIZE = 500;
+const CONNECTION_DIRECTORY_EVENT_TYPES = [
+  "events.iterate.com/integration/connection-claimed",
+  "events.iterate.com/integration/connection-unclaimed",
+];
 
 /**
  * The latest event matching any of the requested types.
@@ -119,7 +127,15 @@ export async function lookupConnectionClaim(
   slug: string,
   externalId: string,
 ): Promise<ConnectionClaim | null> {
-  const events = await readAllStreamEvents(null, INTEGRATION_DIRECTORY_STREAM_PATH);
+  // The directory stream also contains ordinary stream lifecycle events. Webhook
+  // ingress is bursty, so hydrating every unrelated event here multiplies one
+  // GitHub delivery into a large SQLite/body-read workload on a single DO.
+  // Storage-side event-type filtering leaves only the tiny claim history.
+  const events = await readAllStreamEvents(
+    null,
+    INTEGRATION_DIRECTORY_STREAM_PATH,
+    CONNECTION_DIRECTORY_EVENT_TYPES,
+  );
   return foldConnectionDirectory(events).get(directoryKey(slug, externalId)) ?? null;
 }
 
@@ -134,7 +150,7 @@ type RouteIntegrationWebhookResult =
  * Route one validly-signed webhook to the project + connection that claimed its
  * `(slug, externalId)`, by appending a provider-shaped event to that
  * connection's stream. This function deliberately appends ONLY the ingress
- * fact: connection setup owns any router birth and subscription. `ignored` (no
+ * fact: connection setup appends any router-created event and subscription. `ignored` (no
  * live claim) lets the door ACK-and-drop. This is the generic core of the
  * webhook door (D4): per-provider code does only the signature verify,
  * external-id extract, and event shaping; routing is one function for every

@@ -1,11 +1,11 @@
 // The project processor CONTRACT. Self-contained: state schema, events,
 // consumes/emits, deps — and it OWNS every nested data structure (birth
-// certificate, custom-domain snapshot, egress rule, approval payloads);
+// certificate, custom-domain entry, egress rule, approval payloads);
 // consumers reach into this module for pieces, never the other way around.
 // Schemas are spelled INLINE in the contract; the ones it genuinely needs
-// twice (the birth certificate, the Cloudflare custom-domain snapshot, the
-// egress rule) are hoisted functions defined below the contract, so the
-// contract still opens the file.
+// more than once (the project creation payload, terminal creation facts, and
+// the egress rule) are hoisted functions below, so the contract still opens
+// the file.
 //
 // The pure half of the human-approval scheme (rule matching, the canonical
 // approval message, signature verification) lives in egress-approvals.ts and
@@ -13,7 +13,12 @@
 // `iterate approve` CLI both build on that module.
 
 import { z } from "zod";
-import { defineProcessorContract, StreamListItem, type ProcessorState } from "iterate/processors";
+import {
+  defineProcessorContract,
+  StreamListItem,
+  type ProcessorState,
+  type StreamEvent,
+} from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
@@ -22,32 +27,89 @@ import { CapabilityHostProcessorContract } from "../capability-host/capability-h
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
 import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
+import { internalStreamId } from "../streams/stream-delivery-utils.ts";
+import { parseConfigRepoTemplateReference } from "../../lib/config-repo-template-reference.ts";
+import { ApprovalPresentedEvents } from "./approval-presented-contract.ts";
+import { AgentReplyPresentedEvents } from "./agent-reply-presented-contract.ts";
 import { StreamContext } from "./stream-context.ts";
+
+/**
+ * One client scope in the project's clients catalog: a capability-host scope
+ * (typically under /clients/**) that `projects.connect` provided a live
+ * capability to, reduced from its copied provider Pager connected/disconnected
+ * facts. Presence is last-known: the platform journals the disconnect when
+ * the provider's socket dies.
+ */
+const ProjectClientRecord = z.object({
+  path: z.string().meta({ description: "The client's identity — its scope's stream path." }),
+  connected: z.boolean().meta({
+    description:
+      "True while at least one provider Pager is connected on the scope (a reconnect " +
+      "overlaps briefly, so this counts sessions, not sockets).",
+  }),
+  lastConnectedAt: z
+    .string()
+    .meta({ description: "Source-stream commit time of the newest pager-connected fact." }),
+  lastDisconnectedAt: z
+    .string()
+    .optional()
+    .meta({ description: "Source-stream commit time of the newest pager-disconnected fact." }),
+  connectedAtOffsets: z
+    .array(z.number().int().positive())
+    .default([])
+    .meta({
+      description:
+        "Reducer bookkeeping: source-stream offsets of the pager-connected facts still open " +
+        "(each pager-disconnected names the connectedAtOffset it closes). `connected` is " +
+        "this set's non-emptiness.",
+    }),
+});
+/** The clients-catalog fold record (includes reducer bookkeeping). */
+export type ProjectClientRecord = z.infer<typeof ProjectClientRecord>;
+
+/** What `itx.clients.list()` returns per client: the catalog record minus reducer bookkeeping. */
+export type ProjectClientListItem = Omit<ProjectClientRecord, "connectedAtOffsets">;
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
-  version: "0.2.0",
+  version: "0.7.0",
   description:
-    "Project root: births the sibling processors every project gets (root capability host, " +
-    "primary scheduler, config repo, email router, notification facet), marks the project " +
-    "ready once its default worker answers, catalogs the project's streams and domain " +
-    "objects, manages custom-domain routing, and holds the egress-approval policy.",
+    "Project root: runs the project/create-requested → project/created bootstrap saga, births " +
+    "the sibling processors every project gets (root capability host, primary scheduler, config " +
+    "repo, email router, notification facet), catalogs the project's streams and domain objects, " +
+    "manages custom-domain routing, and holds the egress-approval policy.",
   stateSchema: z.object({
+    createRequest: projectCreationPayloadSchema().nullable().default(null).meta({
+      description:
+        "The durable creation intent, from project/create-requested; null until the saga opens.",
+    }),
+    createRequestedAtOffset: z
+      .number()
+      .int()
+      .positive()
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "Offset of project/create-requested: the causal link for terminal creation facts and " +
+          "the lower bound of the later userspace worker feed.",
+      }),
+    createFailure: projectCreationFailureSchema()
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "The terminal creation failure, from project/create-failed; a failed project is " +
+          "closed for good in this deployment.",
+      }),
     birthCertificate: projectBirthCertificateSchema()
       .nullable()
       .default(null)
       .meta({
         description:
-          "Existence marker: null until project/created reduces. Stores the created payload " +
-          "verbatim; no other reaction runs before it.",
-      }),
-    ready: z
-      .boolean()
-      .default(false)
-      .meta({
-        description:
-          "True once project/ready reduced: the config repo exists and the default project " +
-          "worker answered its readiness probe. `projects.get(slug).create()` waits for this.",
+          "Existence marker: null until terminal project/created reduces after sibling " +
+          "processors exist, the seeded default worker is reachable, and its permanent feed " +
+          "has been committed.",
       }),
     onboardingActive: z
       .boolean()
@@ -55,7 +117,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       .meta({
         description:
           "True while the onboarding agent flow is running for the project owner: set from " +
-          "the birth certificate's onboardingActive, cleared by project/onboarding-completed.",
+          "project/create-requested, cleared by project/onboarding-completed.",
       }),
     onboardingCompletedAt: z.string().nullable().default(null).meta({
       description: "createdAt of the project/onboarding-completed event; null until then.",
@@ -65,7 +127,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       .default([])
       .meta({
         description:
-          "Catalog of device streams, recorded from cross-posted device/created facts; what " +
+          "Catalog of device streams, recorded from copied device/created facts; what " +
           "the devices collection's list() reads.",
       }),
     repos: z
@@ -73,7 +135,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       .default([])
       .meta({
         description:
-          "Catalog of repo streams, recorded from cross-posted repos/created certificates; " +
+          "Catalog of repo streams, recorded from copied repos/created certificates; " +
           "what the repos collection's list() reads.",
       }),
     secrets: z
@@ -81,7 +143,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       .default([])
       .meta({
         description:
-          "Catalog of secret streams, recorded from cross-posted secret/created facts; what " +
+          "Catalog of secret streams, recorded from copied secret/created facts; what " +
           "the secrets collection's list() reads.",
       }),
     streams: z
@@ -93,32 +155,34 @@ export const ProjectProcessorContract = defineProcessorContract({
           "stream/child-stream-created facts). Purely physical: a path here never implies any " +
           "processor identity.",
       }),
+    clients: z
+      .record(z.string(), ProjectClientRecord)
+      .default({})
+      .meta({
+        description:
+          "Catalog of client scopes keyed by path, recorded from copied capability-host " +
+          "provider Pager connected/disconnected facts (each projects.connect's birth batch " +
+          "configures the clients-to-root copy subscription); what itx.clients.list() reads. " +
+          "Last-known presence: the platform journals the disconnect when a provider's " +
+          "socket dies, so `connected` is honest to socket death, not merely to polite " +
+          "goodbyes.",
+      }),
     customDomains: z
       .array(
-        projectCustomDomainCloudflareSnapshotSchema().extend({
-          kind: z
-            .enum(["cloudflare", "direct"])
-            .default("cloudflare")
-            .meta({
-              description:
-                "How the hostname routes: `cloudflare` = a Cloudflare-for-SaaS custom hostname " +
-                "this processor provisions and polls; `direct` = a platform-owned apex served " +
-                "by worker routes plus an operator-primed hostname-directory registration — " +
-                "no provisioning lifecycle, and the provisioner must never touch it.",
-            }),
-          createdAt: z
-            .string()
-            .meta({ description: "createdAt of the event that first recorded this hostname." }),
-          updatedAt: z
-            .string()
-            .meta({ description: "createdAt of the newest event that touched this hostname." }),
+        z.object({
+          hostname: z.string().meta({ description: "The custom hostname." }),
+          kind: z.enum(["cloudflare", "direct"]).meta({
+            description:
+              "`cloudflare` is provisioned through Cloudflare for SaaS; `direct` is a " +
+              "platform-owned hostname already covered by a Worker route.",
+          }),
         }),
       )
       .default([])
       .meta({
         description:
-          "The project's custom domains, sorted by hostname: the newest Cloudflare snapshot " +
-          "per hostname plus local bookkeeping timestamps.",
+          "A small display/export catalog. The hostname KV directory, not this state, is the " +
+          "routing authority.",
       }),
     egressRules: z
       .array(egressRuleSchema())
@@ -160,15 +224,94 @@ export const ProjectProcessorContract = defineProcessorContract({
       description:
         "True once the notification/created fact from the atomic project birth batch reduces.",
     }),
+    defaults: z
+      .record(z.string(), z.unknown())
+      .default({})
+      .meta({
+        description:
+          "Generic project-scoped facts, latest occurrence wins PER KEY: the raw value of the " +
+          "newest project/defaults-configured event for each key. The project stores these " +
+          "opaquely — schema, validation, and meaning belong to whichever domain reads a key " +
+          '(e.g. the agent creation door reads and validates "agents/birth-defaults"). A ' +
+          "malformed value therefore degrades at the read site, never to a stale predecessor: " +
+          "the raw latest always replaces the previous raw value.",
+      }),
   }),
   events: {
+    "events.iterate.com/project/create-requested": {
+      description:
+        "Requests the project creation saga. The terminal project/created certificate is " +
+        "appended only after sibling processors exist, the seeded default worker has built and " +
+        "answered its readiness probe, and its permanent root feed has been installed.",
+      payloadSchema: projectCreationPayloadSchema(),
+    },
     "events.iterate.com/project/created": {
-      description: "Birth certificate for this project processor.",
+      description:
+        "The project creation saga completed: sibling processors exist, the seeded default " +
+        "project worker is reachable, and its permanent root feed is installed. This is a " +
+        "platform certificate, not a userspace lifecycle hook.",
       payloadSchema: projectBirthCertificateSchema(),
     },
-    "events.iterate.com/project/ready": {
-      description: "The project bootstrap saga completed and its default worker is ready.",
-      payloadSchema: z.object({}),
+    "events.iterate.com/project/create-failed": {
+      description:
+        "The project creation saga reached a deterministic terminal failure and did not declare " +
+        "the project created. Transient availability and timeout failures remain open for durable " +
+        "redelivery. Fail-closed: nothing else reacts on the failed project stream.",
+      payloadSchema: projectCreationFailureSchema(),
+    },
+    "events.iterate.com/project/worker-updated": {
+      description:
+        "The platform successfully built, loaded, and probed the current default project " +
+        "worker, during creation or after a later config repo commit. This is the userspace " +
+        "configuration lifecycle hook; the raw trusted seed commit is not translated.",
+      payloadSchema: z.object({
+        commitOid: z.string().trim().min(1).meta({
+          description: "The config-repo commit associated with the readiness certificate.",
+        }),
+      }),
+    },
+    "events.iterate.com/project/worker-update-failed": {
+      description:
+        "A post-creation config repo commit deterministically failed to build as the default " +
+        "project worker. A later config commit can repair it; transient availability remains " +
+        "open for redelivery.",
+      payloadSchema: z.object({
+        commitOid: z.string().trim().min(1).meta({
+          description: "The config-repo commit that triggered the failed readiness check.",
+        }),
+        error: z.string().trim().min(1).meta({
+          description: "The deterministic worker build failure.",
+        }),
+      }),
+    },
+    "events.iterate.com/project/heartbeat-triggered": {
+      description:
+        "A project-owned Scheduler heartbeat fired. Userspace handles this lifecycle event " +
+        "directly in the config worker.",
+      payloadSchema: z.object({
+        scheduleKey: z
+          .string()
+          .min(1)
+          .meta({ description: "The scheduler key whose heartbeat fired." }),
+      }),
+    },
+    "events.iterate.com/project/defaults-configured": {
+      description:
+        "A project-scoped fact, published as data: the newest occurrence PER KEY is folded " +
+        "into state.defaults. The project never interprets the value — the consuming domain " +
+        "owns the key's schema and validates at its read site (the agent creation door reads " +
+        '"agents/birth-defaults"; the next defaultable concern is a new key with zero ' +
+        "project-contract changes). Unknown keys are inert data.",
+      payloadSchema: z.object({
+        key: z
+          .string()
+          .trim()
+          .min(1)
+          .meta({ description: "Which fact this event sets; latest occurrence wins per key." }),
+        value: z.unknown().meta({
+          description: "Opaque to the project; schema belongs to the domain that reads the key.",
+        }),
+      }),
     },
     "events.iterate.com/project/onboarding-completed": {
       description: "The project owner completed the onboarding agent flow.",
@@ -186,33 +329,20 @@ export const ProjectProcessorContract = defineProcessorContract({
           .meta({ description: "The DNS hostname to provision, e.g. app.acme-inc.com." }),
       }),
     },
-    "events.iterate.com/project/custom-domain-refresh-requested": {
-      description: "Refresh Cloudflare status for a custom domain.",
-      payloadSchema: z.object({
-        hostname: z.string().meta({ description: "The already-configured hostname to re-poll." }),
-      }),
-    },
     "events.iterate.com/project/custom-domain-remove-requested": {
       description: "A custom domain should be removed from this project.",
       payloadSchema: z.object({
         hostname: z.string().meta({ description: "The hostname to detach from the project." }),
       }),
     },
-    "events.iterate.com/project/custom-domain-cloudflare-observed": {
-      description: "Cloudflare custom-hostname status observed for a project custom domain.",
-      payloadSchema: projectCustomDomainCloudflareSnapshotSchema(),
-    },
-    "events.iterate.com/project/custom-domain-direct-observed": {
+    "events.iterate.com/project/custom-domain-configured": {
       description:
-        "The hostname routes to this project directly: a platform-owned apex served by worker " +
-        "routes plus an operator-primed hostname-directory registration, with no " +
-        "Cloudflare-for-SaaS custom hostname behind it. Appended by platform operators, never by " +
-        "this processor; recording it keeps the settings UI honest without starting any " +
-        "provisioning lifecycle — add/refresh/remove requests for a direct hostname are inert.",
+        "The hostname is configured and its KV routing registration points at this project.",
       payloadSchema: z.object({
-        hostname: z
-          .string()
-          .meta({ description: "The directly routed hostname, e.g. iterate.com." }),
+        hostname: z.string().meta({ description: "The configured hostname." }),
+        kind: z.enum(["cloudflare", "direct"]).meta({
+          description: "Whether Cloudflare for SaaS or a direct Worker route serves it.",
+        }),
       }),
     },
     "events.iterate.com/project/custom-domain-provision-failed": {
@@ -232,8 +362,8 @@ export const ProjectProcessorContract = defineProcessorContract({
       description:
         "Replace the project's egress approval rules wholesale. Every outbound request is matched " +
         "against the ordered list at the Project DO's egress decision point (first match wins, no " +
-        "match allows): a `hold` verdict parks the request until a human grants or rejects it on " +
-        "this stream, `deny` refuses it outright.",
+        "match allows): a `hold` verdict parks the request in an approval batch until a human " +
+        "decides it on this stream, `deny` refuses it outright.",
       payloadSchema: z.object({
         rules: z
           .array(egressRuleSchema())
@@ -242,9 +372,10 @@ export const ProjectProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/project/human-approval-key-added": {
       description:
-        "Enroll a public key whose holder may grant held egress requests. Once any active key " +
-        "exists, grants MUST carry a valid ECDSA P-256 signature over the canonical approval " +
-        "message (approval.v1) — unsigned grants are ignored. Rejections never require a signature.",
+        "Enroll a public key whose holder may approve held egress batches. Once any active key " +
+        "exists, decisions containing any `approve` verdict MUST carry a valid ECDSA P-256 " +
+        "signature over the canonical approval message (approval.v2) — unsigned approvals are " +
+        "ignored. All-reject decisions never require a signature.",
       payloadSchema: z.object({
         keyId: z
           .string()
@@ -266,87 +397,127 @@ export const ProjectProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/project/human-approval-requested": {
       description:
-        "An outbound request matched a `hold` rule and is parked at the egress door awaiting a " +
-        "human. Everything is placeholder form — getSecret(...) references, never material. The " +
-        "requested event's offset IS the held request's identity: grants and rejections reference " +
-        "it as approvalRequestEventOffset.",
+        "A batch of outbound requests matched one `hold` rule and is parked at the egress door " +
+        "awaiting a human — a lone request is a batch of one. Everything is placeholder form — " +
+        "getSecret(...) references, never material. The requested event's offset IS the batch's " +
+        "identity: the decision references it as approvalRequestEventOffset, and each request's " +
+        "position in `requests` is its index within the batch.",
       payloadSchema: z.object({
-        method: z.string().meta({ description: "HTTP method of the held request." }),
-        url: z.string().meta({ description: "Destination URL of the held request." }),
-        headers: z.record(z.string(), z.string()).meta({
-          description: "All headers as they would be forwarded, placeholder form.",
-        }),
-        body: z
-          .object({
-            encoding: z.enum(["utf8", "base64"]),
-            content: z.string(),
-            originalByteLength: z.number().int().nonnegative().optional(),
-            sha256: z.string(),
-            truncated: z.boolean().default(false),
-          })
-          .nullish()
+        requests: z
+          .array(
+            z.object({
+              method: z.string().meta({ description: "HTTP method of the held request." }),
+              url: z.string().meta({ description: "Destination URL of the held request." }),
+              headers: z.record(z.string(), z.string()).meta({
+                description: "All headers as they would be forwarded, placeholder form.",
+              }),
+              body: z
+                .object({
+                  encoding: z.enum(["utf8", "base64"]),
+                  content: z.string(),
+                  originalByteLength: z.number().int().nonnegative().optional(),
+                  sha256: z.string(),
+                  truncated: z.boolean().default(false),
+                })
+                .nullish()
+                .meta({
+                  description:
+                    "A bounded inspection prefix in placeholder form plus the complete body's " +
+                    "SHA-256.",
+                }),
+              secretPaths: z.array(z.string()).default([]).meta({
+                description:
+                  'Secret paths the request references — the "spends this secret" headline.',
+              }),
+            }),
+          )
+          .min(1)
           .meta({
             description:
-              "A bounded inspection prefix in placeholder form plus the complete body's SHA-256.",
+              "The held requests, in arrival order. Index within this array is each request's " +
+              "identity inside the batch (verdicts and settlements refer to it).",
           }),
-        secretPaths: z.array(z.string()).default([]).meta({
-          description: 'Secret paths the request references — the "spends this secret" headline.',
-        }),
-        ruleKey: z.string().meta({ description: "The rule that caught the request." }),
+        ruleKey: z.string().meta({ description: "The one rule that caught every request here." }),
         ruleDescription: z.string().default("").meta({
           description: "The matched rule's human-readable explanation, snapshotted at gate time.",
         }),
         streamContext: StreamContext.optional().meta({
           description:
-            "Host-minted durable stream context for the invocation that attempted this request.",
+            "Host-minted durable stream context for the invocation that attempted these " +
+            "requests. Batches with 2+ requests always carry script-execution provenance — " +
+            "only one script run's concurrent burst at one rule ever coalesces.",
         }),
         expiresAt: z.string().meta({
-          description: "ISO horizon after which the hold auto-rejects with reason expired.",
+          description: "ISO horizon after which the whole batch auto-rejects as expired.",
         }),
       }),
     },
-    "events.iterate.com/project/human-approval-granted": {
+    "events.iterate.com/project/human-approval-decided": {
       description:
-        "A human approved a held egress request. When the project has active approval keys, " +
-        "`keyId` + `signature` (raw 64-byte r‖s ECDSA P-256 over the canonical approval.v1 " +
-        "message, base64) are required and verified before the request is released.",
+        "THE verdict on a held batch — one event decides every request in it, by index. When the " +
+        "project has active approval keys, a decision containing any `approve` verdict must carry " +
+        "`keyId` + `signature` (raw 64-byte r‖s ECDSA P-256 over the canonical approval.v2 " +
+        "message, base64) or the whole event is ignored. All-reject decisions never need a " +
+        "signature — deny is the fail-safe direction. The door honors the FIRST decided event " +
+        "referencing a batch; later ones are ignored.",
       payloadSchema: z.object({
         approvalRequestEventOffset: z.number().int().nonnegative().meta({
-          description:
-            "The held request's identity: the offset of its human-approval-requested event.",
+          description: "The batch's identity: the offset of its human-approval-requested event.",
         }),
+        verdicts: z
+          .array(z.enum(["approve", "reject"]))
+          .min(1)
+          .meta({
+            description:
+              "One verdict per request, same order as the batch's `requests` array. A count " +
+              "mismatch makes the event malformed and ignored.",
+          }),
+        decidedBy: z.enum(["human", "expiry"]).meta({
+          description:
+            "Who decided: a human, or the door's own timeout (expiry is always all-reject and " +
+            "never signed).",
+        }),
+        // `.catch(undefined)`: the reason is cosmetic next to the verdicts, so
+        // an invalid one (too long, blank) degrades to ABSENT instead of
+        // failing the whole payload parse — a malformed reason must never make
+        // the door ignore an otherwise-valid decision and strand the hold.
+        reason: z
+          .string()
+          .trim()
+          .min(1)
+          .max(1_000)
+          .optional()
+          .catch(undefined)
+          .meta({
+            description:
+              "The human's stated reason, applying to every rejected index in this decision. It " +
+              "rides back to the calling script in each rejected fetch's 403 body, so the agent " +
+              "can read why and retry with a change. Deliberately NOT covered by the approval.v2 " +
+              "signature: rejections never need signatures (deny is the fail-safe direction — " +
+              "stream-append access already suffices to veto), so signing the reason would " +
+              "protect nothing. Expiry decisions never carry one.",
+          }),
         keyId: z
           .string()
           .optional()
-          .meta({ description: "The enrolled key that signed this grant." }),
+          .meta({ description: "The enrolled key that signed this decision." }),
         signature: z.string().optional().meta({
           description:
-            "Base64 raw 64-byte r‖s ECDSA P-256 signature over the canonical approval message.",
+            "Base64 raw 64-byte r‖s ECDSA P-256 signature over the canonical approval.v2 message.",
         }),
-      }),
-    },
-    "events.iterate.com/project/human-approval-rejected": {
-      description:
-        "A held egress request was refused — by a human, or automatically when its hold expired. " +
-        "Rejections are deliberately unsigned: deny is the fail-safe direction.",
-      payloadSchema: z.object({
-        approvalRequestEventOffset: z.number().int().nonnegative().meta({
-          description:
-            "The held request's identity: the offset of its human-approval-requested event.",
-        }),
-        reason: z
-          .enum(["human", "expired"])
-          .meta({ description: "Who refused: a human, or the hold's timeout." }),
       }),
     },
     "events.iterate.com/project/human-approval-settled": {
       description:
-        "What actually happened after a granted request was released: the upstream status, or the " +
-        "delivery failure. Approval and outcome are separate facts — audits want both.",
+        "What actually happened after one approved request was released: the upstream status, or " +
+        "the delivery failure. Approval and outcome are separate facts — audits want both — and " +
+        "a batch's released requests finish independently, so each settles on its own.",
       payloadSchema: z.object({
         approvalRequestEventOffset: z.number().int().nonnegative().meta({
-          description:
-            "The held request's identity: the offset of its human-approval-requested event.",
+          description: "The batch's identity: the offset of its human-approval-requested event.",
+        }),
+        index: z.number().int().nonnegative().meta({
+          description: "Which request in the batch this settlement is about.",
         }),
         status: z
           .number()
@@ -359,6 +530,16 @@ export const ProjectProcessorContract = defineProcessorContract({
           .meta({ description: "Delivery failure, when the released request never got a status." }),
       }),
     },
+    // The push-suppression claim ("the user is already looking at this
+    // batch"). Owned here so the root stream's approval vocabulary stays in
+    // one contract; the definition itself lives in a standalone catalog
+    // (approval-presented-contract.ts) because the device contract must
+    // consume it and cannot import this module back (this module imports the
+    // device contract).
+    ...ApprovalPresentedEvents,
+    // Same arrangement for the chat-reply suppression claim ("the user is
+    // already looking at this reply") — standalone catalog, owned here.
+    ...AgentReplyPresentedEvents,
   },
   consumes: [
     "*",
@@ -367,21 +548,28 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/human-approval-key-revoked",
     "events.iterate.com/project/human-approval-requested",
     "events.iterate.com/project/custom-domain-add-requested",
-    "events.iterate.com/project/custom-domain-cloudflare-observed",
-    "events.iterate.com/project/custom-domain-direct-observed",
+    "events.iterate.com/project/custom-domain-configured",
     "events.iterate.com/project/custom-domain-provision-failed",
-    "events.iterate.com/project/custom-domain-refresh-requested",
     "events.iterate.com/project/custom-domain-remove-requested",
     "events.iterate.com/project/custom-domain-removed",
     "events.iterate.com/project/onboarding-completed",
+    "events.iterate.com/project/defaults-configured",
+    "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
-    "events.iterate.com/project/ready",
+    "events.iterate.com/project/create-failed",
+    "events.iterate.com/project/worker-updated",
+    "events.iterate.com/project/worker-update-failed",
+    "events.iterate.com/project/heartbeat-triggered",
     "events.iterate.com/device/created",
+    "events.iterate.com/repo/commit-completed",
     "events.iterate.com/repos/created",
+    "events.iterate.com/repos/create-failed",
     "events.iterate.com/secret/created",
     "events.iterate.com/stream/created",
     "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/notification/created",
+    "events.iterate.com/capability-host/capability-provider-pager-connected",
+    "events.iterate.com/capability-host/capability-provider-pager-disconnected",
   ],
   processorDeps: [
     CoreProcessorContract,
@@ -400,12 +588,16 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/email/created",
     "events.iterate.com/capability-host/created",
     "events.iterate.com/scheduler/created",
-    "events.iterate.com/project/custom-domain-cloudflare-observed",
+    "events.iterate.com/project/custom-domain-configured",
     "events.iterate.com/project/custom-domain-provision-failed",
     "events.iterate.com/project/custom-domain-removed",
-    "events.iterate.com/project/ready",
+    "events.iterate.com/project/created",
+    "events.iterate.com/project/create-failed",
+    "events.iterate.com/project/worker-updated",
+    "events.iterate.com/project/worker-update-failed",
     "events.iterate.com/repos/create-requested",
     "events.iterate.com/stream/subscription-configured",
+    "events.iterate.com/stream/subscription-removed",
     "events.iterate.com/notification/created",
   ],
 });
@@ -419,19 +611,98 @@ export type ProjectProcessorContract = typeof ProjectProcessorContract;
 
 /**
  * The project processor's reduced state, inferred from the contract's
- * `stateSchema` — the one definition of the shape. `ready` flips when the
- * bootstrap saga lands; the list fields are what the collection `list()`
- * methods read.
+ * `stateSchema` — the one definition of the shape. A non-null
+ * `birthCertificate` is the terminal creation marker; the list fields are
+ * what the collection `list()` methods read.
  */
 export type ProjectProcessorState = ProcessorState<ProjectProcessorContract>;
 
+type ProjectCreationRequest = Pick<NonNullable<ProjectProcessorState["createRequest"]>, "config">;
+
+/** Exact equality for the immutable creation facts carried through the saga. */
+function sameProjectCreationRequest(
+  left: ProjectCreationRequest,
+  right: ProjectCreationRequest,
+): boolean {
+  return (
+    left.config.slug === right.config.slug &&
+    left.config.onboardingActive === right.config.onboardingActive &&
+    left.config.creatorEmail === right.config.creatorEmail &&
+    left.config.configRepoTemplate === right.config.configRepoTemplate
+  );
+}
+
+type ProjectCreationTerminal =
+  | {
+      type: "events.iterate.com/project/created";
+      payload: z.output<
+        (typeof ProjectProcessorContract.events)["events.iterate.com/project/created"]["payloadSchema"]
+      >;
+    }
+  | {
+      type: "events.iterate.com/project/create-failed";
+      payload: z.output<
+        (typeof ProjectProcessorContract.events)["events.iterate.com/project/create-failed"]["payloadSchema"]
+      >;
+    };
+
+/**
+ * Parse the one terminal fact that can settle a creation request.
+ *
+ * The canonical idempotency key is in the stream's platform-only namespace:
+ * public appends reject it before idempotency lookup, while the Project
+ * Durable Object commits it through the server-only append path. The payload
+ * then binds that platform fact to the exact open request.
+ */
+export function parseProjectCreationTerminal(input: {
+  event: StreamEvent;
+  projectId: string;
+  request: ProjectCreationRequest;
+  requestOffset: number;
+}): ProjectCreationTerminal | null {
+  const { event, projectId, request, requestOffset } = input;
+  if (event.path !== "/" || event.source?.copiedFrom !== undefined) {
+    return null;
+  }
+
+  switch (event.type) {
+    case "events.iterate.com/project/created": {
+      if (
+        event.idempotencyKey !== internalStreamId("project-creation-terminal", projectId, "created")
+      ) {
+        return null;
+      }
+      const parsed = ProjectProcessorContract.events[
+        "events.iterate.com/project/created"
+      ].payloadSchema.safeParse(event.payload);
+      return parsed.success &&
+        parsed.data.createRequestedAtOffset === requestOffset &&
+        sameProjectCreationRequest(request, parsed.data)
+        ? { type: event.type, payload: parsed.data }
+        : null;
+    }
+    case "events.iterate.com/project/create-failed": {
+      if (
+        event.idempotencyKey !== internalStreamId("project-creation-terminal", projectId, "failed")
+      ) {
+        return null;
+      }
+      const parsed = ProjectProcessorContract.events[
+        "events.iterate.com/project/create-failed"
+      ].payloadSchema.safeParse(event.payload);
+      return parsed.success &&
+        parsed.data.createRequestedAtOffset === requestOffset &&
+        sameProjectCreationRequest(request, parsed.data.request)
+        ? { type: event.type, payload: parsed.data }
+        : null;
+    }
+    default:
+      return null;
+  }
+}
+
 /** One custom domain as reduced onto project processor state. */
 export type ProjectCustomDomain = ProjectProcessorState["customDomains"][number];
-
-/** The Cloudflare custom-hostname snapshot (the custom-domain-cloudflare-observed payload). */
-export type ProjectCustomDomainCloudflareSnapshot = z.output<
-  (typeof ProjectProcessorContract.events)["events.iterate.com/project/custom-domain-cloudflare-observed"]["payloadSchema"]
->;
 
 /** One egress approval rule as reduced onto project processor state. */
 export type EgressRule = ProjectProcessorState["egressRules"][number];
@@ -439,17 +710,18 @@ export type EgressRule = ProjectProcessorState["egressRules"][number];
 /** One enrolled approval public key as reduced onto project processor state. */
 export type HumanApprovalKey = ProjectProcessorState["humanApprovalKeys"][number];
 
-/** The complete human-approval-requested event payload; approval.v1 signs its request-subject fields. */
+/** The complete human-approval-requested event payload — a batch; approval.v2 signs its request-subject fields plus the verdicts. */
 export type HumanApprovalRequestedPayload = z.output<
   (typeof ProjectProcessorContract.events)["events.iterate.com/project/human-approval-requested"]["payloadSchema"]
 >;
 
+/** One held request inside a batch. */
+export type HeldRequest = HumanApprovalRequestedPayload["requests"][number];
+
 /**
- * The project's birth certificate — the ONE schema the contract uses twice
- * (the project/created payload and the reduced state's birthCertificate), so
- * it lives in this hoisted function instead of inline.
+ * The payload shared by the creation intent and terminal certificate.
  */
-function projectBirthCertificateSchema() {
+function projectCreationPayloadSchema() {
   return z.object({
     config: z
       .object({
@@ -467,68 +739,58 @@ function projectBirthCertificateSchema() {
               "The creating user's login email, when known. Seeds owner-scoped project state " +
               "such as the inbound email sender allowlist.",
           }),
+        configRepoTemplate: z
+          .string()
+          .trim()
+          .min(1)
+          .refine(
+            (value) => {
+              try {
+                parseConfigRepoTemplateReference(value);
+                return true;
+              } catch {
+                return false;
+              }
+            },
+            { message: "Invalid public GitHub config template reference." },
+          )
+          .optional()
+          .meta({
+            description:
+              "Canonical public GitHub reference copied into /repos/config at project birth; " +
+              "omit for Iterate's embedded default.",
+          }),
       })
       .meta({ description: "Birth-time configuration, recorded verbatim onto state." }),
   });
 }
 
 /**
- * The Cloudflare custom-hostname snapshot — used twice (the
- * custom-domain-cloudflare-observed payload and, extended with local
- * timestamps, the reduced state's customDomains entries), so it lives in this
- * hoisted function instead of inline.
+ * The successful terminal certificate. The request offset is an explicit
+ * causal link: an old or independently appended birth-shaped fact cannot
+ * satisfy the new creation contract.
  */
-function projectCustomDomainCloudflareSnapshotSchema() {
+function projectBirthCertificateSchema() {
+  return projectCreationPayloadSchema().extend({
+    createRequestedAtOffset: z
+      .number()
+      .int()
+      .positive()
+      .meta({ description: "Offset of the project/create-requested event this settles." }),
+  });
+}
+
+/** The terminal project creation failure, shared by its event and state slot. */
+function projectCreationFailureSchema() {
   return z.object({
-    cloudflareHostnameId: z.string().nullable().default(null).meta({
-      description: "Cloudflare's custom-hostname id; null before the create call succeeded.",
-    }),
-    error: z.string().nullable().default(null).meta({
-      description: "The newest provisioning/validation error Cloudflare reported, if any.",
-    }),
-    hostname: z.string().meta({ description: "The custom hostname this snapshot describes." }),
-    hostnameStatus: z.string().nullable().default(null).meta({
-      description: "Cloudflare's raw hostname status (pending, active, …); null when unknown.",
-    }),
-    ownershipVerification: z
-      .object({
-        name: z.string().meta({ description: "TXT record name proving hostname ownership." }),
-        value: z.string().meta({ description: "TXT record value proving hostname ownership." }),
-      })
-      .nullable()
-      .default(null)
-      .meta({
-        description:
-          "The DNS TXT record the owner must create to prove control; null once verified.",
-      }),
-    sslStatus: z.string().nullable().default(null).meta({
-      description: "Cloudflare's raw certificate status; null when unknown.",
-    }),
-    status: z
-      .enum(["requested", "provisioning", "pending_validation", "active", "failed", "removing"])
-      .meta({
-        description:
-          "Our rollup of the raw statuses: what the dashboard shows and routing acts on. " +
-          "Only `active` routes traffic.",
-      }),
-    validationRecords: z
-      .array(
-        z.object({
-          name: z.string().meta({ description: "TXT record name for certificate validation." }),
-          status: z
-            .string()
-            .nullable()
-            .default(null)
-            .meta({ description: "Cloudflare's per-record validation status; null when unknown." }),
-          value: z.string().meta({ description: "TXT record value for certificate validation." }),
-        }),
-      )
-      .default([])
-      .meta({
-        description: "DNS records the owner still has to create for certificate validation.",
-      }),
-    wildcard: z.boolean().default(true).meta({
-      description: "Whether the certificate also covers *.<hostname> (we always request it).",
+    createRequestedAtOffset: z
+      .number()
+      .int()
+      .positive()
+      .meta({ description: "Offset of the project/create-requested event this settles." }),
+    error: z.string().meta({ description: "The terminal bootstrap failure." }),
+    request: projectCreationPayloadSchema().meta({
+      description: "The project/create-requested intent that could not complete.",
     }),
   });
 }
@@ -574,7 +836,22 @@ function egressRuleSchema() {
       description: "hold parks the request for a human; deny refuses it outright.",
     }),
     approvalTimeoutMs: z.number().int().positive().max(3_600_000).default(600_000).meta({
-      description: "How long a held request waits for a human before auto-rejecting.",
+      description: "How long a held batch waits for a human before auto-rejecting.",
     }),
+    debounceMs: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(60_000)
+      .nullable()
+      .default(100)
+      .meta({
+        description:
+          "How long the egress door waits for more of a script run's concurrent requests before " +
+          "committing them as ONE approval batch (each arrival extends the wait, capped at 3x). " +
+          "Only concurrent requests can ever coalesce — a sequential caller's next request starts " +
+          "after the previous one is approved — so the default 100ms covers Promise.all bursts. " +
+          "null disables batching: every request becomes its own batch of one.",
+      }),
   });
 }

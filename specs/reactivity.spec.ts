@@ -133,7 +133,7 @@ test("reactivity page processor panel goes live and repaints from a server push"
   // The processor panel must actually be LIVE (a live-state push
   // subscription), not silently erroring behind a loader fallback.
   await page.getByTestId("reactivity-status").getByText("live").waitFor(STREAM_READY_WAIT);
-  await page.getByTestId("reactivity-phase").getByText("ready").waitFor();
+  await page.getByTestId("reactivity-phase").getByText("created").waitFor();
 
   // #1810 removed the processor-offset metric; "State updates" is its
   // live-state analogue (how many times the folded slice pushed).

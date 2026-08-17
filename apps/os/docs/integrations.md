@@ -189,7 +189,7 @@ repo — no platform change needed. Two shapes:
 - **A collection mount.** For providers a project wants addressed like a
   built-in — `itx.integrations.<slug>.get(<connection>).<method>()` —
   `provideCapability({ path: ["integrations", "<slug>"], type:
-"itx-expression", flattenNestedPaths: true })` mounts any expression (a
+"itx-call", flattenNestedPaths: true })` mounts any expression (a
   standalone dynamic worker, an MCP connection, …) into the collection; the
   mount is a `capability-provided` event on the itx journal — replayable,
   revocable, enumerable by `integrations.list()`. Mount at the project root
@@ -255,11 +255,11 @@ The provided-lane exhibits remain in the catalogue: `github-mcp-connect`
 cannot be shadowed) and `github-webhooks-project-worker` (deliveries landing
 on the project host's own worker).
 
-A linked repo cross-posts only matching push deliveries to its repo stream so
-the repo processor can import its default branch. Pull-request automation is
-instead ordinary userspace code: the config-repo template shows a project
-worker consuming first-hand connection-stream facts and forwarding them to
-`/agents<repo-path>/pr/<number>`. See
+A linked repo stream receives only matching push deliveries from its connection
+stream so the repo processor can import its default branch. Pull-request
+automation is instead ordinary userspace code: the config-repo template shows
+a project worker consuming first-hand connection-stream facts and forwarding
+them to `/agents<repo-path>/pr/<number>`. See
 [GitHub pull-request agents](./github-agents.md).
 
 ## Telegram: the fourth builtin

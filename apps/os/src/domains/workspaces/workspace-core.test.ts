@@ -115,6 +115,10 @@ function fakeRepo(tree: Record<string, string>) {
   return { commits, repo, snapshotCalls };
 }
 
+// The workspace's own directory (its stream path): the ONLY subtree where
+// unmounted private scratch may be written.
+const SCRATCH_ROOT = "/workspaces/test";
+
 const MOUNTS: Record<string, WorkspaceMount> = {
   "/config": { policy: "commit-to-main", repoPath: "/repos/config" },
   "/iterate": { policy: "read-only", repoPath: "/repos/iterate" },
@@ -132,6 +136,7 @@ function subject(mounts: Record<string, WorkspaceMount> = MOUNTS) {
       if (repoPath === "/repos/iterate") return iterate.repo;
       throw new Error(`unexpected repo "${repoPath}"`);
     },
+    scratchRoot: SCRATCH_ROOT,
     workspace,
   });
   return { config, core, iterate, localFiles: files };
@@ -161,13 +166,13 @@ describe("mount-routed reads", () => {
 
   test("listAllFiles and glob merge the local layer with every mount", async () => {
     const { core } = subject();
-    await core.writeFile("/scratch/notes.txt", "hi");
+    await core.writeFile(`${SCRATCH_ROOT}/notes.txt`, "hi");
     await expect(core.listAllFiles()).resolves.toEqual([
       "/config/tasks/one.md",
       "/config/worker.ts",
       "/iterate/README.md",
       "/iterate/tasks/two.md",
-      "/scratch/notes.txt",
+      `${SCRATCH_ROOT}/notes.txt`,
     ]);
     expect(
       (await core.listAllFiles()).filter((path) =>
@@ -217,12 +222,13 @@ describe("batched mount reads", () => {
     const { workspace } = fakeLocalLayer();
     const core = new WorkspaceCore({
       kv: fakeKv(),
-      mounts: async () => ({ "/": { policy: "commit-to-main", repoPath: "/repos/big" } }),
+      mounts: async () => ({ "/repos/big": { policy: "commit-to-main", repoPath: "/repos/big" } }),
       repo: () => big.repo,
+      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
-    await expect(core.readMountFiles(["/tasks/board.md"])).resolves.toEqual({
-      "/tasks/board.md": "# board",
+    await expect(core.readMountFiles(["/repos/big/tasks/board.md"])).resolves.toEqual({
+      "/repos/big/tasks/board.md": "# board",
     });
     expect(big.snapshotCalls).toEqual([["tasks/board.md"]]);
   });
@@ -248,7 +254,7 @@ describe("git status, commit, and log", () => {
     await core.writeFile("/config/worker.ts", "changed");
     await core.writeFile("/config/new.ts", "new");
     await core.deleteFile("/iterate/README.md");
-    await core.writeFile("/scratch/notes.txt", "hi");
+    await core.writeFile(`${SCRATCH_ROOT}/notes.txt`, "hi");
 
     await expect(core.gitStatus()).resolves.toEqual({
       mounts: [
@@ -268,7 +274,7 @@ describe("git status, commit, and log", () => {
           repoPath: "/repos/iterate",
         },
       ],
-      unmounted: [{ change: "added", path: "/scratch/notes.txt" }],
+      unmounted: [{ change: "added", path: `${SCRATCH_ROOT}/notes.txt` }],
     });
   });
 
@@ -276,7 +282,7 @@ describe("git status, commit, and log", () => {
     const { config, core } = subject();
     await core.writeFile("/config/worker.ts", "changed");
     await core.deleteFile("/config/tasks/one.md");
-    await core.writeFile("/scratch/notes.txt", "survives");
+    await core.writeFile(`${SCRATCH_ROOT}/notes.txt`, "survives");
 
     const result = await core.gitCommit({ message: "update worker" });
     expect(result).toMatchObject({
@@ -298,7 +304,7 @@ describe("git status, commit, and log", () => {
     // committed content and the applied deletion — while scratch survives.
     await expect(core.readFile("/config/worker.ts")).resolves.toBe("changed");
     await expect(core.readFile("/config/tasks/one.md")).resolves.toBeNull();
-    await expect(core.readFile("/scratch/notes.txt")).resolves.toBe("survives");
+    await expect(core.readFile(`${SCRATCH_ROOT}/notes.txt`)).resolves.toBe("survives");
     const statusAfter = await core.gitStatus();
     expect(statusAfter.mounts.find((mount) => mount.path === "/config")?.changes).toEqual([]);
   });
@@ -329,7 +335,9 @@ describe("git status, commit, and log", () => {
   });
 
   test("log reads one mount's repo history; scope optional with one mount", async () => {
-    const single = subject({ "/": { policy: "commit-to-main", repoPath: "/repos/config" } });
+    const single = subject({
+      "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
+    });
     await expect(single.core.gitLog()).resolves.toMatchObject([{ oid: "head-oid" }]);
 
     const { core } = subject();
@@ -341,33 +349,103 @@ describe("git status, commit, and log", () => {
 });
 
 describe("nested mounts", () => {
-  test('a "/" mount is shadowed by deeper mounts, for reads, listing, and status alike', async () => {
+  test("an outer mount is shadowed by deeper mounts, for reads, listing, and status alike", async () => {
     const nested: Record<string, WorkspaceMount> = {
-      "/": { policy: "commit-to-main", repoPath: "/repos/config" },
-      "/tasks": { policy: "read-only", repoPath: "/repos/iterate" },
+      "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
+      "/repos/config/tasks": { policy: "read-only", repoPath: "/repos/iterate" },
     };
     const { core } = subject(nested);
-    // "/tasks/**" belongs to the deeper mount (the iterate repo appears at
-    // "/tasks/…"), so the config repo's tasks/one.md is unreachable and
-    // worker.ts routes to "/".
-    await expect(core.readFile("/worker.ts")).resolves.toBe("export default {}");
-    await expect(core.readFile("/tasks/one.md")).resolves.toBeNull();
-    await expect(core.readFile("/tasks/README.md")).resolves.toBe("# iterate");
+    // "/repos/config/tasks/**" belongs to the deeper mount (the iterate repo
+    // appears there), so the config repo's tasks/one.md is unreachable and
+    // worker.ts routes to the outer mount.
+    await expect(core.readFile("/repos/config/worker.ts")).resolves.toBe("export default {}");
+    await expect(core.readFile("/repos/config/tasks/one.md")).resolves.toBeNull();
+    await expect(core.readFile("/repos/config/tasks/README.md")).resolves.toBe("# iterate");
 
     // The shadowed config file appears in NO listing: not at its own path
     // (the deeper mount owns it) and not as a deletion.
     await expect(core.listAllFiles()).resolves.toEqual([
-      "/tasks/README.md",
-      "/tasks/tasks/two.md",
-      "/worker.ts",
+      "/repos/config/tasks/README.md",
+      "/repos/config/tasks/tasks/two.md",
+      "/repos/config/worker.ts",
     ]);
 
     // Deleting the shadowed path is a no-op delete (nothing visible there).
-    await expect(core.deleteFile("/tasks/one.md")).resolves.toBe(false);
+    await expect(core.deleteFile("/repos/config/tasks/one.md")).resolves.toBe(false);
 
     const status = await core.gitStatus();
-    const root = status.mounts.find((mount) => mount.path === "/")!;
-    expect(root.changes).toEqual([]);
+    const outer = status.mounts.find((mount) => mount.path === "/repos/config")!;
+    expect(outer.changes).toEqual([]);
+  });
+});
+
+describe("strict writes and private scratch", () => {
+  test("writes to unmounted absolute paths are rejected loudly — never silent stray scratch", async () => {
+    const { core } = subject();
+    // A repo that is not mounted, and another workspace's directory: both are
+    // almost always typos, and both must fail instead of stranding work.
+    await expect(core.writeFile("/repos/other/file.ts", "x")).rejects.toThrow(/not writable/);
+    await expect(core.writeFile("/workspaces/other/notes.md", "x")).rejects.toThrow(/not writable/);
+    await expect(core.writeFileBytes("/notes.md", new Uint8Array([1]))).rejects.toThrow(
+      /not writable/,
+    );
+    // The rejection teaches where writes belong: the workspace's own
+    // directory and the mounted repo subtrees.
+    await expect(core.writeFile("/notes.md", "x")).rejects.toThrow(
+      /Private files live under your workspace directory \("\/workspaces\/test\//,
+    );
+  });
+
+  test("scratch writes under the workspace's own directory succeed and surface as unmounted changes", async () => {
+    const { core } = subject();
+    await core.writeFile(`${SCRATCH_ROOT}/notes/draft.md`, "hi");
+    await expect(core.readFile(`${SCRATCH_ROOT}/notes/draft.md`)).resolves.toBe("hi");
+    const status = await core.gitStatus();
+    expect(status.unmounted).toEqual([{ change: "added", path: `${SCRATCH_ROOT}/notes/draft.md` }]);
+  });
+
+  test("the scratch root itself is a directory — only paths strictly beneath it are writable", async () => {
+    const { core } = subject();
+    await expect(core.writeFile(SCRATCH_ROOT, "x")).rejects.toThrow(/not writable/);
+  });
+
+  test("a clean mount's status pays NO repo listing", async () => {
+    const config = fakeRepo({ "worker.ts": "x" });
+    const iterate = fakeRepo({ "README.md": "# iterate" });
+    let configListings = 0;
+    let iterateListings = 0;
+    const countingConfig: MountRepoAccess = {
+      ...config.repo,
+      listFiles: () => {
+        configListings += 1;
+        return config.repo.listFiles();
+      },
+    };
+    const countingIterate: MountRepoAccess = {
+      ...iterate.repo,
+      listFiles: () => {
+        iterateListings += 1;
+        return iterate.repo.listFiles();
+      },
+    };
+    const { workspace } = fakeLocalLayer();
+    const core = new WorkspaceCore({
+      kv: fakeKv(),
+      mounts: async () => MOUNTS,
+      repo: (repoPath) => (repoPath === "/repos/config" ? countingConfig : countingIterate),
+      scratchRoot: SCRATCH_ROOT,
+      workspace,
+    });
+    // A fully clean workspace: with every project repo mounted by derivation,
+    // status must not fan one listFiles per repo just to learn that untouched
+    // mounts are untouched.
+    await core.gitStatus();
+    expect(configListings + iterateListings).toBe(0);
+    // One dirty mount: only ITS repo pays a listing.
+    await core.writeFile("/config/a.md", "dirty");
+    await core.gitStatus();
+    expect(configListings).toBe(1);
+    expect(iterateListings).toBe(0);
   });
 });
 
@@ -396,6 +474,7 @@ describe("thermo regressions", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => failing,
+      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     failProbe = true;
@@ -405,10 +484,10 @@ describe("thermo regressions", () => {
     await expect(core.readFile("/config/worker.ts")).resolves.toBe("export default {}");
   });
 
-  test('committing "/" preserves a deeper mount\'s pending deletion', async () => {
+  test("committing an OUTER mount preserves a nested mount's pending deletion", async () => {
     const nested: Record<string, WorkspaceMount> = {
-      "/": { policy: "commit-to-main", repoPath: "/repos/config" },
-      "/side": { policy: "commit-to-main", repoPath: "/repos/iterate" },
+      "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
+      "/repos/config/side": { policy: "commit-to-main", repoPath: "/repos/iterate" },
     };
     const config = fakeRepo({ "worker.ts": "export default {}" });
     const iterate = fakeRepo({ "note.md": "side truth" });
@@ -417,17 +496,21 @@ describe("thermo regressions", () => {
       kv: fakeKv(),
       mounts: async () => nested,
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : iterate.repo),
+      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
-    await core.deleteFile("/side/note.md");
-    await core.writeFile("/root-change.md", "x");
-    const committed = await core.gitCommit({ message: "root only", scope: "/" });
-    expect(committed).toMatchObject({ changedPaths: ["/root-change.md"], mount: "/" });
+    await core.deleteFile("/repos/config/side/note.md");
+    await core.writeFile("/repos/config/root-change.md", "x");
+    const committed = await core.gitCommit({ message: "outer only", scope: "/repos/config" });
+    expect(committed).toMatchObject({
+      changedPaths: ["/repos/config/root-change.md"],
+      mount: "/repos/config",
+    });
     // The deeper mount's deletion is still pending, not silently consumed.
-    await expect(core.readFile("/side/note.md")).resolves.toBeNull();
+    await expect(core.readFile("/repos/config/side/note.md")).resolves.toBeNull();
     const status = await core.gitStatus();
-    expect(status.mounts.find((mount) => mount.path === "/side")?.changes).toEqual([
-      { change: "deleted", path: "/side/note.md" },
+    expect(status.mounts.find((mount) => mount.path === "/repos/config/side")?.changes).toEqual([
+      { change: "deleted", path: "/repos/config/side/note.md" },
     ]);
   });
 
@@ -450,6 +533,7 @@ describe("thermo regressions", () => {
         "/iterate": { policy: "read-only", repoPath: "/repos/iterate" },
       }),
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : countingIterate),
+      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await core.writeFile("/config/a.md", "a");
@@ -458,22 +542,20 @@ describe("thermo regressions", () => {
   });
 
   test("commit heals a stale whiteout (crash residue) instead of wedging on it", async () => {
-    const { core } = subject();
     // Simulate the crash residue: delete a mount file, then the "repo write
     // landed but cleanup died" state — the repo no longer has the file while
     // the whiteout remains.
     const config = fakeRepo({ "only.md": "x" });
     const { workspace } = fakeLocalLayer();
-    const kv = fakeKv();
     const crashCore = new WorkspaceCore({
-      kv,
+      kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => config.repo,
+      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await crashCore.deleteFile("/config/only.md");
     // "crash": the repo applies the deletion out-of-band; the whiteout stays.
-    delete (config as { tree?: unknown }).tree;
     config.repo.listFiles = async () => ({ commitOid: "head-oid", paths: [] });
     config.repo.readFile = async () => null;
     // A retry commit finds nothing real to commit — and says so cleanly
@@ -481,7 +563,6 @@ describe("thermo regressions", () => {
     await expect(crashCore.gitCommit({ message: "retry" })).rejects.toThrow(/Nothing to commit/);
     const status = await crashCore.gitStatus();
     expect(status.mounts[0]!.changes).toEqual([]);
-    void core;
   });
 
   test("`.gitignore` rules do not cross mount boundaries", async () => {
@@ -491,22 +572,23 @@ describe("thermo regressions", () => {
     const core = new WorkspaceCore({
       kv: fakeKv(),
       mounts: async () => ({
-        "/": { policy: "commit-to-main", repoPath: "/repos/config" },
-        "/side": { policy: "commit-to-main", repoPath: "/repos/iterate" },
+        "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
+        "/repos/config/side": { policy: "commit-to-main", repoPath: "/repos/iterate" },
       }),
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : iterate.repo),
+      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
-    // A ROOT-mount .gitignore suppressing *.log must not hide the side
+    // An OUTER-mount .gitignore suppressing *.log must not hide the nested
     // mount's local log file from ITS commit.
-    await core.writeFile("/.gitignore", "*.log\n");
-    await core.writeFile("/root.log", "suppressed");
-    await core.writeFile("/side/kept.log", "kept");
+    await core.writeFile("/repos/config/.gitignore", "*.log\n");
+    await core.writeFile("/repos/config/root.log", "suppressed");
+    await core.writeFile("/repos/config/side/kept.log", "kept");
     const status = await core.gitStatus();
-    const root = status.mounts.find((mount) => mount.path === "/")!;
-    const side = status.mounts.find((mount) => mount.path === "/side")!;
-    expect(root.changes.map((change) => change.path)).not.toContain("/root.log");
-    expect(side.changes.map((change) => change.path)).toContain("/side/kept.log");
+    const outer = status.mounts.find((mount) => mount.path === "/repos/config")!;
+    const side = status.mounts.find((mount) => mount.path === "/repos/config/side")!;
+    expect(outer.changes.map((change) => change.path)).not.toContain("/repos/config/root.log");
+    expect(side.changes.map((change) => change.path)).toContain("/repos/config/side/kept.log");
   });
 
   test("exists() answers for mounted directories and mount points", async () => {
@@ -533,6 +615,7 @@ describe("thermo round-two regressions", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => failing,
+      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await core.writeFile("/config/worker.ts", "precious local edits");
@@ -551,18 +634,18 @@ describe("thermo round-two regressions", () => {
     await expect(core.writeFileBytes("/iterate", new Uint8Array([1]))).rejects.toThrow(
       /mount point/,
     );
-    // The "/" mount point stays covered by the root guard.
+    // The workspace root stays covered by the platform guard.
     await expect(core.writeFile("/", "nope")).rejects.toThrow(/not writable/);
   });
 
   test("STATUS heals a stale whiteout — no commit attempt required", async () => {
     const config = fakeRepo({ "only.md": "x" });
     const { workspace } = fakeLocalLayer();
-    const kv = fakeKv();
     const core = new WorkspaceCore({
-      kv,
+      kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => config.repo,
+      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await core.deleteFile("/config/only.md");
@@ -586,27 +669,30 @@ describe("thermo round-three regressions", () => {
     const vendorRepo = fakeRepo({ "readme.md": "vendor repo truth" });
     const { workspace } = fakeLocalLayer();
     const table: Record<string, WorkspaceMount> = {
-      "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+      "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
     };
     const core = new WorkspaceCore({
       kv: fakeKv(),
       mounts: async () => table,
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : vendorRepo.repo),
+      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
-    // Delete the FILE /vendor from the root repo...
-    await expect(core.deleteFile("/vendor")).resolves.toBe(true);
-    // ...then mount a repo at /vendor. Its files must be fully visible —
+    // Delete the FILE /repos/config/vendor from the outer repo...
+    await expect(core.deleteFile("/repos/config/vendor")).resolves.toBe(true);
+    // ...then mount a repo at that path. Its files must be fully visible —
     // the file tombstone is exact-match, never recursive.
-    table["/vendor"] = { policy: "read-only", repoPath: "/repos/vendor" };
-    await expect(core.readFile("/vendor/readme.md")).resolves.toBe("vendor repo truth");
-    const status = await core.gitStatus();
-    const vendorMount = status.mounts.find((mount) => mount.path === "/vendor")!;
-    expect(vendorMount.changes).toEqual([]);
-    // And a scoped commit of /vendor has nothing to delete.
-    await expect(core.gitCommit({ message: "nope", scope: "/vendor" })).rejects.toThrow(
-      /read-only|Nothing to commit/,
+    table["/repos/config/vendor"] = { policy: "read-only", repoPath: "/repos/vendor" };
+    await expect(core.readFile("/repos/config/vendor/readme.md")).resolves.toBe(
+      "vendor repo truth",
     );
+    const status = await core.gitStatus();
+    const vendorMount = status.mounts.find((mount) => mount.path === "/repos/config/vendor")!;
+    expect(vendorMount.changes).toEqual([]);
+    // And a scoped commit of the nested mount has nothing to delete.
+    await expect(
+      core.gitCommit({ message: "nope", scope: "/repos/config/vendor" }),
+    ).rejects.toThrow(/read-only|Nothing to commit/);
   });
 
   test("a failed LOCAL delete leaves no whiteout behind", async () => {
@@ -622,6 +708,7 @@ describe("thermo round-three regressions", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => config.repo,
+      scratchRoot: SCRATCH_ROOT,
       workspace: failing,
     });
     await expect(core.deleteFile("/config/worker.ts")).rejects.toThrow(/injected local/);
@@ -636,36 +723,38 @@ describe("thermo round-four regressions", () => {
     const vendorRepo = fakeRepo({ "readme.md": "vendor" });
     const { workspace } = fakeLocalLayer();
     const table: Record<string, WorkspaceMount> = {
-      "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+      "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
     };
     const core = new WorkspaceCore({
       kv: fakeKv(),
       mounts: async () => table,
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : vendorRepo.repo),
+      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
-    await core.deleteFile("/vendor");
-    table["/vendor"] = { policy: "read-only", repoPath: "/repos/vendor" };
-    await expect(core.exists("/vendor")).resolves.toBe(true);
-    await expect(core.exists("/vendor/readme.md")).resolves.toBe(true);
+    await core.deleteFile("/repos/config/vendor");
+    table["/repos/config/vendor"] = { policy: "read-only", repoPath: "/repos/vendor" };
+    await expect(core.exists("/repos/config/vendor")).resolves.toBe(true);
+    await expect(core.exists("/repos/config/vendor/readme.md")).resolves.toBe(true);
   });
 
-  test("writes are rejected at a mount's virtual ANCESTOR directories", async () => {
-    const config = fakeRepo({ "worker.ts": "x" });
+  test("writes are rejected at a mount's virtual ANCESTORS — and at unmounted siblings of them", async () => {
     const nested = fakeRepo({ "note.md": "y" });
     const { workspace } = fakeLocalLayer();
     const core = new WorkspaceCore({
       kv: fakeKv(),
       mounts: async () => ({
-        "/": { policy: "commit-to-main", repoPath: "/repos/config" },
-        "/a/b": { policy: "read-only", repoPath: "/repos/nested" },
+        "/repos/nested": { policy: "read-only", repoPath: "/repos/nested" },
       }),
-      repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : nested.repo),
+      repo: () => nested.repo,
+      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
-    await expect(core.writeFile("/a", "not a file")).rejects.toThrow(/mount point/);
-    await expect(core.writeFile("/a/b", "not a file")).rejects.toThrow(/mount point/);
-    await expect(core.writeFile("/a/c.md", "fine")).resolves.toBeUndefined();
+    await expect(core.writeFile("/repos", "not a file")).rejects.toThrow(/mount point/);
+    await expect(core.writeFile("/repos/nested", "not a file")).rejects.toThrow(/mount point/);
+    // Under STRICT writes the ancestor's sibling is not implicitly writable
+    // scratch: it is unmounted and outside the workspace's own directory.
+    await expect(core.writeFile("/repos/c.md", "stray")).rejects.toThrow(/not writable/);
   });
 
   test("mount transitions over dirty overlay state are rejected; clean ones pass", async () => {
@@ -700,25 +789,51 @@ describe("thermo round-four regressions", () => {
         "/docs": { policy: "read-only", repoPath: "/repos/docs" },
       }),
     ).resolves.toBeUndefined();
-    // A new mount colliding with a local FILE is rejected.
-    await core.writeFile("/notes.md", "scratchless");
+    // A new mount colliding with a local FILE is rejected: the scratch file
+    // sits on an ancestor segment of the proposed mount point.
+    await core.writeFile(`${SCRATCH_ROOT}/notes.md`, "scratch");
     await expect(
       core.assertMountTransitionSafe(current, {
         ...current,
-        "/notes.md": { policy: "read-only", repoPath: "/repos/docs" },
+        [`${SCRATCH_ROOT}/notes.md/vendor`]: { policy: "read-only", repoPath: "/repos/docs" },
       }),
-    ).rejects.toThrow(/collides with the local FILE|uncommitted work/);
+    ).rejects.toThrow(/collides with the local FILE/);
+    // A mount AT the dirty file's own path re-routes it instead.
+    await expect(
+      core.assertMountTransitionSafe(current, {
+        ...current,
+        [`${SCRATCH_ROOT}/notes.md`]: { policy: "read-only", repoPath: "/repos/docs" },
+      }),
+    ).rejects.toThrow(/uncommitted work/);
   });
 });
 
 describe("post-merge follow-ups (Bugbot round)", () => {
-  test("a second created event is SKIPPED by the fold, and .gitignored spill files never fabricate span errors", async () => {
+  test("a `.gitignore` inside a mounted repo subtree still filters commits", async () => {
+    const { config, core } = subject();
+    await core.writeFile("/config/.gitignore", "*.log\n");
+    await core.writeFile("/config/debug.log", "noise");
+    await core.writeFile("/config/keep.ts", "kept");
+    const result = await core.gitCommit({ message: "filtered", scope: "/config" });
+    expect(result.changedPaths).toEqual(["/config/.gitignore", "/config/keep.ts"]);
+    expect(config.commits[0]).toEqual({
+      changes: [
+        { content: "*.log\n", path: ".gitignore" },
+        { content: "kept", path: "keep.ts" },
+      ],
+      message: "filtered",
+    });
+    // The ignored file was not consumed by the commit — it stays local.
+    await expect(core.readFile("/config/debug.log")).resolves.toBe("noise");
+  });
+
+  test(".gitignored files never nominate a mount for scope-less commit inference", async () => {
     const { core } = subject();
-    // Agent-shaped overlay: a spill dir with a "*" .gitignore under one
-    // mount, a real change under the other. Scope-less commit must infer the
-    // single genuinely dirty mount instead of rejecting with a span error.
-    await core.writeFile("/config/script-results/.gitignore", "*\n");
-    await core.writeFile("/config/script-results/huge.json", "{}");
+    // A generated dir with a "*" .gitignore under one mount, a real change
+    // under the other. Scope-less commit must infer the single genuinely
+    // dirty mount instead of rejecting with a span error.
+    await core.writeFile("/config/generated/.gitignore", "*\n");
+    await core.writeFile("/config/generated/huge.json", "{}");
     await core.writeFile("/iterate/notes.md", "dirty");
     await expect(core.gitCommit({ message: "should not span" })).rejects.toThrow(/read-only/);
     // (the /iterate mount is read-only in the fixture — the inference chose
@@ -732,24 +847,27 @@ describe("post-merge follow-ups (Bugbot round)", () => {
     const core = new WorkspaceCore({
       kv: fakeKv(),
       mounts: async () => ({
-        "/": { policy: "commit-to-main", repoPath: "/repos/config" },
-        "/a/b": { policy: "read-only", repoPath: "/repos/nested" },
+        "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
+        "/repos/config/a/b": { policy: "read-only", repoPath: "/repos/nested" },
       }),
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : nested.repo),
+      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
-    // "/a" exists as a repo FILE in the root mount but is also a virtual
-    // ancestor of the /a/b mount — editing it would materialize the collision.
-    await expect(core.edit({ path: "/a", oldString: "a file", newString: "boom" })).rejects.toThrow(
-      /mount point/,
-    );
+    // "/repos/config/a" exists as a repo FILE in the outer mount but is also
+    // a virtual ancestor of the nested mount — editing it would materialize
+    // the collision.
+    await expect(
+      core.edit({ path: "/repos/config/a", oldString: "a file", newString: "boom" }),
+    ).rejects.toThrow(/mount point/);
   });
 });
 
 describe("virtual directory coherence", () => {
-  // The round-five repro: the outer repo has a FILE at "/a" while a nested
-  // mount sits at "/a/b". The merged view must treat "/a" as a DIRECTORY
-  // everywhere — never simultaneously a file and the parent of a mount.
+  // The round-five repro: the outer repo has a FILE at "/repos/config/a"
+  // while a nested mount sits at "/repos/config/a/b". The merged view must
+  // treat "/repos/config/a" as a DIRECTORY everywhere — never simultaneously
+  // a file and the parent of a mount.
   function nestedCollisionCore(
     configTree: Record<string, string> = { a: "a file named a", "worker.ts": "x" },
   ) {
@@ -759,10 +877,11 @@ describe("virtual directory coherence", () => {
     const core = new WorkspaceCore({
       kv: fakeKv(),
       mounts: async () => ({
-        "/": { policy: "commit-to-main", repoPath: "/repos/config" },
-        "/a/b": { policy: "read-only", repoPath: "/repos/nested" },
+        "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
+        "/repos/config/a/b": { policy: "read-only", repoPath: "/repos/nested" },
       }),
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : nested.repo),
+      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     return { config, core, nested };
@@ -770,42 +889,45 @@ describe("virtual directory coherence", () => {
 
   test("reads mask an outer repo file at a virtual ancestor", async () => {
     const { core } = nestedCollisionCore();
-    expect(await core.readFile("/a")).toBeNull();
-    expect(await core.readFileBytes("/a")).toBeNull();
+    expect(await core.readFile("/repos/config/a")).toBeNull();
+    expect(await core.readFileBytes("/repos/config/a")).toBeNull();
     // The nested mount's contents still read through untouched.
-    expect(await core.readFile("/a/b/note.md")).toBe("y");
+    expect(await core.readFile("/repos/config/a/b/note.md")).toBe("y");
   });
 
   test("exists() reports virtual ancestors as directories — even with no outer file there", async () => {
     const { core } = nestedCollisionCore();
-    expect(await core.exists("/a")).toBe(true);
+    expect(await core.exists("/repos/config/a")).toBe(true);
     // Same table, but the outer repo has NOTHING at the ancestor path: the
     // mounted subtree alone implies the directory chain.
     const bare = nestedCollisionCore({ "worker.ts": "x" });
-    expect(await bare.core.exists("/a")).toBe(true);
+    expect(await bare.core.exists("/repos/config/a")).toBe(true);
   });
 
   test("listing masks the outer file at a virtual ancestor", async () => {
     const { core } = nestedCollisionCore();
-    expect(await core.listAllFiles()).toEqual(["/a/b/note.md", "/worker.ts"]);
+    expect(await core.listAllFiles()).toEqual([
+      "/repos/config/a/b/note.md",
+      "/repos/config/worker.ts",
+    ]);
     expect(
       (await core.listAllFiles()).filter((path) => minimatch(path, "/**", { dot: true })),
-    ).toEqual(["/a/b/note.md", "/worker.ts"]);
+    ).toEqual(["/repos/config/a/b/note.md", "/repos/config/worker.ts"]);
   });
 
   test("deleteFile() refuses virtual ancestors and installs no whiteout", async () => {
     const { core } = nestedCollisionCore();
-    await expect(core.deleteFile("/a")).rejects.toThrow(/mount point/);
-    expect(await core.exists("/a")).toBe(true);
-    expect(await core.readFile("/a/b/note.md")).toBe("y");
+    await expect(core.deleteFile("/repos/config/a")).rejects.toThrow(/mount point/);
+    expect(await core.exists("/repos/config/a")).toBe(true);
+    expect(await core.readFile("/repos/config/a/b/note.md")).toBe("y");
     const status = await core.gitStatus();
-    const root = status.mounts.find((mount) => mount.path === "/")!;
-    expect(root.changes).toEqual([]);
+    const outer = status.mounts.find((mount) => mount.path === "/repos/config")!;
+    expect(outer.changes).toEqual([]);
   });
 
   test("deleteFile() at an exact mount point throws instead of no-op'ing", async () => {
     const { core } = nestedCollisionCore();
-    await expect(core.deleteFile("/a/b")).rejects.toThrow(/mount point/);
+    await expect(core.deleteFile("/repos/config/a/b")).rejects.toThrow(/mount point/);
   });
 });
 
@@ -822,38 +944,44 @@ describe("delete whiteout surface", () => {
 });
 
 describe("reRoutedPaths", () => {
-  const root: Record<string, WorkspaceMount> = {
-    "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+  const base: Record<string, WorkspaceMount> = {
+    "/repos/config": { policy: "commit-to-main", repoPath: "/repos/config" },
   };
   test("adding a nested mount re-routes exactly the stolen paths", () => {
     const after = {
-      ...root,
-      "/sub": { policy: "commit-to-main" as const, repoPath: "/repos/other" },
+      ...base,
+      "/repos/config/sub": { policy: "commit-to-main" as const, repoPath: "/repos/other" },
     };
-    expect(reRoutedPaths(root, after, ["/sub/tasks/a.md", "/tasks/b.md"])).toEqual([
-      "/sub/tasks/a.md",
-    ]);
+    expect(
+      reRoutedPaths(base, after, ["/repos/config/sub/tasks/a.md", "/repos/config/tasks/b.md"]),
+    ).toEqual(["/repos/config/sub/tasks/a.md"]);
   });
   test("re-pointing a mount re-routes its paths; removal re-routes to the parent", () => {
     const after: Record<string, WorkspaceMount> = {
-      "/": { policy: "commit-to-main", repoPath: "/repos/swapped" },
+      "/repos/config": { policy: "commit-to-main", repoPath: "/repos/swapped" },
     };
-    expect(reRoutedPaths(root, after, ["/tasks/b.md"])).toEqual(["/tasks/b.md"]);
+    expect(reRoutedPaths(base, after, ["/repos/config/tasks/b.md"])).toEqual([
+      "/repos/config/tasks/b.md",
+    ]);
     const nested = {
-      ...root,
-      "/sub": { policy: "commit-to-main" as const, repoPath: "/repos/other" },
+      ...base,
+      "/repos/config/sub": { policy: "commit-to-main" as const, repoPath: "/repos/other" },
     };
-    expect(reRoutedPaths(nested, root, ["/sub/tasks/a.md"])).toEqual(["/sub/tasks/a.md"]);
+    expect(reRoutedPaths(nested, base, ["/repos/config/sub/tasks/a.md"])).toEqual([
+      "/repos/config/sub/tasks/a.md",
+    ]);
   });
   test("an unchanged nested mount survives sibling changes", () => {
     const before = {
-      ...root,
-      "/keep": { policy: "read-only" as const, repoPath: "/repos/keep" },
+      ...base,
+      "/repos/config/keep": { policy: "read-only" as const, repoPath: "/repos/keep" },
     };
     const after = {
-      "/": { policy: "commit-to-main" as const, repoPath: "/repos/swapped" },
-      "/keep": { policy: "read-only" as const, repoPath: "/repos/keep" },
+      "/repos/config": { policy: "commit-to-main" as const, repoPath: "/repos/swapped" },
+      "/repos/config/keep": { policy: "read-only" as const, repoPath: "/repos/keep" },
     };
-    expect(reRoutedPaths(before, after, ["/keep/x.md", "/y.md"])).toEqual(["/y.md"]);
+    expect(reRoutedPaths(before, after, ["/repos/config/keep/x.md", "/repos/config/y.md"])).toEqual(
+      ["/repos/config/y.md"],
+    );
   });
 });

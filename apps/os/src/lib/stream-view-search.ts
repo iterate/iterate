@@ -54,7 +54,7 @@ export const StreamViewSearch = z.object({
   panel: z.boolean().optional().catch(undefined),
   /** Whether the events sheet is open (full-panel layouts only). */
   events: z.boolean().optional().catch(undefined),
-  /** Subscription key of the processor focused in the sheet. */
+  /** Connection or subscription key focused in the processor sheet. */
   processor: z.string().optional().catch(undefined),
   /** Whether the agent details sheet is open (agent streams only). */
   agent: z.boolean().optional().catch(undefined),
@@ -232,7 +232,7 @@ export function useStreamViewPanels(): {
   closeInspector: () => void;
   inspectLlmRequest: (llmRequestOffset: number) => void;
   inspectScriptExecution: (executionId: string) => void;
-  focusProcessor: (subscriptionKey: string) => void;
+  focusProcessor: (name: string) => void;
   openProcessorsOverview: () => void;
   closeProcessorsPanel: () => void;
   openAgentDetails: () => void;
@@ -288,12 +288,12 @@ export function useStreamViewPanels(): {
     [setSearch],
   );
   const focusProcessor = useCallback(
-    (subscriptionKey: string) =>
+    (name: string) =>
       setSearch({
         ...RELEASE_PANEL_EDGE,
         events: undefined,
         panel: true,
-        processor: subscriptionKey,
+        processor: name,
       }),
     [setSearch],
   );

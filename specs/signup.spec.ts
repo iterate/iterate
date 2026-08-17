@@ -13,7 +13,7 @@ import { test } from "./test-support/test.ts";
 // the apps/auth email-OTP lane instead of minting a session.
 test("can sign up with an email one-time passcode", async ({ page }, testInfo) => {
   test.skip(
-    !(await startEmailOtpSignIn(page)),
+    !(await startEmailOtpSignIn(page, testInfo)),
     "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
   );
 
@@ -32,7 +32,7 @@ test("can sign up with an email one-time passcode", async ({ page }, testInfo) =
     // The composer is the destination route's structural chrome — it renders
     // on mount, independent of any LLM output. 60s covers the cold-slot
     // bootstrap + redirect straggle without serially waiting for an optional
-    // intermediate paint first.
+    // intermediate paint first — a manual timeout, spinner-waiter is disabled here.
     await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
   });
   // The composer only renders under an agent-stream route, so the URL has

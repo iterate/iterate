@@ -21,6 +21,7 @@ test("agent create installs only generic machinery; later events configure it", 
   });
 
   using project = await itx.projects.get(`agent-create-${crypto.randomUUID()}`).create({});
+  expect(await project.agents.list()).toEqual([]);
   using agent = project.agents.get(`/agents/create-${crypto.randomUUID()}`);
   expect((await agent.processor.snapshot()).state.birthCertificate).toBeNull();
 
@@ -63,27 +64,23 @@ test("agent create installs only generic machinery; later events configure it", 
     'Processor "agent" does not consume event "events.iterate.com/stream/subscription-configured".',
   );
 
-  const ephemeralIdempotencyKey = `agent-append-ephemeral-${crypto.randomUUID()}`;
   await expect(
     (
       agent as unknown as {
         append(event: {
           type: string;
           payload: Record<string, unknown>;
-          idempotencyKey: string;
           ephemeral: true;
         }): Promise<unknown>;
       }
     ).append({
       type: AGENT_CONTEXT_ADDED_TYPE,
-      idempotencyKey: ephemeralIdempotencyKey,
       ephemeral: true,
-      payload: { role: "user", content: "wake processors cannot consume this" },
+      payload: { role: "user", content: "hosted processors cannot consume this" },
     }),
   ).rejects.toThrow(
     `Processor "agent" cannot consume ephemeral event "${AGENT_CONTEXT_ADDED_TYPE}".`,
   );
-  expect(await agent.stream.getEvent({ idempotencyKey: ephemeralIdempotencyKey })).toBeUndefined();
 
   const [configured] = await agent.append({
     type: AGENT_CONTEXT_ADDED_TYPE,
@@ -311,29 +308,28 @@ test("Agent create replays its earlier birth and setup events through its subscr
       Array.isArray(event.payload?.path) &&
       event.payload.path.join(".") === "workspace",
   );
-  // Processor subscriptions are wake-mode deliveries addressed by itx
-  // expression over the ordinary domain surface: { delivery: { mode:
-  // "wake", expression: ["agents", ["get", path], "processor",
-  // "wakeStreamSubscriber"] } }. The expression ROOT names the host domain.
+  // Hosted processor subscriptions are facet-placed: the subscription name is
+  // the instance identity (defaulting to the contract slug) and the facet name;
+  // no itx expression names a host Durable Object.
   const wakeSubscriptionPayload = (event: { payload?: Record<string, unknown> }) =>
     event.payload as {
-      subscriptionKey?: string;
-      delivery?: { mode?: string; expression?: unknown[] };
+      name?: string;
+      receiver?: { action?: string; placement?: string };
     };
-  const wakeExpressionRoot = (event: { payload?: Record<string, unknown> }) =>
-    wakeSubscriptionPayload(event).delivery?.expression?.[0];
-  const agentSubscriptionOffset = requiredOffset(
+  // The subscription NAME is the contract selector (name == registered slug).
+  const facetWakeSubscriptionOffset = (description: string, name: string) =>
+    requiredOffset(description, (event) => {
+      if (event.type !== "events.iterate.com/stream/subscription-configured") return false;
+      const payload = wakeSubscriptionPayload(event);
+      return payload.receiver?.action === "facet-processor" && payload.name === name;
+    });
+  const agentSubscriptionOffset = facetWakeSubscriptionOffset(
     "agent processor subscription",
-    (event) =>
-      event.type === "events.iterate.com/stream/subscription-configured" &&
-      wakeExpressionRoot(event) === "agents" &&
-      String(wakeSubscriptionPayload(event).subscriptionKey).endsWith("#agent"),
+    "agent",
   );
-  const capabilityHostSubscriptionOffset = requiredOffset(
+  const capabilityHostSubscriptionOffset = facetWakeSubscriptionOffset(
     "capability-host processor subscription",
-    (event) =>
-      event.type === "events.iterate.com/stream/subscription-configured" &&
-      wakeExpressionRoot(event) === "capabilityHosts",
+    "capability-host",
   );
 
   // This is the supported replay case: create commits one complete birth
@@ -409,7 +405,7 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
       ],
     ],
     path: ["agentProbe"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   using _agentCounterProvision = await agent.provideCapability({
     expression: [
@@ -443,7 +439,7 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
       ],
     ],
     path: ["agentCounter"],
-    type: "itx-expression",
+    type: "itx-call",
   });
 
   await expect(
@@ -558,12 +554,12 @@ test("Dynamic worker env.ITX.get() is scoped by project and agent host path", as
   using _projectScopeProbeProvision = await project.provideCapability({
     expression: ["workers", ["get", scopeProbeWorkerRef("/")]],
     path: ["scopeProbe"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   using _agentScopeProbeProvision = await agent.provideCapability({
     expression: ["workers", ["get", scopeProbeWorkerRef(agentPath)]],
     path: ["scopeProbe"],
-    type: "itx-expression",
+    type: "itx-call",
   });
 
   // @ts-expect-error - dynamic project capability mounted by this test.
@@ -693,11 +689,13 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     );
     subscriptionCount = subscriptions.length;
     processorSlugs = subscriptions
-      .map(
-        (event) =>
-          (event.payload as { delivery?: { processorSlug?: string } } | undefined)?.delivery
-            ?.processorSlug,
-      )
+      .filter((event) => {
+        const action = (event.payload as { receiver?: { action?: string } } | undefined)?.receiver
+          ?.action;
+        return action === "facet-processor" || action === "wake-processor";
+      })
+      // The subscription NAME is the contract selector (name == registered slug).
+      .map((event) => (event.payload as { name?: string } | undefined)?.name)
       .filter((slug): slug is string => typeof slug === "string");
     if (processorSlugs.includes("agent") && processorSlugs.includes("capability-host")) break;
     if (Date.now() > mechanicsDeadline) break;
@@ -706,8 +704,7 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   expect(processorSlugs).toEqual(expect.arrayContaining(["agent", "capability-host"]));
   expect(subscriptionCount).toBeGreaterThanOrEqual(3);
 });
-
-test("Project worker processEventBatch receives events from every project stream and can cross-post", async () => {
+test("Project worker processEventBatch receives events from every project stream and can copy", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
@@ -717,8 +714,8 @@ test("Project worker processEventBatch receives events from every project stream
   using project = await itx.projects
     .get(uniqueFixtureSlug("project-worker-process-event"))
     .create({});
-  const marker = `cross-post-${crypto.randomUUID()}`;
-  // NOT the root stream: every project stream self-configures the
+  const marker = `copy-${crypto.randomUUID()}`;
+  // NOT the root stream: every project child stream self-configures the
   // project-worker push feed at birth, so a freshly minted child stream must
   // reach the worker with no wiring at all.
   const sourcePath = `/sources/ping-${crypto.randomUUID()}`;
@@ -740,15 +737,15 @@ test("Project worker processEventBatch receives events from every project stream
               }
 
               async processEvent(event) {
-                if (event.metadata?.crossPostMarker !== ${JSON.stringify(marker)}) return;
+                if (event.metadata?.copyMarker !== ${JSON.stringify(marker)}) return;
 
                 const project = await this.env.ITX.get();
-                await project.streams.get("/cross-posted").append({
-                  type: "events.iterate.com/test/cross-posted",
-                  idempotencyKey: \`project-worker-cross-post:\${event.path}@\${event.offset}\`,
+                await project.streams.get("/copied").append({
+                  type: "events.iterate.com/test/copied",
+                  idempotencyKey: \`project-worker-copy:\${event.path}@\${event.offset}\`,
                   metadata: {
-                    crossPostedBy: "project-worker",
-                    marker: event.metadata.crossPostMarker,
+                    copiedBy: "project-worker",
+                    marker: event.metadata.copyMarker,
                     sourceOffset: event.offset,
                     sourcePath: event.path,
                   },
@@ -762,15 +759,15 @@ test("Project worker processEventBatch receives events from every project stream
           `,
       },
     ],
-    message: "Cross-post selected project events from processEventBatch",
+    message: "Copy selected project events from processEventBatch",
   });
 
-  const crossPosted = project.streams.get("/cross-posted");
-  const copied = crossPosted.waitForEvent({
-    eventTypes: ["events.iterate.com/test/cross-posted"],
+  const copiedStream = project.streams.get("/copied");
+  const copied = copiedStream.waitForEvent({
+    eventTypes: ["events.iterate.com/test/copied"],
     // A fresh commit deliberately exercises the cold project-worker build.
     // Durable feed handoff preserves delivery, but two consecutive preview
-    // runs exceeded the old 30s client deadline before the worker cross-posted.
+    // runs exceeded the old 30s client deadline before the worker copied.
     // Keep enough headroom to observe that delivery while the follow-up task
     // reduces the cold-path tail and restores the tighter budget.
     timeoutMs: 100_000,
@@ -778,13 +775,13 @@ test("Project worker processEventBatch receives events from every project stream
 
   const [sourceEvent] = await project.streams.get(sourcePath).append({
     type: "events.iterate.com/test/source",
-    metadata: { crossPostMarker: marker },
+    metadata: { copyMarker: marker },
     payload: { text: "hello from a child stream" },
   });
 
   const copiedEvent = await copied;
   expect(copiedEvent.metadata).toMatchObject({
-    crossPostedBy: "project-worker",
+    copiedBy: "project-worker",
     marker,
     sourceOffset: sourceEvent.offset,
     sourcePath,
@@ -797,15 +794,15 @@ test("Project worker processEventBatch receives events from every project stream
 
   // The source stream's worker-feed cursor reflects the delivery. The push
   // ack lands after the worker's processEventBatch resolves — which can be a
-  // beat after the cross-posted copy became observable — so poll briefly.
+  // beat after the copy became observable — so poll briefly.
   await waitForCondition(
     async () => {
       const runtimeState = await project.streams.get(sourcePath).runtimeState();
-      const feed = runtimeState.runtime.subscriptions["project-worker"];
-      return (feed?.ackedOffset ?? 0) >= sourceEvent.offset;
+      const subscription = runtimeState.runtime.subscriptions["project-worker"];
+      return (subscription?.confirmedOffset ?? 0) >= sourceEvent.offset;
     },
     {
-      description: "project-worker feed ackedOffset to reach the source event",
+      description: "project-worker subscription acknowledgement to reach the source event",
       timeoutMs: 10_000,
     },
   );

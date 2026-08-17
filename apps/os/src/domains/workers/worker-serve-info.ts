@@ -1,5 +1,10 @@
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
+
 /** Trusted build metadata stamped by OS onto dynamic-worker responses. */
 export const WORKER_SERVE_HEADER = "x-iterate-worker-serve";
+
+/** Marks the explicitly retryable cold-build page on the fetch lane. */
+export const WORKER_BUILDING_HEADER = "x-iterate-worker-building";
 
 /** Marks the terminal build-failed page on the fetch lane. */
 export const WORKER_BUILD_FAILED_HEADER = "x-iterate-worker-build-failed";
@@ -16,5 +21,10 @@ export function withWorkerCommit(response: Response, commitOid: string | undefin
   const stamped = new Response(response.body, response);
   stamped.headers.delete(WORKER_SERVE_HEADER);
   if (commitOid !== undefined) stamped.headers.set(WORKER_SERVE_HEADER, commitOid);
+  if (Symbol.dispose in response) {
+    Object.defineProperty(stamped, Symbol.dispose, {
+      value: () => disposeIgnoredRpcResult(response),
+    });
+  }
   return stamped;
 }

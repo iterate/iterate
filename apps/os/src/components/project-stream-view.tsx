@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { FilterIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { useAuthClient } from "@iterate-com/auth/client";
@@ -20,7 +21,7 @@ import {
 } from "iterate/sdk/itx/react";
 import type { Stream } from "../itx-api.generated.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
-import { useStreamMirror } from "~/domains/streams/client-libraries/browser/hooks/use-stream-mirror.ts";
+import { useBrowserStreamStore } from "~/domains/streams/client-libraries/browser/hooks/use-browser-stream-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import { asBrowserStreamClient } from "~/domains/streams/client-libraries/browser/stream-transport.ts";
@@ -59,8 +60,8 @@ type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
 
 type ProjectStreamViewProps = {
   /**
-   * Runtime supplied by a parent which already owns the selected agent's live
-   * subscription. `undefined` lets this generic stream view subscribe itself;
+   * Runtime supplied by a parent which already listens to the selected agent's
+   * live state. `undefined` lets this generic stream view open its own listener;
    * `null` means the parent has no transition yet.
    */
   agentRuntimeTransition?: AgentUiRuntimeTransition | null;
@@ -100,7 +101,7 @@ type ProjectStreamViewProps = {
 const EMPTY_STREAM_METRICS: BrowserStreamMetricsView = {
   spark: [],
   transportRttMs: null,
-  subscriber: undefined,
+  eventConsumption: undefined,
 };
 
 /**
@@ -110,7 +111,7 @@ const EMPTY_STREAM_METRICS: BrowserStreamMetricsView = {
  * processor state) on top.
  *
  * This component is the orchestrator: it owns the two browser-hosted
- * processors that mirror the stream into local SQLite (the raw `events` log
+ * processors that store the stream in local SQLite (the raw `events` log
  * and the single `feed_items` projection) and hands their stores/databases to
  * focused child components. All view state (mode, filters, open panels) lives in the URL —
  * see ~/lib/stream-view-search.ts — so children read it themselves; the
@@ -119,22 +120,22 @@ const EMPTY_STREAM_METRICS: BrowserStreamMetricsView = {
  */
 export function ProjectStreamView(props: ProjectStreamViewProps) {
   if (props.layout === "fullPanel") return <FullPanelProjectStreamView {...props} />;
-  return <MirroredProjectStreamView {...props} />;
+  return <BrowserDatabaseProjectStreamView {...props} />;
 }
 
 /**
  * Full-panel domain pages keep their stream available as a secondary Events
- * sheet without paying for its historical download, SQLite mirror, or live
- * subscription while that sheet is closed.
+ * sheet without paying for its historical download, local SQLite database, or
+ * open event connection while that sheet is closed.
  */
 function FullPanelProjectStreamView({
   contextHeader,
   panel,
   streamPath,
-  ...mirrorProps
+  ...databaseProps
 }: ProjectStreamViewProps) {
   const panels = useStreamViewPanels();
-  const mirrorActive = panels.eventsSheetOpen || panels.processorsPanelOpen;
+  const databaseActive = panels.eventsSheetOpen || panels.processorsPanelOpen;
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-background">
@@ -147,9 +148,9 @@ function FullPanelProjectStreamView({
       />
       {contextHeader}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{panel}</div>
-      <DeferredSurface active={mirrorActive}>
-        <MirroredProjectStreamView
-          {...mirrorProps}
+      <DeferredSurface active={databaseActive}>
+        <BrowserDatabaseProjectStreamView
+          {...databaseProps}
           contextHeader={contextHeader}
           layout="fullPanel"
           panel={panel}
@@ -160,7 +161,7 @@ function FullPanelProjectStreamView({
   );
 }
 
-function MirroredProjectStreamView({
+function BrowserDatabaseProjectStreamView({
   agentRuntimeTransition: suppliedAgentRuntimeTransition,
   autoFocusMessageComposer = false,
   defaultComposerMode,
@@ -188,7 +189,7 @@ function MirroredProjectStreamView({
       ...(picture === undefined || picture === "" ? {} : { picture }),
     };
   }, [authSession]);
-  const { resolvedStreamSource, store, snapshot } = useProjectStreamMirror({
+  const { resolvedStreamSource, store, snapshot } = useProjectStreamDatabase({
     projectId,
     resetStreamSourceTransport,
     subscriberUser,
@@ -196,7 +197,7 @@ function MirroredProjectStreamView({
     streamPath,
   });
 
-  // Trigger-maintained counts (O(#types)) instead of COUNT(*) (full mirror
+  // Trigger-maintained counts (O(#types)) instead of COUNT(*) (full local-table
   // scan): this query re-runs after every delivered batch and shares the one
   // OPFS connection with ingest writes — see the raw-events processor schema.
   const countResult = useStreamQuery(
@@ -204,6 +205,10 @@ function MirroredProjectStreamView({
     `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts`,
   );
   const eventCount = Number(countResult.data[0]?.count ?? 0);
+  // While this view shows the newest agent reply in a visible tab, claim it
+  // so the chat-reply push stays quiet (suppression, not read-state) — the
+  // web half of the mobile thread screen's identical claim.
+  useClaimReplyPresented({ database: store.streamDatabase, projectId, streamPath });
   const agentUiState = useAgentUiReducedState(store.streamDatabase, store, snapshot.liveRevision);
   // Real, browser-measured: transport RTT from RPCs the store already makes,
   // plus the hosted processor's self-measured consumption report.
@@ -219,13 +224,13 @@ function MirroredProjectStreamView({
   const rawFilter = feedItemsFilterFromSearch(search, streamPath);
 
   // The server is about to append: verify deliveries actually arrive and
-  // reconnect within seconds if a subscription died silently — instead of
+  // reconnect within seconds if the event connection died silently — instead of
   // the user's message not appearing until the next paced probe (or a reload).
   const nudgeDeliveries = useCallback(() => {
     void store.nudge();
   }, [store]);
 
-  const subscribedAgentRuntimeTransition = useLiveState(
+  const liveAgentRuntimeTransition = useLiveState(
     (itx) => itx.agents.get(streamPath).liveState,
     (state) => state.runtimeChange,
     [streamPath],
@@ -239,7 +244,7 @@ function MirroredProjectStreamView({
   ).value;
   const agentRuntimeTransition =
     suppliedAgentRuntimeTransition === undefined
-      ? subscribedAgentRuntimeTransition
+      ? liveAgentRuntimeTransition
       : (suppliedAgentRuntimeTransition ?? undefined);
   const agentPresentation = useMemo(() => {
     if (agentUiState == null || agentRuntimeTransition == null) {
@@ -260,7 +265,7 @@ function MirroredProjectStreamView({
   });
 
   async function clearClientDatabases() {
-    // One mirror now: clear all canonical tables + checkpoints and reload.
+    // One local database now: clear all processor-owned tables and checkpoints, then reload.
     await store.clearLocalDatabase();
     window.location.reload();
   }
@@ -270,18 +275,22 @@ function MirroredProjectStreamView({
     streamPath,
   });
 
+  // A reader uses another tab's database writer but still owns a usable RPC
+  // transport for appends. A writer is fully ready once its event callback is open.
   // Election starts only after createStreamClient resolves, so every non-idle
-  // role has a usable transport (including followers, which never subscribe).
-  const streamTransportReady = snapshot.subscriptionStatus !== "idle";
-  // Cached rows can paint immediately. With an empty local mirror, a leader
-  // stays pending until reconcile and the atomic live subscribe have finished;
-  // a follower reads the mirror already owned by another tab.
+  // role has a usable transport — including readers, which never open the
+  // stream's live connection themselves but still append over their own itx
+  // socket.
+  const streamTransportReady = snapshot.databaseRole !== "idle";
+  // Cached rows can paint immediately. With an empty local database, the writer
+  // stays pending until reconciliation and the event callback have finished;
+  // a reader can paint the database already owned by another tab.
   const streamContentsReady =
     eventCount > 0 ||
-    snapshot.subscriptionStatus === "follower" ||
-    snapshot.connectionStatus === "subscribed";
+    snapshot.databaseRole === "reader" ||
+    snapshot.connectionStatus === "receiving-events";
   const connectionLabel =
-    snapshot.connectionError ?? (streamTransportReady ? emptyLabel : snapshot.connectionStatus);
+    snapshot.connectionError ?? (streamContentsReady ? emptyLabel : snapshot.connectionStatus);
   // Busy = work is actively running, independent of chat-message timing.
   const agentBusy = isAgentUiActivityWorking(presentedAgentUiState?.live ?? null, agentRuntime);
   const presence = presentedAgentUiState?.presence ?? [];
@@ -312,7 +321,7 @@ function MirroredProjectStreamView({
   // local_index order (raw rows click through to the inspector).
   const modeBody = (
     <StreamFeedView
-      // Fresh virtualizer state per stream mirror + mode (see StreamFeedView docs).
+      // Fresh virtualizer state per stream database + mode (see StreamFeedView docs).
       key={`${store.streamDatabase.databasePath}:${activeMode}`}
       database={store.streamDatabase}
       filter={{
@@ -463,8 +472,8 @@ function MirroredProjectStreamView({
   );
 }
 
-/** Owns transport generation, recovery, and the one local mirror for a stream. */
-function useProjectStreamMirror({
+/** Owns transport generation, recovery, and the one local event database for a stream. */
+function useProjectStreamDatabase({
   projectId,
   resetStreamSourceTransport,
   streamSource,
@@ -475,7 +484,7 @@ function useProjectStreamMirror({
   "projectId" | "resetStreamSourceTransport" | "streamSource" | "streamPath"
 > & { subscriberUser?: BrowserStreamSubscriberUser }) {
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
-  // The stream mirror rides the ONE shared session socket — the same connection
+  // The browser stream database receives events over the ONE shared session socket — the same connection
   // the page's ordinary queries use. It can page tens of thousands of historical
   // events and owns an aggressive reconnect loop, but it NEVER closes the shared
   // socket itself: on a suspected half-open transport it REPORTS the suspicion to
@@ -521,15 +530,15 @@ function useProjectStreamMirror({
       (streamSource === undefined ? reportTransportSuspicion : undefined),
     [resetStreamSourceTransport, streamSource],
   );
-  // One download fans out into the raw-event mirror and browser-feed projector.
-  const mirror = useStreamMirror({
+  // One downloaded batch is passed to both the raw-event writer and browser-feed projector.
+  const browserStore = useBrowserStreamStore({
     createStreamClient: streamClientFactory,
     ...(resetTransport === undefined ? {} : { resetTransport }),
     projectId: streamRuntimeProjectKey,
     ...(subscriberUser === undefined ? {} : { subscriberUser }),
     streamPath,
   });
-  return { resolvedStreamSource, ...mirror };
+  return { resolvedStreamSource, ...browserStore };
 }
 
 /**
@@ -538,7 +547,7 @@ function useProjectStreamMirror({
  * the raw-event inspector when the mode offers it and `?event=` is set,
  * else an LLM or script inspector when its deep-link parameter is set — in
  * EVERY mode, so a shared link works regardless of the viewer's tab. All
- * inspectors read the RAW events mirror (not feed_items): the fold reads the journal,
+ * inspectors read the raw `events` table (not `feed_items`): the fold reads the journal,
  * the same source the processor read.
  */
 function StreamInspectorSheet({
@@ -750,8 +759,9 @@ function StreamEventsSheet({
 
 /**
  * The processors sheet's one on-demand debug accessor: reduced state for the
- * focused processor. Stream runtime diagnostics arrive separately through
- * the LiveState subscription, including the head offset used for lag math.
+ * focused processor subscription, addressed by its name. Stream runtime
+ * diagnostics arrive separately through the LiveState listener, including the
+ * head offset used for lag math.
  */
 function useProcessorsPanelDebugState(args: {
   resolvedStreamSource: ItxStreamSource;
@@ -759,9 +769,9 @@ function useProcessorsPanelDebugState(args: {
 }) {
   const { resolvedStreamSource, streamPath } = args;
   const getProcessorRuntimeState = useCallback(
-    async (subscriptionKey: string) => {
+    async (name: string) => {
       const stream = await resolvedStreamSource(streamPath);
-      return stream.getProcessorRuntimeState({ subscriptionKey });
+      return stream.getProcessorRuntimeState({ name });
     },
     [resolvedStreamSource, streamPath],
   );
@@ -907,7 +917,7 @@ function useAgentUiReducedState(
 ): AgentUiState | null {
   const result = useStreamQuery(
     database,
-    // subscription_key is part of the primary key, so multiple rows can exist
+    // progress_key is part of the primary key, so multiple rows can exist
     // for the slug (e.g. after a key-format change); read the most advanced one.
     `SELECT reduced_state FROM processor_progress WHERE processor_slug = ?
      ORDER BY acknowledged_through_offset DESC LIMIT 1`,
@@ -928,6 +938,62 @@ function useAgentUiReducedState(
       return null;
     }
   }, [liveRevision, result.data, store]);
+}
+
+/**
+ * Claim the newest agent reply in this thread as "on screen": a
+ * `project/agent-reply-presented` claim that lands inside the device
+ * processor's reply grace window settles the pending push `suppressed` on
+ * every enrolled device, and a late claim is a harmless no-op (the push
+ * simply goes out — the designed fallback), so failures are ignored. One
+ * claim per reply per mount (useQuery keyed on the reply offset; the
+ * idempotency key makes any refire a stream-level no-op). Only a visible tab
+ * may claim — the queryFn WAITS for visibility, so a reply that arrives in a
+ * hidden tab is deliberately not claimed: the push is exactly what should
+ * happen then.
+ */
+function useClaimReplyPresented(args: {
+  database: StreamBrowserDatabase;
+  projectId: string | null;
+  streamPath: string;
+}) {
+  const { database, projectId, streamPath } = args;
+  const newestReply = useStreamQuery(
+    database,
+    `SELECT MAX(offset) AS offset FROM events
+     WHERE type = 'events.iterate.com/agents/web-message-sent'`,
+  );
+  const replyOffset = Number(newestReply.data[0]?.offset ?? 0) || null;
+  useQuery({
+    queryKey: ["agent-reply-presented", projectId, streamPath, replyOffset],
+    enabled: projectId !== null && replyOffset !== null && streamPath.startsWith("/agents/"),
+    queryFn: async () => {
+      await documentVisible();
+      const itx = await connectItx(projectId!);
+      await itx.streams.get("/").append({
+        type: "events.iterate.com/project/agent-reply-presented",
+        idempotencyKey: `project/agent-reply-presented:${streamPath}:${replyOffset}`,
+        payload: { path: streamPath, replyEventOffset: replyOffset! },
+      });
+      return true;
+    },
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
+/** Resolves once this tab is visible — immediately when it already is.
+ * One-shot: the listener removes itself on the first visible transition. */
+function documentVisible(): Promise<void> {
+  if (document.visibilityState === "visible") return Promise.resolve();
+  return new Promise((resolve) => {
+    const onChange = () => {
+      if (document.visibilityState !== "visible") return;
+      document.removeEventListener("visibilitychange", onChange);
+      resolve();
+    };
+    document.addEventListener("visibilitychange", onChange);
+  });
 }
 
 function useStreamPauseState(database: StreamBrowserDatabase): {

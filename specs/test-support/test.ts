@@ -1,4 +1,4 @@
-import { test as base, type Page, type TestInfo } from "@playwright/test";
+import { test as base, type Page, type TestInfo as _TestInfo } from "@playwright/test";
 import {
   CLOUDFLARE_WORKERS_VERSION_OVERRIDES_HEADER,
   cloudflareWorkerVersionOverrideHeaders,
@@ -11,10 +11,15 @@ import {
   videoMode,
 } from "middlewright";
 import { createProjectFixture as createForgedProjectFixture } from "./forged-session.ts";
+import { watchMetroBundles } from "./metro-bundle-spinner.ts";
 import { screenshot } from "./screenshot.ts";
 
-const addPagePlugins = (page: Page, testInfo: TestInfo) =>
-  addPlugins({
+const addPagePlugins = (page: Page, testInfo: _TestInfo) => {
+  // Not a middlewright plugin (it listens to network events rather than
+  // wrapping actions): holds a [data-spinner] marker while Metro compiles a
+  // dev bundle mid-spec, so the spinner-waiter covers those waits too.
+  watchMetroBundles(page);
+  return addPlugins({
     page,
     testInfo,
     plugins: [
@@ -32,6 +37,7 @@ const addPagePlugins = (page: Page, testInfo: TestInfo) =>
     ],
     boxedStackPrefixes: (defaults) => [...defaults, import.meta.dirname],
   });
+};
 
 export const test = base.extend<{
   helpers: {
@@ -112,3 +118,8 @@ export const test = base.extend<{
     }
   },
 });
+
+export declare namespace test {
+  type Page = Awaited<ReturnType<typeof addPagePlugins>>;
+  type TestInfo = _TestInfo;
+}

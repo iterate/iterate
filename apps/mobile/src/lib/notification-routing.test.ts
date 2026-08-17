@@ -9,7 +9,7 @@ test("an approval push focuses its request in the project's approval queue", () 
       requestOffset: 42,
     }),
   ).toEqual({
-    pathname: "/project/[projectId]/approvals",
+    pathname: "/project/[projectId]/notifications",
     params: { projectId: "prj_test", approvalRequestEventOffset: "137" },
   });
 });
@@ -20,6 +20,12 @@ test("opening the same notification retries the same durable observation", () =>
     idempotencyKey: "device-notification-opened:42",
     payload: { openedAt: "2026-07-18T08:00:00.000Z", requestOffset: 42 },
   });
+});
+
+test("an unknown destination kind routes nowhere", () => {
+  expect(
+    pushNotificationRoute({ destination: { kind: "approvals-group" }, projectId: "prj_test" }),
+  ).toBeNull();
 });
 
 test("an agent push opens only a well-formed agent path", () => {

@@ -68,7 +68,7 @@ test("OpenAPI built-in connects directly and mounts as a described capability", 
       expression: ["openapi", ["connect", { headers, specUrl }]],
       instructions,
       path: ["pets"],
-      type: "itx-expression",
+      type: "itx-call",
       types,
     });
     const described = await project.__describe();
@@ -77,7 +77,7 @@ test("OpenAPI built-in connects directly and mounts as a described capability", 
         expect.objectContaining({
           instructions,
           path: ["pets"],
-          type: "itx-expression",
+          type: "itx-call",
           types,
         }),
       ]),
@@ -148,7 +148,7 @@ test("MCP built-in connects directly and mounts as a described capability", asyn
       expression: ["mcp", ["connect", { headers, url: mcp.url }]],
       instructions,
       path: ["cloudflareDocs"],
-      type: "itx-expression",
+      type: "itx-call",
       types,
     });
     const described = await project.__describe();
@@ -157,7 +157,7 @@ test("MCP built-in connects directly and mounts as a described capability", asyn
         expect.objectContaining({
           instructions,
           path: ["cloudflareDocs"],
-          type: "itx-expression",
+          type: "itx-call",
           types,
         }),
       ]),
@@ -223,14 +223,14 @@ test("itx expression capabilities mount MCP and OpenAPI built-ins through connec
       ],
       instructions: petsInstructions,
       path: ["exprPets"],
-      type: "itx-expression",
+      type: "itx-call",
       types: petsTypes,
     });
     using _docsProvision = await project.provideCapability({
       expression: ["mcp", ["connect", { headers, url: mcp.url }]],
       instructions: docsInstructions,
       path: ["exprDocs"],
-      type: "itx-expression",
+      type: "itx-call",
       types: docsTypes,
     });
 
@@ -240,13 +240,13 @@ test("itx expression capabilities mount MCP and OpenAPI built-ins through connec
         expect.objectContaining({
           instructions: petsInstructions,
           path: ["exprPets"],
-          type: "itx-expression",
+          type: "itx-call",
           types: petsTypes,
         }),
         expect.objectContaining({
           instructions: docsInstructions,
           path: ["exprDocs"],
-          type: "itx-expression",
+          type: "itx-call",
           types: docsTypes,
         }),
       ]),
@@ -304,7 +304,7 @@ test("itx expression capabilities mount project workers, streams, method aliases
     expression: ["workers", ["get", workerRef]],
     instructions: "Echoes through a worker expression.",
     path: ["exprWorker"],
-    type: "itx-expression",
+    type: "itx-call",
     types: "export type Capability = { echo(input: unknown): Promise<unknown> };",
   });
   await expect(
@@ -316,7 +316,7 @@ test("itx expression capabilities mount project workers, streams, method aliases
     expression: ["workers", ["get", workerRef]],
     flattenNestedPaths: true,
     path: ["exprFlatWorker"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   await expect(
     // @ts-expect-error - mounted expression worker with flattened dispatch.
@@ -330,7 +330,7 @@ test("itx expression capabilities mount project workers, streams, method aliases
   using _functionProvision = await project.provideCapability({
     expression: ["workers", ["get", workerRef], ["addFunction"]],
     path: ["exprAdd"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   await expect(
     // @ts-expect-error - mounted expression function root.
@@ -340,7 +340,7 @@ test("itx expression capabilities mount project workers, streams, method aliases
   using _streamProvision = await project.provideCapability({
     expression: ["streams", ["get", "/expr/special/stream"]],
     path: ["mySpecialStream"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   // @ts-expect-error - mounted expression stream root.
   const [event] = await project.mySpecialStream.append({
@@ -366,7 +366,7 @@ test("itx expression capabilities mount project workers, streams, method aliases
   using _aliasProvision = await project.provideCapability({
     expression: ["exprSource", "deeper", "path", "someMethod"],
     path: ["exprSomeMethod"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   await expect(
     // @ts-expect-error - mounted expression method root.
@@ -396,7 +396,7 @@ test("itx expression capabilities mount project workers, streams, method aliases
   using _domainObjectProvision = await project.provideCapability({
     expression: ["exprFactory", ["makeDomainObject"]],
     path: ["exprDomainObject"],
-    type: "itx-expression",
+    type: "itx-call",
   });
 
   await expect(
@@ -414,7 +414,7 @@ test("itx expression capabilities mount project workers, streams, method aliases
   );
   expect(domainObjectDescription).toMatchObject({
     path: ["exprDomainObject"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   expect(domainObjectDescription?.instructions).toBeUndefined();
   expect(domainObjectDescription?.types).toBeUndefined();
@@ -447,7 +447,7 @@ test("itx expression capabilities resolve aliases against the current itx host p
   using _aliasProvision = await agent.provideCapability({
     expression: ["exprSource", "deeper", "path", "someMethod"],
     path: ["exprAgentSomeMethod"],
-    type: "itx-expression",
+    type: "itx-call",
   });
 
   await expect(
@@ -474,14 +474,14 @@ test("itx expression capabilities reject self-aliases at provide time", async ()
     project.provideCapability({
       expression: ["selfAlias"],
       path: ["selfAlias"],
-      type: "itx-expression",
+      type: "itx-call",
     }),
   ).rejects.toThrow(/cannot reference its own mount path/);
   await expect(
     project.provideCapability({
       expression: ["nested", "selfAlias", "extra"],
       path: ["nested", "selfAlias"],
-      type: "itx-expression",
+      type: "itx-call",
     }),
   ).rejects.toThrow(/cannot reference its own mount path/);
 });

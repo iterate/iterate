@@ -280,6 +280,7 @@ export function StreamFeedView({
                     onToggle={toggleExpanded}
                     onInspectLlmRequest={onInspectLlmRequest}
                     onInspectScriptExecution={onInspectScriptExecution}
+                    database={database}
                   />
                 ) : transientItem != null ? (
                   <AgentFeedItemRow
@@ -289,6 +290,7 @@ export function StreamFeedView({
                     onInspectLlmRequest={onInspectLlmRequest}
                     onInspectScriptExecution={onInspectScriptExecution}
                     projectSlug={projectSlug}
+                    database={database}
                   />
                 ) : row == null ? (
                   // Not-yet-loaded rows must measure exactly estimateSize
@@ -308,6 +310,7 @@ export function StreamFeedView({
                     onInspectLlmRequest={onInspectLlmRequest}
                     onInspectScriptExecution={onInspectScriptExecution}
                     projectSlug={projectSlug}
+                    database={database}
                   />
                 ) : (
                   <RawFeedItemRow

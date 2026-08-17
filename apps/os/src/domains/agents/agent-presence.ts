@@ -134,13 +134,22 @@ type AgentCatalogTimestamps = z.infer<typeof AgentCatalogTimestamps>;
 
 /** One entry in the collection processor's durable agent database. Every
  * field is reducible from the collection's deliberately narrow created +
- * summary event subscription. */
+ * summary-event subscription. */
 export const AgentCatalogRecord = z.strictObject({
   path: AgentPath,
   summary: AgentSummary,
   timestamps: AgentCatalogTimestamps,
 });
 export type AgentCatalogRecord = z.infer<typeof AgentCatalogRecord>;
+
+/** One row of `itx.agents.list()`: stream identity plus the agent-authored
+ * title when one has been set (agents set it on their first turn via
+ * `agent/summary-updated`). Clients fall back to the path when absent. */
+export type AgentListItem = {
+  path: string;
+  createdAt: string;
+  title?: string;
+};
 
 const AgentPresentationTimestamps = AgentCatalogTimestamps.extend({
   runtimeUpdatedAt: z.iso.datetime().optional(),

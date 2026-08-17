@@ -1,0 +1,42 @@
+{
+  "name": "@iterate-com/workspace-documents",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    "./attribution": "./src/collab-attribution.ts",
+    "./collab": "./src/collab.ts",
+    "./comments": "./src/document-comments.tsx",
+    "./editor": "./src/workspace-document-editor.tsx",
+    "./editor-api": "./src/collab-editor-api.ts",
+    "./html-annotations": "./src/html-document-annotations.ts",
+    "./identity": "./src/comment-identity.ts",
+    "./preview": "./src/markdown-document-preview.tsx",
+    "./server": "./src/server.ts",
+    "./types": "./src/types.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts"
+  },
+  "dependencies": {
+    "@codemirror/collab": "^6.1.1",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/lang-html": "^6.4.11",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.6",
+    "@iterate-com/ui": "workspace:*",
+    "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
+    "iterate": "workspace:*",
+    "lucide-react": "^0.553.0",
+    "react": "^19.2.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:cloudflare",
+    "@types/react": "^19.2.17",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.10"
+  }
+}

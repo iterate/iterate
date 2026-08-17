@@ -1,3 +1,14 @@
+/**
+ * Only production deployments report to PostHog — previews, local dev, and CI
+ * produce noise that costs real ingestion money. The environment identifier is
+ * the deployed worker name from envs.ts (`os-prd`, `semaphore-prd`,
+ * `os-preview-3`); local dev has none. Every PostHog client gates its egress
+ * on this one predicate so application code stays unaware of the policy.
+ */
+export function shouldSendPosthogEvents(environment: string | undefined): boolean {
+  return environment === "prd" || Boolean(environment?.endsWith("-prd"));
+}
+
 export interface ProxyPosthogRequestOptions {
   request: Request;
   proxyPrefix: string;
@@ -30,6 +41,6 @@ export async function proxyPosthogRequest(options: ProxyPosthogRequestOptions): 
     body,
     redirect: options.request.redirect,
     // Node's fetch requires this for stream bodies; Workers harmlessly ignore it.
-    ...(body ? { duplex: "half" as const } : {}),
+    ...(body && { duplex: "half" as const }),
   });
 }

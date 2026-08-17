@@ -26,6 +26,8 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./annotated-markdown": "./src/annotated-markdown/index.ts",
+    "./annotated-markdown/react": "./src/annotated-markdown/react/index.ts",
     "./client": "./src/client.ts",
     "./node": "./src/node.ts",
     "./starter-apps/github-ai-linter": "./src/starter-apps/github-ai-linter/index.ts",
@@ -33,6 +35,12 @@
     "./starter-apps/guestbook": "./src/starter-apps/guestbook/index.ts",
     "./starter-apps/guestbook/client": "./src/starter-apps/guestbook/client.tsx",
     "./starter-apps/guestbook/configured-worker": "./src/starter-apps/guestbook/configured-worker.ts",
+    "./starter-apps/media": "./src/starter-apps/media/index.ts",
+    "./starter-apps/media/configured-worker": "./src/starter-apps/media/configured-worker.ts",
+    "./starter-apps/media/ref": "./src/starter-apps/media/ref.ts",
+    "./starter-apps/notes": "./src/starter-apps/notes/index.ts",
+    "./starter-apps/notes/configured-worker": "./src/starter-apps/notes/configured-worker.ts",
+    "./starter-apps/notes/ref": "./src/starter-apps/notes/ref.ts",
     "./starter-apps/todo": "./src/starter-apps/todo/index.ts",
     "./processors": "./src/processors/index.ts",
     "./processors/cloudflare": "./src/processors/cloudflare.ts",
@@ -50,6 +58,16 @@
         "types": "./dist/index.d.mts",
         "import": "./dist/index.mjs",
         "default": "./dist/index.mjs"
+      },
+      "./annotated-markdown": {
+        "types": "./dist/annotated-markdown/index.d.ts",
+        "import": "./dist/annotated-markdown.mjs",
+        "default": "./dist/annotated-markdown.mjs"
+      },
+      "./annotated-markdown/react": {
+        "types": "./dist/annotated-markdown/react/index.d.ts",
+        "import": "./dist/annotated-markdown-react.mjs",
+        "default": "./dist/annotated-markdown-react.mjs"
       },
       "./client": {
         "types": "./dist/client.d.ts",
@@ -85,6 +103,36 @@
         "types": "./dist/starter-apps/guestbook/worker.d.ts",
         "import": "./dist/starter-apps/guestbook/configured-worker.mjs",
         "default": "./dist/starter-apps/guestbook/configured-worker.mjs"
+      },
+      "./starter-apps/media": {
+        "types": "./dist/starter-apps/media/index.d.ts",
+        "import": "./dist/starter-apps/media/index.mjs",
+        "default": "./dist/starter-apps/media/index.mjs"
+      },
+      "./starter-apps/media/configured-worker": {
+        "types": "./dist/starter-apps/media/worker.d.ts",
+        "import": "./dist/starter-apps/media/configured-worker.mjs",
+        "default": "./dist/starter-apps/media/configured-worker.mjs"
+      },
+      "./starter-apps/media/ref": {
+        "types": "./dist/starter-apps/media/ref.d.ts",
+        "import": "./dist/starter-apps/media/ref.mjs",
+        "default": "./dist/starter-apps/media/ref.mjs"
+      },
+      "./starter-apps/notes": {
+        "types": "./dist/starter-apps/notes/index.d.ts",
+        "import": "./dist/starter-apps/notes/index.mjs",
+        "default": "./dist/starter-apps/notes/index.mjs"
+      },
+      "./starter-apps/notes/configured-worker": {
+        "types": "./dist/starter-apps/notes/worker.d.ts",
+        "import": "./dist/starter-apps/notes/configured-worker.mjs",
+        "default": "./dist/starter-apps/notes/configured-worker.mjs"
+      },
+      "./starter-apps/notes/ref": {
+        "types": "./dist/starter-apps/notes/ref.d.ts",
+        "import": "./dist/starter-apps/notes/ref.mjs",
+        "default": "./dist/starter-apps/notes/ref.mjs"
       },
       "./starter-apps/todo": {
         "types": "./dist/starter-apps/todo/index.d.ts",
@@ -151,7 +199,10 @@
     "@orpc/client": "1.13.14",
     "@orpc/server": "1.13.14",
     "@tanstack/react-query": "^5.101.2",
-    "minimatch": "^10.2.4",
+    "approx-string-match": "^2.0.0",
+    "mdast-util-from-markdown": "^2.0.3",
+    "mdast-util-gfm": "^3.1.0",
+    "micromark-extension-gfm": "^3.0.0",
     "react": "^19.2.7",
     "sqlfu": "0.1.1",
     "trpc-cli": "0.15.1",
@@ -175,11 +226,14 @@
   },
   "devDependencies": {
     "@iterate-com/ui": "workspace:*",
+    "@types/mdast": "^4.0.4",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
+    "esbuild": "^0.27.4",
     "jsdom": "27.4.0",
+    "miniflare": "catalog:cloudflare",
     "octokit": "^5.0.5",
     "react-dom": "^19.2.7",
     "tsdown": "0.22.2",

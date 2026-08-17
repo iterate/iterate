@@ -1,28 +1,14 @@
-// Component-owned stream mirror runtime.
+// One StreamBrowserStore exists per (projectId, streamPath) in a browser tab.
+// React views share that store, its capnweb connection, and its SQLite database.
+// Across tabs, one Web Lock holder opens the event callback and writes SQLite;
+// the other tabs query the same OPFS file.
 //
-// ONE runtime per (projectId, path), shared across every React view that mounts that
-// stream in a tab, so all of them share ONE capnweb connection and ONE download. Cross-tab,
-// Web Locks elect a single writer; followers read the same OPFS mirror reactively.
-//
-// A view does not choose processors. The runtime is handed a FIXED set of processors
-// (`args.processors` — the canonical event cache + feed projection; see
-// canonical-mirror-processors.ts) and hosts them as one CompositeMirrorDrive: it
-// downloads the stream once (paged catch-up then live tail) and fans every batch out to
-// every member's runner. Fan-out is safe because each member's runner offset-dedupes
-// against its own durable acknowledged cursor, so the shared replay cursor is just the
-// MINIMUM member checkpoint and a member that is ahead cheaply no-ops.
-//
-// Reconcile and mirror discard are per-member (each member owns its tables, schema
-// version, and durable progress row keyed by its real slug — so unifying the download
-// never invalidates an existing local cache). Everything else the runtime does —
-// connection epochs, catch-up pager, ingest self-heal, liveness — is single-drive and
-// unaware of the member set: it drives the one composite. The runtime always opens a
-// connection (so a follower can still append / read runtimeState) and — only as leader —
-// hosts the composite over a fresh subscription, mirroring the Durable-Object-side
-// registry cutover: each member is driven by its own StreamProcessorRunner, which owns
-// the member's two-cursor progress (persisted through the transactional browser progress
-// store, processor-state-storage.ts) — the store's commit flushes the member's buffered
-// projection writes and its progress record in ONE SQLite transaction.
+// Views do not choose processors. The store runs the fixed list in
+// browser-stream-processors.ts. It downloads each batch once and calls every
+// processor in order through BrowserStreamProcessorGroup. Each processor has
+// its own SQLite tables, reduced-state offset, acknowledged offset, and schema
+// version. The server callback starts after the smallest acknowledged offset;
+// processors with greater offsets ignore events they already committed.
 
 import type { AgentUiState } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { StreamEventBatch } from "iterate/processors";
@@ -33,12 +19,8 @@ import {
   type AnyHostedProcessor,
 } from "iterate/processors";
 import { LatencyRing, type LatencyStats } from "iterate/processors";
-import type { SubscriberMetricsReport } from "iterate/processors";
-import {
-  StreamProcessorRunner,
-  type ProcessorProgressStore,
-  type StreamProcessorDeliveryFrame,
-} from "iterate/processors";
+import type { EventConsumptionMetricsReport } from "iterate/processors";
+import { StreamProcessorRunner, type StreamProcessorEventBatch } from "iterate/processors";
 import type { StreamProcessor } from "iterate/processors";
 import type { Stream } from "../../../../itx-api.generated.ts";
 import { isStreamUnavailableError } from "../../stream-unavailable.ts";
@@ -50,20 +32,20 @@ import {
 import type { BrowserProjectionWriteBuffer } from "./projection-write-buffer.ts";
 import {
   acquireWriterRole,
-  findSupersedingMirrorWriterLock,
-  mirrorLockVersionVector,
-  streamMirrorWriterLockName,
+  findNewerStreamDatabaseWriterLock,
+  processorSchemaVersionKey,
+  streamDatabaseWriterLockName,
   type WriterRole,
-} from "./stream-leader.ts";
-import { CompositeMirrorDrive } from "./composite-mirror-drive.ts";
+} from "./stream-writer.ts";
+import { BrowserStreamProcessorGroup } from "./browser-stream-processor-group.ts";
 import {
   type SqlClient,
   type StreamBrowserDatabase,
   type StreamDatabaseInfo,
 } from "./stream-browser-db.ts";
-import { catchUpDurableHistory, catchUpToLiveReplayBoundary } from "./catch-up-page.ts";
+import { catchUpAvailableHistory, catchUpToLiveReplayBoundary } from "./catch-up-page.ts";
+import { reconcileBrowserProcessorCache } from "./processor-cache-reconciliation.ts";
 import {
-  browserStreamSubscriberDescriptor,
   browserStreamSubscriberUserUpdate,
   type BrowserStreamSubscriberUser,
 } from "./browser-subscriber.ts";
@@ -87,27 +69,28 @@ const LIVE_PROGRESS_NOTIFICATION_MS = 16;
 const DEFAULT_STREAM_PROJECT_ID = "default";
 
 // --- Catch-up + flow-control tuning ----------------------------------------------------
-// The server's live subscription pump is deliberately one-directional: it never waits for
-// the client (see stream-subscribers.ts #open). That is perfect for the live tail and
-// fatal for a cold mirror thousands of events behind — the whole backlog gets blasted at
-// the socket faster than SQLite can apply it (measured: ~20k events/s delivered vs
+// The server's live callback sends are deliberately one-directional: they never wait for
+// the client. That works for newly appended events but is
+// unsafe when the local database is thousands of events behind: the server can write
+// the whole backlog to the socket faster than SQLite applies it (measured: ~20k events/s delivered vs
 // ~1-4k events/s applied; a 1M-event replay ballooned a browser tab to >1.3GB of queued
-// batches and redelivered 3.26× through reconnect churn). So the leader PULLS history
+// batches and redelivered 3.26× through reconnect churn). So the writer PULLS history
 // with paged `getEvents` reads — client-paced, so backpressure is structural — and only
-// subscribes for the tail once the entire atomic replay interval fits inside
-// MAX_LIVE_REPLAY_OFFSET_GAP. Historical reads deliberately exclude ephemeral
-// rows; only the subscription's post-open live interval may contain them.
+// opens the callback once the remaining replay interval fits inside
+// MAX_LIVE_REPLAY_OFFSET_GAP. Historical reads explicitly include whatever
+// ephemeral events the current Stream Durable Object incarnation still holds;
+// browser projections apply those only to their in-memory overlay.
 
 /** `getEvents` page size (its server-side maximum). */
 const CATCHUP_PAGE_LIMIT = 500;
-/** Maximum interval the server may atomically bridge when opening the live tail. */
+/** Maximum historical interval the server may send when opening the callback. */
 const MAX_LIVE_REPLAY_OFFSET_GAP = 2_000;
 /**
- * Live-tail safety valve: if the un-applied delivery backlog exceeds this many events, the
- * subscription has outrun SQLite. Cut the connection (dropping the queued batches — the
+ * Live-callback safety valve: if the unapplied backlog exceeds this many events, the
+ * callback has outrun SQLite. Cut the connection (dropping the queued batches — the
  * superseded-election guard already discards them) and reconnect; the fresh election
- * pull-pages back to the head at the mirror's own pace. One control action when
- * overwhelmed, zero protocol chatter in steady state — delivery frames stay one-way.
+ * reads pages back to the latest offset at SQLite's own pace. One control action when
+ * overwhelmed, with no callback responses in steady state.
  */
 const MAX_PENDING_INGEST_EVENTS = 20_000;
 
@@ -115,10 +98,10 @@ const MAX_PENDING_INGEST_EVENTS = 20_000;
 const APPEND_MAX_RETRIES = 8;
 
 /**
- * The processor surface the browser runtime hosts under runner drive: the
+ * The processor surface the browser runtime passes to a runner: the
  * shared hosted-capability slice (contract, metrics, runtime state) PLUS the
- * two browser-specific members the transactional committer needs —
- * `projectionBuffer` (the write buffer the member's progress store drains
+ * two browser-specific properties the transaction writer needs:
+ * `projectionBuffer` (the writes stored with this processor's progress
  * into its commit transaction) and `ensureProjectionSchema` (the prepare()
  * successor, run before the first checkpoint read). Structural so views (and
  * the streams-example-app) construct whatever processor class they like; the
@@ -131,8 +114,12 @@ type BrowserHostedProcessor = AnyHostedProcessor & {
 };
 
 export type StreamBrowserSnapshot = {
-  connectionStatus: StreamBrowserConnectionStatus | "reconnecting" | "subscribing" | "subscribed";
-  subscriptionStatus: "idle" | "electing" | "leader" | "follower";
+  connectionStatus:
+    | StreamBrowserConnectionStatus
+    | "reconnecting"
+    | "opening-event-callback"
+    | "receiving-events";
+  databaseRole: "idle" | "electing" | "writer" | "reader";
   clearVersion: number;
   connectionError: string | undefined;
   databaseInfo: StreamDatabaseInfo | undefined;
@@ -140,9 +127,9 @@ export type StreamBrowserSnapshot = {
   liveRevision: number;
 };
 
-/** What a view tells the runtime about the processor it wants hosted. */
+/** How the browser creates one processor and manages its SQLite tables. */
 export type BrowserProcessorConfig = {
-  /** Stable processor identity, used for this member's checkpoint/state rows and the mirror writer-lock version vector. */
+  /** Stable identity used for progress rows and the database-writer lock's schema key. */
   slug: string;
   /** Bumped into the writer-lock name so a schema migration lets a fresh tab take over. */
   schemaVersion: number;
@@ -152,12 +139,12 @@ export type BrowserProcessorConfig = {
    * shares a SQLite file and cannot own PRAGMA user_version.
    */
   resetOnSchemaVersionChange?: boolean;
-  /** Tables this processor owns, cleared together when the local mirror is discarded. */
+  /** Tables cleared when this processor's stored progress can no longer be trusted. */
   tables: string[];
   /**
    * Ensure every owned table exists (the same ensurer the processor's own
    * `ensureProjectionSchema` runs — module-level, memoized per SqlClient). A
-   * mirror discard runs this BEFORE its transactional delete so the
+   * A clear runs this BEFORE its transactional delete so the
    * owned-table set is stable: probing table existence instead races a
    * concurrent writer's creation and can delete only part of the set (see
    * discardBrowserProcessorProjection).
@@ -166,11 +153,10 @@ export type BrowserProcessorConfig = {
   /** Create the concrete processor once the browser runtime has a stream connection. */
   createProcessor(args: {
     stream: Stream;
-    /** The mirrored stream's identity — the StreamProcessor base deps' path/projectId. */
+    /** The source stream's identity. */
     path: string;
     projectId: string;
     sql: SqlClient;
-    subscriptionKey: string;
   }): BrowserHostedProcessor;
 };
 
@@ -181,12 +167,12 @@ type BrowserStreamConnectionConfig = {
   subscriberUser?: BrowserStreamSubscriberUser;
   streamUrl?: string | URL | ((args: { projectId: string; streamPath: string }) => string | URL);
   /**
-   * Evict the transport `createStreamClient` dials through, so the NEXT call
-   * dials fresh. The runtime calls this when the transport looks dead in a way
+   * Evict the transport used by `createStreamClient`, so the NEXT call opens a
+   * fresh connection. The runtime calls this when the transport looks dead in a way
    * the factory cannot see: a half-open socket (mobile suspend/resume, laptop
    * sleep — no close frame ever arrives) hangs every RPC forever, and a
-   * factory that memoizes its connection would re-dial through that corpse on
-   * every reconnect. Timeout-shaped failures (probe strikes, dial deadline)
+   * factory that memoizes its connection would reuse that dead socket on
+   * every reconnect. Timeout-shaped failures (probe strikes, connection deadline)
    * and repeated connect failures trigger it; a factory whose transport is
    * per-call fresh can omit it.
    */
@@ -205,15 +191,15 @@ export type StreamRuntimeState = {
 /**
  * This browser's own REAL stream metrics — every value is measured, never
  * synthesized. `transportRttMs` samples come from timing RPCs the store makes
- * anyway (liveness probes and nudges). `subscriber` is the hosted
+ * anyway (liveness probes and nudges). `eventConsumption` is the hosted
  * processor's self-measured consumption report (append round trip,
- * consume-own-append loop, ingest stats) — present only on the leader tab,
- * which is the tab that actually consumes; followers report `undefined` and
+ * consume-own-append loop, ingest stats) — present only on the writer tab,
+ * which is the tab that actually consumes; readers report `undefined` and
  * UIs render "—".
  */
 export type BrowserStreamMetrics = {
   transportRttMs: LatencyStats | null;
-  subscriber: SubscriberMetricsReport | undefined;
+  eventConsumption: EventConsumptionMetricsReport | undefined;
 };
 
 /**
@@ -230,21 +216,21 @@ export type StreamBrowserStore = Disposable & {
   runtimeState(): StreamRpcResult<StreamRuntimeState>;
   /** This browser's own measured metrics (see {@link BrowserStreamMetrics}). */
   metrics(): BrowserStreamMetrics;
-  /** Current rendered agent state, including this connection's live-only ephemeral tail. */
+  /** Current rendered agent state, including ephemeral events received on this connection. */
   agentUiState(): AgentUiState | null;
   /**
-   * An append THIS browser initiated through a lane the store doesn't carry
+   * An append THIS browser initiated through another API
    * (e.g. `itx.agents.get(path).message(...)`) committed at
    * `maxCommittedOffset`. Feeds the same consume-own-append loop as
-   * `appendBatch`: the loop closes when this tab's own subscription ingests
+   * `appendBatch`: the loop closes when this tab's event callback ingests
    * past the offset. `t0` is when the caller initiated the append.
    */
   noteExternalAppend(args: { maxCommittedOffset: number; t0: number }): void;
-  /** Clear local tables + checkpoint and reconnect, letting reconcile + replay rebuild the mirror from the server. */
+  /** Clear every processor's local tables and progress, then replay from the server. */
   clearLocalDatabase(): Promise<void>;
   /**
    * On-demand delivery check for when the caller knows the server is about to
-   * (or just did) append — reconnects within seconds if the subscription is
+   * (or just did) append — reconnects within seconds if the callback is
    * stale instead of waiting for the next paced probe.
    */
   nudge(): Promise<void>;
@@ -254,9 +240,9 @@ export type StreamBrowserStore = Disposable & {
   getServerSnapshot(): StreamBrowserSnapshot;
   subscribe(listener: () => void): () => void;
   /**
-   * True once the runtime tore down (last subscriber gone, idle grace
+   * True once the runtime tore down (last React listener gone, idle grace
    * elapsed). A caller holding a memoized reference to a disposed runtime
-   * must RE-ACQUIRE, not subscribe — see useStreamProcessorStore's self-heal.
+   * must RE-ACQUIRE before registering a React listener — see useBrowserStreamStore.
    */
   isDisposed(): boolean;
 };
@@ -276,14 +262,14 @@ const runtimeRegistry = new Map<
 
 // Console-accessible view of every live runtime's internals
 // (`__streamRuntimeDebug()` in devtools): which runtimes exist, their
-// connection/subscription status, and how far deliveries have progressed.
+// stream-client and event-callback status, and how far received batches have progressed.
 // Exists because this exact information was uninspectable while debugging
 // silent per-runtime delivery stalls in deployed environments.
 const debugRegistry = new Map<string, () => Record<string, unknown>>();
 (globalThis as { __streamRuntimeDebug?: () => Record<string, unknown> }).__streamRuntimeDebug =
   () => Object.fromEntries([...debugRegistry].map(([key, read]) => [key, read()]));
 
-/** Get (or lazily create) the shared mirror runtime for one (projectId, path). */
+/** Get or create the tab's shared store for one stream. */
 export function acquireStreamRuntime(
   args: {
     streamPath: string;
@@ -296,15 +282,15 @@ export function acquireStreamRuntime(
   if (existing !== undefined) {
     // The runtime outlives the render that created it; a stale factory here is
     // a permanent wedge once its captured transport dies. Re-acquires always
-    // hand over the current transport WHOLESALE (dial + evictor are one value;
+    // hand over the current transport WHOLESALE (connection factory + evictor are one value;
     // pairing acquire N's factory with acquire N-1's evictor would point
-    // eviction at a different transport than the one being dialed).
+    // eviction at a different transport than the one opening the connection).
     existing.refreshTransport({
       createStreamClient: args.createStreamClient,
       resetTransport: args.resetTransport,
     });
     // A pending idle-dispose must not fire between this acquire and the
-    // commit's subscribe() — see retain()'s docstring.
+    // commit's React listener registration — see retain()'s docstring.
     existing.retain();
     return existing.runtime;
   }
@@ -331,25 +317,22 @@ function createStreamRuntime(
 } {
   // Mutable on purpose: re-acquires refresh it (see acquireStreamRuntime), and
   // connect()/eviction read it per use — a captured-at-creation factory whose
-  // transport died would otherwise be dialed forever.
+  // transport died would otherwise be reused forever.
   let transport: BrowserStreamTransport = {
     createStreamClient: args.createStreamClient,
     resetTransport: args.resetTransport,
   };
   // Like the transport, auth session data may refresh while this shared
-  // runtime outlives the render that acquired it. Subscription opens read the
+  // runtime outlives the render that acquired it. New connections read the
   // latest identity instead of pinning the creating render's snapshot.
   let subscriberUser = args.subscriberUser;
-  const members = args.processors;
-  // A single label for log lines, the debug registry key, and the server
-  // subscription key. Each member's OWN slug is used for its storage (tables,
-  // mirror-meta, checkpoint row) — never this label — so unifying the download
-  // leaves every existing local cache addressable.
-  const slug = "browser-stream-mirror";
-  // Deterministic compatibility vector over the member set, baked into the
-  // writer-lock name: a deploy that bumps ANY member's schema changes the lock
-  // so a fresh tab re-elects instead of waiting behind an old tab.
-  const mirrorVersionVector = mirrorLockVersionVector(members);
+  const processorConfigs = args.processors;
+  // A shared label for log lines and debug state. Each processor still uses
+  // its own slug for tables and progress rows.
+  const slug = "browser-stream-processors";
+  // Include every processor schema version in the database-writer lock name,
+  // so new code does not wait behind a tab using old table schemas.
+  const processorSchemaKey = processorSchemaVersionKey(processorConfigs);
   const { db: streamDatabase, release: releaseDatabase } = acquireDatabase(
     args.projectId,
     args.streamPath,
@@ -365,7 +348,7 @@ function createStreamRuntime(
           if (isWriteStatement(statement)) notifyDatabaseChangedSoon();
           return rows;
         })
-        .catch(onMirrorWriteError),
+        .catch(onLocalDatabaseWriteError),
     batch: (statements, options) =>
       streamDatabase
         .batch(statements, options)
@@ -373,42 +356,41 @@ function createStreamRuntime(
           if (statements.some((statement) => isWriteStatement(statement.sql)))
             notifyDatabaseChangedSoon();
         })
-        .catch(onMirrorWriteError),
+        .catch(onLocalDatabaseWriteError),
   };
 
   const listeners = new Set<() => void>();
   let stream: BrowserStreamClient | undefined;
-  let subscriptionHandle: { unsubscribe(): void } | undefined;
+  let eventConnection: { close(): void } | undefined;
   let writerRole: WriterRole | undefined;
-  // Set when this tab found a newer-deploy tab's writer lock held and resigned
-  // (see watchSupersedingWriter): a queued request on that NEWER lock, whose
-  // grant is exactly the newer writer's death — the wake-up to re-elect.
-  let supersededWatch: WriterRole | undefined;
+  // A shared-mode request for a newer app version's writer lock. It resolves
+  // when that newer tab stops writing the database.
+  let newerWriterWatch: WriterRole | undefined;
   let connectTimer: ReturnType<typeof setTimeout> | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let databaseInfoTimer: ReturnType<typeof setTimeout> | undefined;
   let databaseChangeTimer: ReturnType<typeof setTimeout> | undefined;
-  let supersededRecheckTimer: ReturnType<typeof setTimeout> | undefined;
+  let newerWriterRecheckTimer: ReturnType<typeof setTimeout> | undefined;
   let disposeTimer: ReturnType<typeof setTimeout> | undefined;
   let livenessTimer: ReturnType<typeof setInterval> | undefined;
   let disposed = false;
   let started = false;
   // Bumped on every connect() so a stale connection's late callbacks (status changes,
-  // subscribe steps) can recognise they no longer own the runtime and bail (B1).
+  // callback-opening steps) can recognise they no longer own the runtime and bail (B1).
   let connectionEpoch = 0;
   // Resolvers waiting for the next "stream is ready" transition (B2). When stream becomes
   // defined we resolve them all; on dispose we reject them.
   let readyWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
-  // Self-heal backoff for browser-side ingest failures (C1).
+  // Retry count for failures while writing received events to SQLite.
   let ingestFailureCount = 0;
-  // Events delivered by the live subscription but not yet applied to SQLite — the
+  // Events received by the open callback but not yet applied to SQLite — the
   // in-memory backlog the MAX_PENDING_INGEST_EVENTS valve bounds. Reset whenever the
-  // connection is replaced (the superseded-election guard discards the queue with it).
+  // connection is replaced (the callback ownership check discards the old queue).
   let pendingIngestEvents = 0;
-  // The server incarnation this connection reconciled against, how far deliveries have
+  // The server incarnation read before this callback opened, how far deliveries have
   // progressed, and a counter + wall-clock stamp bumped every time a delivery ARRIVES
   // (before the possibly-slow ingest). The delivery check (verifyDelivery) compares these
-  // against fresh runtimeState() so an orphaned-but-healthy-looking subscription (the stream
+  // against fresh runtimeState() so an orphaned-but-healthy-looking callback connection (the stream
   // was recreated underneath us, or the server moved ahead while deliveries silently
   // stopped) reconnects instead of wedging. Arrival — not ingest completion — is the
   // aliveness signal: a large batch can take longer than a check interval to apply, and that
@@ -417,8 +399,8 @@ function createStreamRuntime(
   //
   // Contract of the two arrival stamps (both per-connection evidence, like the strike
   // ledger; both reset where a fresh connection is installed and again when its liveness
-  // probe starts, so an arrival on a previous socket — or a pre-subscribe catch-up page —
-  // never vouches for the current live subscription).
+  // probe starts, so an arrival on a previous socket — or a catch-up page read
+  // before `openConnection()` — never vouches for the current callback connection).
   //
   // Exact window semantics: verifyDelivery anchors BOTH windows at checkStartedAt — the
   // moment the check acquired its single-flight latch, BEFORE its guarded read (up to two
@@ -436,7 +418,7 @@ function createStreamRuntime(
   //     does anything newer.
   //   - arrivalBaselineAt: when the current connection started counting. It is grace, not
   //     liveness: only the paced probe (and resume checks) treat a fresh, arrival-less
-  //     subscription as "too early to judge", exactly when
+  //     callback connection as "too early to judge", exactly when
   //       checkStartedAt - arrivalBaselineAt <= LIVENESS_PROBE_INTERVAL_MS + DELIVERY_GRACE_MS.
   //     The + DELIVERY_GRACE_MS slack is what makes the promised grace real: the first
   //     paced probe fires exactly one interval after the baseline is stamped (the same
@@ -444,11 +426,11 @@ function createStreamRuntime(
   //     would leave the first probe's grace to timer lag. With the slack the first probe
   //     always starts inside the window and the second (two intervals after the baseline)
   //     always starts outside — the second paced probe is the earliest that can declare an
-  //     arrival-less subscription orphaned. A nudge does NOT honor this baseline: a nudge
+  //     arrival-less callback orphaned. A nudge does NOT honor this baseline: a nudge
   //     carries caller evidence that the server just appended, so a server-ahead
-  //     subscription with ZERO real arrivals is escalated right after the delivery grace
+  //     callback with ZERO real arrivals is escalated right after the delivery grace
   //     instead of no-oping for up to a full probe interval.
-  let reconciledIncarnation: string | undefined;
+  let connectionStreamId: string | undefined;
   let lastDeliveredOffset = -1;
   let liveAgentUiState: AgentUiState | null = null;
   let deliveryArrivals = 0;
@@ -464,25 +446,23 @@ function createStreamRuntime(
   // Real transport-RTT samples from RPCs the store makes anyway (probes and
   // nudges). Success-only: a timed-out call is not a sample.
   const transportRtt = new LatencyRing();
-  // The leader election's live composite drive. Its (primary member's)
-  // `subscriberMetrics` is the ONE place this browser's consumption metrics
+  // The database writer's processor group. Its first processor's
+  // `eventConsumptionMetrics` is the ONE place this browser's consumption metrics
   // live: appendBatch feeds committed offsets in, the primary runner's
-  // committed-frame report closes the consume-own-append loop, and
-  // stream-side pings land their clock-offset estimate here too. Followers
-  // host no drive → no self-measured metrics, honestly.
-  let currentProcessor: CompositeMirrorDrive | undefined;
-  // The election's delivery drive (one runner per canonical member). Disposed
-  // on every election teardown so a superseded incarnation's queued frames
-  // reject instead of racing the next election's runners over the same mirror
-  // (its in-flight commits are fenced durably by each member progress store's
-  // cursorRevision/monotonic guards either way).
-  let electionDrive: CompositeMirrorDrive | undefined;
+  // committed-batch report closes the consume-own-append loop, and
+  // stream-side pings land their clock-offset estimate here too. Readers
+  // run no processor → no self-measured metrics, honestly.
+  let activeProcessorGroup: BrowserStreamProcessorGroup | undefined;
+  // The group created by the current database writer. It is stopped whenever
+  // that writer releases its lock, so queued batches cannot overlap the next
+  // writer's processors. Progress-store revision checks reject stale commits.
+  let databaseWriterProcessorGroup: BrowserStreamProcessorGroup | undefined;
 
   /** The one builder for this browser's measured metrics (store API + debug registry). */
   function readMetrics(): BrowserStreamMetrics {
     return {
       transportRttMs: transportRtt.stats(),
-      subscriber: currentProcessor?.subscriberMetrics.report(),
+      eventConsumption: activeProcessorGroup?.eventConsumptionMetrics.report(),
     };
   }
 
@@ -490,9 +470,9 @@ function createStreamRuntime(
    * Time one RPC into the transport-RTT ring. Success only — and bounded:
    * callers race these calls against timeouts, and a call the caller already
    * abandoned can still resolve much later (a half-open socket healing).
-   * Recording that late duration would poison the ring with a sample the
+   * Recording that late duration would contaminate the ring with a sample the
    * user never experienced as a success, so anything slower than the
-   * guarded lane's own deadline is treated as a failure, not a sample.
+   * guarded-call deadline is treated as a failure, not a sample.
    */
   function timed<T>(promise: Promise<T>): Promise<T> {
     const t0 = Date.now();
@@ -542,22 +522,17 @@ function createStreamRuntime(
       readyWaiters.push(waiter);
     });
   }
-  const browserSubscriberStorageKey = "stream-browser-subscriber-id";
-  const browserSubscriberId =
-    localStorage.getItem(browserSubscriberStorageKey) ?? crypto.randomUUID();
-  localStorage.setItem(browserSubscriberStorageKey, browserSubscriberId);
-  // The browser mirror contract is intentionally versioned as one clean-cut
-  // identity. A new schema never reads a prior projection/cursor contract.
-  const serverSubscriptionKey = `${args.projectId}:${browserSubscriberId}:browser-stream-mirror:v${mirrorVersionVector}`;
-  const memberSubscriptionKey = (member: BrowserProcessorConfig) =>
-    `${args.projectId}:${browserSubscriberId}:${member.slug}:v${member.schemaVersion}`;
+  const browserInstanceStorageKey = "stream-browser-instance-id";
+  const browserInstanceId = localStorage.getItem(browserInstanceStorageKey) ?? crypto.randomUUID();
+  localStorage.setItem(browserInstanceStorageKey, browserInstanceId);
+  const serverConnectionKey = `${args.projectId}:${browserInstanceId}:browser-stream-processors:v${processorSchemaKey}`;
   let snapshot: StreamBrowserSnapshot = {
     clearVersion: 0,
     connectionStatus: "connecting",
     connectionError: undefined,
     databaseInfo: undefined,
     liveRevision: 0,
-    subscriptionStatus: "idle",
+    databaseRole: "idle",
   };
 
   const offDatabaseChange = streamDatabase.onChange(() => {
@@ -578,14 +553,15 @@ function createStreamRuntime(
     emitSnapshot();
   }
 
-  // The OPFS mirror is shared across tabs, but ephemerals must never enter it.
-  // Relay only the current writer session's in-memory overlay to followers;
+  // The OPFS database is shared across tabs, but ephemeral events must never
+  // be written to it.
+  // Relay only the current writer session's in-memory overlay to readers;
   // the schema-versioned channel and per-leadership claim fence stale tabs.
   const liveAgentStateChannel = new LiveAgentStateChannel({
     name: liveAgentStateChannelName({
       projectId: args.projectId,
       streamPath: args.streamPath,
-      versionVector: mirrorVersionVector,
+      processorSchemaVersionKey: processorSchemaKey,
     }),
     onState: (state) => {
       if (!disposed) updateLiveAgentUiState(state);
@@ -627,12 +603,12 @@ function createStreamRuntime(
     }, LIVE_PROGRESS_NOTIFICATION_MS);
   }
 
-  function onMirrorWriteError(error: unknown): never {
+  function onLocalDatabaseWriteError(error: unknown): never {
     if (!disposed) {
-      console.error(`[stream ${args.streamPath} ${slug}] local mirror write failed`, error);
+      console.error(`[stream ${args.streamPath} ${slug}] local database write failed`, error);
       snapshot = {
         ...snapshot,
-        connectionError: `local mirror write failed: ${errorMessage(error)}`,
+        connectionError: `local database write failed: ${errorMessage(error)}`,
       };
       emitSnapshot();
     }
@@ -651,7 +627,7 @@ function createStreamRuntime(
     connectionEpoch += 1;
     pendingIngestEvents = 0;
     stopLivenessProbe();
-    stopSubscriptionElection();
+    stopDatabaseWriter();
     stream?.[Symbol.dispose]();
     stream = undefined;
     snapshot = { ...snapshot, connectionError, connectionStatus: "reconnecting" };
@@ -683,9 +659,9 @@ function createStreamRuntime(
   // FAILURE routes through here so the "was the transport itself the problem?"
   // call is made once, not per catch block. A step that TIMED OUT rode a
   // transport that answers nothing — the post-suspend half-open socket — and
-  // per-call dialing alone can't escape it (the socket map keeps handing out
+  // asking for another client alone cannot escape it (the socket map keeps handing out
   // the cached corpse; it only self-evicts on a close event that never comes).
-  // Evict it so the reconnect dials fresh. A step that REJECTED got an answer
+  // Evict it so reconnect opens a fresh socket. A step that REJECTED got an answer
   // (a broken-session error, a server-side failure): the transport observably
   // works or already self-evicted — reconnect without collateral damage,
   // unless the caller accumulated its own suspicion (opts.evictTransport).
@@ -700,8 +676,8 @@ function createStreamRuntime(
         `[stream ${args.streamPath} ${slug}] reporting transport suspicion (${step})`,
         error,
       );
-      // Report suspicion to the shared session socket's verifier — the mirror no
-      // longer owns or evicts a socket. Prefer the suspect connection's own
+      // Report suspicion to the shared session socket's verifier. This store
+      // does not close a shared socket directly. Prefer the connection's own
       // reporter; fall back to the config-level resetTransport when the factory
       // couldn't wire one or the failing step had no connection yet.
       const reportSuspicion = opts?.suspect?.reportTransportSuspicion ?? transport.resetTransport;
@@ -710,19 +686,19 @@ function createStreamRuntime(
     scheduleReconnect(`${step}: ${errorMessage(error)}`, delayMs);
   }
 
-  // --- The one guarded-call lane ----------------------------------------------
+  // --- Every established-connection RPC goes through guardedCall --------------
   // Every RPC on an established connection goes through guardedCall. The
   // dead-connection detectors are just triggers that make a call through this
-  // lane — the paced liveness probe, the caller's nudge, resume events, direct
-  // calls (appends, state reads), and the subscribe chain's server-touching
+  // function — the paced liveness probe, the caller's nudge, resume events, direct
+  // calls (appends, state reads), and the callback-opening sequence's server-touching
   // steps. One deadline, one strike ledger, one error classification, every
   // verdict routed through reconnectAfterError:
   //
   //   - A call that TIMES OUT is a strike: one slow answer is a cold or busy
   //     DO, not a dead socket. Two consecutive strikes against the same
   //     connection mean the transport is swallowing calls (the post-suspend
-  //     half-open socket) — evict it and reconnect so the redial is fresh.
-  //     Strikes are shared across lanes on purpose: an unanswered append and
+  //     half-open socket) — evict it and reconnect with a fresh socket.
+  //     Strikes are shared across all calls on purpose: an unanswered append and
   //     an unanswered probe are evidence against the same socket. "Consecutive"
   //     is episode-scoped, though — overlapping timeouts are ONE strike (the
   //     episode rules at the ledger's declaration below).
@@ -752,7 +728,7 @@ function createStreamRuntime(
   //      one was recorded still got no answer — the transport is swallowing
   //      calls (the post-suspend half-open socket). reconnectAfterError
   //      evicts the suspect connection and reconnects fresh. Strikes are
-  //      shared across lanes on purpose: an unanswered append and an
+  //      shared across all calls on purpose: an unanswered append and an
   //      unanswered probe are evidence against the same socket.
   //   3. PROGRESS GUARANTEE: recording strike one — and every ABSORBED
   //      timeout while a strike stands — schedules one immediate follow-up
@@ -777,16 +753,16 @@ function createStreamRuntime(
   //      other reset). Without it, a cold DO answering just after the 10s
   //      deadline would leave strike one standing while the follow-up probe
   //      or a caller's fresh retry times out into a false strike two. For
-  //      the same reason, retry-once lanes (withDeadline, verifyDelivery)
+  //      the same reason, retry-once calls (withDeadline, verifyDelivery)
   //      REUSE the in-flight promise for the retry instead of issuing a
   //      fresh read: the late answer then resolves the retry window itself.
   //      A late REJECTION earns no credit and takes no action — the timeout
   //      verdict already stood in for it, and session-broken classification
-  //      belongs to calls the lane still owns.
+  //      belongs to calls that guardedCall still owns.
   //   5. PER-CONNECTION EVIDENCE: count, generation, and the follow-up latch
   //      reset where every fresh connection is installed (connect()'s stream
   //      assignment) — a strike is evidence against one socket and must never
-  //      carry over to the next, whichever path redialed (scheduleReconnect,
+  //      carry over to the next, whichever path opened it (scheduleReconnect,
   //      clearLocalDatabase's reconnectNow, a direct call's connect()).
   //      Every MUTATION is identity-bound too: strike increments check
   //      stream === connection, and the follow-up latch's handlers release
@@ -802,15 +778,15 @@ function createStreamRuntime(
   //     healthy-but-cold socket — it schedules the follow-up probe instead.
   //   - Three (or N) calls overlapping: still one strike — every later
   //     timeout captured the pre-strike generation.
-  //   - The subscribe chain's deliberate retry-then-evict (withDeadline): the
+  //   - The callback-opening sequence's deliberate retry-then-evict (withDeadline): the
   //     retry's guarded window opens inside the first attempt's catch, after
   //     the strike advanced the generation — so its timeout is genuinely
   //     consecutive evidence and the eviction that comment promises still
   //     happens, with no wall-clock tie-break needed.
-  //   - All-lanes-in-flight after a thaw: every pre-thaw call's timeout
+  //   - All calls in flight after a thaw: every pre-thaw call's timeout
   //     collapses into strike one; the follow-up probe (invariant 3) is the
   //     deterministic post-strike call, so eviction lands ~one timeout later
-  //     even if no lane retries and the paced probe is seconds out.
+  //     even if no caller retries and the paced probe is seconds out.
   //   - Cold DO answers at 11s: the read times out at 10s (strike one,
   //     follow-up probe scheduled). The 11s answer resolves the reused-
   //     promise retry (verifyDelivery/withDeadline) AND the late credit
@@ -892,7 +868,7 @@ function createStreamRuntime(
   // one again and reschedules), a session-broken
   // rejection reconnects on the spot. Single-flight: the latch holds until the
   // probe settles, so absorbed timeouts trickling in during its window cannot
-  // fan out into a probe storm — but a schedule request that lands while the
+  // start a probe storm — but a schedule request that lands while the
   // latch is held is REMEMBERED, not dropped. The probe's own timeout can be
   // strike one again (late credit reset the count mid-window), and guardedCall
   // records that strike — and asks for the next follow-up — BEFORE this
@@ -942,7 +918,7 @@ function createStreamRuntime(
       )
         .catch(() => {
           // Verdicts (strike two → evict, session broken → reconnect) are the
-          // guarded lane's own; the probe has nothing to add.
+          // already handled by guardedCall; the probe has nothing to add.
         })
         .finally(() => {
           if (strikeFollowUpProbe !== latch) return;
@@ -953,36 +929,42 @@ function createStreamRuntime(
     }, 0);
   }
 
-  // Clear ONE member's projection tables AND rewind its resume cursor in ONE
+  // Clear ONE processorConfig's projection tables AND rewind its resume cursor in ONE
   // transaction (discardBrowserProcessorProjection): a crash between the two
-  // could otherwise leave a stale checkpoint over an empty mirror — the
+  // could otherwise leave a stale checkpoint over an empty cache — the
   // silent-hole incident class. Split from the snapshot bump + VACUUM
-  // (finishDiscard) so reconcile can discard several members and reclaim
-  // space once. The rewind covers every subscription key for the member's
+  // (finishDiscard) so reconcile can discard several processorConfigs and reclaim
+  // space once. The rewind covers every processor progress key for the processorConfig's
   // slug (its tables are shared per-slug; a leftover row would let readers
   // that pick the highest checkpoint resurrect stale reduced state), and its
   // cursorRevision bump fences any in-flight commit from a stale runner
-  // incarnation out of the rebuilt mirror. The delete set is the member's
+  // incarnation out of the rebuilt cache. The delete set is the processorConfig's
   // COMPLETE owned-table list, made stable by ensuring the tables exist
-  // first — a follower's clear (no writer lock) probing sqlite_master
+  // first — a reader's clear (no writer lock) probing sqlite_master
   // per-table instead could race a writer tab's creation into deleting only
   // part of the set, leaving `events` rows whose replay dedupes silently and
   // never re-fires the count trigger.
-  async function discardMemberTables(member: BrowserProcessorConfig) {
+  async function clearProcessorTablesAndProgress(
+    processorConfig: BrowserProcessorConfig,
+    streamId?: string,
+  ) {
     await discardBrowserProcessorProjection({
       sql,
-      processorSlug: member.slug,
-      tables: member.tables,
-      ensureProjectionSchema: (client) => member.ensureProjectionSchema(client),
+      processorSlug: processorConfig.slug,
+      ...(streamId === undefined ? {} : { streamId }),
+      tables: processorConfig.tables,
+      ensureProjectionSchema: (client) => processorConfig.ensureProjectionSchema(client),
     });
   }
 
   // Bump clearVersion (views keyed on it remount), reclaim space once, and
-  // refresh the database info. Call after one or more discardMemberTables.
-  async function finishDiscard() {
-    // Same broadcast clearTables published: views remount their mirror reads.
+  // refresh the database info. Call after one or more clearProcessorTablesAndProgress.
+  async function finishDiscard(isCurrent: () => boolean = () => true) {
+    if (!isCurrent()) return;
+    // Same broadcast clearTables published: views remount their cache reads.
     streamDatabase.notifyChanged({ kind: "clear" });
     await streamDatabase.compact();
+    if (!isCurrent()) return;
     snapshot = {
       ...snapshot,
       clearVersion: snapshot.clearVersion + 1,
@@ -992,148 +974,32 @@ function createStreamRuntime(
     refreshDatabaseInfo();
   }
 
-  // Discard EVERY member — the store's clearLocalDatabase lane.
-  async function discardLocalMirror() {
-    for (const member of members) await discardMemberTables(member);
+  // Discard EVERY processorConfig when `clearLocalDatabase()` runs.
+  async function clearAllProcessorData() {
+    for (const processorConfig of processorConfigs)
+      await clearProcessorTablesAndProgress(processorConfig);
     await finishDiscard();
   }
 
-  // Record (or backfill) the incarnation a member's mirror is now reconciled
-  // against. A stream that has not committed its `created` event yet has no
-  // incarnation to record; leaving the row unrecorded means the next reconcile
-  // against a now-created stream rebuilds — always safe for a cache.
-  async function recordServerIncarnation(
-    memberSlug: string,
-    serverIncarnation: string | undefined,
-  ) {
-    if (serverIncarnation === undefined) return;
-    await streamDatabase.writeMirrorIncarnation(memberSlug, serverIncarnation);
-  }
-
-  // Decide, PER MEMBER, whether its local projection can be trusted against the
-  // server before subscribing. The server stream's `createdAt` is its incarnation
-  // identity: stable for a stream's lifetime, changing when the stream's storage
-  // is deleted and recreated (which re-emits `created`, restarting offsets from
-  // 1) — see core-processor-state.ts for why it beats core state's per-DO-restart
-  // `incarnationId`. The server incarnation + head are read ONCE and applied to
-  // every member; each member is independent, so one member's schema bump or
-  // reincarnation rebuilds only its own tables while the others keep their caches.
-  async function reconcileLocalMirrorWithServer(
-    rpc: BrowserStreamClient,
-    // Each member's acknowledged resume cursor is read through its progress
-    // store, whose read runs the member's projection schema/reset FIRST — a
-    // version reset must land before the cursor is trusted. The RUNNERS are
-    // created after this reconcile, so any discard's rewind is what they load.
-    memberDrives: readonly {
-      member: BrowserProcessorConfig;
-      progress: ProcessorProgressStore<unknown>;
-    }[],
-  ): Promise<{ serverMaxOffset: number }> {
-    const { coreProcessorState: rawCoreProcessorState } = await rpc.runtimeState();
-    const coreProcessorState = parseBrowserCoreProcessorState(rawCoreProcessorState);
-    const serverIncarnation = coreProcessorState.createdAt;
-    reconciledIncarnation = serverIncarnation;
-    let discardedAny = false;
-
-    for (const { member, progress } of memberDrives) {
-      // The member's acknowledged cursor, through its progress store. The
-      // read runs `ensureProjectionSchema` first (the prepare() ordering),
-      // which is where raw-events self-resets via PRAGMA user_version — a
-      // stale cursor memoized over a dropped table would skip historical
-      // replay and leave a silent hole the gap-tolerant trigger accepts.
-      const localMaxOffset = (await progress.read())?.processing.acknowledgedThroughOffset ?? 0;
-      const localIncarnation = await streamDatabase.readMirrorIncarnation(member.slug);
-      const localSchemaVersion = member.resetOnSchemaVersionChange
-        ? await streamDatabase.readMirrorSchemaVersion(member.slug)
-        : member.schemaVersion;
-
-      // A truly fresh mirror — no schema version ever recorded AND nothing
-      // checkpointed — must never take the rebuild lane: "undefined ≠ current" is
-      // not a schema CHANGE, and discarding would VACUUM an empty database on
-      // every first open (OPFS VACUUM under a sibling connection's open handles is
-      // exactly the contention that wedges the shared per-path file). A fresh
-      // checkpoint with a DIFFERENT recorded version still rebuilds: the member's
-      // tables are shared across subscription keys, so an older subscription may
-      // have populated them under the old schema.
-      const trulyFreshMirror = localMaxOffset <= 0 && localSchemaVersion === undefined;
-
-      if (!trulyFreshMirror && localSchemaVersion !== member.schemaVersion) {
-        console.warn(
-          `[stream ${args.streamPath} ${member.slug}] local schema version changed; rebuilding member mirror.`,
-          { localSchemaVersion, schemaVersion: member.schemaVersion },
-        );
-        await discardMemberTables(member);
-        discardedAny = true;
-        await streamDatabase.writeMirrorSchemaVersion(member.slug, member.schemaVersion);
-        await recordServerIncarnation(member.slug, serverIncarnation);
-        continue;
-      }
-
-      if (localMaxOffset <= 0) {
-        // Fresh member mirror: nothing to discard, just record which schema
-        // version and incarnation we are tracking.
-        if (member.resetOnSchemaVersionChange) {
-          await streamDatabase.writeMirrorSchemaVersion(member.slug, member.schemaVersion);
-        }
-        await recordServerIncarnation(member.slug, serverIncarnation);
-        continue;
-      }
-
-      if (localIncarnation !== serverIncarnation) {
-        // Either the incarnation changed (reset/reincarnation) OR we have local
-        // events but no recorded incarnation (a mirror that predates incarnation
-        // tracking). In both cases the offset comparison is meaningless — a reset
-        // that caught back up to the same maxOffset would otherwise be kept with
-        // stale rows — so rebuild this member from scratch.
-        console.warn(
-          `[stream ${args.streamPath} ${member.slug}] cannot verify local mirror against server incarnation (changed or unrecorded); rebuilding.`,
-          { localIncarnation, serverIncarnation, localMaxOffset },
-        );
-        await discardMemberTables(member);
-        discardedAny = true;
-        await recordServerIncarnation(member.slug, serverIncarnation);
-        continue;
-      }
-
-      if (coreProcessorState.maxOffset < localMaxOffset) {
-        console.warn(
-          `[stream ${args.streamPath} ${member.slug}] server has fewer events than the local mirror; discarding member tables.`,
-          { serverMaxOffset: coreProcessorState.maxOffset, localMaxOffset },
-        );
-        await discardMemberTables(member);
-        discardedAny = true;
-      }
-      // Record (or backfill) the schema version + incarnation we are now
-      // reconciled against for this member.
-      if (member.resetOnSchemaVersionChange) {
-        await streamDatabase.writeMirrorSchemaVersion(member.slug, member.schemaVersion);
-      }
-      await recordServerIncarnation(member.slug, serverIncarnation);
-    }
-
-    if (discardedAny) await finishDiscard();
-    return { serverMaxOffset: coreProcessorState.maxOffset };
-  }
-
-  // A dial through a half-open transport hangs forever (no close frame ⇒
+  // Opening a client through a half-open transport hangs forever (no close frame ⇒
   // capnweb never rejects), so every attempt races a deadline. NOTE this
-  // deadline is not redundant with the socket map's own 15s dial timeout in
-  // itx-react: that one only guards a FRESH dial — a cached, already-resolved
+  // deadline is not redundant with the socket map's own 15s connection timeout in
+  // itx-react: that one only guards a FRESH connection attempt — a cached, already-resolved
   // corpse resolves instantly and only hangs on the first real round trip,
   // which is this deadline's job to bound. Consecutive failures escalate: the
   // transport is declared suspect after the second in a row (or immediately on
-  // a timeout), evicted, and the next attempt dials fresh.
-  const CONNECT_DIAL_TIMEOUT_MS = 15_000;
+  // a timeout), evicted, and the next attempt opens a fresh connection.
+  const CONNECT_TIMEOUT_MS = 15_000;
   let connectFailuresSinceSuccess = 0;
   // When the current connect attempt started — onResume uses it to leave a
-  // young in-flight dial alone (pageshow fires on every normal load, right
-  // after start() began the first dial; restarting it wastes the round trip).
+  // young in-flight connection attempt alone (pageshow fires on every normal load, right
+  // after start() began the first attempt; restarting it wastes the round trip).
   let connectStartedAt = 0;
   // The epoch of the connect attempt currently in flight, or undefined. An
   // attempt "owns" the runtime only while this matches connectionEpoch: a
   // reconnect path that bumps the epoch (scheduleReconnect) supersedes it,
   // and connect() must then start a fresh attempt — but a connect() call
-  // while the CURRENT epoch's attempt is still dialing (a direct call, a
+  // while the CURRENT epoch's attempt is still opening (a direct call, a
   // resume event) must not abort-and-restart it (each supersede wasted a
   // stub pull and reset the election).
   let connectPendingEpoch: number | undefined;
@@ -1153,18 +1019,18 @@ function createStreamRuntime(
             }),
             window.location.href,
           );
-    // Identity for THIS connect attempt. A late callback from a previously-redialed
+    // Identity for THIS connect attempt. A late callback from a superseded
     // connection compares against this and bails if it no longer matches (B1).
     connectionEpoch += 1;
     const epoch = connectionEpoch;
     connectPendingEpoch = epoch;
-    const dial = transport.createStreamClient({
+    const connectionAttempt = transport.createStreamClient({
       projectId: args.projectId,
       streamPath: args.streamPath,
       streamUrl,
       onConnectionStatusChange(connectionStatus, connectionError) {
         // Ignore status callbacks that belong to a superseded connection: after a
-        // reconnect/redial a stale connection's late "closed"/"error" could otherwise
+        // reconnect, a stale connection's late "closed"/"error" could otherwise
         // clobber the new connection's state (B1).
         if (disposed || epoch !== connectionEpoch) return;
         if (connectionStatus === "closed" || connectionStatus === "error") {
@@ -1179,23 +1045,23 @@ function createStreamRuntime(
         emitSnapshot();
       },
     });
-    // A dial that lost its deadline (or was superseded) can still settle later:
+    // A connection attempt that lost its deadline (or was superseded) can still settle later:
     // dispose the orphaned connection, and swallow the late rejection so it
     // never surfaces as unhandled.
-    void dial.then(
+    void connectionAttempt.then(
       (connection) => {
         if (disposed || epoch !== connectionEpoch) connection[Symbol.dispose]();
       },
       () => {},
     );
     void raceWithTimeout(
-      dial,
-      CONNECT_DIAL_TIMEOUT_MS,
-      `stream client dial timed out after ${CONNECT_DIAL_TIMEOUT_MS}ms`,
+      connectionAttempt,
+      CONNECT_TIMEOUT_MS,
+      `opening stream client timed out after ${CONNECT_TIMEOUT_MS}ms`,
     )
       .then((connection) => {
         if (connectPendingEpoch === epoch) connectPendingEpoch = undefined;
-        // The superseded case is disposed by the dial handler above, exactly once.
+        // The superseded case is disposed by the attempt handler above, exactly once.
         if (disposed || epoch !== connectionEpoch) return;
         connectFailuresSinceSuccess = 0;
         // Per-connection evidence resets. A leftover strike from the previous
@@ -1203,7 +1069,7 @@ function createStreamRuntime(
         // strike two — and a delivery that arrived on the previous socket must
         // not vouch for this one: verifyDelivery reads the arrival stamp as
         // "deliveries flowing", so a stale stamp would let an orphaned fresh
-        // subscription skip its reconnect for up to a full probe interval.
+        // callback skip its reconnect for up to a full probe interval.
         // Clear the real-arrival stamp and restart the baseline so the paced
         // probe's grace is measured from this connection's own install, like
         // the strike ledger (see the stamps' contract at their declaration).
@@ -1222,18 +1088,18 @@ function createStreamRuntime(
         lastDeliveryArrivalAt = undefined;
         arrivalBaselineAt = Date.now();
         stream = connection;
-        // A follower can still append / read runtimeState, so readiness is "connection
-        // open", not "leader/subscribed". Unblock anyone awaiting reconnect (B2).
+        // A reader can still append / read runtimeState, so readiness is "connection
+        // open", not "writer/receiving-events". Unblock anyone awaiting reconnect (B2).
         resolveReadyWaiters();
-        startSubscriptionElection({ connection, epoch });
+        chooseDatabaseWriter({ connection, epoch });
       })
       .catch((error: unknown) => {
         if (connectPendingEpoch === epoch) connectPendingEpoch = undefined;
         if (disposed || epoch !== connectionEpoch) return;
         connectFailuresSinceSuccess += 1;
         const delay = Math.min(30_000, 1_000 * 2 ** Math.min(connectFailuresSinceSuccess - 1, 5));
-        // A REJECTING dial usually rode a transport whose death was observed
-        // (fresh dials recover by themselves), but a factory that hands back
+        // A REJECTING attempt usually used a transport whose death was observed
+        // (fresh connections recover by themselves), but a factory that hands back
         // stubs on a dead-but-never-closed session rejects identically forever
         // — after two consecutive failures stop giving it the benefit of the
         // doubt. (Timeouts evict on the first hit — reconnectAfterError.)
@@ -1243,44 +1109,45 @@ function createStreamRuntime(
       });
   }
 
-  function startSubscriptionElection(election: { connection: BrowserStreamClient; epoch: number }) {
-    snapshot = { ...snapshot, subscriptionStatus: "electing" };
+  function chooseDatabaseWriter(election: { connection: BrowserStreamClient; epoch: number }) {
+    snapshot = { ...snapshot, databaseRole: "electing" };
     emitSnapshot();
     liveAgentStateChannel.request();
 
-    const followerTimeout = setTimeout(() => {
-      if (!disposed && subscriptionHandle === undefined) {
-        snapshot = { ...snapshot, subscriptionStatus: "follower" };
+    const readerTimeout = setTimeout(() => {
+      if (!disposed && eventConnection === undefined) {
+        snapshot = { ...snapshot, databaseRole: "reader" };
         emitSnapshot();
         liveAgentStateChannel.request();
       }
     }, 250);
 
     // Both the connection object AND the epoch must still match: the connection identity
-    // guards against a redial, the epoch against an in-flight election whose connect() was
+    // guards against reconnection, the epoch against an in-flight election whose connect() was
     // superseded before `stream` was reassigned (B1).
     const ownsRuntime = () =>
       !disposed && stream === election.connection && election.epoch === connectionEpoch;
 
-    writerRole = acquireWriterRole({
-      lockName: streamMirrorWriterLockName({
+    const role = acquireWriterRole({
+      lockName: streamDatabaseWriterLockName({
         projectId: args.projectId,
         streamPath: args.streamPath,
-        versionVector: mirrorVersionVector,
+        processorSchemaVersionKey: processorSchemaKey,
       }),
     });
-    // The leader chain calls into the server (reconcile's runtimeState, subscribe). When the
-    // far leg of a proxied connection dies mid-call — e.g. the page subscribed to a
+    writerRole = role;
+    // The writer sequence calls the server (`runtimeState`, catch-up reads, `openConnection`). When the
+    // far side of a proxied connection dies mid-call — e.g. the page opened a callback on a
     // lazily-created agent stream and the agent machinery recreated it, killing the Stream DO
-    // behind the proxy hop without a close frame reaching the browser — those calls park
+    // behind the proxy hop without a close frame reaching the browser — those calls halt
     // forever and the page wedges on "connecting" with no error anywhere. Each
-    // server-touching step rides the guarded lane AND follows its two-strike policy: one
+    // server call goes through guardedCall AND follows its two-strike policy: one
     // struck timeout is retried immediately against the same connection (the underlying call
     // is still in flight, so a cold DO's late answer resolves inside the retry window
-    // without duplicating work), and the retry's timeout is the lane's second strike:
+    // without duplicating work), and the retry's timeout is the second strike:
     // the retry's guarded window opens after strike one was recorded, so the ledger's
     // episode rule counts it as genuinely consecutive evidence — guardedCall evicts the
-    // half-open transport and reconnects, so the wedge above still converges. A rejection the lane did not already act on lands in the catch below,
+    // half-open transport and reconnects, so the stalled call still recovers. A rejection guardedCall did not already act on lands in the catch below,
     // which reconnects on a fresh socket to the live instance.
     const withDeadline = <T>(step: string, promise: Promise<T> | T): Promise<T> => {
       const attempt = () => guardedCall(step, election.connection, () => promise);
@@ -1290,157 +1157,190 @@ function createStreamRuntime(
       });
     };
 
-    void writerRole.whenWriter
+    const setup = role.whenWriter
       .then(async () => {
-        clearTimeout(followerTimeout);
+        clearTimeout(readerTimeout);
         if (!ownsRuntime()) return undefined;
         // Winning OUR lock is not enough: the lock name is version-vectored, so
         // a tab from a different deploy holds a DIFFERENT lock over the same
         // shared OPFS file. If a strictly newer vector's lock is held, a
-        // fresh-deploy tab owns this mirror right now — proceeding would
+        // fresh-deploy tab owns this cache right now — proceeding would
         // rebuild its tables down to our older schema and rewind its cursors,
         // and the two writers would fence each other's commits forever (each
-        // ingest self-heal deleting the other's projection: the deploy-boundary
+        // ingest retry deleting the other's projection: the deploy-boundary
         // livelock). Resign BEFORE touching the database and stand by as a
-        // follower on the mirror the newer tab maintains.
-        const supersedingLock = await findSupersedingMirrorWriterLock({
+        // reader on the cache the newer tab maintains.
+        const supersedingLock = await findNewerStreamDatabaseWriterLock({
           projectId: args.projectId,
           streamPath: args.streamPath,
-          versionVector: mirrorVersionVector,
+          processorSchemaVersionKey: processorSchemaKey,
         });
         if (!ownsRuntime()) return undefined;
         if (supersedingLock !== undefined) {
-          // Resign: give up writership (keeping the connection — a follower
+          // Resign: give up writership (keeping the connection — a reader
           // still appends and reads runtimeState) and let the newer tab own
-          // the shared mirror; its writes reach this tab's reactive queries
-          // through the database change channel like any follower's. Reloading
+          // the shared cache; its writes reach this tab's reactive queries
+          // through the database change channel like any reader's. Reloading
           // this tab is the real upgrade; until then the watch below waits for
           // the newer writer to be truly gone (closed, or rolled back) —
           // which is when re-electing can win cleanly.
           console.warn(
-            `[stream ${args.streamPath} ${slug}] a newer app version's tab owns this stream mirror; standing by as a follower (reload this tab to take over)`,
+            `[stream ${args.streamPath} ${slug}] a newer app version's tab owns this stream cache; standing by as a reader (reload this tab to take over)`,
             { supersedingLock },
           );
-          writerRole?.release();
-          writerRole = undefined;
-          snapshot = { ...snapshot, subscriptionStatus: "follower" };
+          role.release();
+          if (writerRole === role) writerRole = undefined;
+          snapshot = { ...snapshot, databaseRole: "reader" };
           emitSnapshot();
           liveAgentStateChannel.request();
-          watchSupersedingWriter(supersedingLock);
+          watchNewerWriter(supersedingLock);
           return undefined;
         }
-        snapshot = { ...snapshot, subscriptionStatus: "leader" };
+        snapshot = { ...snapshot, databaseRole: "writer" };
         emitSnapshot();
-        // Build every canonical member over the shared connection + db: the
-        // member processor (which carries its own projection-write buffer)
+        // Build every configured processorConfig over the shared connection + db: the
+        // processorConfig processor (which carries its own projection-write buffer)
         // and its transactional progress store, whose commit drains that
-        // buffer into the SAME transaction that persists the member's
+        // buffer into the SAME transaction that persists the processorConfig's
         // two-cursor progress record. Constructed BEFORE reconcile so the
-        // reconcile's checkpoint reads run each member's projection
+        // reconcile's checkpoint reads run each processorConfig's projection
         // schema/reset first (the prepare() ordering); the RUNNERS are
         // constructed after, so a discard's rewind is what they load.
-        const memberDrives = members.map((member) => {
-          const processor = member.createProcessor({
+        const configuredProcessors = processorConfigs.map((processorConfig) => {
+          const processor = processorConfig.createProcessor({
             stream: election.connection,
             path: args.streamPath,
             projectId: args.projectId,
             sql,
-            subscriptionKey: memberSubscriptionKey(member),
           });
           const progress = browserProcessorProgressStore({
             sql,
-            processorSlug: member.slug,
-            subscriptionKey: memberSubscriptionKey(member),
+            processorSlug: processorConfig.slug,
+            progressKey: `${args.projectId}:${browserInstanceId}:${processorConfig.slug}:v${processorConfig.schemaVersion}`,
             ensureProjectionSchema: (client) => processor.ensureProjectionSchema(client),
             projection: processor.projectionBuffer,
           });
-          return { member, processor, progress };
+          return { processorConfig, processor, progress };
         });
-        const { serverMaxOffset } = await withDeadline(
-          "reconcile",
-          reconcileLocalMirrorWithServer(election.connection, memberDrives),
+        const { coreProcessorState: rawCoreProcessorState } = await withDeadline(
+          "read stream state before cache reconciliation",
+          election.connection.runtimeState(),
         );
+        if (!ownsRuntime()) return undefined;
+        const coreProcessorState = parseBrowserCoreProcessorState(rawCoreProcessorState);
+        const { serverMaxOffset, serverStreamId } = await reconcileBrowserProcessorCache({
+          streamPath: args.streamPath,
+          serverState: coreProcessorState,
+          processors: configuredProcessors.map(({ processorConfig, progress }) => ({
+            processor: processorConfig,
+            progress,
+          })),
+          isCurrentWriter: ownsRuntime,
+          actions: {
+            readRecordedStreamId: (processorSlug) =>
+              streamDatabase.readProcessorStreamId(processorSlug),
+            recordStreamId: (processorSlug, streamId) =>
+              streamDatabase.writeProcessorStreamId(processorSlug, streamId),
+            readRecordedSchemaVersion: (processorSlug) =>
+              streamDatabase.readProcessorSchemaVersion(processorSlug),
+            recordSchemaVersion: (processorSlug, schemaVersion) =>
+              streamDatabase.writeProcessorSchemaVersion(processorSlug, schemaVersion),
+            clearProcessorData: clearProcessorTablesAndProgress,
+            finishDiscard: () => finishDiscard(ownsRuntime),
+          },
+        });
         // Re-check after every await: a step that settles late (after this
         // election was superseded) must not write runtime-wide fields like
         // lastDeliveredOffset over the current election's values.
         if (!ownsRuntime()) return undefined;
-        // One runner PER MEMBER, fanned by the composite drive: the catch-up
-        // pager, live sink, and metrics below all drive this single composite;
-        // it fans each frame out to its members in canonical order.
-        const processor = new CompositeMirrorDrive(
-          memberDrives.map(({ member, processor: memberProcessor, progress }) => ({
-            slug: member.slug,
-            processor: memberProcessor,
-            runner: new StreamProcessorRunner({
-              // The structural config type narrows back to the class here;
-              // the runner's own construction (runnerDriver) fails loudly on
-              // anything that is not a real StreamProcessor instance.
-              processor: memberProcessor as unknown as StreamProcessor<any, any>,
-              // Range reads are durable-only. Live ephemeral rows exist only
-              // in the composite's per-connection in-memory overlay.
-              stream: election.connection,
-              durability: { progress },
-              // No recovery adapter: a browser tab has no keepalive alarm — a
-              // closed tab's unfinished frame is simply redelivered to the
-              // next leader from the durably committed cursor.
+        // One runner per processorConfig. The group processor sends each downloaded
+        // batch to those runners in configured order.
+        const processor = new BrowserStreamProcessorGroup(
+          configuredProcessors.map(
+            ({ processorConfig, processor: browserProcessor, progress }) => ({
+              slug: processorConfig.slug,
+              processor: browserProcessor,
+              runner: new StreamProcessorRunner({
+                // The structural config type narrows back to the class here;
+                // the runner's own construction (runnerHooks) fails loudly on
+                // anything that is not a real StreamProcessor instance.
+                processor: browserProcessor as unknown as StreamProcessor<any, any>,
+                // The runner's own recovery reads remain durable-only. The
+                // group intercepts ephemeral events from the browser catch-up
+                // and callback paths for its in-memory overlay.
+                stream: election.connection,
+                durability: { progress },
+                // No recovery adapter: a browser tab has no keepalive alarm — a
+                // closed tab's unfinished batch is simply sent again to the
+                // next writer from the durably committed cursor.
+              }),
             }),
-          })),
+          ),
         );
         if (!ownsRuntime()) {
           processor.dispose();
           return undefined;
         }
-        electionDrive = processor;
-        // openDelivery loads every member's two-cursor progress (running any
-        // pending reduce-only refold) and answers the MINIMUM member cursor
-        // (so replay covers the least-caught-up member; ahead members dedupe)
-        // plus the fan-out sink. The loads go to the shared db worker; an
-        // un-deadlined hang here would park the runtime as a forever-"leader"
-        // with no subscription, no probe, and no error.
-        const opened = await withDeadline("checkpoint read", processor.openDelivery());
+        databaseWriterProcessorGroup = processor;
+        // openEventBatchCallback loads every processorConfig's two-cursor progress (running any
+        // pending reduce-only refold) and answers the MINIMUM processorConfig cursor
+        // (so replay covers the least-caught-up processorConfig; ahead processorConfigs dedupe)
+        // plus one processEventBatch callback that calls each processor. The loads go to the shared db worker; an
+        // un-deadlined hang here would halt the runtime as a forever-"writer"
+        // with no event callback, no probe, and no error.
+        const opened = await withDeadline(
+          "checkpoint read",
+          processor.openEventBatchCallback(serverStreamId),
+        );
         if (!ownsRuntime()) return undefined;
 
         const historicalGap = serverMaxOffset - opened.checkpointOffset;
         if (historicalGap > MAX_LIVE_REPLAY_OFFSET_GAP) {
           console.info(
-            `[stream ${args.streamPath} ${slug}] pull-paging ${historicalGap} durable historical offsets before opening the live subscription`,
+            `[stream ${args.streamPath} ${slug}] pull-paging ${historicalGap} durable historical offsets before opening the event callback`,
           );
         }
 
-        // Pull every pre-open historical offset through a bounded, durable-only
-        // scan. The scan envelope advances across omitted ephemeral rows, so
-        // old chunks neither replay nor leave a permanent cursor hole. Once
-        // the remaining interval fits the server's atomic subscribe guard, the
-        // live lane opens after the captured boundary and only post-open
-        // ephemeral events can enter the in-memory overlay.
+        // Pull every still-available pre-open event through bounded pages.
+        // Durable events feed the persistent runners; buffered ephemeral
+        // events feed only the in-memory UI overlay. Missing ephemeral offsets
+        // are scanned as gaps. Once the remaining interval fits the server's
+        // atomic open guard, the callback opens after the captured boundary.
         const caughtUp = await catchUpToLiveReplayBoundary({
           afterOffset: opened.checkpointOffset,
           throughOffset: serverMaxOffset,
           pageLimit: CATCHUP_PAGE_LIMIT,
           maxReplayOffsetGap: MAX_LIVE_REPLAY_OFFSET_GAP,
-          expectedIncarnation: reconciledIncarnation,
+          expectedStreamId: serverStreamId,
           shouldContinue: ownsRuntime,
           catchUp: ({ afterOffset, throughOffset, pageLimit }) =>
-            catchUpDurableHistory({
+            catchUpAvailableHistory({
               afterOffset,
               throughOffset,
               pageLimit,
+              expectedStreamId: serverStreamId,
               shouldContinue: ownsRuntime,
               read: async ({ afterOffset: cursor, beforeOffset, limit }) =>
                 (await withDeadline(
                   "catch-up page read",
-                  election.connection.getEvents({ afterOffset: cursor, beforeOffset, limit }),
-                )) as StreamEvent[],
+                  election.connection.getEventPage({
+                    afterOffset: cursor,
+                    beforeOffset,
+                    limit,
+                    includeEphemeral: true,
+                  }),
+                )) as { streamId: string; events: StreamEvent[] },
               ingest: async ({ events, scannedAfterOffset, scannedThroughOffset }) => {
                 if (!ownsRuntime()) return;
                 deliveryArrivals += 1;
                 lastDeliveryArrivalAt = Date.now();
                 lastBatchEvents = events.length;
                 totalDeliveredEvents += events.length;
-                // Applying a frame is deliberately not abandoned behind a
+                // Applying a batch is deliberately not abandoned behind a
                 // timeout: the durable cursor fence, not a second concurrent
                 // writer, owns recovery from a failed apply.
-                await opened.sink({
+                await opened.processEventBatch({
+                  streamId: serverStreamId,
                   events: [...events],
                   scannedAfterOffset,
                   scannedThroughOffset,
@@ -1454,28 +1354,28 @@ function createStreamRuntime(
                 );
               },
             }),
-          readHead: async () => {
-            const { coreProcessorState } = await withDeadline(
-              "catch-up head re-read",
-              election.connection.runtimeState(),
+          readLatestOffset: async () => {
+            const page = await withDeadline(
+              "catch-up maximum-offset re-read",
+              election.connection.getEventPage({
+                afterOffset: Number.MAX_SAFE_INTEGER,
+                limit: 1,
+              }),
             );
-            const parsed = parseBrowserCoreProcessorState(coreProcessorState);
-            return { createdAt: parsed.createdAt, maxOffset: parsed.maxOffset };
+            return { streamId: page.streamId, maxOffset: page.streamMaxOffset };
           },
         });
         if (caughtUp === undefined || !ownsRuntime()) return undefined;
         const replayAfterOffset = caughtUp.replayAfterOffset;
         lastDeliveredOffset = replayAfterOffset;
-        processor.clearVolatileState();
-        updateLiveAgentUiState(null);
         // The live capabilities ride as SIBLINGS of the serializable
-        // descriptor — the same position the wake handshake gives them,
+        // descriptor — the same position as in a hosted processor's wake response,
         // built by the same shared helper so the two hosts cannot drift.
         // Half our measured transport RTT is the one-way estimate that
         // turns observed pings into the clock-offset correction. The SNAPSHOT
-        // half of runtime state comes from the member runners' committed
-        // progress (the composite's MINIMUM) — the runners own the cursors;
-        // the composite contributes only the primary's runtime bag (metrics
+        // half of runtime state comes from the processorConfig runners' committed
+        // progress (the group's MINIMUM) — the runners own the cursors;
+        // the group contributes only the primary's runtime bag (metrics
         // merged in by the helper).
         const capabilities = hostRuntimeCapabilities(processor, {
           now: () => Date.now(),
@@ -1487,20 +1387,30 @@ function createStreamRuntime(
         });
         return {
           processor,
+          streamId: serverStreamId,
           replayAfterOffset,
-          subscriber: browserStreamSubscriberDescriptor({
-            announcement: announceContract(processor.contract),
+          openedBy: {
+            description: "browser",
+            processor: {
+              announcement: announceContract(processor.contract),
+            },
             ...(subscriberUser === undefined ? {} : { user: subscriberUser }),
-          }),
+          },
           getRuntimeState: capabilities.getRuntimeState,
           ping: capabilities.ping,
           // Counters are bumped inside ingestWithSelfHeal, AFTER its
           // supersede guard: a batch delivered to a replaced election is
           // dropped and must not count as progress (it never advances
           // lastDeliveredOffset), or the liveness probe would read a dead
-          // subscription's stale pushes as healthy.
-          processEventBatch: (batch: StreamEventBatch) =>
-            ingestWithSelfHeal(processor, opened.sink, batch, election),
+          // old callback's late batches as healthy.
+          processEventBatch: (batch: StreamEventBatch) => {
+            if (batch.streamId !== serverStreamId) {
+              throw new Error(
+                `received event batch for stream ID ${batch.streamId}; expected ${serverStreamId}`,
+              );
+            }
+            return ingestWithSelfHeal(processor, opened.processEventBatch, batch, election);
+          },
         };
       })
       .then(async (ready) => {
@@ -1508,65 +1418,77 @@ function createStreamRuntime(
         // Claim the volatile relay immediately before the atomic live open.
         // Any old writer's overlay disappears even if it crashed without a
         // release message; state published below belongs to this session only.
-        updateLiveAgentUiState(null);
-        liveAgentStateChannel.claim(null);
+        updateLiveAgentUiState(ready.processor.agentUiState);
+        liveAgentStateChannel.claim(ready.processor.agentUiState);
         const handle = await withDeadline(
-          "subscribe",
-          election.connection.subscribe({
-            subscriptionKey: serverSubscriptionKey,
+          "open event callback",
+          election.connection.openConnection({
+            connectionKey: serverConnectionKey,
             processEventBatch: ready.processEventBatch,
             replayAfterOffset: ready.replayAfterOffset,
             // Bind the open to the exact stream identity whose history was
             // reconciled. `null` deliberately binds the pre-creation state,
-            // so creation/reset in the final-read→subscribe gap rejects.
-            expectedIncarnation: reconciledIncarnation ?? null,
+            // so creation/reset between the final read and `openConnection()` rejects.
+            expectedStreamId: ready.streamId,
             maxReplayOffsetGap: MAX_LIVE_REPLAY_OFFSET_GAP,
-            subscriber: ready.subscriber,
+            openedBy: ready.openedBy,
             getRuntimeState: ready.getRuntimeState,
             ping: ready.ping,
           }),
         );
-        return { handle, processor: ready.processor };
+        return { handle, processor: ready.processor, streamId: ready.streamId };
       })
-      .then((subscribed) => {
-        if (subscribed === undefined) return;
-        const { handle, processor } = subscribed;
+      .then((opened) => {
+        if (opened === undefined) return;
+        const { handle, processor, streamId: openedStreamId } = opened;
         if (!ownsRuntime()) {
-          fireAndForgetUnsubscribe(handle);
+          closeWithoutWaiting(handle);
           return;
         }
-        subscriptionHandle = handle;
-        // Assigned only once the subscription is LIVE: an election that bails
+        eventConnection = handle;
+        connectionStreamId = openedStreamId;
+        // Assigned only once the callback is OPEN: an election that bails
         // mid-chain must not leave metrics/appendBatch attributing samples to
-        // a processor that never subscribed (Bugbot round 2).
-        currentProcessor = processor;
+        // a processor that never received events (Bugbot round 2).
+        activeProcessorGroup = processor;
         nudgeSkipWarned = false;
-        snapshot = { ...snapshot, connectionError: undefined, connectionStatus: "subscribed" };
+        snapshot = {
+          ...snapshot,
+          connectionError: undefined,
+          connectionStatus: "receiving-events",
+        };
         emitSnapshot();
         startLivenessProbe();
-        // Note: we deliberately do NOT reset ingestFailureCount here. A clean resubscribe does
-        // not mean the batch that failed will now succeed, so resetting would let a poison
+        // Note: we deliberately do NOT reset ingestFailureCount here. Opening a new callback does
+        // not mean the batch that failed will now succeed, so resetting would let a failing
         // batch busy-loop at the floor delay. ingestFailureCount only resets on a successful
         // ingest (so a transient failure that then applies clears the backoff).
       })
       .catch((error: unknown) => {
-        clearTimeout(followerTimeout);
+        clearTimeout(readerTimeout);
         // A late rejection from a superseded election (its connection was already
-        // replaced — e.g. a parked subscribe's deadline firing after a reconnect
-        // landed us elsewhere) must not tear down the healthy current subscription (B1).
+        // replaced — e.g. an old open attempt's deadline firing after reconnect
+        // landed us elsewhere) must not tear down the healthy current callback (B1).
         if (disposed || !ownsRuntime()) return;
-        console.error(`[stream ${args.streamPath} ${slug}] subscribe failed`, error);
+        console.error(`[stream ${args.streamPath} ${slug}] opening event callback failed`, error);
         // Timeout verdicts (including the half-open-corpse eviction) are the
-        // guarded lane's business, made inside withDeadline's retry: a
+        // handled by guardedCall inside withDeadline's retry: a
         // two-strike eviction already reconnected (so ownsRuntime() bailed
         // above), and a StepTimeoutError still reaching here means the ledger
-        // never hit two — another lane's success proved the transport answers
+        // never hit two — another call's success proved the transport answers
         // mid-chain — so one strike is not evidence enough to evict. Restart
         // the election without collateral damage; non-timeout rejections the
-        // lane didn't act on are app-level failures and get the same
+        // guardedCall did not act on are app-level failures and get the same
         // no-eviction reconnect they always did.
-        scheduleReconnect(`subscribe failed: ${errorMessage(error)}`, 1_000);
+        scheduleReconnect(`opening event callback failed: ${errorMessage(error)}`, 1_000);
       });
+    // Ownership can change while one of the awaited SQLite operations above
+    // is already executing. The before/after checks keep stale results out of
+    // runtime state; holding the Web Lock until the entire setup chain settles
+    // also keeps that unavoidable late mutation from overlapping a successor
+    // writer against the shared database.
+    role.holdUntil(setup);
+    void setup;
   }
 
   // Batches are applied strictly one at a time (see ingestWithSelfHeal). The
@@ -1575,27 +1497,27 @@ function createStreamRuntime(
   // interleave with the current election's.
   let ingestChain: Promise<void> = Promise.resolve();
 
-  // Browsers are an inbound (fire-and-forget) subscriber: the server advances its delivery
-  // cursor regardless of whether our ingest succeeded and never closes the connection on an
+  // Browser callbacks are fire-and-forget: the server advances its connection cursor
+  // regardless of whether our ingest succeeded and never closes the connection on an
   // ingest error. So if applying a batch throws (a transient OPFS/SQLite error, or a
-  // RAISE(ABORT) from the mirror trigger: replay conflict / out-of-order insert), we must self-heal — otherwise the mirror
-  // silently desyncs forever. We resubscribe from the last successfully-applied checkpoint
+  // RAISE(ABORT) from the cache trigger: replay conflict / out-of-order insert), we must retry — otherwise the cache
+  // silently desyncs forever. We open a new callback from the last successfully-applied checkpoint
   // (the next election re-reads the processor's persisted offset into `replayAfterOffset`,
   // so the server replays from there), with bounded exponential backoff so repeated failures
   // don't busy-loop. A disposed runtime, or a callback from a superseded connection, stops.
   async function ingestWithSelfHeal(
-    processor: CompositeMirrorDrive,
-    sink: (batch: StreamProcessorDeliveryFrame) => Promise<void>,
+    processor: BrowserStreamProcessorGroup,
+    processEventBatch: (batch: StreamProcessorEventBatch) => Promise<void>,
     batch: StreamEventBatch,
     election: { connection: BrowserStreamClient },
   ): Promise<void> {
     // A batch delivered to a superseded election must not be applied: its
-    // runners' queued frames would interleave with the current election's
-    // drive on the same tables (the progress stores' fences reject a stale
-    // commit durably, but feeding known-stale frames is still waste) — and it
+    // runners' queued batches would interleave with the current writer's
+    // writes to the same tables (the progress stores' fences reject a stale
+    // commit durably, but feeding known-stale batches is still waste) — and it
     // must not count as delivery progress either (see below).
     if (disposed || stream !== election.connection) return;
-    // Live-tail safety valve (see MAX_PENDING_INGEST_EVENTS): the server pump
+    // Live-callback safety valve (see MAX_PENDING_INGEST_EVENTS): the server send loop
     // is one-directional and can outrun SQLite; queued-but-unapplied events
     // otherwise accumulate in JS memory without bound. Cutting the connection
     // discards the queue (every queued ingest bails on the superseded-election
@@ -1612,10 +1534,10 @@ function createStreamRuntime(
     try {
       if (pendingIngestEvents > MAX_PENDING_INGEST_EVENTS) {
         console.warn(
-          `[stream ${args.streamPath} ${slug}] delivery outran the local mirror (> ${MAX_PENDING_INGEST_EVENTS} events queued); reconnecting to catch up at the mirror's pace`,
+          `[stream ${args.streamPath} ${slug}] delivery outran the local cache (> ${MAX_PENDING_INGEST_EVENTS} events queued); reconnecting to catch up at the cache's pace`,
         );
         // scheduleReconnect zeroes pendingIngestEvents with the connection.
-        scheduleReconnect("delivery outran the local mirror", 0);
+        scheduleReconnect("delivery outran the local cache", 0);
         return;
       }
       // Count the arrival HERE, for the current election only, and BEFORE the
@@ -1634,7 +1556,7 @@ function createStreamRuntime(
       // A supersedes the election.
       const run = ingestChain.then(async () => {
         if (disposed || stream !== election.connection) return;
-        await sink(batch);
+        await processEventBatch(batch);
         ingestFailureCount = 0;
         lastDeliveredOffset = Math.max(lastDeliveredOffset, batch.scannedThroughOffset);
         updateLiveAgentUiState(processor.agentUiState, { publish: true });
@@ -1648,7 +1570,7 @@ function createStreamRuntime(
         ingestFailureCount += 1;
         ingestFailures += 1;
         console.error(
-          `[stream ${args.streamPath} ${slug}] local mirror ingest failed (attempt ${ingestFailureCount}); resubscribing from last applied offset`,
+          `[stream ${args.streamPath} ${slug}] local cache ingest failed (attempt ${ingestFailureCount}); opening a new callback after the last applied offset`,
           error,
         );
         // Drop the connection and reconnect with bounded exponential backoff (capped 30s). The
@@ -1656,7 +1578,7 @@ function createStreamRuntime(
         // applied offset. Routed through the shared scheduleReconnect so a concurrent socket
         // close can't race a second reconnect timer.
         const delay = Math.min(30_000, 250 * 2 ** Math.min(ingestFailureCount - 1, 7));
-        scheduleReconnect(`mirror ingest failed: ${errorMessage(error)}`, delay);
+        scheduleReconnect(`cache ingest failed: ${errorMessage(error)}`, delay);
         throw error;
       }
     } finally {
@@ -1668,99 +1590,100 @@ function createStreamRuntime(
 
   // A grant only proves the newer writer is gone RIGHT NOW — a healthy newer
   // tab also releases its lock on every routine reconnect and only re-holds
-  // after its backoff, redial, and re-election complete. That gap can
+  // after its backoff, reconnection, and re-election complete. That gap can
   // legitimately reach scheduleReconnect's 30s backoff ceiling (ingest
-  // self-heal, connect failures) plus the 15s dial deadline, so the takeover
+  // retry, connect failures) plus the 15s connection deadline, so the takeover
   // re-check must wait it out: only a writer that STAYED gone triggers
   // re-election; a cycling one re-holds its lock and this tab just re-arms the
   // watch. The asymmetry is deliberate — a false takeover deletes the newer
   // tab's projection (the flicker this exists to prevent), while a slow
   // takeover only delays live updates in a tab that is stale anyway (reads
-  // keep serving the last-written mirror, and reloading is always the fast
+  // keep serving the last-written cache, and reloading is always the fast
   // path).
   const SUPERSEDED_RECHECK_DELAY_MS = 60_000;
 
   // The zero-polling death watch on the newer tab's own writer lock: a
   // queued request granted only when that tab is gone (closed, navigated
   // away, or rolled back).
-  function watchSupersedingWriter(newerLockName: string) {
-    supersededWatch?.release();
+  function watchNewerWriter(newerLockName: string) {
+    newerWriterWatch?.release();
     // SHARED mode: granted only once the exclusive holder is gone, and other
     // resigned tabs' watches neither queue behind this one nor read as live
-    // writers (findSupersedingMirrorWriterLock ignores shared holders).
+    // writers (findNewerStreamDatabaseWriterLock ignores shared holders).
     const watch = acquireWriterRole({ lockName: newerLockName, mode: "shared" });
-    supersededWatch = watch;
+    newerWriterWatch = watch;
     void watch.whenWriter.then(() => {
       // Never HOLD the newer generation's lock — a fresh tab of that version
       // must stay able to elect. The grant was only the death notification.
       watch.release();
       // whenWriter also settles on release() (teardown, or a later resign
       // replacing the watch); only the still-current watch proceeds. The
-      // released watch stays in `supersededWatch` as the "still resigned"
+      // released watch stays in `newerWriterWatch` as the "still resigned"
       // marker until the recheck below decides.
-      if (disposed || supersededWatch !== watch) return;
-      supersededRecheckTimer = setTimeout(() => {
-        supersededRecheckTimer = undefined;
-        void findSupersedingMirrorWriterLock({
+      if (disposed || newerWriterWatch !== watch) return;
+      newerWriterRecheckTimer = setTimeout(() => {
+        newerWriterRecheckTimer = undefined;
+        void findNewerStreamDatabaseWriterLock({
           projectId: args.projectId,
           streamPath: args.streamPath,
-          versionVector: mirrorVersionVector,
+          processorSchemaVersionKey: processorSchemaKey,
         }).then((stillSuperseding) => {
-          if (disposed || supersededWatch !== watch) return;
-          supersededWatch = undefined;
+          if (disposed || newerWriterWatch !== watch) return;
+          newerWriterWatch = undefined;
           if (stillSuperseding !== undefined) {
-            watchSupersedingWriter(stillSuperseding);
+            watchNewerWriter(stillSuperseding);
             return;
           }
-          scheduleReconnect("superseding mirror writer gone; re-electing", 0);
+          scheduleReconnect("superseding cache writer gone; re-electing", 0);
         });
       }, SUPERSEDED_RECHECK_DELAY_MS);
     });
   }
 
-  function stopSubscriptionElection() {
-    fireAndForgetUnsubscribe(subscriptionHandle);
-    subscriptionHandle = undefined;
+  function stopDatabaseWriter() {
+    closeWithoutWaiting(eventConnection);
+    eventConnection = undefined;
+    connectionStreamId = undefined;
     liveAgentStateChannel.release();
     writerRole?.release();
     writerRole = undefined;
-    supersededWatch?.release();
-    supersededWatch = undefined;
-    if (supersededRecheckTimer !== undefined) {
-      clearTimeout(supersededRecheckTimer);
-      supersededRecheckTimer = undefined;
+    newerWriterWatch?.release();
+    newerWriterWatch = undefined;
+    if (newerWriterRecheckTimer !== undefined) {
+      clearTimeout(newerWriterRecheckTimer);
+      newerWriterRecheckTimer = undefined;
     }
-    // Dispose the election's member runners so queued frames (and their
-    // trailing self-pulls) reject at their turn instead of racing the next
-    // election's drive over the shared mirror. A frame already PAST the
+    // Dispose the writer's processorConfig runners so queued batches (and their
+    // remaining SQLite reads) reject at their turn instead of racing the next
+    // writer over the shared cache. A batch already past the
     // dispose check can still finish — the progress stores'
     // cursorRevision/monotonic fences are what durably contain that
     // incarnation, not this best-effort stop.
-    electionDrive?.dispose();
-    electionDrive = undefined;
+    databaseWriterProcessorGroup?.dispose();
+    databaseWriterProcessorGroup = undefined;
     updateLiveAgentUiState(null);
-    // In-flight own-append correlations belong to the dying subscription; the
+    // In-flight own-append correlations belong to the closing callback; the
     // fresh election replays, and a replayed delivery must not close a stale
     // loop with an inflated sample.
-    currentProcessor?.subscriberMetrics.clearPendingAppends();
-    currentProcessor = undefined;
+    activeProcessorGroup?.eventConsumptionMetrics.clearPendingAppends();
+    activeProcessorGroup = undefined;
     snapshot = {
       ...snapshot,
-      subscriptionStatus: "idle",
+      databaseRole: "idle",
     };
     if (!disposed) emitSnapshot();
   }
 
   // Teardown runs exactly when the session is likeliest to be dead, and a
-  // dead session's unsubscribe() rejects — un-awaited, that's an
-  // unhandledrejection per teardown. Same wrapper useItxSubscription's
+  // dead session's close() rejects — un-awaited, that's an
+  // unhandledrejection per teardown. Same wrapper useStreamConnection's
   // dispose uses.
-  function fireAndForgetUnsubscribe(handle: { unsubscribe(): void } | undefined) {
+  function closeWithoutWaiting(handle: { close(): void } | undefined) {
     if (handle === undefined) return;
     void Promise.resolve()
-      .then(() => handle.unsubscribe())
+      .then(() => handle.close())
       .catch(() => {
-        // The server side of a dead subscription is already gone.
+        // The server side of a dead callback connection is already gone.
       });
   }
 
@@ -1778,23 +1701,23 @@ function createStreamRuntime(
   //     half-open corpse needs the ledger's strikes, and the follow-up probe
   //     (ledger invariant 3) bounds that at two guarded windows from the
   //     resume check's start.
-  // A live subscription and a settled FOLLOWER both run the check. The
-  // follower matters — it has no probe (probes are the leader's,
-  // post-subscribe) and nothing else would ever notice its dead connection:
-  // its feed keeps updating off the leader tab's shared mirror while its own
+  // An open callback and a settled READER both run the check. The
+  // reader matters — it has no probe (probes are the writer's,
+  // after `openConnection()`) and nothing else would ever notice its dead connection:
+  // its feed keeps updating off the writer tab's shared cache while its own
   // appends fail, which looks exactly like a healthy page. An election in
-  // flight ("electing", or "leader" before subscribe resolves) is left alone:
+  // flight ("electing", or "writer" before `openConnection()` resolves) is left alone:
   // its own guarded steps already bound a dead transport, and a resume-time
   // check racing a cold DO would strike a healthy attempt.
   function onResume() {
     if (disposed || !started) return;
     if (stream === undefined || reconnectTimer !== undefined) {
       // pageshow fires on every NORMAL load too, right after start() began the
-      // first dial — leave a young in-flight attempt alone instead of bumping
-      // its epoch and re-dialing (one wasted round trip per page load).
+      // first connection attempt — leave a young in-flight attempt alone instead of bumping
+      // its epoch and reconnecting (one wasted round trip per page load).
       if (stream === undefined && Date.now() - connectStartedAt < 5_000) return;
       reconnectNow();
-    } else if (subscriptionHandle !== undefined || snapshot.subscriptionStatus === "follower") {
+    } else if (eventConnection !== undefined || snapshot.databaseRole === "reader") {
       void verifyDelivery("resume check");
     }
   }
@@ -1806,7 +1729,7 @@ function createStreamRuntime(
     if (started || disposed) return;
     started = true;
     liveAgentStateChannel.request();
-    snapshot = { ...snapshot, connectionStatus: "subscribing" };
+    snapshot = { ...snapshot, connectionStatus: "opening-event-callback" };
     emitSnapshot();
     refreshDatabaseInfo();
     if (typeof document !== "undefined") {
@@ -1827,24 +1750,24 @@ function createStreamRuntime(
   // The read itself is the transport check. A dead-but-open WebSocket (the
   // worker behind a dev proxy restarted, a Durable Object was evicted
   // mid-connection) hangs silently: the browser never gets a close frame,
-  // deliveries just stop, and the UI stays "subscribed" forever — the guarded
-  // lane strikes (and, on the second strike, evicts) that connection. One
+  // event batches just stop, and the UI stays "receiving events" forever —
+  // guardedCall records a timeout (and evicts on the second). One
   // struck timeout is retried immediately so a one-shot trigger (nudge,
   // resume) is not silently swallowed by a single slow answer; the retry
   // REUSES the in-flight read (a cold DO's late answer resolves it — see the
   // ledger's late-credit rule), and only a still-unanswered read makes the
-  // retry's timeout the lane's second strike.
+  // retry's timeout the second strike.
   //
-  // The ANSWER matters for the leader: a subscription can be orphaned while
+  // The ANSWER matters for the writer: a callback can disappear on the server while
   // the socket stays perfectly healthy. If the stream was recreated underneath
-  // us (incarnation changed — e.g. the browser subscribed to a lazily-created
+  // us (incarnation changed — e.g. the browser opened a callback on a lazily-created
   // empty stream and the agent machinery then created it for real), or the
   // server's maxOffset is ahead and deliveries have been SILENT for a full
   // check interval (no batch in flight, none arrived recently — a batch that
   // arrived before the check and is still ingesting is proof of life, not a
-  // stall), the subscription is gone server-side — reconnect, and the
-  // resubscribe replays from the persisted checkpoint. A follower holds no
-  // subscription, so for it the answered read is the whole check.
+  // stall), the callback is gone server-side — reconnect, and the new callback
+  // replays from the persisted checkpoint. A reader holds no event callback,
+  // so for it the answered read is the whole check.
   const LIVENESS_PROBE_INTERVAL_MS = 10_000;
   const DELIVERY_GRACE_MS = 2_000;
   // Single-flight latch: two overlapping verifies would burn concurrent reads
@@ -1859,12 +1782,12 @@ function createStreamRuntime(
   // the strictest requested semantics (a latched nudge's requireRealArrival
   // survives a later-latched probe), and a natural no-op if the settling verify
   // already evicted/reconnected (the re-run re-reads `stream` and the
-  // subscription state from scratch).
+  // callback state from scratch).
   let verifyInFlight = false;
   let verifyRerun: { reason: string; requireRealArrival: boolean } | undefined;
 
   // `requireRealArrival` (the nudge's mode): the caller has evidence the server
-  // just appended, so a server-ahead subscription with no REAL arrival since
+  // just appended, so a server-ahead callback with no REAL arrival since
   // its probe started is judged orphaned right after the delivery grace — the
   // artificial baseline that shields the paced probe's first interval does not
   // apply. See the arrival stamps' contract at their declaration.
@@ -1917,30 +1840,30 @@ function createStreamRuntime(
       // on the first hit.
       const coreProcessorState = parseBrowserCoreProcessorState(result.coreProcessorState);
       if (disposed || stream !== connection) return;
-      if (subscriptionHandle === undefined) return; // transport answered — all a follower needs
-      if (coreProcessorState.createdAt !== reconciledIncarnation) {
+      if (eventConnection === undefined) return; // transport answered — all a reader needs
+      if (coreProcessorState.streamId !== connectionStreamId) {
         throw new Error(
-          `stream incarnation changed (${reconciledIncarnation} -> ${coreProcessorState.createdAt}); subscription is orphaned`,
+          `stream ID changed (${connectionStreamId} -> ${coreProcessorState.streamId}); event callback is no longer open on the server`,
         );
       }
-      if (coreProcessorState.maxOffset <= lastDeliveredOffset) return; // mirror is current
+      if (coreProcessorState.maxOffset <= lastDeliveredOffset) return; // cache is current
       // Server is ahead — give an in-flight delivery a moment, then require
       // SILENCE across the full check interval ENDING AT checkStartedAt before
-      // declaring the subscription orphaned. lastDeliveredOffset lagging is
+      // deciding the callback is no longer open. lastDeliveredOffset lagging is
       // NOT the stall signal: a batch that arrived before this check and is
       // still ingesting (or several, queued) adds no new arrival during the
       // grace window, and reconnecting under it would abandon a healthy
-      // mid-apply mirror. Arrival — the ledger's counter/stamp, bumped before
-      // the possibly-slow ingest — is what proves the delivery lane is alive.
+      // mid-apply cache. Arrival — the ledger's counter/stamp, bumped before
+      // the possibly-slow ingest — is what proves event batches are still arriving.
       await new Promise((resolve) => setTimeout(resolve, DELIVERY_GRACE_MS));
       if (disposed || stream !== connection) return;
       if (pendingIngestEvents > 0) return; // an arrived batch is still ingesting
-      // Re-check mirror-current AFTER the grace: an ingest that was in flight
+      // Re-check cache-current AFTER the grace: an ingest that was in flight
       // when this check began can finish during the wait — clearing the
       // pending counter and advancing lastDeliveredOffset past the server
-      // offset read above. That mirror is current; judging it by a stale
+      // offset read above. That cache is current; judging it by a stale
       // arrival stamp (the batch may have ARRIVED long before this check)
-      // would reconnect a healthy, caught-up subscription.
+      // would reconnect a healthy, caught-up callback.
       if (coreProcessorState.maxOffset <= lastDeliveredOffset) return;
       if (
         lastDeliveryArrivalAt !== undefined &&
@@ -1957,7 +1880,7 @@ function createStreamRuntime(
         lastDeliveryArrivalAt === undefined &&
         checkStartedAt - arrivalBaselineAt <= LIVENESS_PROBE_INTERVAL_MS + DELIVERY_GRACE_MS
       ) {
-        // Fresh, arrival-less subscription: too early for the paced probe (or
+        // Fresh callback with no arrivals: too early for the paced probe (or
         // a resume check) to judge. The bound is interval + grace so the first
         // paced probe — which fires exactly one interval after the baseline —
         // is reliably inside it (exact semantics at the stamps' declaration).
@@ -1967,18 +1890,18 @@ function createStreamRuntime(
       throw new Error(
         `server is at offset ${coreProcessorState.maxOffset} but ${
           lastDeliveryArrivalAt === undefined
-            ? `no delivery has arrived since the subscription went live ${Date.now() - arrivalBaselineAt}ms ago`
+            ? `no event batch has arrived since the callback opened ${Date.now() - arrivalBaselineAt}ms ago`
             : `no delivery arrived in the ${LIVENESS_PROBE_INTERVAL_MS}ms before this check began (last arrival ${Date.now() - lastDeliveryArrivalAt}ms ago)`
-        } (applied through ${lastDeliveredOffset}); subscription is orphaned`,
+        } (applied through ${lastDeliveredOffset}); event callback is no longer sending`,
       );
     } catch (error) {
       if (disposed || stream !== connection) return;
-      // Timeouts are entirely the guarded lane's business: a strike that has
+      // Timeouts are handled entirely by guardedCall: a strike that has
       // not reached its verdict must not reconnect here (much less evict — the
-      // ledger may have been reset by a success on another lane mid-check).
+      // ledger may have been reset by another successful call mid-check).
       if (error instanceof StepTimeoutError) return;
       console.warn(
-        `[stream ${args.streamPath} ${slug}] ${reason} found a dead or stale subscription; reconnecting`,
+        `[stream ${args.streamPath} ${slug}] ${reason} found a closed or stale event callback; reconnecting`,
         error,
       );
       reconnectAfterError(`${reason} failed`, error, 250, { suspect: connection });
@@ -1994,11 +1917,11 @@ function createStreamRuntime(
 
   function startLivenessProbe() {
     stopLivenessProbe();
-    // The subscription just went live: clear the real-arrival stamp and restart
+    // The event callback just opened: clear the real-arrival stamp and restart
     // the baseline so the orphan check measures silence from THIS
-    // subscription's start, not from a pre-subscribe catch-up page or a
+    // callback's start, not from a catch-up page read before `openConnection()` or a
     // delivery that rode a previous socket. Checks starting within
-    // interval + grace of this baseline treat an arrival-less subscription as
+    // interval + grace of this baseline treat a callback with no arrivals as
     // too early to judge — the first paced probe (one interval from here) is
     // always inside that window, so the second is the earliest that can
     // declare it orphaned. A nudge gets no such grace — zero real arrivals
@@ -2019,33 +1942,33 @@ function createStreamRuntime(
     }
   }
 
-  // Once-per-state latch for the skipped-nudge warning; reset on subscribe.
+  // Once-per-state latch for the skipped-nudge warning; reset when the callback opens.
   let nudgeSkipWarned = false;
 
   // On-demand delivery check for moments the CALLER knows the server is about
   // to (or just did) append — e.g. right after a composer submit. The paced
-  // probe takes up to an interval to notice an orphaned subscription; this
+  // probe takes up to an interval to notice a missing callback; this
   // collapses that to ~seconds exactly when a human is watching. Nudging while
   // disconnected is a no-op (reconnect is already the path that heals that
   // state).
   async function nudge(): Promise<void> {
-    if (stream === undefined || subscriptionHandle === undefined) {
-      // Not the writer (or not connected): we can't resubscribe, but say so —
-      // a silently inert nudge made follower-side stalls undiagnosable. Once
-      // per state though: a follower tab nudges on EVERY composer submit, and
+    if (stream === undefined || eventConnection === undefined) {
+      // Not the writer (or not connected): we cannot reopen the callback, but say so —
+      // a silently inert nudge made reader-side stalls undiagnosable. Once
+      // per state though: a reader tab nudges on EVERY composer submit, and
       // repeating the same warning per keypress-send is noise, not signal.
       if (!nudgeSkipWarned) {
         nudgeSkipWarned = true;
         console.warn(
-          `[stream ${args.streamPath} ${slug}] nudge skipped: ${stream === undefined ? "no connection" : `no subscription (status ${snapshot.subscriptionStatus})`}`,
+          `[stream ${args.streamPath} ${slug}] nudge skipped: ${stream === undefined ? "no stream connection" : `no event callback (cache role ${snapshot.databaseRole})`}`,
         );
       }
       return;
     }
     // requireRealArrival: the nudge's caller-side evidence (the server is
-    // about to be / was just appended to) means a server-ahead subscription
+    // about to be / was just appended to) means a server-ahead callback
     // with zero real arrivals is orphaned NOW — it must not ride the fresh-
-    // subscription grace the paced probe gets, or the fast heal this check
+    // fresh-callback grace the paced probe gets, or the fast heal this check
     // exists for degrades back to a full probe interval.
     await verifyDelivery("delivery nudge", { requireRealArrival: true });
   }
@@ -2061,7 +1984,7 @@ function createStreamRuntime(
     }
     connectTimer = reconnectTimer = databaseInfoTimer = databaseChangeTimer = undefined;
     stopLivenessProbe();
-    stopSubscriptionElection();
+    stopDatabaseWriter();
     liveAgentStateChannel[Symbol.dispose]();
     stream?.[Symbol.dispose]();
     stream = undefined;
@@ -2072,7 +1995,7 @@ function createStreamRuntime(
 
   debugRegistry.set(`${args.projectId} ${args.streamPath} ${slug}`, () => ({
     connectionStatus: snapshot.connectionStatus,
-    subscriptionStatus: snapshot.subscriptionStatus,
+    databaseRole: snapshot.databaseRole,
     connectionError: snapshot.connectionError,
     lastDeliveredOffset,
     deliveryArrivals,
@@ -2086,12 +2009,12 @@ function createStreamRuntime(
     guardedTimeoutStrikes,
     ledgerGeneration,
     strikeFollowUpProbeInFlight: strikeFollowUpProbe !== undefined,
-    reconciledIncarnation,
+    connectionStreamId,
     started,
     disposed,
     hasConnection: stream !== undefined,
-    hasSubscription: subscriptionHandle !== undefined,
-    hasHostedProcessor: currentProcessor !== undefined,
+    hasEventConnection: eventConnection !== undefined,
+    hasHostedProcessor: activeProcessorGroup !== undefined,
     metrics: readMetrics(),
     listeners: listeners.size,
   }));
@@ -2111,11 +2034,11 @@ function createStreamRuntime(
   }
 
   // Run `call` against the live stream stub. Direct calls (appends, state
-  // reads) can be the FIRST place a dead connection manifests: a follower has
+  // reads) can be the FIRST place a dead connection manifests: a reader has
   // no liveness probe, and nothing else ever clears its corpse `stream` —
-  // before the guarded lane, its appendBatch retries looped through the same
+  // before guardedCall, its appendBatch retries looped through the same
   // dead stub forever (connect() no-ops while `stream` is set), which read as
-  // "the feed updates but my sends fail". The lane's strikes clear the corpse
+  // "the feed updates but my sends fail". Two timeouts clear the dead connection
   // so the CALLER's retry finds a fresh connection; app-level failures
   // (validation and friends) pass through untouched.
   //
@@ -2129,8 +2052,8 @@ function createStreamRuntime(
     // Kick a reconnect only when nothing is already driving one. The old
     // unconditional reconnectNow() collapsed armed backoff timers on every
     // direct call — defeating the escalating connect backoff and the
-    // poison-batch ingest pacing exactly when a user hammers retry — and
-    // superseded a mid-flight dial+election per call.
+    // failing-batch ingest pacing exactly when a user hammers retry — and
+    // superseded a mid-flight connection attempt and election per call.
     if (stream === undefined && reconnectTimer === undefined && connectTimer === undefined) {
       connect();
     }
@@ -2167,7 +2090,7 @@ function createStreamRuntime(
       const promise = (async () => {
         // Real consume-own-append measurement: t0 is when the CALLER asked
         // for the append (retries included — that wait is part of the honest
-        // number); the loop closes when this tab's own subscription ingests
+        // number); the loop closes when this tab's own callback ingests
         // the committed offset (StreamProcessor.noteBatchIngested).
         const t0 = Date.now();
         for (let attempt = 0; ; attempt++) {
@@ -2180,7 +2103,7 @@ function createStreamRuntime(
               0,
             );
             if (maxCommittedOffset > 0) {
-              currentProcessor?.subscriberMetrics.noteAppendCommitted({
+              activeProcessorGroup?.eventConsumptionMetrics.noteAppendCommitted({
                 maxCommittedOffset,
                 t0,
                 atMs: Date.now(),
@@ -2217,17 +2140,17 @@ function createStreamRuntime(
     agentUiState: () => liveAgentUiState,
     noteExternalAppend({ maxCommittedOffset, t0 }) {
       if (!Number.isFinite(maxCommittedOffset) || maxCommittedOffset <= 0) return;
-      currentProcessor?.subscriberMetrics.noteAppendCommitted({
+      activeProcessorGroup?.eventConsumptionMetrics.noteAppendCommitted({
         maxCommittedOffset,
         t0,
         atMs: Date.now(),
       });
     },
     async clearLocalDatabase() {
-      stopSubscriptionElection();
+      stopDatabaseWriter();
       stream?.[Symbol.dispose]();
       stream = undefined;
-      await discardLocalMirror();
+      await clearAllProcessorData();
       reconnectNow();
     },
     nudge,
@@ -2245,12 +2168,12 @@ function createStreamRuntime(
     getServerSnapshot: () => snapshot,
     subscribe(listener) {
       if (disposed) {
-        // A subscriber landing on a disposed runtime renders a frozen view
+        // A React listener registering on a disposed runtime renders a frozen view
         // that nothing will ever reconnect — never let that be silent. The
         // registry's acquire-time retain() makes this unreachable in the
-        // known lanes; this is the tripwire for the ones we haven't met.
+        // known call paths; this is the tripwire for any path we have not covered.
         console.error(
-          `[stream ${args.streamPath} ${slug}] subscribe() on a disposed runtime — the view will be frozen until its deps change or the page reloads`,
+          `[stream ${args.streamPath} ${slug}] React-store subscribe() called after disposal — the view will be frozen until its deps change or the page reloads`,
         );
         return () => {};
       }
@@ -2284,11 +2207,11 @@ function createStreamRuntime(
       transport = next;
     },
     // A re-acquire between "last listener unsubscribed" and the idle-dispose
-    // timer firing means a render is about to subscribe: cancel the pending
+    // timer firing means a render is about to register a listener: cancel the pending
     // dispose so the commit can't land on a corpse (React can yield between
     // the render that acquired and the effect that subscribes — Suspense and
     // lazy chunks stretch that window to seconds; a runtime disposed inside
-    // it froze the view silently, the same subscribe-after-GC shape
+    // it froze the view silently, the same listener-after-GC shape
     // stream-browser-db.ts fixed for query handles). The grace timer is
     // re-armed, not cancelled outright, so an acquire from a DISCARDED render
     // that never subscribes still lets the runtime dispose.

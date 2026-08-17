@@ -346,7 +346,7 @@ The TypeScript class/export name for the Agent Durable Object.
 _Avoid_: Subagent class, Agent DO class
 
 **createStreamProcessorHost**:
-The factory that hosts StreamProcessor instances inside a domain Durable Object: `host.add((deps) => new SomeProcessor(deps))` registers a processor under its contract slug, and `host.wakeStreamSubscriber` answers stream wakeups by re-subscribing from the processor's durable checkpoint.
+The factory that hosts StreamProcessor instances inside a domain Durable Object: `host.add((deps) => new SomeProcessor(deps))` registers a processor under its contract slug, and `host.wakeStreamProcessor` answers stream wakeups by re-subscribing from the processor's durable checkpoint.
 _Avoid_: withStreamProcessor, host mixin, dynamic processor registry
 
 **Stream Processor keepAliveWhile**:
@@ -506,11 +506,15 @@ through itx as a live handle.
 _Avoid_: Repository row, repo provider, GitHub repo
 
 **Workspace Durable Object**:
-A minimal agent-associated durable tool provider that owns Cloudflare Shell workspace state for one Project-local workspace.
-_Avoid_: Organization, Project, event-sourced workspace
+An event-sourced, mount-routed Durable Object owning one workspace's private
+overlay; every project repo is mounted at its own `/repos/**` path by
+derivation.
+_Avoid_: Organization, Project, checkout
 
 **Workspace**:
-A project-scoped live work surface exposed through `itx.workspace`.
+A private working copy of the project's path namespace exposed through
+`itx.workspace`; repo mounts at `/repos/**`, private files under the
+workspace's own path.
 _Avoid_: Organization, Project, workspace alias
 
 **Outbound MCP From Our Client Capability**:
@@ -530,6 +534,16 @@ _Avoid_: Function, tool, provider, execution
 **Script Execution**:
 One attempt to run a Script against an itx Handle.
 _Avoid_: Script, execution ID, script ID
+
+**Approval Batch**:
+The unit of egress approval: one `project/human-approval-requested` event
+carrying an ordered list of held requests — a Script Execution's concurrent
+burst at one egress rule, coalesced at the egress door within the rule's
+debounce window — decided by exactly one `human-approval-decided` event with
+a verdict per index and at most one signature (approval.v2). A lone request
+is an Approval Batch of one and renders identically to how a single request
+always has.
+_Avoid_: Approval Group, notification group
 
 **Provider Bridge**:
 An adapter that exposes an external system, such as OpenAPI or MCP, as an itx
@@ -600,6 +614,13 @@ _Avoid_: Project MCP route, inbound MCP
   handler.
 - Project-scoped MCP tools select one **Project** per invocation before touching
   project-local capabilities.
+- An **Approval Batch** never spans egress rules or **Script Executions**: the
+  egress door coalesces only one Script Execution's concurrent requests at one
+  rule, so mixed hold policies inside a batch are structurally impossible.
+- An **Approval Batch** is decided as a single unit: one
+  `human-approval-decided` event carries a verdict per request index, and one
+  signature (approval.v2) covers the request subjects plus the verdicts.
+  Settlement stays per released request.
 - OS exposes one global MCP resource; it does not expose per-project MCP
   hostnames.
 - The OS Worker classifies every request by **Ingress Hostname** before invoking the **OS App**.
@@ -730,13 +751,14 @@ calls onto its WorkerEntrypoint methods; repo handles expose live Workers RPC
 methods such as `getInfo`, `commitFiles`, `readFiles`, and `readLog`.
 
 ```ts
-await itx.workspace.writeFile("/project/worker.ts", source);
-await itx.workspace.gitCommit({ dir: "/project", message, author });
+await itx.workspace.writeFile("/repos/config/worker.ts", source);
+await itx.workspace.git.commit({ message, scope: "/repos/config" });
 ```
 
-Workspace is an explicit capability selected by the host. Project handles get
-the shared project workspace; agent contexts provide their own isolated
-workspace capability.
+Workspace is an explicit capability selected by the host. Agent contexts
+provide their own isolated workspace — a private working copy of the
+project's path namespace, with every project repo mounted at its own
+`/repos/**` path and private files under the workspace's own directory.
 
 ```ts
 const messages = await itx.integrations.gmail.get().request({
@@ -957,3 +979,4 @@ context while the provider remains connected.
 - "base repo" sounded like a Cloudflare Artifact name or special case. Resolved: the **Iterate Config Base Repo** is a global **Repo Reference** with `projectId: null`.
 - Repo creation source used Artifact names and README bootstrap modes. Resolved: **Repo Creation Source** is only empty repo or fork from a **Repo Reference**; README writes are normal repo writes after creation.
 - The **Project Lifecycle Stream** path was ambiguous between `/project` and `/`. Resolved: use root `/`; resource streams such as `/repos/project` are child streams under the same Project ID.
+- "batch" implied one signed transaction covering many requests, so "Approval Group" was briefly used for requests presented together over per-request grant events. Resolved (reversed, ADR 0007): one signed transaction covering many requests is exactly the model — use **Approval Batch**; the requested event carries the request list and one decided event answers it.

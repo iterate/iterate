@@ -1,45 +1,59 @@
-import { IterateDurableObject, createProcessorHost } from "../../sdk.ts";
+import { StreamProcessorDurableObject, type ProcessorHostDeps } from "../../sdk.ts";
 import type { GithubAiLinterConfig } from "./index.ts";
+import { GithubAiLinterProcessor, publishGithubAiLinterReview } from "./ai-linter.ts";
 import { ReviewBotProcessor } from "./review-bot.ts";
 
-// The review bot's stateful host, one Durable Object instance per GitHub
-// connection (the app ref's durableWorkerKey carries the connection slug). No
-// fixed `path`: the host learns its connection stream from the first wake
-// request. It serves no HTTP and holds no live state; it exists purely to put
-// ReviewBotProcessor on the stream's delivery spine.
+/**
+ * One stateful review-bot worker per GitHub connection. It serves no HTTP and
+ * folds no application state; its durable processor checkpoint prevents a
+ * project-worker deployment or eviction from duplicating review work. `alarm()`
+ * and the `processor` wake door come from {@link StreamProcessorDurableObject};
+ * `recovery` keeps its registered obligations alive across eviction.
+ */
 export function createGithubAiLinterWorker(
   config: GithubAiLinterConfig,
-): new (...args: ConstructorParameters<typeof IterateDurableObject>) => IterateDurableObject {
-  return class ReviewBotApp extends IterateDurableObject {
-    #host = createProcessorHost({
-      ctx: this.ctx,
-      env: this.env,
-      // Keepalive recovery: if an eviction kills this object while it owes
-      // work, the alarm fires and the recovered runner gets its delivery turn.
-      recovery: true,
-      createProcessor: (deps) =>
-        new ReviewBotProcessor({
-          ...deps,
-          config,
-          getItx: () => this.env.ITX.get(),
-        }),
-    });
-
-    async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-      await this.#host.handleAlarm(alarmInfo);
-    }
-
-    /** The wake door the stream spine dials — the subscription's persisted
-     * expression is `workers.get(ref).processor.wakeStreamSubscriber`. */
-    get processor() {
-      return this.#host.wakeSubscriber;
+): new (
+  ...args: ConstructorParameters<typeof StreamProcessorDurableObject>
+) => StreamProcessorDurableObject {
+  return class ReviewBotApp extends StreamProcessorDurableObject {
+    protected readonly recovery = true;
+    protected createProcessor(deps: ProcessorHostDeps) {
+      return new ReviewBotProcessor({
+        ...deps,
+        config,
+        getItx: () => this.env.ITX.get(),
+      });
     }
   };
 }
 
+/**
+ * One stateful processor host per pull-request child stream. The stream also
+ * hosts the generic Agent processor; separate Durable Objects are intentional
+ * because each processor owns its own checkpoint and runtime obligations.
+ */
+export function createPullRequestLinterWorker(): new (
+  ...args: ConstructorParameters<typeof StreamProcessorDurableObject>
+) => StreamProcessorDurableObject {
+  return class GithubAiLinterApp extends StreamProcessorDurableObject {
+    protected readonly recovery = true;
+    protected createProcessor(deps: ProcessorHostDeps) {
+      return new GithubAiLinterProcessor({
+        ...deps,
+        publishReview: async (analysis) => {
+          using itx = await this.env.ITX.get();
+          return await publishGithubAiLinterReview(itx, analysis);
+        },
+      });
+    }
+  };
+}
+
+export { GithubAiLinterProcessor, publishGithubAiLinterReview } from "./ai-linter.ts";
+export { GithubAiLinterProcessorContract, githubAiLinterEventTypes } from "./contract.ts";
 export {
   handleGithubPullRequestWebhook,
+  mightWakePullRequestAgent,
   ReviewBotProcessor,
   ReviewBotProcessorContract,
-  reviewBotFreshnessHorizonMs,
 } from "./review-bot.ts";

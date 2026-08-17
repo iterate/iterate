@@ -255,6 +255,8 @@ export interface SourceCodeBlockProps {
   language?: SourceCodeLanguage;
   showCopyButton?: boolean;
   showLineNumbers?: boolean;
+  /** Keep the fold gutter when line numbers are hidden. */
+  showFoldGutter?: boolean;
   plainChrome?: boolean;
   wrapLongLines?: boolean;
   editable?: boolean;
@@ -270,6 +272,7 @@ export function SourceCodeBlock({
   language = "typescript",
   showCopyButton = true,
   showLineNumbers = true,
+  showFoldGutter = false,
   plainChrome = false,
   wrapLongLines = true,
   editable = false,
@@ -293,13 +296,15 @@ export function SourceCodeBlock({
       EditorView.contentAttributes.of({ tabindex: "0" }),
       wrapLongLines ? EditorView.lineWrapping : [],
       // Orthogonal on purpose: plainChrome strips the visual chrome (border,
-      // highlights), showLineNumbers alone decides the gutter.
+      // highlights), showLineNumbers alone decides the gutter —
+      // showFoldGutter keeps just the fold arrows when line numbers are off
+      // (collapsible YAML/JSON sections without the number column).
       !showLineNumbers
-        ? EditorView.theme({
-            ".cm-gutters": {
-              display: "none",
-            },
-          })
+        ? EditorView.theme(
+            showFoldGutter
+              ? { ".cm-gutter.cm-lineNumbers": { display: "none" } }
+              : { ".cm-gutters": { display: "none" } },
+          )
         : [],
       plainChrome
         ? EditorView.theme({
@@ -313,7 +318,7 @@ export function SourceCodeBlock({
         : [],
       codeMirrorExtensions ?? [],
     ];
-  }, [codeMirrorExtensions, language, plainChrome, showLineNumbers, wrapLongLines]);
+  }, [codeMirrorExtensions, language, plainChrome, showFoldGutter, showLineNumbers, wrapLongLines]);
 
   const handleCopy = async () => {
     try {

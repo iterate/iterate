@@ -11,6 +11,7 @@
 // exact pkg.pr.new artifact produced by the pull request.
 import { DurableObject, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import type {
+  AgentEventInput,
   DynamicWorkerCapability,
   DynamicWorkerRef,
   ItxBinding,
@@ -21,16 +22,21 @@ import type {
   StatefulDynamicWorkerRef,
   StreamEvent,
   StreamEventPager,
-  StreamPushEventBatch,
 } from "./itx-api.generated.ts";
 import type { ProcessorStream, ProcessorStreamPager } from "./processors/stream-handle.ts";
 import type {
+  ProcessorRuntimeState,
   ProcessorSnapshot,
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
+  StreamDeliveryBatch,
+  StreamProcessorWakeRequest,
+  StreamProcessorWakeResponse,
 } from "./processors/rpc-types.ts";
 import {
   createStreamProcessorRegistry,
+  ProcessorFacet,
+  type ProcessorFacetAlarmProxy,
+  type ProcessorFacetHost,
+  type ProcessorFacetIdentity,
   type RegisterableProcessor,
   type RegisteredProcessorReads,
   type StreamProcessorRegistry,
@@ -40,6 +46,34 @@ import {
 // rewriteRelativeImportExtensions keeps the declaration emit for the published
 // dist/sdk.d.ts, where it must resolve to dist/itx-api.generated.d.ts.
 export type * from "./itx-api.generated.ts";
+
+/**
+ * Compile-time shape for the `"agents/birth-defaults"` value of a
+ * `project/defaults-configured` append — the project's standing contribution
+ * to every matching agent birth batch. The platform stores the value
+ * opaquely and validates it at the agent creation door (degrading to
+ * platform-default births on mismatch; runtime owner:
+ * apps/os/src/domains/agents/agent-defaults.ts), so this type exists to give
+ * config workers compile-time reassurance that what they publish will
+ * survive that check: agent-consumed events, plus the one allowlisted
+ * platform-lane exception — a builtin facet-processor subscription (the
+ * runtime additionally allowlists the subscription name).
+ */
+export type AgentBirthDefaultsValue = {
+  /** Which agents these defaults apply to; absent = every agent born through
+   * the generic creation door. */
+  matches?: { pathPrefix: string };
+  birthEvents: Array<
+    | AgentEventInput
+    | {
+        type: "events.iterate.com/stream/subscription-configured";
+        payload: {
+          name: string;
+          receiver: { action: "facet-processor"; source: { kind: "builtin" } };
+        };
+      }
+  >;
+};
 
 /**
  * What the platform supplies to every dynamic worker: the `ITX` binding
@@ -216,6 +250,32 @@ async function withProject<T>(env: IterateEnv, fn: (project: Project) => Promise
 }
 
 /**
+ * Detach plain data returned by Workers RPC before releasing the per-call
+ * result capability. Disposing the project root does not release values
+ * obtained through it; each stream call owns its own result reference.
+ */
+function detachPlainRpcResult<T>(result: T): T {
+  if (result === null || (typeof result !== "object" && typeof result !== "function")) {
+    return result;
+  }
+  // ProcessorStream returns JSON-shaped data only. Workers RPC adds a hidden
+  // disposer that is absent from the generated data types; a shallow spread
+  // preserves that data and drops the capability, but TypeScript cannot prove
+  // that the generic spread still has T's exact shape.
+  const detached = Array.isArray(result) ? [...result] : { ...result };
+  Reflect.deleteProperty(detached, Symbol.dispose);
+  try {
+    const dispose = Reflect.get(result, Symbol.dispose);
+    if (typeof dispose === "function") Reflect.apply(dispose, result, []);
+  } catch (error) {
+    // The plain data is already detached and the remote operation succeeded.
+    // Keep cleanup failure visible without rewriting that outcome as failure.
+    console.warn("project stream RPC result dispose failed after detaching plain data", { error });
+  }
+  return detached as T;
+}
+
+/**
  * A view of `target` with `overrides` in front and everything else passed
  * through. Proxies (not spreads or Object.create) because DurableObjectState
  * and DurableObjectStorage are host objects: their methods must be invoked
@@ -244,11 +304,13 @@ function overlay<T extends object>(target: T, overrides: Record<PropertyKey, unk
  */
 export function itxProjectStream(env: IterateEnv, path: string): ProcessorStream {
   const withStream = <T>(fn: (streams: Project["streams"]) => Promise<T>): Promise<T> =>
-    withProject(env, (project) => fn(project.streams));
+    withProject(env, (project) => fn(project.streams)).then(detachPlainRpcResult);
   return {
     append: (...events) => withStream((streams) => streams.get(path).append(...events)),
+    appendIfStreamId: (args) => withStream((streams) => streams.get(path).appendIfStreamId(args)),
     getEvent: (args) => withStream((streams) => streams.get(path).getEvent(args)),
     getEvents: (args) => withStream((streams) => streams.get(path).getEvents(args)),
+    getEventPage: (args) => withStream((streams) => streams.get(path).getEventPage(args)),
     readEvents: (args): ProcessorStreamPager => {
       let opened: Promise<{ pager: StreamEventPager; project: Disposable }> | undefined;
       let closed = false;
@@ -260,7 +322,7 @@ export function itxProjectStream(env: IterateEnv, path: string): ProcessorStream
             project,
           }));
           const { pager } = await opened;
-          return await pager.next();
+          return detachPlainRpcResult(await pager.next());
         },
         [Symbol.dispose]() {
           closed = true;
@@ -343,9 +405,10 @@ function selfAlarmState<State extends DurableObjectState>(ctx: State, env: Itera
  *   committed DURABLE event on every stream in the project as checkpointed
  *   per-stream batches — in per-stream order, at-least-once. Events appended
  *   with `ephemeral: true` (LLM streaming chunks and other transient
- *   signals) never arrive here — they ride live `subscribe()` connections
- *   only; react to the durable fact that supersedes them (e.g.
- *   an assistant-role `agents/context-added` item). The base unpacks batches
+ *   signals) never arrive here. Session callbacks can receive one while its
+ *   body remains in the Stream Durable Object's bounded memory buffer; react
+ *   here to the durable fact that supersedes it (e.g. an assistant-role
+ *   `agents/context-added` item). The base unpacks batches
  *   into one `processEvent(event)` call per event; override `processEvent` to react
  *   (one `if` per reaction, keyed on event.path + event.type). Throwing (or a worker that fails to build) leaves that
  *   stream's checkpoint in place and the whole batch is redelivered later,
@@ -359,9 +422,25 @@ function selfAlarmState<State extends DurableObjectState>(ctx: State, env: Itera
 export class IterateWorkerEntrypoint<
   Env extends IterateEnv = IterateEnv,
 > extends WorkerEntrypoint<Env> {
+  #itx: Promise<Project> | undefined;
+
   constructor(ctx: ConstructorParameters<typeof WorkerEntrypoint<Env>>[0], env: Env) {
     super(ctx, env);
     this.env = wrapIterateEnv(env);
+  }
+
+  /**
+   * This invocation's project-root itx. Cloudflare constructs one
+   * WorkerEntrypoint per invocation and releases its RPC stubs when that
+   * execution context ends, so every handler can simply `await this.itx`;
+   * repeated access within one event batch or fetch reuses the same session.
+   *
+   * Durable Objects have a longer, multi-invocation lifetime and no eviction
+   * callback, so IterateDurableObject deliberately does not expose this
+   * memoized getter.
+   */
+  protected get itx(): Promise<Project> {
+    return (this.#itx ??= this.env.ITX.get());
   }
 
   /** See `fetchDynamicWorker` at module level: a real fetch hop into a
@@ -378,7 +457,7 @@ export class IterateWorkerEntrypoint<
   /** Platform entry point for event delivery (see the class docstring for
    * the delivery contract). Override `processEvent`, not this, unless you
    * need whole-batch atomicity. */
-  async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
+  async processEventBatch(batch: StreamDeliveryBatch): Promise<void> {
     for (const event of batch.events) await this.processEvent(event);
   }
 
@@ -436,7 +515,7 @@ export class IterateDurableObject<Env extends IterateEnv = IterateEnv> extends D
 
   /** Platform entry point for event delivery — see
    * `IterateWorkerEntrypoint.processEventBatch`. */
-  async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
+  async processEventBatch(batch: StreamDeliveryBatch): Promise<void> {
     for (const event of batch.events) await this.processEvent(event);
   }
 
@@ -460,32 +539,75 @@ const HOST_STREAM_PATH_KEY = "iterate:processor-host:stream-path";
 type WakeRegistryLookup = (
   projectId: string,
   path: string,
-) => Pick<StreamProcessorRegistry<object>, "wakeStreamSubscriber">;
+) => Pick<StreamProcessorRegistry<object>, "wakeStreamProcessor">;
 
-/** The wake door the stream spine dials. It crosses Workers RPC as a property
- * read before its method is called, so it must be a real RpcTarget. */
-class ProcessorWakeSubscriber extends RpcTarget {
+/**
+ * The worker's `processor` node: the wake door the stream spine dials PLUS
+ * the public read verbs of the standard processor contract
+ * (`StreamProcessorRpc`). The reads serve the registered runner directly, so
+ * `streams.get(path).subscriptions.get(name).processor` and the stream's
+ * `waitUntilProcessed` barrier reach an expression-placed dynamic worker's
+ * processor with no extra wiring — the stream replays those verbs onto this
+ * node (the stored wake expression minus its trailing wake step). It crosses
+ * Workers RPC as a property read before its method is called, so it must be
+ * a real RpcTarget.
+ */
+class ProcessorWakeTarget extends RpcTarget {
   readonly #registryFor: WakeRegistryLookup;
+  readonly #reads: () => Promise<RegisteredProcessorReads<object>>;
 
-  constructor(registryFor: WakeRegistryLookup) {
+  constructor(
+    registryFor: WakeRegistryLookup,
+    reads: () => Promise<RegisteredProcessorReads<object>>,
+  ) {
     super();
     this.#registryFor = registryFor;
+    this.#reads = reads;
   }
 
-  async wakeStreamSubscriber(
-    request: StreamSubscriberWakeRequest,
-  ): Promise<StreamSubscriberWakeResponse> {
+  async wakeStreamProcessor(
+    request: StreamProcessorWakeRequest,
+  ): Promise<StreamProcessorWakeResponse> {
     if (request.stream.projectId === null) {
-      throw new Error("stream-processor hosts subscribe on project streams only");
+      throw new Error("hosted stream processors require project streams");
     }
     // The registry fences mismatched coordinates itself, so a host with a
     // fixed home stream rejects a stray wake instead of adopting its path.
     return await this.#registryFor(
       request.stream.projectId,
       request.stream.path,
-    ).wakeStreamSubscriber(request);
+    ).wakeStreamProcessor(request);
+  }
+
+  /** One consistent read of the committed fold, pulled through the durable
+   * stream tail first (read-your-writes, the hosting relays' catch-up leg). */
+  async snapshot(): Promise<ProcessorSnapshot<object>> {
+    const reads = await this.#reads();
+    await reads.catchUp();
+    return await reads.snapshot();
+  }
+
+  async getRuntimeState(): Promise<ProcessorRuntimeState<object>> {
+    return await (await this.#reads()).getRuntimeState();
+  }
+
+  /** Offset barrier against the runner's committed fold. The runner's waiter
+   * self-pulls, so its timeout bounds the whole read-your-writes operation. */
+  async waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void> {
+    await (await this.#reads()).waitUntilEvent(input);
   }
 }
+
+/**
+ * The platform deps the host derives and hands a processor factory: the home
+ * stream and its coordinates. Everything else a processor needs (clocks,
+ * clients, itx-backed capabilities) the factory wires off `this.env`.
+ */
+export type ProcessorHostDeps = {
+  path: string;
+  projectId: string;
+  stream: ProcessorStream;
+};
 
 export type ProcessorHost<State extends object> = {
   /** The lazily built registry. Outside a wake request the coordinates come
@@ -493,8 +615,11 @@ export type ProcessorHost<State extends object> = {
   registry(): Promise<StreamProcessorRegistry<State>>;
   /** One consistent read of the hosted processor's committed fold. */
   snapshot(): Promise<ProcessorSnapshot<State>>;
-  /** Assign to a `processor` getter — the wake door the stream spine dials. */
-  readonly wakeSubscriber: ProcessorWakeSubscriber;
+  /** Assign to a `processor` getter — the wake door the stream spine dials,
+   * which also serves the standard read verbs (snapshot / getRuntimeState /
+   * waitUntilProcessed) so the subscriptions catalog and the stream barrier
+   * reach this processor. */
+  readonly wakeProcessor: ProcessorWakeTarget;
   /** Route the Durable Object's `alarm()` here. Nothing cached means no
    * registry ever armed one, so a stray fire is a no-op. */
   handleAlarm(alarmInfo?: AlarmInvocationInfo): Promise<void>;
@@ -507,9 +632,9 @@ export type ProcessorHost<State extends object> = {
  *
  * With `path` the host serves one fixed home stream (the guestbook shape).
  * Without it the host learns its stream from the first wake request and
- * caches the coordinates durably (the review-bot shape: one Durable Object
- * per dynamic stream, keyed by the ref that names it). One host per Durable
- * Object — the cache keys assume it.
+ * caches the coordinates durably (one Durable Object per dynamic stream,
+ * keyed by the ref that names it). One host per Durable Object — the cache
+ * keys assume it.
  */
 export function createProcessorHost<State extends object = Record<string, unknown>>(args: {
   ctx: DurableObjectState;
@@ -517,11 +642,7 @@ export function createProcessorHost<State extends object = Record<string, unknow
   path?: string;
   /** Post-eviction keepalive recovery, for processors that owe registered work. */
   recovery?: boolean;
-  createProcessor(deps: {
-    path: string;
-    projectId: string;
-    stream: ProcessorStream;
-  }): RegisterableProcessor;
+  createProcessor(deps: ProcessorHostDeps): RegisterableProcessor;
 }): ProcessorHost<State> {
   let built:
     | { reads: RegisteredProcessorReads<State>; registry: StreamProcessorRegistry<State> }
@@ -568,8 +689,9 @@ export function createProcessorHost<State extends object = Record<string, unknow
   return {
     registry: async () => (await buildOutsideWake()).registry,
     snapshot: async () => await (await buildOutsideWake()).reads.snapshot(),
-    wakeSubscriber: new ProcessorWakeSubscriber(
+    wakeProcessor: new ProcessorWakeTarget(
       (projectId, path) => ensure(projectId, args.path ?? path).registry,
+      async () => (await buildOutsideWake()).reads as RegisteredProcessorReads<object>,
     ),
     async handleAlarm(alarmInfo?: AlarmInvocationInfo) {
       const projectId = args.ctx.storage.kv.get<string>(HOST_PROJECT_ID_KEY);
@@ -578,4 +700,204 @@ export function createProcessorHost<State extends object = Record<string, unknow
       await ensure(projectId, path).registry.handleAlarm(alarmInfo);
     },
   };
+}
+
+/**
+ * Ergonomic base for a Durable Object that hosts exactly one stream processor.
+ *
+ * It collapses the host boilerplate every processor app writes by hand today —
+ * a {@link createProcessorHost} field, an `alarm()` that forwards to it, and a
+ * `processor` getter exposing the wake door — down to a single
+ * {@link createProcessor} factory. First-party and userspace processors are
+ * authored the SAME way: all a subclass writes is how to build its processor
+ * from the host-derived platform deps (`{ stream, path, projectId }`) plus
+ * whatever it wires off `this.env`. That single seam is why a built-in
+ * processor forks into userspace with no change to the processor itself — only
+ * the dep wiring in `createProcessor` differs.
+ *
+ * Host-agnostic: the exact same class runs as its own Durable Object, as a
+ * facet of the Stream DO, or as a facet of another DO. Only the alarm adapter
+ * (native vs parent-proxied) and who dials the wake door differ per host, and
+ * the host owns both.
+ *
+ * ```ts
+ * export class GuestbookDurableObject extends StreamProcessorDurableObject<GuestbookState> {
+ *   protected readonly streamPath = guestbookStreamPath; // fixed home stream
+ *   protected createProcessor(deps: ProcessorHostDeps) {
+ *     return new GuestbookProcessor(deps);
+ *   }
+ *   // alarm(), the `processor` wake door, snapshot(), registry() — inherited.
+ * }
+ * ```
+ */
+export abstract class StreamProcessorDurableObject<
+  State extends object = Record<string, unknown>,
+  Env extends IterateEnv = IterateEnv,
+> extends IterateDurableObject<Env> {
+  /**
+   * Build the processor from the host-derived platform deps. Wire your own deps
+   * (clocks, clients, itx-backed capabilities) off `this.env` here — this is
+   * the one method a processor app must implement, and the seam that keeps a
+   * built-in processor forkable into userspace unchanged.
+   */
+  protected abstract createProcessor(deps: ProcessorHostDeps): RegisterableProcessor;
+
+  /**
+   * A fixed home stream path (the guestbook shape). Leave undefined to learn
+   * the stream from the first wake request and cache the coordinates durably
+   * (one Durable Object per dynamic stream).
+   */
+  protected readonly streamPath?: string;
+
+  /**
+   * Post-eviction keepalive recovery, for processors that owe registered
+   * background work (the obligation pattern). Off by default.
+   */
+  protected readonly recovery: boolean = false;
+
+  /**
+   * Built lazily on first door/alarm access — deliberately NOT a field
+   * initializer. A base-class field initializer runs before the subclass's
+   * `streamPath` / `recovery` field initializers, so it would capture the base
+   * defaults instead of a subclass's overrides; reading them on first use
+   * sidesteps that ordering trap. Memoized because the host owns the registry
+   * cache, and one host per Durable Object is assumed.
+   */
+  #memoHost?: ProcessorHost<State>;
+  get #host(): ProcessorHost<State> {
+    return (this.#memoHost ??= createProcessorHost<State>({
+      ctx: this.ctx,
+      env: this.env,
+      path: this.streamPath,
+      recovery: this.recovery,
+      createProcessor: (deps) => this.createProcessor(deps),
+    }));
+  }
+
+  /**
+   * The processor node the stream spine dials: the wake door plus the standard
+   * read verbs (`snapshot` / `getRuntimeState` / `waitUntilProcessed`), so the
+   * subscriptions catalog and the stream barrier reach this processor. It
+   * crosses Workers RPC as a property read before its method is called, so it
+   * must be a real RpcTarget — which the host guarantees.
+   */
+  get processor() {
+    return this.#host.wakeProcessor;
+  }
+
+  /** Route the Durable Object's native `alarm()` into the host's multiplex. */
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    await this.#host.handleAlarm(alarmInfo);
+  }
+
+  /**
+   * One consistent read of the hosted processor's committed fold, for a
+   * subclass's own read verbs (e.g. a `getState()`).
+   */
+  protected snapshot(): Promise<ProcessorSnapshot<State>> {
+    return this.#host.snapshot();
+  }
+
+  /**
+   * The lazily built registry, for subclasses that drive catch-up / live
+   * refresh directly (the guestbook's HTTP + append flow).
+   */
+  protected registry(): Promise<StreamProcessorRegistry<State>> {
+    return this.#host.registry();
+  }
+}
+
+/**
+ * Ergonomic base for a userspace stream processor hosted as a FACET of the
+ * platform's Stream Durable Object — the `facet-processor` subscription with a
+ * `userspace` source, whose `StatefulDynamicWorkerRef` names THIS class. The
+ * Stream DO loads the class from the project's source and starts it with
+ * `ctx.facets.get(name, …)`, so it runs INSIDE the stream it serves: wakes are
+ * an in-process parent→facet dial (no itx wake expression), and checkpoints /
+ * projections land in the facet's own private SQLite.
+ *
+ * Same authoring seam as {@link StreamProcessorDurableObject} — a subclass
+ * writes only `createProcessor` (and sets `recovery` when it owes background
+ * work) — so a processor forks between "its own Durable Object" and "a facet
+ * of its stream" with no change to the processor itself. The two differences a
+ * facet forces, both handled here:
+ *
+ * - **No native alarm.** workerd does not implement alarms for facets
+ *   (workerd#6810), so this base routes the registry's keepalive/recovery
+ *   alarm through the parent's real platform alarm over itx —
+ *   `streams.get(path).proxySetAlarm/proxyDeleteAlarm/proxyGetAlarm`, the
+ *   itx-channel twin of a stateful worker's `workers.get(ref).setAlarm`. The
+ *   parent fires it back as {@link ProcessorFacet.handleAlarm}. NEVER define
+ *   `alarm()` on a subclass (the base throws): a facet's native `setAlarm`
+ *   would appear to succeed, then poison its output gate.
+ * - **Identity by first-contact `configure`, not the constructor.** The Stream
+ *   DO delivers `{ parentName, projectId, path }`; the base stashes it and
+ *   rebuilds the host from that stash on every incarnation (see
+ *   {@link ProcessorFacet}).
+ *
+ * ```ts
+ * export class GuestbookFacet extends StreamProcessorFacet {
+ *   protected readonly recovery = true; // owes background work
+ *   protected createProcessor(deps: ProcessorHostDeps) {
+ *     return new GuestbookProcessor(deps);
+ *   }
+ * }
+ * ```
+ */
+export abstract class StreamProcessorFacet<
+  Env extends IterateEnv = IterateEnv,
+> extends ProcessorFacet<Env> {
+  /**
+   * Build the processor from the host-derived platform deps, wiring your own
+   * deps (clocks, clients, itx-backed capabilities) off `this.env` — the one
+   * method a facet-hosted processor app implements, identical to
+   * {@link StreamProcessorDurableObject.createProcessor}.
+   */
+  protected abstract createProcessor(deps: ProcessorHostDeps): RegisterableProcessor;
+
+  /**
+   * Post-eviction keepalive recovery, for processors that owe registered
+   * background work (the obligation pattern). Off by default.
+   */
+  protected readonly recovery: boolean = false;
+
+  /**
+   * Dial the parent stream's alarm proxy over itx, resolved PER CALL (a stub
+   * must not outlive its RPC turn), each verb opening and disposing its own
+   * session like {@link itxProjectStream}. `identity.path` is the coordinate;
+   * `parentName` is unused here (userspace facets have no `env.STREAM`).
+   */
+  protected parentAlarms(identity: ProcessorFacetIdentity): ProcessorFacetAlarmProxy {
+    const env = this.env;
+    const { path } = identity;
+    return {
+      proxySetAlarm: (scheduledTimeMs) =>
+        withProject(env, (project) => project.streams.get(path).proxySetAlarm(scheduledTimeMs)),
+      proxyDeleteAlarm: () =>
+        withProject(env, (project) => project.streams.get(path).proxyDeleteAlarm()),
+      proxyGetAlarm: () => withProject(env, (project) => project.streams.get(path).proxyGetAlarm()),
+    };
+  }
+
+  /**
+   * Build the host wiring from the stashed identity: the stream handle is the
+   * same itx-backed {@link itxProjectStream} a worker-hosted processor appends
+   * through, and the single processor is registered under this facet's name.
+   */
+  protected createHost(identity: ProcessorFacetIdentity): ProcessorFacetHost {
+    if (identity.projectId === null) {
+      throw new Error("userspace stream-processor facets require a project stream");
+    }
+    const { projectId, path } = identity;
+    const stream = itxProjectStream(this.env, path);
+    return {
+      stream,
+      version: this.env.ITERATE_WORKER_VERSION,
+      registerProcessors: (registry) => {
+        registry.register(this.createProcessor({ path, projectId, stream }), {
+          recovery: this.recovery,
+        });
+      },
+    };
+  }
 }

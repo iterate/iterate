@@ -23,6 +23,7 @@ import {
   SquarePen,
   SquareTerminal,
   UserCircle,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
@@ -93,7 +94,10 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
   });
   // Missing projects (auth knows them, this deployment's engine does not) are
   // not navigable — the /projects page owns setting them up.
-  const projects = data?.filter((project) => project.deploymentStatus !== "missing") ?? [];
+  const projects =
+    data?.filter(
+      (project) => project.deploymentStatus !== "missing" && project.deploymentStatus !== "failed",
+    ) ?? [];
   // Sidebar composition follows shadcn sidebar blocks 07/08:
   // https://ui.shadcn.com/blocks/sidebar
   // CloseMobileSidebarOnNavigate must sit outside <Sidebar>: on mobile, Sidebar
@@ -229,7 +233,7 @@ function AppSidebarCollapseButton() {
 }
 
 function AppSidebarUser() {
-  const { loading, session, signOut } = useAuthClient();
+  const { loading, session, signIn, signOut } = useAuthClient();
   const { isMobile } = useSidebar();
   const config = useConfig<PublicConfig>();
   const accountManagementUrl = authWorkerUrl(config, "/");
@@ -259,6 +263,14 @@ function AppSidebarUser() {
     });
     if (!response.ok) throw new Error(`Could not end operator session (${response.status}).`);
     window.location.assign("/");
+  }
+
+  function switchOrAddAccount() {
+    signIn({
+      prompt: "select_account",
+      replaceCurrentSession: true,
+      returnTo: `${window.location.origin}/projects`,
+    });
   }
   const debugInfo = useMemo(
     () => ({
@@ -346,6 +358,12 @@ function AppSidebarUser() {
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
+                {!isOperatorSession ? (
+                  <DropdownMenuItem onClick={switchOrAddAccount}>
+                    <Users />
+                    <span>Switch or add account</span>
+                  </DropdownMenuItem>
+                ) : null}
                 <DropdownMenuItem onClick={() => void endCurrentSession()}>
                   <LogOut />
                   <span>{isOperatorSession ? "End operator session" : "Sign out"}</span>
@@ -451,23 +469,6 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
               {/* No per-project sub-list here: the switcher and the /projects
                   page own project navigation, and duplicate slug-named links
                   break the Playwright specs' strict-mode locators. */}
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
-      <SidebarSeparator />
-      <SidebarGroup>
-        <SidebarGroupContent>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                tooltip="Repl"
-                render={<Link to="/itx-repl" />}
-                isActive={Boolean(matchRoute({ to: "/itx-repl", fuzzy: false }))}
-              >
-                <SquareTerminal />
-                <span>Repl</span>
-              </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroupContent>
@@ -581,20 +582,6 @@ function ProjectSidebarGroup({
                 }),
               )}
             />
-            <ProjectSidebarMenuItem
-              icon={SquareTerminal}
-              label="Repl"
-              render={
-                <Link to="/projects/$projectSlug/repl" params={{ projectSlug }} search={{}} />
-              }
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$projectSlug/repl",
-                  params: { projectSlug },
-                  fuzzy: false,
-                }),
-              )}
-            />
             {projectWorkerUrl ? (
               <ProjectSidebarMenuItem
                 icon={ExternalLink}
@@ -665,6 +652,7 @@ type ProjectStreamNavItemConfig = {
     | "/projects/$projectSlug/sandboxes"
     | "/projects/$projectSlug/scheduler"
     | "/projects/$projectSlug/secrets"
+    | "/projects/$projectSlug/repl"
     | "/projects/$projectSlug/repos"
     | "/projects/$projectSlug/streams";
 };
@@ -690,6 +678,14 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     label: "/secrets",
     streamPath: StreamPath.parse("/secrets"),
     to: "/projects/$projectSlug/secrets",
+  },
+  {
+    // fuzzy: session URLs (/repl/<timestamp-slug>) keep the entry active.
+    fuzzy: true,
+    icon: SquareTerminal,
+    label: "/repl",
+    streamPath: StreamPath.parse("/repl"),
+    to: "/projects/$projectSlug/repl",
   },
   {
     fuzzy: true,

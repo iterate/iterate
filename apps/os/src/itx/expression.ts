@@ -4,12 +4,12 @@
 // property reads, `[method, ...args]` steps are calls. Persisting one is
 // persisting the NAME of a capability, never its authority — every evaluation
 // re-derives authority from the root it is handed at that moment (a capability
-// mount evaluates against the capability host's itx; a stream's push
-// subscription evaluates against an `env.ITX`-scoped root). Deleting the
+// mount evaluates against the capability host's itx; an ITX-expression stream
+// receiver evaluates against an `env.ITX`-scoped root). Deleting the
 // stored expression is revocation, because the store is the only holder.
 //
-// Consumers today: capability-host mounts (`type: "itx-expression"` records),
-// stream push subscriptions (`delivery: { mode: "push", expression }`), and
+// Consumers today: capability-host mounts (`type: "itx-call"` records),
+// stream receivers addressed by `expression`, and
 // agent birth mounts. One shape, one evaluator, one zod schema — defined here,
 // at the leaf, so domain contracts can share them without import cycles.
 
@@ -22,15 +22,31 @@ export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
 /** A persisted capability name: the steps from an itx root to a value. */
 export type ItxExpression = ItxExpressionStep[];
 
+const RESERVED_ITX_PROPERTY_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+
+function reservedItxPropertyName(step: ItxExpressionStep): string | undefined {
+  const propertyName = typeof step === "string" ? step : step[0];
+  return RESERVED_ITX_PROPERTY_NAMES.has(propertyName) ? propertyName : undefined;
+}
+
 /** Zod schema for one expression step; merges with the type of the same name. */
-export const ItxExpressionStep: z.ZodType<ItxExpressionStep> = z.union([
-  z.string(),
-  z
-    .array(z.unknown())
-    .refine((step): step is [string, ...unknown[]] => typeof step[0] === "string", {
-      message: "call expression steps must start with a method name",
-    }),
-]);
+export const ItxExpressionStep: z.ZodType<ItxExpressionStep> = z
+  .union([
+    z.string(),
+    z
+      .array(z.unknown())
+      .refine((step): step is [string, ...unknown[]] => typeof step[0] === "string", {
+        message: "call expression steps must start with a method name",
+      }),
+  ])
+  .superRefine((step, context) => {
+    const reserved = reservedItxPropertyName(step);
+    if (reserved === undefined) return;
+    context.addIssue({
+      code: "custom",
+      message: `itx expressions cannot use reserved property name "${reserved}"`,
+    });
+  });
 
 /** Zod schema for a whole expression (at least one step); merges with the type of the same name. */
 export const ItxExpression: z.ZodType<ItxExpression> = z.array(ItxExpressionStep).min(1);
@@ -137,9 +153,13 @@ function assertItxExpression(expression: ItxExpression): void {
   }
 
   for (const step of expression) {
-    if (typeof step === "string") continue;
-    if (Array.isArray(step) && typeof step[0] === "string") continue;
-    throw new Error(`invalid itx expression step ${JSON.stringify(step)}`);
+    if (!(typeof step === "string" || (Array.isArray(step) && typeof step[0] === "string"))) {
+      throw new Error(`invalid itx expression step ${JSON.stringify(step)}`);
+    }
+    const reserved = reservedItxPropertyName(step);
+    if (reserved !== undefined) {
+      throw new Error(`itx expression cannot use reserved property name "${reserved}"`);
+    }
   }
 }
 

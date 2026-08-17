@@ -5,12 +5,13 @@ import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   useItx,
-  useItxSubscription,
+  useStreamConnection,
   useLiveState,
-  type ItxSubscriptionStatus,
+  type ItxConnectionStatus,
 } from "iterate/sdk/itx/react";
 import type { StreamEvent } from "iterate/processors";
 import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
+import { deploymentStatusFromState } from "~/project-deployment-status.ts";
 
 // The live-state PLAYGROUND — one primitive from several angles: a DO-backed
 // composite (`itx.liveState`: the project's folded `reduced` state + the streams
@@ -33,19 +34,19 @@ type ReactivityTestStreamState = {
   batchCount: number;
   error?: string;
   events: ReactivityTestEvent[];
-  status: ItxSubscriptionStatus;
+  status: ItxConnectionStatus;
 };
 
 /**
  * Live raw-EVENT subscription — the lane that stays separate from live state.
- * Recovery is all `useItxSubscription`'s; this hook only accumulates delivered
+ * Recovery is all `useStreamConnection`'s; this hook only accumulates delivered
  * events, deduped by offset so a re-subscription's replay is idempotent.
  */
 function useReactivityTestStream(): ReactivityTestStreamState {
   const [feed, setFeed] = useState({ batchCount: 0, events: [] as ReactivityTestEvent[] });
-  const subscription = useItxSubscription(
+  const subscription = useStreamConnection(
     (itx) =>
-      itx.streams.get(REACTIVITY_TEST_STREAM_PATH).subscribe({
+      itx.streams.get(REACTIVITY_TEST_STREAM_PATH).openConnection({
         replayAfterOffset: 0,
         processEventBatch: (batch: { events: StreamEvent[] }) => {
           const events = (batch.events || [])
@@ -109,7 +110,7 @@ function ProjectReactivityContent() {
   const [incrementing, setIncrementing] = useState(false);
 
   const projectState = live.value;
-  const phase = projectState === undefined ? "unknown" : projectState.ready ? "ready" : "pending";
+  const phase = projectState === undefined ? "unknown" : deploymentStatusFromState(projectState);
   const projectId = project.id;
   const indexedCount =
     streamsIndex.value === undefined ? "-" : String(Object.keys(streamsIndex.value).length);
@@ -242,14 +243,22 @@ function ProjectReactivityContent() {
                 <dd>
                   <Badge
                     data-testid="reactivity-phase"
-                    variant={phase === "ready" ? "default" : "secondary"}
+                    variant={
+                      phase === "created"
+                        ? "default"
+                        : phase === "failed"
+                          ? "destructive"
+                          : "secondary"
+                    }
                   >
                     {phase}
                   </Badge>
                 </dd>
-                <dt className="text-muted-foreground">Ready</dt>
+                <dt className="text-muted-foreground">Created</dt>
                 <dd data-testid="reactivity-onboarding">
-                  {projectState === undefined ? "unknown" : String(projectState.ready)}
+                  {projectState === undefined
+                    ? "unknown"
+                    : String(projectState.birthCertificate !== null)}
                 </dd>
                 <dt className="text-muted-foreground">Project ID</dt>
                 <dd className="truncate font-mono text-xs" data-testid="reactivity-project-id">

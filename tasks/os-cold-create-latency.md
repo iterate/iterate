@@ -7,12 +7,12 @@ tags: [os, performance, streams, secrets]
 
 # Cold project-create latency: the background saga is still seconds
 
-The caller-facing half is fixed: `create({}, { waitUntilReady: false })`
+The caller-facing half is fixed: `create({}, { waitUntilCreated: false })`
 returns after auth-register + directory prime + the atomic root append, and
 the dashboard navigates immediately while the saga streams into the creation
 checklist. This task tracks the remaining latency of the saga itself — it now
 runs behind the response, but it is what the checklist user actually watches,
-and the `waitUntilReady` lane (scripts, e2e) still pays it in full.
+and the `waitUntilCreated` lane (scripts, e2e) still pays it in full.
 
 Measured on prd 2026-07-21 (`[create-timing]` via `wrangler tail os-prd`,
 three admin-lane creates):
@@ -22,7 +22,7 @@ three admin-lane creates):
 | root-append (atomic birth batch, fresh Stream DO) | 0.5–1.5s | — |
 | seed-project-api-key (Secret DO builder/create barrier) | 3.0–3.7s | — |
 | wait-project-birth (both root processors through the birth frame) | 1.5–2.4s | 14s |
-| whole create, ready lane | ~6–8s | ~20s |
+| whole create, blocking lane | ~6–8s | ~20s |
 
 Full-suite preview evidence on 2026-07-23 exposed the bounded tail that the
 warm/cold samples missed. One config-repo processor was still completing its

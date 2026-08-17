@@ -45,7 +45,7 @@ export async function sendAgentFirstTurn(
   if (files.length > 0) {
     await agent.addFiles({
       files: await filesToAgentPayload(files),
-      ...(trimmed ? { message: trimmed } : {}),
+      ...(trimmed && { message: trimmed }),
     });
   } else {
     await agent.message(trimmed);

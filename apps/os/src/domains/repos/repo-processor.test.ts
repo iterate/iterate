@@ -19,6 +19,7 @@ import {
 } from "iterate/processors/testing";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
+import { RetryableRepoCreationError } from "./utils.ts";
 
 type RepoEventInput = ConsumedInput<RepoProcessorContract>;
 
@@ -32,7 +33,6 @@ const SEEDED_ARTIFACT = {
   defaultBranch: "main",
   remote: "https://example.artifacts.cloudflare.net/git/ns/proj_harness--L3JlcG9zL2NvbmZpZw.git",
 };
-
 const CREATE_REQUESTED = {
   type: "events.iterate.com/repos/create-requested",
   payload: { type: "empty" },
@@ -56,7 +56,7 @@ const GITHUB_LINK_CONFIGURED = {
   },
 } satisfies RepoEventInput;
 
-/** A GitHub push delivery as the connection stream cross-posts it. Event
+/** A GitHub push delivery as the connection stream copies it. Event
  * BUILDER (data), not an append wrapper — the overrides produce the
  * wrong-provenance variants. */
 function githubPush(input?: {
@@ -64,7 +64,7 @@ function githubPush(input?: {
   installationId?: string;
   provenance?: boolean;
   repositoryId?: number;
-  subscriptionKey?: string;
+  name?: string;
 }): RepoEventInput {
   const connection = input?.connection ?? "install-789";
   return {
@@ -83,9 +83,12 @@ function githubPush(input?: {
       ? {}
       : {
           source: {
-            crossPostedFrom: [
+            copiedFrom: [
               {
-                subscriptionKey: input?.subscriptionKey ?? `github-repo:${REPO_PATH}`,
+                name: input?.name ?? `github-repo:${REPO_PATH}`,
+                streamId: "11111111-1111-4111-8111-111111111111",
+                streamCreatedAt: "2026-07-17T11:00:00.000Z",
+                cursorChangedAtSourceOffset: 1,
                 createdAt: "2026-07-17T12:00:00.000Z",
                 offset: 12,
                 path: `/integrations/github/${connection}`,
@@ -125,6 +128,16 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
     calls: 0,
     impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
   };
+  const createTemplate = {
+    calls: [] as Array<{
+      owner: string;
+      path?: string;
+      ref?: string;
+      repo: string;
+      type: "github-public-template";
+    }>,
+    impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
+  };
   const importPublic = {
     calls: [] as { depth?: number; owner: string; repo: string }[],
     impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
@@ -148,7 +161,7 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
       branch: string;
     }[],
   };
-  const harness = makeProcessorHarness<RepoProcessorContract>({
+  const harness = makeProcessorHarness<RepoProcessorContract, RepoProcessor>({
     createProcessor: (deps) =>
       new RepoProcessor({
         stream: deps.stream,
@@ -157,6 +170,10 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
         createEmptyArtifact: () => {
           createEmpty.calls += 1;
           return createEmpty.impl();
+        },
+        createPublicGithubTemplateArtifact: (input) => {
+          createTemplate.calls.push(input);
+          return createTemplate.impl();
         },
         importPublicGithubArtifact: (input) => {
           importPublic.calls.push(input);
@@ -182,6 +199,7 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
   return {
     ...harness,
     createEmpty,
+    createTemplate,
     importPublic,
     link,
     syncPrivate,
@@ -246,6 +264,60 @@ describe("RepoProcessor creation saga", () => {
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
   });
 
+  it("copies a public GitHub template and uses it to create the Artifact", async () => {
+    const h = makeRepoHarness();
+    const request = {
+      type: "github-public-template" as const,
+      owner: "iterate",
+      path: "configs/with-voice",
+      ref: "main",
+      repo: "iterate",
+    };
+    await h.play([
+      "append",
+      { type: "events.iterate.com/repos/create-requested", payload: request },
+    ]);
+
+    expect(h.createTemplate.calls).toEqual([request]);
+    expect(h.createEmpty.calls).toBe(0);
+    expect(h.events("events.iterate.com/repos/created")).toMatchObject([
+      { payload: { ...SEEDED_ARTIFACT, request } },
+    ]);
+  });
+
+  it("re-drives a public template after a temporary source failure", async () => {
+    const h = makeRepoHarness();
+    let calls = 0;
+    h.createTemplate.impl = async () => {
+      calls += 1;
+      if (calls === 1) throw new RetryableRepoCreationError("GitHub could not be reached.");
+      return SEEDED_ARTIFACT;
+    };
+    const request = {
+      type: "github-public-template" as const,
+      owner: "iterate",
+      path: "configs/with-voice",
+      repo: "iterate",
+    };
+    await h.stream.append({
+      type: "events.iterate.com/repos/create-requested",
+      payload: request,
+    });
+
+    await h.settle();
+    expect(calls).toBe(1);
+    expect(h.events("events.iterate.com/repos/create-failed")).toHaveLength(0);
+
+    h.crash();
+    await h.settle();
+    await h.advanceTime(KEEPALIVE_ALARM_LEAD_MS + 1);
+
+    expect(calls).toBe(2);
+    expect(h.events("events.iterate.com/repos/created")).toMatchObject([
+      { payload: { ...SEEDED_ARTIFACT, request } },
+    ]);
+  });
+
   it("seeds an Artifact, links a private GitHub repo, then performs its depth-one sync", async () => {
     const h = makeRepoHarness();
     await h.play([
@@ -260,7 +332,6 @@ describe("RepoProcessor creation saga", () => {
         },
       },
     ]);
-
     expect(h.createEmpty.calls).toBe(1);
     expect(h.link.calls).toMatchObject([
       { connection: "install-789", owner: "acme", repo: "widgets" },
@@ -288,7 +359,6 @@ describe("RepoProcessor creation saga", () => {
       "append",
       { type: "events.iterate.com/repos/create-requested", payload: request },
     ]);
-
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(0);
     expect(h.events("events.iterate.com/repos/create-failed")).toMatchObject([
       {
@@ -447,7 +517,7 @@ describe("RepoProcessor GitHub imports", () => {
     ["the wrong connection", { connection: "install-other" }],
     ["the wrong installation", { installationId: "456" }],
     ["the wrong repository", { repositoryId: 202 }],
-    ["the wrong subscription", { subscriptionKey: "userspace:other" }],
+    ["the wrong subscription", { name: "userspace:other" }],
   ])("does not import %s", async (_case, webhookInput) => {
     const h = makeRepoHarness();
     await h.play(
@@ -598,6 +668,13 @@ describe("repos/create-requested payload schema", () => {
   it.each([
     { type: "empty" },
     { type: "github-private", connection: "install-1", owner: "acme", repo: "private" },
+    {
+      type: "github-public-template",
+      owner: "iterate",
+      path: "configs/default",
+      ref: "main",
+      repo: "iterate",
+    },
     { type: "github-public", connection: "install-1", owner: "acme", repo: "public" },
     { type: "github-public", connection: "install-1", depth: 1, owner: "acme", repo: "public" },
   ])("accepts $type", (request) => {
@@ -611,7 +688,17 @@ describe("repos/create-requested payload schema", () => {
   it("requires GitHub coordinates for both GitHub modes", () => {
     expect(() => requestSchema.parse({ type: "github-public", owner: "acme" })).toThrow();
     expect(() => requestSchema.parse({ type: "github-private", repo: "private" })).toThrow();
+    expect(() => requestSchema.parse({ type: "github-public-template", owner: "acme" })).toThrow();
   });
+
+  it.each(["../private", ".git/objects", "/configs/default", "configs\\default"])(
+    "rejects unsafe template path %s",
+    (path) => {
+      expect(() =>
+        requestSchema.parse({ type: "github-public-template", owner: "acme", path, repo: "app" }),
+      ).toThrow();
+    },
+  );
 
   it("requires a positive public import depth", () => {
     expect(() =>
@@ -657,7 +744,7 @@ describe("RepoProcessor full replay", () => {
     const replay = makeRepoHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(RepoProcessorContract),
     });
     replay.createEmpty.impl = () => {
       throw new Error("replay must not re-create an existing repo");

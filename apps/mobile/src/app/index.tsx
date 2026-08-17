@@ -9,15 +9,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Redirect, router, Stack } from "expo-router";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { AppDrawerButton } from "../components/project-drawer.tsx";
 import { hasSignIn, signIn } from "../lib/auth.ts";
+import { bundleRecommendation } from "../lib/expected-backend.ts";
 import { getItxSession, reconnectItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing, rememberedProjectInScope } from "../lib/open-project.ts";
-import { DEFAULT_SERVER, SERVER_PRESETS } from "../lib/servers.ts";
+import { DEFAULT_SERVER, PRODUCTION_PRESET } from "../lib/servers.ts";
 import {
-  addRecentServer,
   clearLastProject,
   getLastProject,
-  getRecentServers,
   getServerBaseUrl,
   setServerBaseUrl,
 } from "../lib/storage.ts";
@@ -25,6 +25,13 @@ import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function SignInScreen() {
   const queryClient = useQueryClient();
+  // The running bundle's expectation (lib/expected-backend.ts): a PR bundle
+  // names its leased preview slot and per-PR test identity, a main/local
+  // bundle names nothing. Suggestions only — they preselect the server and
+  // ride the sign-in as a login_hint; the user still confirms everything.
+  const expectation = bundleRecommendation();
+  const recommended = expectation.server;
+  const hintedEmail = expectation.email;
   // Persisted server + sign-in state decide whether to skip this screen.
   const bootstrap = useQuery({
     queryKey: ["bootstrap"],
@@ -61,7 +68,6 @@ export default function SignInScreen() {
       return {
         server,
         signedIn,
-        recents: await getRecentServers(),
         lastProject,
       };
     },
@@ -69,33 +75,48 @@ export default function SignInScreen() {
   });
 
   const [editedServer, setEditedServer] = useState<string | null>(null);
-  const server = editedServer ?? bootstrap.data?.server ?? DEFAULT_SERVER;
+  // A recommended backend from a preview deep link preselects the server —
+  // the user's own edits always win.
+  const server = editedServer || recommended?.baseUrl || bootstrap.data?.server || DEFAULT_SERVER;
 
   const login = useMutation({
     mutationFn: async () => {
       const baseUrl = normalizeBaseUrl(server);
       await setServerBaseUrl(baseUrl);
-      if (!SERVER_PRESETS.some((preset) => preset.baseUrl === baseUrl)) {
-        await addRecentServer(baseUrl);
-      }
-      await signIn(baseUrl);
+      // The test-identity hint only accompanies its own backend: signing in
+      // anywhere else (say prd, where the test OTP is off) must not suggest a
+      // mailbox nobody can read.
+      const loginHint =
+        hintedEmail !== null && recommended !== null && baseUrl === recommended.baseUrl
+          ? { loginHint: hintedEmail }
+          : {};
+      await signIn(baseUrl, loginHint);
       return baseUrl;
     },
     onSuccess: (baseUrl) => {
       setEditedServer(null);
       reconnectItxSession(baseUrl);
       queryClient.clear();
-      router.replace("/projects");
+      // autoOpen: fresh sign-ins skip the picker when the account has exactly
+      // one project (projects.tsx) — the first list can ride a cold itx
+      // WebSocket, so the decision lives in the picker's retrying query, not
+      // here. Plain /projects visits (Back from a project) never auto-open.
+      router.replace({ pathname: "/projects", params: { autoOpen: "1" } });
     },
   });
 
   if (bootstrap.isPending) {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator color={colors.textMuted} />
+        <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
       </View>
     );
   }
+  // Signed-in boots always fast-forward. The bundle's expectation never
+  // interrupts here — the QR confirm screen (preview-channel/[channel].tsx)
+  // is the one surface that offers the backend/identity switch, and this
+  // screen only SUGGESTS (preselected server + login_hint) when you land on
+  // it signed out anyway.
   if (bootstrap.data?.signedIn && editedServer === null) {
     const last = bootstrap.data.lastProject;
     if (last) {
@@ -111,22 +132,39 @@ export default function SignInScreen() {
     return <Redirect href="/projects" />;
   }
 
+  // Just two one-tap options at most: Production, plus the bundle's expected
+  // backend when it names a preview slot. Twenty preview chips helped nobody
+  // — anything else gets typed into the field.
   const serverOptions = [
-    ...SERVER_PRESETS,
-    ...(bootstrap.data?.recents || []).map((url) => ({
-      label: url.replace(/^https?:\/\//, ""),
-      baseUrl: url,
-    })),
+    PRODUCTION_PRESET,
+    ...(recommended !== null && recommended.baseUrl !== PRODUCTION_PRESET.baseUrl
+      ? [recommended]
+      : []),
   ];
 
   return (
     <SafeAreaView style={styles.screen}>
       <Stack.Screen options={{ headerShown: false }} />
+      {/* Build info must stay reachable while signed out / picking a backend —
+          it names the running channel and commit, the first diagnostic when a
+          preview looks wrong. */}
+      <View style={styles.menuRow}>
+        <AppDrawerButton />
+      </View>
       <View style={styles.hero}>
         <Text style={styles.title}>Iterate</Text>
         <Text style={styles.subtitle}>
           Chat with your project&apos;s agents. Pick a deployment, sign in, start talking.
         </Text>
+        {recommended !== null ? (
+          <View style={styles.recommendation}>
+            <Text style={styles.recommendationTitle}>Expected backend for this build</Text>
+            <Text style={styles.recommendationBody}>
+              {recommended.label}
+              {hintedEmail !== null ? ` · test sign-in as ${hintedEmail}` : ""}
+            </Text>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.form}>
@@ -163,7 +201,7 @@ export default function SignInScreen() {
           style={[styles.signIn, login.isPending && { opacity: 0.6 }]}
         >
           {login.isPending ? (
-            <ActivityIndicator color={colors.background} />
+            <ActivityIndicator accessibilityLabel="Loading" color={colors.background} />
           ) : (
             <Text style={styles.signInText}>Sign in</Text>
           )}
@@ -192,7 +230,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  menuRow: { alignItems: "flex-start" },
   hero: { flex: 1, justifyContent: "center", gap: spacing.md },
+  recommendation: {
+    backgroundColor: colors.surface,
+    borderColor: colors.accent,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    gap: 4,
+  },
+  recommendationTitle: { color: colors.text, fontSize: 13, fontWeight: "600" },
+  recommendationBody: { color: colors.textMuted, fontSize: 13 },
   title: { color: colors.text, fontSize: 34, fontWeight: "700", letterSpacing: -0.5 },
   subtitle: { color: colors.textMuted, fontSize: 15, lineHeight: 22 },
   form: { gap: spacing.sm, paddingBottom: spacing.xl },

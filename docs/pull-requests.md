@@ -1,14 +1,40 @@
 # Pull requests
 
+> **Enforcement:** a Claude Code hook ([scripts/hooks/pr-guidance-gate.sh](../scripts/hooks/pr-guidance-gate.sh))
+> blocks PR-mutating `gh` commands until this doc's current content hash appears in the command
+> as a `PR_GUIDANCE_HASH=<hash>` prefix. The deny message contains this whole doc plus the hash,
+> so just follow what it says. Editing this file changes the hash and re-arms the gate for
+> everyone — that's intended.
+
 ## Before open
 
 ```bash
-pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
+pnpm install && pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test
 ```
 
 Clean branch off `origin/main`. Don't stack unrelated worktree WIP. Don't commit/push/open a PR unless asked.
 
-## Screenshots in the PR body
+## Body
+
+The body becomes the squash-merge commit message. Write it for a reviewer and
+future reader, not as a task-file mirror: the net effect once merged,
+abbreviated self-contained sample code for new surface area, before/after
+output for bug fixes.
+
+Substantive PRs get a **risk map** section:
+
+- The riskiest part of the diff and why — trust boundaries, state machines,
+  anything whose correctness rests on an argument rather than a test.
+- What to expect on merge: behavior changes, invalidated data, stale clients,
+  operational follow-ups.
+- A suggested review order, highest-attention files first, mechanical changes
+  last.
+
+A reviewer should know where to spend attention before opening the diff.
+
+## Media in the PR body
+
+Include screenshots or short videos whenever visual review helps. reviewers often have no idea the "why" of a change. Even for bugs, before/after videos prove that the problem was real and was fixed. We also like videos because they prove that real code paths were exercised.
 
 **Relative paths do not render in PR descriptions.**
 
@@ -22,7 +48,30 @@ Clean branch off `origin/main`. Don't stack unrelated worktree WIP. Don't commit
 ![ui](https://github.com/iterate/iterate/raw/<branch>/docs/pr-assets/foo.png)
 ```
 
-Also fine: `raw.githubusercontent.com/.../<sha>/...` or `user-attachments/assets/...` (needed for inline video). Smoke-check with `curl -sI -L` → 200.
+Also fine: `raw.githubusercontent.com/.../<sha>/...` or `user-attachments/assets/...`. Smoke-check with `curl -sI -L` → 200.
+
+### Video
+
+A real inline **player** only renders from a
+`github.com/user-attachments/assets/...` URL. GitHub sanitises `<video>`
+pointing at any other host — link at best, never a player. (GIFs render from
+any URL.)
+
+Mint the URL through any PR page's comment editor: upload via the attach flow
+(a browser-automation `file_upload` tool pointed at the editor's file input
+works), wait for the inserted `user-attachments` URL, then clear the comment
+WITHOUT submitting — the asset is already permanent. Put the bare URL in the
+body on its own line with blank lines above and below.
+
+Spec recordings: `VIDEO_MODE=1 pnpm spec -g <name>`. Ship
+`video-rendered.webm` (dead air sped up, pointer annotations) — `video.webm`
+is the raw capture. Note that video mode depends on "middlewright" which is somewhat experimental and also maintained by us. If there are issues with it they typically need to be fixed upstream. we can use pkg-pr-new releases and publish to npm will be done manually later.
+
+Verify the player rendered:
+
+```bash
+gh api repos/iterate/iterate/pulls/<n> -H "Accept: application/vnd.github.html+json" --jq .body_html | grep -c '<video'
+```
 
 `gh pr edit` sometimes fails on this repo (GraphQL classic Projects deprecation). REST works:
 
@@ -30,9 +79,9 @@ Also fine: `raw.githubusercontent.com/.../<sha>/...` or `user-attachments/assets
 gh api -X PATCH repos/iterate/iterate/pulls/<n> --input payload.json
 ```
 
-## Drafts / previews
+## Previews
 
-Drafts don't get a preview unless labeled `preview` or marked ready. Lease details: [Dev environments](./dev-environments.md).
+Every open PR (draft or ready) gets a preview deployment. Lease details: [Dev environments](./dev-environments.md).
 
 ## After open — agents landing a PR
 

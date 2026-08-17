@@ -526,8 +526,27 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     url.searchParams.set("code_challenge", challenge);
     url.searchParams.set("code_challenge_method", "S256");
     const loginHint = requestURL.searchParams.get("login_hint");
-    if (loginHint === "email" || loginHint === "google") {
+    // Mode hints ("email"/"google") pick a sign-in method; an email ADDRESS
+    // (the standard OIDC login_hint) rides through to the auth login page,
+    // which offers "Continue as <email>" and prefills the form — and, for
+    // test addresses on fixed-test-OTP deployments, the code too (the same
+    // hint-not-credential lane the mobile preview deep links use). The auth
+    // page re-validates; a hint never signs anyone in by itself.
+    if (loginHint === "email" || loginHint === "google" || loginHint?.includes("@")) {
       url.searchParams.set("login_hint", loginHint);
+    }
+    const projectHint = requestURL.searchParams.get("project_hint");
+    // A suggested project slug for the auth app's first-run setup — pairs
+    // with login_hint so a single PR-body link preselects both the test user
+    // and the project (see docs/dev-environments.md, "Template-carrying
+    // login links"). Slug-shaped or dropped; a hint never creates anything
+    // by itself.
+    if (
+      projectHint !== null &&
+      projectHint.length <= 50 &&
+      /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(projectHint)
+    ) {
+      url.searchParams.set("project_hint", projectHint);
     }
     if (requestURL.searchParams.get("prompt") === "select_account") {
       url.searchParams.set("prompt", "select_account");
@@ -717,7 +736,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
 
   // One-URL sign-in for minted/programmatic tokens: validates an access+id
   // token pair against the trusted JWKS and writes the normal session cookie.
-  // Used by Playwright/agent-browser/humans via `pnpm auth:mint --browser-url`.
+  // Used by Playwright/Playwriter/humans via `pnpm auth:mint --browser-url`.
   // No new trust is introduced — only tokens signed by a key in this
   // deployment's JWKS are accepted, the same check every request performs.
   app.get("/session-from-token", async (c) => {

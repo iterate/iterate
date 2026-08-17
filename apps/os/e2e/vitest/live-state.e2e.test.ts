@@ -6,6 +6,8 @@
 // isolate with no DO).
 import { expect, test } from "vitest";
 import { applyPatch, type LiveUpdate } from "iterate/sdk/capnweb";
+import { LIVE_STATE_PAGER_HEADER } from "../../src/domains/live-state-pager.ts";
+import type { AgentCollectionProcessorState } from "../../src/itx-api.generated.ts";
 import type { ProjectLiveState } from "../../src/domains/projects/project-live-state.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -107,7 +109,153 @@ test("itx.liveState indexes stream activity as a peer slice", async () => {
   expect(await subscription.ping()).toBe(true);
 });
 
-/** Reassemble a live subscription the way `useLiveState` does: snapshot, then patches. */
+// The `/agents` collection stream is born on the FIRST agent create(); a live
+// watcher mounted before that (the dashboard sidebar, the mobile chat list on
+// a brand-new project) used to be refused with
+// stream-subscription-unconfigured and stay dead even after chats appeared.
+// The relay now ensures the idempotency-keyed birth batch on exactly that
+// refusal, so the early subscriber gets the empty catalog and then watches
+// the first agent (and its agent-set title) arrive as pushes.
+test("agents.liveState subscribed before any agent exists serves the empty catalog, then pushes the first agent and its title", async () => {
+  const marker = crypto.randomUUID().slice(0, 8);
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects.get(`agents-live-${RUN_SUFFIX}-${marker}`).create({});
+
+  const track = trackLiveState<AgentCollectionProcessorState>();
+  using subscription = await project.agents.liveState.subscribe(track.onUpdate);
+  await waitForCondition(() => track.state() !== undefined, {
+    description: "the initial (empty) agent catalog snapshot",
+  });
+  // The whole reduced state, exactly: born (birth certificate reduced) with
+  // an EMPTY catalog — toMatchObject({ agents: {} }) would not prove empty.
+  expect(track.state()).toEqual({
+    birthCertificate: {},
+    agents: {},
+    waitingForSinceOffsets: {},
+  });
+
+  const agentPath = `/agents/live-${marker}`;
+  using agent = project.agents.get(agentPath);
+  await agent.create();
+  await waitForCondition(() => track.state()?.agents[agentPath] !== undefined, {
+    description: "the created agent arriving as a push",
+    timeoutMs: 30_000,
+  });
+
+  await project.streams.get(agentPath).append({
+    type: "events.iterate.com/agent/summary-updated",
+    payload: { title: "Live title lands", activity: "first turn" },
+  });
+  await waitForCondition(() => track.state()?.agents[agentPath]?.summary.title !== undefined, {
+    description: "the agent-set title arriving as a push",
+    timeoutMs: 30_000,
+  });
+  expect(track.state()!.agents[agentPath]).toMatchObject({
+    path: agentPath,
+    summary: { title: "Live title lands", activity: "first turn" },
+  });
+  expect(await subscription.ping()).toBe(true);
+});
+
+// Stream liveState rides the client-given hibernatable Live State Pager
+// (domains/live-state-pager.ts): the worker relay seeds itself from the
+// socket's first frame and then receives `{"type":"state"}` frames — no
+// retained subscription pins the Stream DO. Same public LiveStateRpc
+// contract; this proves updates flow end-to-end through the socket-fed
+// relay engine.
+test("stream.liveState pushes updates through the state socket without a DO-side subscription", async () => {
+  const marker = crypto.randomUUID().slice(0, 8);
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects.get(`stream-live-${RUN_SUFFIX}-${marker}`).create({});
+  const streamPath = `/e2e/stream-live/${marker}`;
+  using stream = project.streams.get(streamPath);
+  const [first] = await stream.append({
+    type: "events.iterate.test/live/tick",
+    payload: { round: 1 },
+  });
+
+  const track = trackLiveState<{ coreProcessorState: { maxOffset: number } }>();
+  using subscription = await stream.liveState.subscribe(track.onUpdate);
+
+  await waitForCondition(() => track.state() !== undefined, {
+    description: "the initial stream runtime snapshot",
+  });
+  expect(track.state()!.coreProcessorState.maxOffset).toBeGreaterThanOrEqual(first!.offset);
+
+  const [second] = await stream.append({
+    type: "events.iterate.test/live/tick",
+    payload: { round: 2 },
+  });
+  await waitForCondition(
+    () => (track.state()?.coreProcessorState.maxOffset ?? 0) >= second!.offset,
+    {
+      description: "a state-socket-fed update reflecting the new append",
+      timeoutMs: 30_000,
+    },
+  );
+  expect(await subscription.ping()).toBe(true);
+});
+
+// Secret liveState rides the Pager lane too — as a KEYED facet lane on the
+// secret STREAM Durable Object (the secret processor is facet-hosted; see
+// facetProcessorLiveStateRelay and the stream DO's facet lanes): pushed
+// DESCRIPTION updates — never material — flow without a DO-side retained
+// subscription.
+test("secret.liveState pushes description updates through the Live State Pager", async () => {
+  const marker = crypto.randomUUID().slice(0, 8);
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects.get(`secret-live-${RUN_SUFFIX}-${marker}`).create({});
+  using secret = project.secrets.get(`/secrets/live/${marker}`);
+  await secret.create({ egress: { urls: ["https://one.example"] }, material: "material-1" });
+
+  const track = trackLiveState<{ hasMaterial: boolean; egress: { urls: string[] } }>();
+  using subscription = await secret.liveState.subscribe(track.onUpdate);
+  await waitForCondition(() => track.state() !== undefined, {
+    description: "the initial secret description snapshot",
+  });
+  expect(track.state()).toMatchObject({ hasMaterial: true, egress: { urls: expect.any(Array) } });
+  expect(JSON.stringify(track.state())).not.toContain("material-1");
+
+  await secret.update({ egress: { urls: ["https://two.example"] }, material: "material-2" });
+  await waitForCondition(
+    () => track.state()?.egress.urls.includes("https://two.example") === true,
+    {
+      description: "a pushed description update reflecting the new egress pin",
+      timeoutMs: 30_000,
+    },
+  );
+  expect(JSON.stringify(track.state())).not.toContain("material-2");
+  expect(await subscription.ping()).toBe(true);
+});
+
+// The project/secret DO fetch lanes also serve user-influenced egress
+// traffic, where a user script controls arbitrary headers. The lane header
+// CLAIMS a request for the liveState lane outright — it must never continue
+// to the egress lanes, so an internal-looking request cannot alias into a
+// real outbound fetch. (The header is deliberately a plain marker, not a
+// signed token: a script that composes a WebSocket upgrade with it watches
+// its own project's liveState, which itx already serves it.)
+test("a user egress request wearing the liveState lane header is claimed by the lane, never egressed", async () => {
+  const marker = crypto.randomUUID().slice(0, 8);
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects.get(`lane-gate-${RUN_SUFFIX}-${marker}`).create({});
+  await project.__describe();
+
+  const claimed = await project.egress.fetch(
+    new Request("https://live-state.internal/", {
+      headers: { [LIVE_STATE_PAGER_HEADER]: "watch" },
+    }),
+  );
+  expect(claimed).toMatchObject({ status: 400 });
+  expect(await claimed.json()).toMatchObject({
+    error: expect.stringContaining("WebSocket upgrades"),
+  });
+});
+
 function trackLiveState<State>(): {
   onUpdate: (update: LiveUpdate<State>) => void;
   state: () => State | undefined;

@@ -39,9 +39,23 @@ export function CorePrettyState({
   }
 
   const childPaths = Array.isArray(core.childPaths) ? core.childPaths : [];
-  const configured = readRuntimeRecord(core.configuredSubscribersByKey) ?? {};
-  const connections = readRuntimeRecord(core.connectionsByKey) ?? {};
-  const runtimeSubscriptions = readRuntimeRecord(runtime?.subscriptions) ?? {};
+  const subscriptions = readRuntimeRecord(core.subscriptions);
+  const outbound = readRuntimeRecord(subscriptions?.outbound);
+  const outboundByName = readRuntimeRecord(outbound?.byName) ?? {};
+  const inbound = readRuntimeRecord(subscriptions?.inbound);
+  const inboundBySourcePath = readRuntimeRecord(inbound?.bySourcePath) ?? {};
+  const inboundSubscriptions = Object.entries(inboundBySourcePath).flatMap(
+    ([sourcePath, sourceValue]) => {
+      const byName = readRuntimeRecord(sourceValue) ?? {};
+      return Object.entries(byName).map(([name, value]) => ({
+        sourcePath,
+        name,
+        value,
+      }));
+    },
+  );
+  const connections = readRuntimeRecord(runtime?.connections) ?? {};
+  const subscriptionProgressByName = readRuntimeRecord(runtime?.subscriptions) ?? {};
   const paused = core.paused === true;
   const circuitBreaker = readRuntimeRecord(core.circuitBreaker);
   const trippedAtOffset = readNumber(circuitBreaker, "trippedAtOffset");
@@ -49,18 +63,25 @@ export function CorePrettyState({
   return (
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <RuntimeStateStat label="head" value={`#${Number(core.maxOffset ?? 0)}`} />
+        <RuntimeStateStat label="max offset" value={`#${Number(core.maxOffset ?? 0)}`} />
         <RuntimeStateStat label="events" value={String(core.eventCount ?? 0)} />
         <RuntimeStateStat label="children" value={String(childPaths.length)} />
         <RuntimeStateStat label="paused" value={paused ? "yes" : "no"} />
       </div>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        <RuntimeStateStat label="configured" value={String(Object.keys(configured).length)} />
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <RuntimeStateStat
+          label="outbound subscriptions"
+          value={String(Object.keys(outboundByName).length)}
+        />
+        <RuntimeStateStat
+          label="inbound subscriptions"
+          value={String(inboundSubscriptions.length)}
+        />
         <RuntimeStateStat label="connected" value={String(Object.keys(connections).length)} />
         <RuntimeStateStat
-          label="runtime subs"
-          value={String(Object.keys(runtimeSubscriptions).length)}
+          label="sending"
+          value={String(Object.keys(subscriptionProgressByName).length)}
         />
       </div>
 
@@ -87,36 +108,54 @@ export function CorePrettyState({
         </div>
       ) : null}
 
-      {Object.keys(configured).length === 0 ? null : (
+      {Object.keys(outboundByName).length === 0 ? null : (
         <div>
-          <SectionHeading>Configured subscriptions</SectionHeading>
+          <SectionHeading>Outbound subscriptions</SectionHeading>
           <div className="flex flex-col gap-1.5">
-            {Object.entries(configured).map(([key, value]) => {
-              const latest = readRuntimeRecord(readRuntimeRecord(value)?.latestConfiguredEvent);
-              const payload = readRuntimeRecord(latest?.payload);
-              const delivery = readRuntimeRecord(payload?.delivery);
-              const mode = typeof delivery?.mode === "string" ? delivery.mode : "unknown";
-              const runtimeSub = readRuntimeRecord(runtimeSubscriptions[key]);
-              const lag = readNumber(runtimeSub, "lag");
-              const selector = readRuntimeRecord(payload?.selector);
-              const eventTypes = Array.isArray(selector?.eventTypes)
-                ? selector.eventTypes.filter((t): t is string => typeof t === "string")
+            {Object.entries(outboundByName).map(([name, value]) => {
+              const configured = readRuntimeRecord(value);
+              const payload = readRuntimeRecord(configured?.configuration);
+              const receiver = readRuntimeRecord(payload?.receiver);
+              const kind = typeof receiver?.action === "string" ? receiver.action : "unknown";
+              const subscriptionProgress = readRuntimeRecord(subscriptionProgressByName[name]);
+              const lag = readNumber(subscriptionProgress, "lag");
+              // Durable facts outrank the mirrored runtime row; halted vs
+              // plain retry stay visibly distinct.
+              const status =
+                configured?.deliveryHalted !== undefined
+                  ? "halted"
+                  : typeof subscriptionProgress?.status === "string" &&
+                      subscriptionProgress.status !== "active"
+                    ? subscriptionProgress.status
+                    : null;
+              const filter = readRuntimeRecord(payload?.filter);
+              const eventTypes = Array.isArray(filter?.eventTypes)
+                ? filter.eventTypes.filter((t): t is string => typeof t === "string")
                 : [];
               const condition =
-                typeof selector?.condition === "string" ? selector.condition : undefined;
-              const destination = readAcceptCrossPostPath(delivery?.expression);
+                typeof filter?.jsonataCondition === "string" ? filter.jsonataCondition : undefined;
               const deliveryHint =
-                typeof delivery?.url === "string"
-                  ? `POST ${delivery.url}`
-                  : destination != null
-                    ? `cross-post → ${destination}`
-                    : formatItxExpressionHint(delivery?.expression);
+                kind === "copy-to-stream" && typeof receiver?.receivingStreamPath === "string"
+                  ? `copy → ${receiver.receivingStreamPath}`
+                  : kind === "webhook-post" && typeof receiver?.url === "string"
+                    ? `POST ${receiver.url}`
+                    : receiver?.action === "facet-processor"
+                      ? // The subscription name IS the contract slug and facet name.
+                        `facet · ${name}`
+                      : formatItxExpressionHint(receiver?.expression);
               return (
-                <div key={key} className="rounded-xl bg-muted/40 px-3 py-2">
+                <div key={name} className="rounded-xl bg-muted/40 px-3 py-2">
                   <div className="flex items-baseline justify-between gap-2">
-                    <div className="min-w-0 break-all font-mono text-xs">{key}</div>
-                    <div className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                      {mode}
+                    <div className="min-w-0 break-all font-mono text-xs">{name}</div>
+                    <div
+                      className={
+                        status === "halted"
+                          ? "shrink-0 font-mono text-[10px] text-destructive"
+                          : "shrink-0 font-mono text-[10px] text-muted-foreground"
+                      }
+                    >
+                      {kind}
+                      {status == null ? "" : ` · ${status}`}
                       {lag == null ? "" : ` · lag ${lag}`}
                     </div>
                   </div>
@@ -133,7 +172,7 @@ export function CorePrettyState({
                   )}
                   {eventTypes.length === 0 && condition == null ? null : (
                     <div className="mt-1 text-[11px] text-muted-foreground">
-                      {/* `*` anywhere means "all types" — same convention as EventSelector. */}
+                      {/* `*` anywhere means "all types" — same convention as EventFilter. */}
                       {eventTypes.length === 0 || eventTypes.includes("*")
                         ? "all events"
                         : eventTypes
@@ -142,6 +181,36 @@ export function CorePrettyState({
                       {condition == null
                         ? ""
                         : ` when ${condition.length > 48 ? `${condition.slice(0, 45)}…` : condition}`}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {inboundSubscriptions.length === 0 ? null : (
+        <div>
+          <SectionHeading>Inbound copy subscriptions</SectionHeading>
+          <div className="flex flex-col gap-1.5">
+            {inboundSubscriptions.map(({ sourcePath, name, value }) => {
+              const entry = readRuntimeRecord(value);
+              const numEventsReceived = readNumber(entry, "numEventsReceived") ?? 0;
+              return (
+                <div key={`${sourcePath}:${name}`} className="rounded-xl bg-muted/40 px-3 py-2">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <div className="min-w-0 break-all font-mono text-xs">{sourcePath}</div>
+                    <div className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                      {numEventsReceived} received
+                    </div>
+                  </div>
+                  <div className="mt-1 break-all font-mono text-[11px] text-foreground/70">
+                    {name}
+                  </div>
+                  {typeof entry?.lastEventReceivedAt !== "string" ? null : (
+                    <div className="mt-1 text-[11px] text-muted-foreground">
+                      last event {entry.lastEventReceivedAt}
                     </div>
                   )}
                 </div>
@@ -176,11 +245,7 @@ export function CorePrettyState({
 function asCoreState(state: unknown): Record<string, unknown> | null {
   if (state == null || typeof state !== "object") return null;
   const record = state as Record<string, unknown>;
-  if (
-    !("maxOffset" in record) &&
-    !("configuredSubscribersByKey" in record) &&
-    !("connectionsByKey" in record)
-  ) {
+  if (!("maxOffset" in record) && !("subscriptions" in record)) {
     return null;
   }
   return record;
@@ -356,16 +421,6 @@ function previewChatMessage(message: Record<string, unknown>): { role: string; t
   text = text.replace(/\s+/g, " ").trim();
   if (text.length > 160) text = `${text.slice(0, 157)}…`;
   return { role, text: text || "(empty)" };
-}
-
-/** `["streams", ["get", path], "acceptCrossPost"]` → path. */
-function readAcceptCrossPostPath(expression: unknown): string | null {
-  if (!Array.isArray(expression) || expression.length < 3) return null;
-  if (expression[0] !== "streams") return null;
-  if (expression[expression.length - 1] !== "acceptCrossPost") return null;
-  const getStep = expression[1];
-  if (!Array.isArray(getStep) || getStep[0] !== "get") return null;
-  return typeof getStep[1] === "string" ? getStep[1] : null;
 }
 
 /** Compact itx expression for core-state list rows. */

@@ -161,18 +161,19 @@ const SURFACE_GAPS: Record<string, string> = {
     "GmailConnection.request's data is caller-typed (request<T = unknown>); this plain-JS body " +
     "cannot instantiate T and reads list/get resources dynamically — its shapes are declared in " +
     "examples-source.ts",
-  "ai-generate-text":
-    "ai.run's output is caller-typed (run<T = unknown>); this plain-JS body cannot instantiate T " +
-    "and reads result.response — the shape is declared in examples-source.ts",
-  "ai-generate-image": "same run<T> constraint as ai-generate-text; the body reads response.image",
-  "ai-generate-audio": "same run<T> constraint as ai-generate-text; the body reads result.audio",
+  "ai-generate-image":
+    "run<T> is caller-typed (run<T = unknown>); the plain-JS body reads response.image",
+  "ai-generate-audio": "same run<T> constraint as ai-generate-image; the body reads result.audio",
   "ai-transcribe-audio":
-    "same run<T> constraint as ai-generate-text; the body reads result.text and friends",
-  "ai-generate-video": "same run<T> constraint as ai-generate-text; the body reads result.video",
+    "same run<T> constraint as ai-generate-image; the body reads result.text and friends",
+  "ai-generate-video": "same run<T> constraint as ai-generate-image; the body reads result.video",
   "cf-browser-markdown":
     "browser.quickAction() returns the action-shaped unknown; markdown is a string per entry",
+  "parallel-search-and-research":
+    "itx.parallel is an OpenApiRpc (object): operationIds are discovered lazily from Parallel's " +
+    "spec and only exist at runtime; the method shapes are declared per entry in examples-source.ts",
 };
 
 function mount(path: string[], types: string): CapabilityDescription {
-  return { path, type: "itx-expression", types };
+  return { path, type: "itx-call", types };
 }

@@ -2,17 +2,25 @@ import { expect, test } from "vitest";
 import { projectRepoSeedFiles, templateIterateRepoPkgSpecs } from "./project-repo-seed.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
+const TEMPLATE_DOCS_SPEC = "https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main";
 const TEMPLATE_ITERATE_SPEC = "https://pkg.pr.new/iterate/iterate/iterate@main";
+const TEMPLATE_PACKAGE_SPECS = [TEMPLATE_DOCS_SPEC, TEMPLATE_ITERATE_SPEC];
 
 test("no knobs seed the template verbatim", () => {
   expect(projectRepoSeedFiles({})).toBe(PROJECT_REPO_INITIAL_FILES);
 });
 
-test("the seed keeps the root worker and tasks app proxy", () => {
+test("the seed keeps the root worker and hosted app proxies", () => {
   const worker = projectRepoSeedFiles({}).find((file) => file.path === "worker.ts");
-  expect(worker?.content).toContain('if (app === "tasks")');
-  expect(worker?.content).toContain('itx.kv.get("tasks-app-origin")');
-  expect(worker?.content).toContain('"tasks.iterate.workers.dev"');
+  expect(worker?.content).toContain('from "@iterate-com/docs"');
+  // The tasks board is the docs app's /w view of the ONE app — one
+  // capability (docs.link mints both views), no tasks getter, host, or knob.
+  expect(worker?.content).not.toContain("TasksApp");
+  expect(worker?.content).not.toContain('if (app === "tasks")');
+  expect(worker?.content).toContain('if (app === "docs")');
+  expect(worker?.content).toContain('originOverrideKvKey: "docs-app-origin"');
+  expect(worker?.content).toContain('"https://docs.iterate.workers.dev"');
+  expect(worker?.content).toContain("return this.#docsApp.fetch(req)");
 });
 
 test("a ref pins every iterate/iterate pkg.pr.new spec in every manifest", () => {
@@ -21,7 +29,10 @@ test("a ref pins every iterate/iterate pkg.pr.new spec in every manifest", () =>
 
   const packageJson = JSON.parse(files.find((file) => file.path === "package.json")!.content);
   expect(packageJson).toMatchObject({
-    dependencies: { iterate: `https://pkg.pr.new/iterate/iterate/iterate@${sha}` },
+    dependencies: {
+      "@iterate-com/docs": `https://pkg.pr.new/iterate/iterate/@iterate-com/docs@${sha}`,
+      iterate: `https://pkg.pr.new/iterate/iterate/iterate@${sha}`,
+    },
   });
 
   // Every non-manifest file is untouched, and nothing still carries @main.
@@ -29,7 +40,9 @@ test("a ref pins every iterate/iterate pkg.pr.new spec in every manifest", () =>
   expect(others).toEqual(
     PROJECT_REPO_INITIAL_FILES.filter((file) => !file.path.endsWith("package.json")),
   );
-  expect(files.some((file) => file.content.includes(TEMPLATE_ITERATE_SPEC))).toBe(false);
+  for (const spec of TEMPLATE_PACKAGE_SPECS) {
+    expect(files.some((file) => file.content.includes(spec))).toBe(false);
+  }
 });
 
 test("a spec override replaces the named dependency wholesale (local dev tarball)", () => {
@@ -49,5 +62,5 @@ test("an override for a dependency the template does not carry fails loudly", ()
 test("the template carries pinnable pkg.pr.new specs where the substitution looks", () => {
   // projectRepoSeedFiles throws at seed time if the template drifts away from
   // pkg.pr.new specs entirely; this catches the same drift at unit-test time.
-  expect(templateIterateRepoPkgSpecs()).toEqual([TEMPLATE_ITERATE_SPEC]);
+  expect(templateIterateRepoPkgSpecs()).toEqual(TEMPLATE_PACKAGE_SPECS);
 });

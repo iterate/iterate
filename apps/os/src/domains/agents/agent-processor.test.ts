@@ -22,12 +22,11 @@ import {
 import {
   AgentProcessor,
   buildAgentCompactionRequestBody,
-  buildAgentLlmRequestBody,
   contextWindowTokens,
   prepareAgentLlmMessages,
-  projectContextAdded,
   type AgentProcessorDeps,
 } from "./agent-processor-implementation.ts";
+import { buildAgentLlmRequestBody, projectContextAdded } from "./agent-prompt-fold.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
 
 type AgentEventInput = ConsumedInput<AgentProcessorContract>;
@@ -100,7 +99,7 @@ function makeScriptedLlm() {
   const calls: {
     model: string;
     messages: WorkersAiMessage[];
-    onChunk?: (text: string) => void;
+    onChunk?: (text: string) => Promise<void>;
     signal: AbortSignal;
     resolve: (result: {
       text: string;
@@ -120,7 +119,7 @@ function makeScriptedLlm() {
       model: string;
       messages: WorkersAiMessage[];
       signal: AbortSignal;
-      onChunk?: (text: string) => void;
+      onChunk?: (text: string) => Promise<void>;
     }) =>
       new Promise<{ text: string; usage?: { inputTokens: number; outputTokens: number } }>(
         (resolve, reject) => {
@@ -146,6 +145,7 @@ function makeAgentHarness(substrate?: HarnessSubstrate, extraDeps?: Partial<Agen
 const REQUESTED = "events.iterate.com/agent/llm-request-requested";
 const SETTLED = "events.iterate.com/agent/llm-request-settled";
 const CONTEXT_ADDED = "events.iterate.com/agents/context-added";
+const RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
 
 // =============================================================================
 // The turn lifecycle
@@ -207,6 +207,39 @@ describe("AgentProcessor turn lifecycle", () => {
     expect(h.state().tokenUsage).toMatchObject({ totalInputTokens: 10, totalOutputTokens: 2 });
   });
 
+  it("backpressures streamed response chunks so append order stays provider order", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Stream some code")],
+      ["advanceTime", 10_000],
+    );
+
+    const realAppend = h.stream.append.bind(h.stream);
+    let releaseFirstChunk = () => {};
+    const firstChunkHeld = new Promise<void>((resolve) => {
+      releaseFirstChunk = resolve;
+    });
+    h.stream.append = async (...inputs) => {
+      const chunk = inputs.find((input) => input.type === RESPONSE_CHUNK);
+      if (chunk?.payload?.sequence === 0) await firstChunkHeld;
+      return realAppend(...inputs);
+    };
+
+    const streaming = (async () => {
+      await h.llm.calls[0]!.onChunk?.("const answer = ");
+      await h.llm.calls[0]!.onChunk?.("42;");
+    })();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The transport must not deliver chunk 2 while chunk 1 is still appending.
+    expect(h.events(RESPONSE_CHUNK)).toEqual([]);
+
+    releaseFirstChunk();
+    await streaming;
+    await h.settle();
+    expect(h.events(RESPONSE_CHUNK).map((event) => event.payload.sequence)).toEqual([0, 1]);
+  });
+
   it("debounce coalesces a burst: two inputs, ONE open request covering both", async () => {
     const h = makeAgentHarness();
     await h.play(
@@ -262,9 +295,9 @@ describe("AgentProcessor turn lifecycle", () => {
     await h.play(
       ["append", ...NEW_AGENT_EVENTS, userMessage("Hello")],
       ["advanceTime", 10_000],
-      () => {
-        h.llm.calls[0]!.onChunk?.("Hel");
-        h.llm.calls[0]!.onChunk?.("lo");
+      async () => {
+        await h.llm.calls[0]!.onChunk?.("Hel");
+        await h.llm.calls[0]!.onChunk?.("lo");
       },
       ["append", userMessage("actually stop", { behaviour: "interrupt-current-request" })],
     );
@@ -654,6 +687,63 @@ describe("AgentProcessor recovery", () => {
     ).toMatchObject({ payload: { role: "developer", actor: { type: "integration" } } });
   });
 
+  it("near-expiry: adoption with only seconds of validity left settles expired instead of running a doomed attempt", async () => {
+    // Prod 2026-08-11: a revival adopted a request with ~9s of its 10-minute
+    // horizon left and ran the attempt with a 9-second transport deadline —
+    // guaranteed to time out, burning the retry budget on a stale trigger.
+    // Too-little-validity must take the same expired path as fully-expired.
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Hello")],
+      ["advanceTime", 10_000],
+      ["crash"],
+      () => {
+        // The revival lands with 9s of the 600s horizon remaining: the clock
+        // already advanced 10s past the trigger, so add 581s.
+        h.clock.now += 581_000;
+      },
+      ["advanceTime", 0],
+    );
+
+    expect(h.llm.calls).toHaveLength(1); // only the pre-crash attempt — no doomed 9s retry
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { result: { status: "cancelled", reason: "expired" } } },
+    ]);
+    expect(h.state().openRequest).toBeNull();
+    expect(h.events("events.iterate.com/stream/error-occurred")).toMatchObject([
+      { payload: { message: expect.stringContaining("expired") } },
+    ]);
+  });
+
+  it("expiry: a WEDGED in-flight attempt is abandoned at the horizon — the live incarnation settles expired instead of deferring to a hung promise forever", async () => {
+    // The 2026-08-13 prd incident: the attempt hung (an un-deadlined await in
+    // the run closure), the incarnation stayed alive on constant unrelated
+    // deliveries, and the expiry branch deferred to isExecuting() for 28
+    // minutes. No crash here, deliberately — the same incarnation that dialed
+    // must expire its own wedge.
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
+    expect(h.llm.calls).toHaveLength(1); // dialed and hung; the test never settles it
+
+    await h.play(
+      () => {
+        h.clock.now += 10 * 60_000 + 1;
+      },
+      // Any delivery at head (a watcher presence event in prd) re-runs the
+      // at-head pass; the expiry settle must not need an eviction first.
+      () => h.stream.append(REVIVED),
+    );
+
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { result: { status: "cancelled", reason: "expired" } } },
+    ]);
+    expect(h.state().openRequest).toBeNull();
+    // The hung zombie was aborted, so it can neither keep streaming chunks
+    // nor journal a competing settlement; and the horizon never re-dials.
+    expect(h.llm.calls[0]!.signal.aborted).toBe(true);
+    expect(h.llm.calls).toHaveLength(1);
+  });
+
   it("a transient outage on the settlement append does not lose the turn", async () => {
     const h = makeAgentHarness();
     await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
@@ -761,7 +851,12 @@ describe("AgentProcessor failure policy", () => {
     // Two autonomous turns ran; the third trigger tripped the breaker.
     expect(h.llm.calls).toHaveLength(2);
     expect(h.events("events.iterate.com/agent/paused")).toMatchObject([
-      { payload: { reason: expect.stringContaining("autonomous turn limit") } },
+      {
+        payload: {
+          reason: expect.stringContaining("autonomous turn limit"),
+          triggerOffset: expect.any(Number),
+        },
+      },
     ]);
     expect(h.state().paused).not.toBeNull();
     expect(h.state().pendingLlmRequestTrigger).toBeNull();
@@ -772,6 +867,29 @@ describe("AgentProcessor failure policy", () => {
     expect(h.state().paused).toBeNull();
     expect(h.state().autonomousTurnCount).toBe(0);
     expect(h.llm.calls).toHaveLength(3);
+  });
+
+  it("ignores a delayed breaker pause superseded by newer external input", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, agentLoopNote("old analysis continuation")]);
+    const oldTriggerOffset = h.events("events.iterate.com/agents/context-added").at(-1)!.offset;
+
+    await h.play(
+      ["append", userMessage("start the new analysis")],
+      [
+        "append",
+        {
+          type: "events.iterate.com/agent/paused",
+          payload: {
+            reason: "autonomous turn limit reached",
+            triggerOffset: oldTriggerOffset,
+          },
+        },
+      ],
+    );
+
+    expect(h.state().paused).toBeNull();
+    expect(h.state().pendingLlmRequestTrigger).toMatchObject({ source: "external" });
   });
 
   it("the retry window is debounce + 2^(n-1)×base, capped at backoffMaxMs", async () => {
@@ -974,11 +1092,44 @@ describe("AgentProcessor script execution", () => {
     expect(h.llm.calls).toHaveLength(1); // no new turn
   });
 
+  it("does not render results from an ITX execution requested outside the agent processor", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS]);
+    const itemsBefore = h.state().contextItems.length;
+    const executionId = "agent-output:999";
+
+    await h.play(
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/script-run-requested",
+          payload: {
+            executionId,
+            code: "async () => 'external result'",
+            expiresAt: h.clock.now + 60_000,
+          },
+        },
+        {
+          type: "events.iterate.com/capability-host/script-run-settled",
+          payload: { executionId, settlement: { status: "succeeded", result: "external result" } },
+        },
+      ],
+      ["advanceTime", 10_000],
+    );
+
+    expect(h.state().activeScriptExecutionIds).toEqual([]);
+    expect(h.state().contextItems).toHaveLength(itemsBefore);
+    expect(h.llm.calls).toHaveLength(0);
+  });
+
   it("spills an oversized script result to a workspace file and references it; small results stay inline", async () => {
     const written: { path: string; content: string }[] = [];
     const h = makeAgentHarness(undefined, {
+      // The host dep writes relative to the agent's own workspace directory
+      // and answers with the fully-qualified path it wrote.
       writeWorkspaceFile: async (input) => {
         written.push(input);
+        return { absolutePath: `/workspaces/agents/main/${input.path}` };
       },
     });
     await h.play(
@@ -1006,19 +1157,21 @@ describe("AgentProcessor script execution", () => {
       },
     ]);
 
-    // The .gitignore seed plus the spill file itself, under /script-results.
+    // ONE write: the spill file itself, at a workspace-relative path under
+    // script-results/ (private scratch — no .gitignore seeding needed).
     expect(written).toMatchObject([
-      { path: "/script-results/.gitignore", content: "*\n" },
       {
-        path: expect.stringMatching(/^\/script-results\/agent-output-\d+\.txt$/),
+        path: expect.stringMatching(/^script-results\/agent-output-\d+\.txt$/),
         content: bigText,
       },
     ]);
     const rendered = h
       .state()
       .contextItems.find((item) => item.payload.content.startsWith("Your script returned:"));
-    expect(rendered!.payload.content).toContain("saved in your workspace at");
-    expect(rendered!.payload.content).toContain("/script-results/");
+    // The notice names exactly the fully-qualified path the dep answered with.
+    expect(rendered!.payload.content).toContain(
+      `saved in your workspace at "/workspaces/agents/main/${written[0]!.path}"`,
+    );
     // Raw string result: no json fence label, no JSON escaping.
     expect(rendered!.payload.content).not.toContain("```json");
 
@@ -1150,13 +1303,98 @@ describe("AgentProcessor script execution", () => {
     expect(rendered!.payload.content).toContain('line one\nline "two"');
     expect(rendered!.payload.content).not.toContain("\\n");
     expect(rendered!.payload.content).not.toContain("```json");
+    // The render names the preamble binding the next script will have — a
+    // small result embeds inline, so it reads as data, not a loader.
+    expect(rendered!.payload.content).toContain("`results[0].data`");
+    expect(rendered!.payload.content).not.toContain("load(itx)");
   });
 
-  it("spills an object result as pretty-printed JSON with a readFile pointer", async () => {
+  it("an oversized result's render points at the preamble's typed loader instead of .data", async () => {
+    const h = makeAgentHarness(undefined, {
+      writeWorkspaceFile: async (input) => ({
+        absolutePath: `/workspaces/agents/main/${input.path}`,
+      }),
+    });
+    await h.play(
+      [
+        "append",
+        ...NEW_AGENT_EVENTS,
+        {
+          type: "events.iterate.com/agent/configured",
+          payload: { config: { scriptResultHistoryLimit: 100 } },
+        },
+        userMessage("fetch the big thing"),
+      ],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("```ts\nasync (itx) => itx.big()\n```"),
+    );
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: {
+          executionId,
+          // over INLINE_RESULT_PREAMBLE_LIMIT serialized: the host retains a
+          // typed loader for this row, and the render must say so
+          settlement: { status: "succeeded", result: "x".repeat(20_000) },
+        },
+      },
+    ]);
+    const rendered = h
+      .state()
+      .contextItems.find((item) => item.payload.content.startsWith("Your script returned"));
+    // The paging recipe itself uses the preamble loader, not a readFile call.
+    expect(rendered!.payload.content).toContain("await results[0].load(itx)");
+    expect(rendered!.payload.content).not.toContain("await itx.workspace.readFile(");
+  });
+
+  it("transcribes preamble changes as developer context without triggering a turn", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS]);
+    const callsBefore = h.llm.calls.length;
+    await h.play(
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/preamble-set",
+          payload: { key: "channels", code: 'const TECH_CHANNEL_ID = "c1234";' },
+        },
+      ],
+      ["advanceTime", 60_000],
+    );
+    const setItem = h
+      .state()
+      .contextItems.find((item) => item.payload.content.startsWith('Preamble entry "channels"'));
+    expect(setItem).toMatchObject({ payload: { role: "developer" } });
+    expect(setItem!.payload.content).toContain('const TECH_CHANNEL_ID = "c1234";');
+    expect(h.llm.calls.length).toBe(callsBefore); // configuration, not conversation
+
+    await h.play(
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/preamble-removed",
+          payload: { key: "channels" },
+        },
+      ],
+      ["advanceTime", 60_000],
+    );
+    expect(
+      h
+        .state()
+        .contextItems.some((item) => item.payload.content.includes('"channels" was removed')),
+    ).toBe(true);
+    expect(h.llm.calls.length).toBe(callsBefore);
+  });
+
+  it("spills an object result as pretty-printed JSON with a loader-first recipe", async () => {
     const written: { path: string; content: string }[] = [];
     const h = makeAgentHarness(undefined, {
       writeWorkspaceFile: async (input) => {
         written.push(input);
+        return { absolutePath: `/workspaces/agents/main/${input.path}` };
       },
     });
     await h.play(
@@ -1187,24 +1425,88 @@ describe("AgentProcessor script execution", () => {
     // The full result spills as pretty-printed .json (strings spill as .txt).
     const spilled = JSON.stringify(result, null, 2);
     expect(written).toMatchObject([
-      { path: "/script-results/.gitignore", content: "*\n" },
       {
-        path: expect.stringMatching(/^\/script-results\/agent-output-\d+\.json$/),
+        path: expect.stringMatching(/^script-results\/agent-output-\d+\.json$/),
         content: spilled,
       },
     ]);
-    // The rendered item: a bounded preview plus the paste-ready read recipe.
+    // The rendered item: a bounded preview plus the paste-ready recipe. The
+    // recipe leads with the preamble loader (a competing readFile snippet
+    // would win over a footnote); the workspace path stays as a pointer.
     const rendered = h
       .state()
       .contextItems.find((item) => item.payload.content.startsWith("Your script returned"));
-    expect(rendered!.payload.content).toContain("saved in your workspace at");
     expect(rendered!.payload.content).toContain(
-      'JSON.parse(await itx.workspace.readFile("/script-results/',
+      `saved in your workspace at "/workspaces/agents/main/${written[0]!.path}"`,
     );
+    // Spilled for HISTORY (tiny historyLimit) but small enough to embed in
+    // the preamble: the row has `.data`, not `.load` — the recipe must match.
+    expect(rendered!.payload.content).toContain("const data = results[0].data;");
+    expect(rendered!.payload.content).not.toContain("results[0].load(");
+    expect(rendered!.payload.content).not.toContain("JSON.parse(await itx.workspace.readFile(");
     expect(rendered!.payload.content).toContain(
-      `showing the first 100 of ${spilled.length.toLocaleString("en-US")} chars`,
+      `Your script returned ${spilled.length.toLocaleString("en-US")} chars of JSON — over the ~100-char inline limit.`,
     );
+    // The inferred type block tells the model the shape it cannot see.
+    expect(rendered!.payload.content).toContain("Inferred type:");
+    expect(rendered!.payload.content).toContain("type Result = {");
+    expect(rendered!.payload.content).toContain("items: string");
     expect(rendered!.payload.content).not.toContain("x".repeat(200)); // preview stays bounded
+  });
+
+  it("an oversized structured result renders an inferred type and an array-eliding preview", async () => {
+    const written: { path: string; content: string }[] = [];
+    const h = makeAgentHarness(undefined, {
+      writeWorkspaceFile: async (input) => {
+        written.push(input);
+        return { absolutePath: `/workspaces/agents/main/${input.path}` };
+      },
+    });
+    await h.play(
+      [
+        "append",
+        ...NEW_AGENT_EVENTS,
+        {
+          type: "events.iterate.com/agent/configured",
+          payload: { config: { scriptResultHistoryLimit: 5_000 } },
+        },
+        userMessage("fetch the rows"),
+      ],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("```ts\nasync (itx) => itx.rows()\n```"),
+    );
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
+
+    const result = {
+      rows: Array.from({ length: 400 }, (_, index) => ({
+        id: index,
+        status: index % 2 === 0 ? "open" : "closed",
+        note: `note ${index}`,
+      })),
+    };
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId, settlement: { status: "succeeded", result } },
+      },
+    ]);
+
+    const rendered = h
+      .state()
+      .contextItems.find((item) => item.payload.content.startsWith("Your script returned"));
+    const content = rendered!.payload.content;
+    // Type: element shapes merged across all 400 rows, cardinality annotated.
+    expect(content).toContain('status: "open" | "closed"');
+    expect(content).toContain("/* 400 items */");
+    // Preview: a few rows plus a marker, NOT 5_000 chars of leading rows.
+    expect(content).toContain('"id": 0');
+    expect(content).not.toContain('"id": 10');
+    expect(content).toMatch(/\[truncated 397 items; from \d+ JSON bytes\]/);
+    // History stays lean: the whole rendered item is far below the old
+    // slice-to-historyLimit behavior's floor.
+    expect(content.length).toBeLessThan(5_000);
   });
 
   it("a markdown fence inside a string literal does not truncate script extraction", async () => {
@@ -1307,7 +1609,7 @@ describe("AgentProcessor script execution", () => {
     const replay = makeAgentHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(AgentProcessorContract),
     });
     await replay.settle(); // replays the whole journal; a wedge would throw here
 
@@ -1326,14 +1628,14 @@ describe("AgentProcessor stream facts", () => {
       ...NEW_AGENT_EVENTS,
       {
         type: "events.iterate.com/stream/error-occurred",
-        payload: { message: 'subscription "worker" skipped poison event at offset 7' },
+        payload: { message: 'subscription "worker" skipped failing event at offset 7' },
       },
     ]);
 
     expect(h.state().contextItems.at(-1)).toMatchObject({
       payload: {
         role: "developer",
-        content: expect.stringContaining("skipped poison"),
+        content: expect.stringContaining("skipped failing event"),
         actor: { type: "integration", name: "stream-error" },
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
@@ -1730,7 +2032,144 @@ describe("AgentProcessor stream facts", () => {
 // Summary + presence
 // =============================================================================
 
+describe("AgentProcessor slash commands", () => {
+  it("a resolving /script runs deterministically and delegates its result append to the script", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("/script await itx.__describe()")],
+      ["advanceTime", 10_000], // would close the turn debounce if a turn were owed
+    );
+
+    const scriptRequests = h.events("events.iterate.com/capability-host/script-run-requested");
+    expect(scriptRequests).toHaveLength(1);
+    const commandOffset = h
+      .events(CONTEXT_ADDED)
+      .find((event) =>
+        (event.payload as { content?: string }).content?.startsWith("/script"),
+      )!.offset;
+    expect(scriptRequests[0]!.payload).toMatchObject({
+      executionId: `slash-command:script:${commandOffset}`,
+    });
+    expect(scriptRequests[0]!.payload.code).toContain(
+      "const result = await (async () => {\nreturn await (itx.__describe()\n);\n})();",
+    );
+    expect(scriptRequests[0]!.payload.code).toContain(
+      "User ran `/script await itx.__describe()` command with the following result",
+    );
+    expect(scriptRequests[0]!.payload.code).toContain(
+      'llmRequestPolicy: { behaviour: "interrupt-current-request" }',
+    );
+    // The command IS the action — the model's turn comes later, from the
+    // context item appended by the script, not from the command message.
+    expect(h.llm.calls).toHaveLength(0);
+    expect(h.events(REQUESTED)).toHaveLength(0);
+
+    const itemsBeforeSettlement = h.state().contextItems.length;
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: {
+          executionId: `slash-command:script:${commandOffset}`,
+          settlement: { status: "succeeded", result: { projectId: "project-1" } },
+        },
+      },
+    ]);
+    // The generated script already appended this result. Its successful
+    // settlement only preserves the value for `results`; it must not append a
+    // second context item.
+    expect(h.state().contextItems).toHaveLength(itemsBeforeSettlement);
+  });
+
+  it("a resolving /example still renders its successful settlement", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("/example describe-project")]);
+
+    const scriptRequest = h.events("events.iterate.com/capability-host/script-run-requested")[0]!;
+    expect(scriptRequest.payload.executionId).toMatch(/^slash-command:example:/);
+
+    await h.play(
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/script-run-settled",
+          payload: {
+            executionId: scriptRequest.payload.executionId,
+            settlement: { status: "succeeded", result: { projectId: "project-1" } },
+          },
+        },
+      ],
+      ["advanceTime", 10_000],
+    );
+
+    const renderedResult = h
+      .state()
+      .contextItems.find(
+        (item) =>
+          item.payload.actor?.type === "script" &&
+          item.payload.actor.executionId === scriptRequest.payload.executionId,
+      );
+    expect(renderedResult?.payload.content).toContain('"projectId": "project-1"');
+    expect(h.llm.calls).toHaveLength(1);
+  });
+
+  it("a /script mid-turn runs as a side-band action: no interrupt, no lost command", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Hello there")],
+      ["advanceTime", 10_000], // open the turn — the LLM call is now in flight
+    );
+    expect(h.state().openRequest).not.toBeNull();
+
+    await h.play([
+      "append",
+      userMessage("/script await itx.__describe()", { behaviour: "interrupt-current-request" }),
+    ]);
+
+    // The command ran; the in-flight turn was NOT cancelled by it.
+    expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(1);
+    expect(h.state().openRequest).not.toBeNull();
+    expect(
+      h
+        .events(SETTLED)
+        .filter(
+          (event) =>
+            (event.payload as { result: { status: string } }).result.status === "cancelled",
+        ),
+    ).toHaveLength(0);
+  });
+
+  it("a non-resolving /example (bad slug) falls through to an ordinary model turn", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("/example not-a-real-slug")],
+      ["advanceTime", 10_000],
+    );
+
+    expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
+    expect(h.llm.calls).toHaveLength(1);
+    expect(h.llm.calls[0]!.messages.at(-2)?.content).toContain("/example not-a-real-slug");
+  });
+});
+
 describe("AgentProcessor summary", () => {
+  it("a resolving slash command is a side-band action and does not retire the wait", async () => {
+    const h = makeAgentHarness();
+    await h.play([
+      "append",
+      ...NEW_AGENT_EVENTS,
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { waitingFor: "user_input" },
+      },
+      userMessage("/script await itx.__describe()"),
+    ]);
+    // The command ran (script requested) but the agent still awaits a real
+    // answer — no clear was appended.
+    expect(h.state().summary.waitingFor).toBe("user_input");
+    expect(h.events("events.iterate.com/agent/summary-updated")).toHaveLength(1);
+  });
+
   it("folds summary updates, and a qualifying wake conditionally clears only a wait it followed", async () => {
     const h = makeAgentHarness();
     await h.play([
@@ -2104,7 +2543,7 @@ describe("AgentProcessor compaction", () => {
     const replay = makeAgentHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(AgentProcessorContract),
     });
     await replay.settle();
     expect(replay.llm.calls).toHaveLength(0);

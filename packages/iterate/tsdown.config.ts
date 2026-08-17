@@ -34,6 +34,8 @@ export default defineConfig([
     // supplies only package.json so worker-bundler can resolve these files.
     entry: {
       "starter-apps/guestbook/configured-worker": "src/starter-apps/guestbook/configured-worker.ts",
+      "starter-apps/media/configured-worker": "src/starter-apps/media/configured-worker.ts",
+      "starter-apps/notes/configured-worker": "src/starter-apps/notes/configured-worker.ts",
       "starter-apps/todo/configured-worker": "src/starter-apps/todo/configured-worker.ts",
     },
     format: "esm",
@@ -47,7 +49,9 @@ export default defineConfig([
       },
     },
     deps: {
-      alwaysBundle: ["@iterate-com/capnweb", "sqlfu", "zod"],
+      // yaml rides along for the notes app's frontmatter (the config repo
+      // installs only what its own package.json declares).
+      alwaysBundle: ["@iterate-com/capnweb", "sqlfu", "yaml", "zod"],
       neverBundle: ["cloudflare:workers"],
     },
     dts: false,
@@ -55,12 +59,10 @@ export default defineConfig([
     clean: false,
   },
   {
-    // This is installed as the dynamic worker's PHYSICAL entry point. The
-    // worker-bundler host installs the root config repo's dependencies, not
-    // transitive dependencies declared inside an installed tarball, so this
-    // artifact must carry its complete runtime graph. The only imports left
-    // for workerd to resolve are its built-in API and the per-install config
-    // virtual supplied by GithubAiLinter.create().
+    // The dynamic worker host installs the config repo's dependencies, not
+    // transitive dependencies inside iterate's tarball. This physical entry
+    // therefore carries its complete runtime graph; only Cloudflare's API and
+    // the per-install virtual config remain external.
     entry: {
       "starter-apps/github-ai-linter/configured-worker":
         "src/starter-apps/github-ai-linter/configured-worker.ts",
@@ -68,22 +70,16 @@ export default defineConfig([
     format: "esm",
     fixedExtension: true,
     platform: "neutral",
+    target: "es2022",
     inputOptions: {
       resolve: {
         conditionNames: ["workerd", "worker", "import", "default"],
       },
     },
     deps: {
-      alwaysBundle: ["@iterate-com/capnweb", "minimatch", "yaml", "zod"],
+      alwaysBundle: ["@iterate-com/capnweb", "yaml", "zod"],
       neverBundle: ["cloudflare:workers", "iterate:github-ai-linter-config"],
-      onlyBundle: [
-        "@iterate-com/capnweb",
-        "balanced-match",
-        "brace-expansion",
-        "minimatch",
-        "yaml",
-        "zod",
-      ],
+      onlyBundle: ["@iterate-com/capnweb", "yaml", "zod"],
     },
     dts: false,
     sourcemap: true,
@@ -138,10 +134,16 @@ export default defineConfig([
     // in the build script instead.
     entry: {
       sdk: "src/sdk.ts",
-      "starter-apps/guestbook/index": "src/starter-apps/guestbook/index.ts",
-      "starter-apps/guestbook/worker": "src/starter-apps/guestbook/worker.ts",
       "starter-apps/github-ai-linter/index": "src/starter-apps/github-ai-linter/index.ts",
       "starter-apps/github-ai-linter/worker": "src/starter-apps/github-ai-linter/worker.ts",
+      "starter-apps/guestbook/index": "src/starter-apps/guestbook/index.ts",
+      "starter-apps/guestbook/worker": "src/starter-apps/guestbook/worker.ts",
+      "starter-apps/media/index": "src/starter-apps/media/index.ts",
+      "starter-apps/media/ref": "src/starter-apps/media/ref.ts",
+      "starter-apps/media/worker": "src/starter-apps/media/worker.ts",
+      "starter-apps/notes/index": "src/starter-apps/notes/index.ts",
+      "starter-apps/notes/ref": "src/starter-apps/notes/ref.ts",
+      "starter-apps/notes/worker": "src/starter-apps/notes/worker.ts",
       "starter-apps/todo/index": "src/starter-apps/todo/index.ts",
       processors: "src/processors/index.ts",
       "processors-cloudflare": "src/processors/cloudflare.ts",
@@ -171,6 +173,13 @@ export default defineConfig([
       "sdk/capnweb": "src/sdk/capnweb/index.ts",
       "sdk/capnweb/react": "src/sdk/capnweb/react.tsx",
       "sdk/itx/react": "src/sdk/itx/react.ts",
+      // Self-contained codec; shares no modules with the entries above, so
+      // joining this group adds no chunk coupling. Declarations come from the
+      // tsconfig.sdk.json tsc pass like the rest of the group.
+      "annotated-markdown": "src/annotated-markdown/index.ts",
+      // The React viewer imports the codec entry's modules — same group so
+      // they share one chunk instead of inlining a second copy.
+      "annotated-markdown-react": "src/annotated-markdown/react/index.ts",
     },
     format: "esm",
     dts: false,

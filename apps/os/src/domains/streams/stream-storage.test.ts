@@ -1,11 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "iterate/processors";
-import {
-  reconcileSubscriptionCursorRows,
-  SqliteSubscriptionCursorStore,
-  StreamEventLog,
-} from "./stream-storage.ts";
+import { SqliteSubscriptionCursorStore, StreamEventLog } from "./stream-storage.ts";
 
 function wrapSqlStorage(db: DatabaseSync): SqlStorage {
   return {
@@ -118,107 +114,250 @@ describe("StreamEventLog.getRange", () => {
     expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
   });
 
-  it("excludes ephemeral rows from range reads unless asked; point reads always return them", () => {
+  it("fails loudly when an indexed event has no stored body", () => {
+    const log = createLog();
+    log.sql.exec("delete from event_chunks where offset = ?", 2);
+
+    expect(() => read(log, { afterOffset: 0, limit: 5 })).toThrow(
+      'stream event at path "/tests/stream", offset 2 has no body',
+    );
+  });
+
+  it("rejects ephemeral events at the durable storage boundary", () => {
     const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
     const chunk: StreamEvent = {
       ...event(2, "events.iterate.com/test/chunk"),
       ephemeral: true,
-      idempotencyKey: "chunk-2",
     };
     log.insert([event(1, "events.iterate.com/test/durable")]);
-    log.insert([chunk]);
-    log.insert([event(3, "events.iterate.com/test/durable")]);
-
-    expect(log.highestOffset()).toBe(3);
-    expect(offsets(read(log, { afterOffset: 0, limit: 10 }))).toEqual([1, 3]);
-    expect(offsets(read(log, { afterOffset: 0, limit: 10, includeEphemeral: true }))).toEqual([
-      1, 2, 3,
-    ]);
-    // Both interpolated WHERE clauses at once (ephemeral + type filter).
-    expect(
-      offsets(
-        read(log, {
-          afterOffset: 0,
-          limit: 10,
-          eventTypes: ["events.iterate.com/test/chunk"],
-          includeEphemeral: true,
-        }),
-      ),
-    ).toEqual([2]);
-    expect(
-      offsets(
-        read(log, { afterOffset: 0, limit: 10, eventTypes: ["events.iterate.com/test/chunk"] }),
-      ),
-    ).toEqual([]);
-    // Point reads are an explicit request — no flag needed.
-    expect(log.getByOffset(2)).toEqual(chunk);
-    expect(log.getByIdempotencyKey("chunk-2")).toEqual(chunk);
-  });
-
-  it("adopts a pre-ephemeral events table in place (the live-stream deploy path)", () => {
-    const db = new DatabaseSync(":memory:");
-    // The exact table shape every live stream's constructor DDL created
-    // before the ephemeral column existed, with a row already in it.
-    db.exec(`
-      create table events (
-        offset integer primary key autoincrement,
-        type text not null,
-        created_at text not null,
-        idempotency_key text unique
-      );
-      create table event_chunks (
-        offset integer not null,
-        chunk_index integer not null,
-        chunk_bytes blob not null,
-        primary key (offset, chunk_index),
-        foreign key (offset) references events(offset) on delete cascade
-      ) without rowid;
-    `);
-    db.prepare("insert into events (offset, type, created_at) values (1, 'legacy', '1970')").run();
-
-    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
-    log.insert([{ ...event(2, "events.iterate.com/test/chunk"), ephemeral: true }]);
-    log.insert([event(3, "events.iterate.com/test/durable")]);
-    // Legacy row reads as durable (default 0 backfill); the filter works.
-    expect(
-      log.getRange({ afterOffset: 1, beforeOffset: 100, limit: 10 }).map((entry) => entry.offset),
-    ).toEqual([3]);
-  });
-
-  it("highestAssignedOffset survives deletion of the highest row (the eviction allocator floor)", () => {
-    const db = new DatabaseSync(":memory:");
-    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
-    log.insert([event(1, "events.iterate.com/test/durable")]);
-    log.insert([{ ...event(2, "events.iterate.com/test/chunk"), ephemeral: true }]);
-    db.prepare("delete from events where offset = 2").run();
+    expect(() => log.insert([chunk])).toThrow(
+      "ephemeral events must not be written to the durable event log",
+    );
     expect(log.highestOffset()).toBe(1);
-    expect(log.highestAssignedOffset()).toBe(2);
+    expect(log.getByOffset(2)).toBeUndefined();
   });
 
-  it("adds the stream path when reading legacy stored events", () => {
-    const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
-    const log = new StreamEventLog(sql, "/legacy/stream");
+  it("persists a highest-assigned offset with no event row", () => {
+    const db = new DatabaseSync(":memory:");
+    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+    log.insert([event(1, "events.iterate.com/test/durable")]);
+    expect(log.highestAssignedOffset()).toBe(1);
+    log.advanceHighestAssignedOffset(2);
 
-    const legacyEvent = {
-      type: "events.iterate.com/test/legacy",
-      createdAt: new Date(1).toISOString(),
-      offset: 1,
-    };
-    sql.exec(
-      "insert into events (offset, type, created_at, idempotency_key) values (?, ?, ?, ?)",
-      legacyEvent.offset,
-      legacyEvent.type,
-      legacyEvent.createdAt,
-      null,
-    );
-    sql.exec(
-      "insert into event_chunks (offset, chunk_index, chunk_bytes) values (?, ?, ?)",
-      legacyEvent.offset,
-      0,
-      new TextEncoder().encode(JSON.stringify(legacyEvent)).buffer,
-    );
+    const reopened = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+    expect(log.highestOffset()).toBe(1);
+    expect(reopened.highestAssignedOffset()).toBe(2);
+    expect(reopened.getByOffset(2)).toBeUndefined();
+  });
+});
 
-    expect(log.getByOffset(1)).toEqual({ ...legacyEvent, path: "/legacy/stream" });
+describe("SqliteSubscriptionCursorStore hosted delivery watchdog", () => {
+  it("persists one in-flight deadline and rejects an older connection clearing it", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("processor", 4, 12);
+    const cursorChangedAtOffset = store.get("processor")!.cursorChangedAtOffset;
+    store.nack("processor", {
+      attempt: 14,
+      nextAttemptAt: 19_000,
+      error: "previous hosted batch failed",
+      failingEvent: { offset: 5, attempt: 3 },
+    });
+
+    store.markInFlight("processor", {
+      deadlineAt: 20_000,
+      connectionGeneration: 7,
+      cursorChangedAtOffset,
+    });
+    expect(store.get("processor")).toMatchObject({
+      attempt: 14,
+      nextAttemptAt: 19_000,
+      lastError: "previous hosted batch failed",
+      inFlightDeadlineAt: 20_000,
+      inFlightConnectionGeneration: 7,
+    });
+
+    store.clearInFlight("processor", {
+      connectionGeneration: 6,
+      cursorChangedAtOffset,
+    });
+    expect(store.get("processor")).toMatchObject({
+      attempt: 14,
+      nextAttemptAt: 19_000,
+      lastError: "previous hosted batch failed",
+      inFlightDeadlineAt: 20_000,
+      inFlightConnectionGeneration: 7,
+      confirmedOffset: 4,
+    });
+
+    store.clearInFlight("processor", {
+      connectionGeneration: 7,
+      cursorChangedAtOffset,
+    });
+    expect(store.get("processor")).toMatchObject({
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+      failingEventOffset: null,
+      failingEventAttempt: 0,
+      failingEventSkipsSinceLastSuccess: 0,
+      inFlightDeadlineAt: null,
+      inFlightConnectionGeneration: null,
+      // A batch ack settles the watchdog; the receiver's durable claim is
+      // untouched until a reported checkpoint confirms it.
+      confirmedOffset: 4,
+    });
+  });
+
+  it("confirm clears the schedule always but the failure streak only on progress", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("processor", 4, 12);
+    const cursorChangedAtOffset = store.get("processor")!.cursorChangedAtOffset;
+    store.nack("processor", {
+      attempt: 14,
+      nextAttemptAt: 19_000,
+      error: "hosted batch failed",
+      failingEvent: { offset: 5, attempt: 3 },
+    });
+    store.markInFlight("processor", {
+      deadlineAt: 20_000,
+      connectionGeneration: 7,
+      cursorChangedAtOffset,
+    });
+
+    // No progress (checkpoint equals the confirmed offset): the wake call
+    // consumed the retry schedule, but a reachable host is not a digesting
+    // host — the streak stays so a deterministic failure still halts.
+    store.confirm("processor", 4, { cursorChangedAtOffset });
+    expect(store.get("processor")).toMatchObject({
+      confirmedOffset: 4,
+      attempt: 14,
+      nextAttemptAt: null,
+      lastError: "hosted batch failed",
+      failingEventOffset: 5,
+      failingEventAttempt: 3,
+      inFlightDeadlineAt: null,
+      inFlightConnectionGeneration: null,
+    });
+
+    // Progress clears the streak: deliveries have been digested since.
+    store.confirm("processor", 6, { cursorChangedAtOffset });
+    expect(store.get("processor")).toMatchObject({
+      confirmedOffset: 6,
+      attempt: 0,
+      lastError: null,
+      failingEventOffset: null,
+      failingEventAttempt: 0,
+    });
+  });
+
+  it("confirm is fenced by the cursor-changing event like an acknowledgement", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("processor", 4, 12);
+    const before = store.get("processor")!;
+
+    store.confirm("processor", 9, { cursorChangedAtOffset: 11 });
+    expect(store.get("processor")).toEqual(before);
+
+    store.confirm("processor", 9, { cursorChangedAtOffset: 12 });
+    expect(store.get("processor")).toMatchObject({ confirmedOffset: 9 });
+  });
+
+  it("mirrors the delivery status onto the row and resets it on reconfiguration", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("capability", 0, 1);
+    expect(store.get("capability")!.status).toBe("active");
+
+    store.setStatus("capability", "halted");
+    expect(store.get("capability")!.status).toBe("halted");
+
+    // A replacement configuration resets the row, status included.
+    store.ensure("capability", 5, 9);
+    expect(store.get("capability")).toMatchObject({
+      status: "active",
+      confirmedOffset: 5,
+      configuredAtOffset: 9,
+    });
+  });
+
+  it("keeps a replacement or seek from inheriting an old delivery watchdog", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("processor", 4, 12);
+    const firstCursorChangedAtOffset = store.get("processor")!.cursorChangedAtOffset;
+    store.markInFlight("processor", {
+      deadlineAt: 20_000,
+      connectionGeneration: 7,
+      cursorChangedAtOffset: firstCursorChangedAtOffset,
+    });
+
+    store.setCursor("processor", 2, 20);
+    const afterSeek = store.get("processor")!;
+    expect(afterSeek.cursorChangedAtOffset).toBe(20);
+    expect(afterSeek).toMatchObject({
+      confirmedOffset: 2,
+      inFlightDeadlineAt: null,
+      inFlightConnectionGeneration: null,
+    });
+
+    store.markInFlight("processor", {
+      deadlineAt: 30_000,
+      connectionGeneration: 8,
+      cursorChangedAtOffset: afterSeek.cursorChangedAtOffset,
+    });
+    store.ensure("processor", 9, 13);
+    expect(store.get("processor")).toMatchObject({
+      confirmedOffset: 9,
+      configuredAtOffset: 13,
+      inFlightDeadlineAt: null,
+      inFlightConnectionGeneration: null,
+    });
+  });
+
+  it("rejects a stale acknowledgement whose cursor-changing event moved, leaving the row untouched", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("processor", 4, 12);
+    store.nack("processor", { attempt: 3, nextAttemptAt: 19_000, error: "receiver failed" });
+    const before = store.get("processor")!;
+
+    // The SQL-level dual of the sender's in-memory delivery-still-matches
+    // guard: an acknowledgement naming a superseded configuration/cursor-set
+    // event must not advance the cursor or clear failure state.
+    store.ack("processor", 9, { cursorChangedAtOffset: 11 });
+    expect(store.get("processor")).toEqual(before);
+
+    // The same acknowledgement naming the live cursor generation lands: a
+    // push ack advances the confirmed cursor and clears failure state.
+    store.ack("processor", 9, { cursorChangedAtOffset: 12 });
+    expect(store.get("processor")).toMatchObject({
+      confirmedOffset: 9,
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+    });
+  });
+
+  it("turns a failed dispatch into ordinary retry state and clears its watchdog", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("processor", 4, 12);
+    const cursorChangedAtOffset = store.get("processor")!.cursorChangedAtOffset;
+    store.markInFlight("processor", {
+      deadlineAt: 20_000,
+      connectionGeneration: 7,
+      cursorChangedAtOffset,
+    });
+
+    store.nack("processor", {
+      attempt: 1,
+      nextAttemptAt: 25_000,
+      error: "batch did not acknowledge",
+    });
+
+    expect(store.get("processor")).toMatchObject({
+      attempt: 1,
+      nextAttemptAt: 25_000,
+      lastError: "batch did not acknowledge",
+      inFlightDeadlineAt: null,
+      inFlightConnectionGeneration: null,
+    });
   });
 });
 
@@ -228,270 +367,3 @@ function fromNodeSqlValue([key, value]: [string, unknown]) {
   }
   return [key, value];
 }
-
-describe("reconcileSubscriptionCursorRows", () => {
-  it("drops orphaned rows, keeps progress, clears failure state (version-mismatch rebuild)", () => {
-    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
-    store.ensure("survivor-clean", 5);
-    store.ensure("survivor-backing-off", 3);
-    store.nack("survivor-backing-off", {
-      attempt: 7,
-      nextAttemptAt: 99_999,
-      error: "old-code bug",
-    });
-    store.ensure("orphan", 2);
-    store.nack("orphan", { attempt: 14, nextAttemptAt: 88_888, error: "config no longer folds" });
-
-    reconcileSubscriptionCursorRows(
-      store,
-      new Set(["survivor-clean", "survivor-backing-off"]),
-      new Set(),
-    );
-
-    // The orphan is gone entirely — its next_attempt_at must not arm alarms forever.
-    expect(store.get("orphan")).toBeUndefined();
-    expect(store.minNextAttemptAt()).toBeNull();
-    // Progress survives (ackedOffset is monotonic truth about the same log)...
-    expect(store.get("survivor-clean")?.ackedOffset).toBe(5);
-    expect(store.get("survivor-backing-off")?.ackedOffset).toBe(3);
-    // ...but backoff state is cleared: the new fold gets an immediate fresh try.
-    expect(store.get("survivor-backing-off")).toMatchObject({
-      attempt: 0,
-      nextAttemptAt: null,
-      lastError: null,
-    });
-  });
-
-  it("keeps a parked survivor's failure evidence — the fold keeps it parked, so there is no fresh try", () => {
-    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
-    store.ensure("parked", 7);
-    store.nack("parked", { attempt: 14, nextAttemptAt: 55_555, error: "still down" });
-    store.park("parked", { attempt: 15, error: "still down" });
-
-    reconcileSubscriptionCursorRows(store, new Set(["parked"]), new Set(["parked"]));
-
-    // The stalled-warning sheet's "why" must survive the rebuild.
-    expect(store.get("parked")).toMatchObject({
-      ackedOffset: 7,
-      attempt: 15,
-      nextAttemptAt: null,
-      lastError: "still down",
-    });
-  });
-
-  it("still clears a parked row holding a stray retry schedule — no eternally re-armed alarm", () => {
-    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
-    store.ensure("parked-stray", 4);
-    // A parked row's next_attempt_at should be null (park guarantees it);
-    // simulate corrupted storage where it is not.
-    store.nack("parked-stray", { attempt: 9, nextAttemptAt: 77_777, error: "still down" });
-
-    reconcileSubscriptionCursorRows(store, new Set(["parked-stray"]), new Set(["parked-stray"]));
-
-    expect(store.get("parked-stray")).toMatchObject({ attempt: 0, nextAttemptAt: null });
-    expect(store.minNextAttemptAt()).toBeNull();
-  });
-});
-
-describe("SqliteSubscriptionCursorStore schema migration", () => {
-  it("adds the epoch column to a pre-epoch subscriptions table without losing rows", () => {
-    // A live DO that created the table under #1784 (no epoch column) and then
-    // received #1792 code: construction must upgrade the table in place
-    // instead of leaving every subsequent select throwing "no such column".
-    const db = new DatabaseSync(":memory:");
-    db.exec(`
-      create table subscriptions (
-        subscription_key text primary key,
-        acked_offset integer not null,
-        attempt integer not null default 0,
-        next_attempt_at integer,
-        last_error text,
-        updated_at text not null
-      )
-    `);
-    db.prepare(
-      "insert into subscriptions (subscription_key, acked_offset, updated_at) values (?, ?, ?)",
-    ).run("pre-existing", 7, new Date(0).toISOString());
-
-    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
-
-    // The old row reads back with the fence value fresh #1784 rows had.
-    expect(store.get("pre-existing")).toMatchObject({ ackedOffset: 7, epoch: 0 });
-    expect(store.list()).toHaveLength(1);
-    // Post-migration writes behave like any other row.
-    store.ensure("fresh", 0);
-    expect(store.get("fresh")!.epoch).toBeGreaterThan(0);
-  });
-
-  it("adopts a with-epoch table that predates sqlfu ownership (post-#1792 constructor DDL)", () => {
-    // DOs created between #1792 and this fix got the epoch column from raw
-    // constructor DDL, so they have the current shape but an empty
-    // sqlfu_migrations table. The migration chain must pass over them without
-    // throwing (a bare `alter table add column epoch` would die with
-    // "duplicate column name") and without losing rows. Epochs reset to 0 —
-    // acceptable because no in-flight delivery survives the DO restart that
-    // reruns the constructor.
-    const db = new DatabaseSync(":memory:");
-    db.exec(`
-      create table subscriptions (
-        subscription_key text primary key,
-        acked_offset integer not null,
-        attempt integer not null default 0,
-        next_attempt_at integer,
-        last_error text,
-        epoch integer not null default 0,
-        updated_at text not null
-      )
-    `);
-    db.prepare(
-      "insert into subscriptions (subscription_key, acked_offset, epoch, updated_at) values (?, ?, ?, ?)",
-    ).run("pre-existing", 7, Date.now(), new Date(0).toISOString());
-
-    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
-
-    expect(store.get("pre-existing")).toMatchObject({ ackedOffset: 7, epoch: 0 });
-    expect(store.list()).toHaveLength(1);
-    store.ensure("fresh", 0);
-    expect(store.get("fresh")!.epoch).toBeGreaterThan(0);
-  });
-
-  it("is idempotent on an already-current table", () => {
-    const db = new DatabaseSync(":memory:");
-    const first = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
-    first.ensure("k", 3);
-    const again = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
-    expect(again.get("k")).toMatchObject({ ackedOffset: 3 });
-    // Second construction re-ran migrate() against recorded history: the
-    // epoch minted by the first store must survive (no re-rebuild).
-    expect(again.get("k")!.epoch).toBeGreaterThan(0);
-  });
-});
-
-describe("SqliteSubscriptionCursorStore epoch fencing", () => {
-  function makeStore() {
-    return new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
-  }
-
-  it("migrates existing subscription tables that predate epoch fencing", () => {
-    const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
-    sql.exec(`
-      create table subscriptions (
-        subscription_key text primary key,
-        acked_offset integer not null,
-        attempt integer not null default 0,
-        next_attempt_at integer,
-        last_error text,
-        updated_at text not null
-      )
-    `);
-    sql.exec(
-      "insert into subscriptions (subscription_key, acked_offset, attempt, next_attempt_at, last_error, updated_at) values (?, ?, ?, ?, ?, ?)",
-      "legacy",
-      4,
-      2,
-      123,
-      "old failure",
-      new Date(0).toISOString(),
-    );
-
-    const store = new SqliteSubscriptionCursorStore(sql);
-
-    expect(store.get("legacy")).toMatchObject({
-      ackedOffset: 4,
-      attempt: 2,
-      epoch: 0,
-      lastError: "old failure",
-      nextAttemptAt: 123,
-    });
-
-    store.setCursor("legacy", 7);
-
-    expect(store.get("legacy")).toMatchObject({
-      ackedOffset: 7,
-      attempt: 0,
-      lastError: null,
-      nextAttemptAt: null,
-    });
-    expect(store.get("legacy")!.epoch).toBeGreaterThan(0);
-  });
-
-  it("acks fenced on a stale epoch no-op; unfenced acks still land", () => {
-    const store = makeStore();
-    store.ensure("k", 0);
-    const before = store.get("k")!;
-
-    store.setCursor("k", 2); // the seek bumps the epoch
-    const after = store.get("k")!;
-    expect(after.epoch).toBeGreaterThan(before.epoch);
-
-    // The in-flight delivery captured the PRE-seek epoch: its ack must not
-    // clobber the seek.
-    store.ack("k", 100, before.epoch);
-    expect(store.get("k")!.ackedOffset).toBe(2);
-
-    // A delivery that read the post-seek row acks normally.
-    store.ack("k", 5, after.epoch);
-    expect(store.get("k")!.ackedOffset).toBe(5);
-  });
-
-  it("remove+recreate mints a fresh epoch, so a dead subscription's ack cannot land", () => {
-    const store = makeStore();
-    store.ensure("k", 0);
-    const oldEpoch = store.get("k")!.epoch;
-    store.delete("k");
-    store.ensure("k", 0); // recreate with deliver:"all" semantics
-    expect(store.get("k")!.epoch).toBeGreaterThan(oldEpoch);
-
-    store.ack("k", 100, oldEpoch); // the removed receiver's in-flight ack
-    expect(store.get("k")!.ackedOffset).toBe(0); // full history still owed
-  });
-
-  it("advanceWatermark keeps the failure streak but clears the retry schedule", () => {
-    const store = makeStore();
-    store.ensure("k", 0);
-    store.nack("k", { attempt: 3, nextAttemptAt: 12345, error: "ingest failing" });
-
-    store.advanceWatermark("k", 7);
-    const row = store.get("k")!;
-    expect(row.ackedOffset).toBe(7);
-    expect(row.attempt).toBe(3); // a reachable host is not a healthy one
-    expect(row.lastError).toBe("ingest failing");
-    expect(row.nextAttemptAt).toBeNull(); // the poke consumed the retry
-  });
-
-  it("park clears the retry schedule but keeps the cursor and failure evidence", () => {
-    const store = makeStore();
-    store.ensure("k", 5);
-    store.nack("k", { attempt: 14, nextAttemptAt: 12345, error: "still down" });
-
-    store.park("k", { attempt: 15, error: "still down" });
-    expect(store.get("k")).toMatchObject({
-      ackedOffset: 5,
-      attempt: 15, // mirrors the park fact, not the last nack
-      nextAttemptAt: null, // a parked row must not drive the alarm
-      lastError: "still down",
-    });
-
-    // Resume acks at the unmoved cursor: the evidence clears for a fresh start.
-    store.ack("k", 5);
-    expect(store.get("k")).toMatchObject({ attempt: 0, nextAttemptAt: null, lastError: null });
-  });
-});
-
-describe("SqliteSubscriptionCursorStore mutation observation", () => {
-  it("notifies the owning runtime projection after every cursor mutation", () => {
-    const onMutation = vi.fn();
-    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")), {
-      onMutation,
-    });
-
-    store.ensure("k", 0);
-    store.ack("k", 1);
-    store.advanceWatermark("k", 2);
-    store.nack("k", { attempt: 1, nextAttemptAt: 10, error: "retry" });
-    store.setCursor("k", 3);
-    store.delete("k");
-
-    expect(onMutation).toHaveBeenCalledTimes(6);
-  });
-});

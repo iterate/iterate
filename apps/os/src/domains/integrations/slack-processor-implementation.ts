@@ -219,7 +219,7 @@ function slackAgentCreationEvents(input: {
           },
         },
       }),
-      processorSlug: SlackAgentProcessorContract.slug,
+      name: SlackAgentProcessorContract.slug,
     },
   });
   return creation.events satisfies EmittedInput<SlackProcessorContract>[];

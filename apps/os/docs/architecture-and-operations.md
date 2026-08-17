@@ -81,7 +81,7 @@ in the auth worker.
 
 The browser talks to itx over `/api`: one Cap'n Web WebSocket per
 context, managed by the `iterate` package's client (`iterate/sdk/itx/react` —
-`useItx`/`useItxQuery`/`useItxSubscription`; see `docs/frontend-development.md`). `POST /api` serves one-shot HTTP batch sessions (used by
+`useItx`/`useItxQuery`/`useStreamConnection`; see `docs/frontend-development.md`). `POST /api` serves one-shot HTTP batch sessions (used by
 the project-create server function and MCP `exec_typescript`).
 `/api/operator-sessions` mints short-lived, origin-bound grants for either one
 resolved project or explicit platform-wide operation. Project grants create a
@@ -188,7 +188,7 @@ ensures two OAuth clients (web + MCP/CLI) via the auth contract's
 `APP_CONFIG_ITERATE_AUTH__*` OAuth/client values back to Doppler. It does not
 write `APP_CONFIG_ITERATE_AUTH__JWKS`: generated local config and deployed OS
 derive the public JWKS directly from the environment's Doppler-owned
-`AUTH_FORGE_PRIVATE_JWK`. Auth signs with the private half; OS receives only
+`AUTH_FORGE_ES256_PRIVATE_JWK`. Auth signs with the private half; OS receives only
 the public half and never fetches Auth during deploy or verification.
 
 It requires `APP_CONFIG_SERVICE_AUTH_TOKEN` (run through Doppler for the auth project).
@@ -229,6 +229,6 @@ doppler run --project os --config preview_2 -- pnpm cli itx agent-smoke \
   --project <prj_id> --agent-path /agents/onboarding --message "Reply with exactly: pong"
 ```
 
-Browser smoke with `agent-browser`:
+Browser smoke with `Playwriter`:
 
-- [Preview Agent Browser Smoke](./preview-agent-browser-smoke.md)
+- [Preview browser smoke](./preview-browser-smoke.md)

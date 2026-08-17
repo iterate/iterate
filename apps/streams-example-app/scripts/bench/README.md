@@ -2,7 +2,7 @@
 
 Node-side harnesses for measuring the streams backend and the browser mirror
 under load. All of them speak the playground's capnweb WebSocket
-(`/api/streams`), so they exercise the same lane the browser client uses.
+(`/api/streams`), so they exercise the same WebSocket endpoint as the browser client.
 
 ## Auth
 
@@ -28,7 +28,7 @@ pnpm exec tsx scripts/bench/bench-stream.mts burst wss://<host>/api/streams /ben
 # getEvents paging throughput
 pnpm exec tsx scripts/bench/bench-stream.mts read wss://<host>/api/streams /bench-b100 0 100000 500
 
-# paced sustained load with a 1s server-head timeline (for subscriber-lag analysis)
+# paced sustained load with a 1s server-head timeline (for callback-lag analysis)
 pnpm exec tsx scripts/bench/sustained-load.mts wss://<host>/api/streams /lat-test 5000 200 30
 
 # end-to-end latency pings (pair with the browser sampler below)
@@ -63,7 +63,7 @@ which is how you spot redundant redelivery after connection churn.
 - Unpaced floods of >~1000 in-flight append calls make the Durable Object shed
   load: in-flight calls fail `Network connection lost.`, a few commit without
   acks (retry without idempotency keys ⇒ duplicates).
-- The delivery lane dies after ~1000 pushed batches per WebSocket connection
+- A WebSocket connection stops carrying callback batches after ~1000 pushes
   (worker invocation subrequest budget), so big replays reconnect-thrash and
   redeliver.
 - Browser OPFS ingest is far slower than the server's delivery rate and there

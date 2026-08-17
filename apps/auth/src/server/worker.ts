@@ -22,7 +22,8 @@ import { cors } from "hono/cors";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { onError, ORPCError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
-import { auth, getAllowedBrowserOrigins } from "./auth.ts";
+import { auth } from "./auth.ts";
+import { resolveAllowedBrowserOrigin } from "./browser-origin.ts";
 import { db } from "./db/index.ts";
 import { config } from "./env.ts";
 import { hono, variablesProvider, type Variables } from "./utils/hono.ts";
@@ -42,17 +43,17 @@ import {
   mintProjectId,
   userCanAccessProject,
 } from "./project-directory.ts";
+import { handleTestLogin } from "./test-login.ts";
+import { buildAccessTokenGrantClaims } from "./oauth-project-selection.ts";
+import { getUserByEmail } from "./db/queries/index.ts";
 
 const app = hono();
-const allowedBrowserOrigins = new Set(getAllowedBrowserOrigins());
 const AUTH_ISSUER_PATH = "/api/auth";
 
 app.use(
   cors({
     origin: (origin) => {
-      if (!origin || !URL.canParse(origin)) return null;
-      const normalizedOrigin = new URL(origin).origin;
-      return allowedBrowserOrigins.has(normalizedOrigin) ? normalizedOrigin : null;
+      return resolveAllowedBrowserOrigin(origin, config);
     },
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -97,6 +98,10 @@ app.get("/logout", async (c) => {
   appendSetCookieHeaders(response.headers, signOutResponse.headers);
   return response;
 });
+
+// One-click test sign-in for fixed-test-OTP deployments (preview/dev only;
+// 404 in production). See test-login.ts for the gate and the seeding it does.
+app.get("/test-login", handleTestLogin);
 
 export const orpcHandler = new RPCHandler(appRouter, {
   plugins: [new RequestHeadersPlugin()],
@@ -210,6 +215,28 @@ export default class AuthWorker extends AuthWorkerContract<CloudflareEnv> {
 
   listProjectsForUser(input: { userId: string }) {
     return listProjectsForUser(input, db);
+  }
+
+  async getUserGrants(input: { userId: string }) {
+    // Reuse the single source of truth for "what a token grants": no scopes + no
+    // selection => every organization and project this user can reach.
+    const { organizations, projects } = await buildAccessTokenGrantClaims(
+      { userId: input.userId, requestedScopes: [], selection: null },
+      db,
+    );
+    return { organizations, projects };
+  }
+
+  async getUserGrantsByEmail(input: { email: string }) {
+    // Resolve the verified email to a user, then the same grant bundle as getUserGrants.
+    // Unknown email => empty grants (a caller behind a wall may present any email).
+    const user = await getUserByEmail(db, { email: input.email.trim().toLowerCase() });
+    if (!user) return { organizations: [], projects: [] };
+    const { organizations, projects } = await buildAccessTokenGrantClaims(
+      { userId: user.id, requestedScopes: [], selection: null },
+      db,
+    );
+    return { organizations, projects };
   }
 
   mintProjectAppSession(input: MintProjectAppSessionInput) {

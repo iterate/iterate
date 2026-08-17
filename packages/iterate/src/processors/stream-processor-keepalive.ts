@@ -1,52 +1,52 @@
 // The processor host's revival guarantee: a Durable Object that dies owing
-// work gets dialed again.
+// work gets another processor wake.
 //
-// THE GAP THIS CLOSES. Stream-side delivery is already durable (the spine's
-// cursor rows + the stream DO's alarm retry/park machinery,
-// stream-subscribers.ts). What nothing covered is the ZERO-LAG wedge: a
-// processor records an obligation (`llm-request-requested`,
+// THE GAP THIS CLOSES. Stream-side sending is already durable (the source
+// cursor rows + the stream DO's alarm retry/halt machinery,
+// stream-event-sender.ts). What nothing covered is the ZERO-LAG wedge: a
+// processor journals an obligation (`llm-request-requested`,
 // `script-run-requested`), its checkpoint advances, and the in-flight
 // attempt dies with the incarnation — a deploy evicts every DO. The stream
-// sees no lag, arms no retry, and nothing ever dials anything again. The
+// sees no lag, arms no retry, and nothing ever wakes the processor again. The
 // agent sits at `phase: "requested"` forever (the 2026-06-10 and 2026-07-07
 // prd incidents).
 //
 // THE MECHANISM. While any registered work is in flight (`blockProcessorWhile`
-// and `runInBackground` both count), keep a durable DO alarm parked a few
+// and `runInBackground` both count), schedule a durable DO alarm a few
 // seconds ahead. Work settles cleanly → a confirmation fire finds quiet and
 // disarms. The incarnation dies mid-work → the alarm survives it, fires in a
 // fresh incarnation, and REVIVES: append one persisted revival fact to the
 // stream (which cold-boots the stream DO — its `woken` fan-out restores the
-// spine). Its delivery reaches head for the processor: a consumer receives the
+// sender). Its delivery reaches head for the processor: a consumer receives the
 // fact, while a non-consumer receives the runner's eventless at-head pass.
 // Either path can settle whatever the dead incarnation left behind. Recovery
 // has ONE entrypoint — batch delivery — and the stream records the whole episode: requested → revived → failure
 // completion → reschedule.
 //
 // THE IMPOSSIBILITY GUARANTEE. A bug must never keep a DO awake forever, so
-// the revival lane is a crash-loop breaker, not a loop: every revival attempt
+// the revival alarm is a crash-loop breaker, not a loop: every revival attempt
 // durably marks `revivals + 1` BEFORE doing anything else and arms its next
 // try at a growing backoff (10s → 1m → 5m → 30m → 6h, plateau forever — a
-// permanently poisoned host costs ~4 wakes a day). The mark only resets on a
+// permanently failing host costs ~4 wakes a day). The mark only resets on a
 // QUIET-CLEAN confirmation (a fire that finds all tracked work settled
 // successfully — not merely "the revival pass resolved", which a
 // crash-looping post-revival batch would reset endlessly) or on a version
 // change: the overwhelmingly likely fix for a deterministic crash loop is a
 // deploy, so a revival that notices a new worker version starts from a fresh
-// budget. Arming is suppressed while a revival pass runs — otherwise the
+// budget. Arming is dropped while a revival pass runs — otherwise the
 // pass's own tracked work would pull the alarm back to the short lead and a
 // crash inside the pass would defeat the backoff.
 //
 // This module is transport-free, clock-free, and storage-free — everything
-// arrives through {@link ProcessorKeepaliveHooks}, mirroring
-// stream-subscribers.ts, so the whole state machine runs in plain-node vitest
+// arrives through {@link ProcessorKeepaliveHooks}, using the same injected-hook
+// pattern as stream-event-sender.ts, so the whole state machine runs in plain-node vitest
 // with a mutable clock and scripted revivals (stream-processor-keepalive.test.ts).
 
 import type { StreamEventInput } from "./schemas.ts";
 
 /**
  * The durable mark, stored in DO KV BELOW the journal/fold: the crash-loop
- * breaker must live beneath the abstraction it protects (a poisoned fold
+ * breaker must live beneath the state reduction it protects (a failing fold
  * cannot be asked to fold its own pause fact). KV is authoritative here;
  * journal facts about revivals are evidence, not enforcement — the deliberate
  * inversion of the usual rule.
@@ -84,13 +84,20 @@ type ProcessorKeepaliveHooks = {
    * reconciliations run. Must throw on failure — the breaker owns the retry.
    */
   revive(record: KeepaliveRecord): Promise<void>;
+  /**
+   * Classify and dispose a revival that can never become valid on retry.
+   * Return true only after synchronously removing this attempt's durable
+   * desire (or proving a newer desire replaced it). The keepalive then stops
+   * without arming another retry.
+   */
+  discardFailedRevival?(error: unknown, record: KeepaliveRecord): boolean;
   /** Best-effort journal evidence (crash-loop warnings). Must not throw. */
   appendFact(event: StreamEventInput): void;
   /** Current worker deploy version (antidote-deploy budget reset). */
   version: string;
 };
 
-/** How far ahead of in-flight work the alarm is parked. Bounds post-eviction
+/** How far ahead of in-flight work the alarm is scheduled. Bounds post-eviction
  * revival latency; a deploy mid-agent-turn recovers within roughly this. */
 export const KEEPALIVE_ALARM_LEAD_MS = 10_000;
 
@@ -118,6 +125,7 @@ type ProcessorKeepaliveAlarmAction =
   | "revival_hung_backoff"
   | "clean_disarmed"
   | "revived"
+  | "revival_discarded"
   | "revival_failed";
 
 export function revivalBackoffMs(revivals: number): number {
@@ -153,8 +161,8 @@ export class ProcessorKeepalive {
   /**
    * The keepalive's current alarm desire, for the host's slice merge. Read
    * straight from the durable record (synchronous DO KV) — a separate
-   * in-memory mirror would be one more thing to drift after an eviction, and
-   * stale-mirror drift is exactly the failure class this module hunts.
+   * in-memory copy would be one more thing to drift after an eviction, and
+   * stale copied state is exactly the failure class this module hunts.
    */
   get armedAtMs(): number | null {
     return this.#hooks.readRecord()?.armedAtMs ?? null;
@@ -198,7 +206,7 @@ export class ProcessorKeepalive {
     // the cadence, and a SECOND pass must never start underneath it): push
     // the alarm ahead again — unless NOTHING has settled for so many
     // consecutive fires that the work is wedged (a hung promise no deadline
-    // owns). A wedge falls through to the revival lane so its alarm cadence
+    // owns). A wedge falls through to the revival alarm so its cadence
     // decays along the backoff instead of firing at the lead interval forever.
     if (this.#inFlight > 0 || this.#reviving) {
       this.#busyRefires += 1;
@@ -208,7 +216,7 @@ export class ProcessorKeepalive {
       }
       if (this.#reviving) {
         // The revival pass itself is hung. Starting another would lift the
-        // arm-suppression under the running one; park at the plateau instead
+        // arm-dropping under the running one; schedule at the longest interval instead
         // — the impossibility guarantee holds (~4 wakes/day) and any real
         // settlement resets the counter.
         this.#arm(now + REVIVAL_BACKOFF_PLATEAU_MS);
@@ -235,7 +243,9 @@ export class ProcessorKeepalive {
 
   async #revive(
     now: number,
-  ): Promise<Extract<ProcessorKeepaliveAlarmAction, "revived" | "revival_failed">> {
+  ): Promise<
+    Extract<ProcessorKeepaliveAlarmAction, "revived" | "revival_discarded" | "revival_failed">
+  > {
     const previous = this.#hooks.readRecord();
     const priorRevivals =
       previous === undefined || previous.version !== this.#hooks.version ? 0 : previous.revivals;
@@ -281,6 +291,11 @@ export class ProcessorKeepalive {
       if (!wedged) this.#arm(this.#hooks.now() + KEEPALIVE_ALARM_LEAD_MS);
       return "revived";
     } catch (error) {
+      if (this.#hooks.discardFailedRevival?.(error, record) === true) {
+        this.#sawFailure = false;
+        this.#sawCleanSettle = false;
+        return "revival_discarded";
+      }
       console.error("stream processor host revival failed; backing off", {
         revivals: record.revivals,
         nextAttemptAt: record.armedAtMs,
@@ -292,6 +307,27 @@ export class ProcessorKeepalive {
     } finally {
       this.#reviving = false;
     }
+  }
+
+  /**
+   * The operator's no-deploy antidote: clear the crash-loop budget and, when
+   * a retry is owed (the record is armed), pull it in to the confirmation
+   * lead so the next fire revives promptly on the fresh budget. Without this
+   * the mark resets only on a quiet-clean confirmation or a version change —
+   * a 3-strikes plateau otherwise mutes a wedged processor for six hours at
+   * a time with a deploy as the only cure (the 2026-08-11 prod incident).
+   */
+  resetBackoff(): void {
+    const record = this.#hooks.readRecord();
+    if (record === undefined) return;
+    if (record.armedAtMs === null) {
+      // Nothing owed — just clear the stale budget.
+      this.#hooks.writeRecord({ ...FRESH_RECORD, version: this.#hooks.version });
+      return;
+    }
+    const atMs = this.#hooks.now() + KEEPALIVE_ALARM_LEAD_MS;
+    this.#hooks.writeRecord({ ...FRESH_RECORD, version: this.#hooks.version, armedAtMs: atMs });
+    this.#hooks.armAlarm(atMs);
   }
 
   /** Arm for in-flight work: move the alarm earlier, never later, and never

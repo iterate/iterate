@@ -3,7 +3,7 @@
 How to reproduce UI/auth bugs against a **local** OS + Auth stack with a
 scripted headless browser: sign in via test OTP, create orgs/projects, drive
 OAuth, and read server state directly. Complements
-[preview-agent-browser-smoke.md](./preview-agent-browser-smoke.md), which drives
+[preview-browser-smoke.md](./preview-browser-smoke.md), which drives
 a deployed preview against that slot's auth worker.
 
 ## When to use which environment
@@ -35,35 +35,31 @@ Gotchas:
 - The Doppler scope for `apps/auth` must resolve to a config that exists. If
   `pnpm dev-all` dies with `Could not find requested config 'dev_<you>'`, point it
   at the shared dev config: `doppler configure set config dev --scope apps/auth`.
-- Local Auth and OS read the same `AUTH_FORGE_PRIVATE_JWK`. Auth signs with its
+- Local Auth and OS read the same `AUTH_FORGE_ES256_PRIVATE_JWK`. Auth signs with its
   private half and generated OS config derives the public JWKS, exactly like a
   deployment; no live JWKS fallback is involved.
 
 ## Headless browser without touching the user's Chrome
 
-`~/.zshrc` sets `AGENT_BROWSER_AUTO_CONNECT=1`, which attaches to the user's
-real Chrome (prompts + reads their tabs). For autonomous work launch a
-dedicated, isolated, headless Chrome for Testing and drive it over CDP:
+Use Playwriter headless so automation never attaches to the user's real Chrome:
 
 ```bash
-agent-browser install   # one-time: bundled Chrome for Testing
-BIN="$HOME/.agent-browser/browsers/chrome-149.0.7827.54/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
-nohup "$BIN" --headless=new --remote-debugging-port=9444 --user-data-dir=/tmp/ab-own about:blank >/tmp/ab-own.log 2>&1 & disown
-
-# AUTO_CONNECT=0 overrides the .zshrc default so it never touches the user's Chrome.
-# Use an isolated --session so refs/cookies don't collide with other work.
-export AGENT_BROWSER_AUTO_CONNECT=0
-ab() { agent-browser --session dbg --cdp 9444 "$@"; }
-ab open "$(node -p 'require("./apps/os/.dev-server/dev-server.json").baseUrl')"
+playwriter browser install   # one-time: Chrome for Testing
+SID=$(playwriter session new --browser headless 2>&1 | sed -n 's/^Session \([0-9][0-9]*\) created.*/\1/p')
+BASE="$(node -p 'require("./apps/os/.dev-server/dev-server.json").baseUrl')"
+playwriter -s "$SID" --timeout 60000 -e "$(cat <<EOF
+state.page = context.pages().find((p) => p.url() === 'about:blank') ?? (await context.newPage());
+await state.page.goto(${JSON.stringify('$BASE')}, { waitUntil: 'domcontentloaded' });
+console.log(await snapshot({ page: state.page }));
+EOF
+)"
 ```
 
-- The browser keeps its profile in `--user-data-dir`, so an `iterate_session`
-  cookie survives a _page reload_ but a fresh Chrome process is a clean slate.
-- `ab state save /tmp/dbg-state.json` / `state load` persists cookies +
-  localStorage across Chrome restarts (Chrome for Testing is occasionally
-  OOM-killed by local dev rebuilds — save state once logged in).
-- Do **not** `agent-browser close` the `--cdp` instance (it kills the browser).
-  Clean up with `pkill -f ab-own`.
+- Keep a single Playwriter session id for the whole debug loop so cookies and
+  pages persist across `-e` calls.
+- Prefer `snapshot()` after every navigation; locators go stale on re-render.
+- Do not use the developer's real Chrome unless they explicitly authorize it
+  for that task (extension path + multi-profile `--browser` key).
 
 ## Sign in with a test user (OTP)
 

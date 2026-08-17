@@ -32,7 +32,7 @@ import { SecretProcessorContract } from "./secret-processor-contract.ts";
  *   an otherwise identical configuration.
  *
  * The ONE side effect: when `secret/created` is delivered, the processor
- * cross-posts that event to the project root stream (`/`), where the project
+ * copies that event to the project root stream (`/`), where the project
  * processor reduces it into its secrets catalog. Everything else is pure
  * reduction — no background work, no at-head pass, nothing an eviction could
  * lose.
@@ -52,7 +52,7 @@ export class SecretProcessor extends StreamProcessor<SecretProcessorContract> {
     switch (event?.type) {
       case "events.iterate.com/secret/created":
         // Per-event consequence, so the cursor holds: secret/created is
-        // delivered exactly once, and the cross-post body (the parsed payload)
+        // delivered exactly once, and the copy body (the parsed payload)
         // is deterministic, so a redelivered frame dedupes on the key.
         blockProcessorWhile(() =>
           appendTo("/", {

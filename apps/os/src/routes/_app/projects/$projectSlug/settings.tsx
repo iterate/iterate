@@ -47,8 +47,8 @@ function ProjectSettingsPage() {
           <p className="text-sm text-muted-foreground" data-spinner="true">
             Loading project…
           </p>
-        ) : !lifecycle.value.ready ? (
-          // Same gate as project home: a not-yet-ready project shows the
+        ) : lifecycle.value.birthCertificate === null ? (
+          // Same gate as project home: a not-yet-created project shows the
           // bootstrap checklist, never live settings forms.
           <ProjectCreationProgress state={lifecycle.value} />
         ) : (

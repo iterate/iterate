@@ -52,4 +52,4 @@ make query failure visible rather than presenting stale state as healthy.
 - `apps/os/src/components/stream-state-panel.tsx`
 - `apps/os/src/components/stream-view-header.tsx`
 - `apps/os/src/components/project-stream-view.tsx`
-- `apps/os/src/domains/streams/stream-subscribers.ts`
+- `apps/os/src/domains/streams/stream-event-sender.ts`

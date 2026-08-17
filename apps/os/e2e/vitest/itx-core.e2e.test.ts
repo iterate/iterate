@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import { newHttpBatchRpcSession } from "capnweb";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { RepoArtifactNameCodec } from "../../src/domains/repos/utils.ts";
+import type { CoreProcessorState } from "../../src/domains/streams/core-processor-contract.ts";
 import type { UnauthenticatedOs } from "../../src/itx-api.generated.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
@@ -38,7 +39,9 @@ test("Authenticated session __describe returns principal", async () => {
     organizationId: null,
     organizationName: null,
   });
-  expect(["ready", "missing", "unknown"]).toContain(list[0]?.deploymentStatus);
+  expect(["created", "creating", "failed", "missing", "unknown"]).toContain(
+    list[0]?.deploymentStatus,
+  );
 });
 
 test("Authenticated internal auth itx can create project and append to stream", async () => {
@@ -90,26 +93,29 @@ test("Authenticated internal auth itx can create project and append to stream", 
 
   // We don't care about ordering, just that the stream contains each of these
   // event types. Mapping to types + arrayContaining is the concise idiomatic way.
-  // The repo/* events are CROSS-POSTED COPIES: the config repo commits its
-  // facts on its own stream (/repos/config) and the bootstrap's cross-post
-  // rule copies them here for the creation saga.
+  // The repo/* events arrive through a stream relationship: the config repo
+  // commits its facts on its own stream (/repos/config), then its subscription
+  // delivers them here for the creation saga.
   expect(events.map((event) => event.type)).toEqual(
     expect.arrayContaining([
       "events.iterate.com/stream/created",
       "events.iterate.com/stream/woken",
       "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/project/create-requested",
       "events.iterate.com/project/created",
       "events.iterate.com/repos/created",
-      "events.iterate.com/project/ready",
-      "events.iterate.com/stream/subscriber-disconnected",
+      // NOTE: connection-opened/closed presence facts are ephemeral (memory
+      // only) and deliberately absent from durable reads like this one.
     ]),
   );
 
   const repoCreated = events.find((event) => event.type === "events.iterate.com/repos/created");
+  const projectCreateRequested = events.find(
+    (event) => event.type === "events.iterate.com/project/create-requested",
+  );
   const projectCreated = events.find(
     (event) => event.type === "events.iterate.com/project/created",
   );
-  const projectReady = events.find((event) => event.type === "events.iterate.com/project/ready");
   expect(repoCreated).toMatchObject({
     payload: {
       request: { type: "empty" },
@@ -121,23 +127,73 @@ test("Authenticated internal auth itx can create project and append to stream", 
     // Provenance: the copy names its source coordinate on the config repo's
     // own stream.
     source: {
-      crossPostedFrom: [
+      copiedFrom: [
         expect.objectContaining({
           path: "/repos/config",
           projectId: description.projectId,
-          subscriptionKey: "cross-post:/",
+          name: "project-config-to-root",
           type: "events.iterate.com/repos/created",
         }),
       ],
     },
   });
+  expect(projectCreateRequested).toBeTruthy();
   expect(projectCreated).toBeTruthy();
-  expect(projectReady).toBeTruthy();
-  expect(projectCreated!.offset).toBeLessThan(repoCreated!.offset);
-  expect(repoCreated!.offset).toBeLessThan(projectReady!.offset);
+  expect(projectCreated!.payload).toMatchObject({
+    createRequestedAtOffset: projectCreateRequested!.offset,
+  });
+  expect(projectCreateRequested!.offset).toBeLessThan(repoCreated!.offset);
+  expect(repoCreated!.offset).toBeLessThan(projectCreated!.offset);
+
+  const workerConfigurations = events.filter(
+    (event) =>
+      event.type === "events.iterate.com/stream/subscription-configured" &&
+      (event.payload as { name?: string }).name === "project-worker",
+  );
+  expect(workerConfigurations).toHaveLength(1);
+  const permanentWorkerConfiguration = workerConfigurations[0];
+  expect(permanentWorkerConfiguration).toMatchObject({
+    idempotencyKey: `project-worker-subscription:${description.projectId}`,
+    payload: {
+      name: "project-worker",
+      receiver: {
+        action: "itx-call",
+        expression: ["processEventBatch"],
+        delivery: {
+          start: "now",
+          onFailingEvent: "skip",
+        },
+      },
+    },
+  });
+  expect(permanentWorkerConfiguration!.payload).not.toHaveProperty("filter");
+  expect(repoCreated!.offset).toBeLessThan(permanentWorkerConfiguration!.offset);
+  expect(permanentWorkerConfiguration!.offset + 1).toBe(projectCreated!.offset);
+
+  const rootRuntime = await stream.runtimeState();
+  const workerConfiguration = (rootRuntime.coreProcessorState as CoreProcessorState).subscriptions
+    .outbound.byName["project-worker"];
+  expect(workerConfiguration).toMatchObject({
+    configuredAtOffset: permanentWorkerConfiguration!.offset,
+    configuration: {
+      name: "project-worker",
+      receiver: {
+        action: "itx-call",
+        expression: ["processEventBatch"],
+        delivery: {
+          start: "now",
+          onFailingEvent: "skip",
+        },
+      },
+    },
+  });
+  expect(workerConfiguration!.configuration).not.toHaveProperty("filter");
+  expect(
+    rootRuntime.runtime.subscriptions["project-worker"]!.confirmedOffset,
+  ).toBeGreaterThanOrEqual(permanentWorkerConfiguration!.offset);
 
   // First-hand on the config repo's own stream: the same facts, no
-  // provenance chain, plus the repo processor + cross-post subscriptions.
+  // provenance chain, plus the repo processor and stream subscriptions.
   const configRepoEvents = await project.streams.get("/repos/config").getEvents();
   const firstHandRepoCreated = configRepoEvents.find(
     (event) => event.type === "events.iterate.com/repos/created",
@@ -145,17 +201,17 @@ test("Authenticated internal auth itx can create project and append to stream", 
   expect(firstHandRepoCreated).toMatchObject({
     payload: { request: { type: "empty" } },
   });
-  expect(firstHandRepoCreated!.source?.crossPostedFrom).toBeUndefined();
+  expect(firstHandRepoCreated!.source?.copiedFrom).toBeUndefined();
   expect(
     configRepoEvents.some(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { subscriptionKey?: string }).subscriptionKey === "cross-post:/",
+        (event.payload as { name?: string }).name === "project-config-to-root",
     ),
   ).toBe(true);
 
-  // The cross-post pipe stays live after bootstrap: a fresh append on the
-  // config repo's stream shows up on `/` as a provenance-stamped copy.
+  // The relationship stays live after bootstrap: a fresh append on the config
+  // repo's stream shows up on `/` with source-stream provenance.
   const [configRepoFact] = await project.streams.get("/repos/config").append({
     type: "events.iterate.test/config-repo-fact",
     payload: { marker: description.projectId },
@@ -166,8 +222,8 @@ test("Authenticated internal auth itx can create project and append to stream", 
     eventTypes: ["events.iterate.test/config-repo-fact"],
     predicate: (event) =>
       (event.payload as { marker?: string }).marker === description.projectId &&
-      event.source?.crossPostedFrom?.[0]?.path === "/repos/config" &&
-      event.source.crossPostedFrom[0].offset === configRepoFact!.offset,
+      event.source?.copiedFrom?.[0]?.path === "/repos/config" &&
+      event.source.copiedFrom[0].offset === configRepoFact!.offset,
     timeoutMs: 30_000,
   });
 
@@ -192,7 +248,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
   expect(committedEvent).toMatchObject({
     type: "hello-world",
     // The birth certificate: created(1), the project-worker feed's
-    // subscription-configured(2), the PostHog feed(3), woken(4) — the first
+    // outbound project-worker config(2), the PostHog config(3), woken(4) — the first
     // user append is 5.
     offset: 5,
   });
@@ -202,11 +258,11 @@ test("Authenticated internal auth itx can create project and append to stream", 
     },
     {
       type: "events.iterate.com/stream/subscription-configured",
-      payload: { subscriptionKey: "project-worker" },
+      payload: { name: "project-worker" },
     },
     {
       type: "events.iterate.com/stream/subscription-configured",
-      payload: { subscriptionKey: "iterate-platform-posthog" },
+      payload: { name: "iterate-platform-posthog" },
     },
     {
       type: "events.iterate.com/stream/woken",
@@ -295,8 +351,12 @@ test("Trusted internal root can access global streams and repos", async () => {
     type: "events.iterate.test/global-stream",
   });
 
-  using repo = await itx.repos.get(path).create({ type: "empty" });
-  expect(await repo.whoami()).toBe(`repo null:${path}`);
+  // Repos live under /repos/** — the one path namespace whose streams host
+  // the facet-placed repo processor (the facet composition is path-selected,
+  // for deployment-global streams exactly as for project streams).
+  const repoPath = `/repos/global-${crypto.randomUUID()}`;
+  using repo = await itx.repos.get(repoPath).create({ type: "empty" });
+  expect(await repo.whoami()).toBe(`repo null:${repoPath}`);
 });
 
 // This test is handy because it proves that we really only need one round trip to

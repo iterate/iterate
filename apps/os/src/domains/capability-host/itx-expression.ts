@@ -2,7 +2,7 @@ import { evaluateItxExpression, type EvaluatedItxExpression } from "../../itx/ex
 import { invokeFlattenedPath } from "./live-capability.ts";
 
 // The evaluator itself lives at the itx leaf (src/itx/expression.ts) so stream
-// push subscriptions share it; this module keeps the capability-host-specific
+// ITX-expression stream receivers share it; this module keeps the capability-host-specific
 // halves: normalizing an evaluated expression into a provider and invoking it.
 export { evaluateItxExpression };
 

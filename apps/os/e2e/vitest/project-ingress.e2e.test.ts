@@ -1,6 +1,7 @@
 import { request as httpRequest } from "node:http";
 import { expect, test } from "vitest";
 import WebSocket from "ws";
+import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
 import type { StatefulDynamicWorkerRef } from "iterate/sdk";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
@@ -61,7 +62,7 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
     secret: adminSecret(),
   });
   using project = await itx.projects.get(slug).create({});
-  await project.__describe();
+  const { projectId } = await project.__describe();
 
   // The app owns its birth invariant even when called directly, before the
   // userspace root route has had an opportunity to initialize the stream.
@@ -83,6 +84,11 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   } satisfies StatefulDynamicWorkerRef;
   using directGuestbook = project.workers.get(guestbookAppRef) as unknown as {
     getState(): Promise<{ entries: { message: string; name: string }[] }>;
+    processor: {
+      wakeStreamProcessor(
+        request: StreamProcessorWakeRequest,
+      ): Promise<StreamProcessorWakeResponse>;
+    };
     sign(name: string, message: string): Promise<void>;
   } & Disposable;
   await expect(
@@ -94,6 +100,21 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
       .map(({ type }) => type)
       .filter((type) => type.startsWith("events.iterate.com/guestbook/")),
   ).toEqual(["events.iterate.com/guestbook/created", "events.iterate.com/guestbook/entry-signed"]);
+  // The wake expression uses workers.get(ref)'s default member replay. Its
+  // intermediate `processor` property must therefore survive Workers RPC as
+  // a real RpcTarget; reaching the registry's coordinate fence proves that
+  // exact lane without opening a live delivery sink in the test.
+  await expect(
+    directGuestbook.processor.wakeStreamProcessor({
+      stream: {
+        path: "/wrong-stream",
+        projectId,
+        streamId: crypto.randomUUID(),
+        streamMaxOffset: 2,
+      },
+      name: "guestbook",
+    }),
+  ).rejects.toThrow("wakeStreamProcessor coordinate mismatch");
   const externalName = `External ${marker}`;
   await guestbookStream.append({
     type: "events.iterate.com/guestbook/entry-signed",
@@ -109,6 +130,42 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
       timeoutMs: 30_000,
     },
   );
+
+  // An expression-placed wake subscription on the guestbook stream: the
+  // standard createProcessorHost idiom's `processor` node serves the read
+  // verbs too, so the subscriptions catalog and the uniform barrier reach a
+  // DYNAMIC WORKER's processor through the stored expression (facet rows
+  // resolve to the stream's own facet instead).
+  await guestbookStream.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    idempotencyKey: `guestbook-wake:${marker}`,
+    payload: {
+      name: "guestbook",
+      receiver: {
+        action: "wake-processor",
+        expression: ["workers", ["get", guestbookAppRef], "processor", "wakeStreamProcessor"],
+      },
+    },
+  });
+  const catalogName = `Catalog ${marker}`;
+  const [catalogProbe] = await guestbookStream.append({
+    type: "events.iterate.com/guestbook/entry-signed",
+    payload: { message: "Read back through the subscriptions catalog", name: catalogName },
+    idempotencyKey: `guestbook/catalog:${marker}`,
+  });
+  const wakeSubscription = guestbookStream.subscriptions.get("guestbook");
+  await wakeSubscription.waitUntilProcessed({ offset: catalogProbe!.offset, timeoutMs: 30_000 });
+  await wakeSubscription.processor.waitUntilProcessed({
+    offset: catalogProbe!.offset,
+    timeoutMs: 30_000,
+  });
+  const catalogSnapshot = await wakeSubscription.processor.snapshot();
+  expect(catalogSnapshot.offset).toBeGreaterThanOrEqual(catalogProbe!.offset);
+  expect(
+    (catalogSnapshot.state as { entries?: { name: string }[] }).entries?.some(
+      ({ name }) => name === catalogName,
+    ),
+  ).toBe(true);
 
   const fetchApp = (
     appHostPrefix: string,

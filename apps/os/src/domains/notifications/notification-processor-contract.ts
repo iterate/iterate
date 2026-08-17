@@ -7,7 +7,7 @@
 // import this contract.
 
 import { z } from "zod";
-import { defineProcessorContract } from "iterate/processors";
+import { defineProcessorContract, type ProcessorState } from "iterate/processors";
 import { ProjectProcessorContract } from "../projects/project-processor-contract.ts";
 import { NotificationIntentContract } from "./notification-intent-contract.ts";
 import { NotificationLifecycleContract } from "./notification-lifecycle-contract.ts";
@@ -33,8 +33,10 @@ export const NotificationProcessorContract = defineProcessorContract({
       .default(null)
       .meta({
         description:
-          "Existence marker: null until notification/created reduces. The processor's only " +
-          "state — every intent it emits derives from the triggering event alone.",
+          "Existence marker: null until notification/created reduces. Every intent the " +
+          "processor emits derives from the triggering event alone — the processor is " +
+          "stateless per event (the egress door already batches burst approvals into one " +
+          "event, ADR 0007).",
       }),
   }),
   events: {},
@@ -46,3 +48,5 @@ export const NotificationProcessorContract = defineProcessorContract({
 });
 
 export type NotificationProcessorContract = typeof NotificationProcessorContract;
+
+export type NotificationProcessorState = ProcessorState<NotificationProcessorContract>;

@@ -6,26 +6,7 @@ import { generateDefaultAvatar } from "@iterate-com/shared/default-avatar";
 import { config, env } from "./env.ts";
 import { getAuthPlugins } from "./auth-plugins.ts";
 import { authJwt } from "./auth-jwt.ts";
-
-const LOCAL_OAUTH_CLIENT_ORIGINS = [
-  "http://localhost:6274",
-  "http://127.0.0.1:6274",
-  "http://[::1]:6274",
-] as const;
-
-export function getAllowedBrowserOrigins(): string[] {
-  // config.authAppOrigin/publicUrl are `publicValue`-tagged strings; a tagged
-  // string is assignable to `string`, so collect them into a plain `string[]`
-  // (dropping an unset publicUrl) for comparing/`Set`ing against request origins.
-  const origins: string[] = [config.authAppOrigin, ...LOCAL_OAUTH_CLIENT_ORIGINS];
-  if (config.publicUrl) origins.push(config.publicUrl);
-  return origins;
-}
-
-function isAllowedBrowserOrigin(origin: string | null | undefined) {
-  if (!origin || !URL.canParse(origin)) return false;
-  return getAllowedBrowserOrigins().includes(new URL(origin).origin);
-}
+import { resolveAllowedBrowserOrigin } from "./browser-origin.ts";
 
 export type ProjectIngressTokenPayload = {
   type: "project-ingress";
@@ -55,14 +36,22 @@ export const auth = betterAuth({
   baseURL: config.authAppOrigin,
   plugins: getAuthPlugins({
     authAppOrigin: config.authAppOrigin,
-    jwtPlugin: authJwt(config.authSigningPrivateJwk.exposeSecret()),
+    jwtPlugin: authJwt(config.authSigningEs256PrivateJwk.exposeSecret()),
     emailOtpEnabled: config.emailOtpEnabled,
     fixedTestOtpEnabled: config.fixedTestOtpEnabled,
     emailBinding: env.EMAIL,
     emailSenderDomain: config.emailSenderDomain,
   }),
-  trustedOrigins: (request) =>
-    isAllowedBrowserOrigin(request?.headers.get("origin")) ? getAllowedBrowserOrigins() : [],
+  trustedOrigins: (request) => {
+    const origin = request?.headers.get("origin");
+    const allowedOrigin = resolveAllowedBrowserOrigin(origin, config);
+    if (!allowedOrigin) return [];
+    // The allowed requester plus this deployment's own origins — loopback
+    // and extension clients must be listed explicitly.
+    const trusted = [allowedOrigin, config.authAppOrigin];
+    if (config.publicUrl) trusted.push(config.publicUrl);
+    return trusted;
+  },
   secret: config.betterAuthSecret.exposeSecret(),
   session: {
     storeSessionInDatabase: true,

@@ -183,6 +183,8 @@ export default function RepoScreen() {
                   dom={{ scrollEnabled: false, style: { flex: 1 } }}
                   editable
                   onChange={async (content) => store.updateSelected(content)}
+                  // The workspace has no native fallback to swap away from.
+                  onReady={async () => {}}
                   path={repoState.selectedPath}
                   value={repoState.selectedBuffer?.current || ""}
                 />
@@ -569,7 +571,9 @@ function EditorHeader({
 function EmptyEditor({ label }: { label: string }) {
   return (
     <View style={styles.center}>
-      {label.endsWith("…") ? <ActivityIndicator color={colors.textMuted} /> : null}
+      {label.endsWith("…") ? (
+        <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
+      ) : null}
       <Text style={styles.muted}>{label}</Text>
     </View>
   );

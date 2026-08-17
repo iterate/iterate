@@ -47,6 +47,68 @@ Store releases use the `production` profile, store distribution signing, and a
 separate EAS Submit/App Store Connect step; a successful development build is
 not silently treated as a releasable binary.
 
+## Dev ↔ preview: two builds, one phone
+
+Both builds share the bundle ID, so installing one replaces the other —
+deliberate: the keychain survives, sign-in persists, and switching is just
+opening the other build's EAS install page and tapping Install. Bookmark both
+install pages ([EAS builds list](https://expo.dev/accounts/mishanustom/projects/iterate/builds)).
+
+- **Dev**: the development client + `pnpm --dir apps/mobile start`. Metro
+  hot-reload; JS comes from your laptop.
+- **Preview**: standalone, JS bundled in, laptop off. It tracks main by
+  itself: every merge, CI publishes the JS bundle to the EAS Update `preview`
+  channel (`.depot/workflows/mobile-eas-update.yml` →
+  `scripts/ci/publish-mobile-update.ts`) and the installed app pulls it on
+  next launch. The drawer's **Build info** screen shows what's running
+  (branch, commit, who built it, update channel/time) and has a
+  check-for-update-now button.
+
+The runtime version uses the fingerprint policy: a merge that changes native
+code (new native module, Expo upgrade) produces updates old binaries ignore.
+CI notices there's no preview build for the new fingerprint and triggers one
+automatically — install that from its EAS page once, then OTA resumes. The
+same merges are the ones that need a manual dev-client rebuild
+(`build:development:ios`), as above.
+
+`eas update` publishes stamp `src/build-info.json` via
+`scripts/write-build-info.mjs` (EAS native builds run it through the
+`eas-build-pre-install` hook). Besides provenance, the stamp carries the
+bundle's _expected backend_ (`expectedBackendEnv` — the PR's leased preview
+slot — plus a `pr<N>+test@nustom.com` test identity). The QR confirm screen
+is the ONE surface that acts on it: after a channel switch it compares the
+new bundle's expectation against the phone's server/sign-in and offers the
+fix as a default-checked checkbox on Continue
+(`src/lib/expected-backend.ts`); the sign-in screen and Build info only
+display it. Main and local bundles stamp it empty — no recommendation,
+phones default to prd. The checked-in file is an all-empty placeholder —
+don't commit a stamped one. Manual publish to the shared
+main channel (rare — see per-PR channels below):
+`pnpm --dir apps/mobile update:preview`.
+
+### Per-PR channels
+
+The `preview` channel is main-only; publishing PR work to it would be
+last-write-wins chaos. PRs touching `apps/mobile/**` get their own channel
+named after the branch: CI (`.depot/workflows/mobile-pr-preview.yml` →
+`scripts/ci/publish-mobile-pr-preview.ts`) publishes on every push and
+maintains a PR-body section with two tappable QR codes — an
+`iterate://preview-channel/<channel>` deep link that switches the installed
+app to the PR's channel (confirm screen, then fetch + reload), and the
+matching build's install page for when the runtime differs or the app isn't
+installed. Whichever the fingerprint heuristic says you need is expanded.
+The switch persists across restarts; get back with **Build info → Reset to
+default channel**. Installing a native build overpowers that persistence:
+the first boot of a new binary force-clears any pre-existing channel
+override (with a notice), so the build you installed is the build you run
+(`src/lib/native-install-guard.ts`).
+
+Lifecycle: closing a PR deletes its channel, update branch, and QR assets
+(`.depot/workflows/mobile-pr-preview-cleanup.yml`). Channel discovery is the
+PR bodies' QR sections — deliberately no in-app channel list, because listing
+channels needs the EAS API and we don't ship `EXPO_TOKEN` to the deployment
+(a CI-pushed snapshot could enable it tokenlessly later).
+
 ## Run and test it in a browser
 
 Expo Web renders the same Expo Router screens through React Native Web, so UI
@@ -75,10 +137,10 @@ deterministic and credential-free at the signed-out entry point.
 
 ## Pointing it at a deployment
 
-The sign-in screen has an editable server field with one-tap presets:
-**Production** (`os.iterate.com`, default) and every preview slot
-(`os.iterate-preview-N.com`). Anything else — a captun tunnel, a teammate's
-box — gets typed in and remembered as a recent.
+The sign-in screen has an editable server field with at most two one-tap
+presets: **Production** (`os.iterate.com`, default) and the running bundle's
+expected backend when it names a preview slot. Anything else — another
+preview slot, a captun tunnel, a teammate's box — gets typed in.
 
 - **Local dev from the phone**: the phone can't see `localhost`, so publish
   your dev server through captun — `CAPTUN_TUNNEL_NAME=<name> pnpm dev` —
@@ -99,7 +161,7 @@ mints `/agents/mobile/<timestamp>` and the first `message()` call creates it
 (same lazy-seeding contract as the dashboard). The chat list is the unfiltered
 `/agents` catalogue, so web/Slack-started chats open and continue here too.
 The thread screen renders only visible messages plus a "working…" row derived
-from in-flight activity (`src/lib/chat.ts`); `useItxSubscription` pushes live
+from in-flight activity (`src/lib/chat.ts`); `useStreamConnection` pushes live
 events into the same TanStack Query cache as the initial read
 (`src/lib/use-live-events.ts`). Assistant messages are rendered as selectable
 Markdown; user messages remain literal text.
@@ -148,13 +210,13 @@ testable from the phone alone. The runner shipped in PR #2059.
 
 ## Verification
 
-| Lane                                                          | What it proves                                                                                                                                                                                                    |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm --dir apps/mobile test`                                 | Pure logic: chat reducer, merge, path conventions (runs in root CI)                                                                                                                                               |
-| `pnpm spec --project=mobile`                                  | Real Expo Router + React Native Web behavior at a phone-sized viewport and one visible interaction; no Xcode/native build                                                                                         |
-| `doppler run --config dev -- pnpm --dir apps/mobile test:e2e` | Live round-trip through `iterate/node`: bearer auth → new mobile chat → real agent reply → live subscription. Point it at a preview by switching the Doppler config. Needs `pnpm dev` running for the dev config. |
-| `npx expo export` / `npx expo prebuild`                       | The bundle builds; app config is sane                                                                                                                                                                             |
-| Iterate development build on a phone                          | Native integration: the in-app browser OAuth hop, Keychain/Face ID, APNs enrollment, and device-specific behavior                                                                                                 |
+| Lane                                                          | What it proves                                                                                                                                                                                                  |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm --dir apps/mobile test`                                 | Pure logic: chat reducer, merge, path conventions (runs in root CI)                                                                                                                                             |
+| `pnpm spec --project=mobile`                                  | Real Expo Router + React Native Web behavior at a phone-sized viewport and one visible interaction; no Xcode/native build                                                                                       |
+| `doppler run --config dev -- pnpm --dir apps/mobile test:e2e` | Live round-trip through `iterate/node`: bearer auth → new mobile chat → real agent reply → live connection. Point it at a preview by switching the Doppler config. Needs `pnpm dev` running for the dev config. |
+| `npx expo export` / `npx expo prebuild`                       | The bundle builds; app config is sane                                                                                                                                                                           |
+| Iterate development build on a phone                          | Native integration: the in-app browser OAuth hop, Keychain/Face ID, APNs enrollment, and device-specific behavior                                                                                               |
 
 ## Layout
 

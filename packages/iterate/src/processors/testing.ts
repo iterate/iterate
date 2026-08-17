@@ -36,7 +36,7 @@ function emptyStreamRuntimeState() {
     coreProcessorState: null,
     runtime: {
       connections: {},
-      subscriptions: {},
+      sending: {},
       metrics: {
         measuredSince: new Date(0).toISOString(),
         reportedAt: new Date(0).toISOString(),
@@ -54,6 +54,7 @@ function emptyStreamRuntimeState() {
 // assertions and for suites that treat the double as a fuller stream.
 export class MemoryStream implements ProcessorStream {
   events: StreamEvent[] = [];
+  streamId = crypto.randomUUID();
   /** Injectable clock for createdAt stamps; harnesses point it at virtual time. */
   now: () => number = Date.now;
   /** Simulate a transient Stream DO outage: appends of this type throw. */
@@ -132,6 +133,13 @@ export class MemoryStream implements ProcessorStream {
     return results;
   }
 
+  appendIfStreamId(args: { streamId: string; events: StreamEventInput[] }): Promise<StreamEvent[]> {
+    if (args.streamId !== this.streamId) {
+      throw new Error(`stream ID changed (${args.streamId} -> ${this.streamId}); append rejected`);
+    }
+    return this.append(...args.events);
+  }
+
   at(path?: string): MemoryStream {
     return path === undefined || this.network === undefined ? this : this.network.get(path);
   }
@@ -156,6 +164,14 @@ export class MemoryStream implements ProcessorStream {
           input.eventTypes.includes(event.type),
       )
       .slice(0, limit);
+  }
+
+  async getEventPage(input: StreamEventReadInput = {}) {
+    return {
+      streamId: this.streamId,
+      streamMaxOffset: this.events.at(-1)?.offset ?? 0,
+      events: await this.getEvents(input),
+    };
   }
 
   readEvents(input: StreamEventReadInput = {}) {
@@ -196,29 +212,13 @@ export class MemoryStream implements ProcessorStream {
   async runtimeState() {
     return emptyStreamRuntimeState();
   }
-
-  async subscribe(): Promise<never> {
-    throw new Error("MemoryStream does not implement subscribe().");
-  }
-
-  async acceptCrossPost(): Promise<never> {
-    throw new Error("MemoryStream does not implement acceptCrossPost().");
-  }
-
-  async crossPostTo(): Promise<never> {
-    throw new Error("MemoryStream does not implement crossPostTo().");
-  }
-
-  async removeCrossPost(): Promise<never> {
-    throw new Error("MemoryStream does not implement removeCrossPost().");
-  }
 }
 
 /**
  * In-memory network of streams keyed by path, so router tests can observe
  * the cross-stream forwards (`stream.at(path).append(...)`) next to
  * same-stream appends. `now` feeds every member stream's createdAt stamp, so
- * freshness-gated lanes (webhook ack horizons) can be tested on both sides
+ * freshness checks (such as webhook acknowledgement horizons) can be tested on both sides
  * of the horizon. `eventsAt` never creates a stream — `network.streams.size`
  * assertions ("nothing was forwarded anywhere") stay honest.
  */
@@ -300,6 +300,7 @@ function makeDurabilitySubstrate(): HarnessDurabilitySubstrate {
       get: <T = unknown>(key: string): T | undefined =>
         kv.has(key) ? (structuredClone(kv.get(key)) as T) : undefined,
       put: (key: string, value: unknown) => void kv.set(key, structuredClone(value)),
+      delete: (key: string) => kv.delete(key),
     },
     getAlarm: async () => alarm.at,
     setAlarm: async (at: number) => {
@@ -309,7 +310,7 @@ function makeDurabilitySubstrate(): HarnessDurabilitySubstrate {
       alarm.at = null;
     },
     // Double assertion because this implements only the members the keepalive
-    // and progress adapters touch (kv get/put, get/set/deleteAlarm) — the
+    // and progress adapters touch (kv get/put/delete, get/set/deleteAlarm) — the
     // platform type's dozens of other members (sql, transactions, bookmarks)
     // are structurally missing on purpose. Safe for every consumer HERE
     // because the adapters' member usage is pinned by these suites; a new
@@ -368,12 +369,19 @@ export type ProcessorHarness<
  * so progress survives `crash()` into the successor incarnation. Exported so
  * suites can hand a harness a FRESH store over an existing stream — a full
  * replay from offset zero, which is both the re-reduce-from-scratch recipe and the harshest
- * at-least-once redelivery test (every per-event append re-runs). */
-export function makeMemoryProgressStore(): ProcessorProgressStore<unknown> {
+ * at-least-once redelivery test (every per-event append re-runs).
+ *
+ * The contract is required because progress and recovery share the same
+ * per-processor Durable Object keys. A generic placeholder slug would let the
+ * runner commit progress under one key while recovery looks under another.
+ */
+export function makeMemoryProgressStore(
+  contract: Pick<StreamProcessorContract, "slug">,
+): ProcessorProgressStore<unknown> {
   const durability = makeDurabilitySubstrate();
   const progress = durableObjectProgressStore<unknown>({
     storage: durability.storage,
-    slug: "test-harness",
+    name: contract.slug,
   });
   progressSubstrates.set(progress, durability);
   return progress;
@@ -449,11 +457,11 @@ export function makeProcessorHarness<
     });
     progress ??= durableObjectProgressStore<ProcessorState<Contract>>({
       storage: durability.storage,
-      slug: processor.contract.slug,
+      name: processor.contract.slug,
     });
     recovery = durableObjectRecovery({
       storage: durability.storage,
-      slug: processor.contract.slug,
+      name: processor.contract.slug,
       stream,
       version: "test-harness",
       armAlarm: (atMs) => {
@@ -504,6 +512,8 @@ export function makeProcessorHarness<
   };
 
   const settle = async () => {
+    // Fixpoint with a bounded round count: each round drains real microtasks
+    // and macrotasks so background work can append, then catches the runner up.
     let quietRounds = 0;
     let lastAppendedTypes: string[] = [];
     for (let round = 0; round < 50; round++) {

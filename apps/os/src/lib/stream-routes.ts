@@ -6,6 +6,19 @@ import { StreamPath } from "~/lib/stream-links.ts";
 // apps (streams-example-app aliases ~ to apps/os/src), where these routes
 // don't exist.
 
+/** Canonical admin-explorer destination for a project stream path. */
+export function linkOptionsForAdminStreamPath(projectId: string, path: string) {
+  const params = { projectId };
+  if (path === "/") {
+    return linkOptions({ to: "/admin/streams/$projectId", params, search: {} });
+  }
+  return linkOptions({
+    to: "/admin/streams/$projectId/$",
+    params: { ...params, _splat: path },
+    search: {},
+  });
+}
+
 /**
  * The canonical page for a stream path. Every domain object IS a stream, and
  * each domain page is that stream's view (stream main, reduced-state panel at
@@ -15,9 +28,20 @@ import { StreamPath } from "~/lib/stream-links.ts";
  * default tab and filters rather than inheriting the previous view's.
  */
 export function linkOptionsForStreamPath(projectSlug: string, path: string) {
-  const streamPath = StreamPath.parse(path);
-  const segments = streamPath.split("/").filter(Boolean);
   const params = { projectSlug };
+  const parsed = StreamPath.safeParse(path);
+  if (!parsed.success) {
+    // Keep malformed input in one wildcard segment. Otherwise the router
+    // normalizes path-shaped params (notably trailing slashes) before the
+    // route parser can reject them, silently opening a different valid stream.
+    return linkOptions({
+      to: "/projects/$projectSlug/streams/$",
+      params: { ...params, _splat: `/${encodeURIComponent(path)}` },
+      search: {},
+    });
+  }
+  const streamPath = parsed.data;
+  const segments = streamPath.split("/").filter(Boolean);
 
   if (streamPath === "/") {
     // Root stream + project settings panel (dashboard is not a stream view).

@@ -2,7 +2,7 @@
 //
 // This drives the shared iterate client over a real capnweb WebSocket with a
 // bearer token, the /agents/mobile/<ts> new-chat convention, a live stream
-// subscription like the thread screen's, and the chat reducer — against
+// connection like the thread screen's, and the chat reducer — against
 // whatever deployment the ambient environment points at.
 //
 //   doppler run --config dev -- pnpm --dir apps/mobile test:e2e   # local dev (pnpm dev must be running)
@@ -47,7 +47,7 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
 
   // The phone lane: bearer token over the app's own dial.
   const token = await mintForgedAccessToken({
-    forgePrivateJwk: requireEnv("AUTH_FORGE_PRIVATE_JWK"),
+    forgePrivateJwk: requireEnv("AUTH_FORGE_ES256_PRIVATE_JWK"),
     issuer: requireEnv("APP_CONFIG_ITERATE_AUTH__ISSUER"),
     audience: process.env.APP_CONFIG_ITERATE_AUTH__RESOURCE?.trim() || portlessOrigin(baseUrl),
     email: "mobile-e2e@nustom.com",
@@ -55,18 +55,18 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
   });
   using project = connectItx({ baseUrl, auth: { type: "bearer", token }, projectId });
 
-  // Live subscription first — the thread screen's lane — so we observe the
+  // Open the thread screen's live connection first so we observe the
   // whole conversation as server pushes, not just the final read.
   const agentPath = newMobileAgentPath(new Date());
   const stream = project.streams.get(agentPath);
   let pushed: StreamEvent[] = [];
-  const subscription = await stream.subscribe({
+  using connection = await stream.openConnection({
     replayAfterOffset: 0,
     processEventBatch: (batch: StreamEventBatch) => {
       pushed = mergeEventsByOffset(pushed, batch.events);
     },
   });
-  expect(await subscription.ping()).toBe(true);
+  expect(await connection.ping()).toBe(true);
 
   // Stream processor births are explicit: create() before the first
   // message, same as the dashboard's new-chat page and the app's own send
@@ -134,7 +134,7 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
     files: [{ filename: "e2e.png", contentType: "image/png" }],
   });
 
-  subscription.unsubscribe();
+  connection.close();
 });
 
 /** 1x1 transparent PNG. */

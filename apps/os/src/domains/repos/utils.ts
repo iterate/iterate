@@ -42,17 +42,24 @@ export function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
 }
 
 /**
- * The repo stream exists but its git data does not (yet): the Artifacts repo
- * was never created, or was created and awaits its seed commit. Every project
- * bootstrap has this window — the config repo's stream and its dependents
- * (the project worker feed) come alive before the seed lands — so callers
- * must be able to tell "not seeded YET, retry" from a real failure. Matched
- * by NAME because the error crosses Workers RPC (which preserves `error.name`
- * but not class identity).
+ * The repo stream exists but its authoritative git head cannot be read yet:
+ * the Artifacts repo may still be creating/importing, may await its seed
+ * commit, or an observed push may not have converged across Artifacts
+ * replicas. Every project bootstrap has the first window, and direct Git
+ * pushes can briefly have the last. Callers must be able to distinguish
+ * "source not readable YET, retry" from a deterministic source failure.
+ * Matched by NAME because the error crosses Workers RPC (which preserves
+ * `error.name` but not class identity).
  */
 export class RepoNotSeededError extends Error {
   static readonly NAME = "RepoNotSeededError";
   override readonly name = RepoNotSeededError.NAME;
+}
+
+/** A temporary source failure that must leave the repo-creation obligation
+ * open for the processor's existing recovery lane. */
+export class RetryableRepoCreationError extends Error {
+  override readonly name = "RetryableRepoCreationError";
 }
 
 const ARTIFACTS_REPO_NOT_READY_CODES = new Set([

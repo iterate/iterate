@@ -18,6 +18,8 @@ setup:
     path: apps/mobile/
   - project: semaphore
     path: apps/semaphore/
+  - project: kit
+    path: apps/kit/
   - project: streams-example-app
     path: apps/streams-example-app/
   - project: auth
@@ -28,3 +30,5 @@ setup:
     path: apps/tunnels/
   - project: dummy-petshop
     path: apps/dummy-petshop/
+  - project: docs
+    path: apps/docs/

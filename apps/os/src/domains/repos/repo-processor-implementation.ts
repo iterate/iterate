@@ -11,7 +11,11 @@ import {
   repoArtifactPushFromEventPayload,
   repoGithubPushFromWebhookPayload,
 } from "./repo-push-events.ts";
-import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from "./utils.ts";
+import {
+  isRepoNotSeededError,
+  isRetryableArtifactsInfrastructureError,
+  RetryableRepoCreationError,
+} from "./utils.ts";
 
 /**
  * The repo processor: one stream per repo, projecting its lifecycle and Git
@@ -20,37 +24,40 @@ import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from ".
  * HOW IT WORKS, end to end:
  *
  * A repo begins as a CREATION SAGA. `repos/create-requested` is the durable
- * intent (empty starter seed, a private GitHub pull at depth one, or a public
- * GitHub import performed by Cloudflare Artifacts outside the Worker);
+ * intent (empty starter seed, a copied public GitHub template folder, a
+ * private GitHub pull at depth one, or a public GitHub import performed by
+ * Cloudflare Artifacts outside the Worker);
  * `repos/created` or `repos/create-failed` is its terminal fact. Empty seeding
  * is short must-complete work, so the at-head pass holds the stream checkpoint
  * with `blockProcessorWhile`; an interrupted attempt is redelivered by the
  * stream spine immediately instead of depending on another event to wake a
- * quiet config repo. GitHub imports remain state-derived background
- * obligations because they can be long-running. The terminal certificate's
- * idempotency keys are offset-free (`created` / `create-failed`), so a
+ * quiet config repo. GitHub-backed creation remains a state-derived
+ * background obligation because it can perform network work. The terminal
+ * certificate's idempotency keys are offset-free (`created` /
+ * `create-failed`), so a
  * redelivery or revival cannot rotate them and double-birth. A vendor/domain
  * error settles the saga as `repos/create-failed` — FAIL-CLOSED: a failed
  * repo's stream never reacts to anything again. A still-materializing
  * Artifact (RepoNotSeededError), an Artifacts service-availability failure,
  * or a Durable Object lifecycle interruption is not a domain failure: no
  * terminal fact is journaled and the durable obligation remains open for
- * redelivery/revival.
+ * redelivery/revival. Temporary public-GitHub failures are classified the same
+ * way and leave the durable creation obligation open.
  *
- * Commit facts come from ONE source: the Cloudflare Artifacts event queue.
- * Each `repo/cloudflare-artifact-event-received` push on the default branch
- * is projected into the in-memory branch-head cache (including ref
- * DELETIONS, which produce no commit facts but must still evict a warm head)
- * and, when it carries a commit, normalized into `repo/commit-completed`,
- * idempotency-keyed on the (before, after, branch) coordinates — per-event
- * `blockProcessorWhile` work: each fact derives from an event that is
- * delivered once, so a dropped append would lose it forever, and the stable
- * keys collapse redeliveries. The default branch is known from the moment
- * create-requested reduces (every creation mode targets main), so a push
- * racing the terminal certificate still lands its facts.
+ * Every default-branch advance becomes one `repo/commit-completed` fact.
+ * OS-owned writes append it directly from the Repo Durable Object's durable
+ * outbox. External Git pushes arrive as
+ * `repo/cloudflare-artifact-event-received`: each push is projected into
+ * branch-head authority (including ref DELETIONS, which produce no commit
+ * facts but must still evict a warm head) and, when it carries a commit,
+ * normalized into that same fact. Both paths use the (before, after, branch)
+ * idempotency key, so a later queue observation of an OS write deduplicates.
+ * The default branch is known from the moment create-requested reduces (every
+ * creation mode targets main), so a push racing the terminal certificate
+ * still lands its facts.
  *
  * GitHub is an ingress lane, not a second source of commit facts. A
- * cross-posted `github/webhook-received` push delivery — provenance-checked
+ * received `github/webhook-received` push delivery — source-checked
  * against the linked connection stream, installation, repository id, and
  * default branch — is normalized per-event into
  * `repo/github-import-requested`, which opens the one import obligation in
@@ -68,28 +75,21 @@ import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from ".
  *
  * RECOVERY is the same code path as normal operation: an incarnation that
  * dies owing work gets the keepalive's `stream/processor-revived` fact
- * appended; its wake produces the eventless at-head pass — an open creation
- * request with no live attempt is re-driven, and an import with no live driver
- * (fresh incarnations have empty runtime sets) is re-driven under the same
- * request identity, so a zombie attempt racing the
- * successor collapses on the shared idempotency keys.
+ * appended; its wake produces the eventless at-head pass. Open creation and
+ * import obligations with no live driver (fresh incarnations have empty
+ * runtime sets) are re-driven under the same request identity. Zombie
+ * attempts collapse on the shared idempotency keys.
  */
 export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoProcessorDeps> {
   readonly contract = RepoProcessorContract;
 
-  /**
-   * RUNTIME state: whether THIS incarnation already launched a creation
-   * attempt. In-memory, dies with the isolate, never persisted — the stream
-   * (the request and its terminal fact), not this flag, is what survives an
-   * eviction. A fresh incarnation finds the open request in state, sees no
-   * attempt here, and drives it again.
-   */
+  /** One background creation attempt per incarnation. The open request on the
+   * stream, not this flag, survives eviction. */
   #longCreationAttemptedThisIncarnation = false;
 
   /**
    * RUNTIME state: request ids of GitHub imports THIS incarnation is driving.
-   * Same lifecycle as the creation flag — the requested/started facts on the
-   * stream are the durable truth.
+   * The requested/started facts on the stream are the durable truth.
    */
   readonly #liveGithubImports = new Set<string>();
 
@@ -102,8 +102,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   //   dropped append loses the fact forever.
   // - STATE-DERIVED consequences run after the switch, at head only, in
   //   `runInBackground`: any later at-head pass re-derives an undriven
-  //   obligation from state, and slow vendor work (a full public import, a
-  //   Git transfer) must not hold the stream cursor.
+  //   obligation from state, and slow vendor work must not hold the cursor.
   protected override processEvent(args: ProcessEventArgs<RepoProcessorContract>): undefined {
     const { event, state, delivery, append, blockProcessorWhile, runInBackground } = args;
 
@@ -146,14 +145,14 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       }
       case "events.iterate.com/github/webhook-received": {
         const push = repoGithubPushFromWebhookPayload(event.payload);
-        const origin = event.source?.crossPostedFrom?.at(-1);
+        const origin = event.source?.copiedFrom?.at(-1);
         if (
           push === null ||
           state.github === null ||
           state.defaultBranch === null ||
           origin?.path !== `/integrations/github/${state.github.connection}` ||
           origin.projectId !== this.projectId ||
-          origin.subscriptionKey !== `github-repo:${this.path}` ||
+          origin.name !== `github-repo:${this.path}` ||
           origin.type !== event.type ||
           push.installationId !== state.github.installationId ||
           push.repositoryId !== state.github.repositoryId ||
@@ -192,9 +191,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     // The creation saga. Empty seeding is short and must complete before this
     // frame is acknowledged: if an Artifacts DO is reset during a deployment,
     // the stream spine redelivers the uncommitted frame and retries promptly.
-    // GitHub-backed creation can be a long import, so it remains a background
-    // obligation re-derived from state after eviction. Offset-free terminal
-    // keys make both paths converge on one certificate.
+    // GitHub-backed creation can perform network work, so it remains a
+    // background obligation re-derived from state after eviction.
     const createRequest = state.createRequest;
     if (
       createRequest !== null &&
@@ -258,7 +256,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       if (
         isRepoNotSeededError(error) ||
         isRetryableArtifactsInfrastructureError(error) ||
-        isRetryableDurableObjectAvailabilityError(error)
+        isRetryableDurableObjectAvailabilityError(error) ||
+        error instanceof RetryableRepoCreationError
       ) {
         throw error;
       }
@@ -276,12 +275,27 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   async #createRepo(request: RepoCreateRequest) {
     if (request.type === "empty") return await this.deps.createEmptyArtifact();
 
+    if (request.type === "github-public-template") {
+      return await this.deps.createPublicGithubTemplateArtifact(request);
+    }
+
     const artifact =
       request.type === "github-public"
         ? await this.deps.importPublicGithubArtifact(request)
         : await this.deps.createEmptyArtifact();
-    await this.deps.linkGithub(request);
-    if (request.type === "github-private") await this.deps.syncPrivateGithub();
+    // A public import without a connection is a plain clone: Artifacts pulls
+    // the public URL unauthenticated, and nothing links — linkGithub remains
+    // the explicit later verb for webhook ingestion and sync.
+    if (request.type === "github-private") {
+      await this.deps.linkGithub(request);
+      await this.deps.syncPrivateGithub();
+    } else if (request.connection !== undefined) {
+      await this.deps.linkGithub({
+        connection: request.connection,
+        owner: request.owner,
+        repo: request.repo,
+      });
+    }
     return artifact;
   }
 
@@ -441,6 +455,15 @@ type RepoProcessorDeps = {
     defaultBranch: string;
     remote: string;
   }>;
+  /** Download the selected public GitHub folder as text files and seed them
+   * into the backing Artifact. Idempotent: an existing branch is untouched. */
+  createPublicGithubTemplateArtifact(
+    input: Extract<RepoCreateRequest, { type: "github-public-template" }>,
+  ): Promise<{
+    artifactName: string;
+    defaultBranch: string;
+    remote: string;
+  }>;
   /** Have Cloudflare Artifacts clone a public GitHub repository directly —
    * the history never transfers through the Worker. Throws RepoNotSeededError
    * while the import is still materializing. */
@@ -450,7 +473,7 @@ type RepoProcessorDeps = {
     remote: string;
   }>;
   /** Link the repo to the GitHub repository (configure the link, arm webhook
-   * cross-posting) without pushing starter history first. */
+   * webhook delivery) without pushing starter history first. */
   linkGithub(input: { connection: string; owner: string; repo: string }): Promise<void>;
   /** Pull the linked private repository's default branch through the Worker
    * at depth one, overwriting the empty Artifact seed. */

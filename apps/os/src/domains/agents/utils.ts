@@ -1,4 +1,3 @@
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentPath, type AgentPath as AgentPathValue } from "./agent-presence.ts";
 
 /**
@@ -40,10 +39,4 @@ export function resolveAgentPath(
     resolved.push(segment);
   }
   return parseAgentPath(`/${resolved.join("/")}`);
-}
-
-export function parseAgentDurableObjectName(name: string) {
-  const parsed = DurableObjectNameCodec.parse(name);
-  parseAgentPath(parsed.path);
-  return parsed;
 }

@@ -13,7 +13,11 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { AuthRedirectError } from "../components/auth-redirect-error.tsx";
 import { parseConfig } from "../config.ts";
 import { getLoginRedirectSearch } from "../utils/auth-redirect-error.ts";
+// Pure, unit-tested hint semantics (utils/login-hint.test.ts): Continue-as
+// shortcut, OTP guess for test addresses, mode hints.
+import { deriveLoginHintPresentation } from "../utils/login-hint.ts";
 import { authClient } from "../utils/auth-client.ts";
+import { redirectAndStayPending } from "../utils/redirect-and-stay-pending.ts";
 import { AccountChooser } from "./-login-account-chooser.tsx";
 
 // Runs on the server for both SSR and client navigations; the session comes
@@ -22,8 +26,13 @@ import { AccountChooser } from "./-login-account-chooser.tsx";
 // dehydrated loader payload in the HTML).
 const getLoginState = createServerFn({ method: "GET" }).handler(({ context }) => {
   const user = context.variables.session?.user;
+  const config = parseConfig(context.cloudflare.env);
   return {
-    emailOtpEnabled: parseConfig(context.cloudflare.env).emailOtpEnabled,
+    emailOtpEnabled: config.emailOtpEnabled,
+    // Not a secret (anyone can discover it empirically): lets the page
+    // auto-drive the fixed test OTP for a `*+test@nustom.com` login_hint
+    // instead of making automation type 424242 by hand.
+    fixedTestOtpEnabled: config.fixedTestOtpEnabled,
     user: user
       ? { id: user.id, name: user.name ?? null, email: user.email, image: user.image ?? null }
       : null,
@@ -40,8 +49,16 @@ export const Route = createFileRoute("/login")({
   validateSearch: z.looseObject({
     redirect: z.string().optional(),
     // `login_hint=email` doubles as the deep-linkable "email code" mode of
-    // this page; `login_hint=google` auto-starts the Google flow once.
-    login_hint: z.enum(["email", "google"]).optional().catch(undefined),
+    // this page; `login_hint=google` auto-starts the Google flow once. An
+    // email ADDRESS (the standard OIDC meaning, forwarded by the
+    // oauth-provider's signed login redirect) offers a "Continue as <email>"
+    // shortcut and prefills the email form — for `*+test@nustom.com` on
+    // deployments with the fixed test OTP, the code field prefills too
+    // (mobile preview deep links). Never signs in by itself.
+    login_hint: z
+      .union([z.enum(["email", "google"]), z.string().email()])
+      .optional()
+      .catch(undefined),
     account_chooser_method: z.literal("email").optional().catch(undefined),
     sig: z.string().optional(),
     error: z.string().optional(),
@@ -93,14 +110,20 @@ export const Route = createFileRoute("/login")({
 function RouteComponent() {
   const search = Route.useSearch();
   const redirectTo = safeRedirectPath(search.redirect);
-  const { emailOtpEnabled, user } = Route.useLoaderData();
+  const { emailOtpEnabled, fixedTestOtpEnabled, user } = Route.useLoaderData();
   const signedInUser = user && isOAuthProviderFlowSearch(search) ? user : null;
-  const loginHint =
-    !signedInUser && search.login_hint === "email" && emailOtpEnabled
-      ? search.login_hint
-      : !signedInUser && search.login_hint === "google"
-        ? search.login_hint
-        : undefined;
+  // Hint semantics (Continue-as shortcut, OTP guess, mode hints) live in the
+  // pure, unit-tested helper — the route only renders what it derives.
+  const {
+    hintedEmail,
+    otpGuess,
+    mode: loginHint,
+  } = deriveLoginHintPresentation({
+    loginHint: search.login_hint,
+    emailOtpEnabled,
+    fixedTestOtpEnabled,
+    signedIn: signedInUser !== null,
+  });
 
   return (
     <div className="flex min-h-screen items-center justify-center p-6">
@@ -135,6 +158,8 @@ function RouteComponent() {
               redirectTo={redirectTo}
               emailOtpEnabled={emailOtpEnabled}
               loginHint={search.account_chooser_method}
+              hintedEmail={undefined}
+              otpGuess={undefined}
               emailModeSearchKey="account_chooser_method"
               methodDivider="before"
             />
@@ -144,6 +169,8 @@ function RouteComponent() {
             redirectTo={redirectTo}
             emailOtpEnabled={emailOtpEnabled}
             loginHint={loginHint}
+            hintedEmail={hintedEmail}
+            otpGuess={otpGuess}
             emailModeSearchKey="login_hint"
             methodDivider="between"
           />
@@ -157,12 +184,20 @@ function LoginActions({
   redirectTo,
   emailOtpEnabled,
   loginHint,
+  hintedEmail,
+  otpGuess,
   emailModeSearchKey,
   methodDivider,
 }: {
   redirectTo: string;
   emailOtpEnabled: boolean;
   loginHint?: "email" | "google";
+  /** Email address from a `login_hint`: offered as a "Continue as" shortcut
+   * and prefilled into the email form. */
+  hintedEmail: string | undefined;
+  /** Known-in-advance OTP for the hinted email (fixed test OTP deployments
+   * only): prefills the code field after "Continue as" sends it. */
+  otpGuess: string | undefined;
   emailModeSearchKey: "login_hint" | "account_chooser_method";
   methodDivider: "before" | "between";
 }) {
@@ -189,13 +224,18 @@ function LoginActions({
     },
   });
 
+  // Captured on first render: expanding rewrites `login_hint` to "email", so
+  // an address hint would otherwise be unrecoverable when the user presses
+  // Back. Restoring it on collapse keeps the "Continue as <email>" shortcut
+  // alive across an expand/Back round trip.
+  const initialHintedEmail = useRef(hintedEmail).current;
+
   const setEmailMode = (expanded: boolean) => {
-    const emailMode = expanded ? ("email" as const) : undefined;
     return navigate({
       search: (previous) =>
         emailModeSearchKey === "account_chooser_method"
-          ? { ...previous, account_chooser_method: emailMode }
-          : { ...previous, login_hint: emailMode },
+          ? { ...previous, account_chooser_method: expanded ? "email" : undefined }
+          : { ...previous, login_hint: expanded ? "email" : initialHintedEmail },
       replace: true,
     });
   };
@@ -243,6 +283,8 @@ function LoginActions({
           isExpanded={emailMode}
           isHydrated={isHydrated}
           onExpandedChange={setEmailMode}
+          hintedEmail={hintedEmail}
+          otpGuess={otpGuess}
         />
       ) : null}
 
@@ -281,25 +323,33 @@ function EmailOtpSignIn({
   isExpanded,
   isHydrated,
   onExpandedChange,
+  hintedEmail,
+  otpGuess,
 }: {
   redirectTo: string;
   isExpanded: boolean;
   isHydrated: boolean;
   onExpandedChange: (expanded: boolean) => void;
+  hintedEmail: string | undefined;
+  otpGuess: string | undefined;
 }) {
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(hintedEmail || "");
   const [submittedEmail, setSubmittedEmail] = useState("");
   const [otp, setOtp] = useState("");
 
   const sendOtp = useMutation({
-    mutationFn: (address: string) =>
+    // `prefillOtp` is the known-in-advance code for the hinted test address
+    // ("Continue as" lane): the code field prefills once the send succeeds,
+    // and the user presses the verify button — the normal OTP screen, one
+    // typing step saved. Manual sends prefill nothing.
+    mutationFn: async ({ address }: { address: string; prefillOtp?: string }) =>
       authClient.emailOtp.sendVerificationOtp({
         email: address,
         type: "sign-in",
       }),
-    onSuccess: (_, address) => {
+    onSuccess: (_, { address, prefillOtp }) => {
       setSubmittedEmail(address);
-      setOtp("");
+      setOtp(prefillOtp || "");
       toast.success(`Verification code sent to ${address}`);
     },
     onError: (error: Error) => {
@@ -316,9 +366,9 @@ function EmailOtpSignIn({
 
       return getPostLoginRedirectUrl(redirectTo);
     },
-    onSuccess: (nextUrl) => {
-      window.location.assign(nextUrl);
-    },
+    // Returning the never-resolving redirect keeps "Signing in..." showing
+    // until the browser actually leaves (see redirectAndStayPending).
+    onSuccess: (nextUrl) => redirectAndStayPending(nextUrl),
     onError: (error: Error) => {
       toast.error(error.message || "Failed to sign in with email");
     },
@@ -342,15 +392,32 @@ function EmailOtpSignIn({
           Loading...
         </Button>
       ) : !showExpandedForm ? (
-        <Button
-          className="w-full border-border bg-background text-foreground shadow-sm transition-colors hover:bg-muted"
-          variant="outline"
-          size="lg"
-          data-testid="email-login-button"
-          onClick={() => onExpandedChange(true)}
-        >
-          Continue with email
-        </Button>
+        <>
+          {hintedEmail ? (
+            // The deep link's suggested identity, one press: sends the code
+            // and opens the normal OTP screen (prefilled when the code is
+            // knowable — fixed-test-OTP deployments). Sits above the generic
+            // methods; those stay for signing in as anyone else.
+            <Button
+              className="w-full bg-foreground text-background hover:bg-foreground/90"
+              size="lg"
+              data-testid="continue-as-hinted-email-button"
+              disabled={sendOtp.isPending}
+              onClick={() => sendOtp.mutate({ address: hintedEmail, prefillOtp: otpGuess })}
+            >
+              {sendOtp.isPending ? "Sending code..." : `Continue as ${hintedEmail}`}
+            </Button>
+          ) : null}
+          <Button
+            className="w-full border-border bg-background text-foreground shadow-sm transition-colors hover:bg-muted"
+            variant="outline"
+            size="lg"
+            data-testid="email-login-button"
+            onClick={() => onExpandedChange(true)}
+          >
+            Continue with email
+          </Button>
+        </>
       ) : (
         <div className="space-y-4">
           <p className="text-xs text-muted-foreground">
@@ -416,7 +483,7 @@ function EmailOtpSignIn({
               className="w-full bg-foreground text-background hover:bg-foreground/90"
               data-testid="email-submit-button"
               disabled={sendOtp.isPending || signInWithOtp.isPending || !canSendOtp}
-              onClick={() => sendOtp.mutate(normalizedEmail)}
+              onClick={() => sendOtp.mutate({ address: normalizedEmail })}
             >
               {sendOtp.isPending
                 ? "Sending code..."

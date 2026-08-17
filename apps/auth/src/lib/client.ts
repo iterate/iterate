@@ -17,10 +17,19 @@ export type PublicSessionResponse =
 type LoginOptions = {
   /** Destination after OAuth callback. Defaults to the current origin. */
   returnTo?: string;
-  /** Preferred sign-in method for the auth server login page. */
-  loginHint?: "email" | "google";
+  /** Preferred sign-in method for the auth server login page ("email" /
+   * "google"), or an email ADDRESS (standard OIDC login_hint) the page
+   * offers as a "Continue as <email>" shortcut with the form prefilled. */
+  loginHint?: "email" | "google" | (string & {});
   /** Require the authorization server to let the user choose an account. */
   prompt?: "select_account";
+  /**
+   * End this relying party's current session before starting OAuth. The
+   * authorization-server session stays intact, so its account chooser can
+   * switch to another remembered account without orphaning the current app
+   * refresh token.
+   */
+  replaceCurrentSession?: boolean;
 };
 
 type RefreshOptions = {
@@ -89,7 +98,14 @@ export function createIterateAuthClient(config: IterateAuthClientConfig = {}) {
       if (options.prompt) {
         url.searchParams.set("prompt", options.prompt);
       }
-      window.location.href = url.toString();
+      if (options.replaceCurrentSession) {
+        const logoutUrl = new URL(`${base}/logout`, window.location.origin);
+        logoutUrl.searchParams.set("global", "false");
+        logoutUrl.searchParams.set("return_to", url.toString());
+        window.location.href = logoutUrl.toString();
+      } else {
+        window.location.href = url.toString();
+      }
     },
     fetchSession,
     async logout(options: LogoutOptions = {}): Promise<void> {

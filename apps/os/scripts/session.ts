@@ -44,7 +44,7 @@ type CreatedOperatorSession = {
  * `doppler run --config prd -- pnpm cli session create --project <slug> --open`
  *
  * Omit `--open` to print the one-shot redemption URL for Playwright,
- * agent-browser, or a browser on another machine. Use `pnpm --silent cli ...`
+ * Playwriter, or a browser on another machine. Use `pnpm --silent cli ...`
  * when automation needs stdout to contain only that URL.
  *
  * `--admin` is a separate, explicit mode for the platform administration UI.
@@ -67,15 +67,15 @@ export async function create(options: CreateOptions = {}) {
     ? {
         kind: "admin" as const,
         operatorId,
-        ...(options.returnTo ? { returnTo: options.returnTo } : {}),
-        ...(options.ttlSeconds ? { ttlSeconds: options.ttlSeconds } : {}),
+        ...(options.returnTo && { returnTo: options.returnTo }),
+        ...(options.ttlSeconds && { ttlSeconds: options.ttlSeconds }),
       }
     : {
         kind: "project" as const,
         operatorId,
         project: project!,
-        ...(options.returnTo ? { returnTo: options.returnTo } : {}),
-        ...(options.ttlSeconds ? { ttlSeconds: options.ttlSeconds } : {}),
+        ...(options.returnTo && { returnTo: options.returnTo }),
+        ...(options.ttlSeconds && { ttlSeconds: options.ttlSeconds }),
       };
 
   const response = await fetch(new URL("/api/operator-sessions", baseUrl), {

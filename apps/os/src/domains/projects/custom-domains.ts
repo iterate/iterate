@@ -15,7 +15,6 @@ import {
   normalizeCustomHostname,
   normalizeProjectHostnameBase,
 } from "../../lib/project-host-routing.ts";
-import type { ProjectCustomDomainCloudflareSnapshot } from "./project-processor-contract.ts";
 
 type Fetch = typeof fetch;
 
@@ -33,47 +32,14 @@ class CloudflareApiError extends Error {
   }
 }
 
-type CloudflareValidationRecord = {
-  name?: unknown;
-  status?: unknown;
-  txt_name?: unknown;
-  txt_value?: unknown;
-  value?: unknown;
-};
-
 type CloudflareCustomHostname = {
-  custom_metadata?: Record<string, unknown> | null;
-  errors?: CloudflareError[];
   hostname?: string;
   id?: string;
-  ownership_verification?: {
-    name?: unknown;
-    value?: unknown;
-  } | null;
-  ssl?: {
-    errors?: CloudflareError[];
-    status?: string;
-    validation_records?: CloudflareValidationRecord[];
-    wildcard?: boolean;
-  } | null;
-  status?: string;
 };
 
 export type ProjectCustomDomainProvisioner = {
-  ensure(input: {
-    hostname: string;
-    project: ProjectDirectoryRecord;
-  }): Promise<ProjectCustomDomainCloudflareSnapshot>;
-  refresh(input: {
-    cloudflareHostnameId?: string | null;
-    hostname: string;
-    project: ProjectDirectoryRecord;
-  }): Promise<ProjectCustomDomainCloudflareSnapshot>;
-  remove(input: {
-    cloudflareHostnameId?: string | null;
-    hostname: string;
-    project: ProjectDirectoryRecord;
-  }): Promise<void>;
+  ensure(input: { hostname: string; project: ProjectDirectoryRecord }): Promise<void>;
+  remove(input: { hostname: string; project: ProjectDirectoryRecord }): Promise<void>;
 };
 
 export type ProjectCustomDomainDeps = ProjectCustomDomainProvisioner & {
@@ -107,6 +73,26 @@ export function normalizeProjectCustomDomain(input: {
   return hostname;
 }
 
+/**
+ * Record the routing half of a platform-owned apex that already reaches this
+ * worker through ordinary Worker routes. This does not provision Cloudflare
+ * for SaaS; the caller separately records the small project catalog entry.
+ */
+export async function primeDirectProjectCustomDomain(input: {
+  directory: KVNamespace;
+  hostname: string;
+  project: ProjectDirectoryRecord;
+  projectHostnameBases: readonly string[];
+}): Promise<string> {
+  const hostname = normalizeProjectCustomDomain(input);
+  await claimProjectHostname({
+    directory: input.directory,
+    hostname,
+    project: input.project,
+  });
+  return hostname;
+}
+
 export function createCloudflareCustomDomainProvisioner(options: {
   config: AppConfig;
   directory: KVNamespace;
@@ -120,107 +106,78 @@ export function createCloudflareCustomDomainProvisioner(options: {
         hostname,
         projectHostnameBases: options.config.projectHostnameBases ?? [],
       });
-      await assertHostnameAvailable({
+      await claimProjectHostname({
         directory: options.directory,
         hostname: normalized,
-        projectId: project.id,
+        project,
       });
 
       const client = await cloudflareClient({ config: options.config, fetch: fetcher });
       const existing = await client.findCustomHostname(normalized);
-      if (existing) assertCloudflareHostnameBelongsToProject(existing, project);
       const customHostname =
         existing ??
         (await createCustomHostnameWithDuplicateRecovery({
           client,
           hostname: normalized,
-          project,
         }));
-
-      const snapshot = await snapshotCustomHostname({
-        client,
-        customHostname,
-        fallbackHostname: normalized,
-      });
-      await reconcileProjectHostnameRegistration({
-        directory: options.directory,
-        hostname: normalized,
-        project,
-        snapshot,
-      });
-      return snapshot;
+      assertCloudflareHostnameMatches(customHostname, normalized);
+      await assertProjectHostnameClaim(options.directory, normalized, project.id);
     },
 
-    async refresh({ cloudflareHostnameId, hostname, project }) {
+    async remove({ hostname, project }) {
       const normalized = normalizeProjectCustomDomain({
         hostname,
         projectHostnameBases: options.config.projectHostnameBases ?? [],
       });
-      const client = await cloudflareClient({ config: options.config, fetch: fetcher });
-      const customHostname =
-        (cloudflareHostnameId
-          ? await client.getCustomHostname(cloudflareHostnameId).catch((error) => {
-              if (error instanceof CloudflareApiError && error.status === 404) return null;
-              throw error;
-            })
-          : null) ?? (await client.findCustomHostname(normalized));
-      if (!customHostname) {
-        throw new Error(`Cloudflare custom hostname "${normalized}" was not found.`);
-      }
-      if (cloudflareHostnameId) {
-        assertCloudflareHostnameMatches(customHostname, normalized);
-        assertCloudflareHostnameNotOwnedByAnotherProject(customHostname, project);
-      } else {
-        assertCloudflareHostnameBelongsToProject(customHostname, project);
-      }
-      const snapshot = await snapshotCustomHostname({
-        client,
-        customHostname,
-        fallbackHostname: normalized,
-      });
-      await reconcileProjectHostnameRegistration({
-        directory: options.directory,
-        hostname: normalized,
-        project,
-        snapshot,
-      });
-      return snapshot;
-    },
-
-    async remove({ cloudflareHostnameId, hostname, project }) {
-      const normalized = normalizeProjectCustomDomain({
-        hostname,
-        projectHostnameBases: options.config.projectHostnameBases ?? [],
-      });
-      const client = await cloudflareClient({ config: options.config, fetch: fetcher });
-      const customHostname = cloudflareHostnameId
-        ? await client.getCustomHostname(cloudflareHostnameId).catch((error) => {
-            if (error instanceof CloudflareApiError && error.status === 404) {
-              return client.findCustomHostname(normalized);
-            }
-            throw error;
-          })
-        : await client.findCustomHostname(normalized);
-      let id = cloudflareHostnameId;
-      if (customHostname) {
-        if (cloudflareHostnameId) {
-          assertCloudflareHostnameMatches(customHostname, normalized);
-          assertCloudflareHostnameNotOwnedByAnotherProject(customHostname, project);
-          id = stringValue(customHostname.id) ?? cloudflareHostnameId;
-        } else if (stringValue(customHostname.custom_metadata?.projectId) === project.id) {
-          id = stringValue(customHostname.id);
-        }
-      }
-      if (id) await client.deleteCustomHostname(id);
       const registeredProject = await readProjectHostnameRegistration(
         options.directory,
         normalized,
       );
-      if (registeredProject?.id === project.id) {
-        await deleteProjectHostname(options.directory, normalized);
+      if (registeredProject === null) return;
+      if (registeredProject.id !== project.id) {
+        throw new Error(`"${normalized}" is already routed to another project.`);
       }
+
+      const client = await cloudflareClient({ config: options.config, fetch: fetcher });
+      const customHostname = await client.findCustomHostname(normalized);
+      await assertProjectHostnameClaim(options.directory, normalized, project.id);
+      if (customHostname) {
+        assertCloudflareHostnameMatches(customHostname, normalized);
+        const id = stringValue(customHostname.id);
+        if (!id) {
+          throw new Error(`Cloudflare custom hostname "${normalized}" has no id.`);
+        }
+        await client.deleteCustomHostname(id);
+      }
+      await assertProjectHostnameClaim(options.directory, normalized, project.id);
+      await deleteProjectHostname(options.directory, normalized);
     },
   };
+}
+
+async function claimProjectHostname(input: {
+  directory: KVNamespace;
+  hostname: string;
+  project: ProjectDirectoryRecord;
+}): Promise<void> {
+  await assertHostnameAvailable({
+    directory: input.directory,
+    hostname: input.hostname,
+    projectId: input.project.id,
+  });
+  await primeProjectHostname(input.directory, input.hostname, input.project);
+  await assertProjectHostnameClaim(input.directory, input.hostname, input.project.id);
+}
+
+async function assertProjectHostnameClaim(
+  directory: KVNamespace,
+  hostname: string,
+  projectId: string,
+): Promise<void> {
+  const registration = await readProjectHostnameRegistration(directory, hostname);
+  if (registration?.id !== projectId) {
+    throw new Error(`Custom hostname "${hostname}" is not registered for ${projectId}.`);
+  }
 }
 
 async function assertHostnameAvailable(input: {
@@ -255,87 +212,14 @@ async function assertHostnameAvailable(input: {
 async function createCustomHostnameWithDuplicateRecovery(input: {
   client: Awaited<ReturnType<typeof cloudflareClient>>;
   hostname: string;
-  project: ProjectDirectoryRecord;
 }): Promise<CloudflareCustomHostname> {
   try {
-    return await input.client.createCustomHostname({
-      hostname: input.hostname,
-      metadata: {
-        projectId: input.project.id,
-        projectSlug: input.project.slug,
-        source: "iterate-os",
-      },
-    });
+    return await input.client.createCustomHostname({ hostname: input.hostname });
   } catch (error) {
     const existing = await input.client.findCustomHostname(input.hostname).catch(() => null);
-    if (existing) {
-      assertCloudflareHostnameBelongsToProject(existing, input.project);
-      return existing;
-    }
+    if (existing) return existing;
     throw error;
   }
-}
-
-async function snapshotCustomHostname(input: {
-  client: Awaited<ReturnType<typeof cloudflareClient>>;
-  customHostname: CloudflareCustomHostname;
-  fallbackHostname: string;
-}): Promise<ProjectCustomDomainCloudflareSnapshot> {
-  const customHostname = await fetchCustomHostnameDetails(input.client, input.customHostname);
-  return toProjectCustomDomainCloudflareSnapshot(customHostname, input.fallbackHostname);
-}
-
-async function fetchCustomHostnameDetails(
-  client: Awaited<ReturnType<typeof cloudflareClient>>,
-  customHostname: CloudflareCustomHostname,
-): Promise<CloudflareCustomHostname> {
-  const id = stringValue(customHostname.id);
-  if (!id) return customHostname;
-  return await client.getCustomHostname(id).catch(() => customHostname);
-}
-
-async function reconcileProjectHostnameRegistration(input: {
-  directory: KVNamespace;
-  hostname: string;
-  project: ProjectDirectoryRecord;
-  snapshot: ProjectCustomDomainCloudflareSnapshot;
-}): Promise<void> {
-  if (input.snapshot.status !== "active") {
-    const registeredProject = await readProjectHostnameRegistration(
-      input.directory,
-      input.hostname,
-    );
-    if (registeredProject?.id === input.project.id) {
-      await deleteProjectHostname(input.directory, input.hostname);
-    }
-    return;
-  }
-
-  await assertHostnameAvailable({
-    directory: input.directory,
-    hostname: input.hostname,
-    projectId: input.project.id,
-  });
-  await primeProjectHostname(input.directory, input.hostname, input.project);
-}
-
-function assertCloudflareHostnameBelongsToProject(
-  customHostname: CloudflareCustomHostname,
-  project: ProjectDirectoryRecord,
-): void {
-  if (stringValue(customHostname.custom_metadata?.projectId) === project.id) return;
-  const hostname = customHostname.hostname ?? "custom hostname";
-  throw new Error(`Cloudflare custom hostname "${hostname}" is already owned by another project.`);
-}
-
-function assertCloudflareHostnameNotOwnedByAnotherProject(
-  customHostname: CloudflareCustomHostname,
-  project: ProjectDirectoryRecord,
-): void {
-  const ownerProjectId = stringValue(customHostname.custom_metadata?.projectId);
-  if (!ownerProjectId || ownerProjectId === project.id) return;
-  const hostname = customHostname.hostname ?? "custom hostname";
-  throw new Error(`Cloudflare custom hostname "${hostname}" is already owned by another project.`);
 }
 
 function assertCloudflareHostnameMatches(
@@ -386,15 +270,11 @@ async function cloudflareClient(input: { config: AppConfig; fetch: Fetch }) {
   const zone = zones.find((candidate) => candidate.name === zoneName);
   if (!zone) throw new Error(`Cloudflare zone "${zoneName}" was not found.`);
   return {
-    async createCustomHostname(input: {
-      hostname: string;
-      metadata: Record<string, string>;
-    }): Promise<CloudflareCustomHostname> {
+    async createCustomHostname(input: { hostname: string }): Promise<CloudflareCustomHostname> {
       return await request<CloudflareCustomHostname>(`/zones/${zone.id}/custom_hostnames`, {
         method: "POST",
         body: JSON.stringify({
           hostname: input.hostname,
-          custom_metadata: input.metadata,
           ssl: {
             method: "txt",
             settings: { min_tls_version: "1.2" },
@@ -414,12 +294,6 @@ async function cloudflareClient(input: { config: AppConfig; fetch: Fetch }) {
         if (error instanceof CloudflareApiError && error.status === 404) return;
         throw error;
       }
-    },
-
-    async getCustomHostname(id: string): Promise<CloudflareCustomHostname> {
-      return await request<CloudflareCustomHostname>(
-        `/zones/${zone.id}/custom_hostnames/${encodeURIComponent(id)}`,
-      );
     },
 
     async findCustomHostname(hostname: string): Promise<CloudflareCustomHostname | null> {
@@ -445,86 +319,6 @@ function cloudflareErrorMessage(path: string, status: number, errors: Cloudflare
     .filter((value): value is string => Boolean(value))
     .join("; ");
   return `Cloudflare ${path} failed with ${status}${message ? `: ${message}` : ""}`;
-}
-
-function toProjectCustomDomainCloudflareSnapshot(
-  customHostname: CloudflareCustomHostname,
-  fallbackHostname: string,
-): ProjectCustomDomainCloudflareSnapshot {
-  const hostname =
-    typeof customHostname.hostname === "string" ? customHostname.hostname : fallbackHostname;
-  const hostnameStatus = customHostname.status ?? null;
-  const sslStatus = customHostname.ssl?.status ?? null;
-  const validationRecords = (customHostname.ssl?.validation_records ?? [])
-    .map(toValidationRecord)
-    .filter(
-      (record): record is NonNullable<ReturnType<typeof toValidationRecord>> => record !== null,
-    );
-  const error = [...(customHostname.errors ?? []), ...(customHostname.ssl?.errors ?? [])]
-    .map((entry) => entry.message)
-    .filter((value): value is string => Boolean(value))
-    .join("; ");
-
-  return {
-    cloudflareHostnameId: customHostname.id ?? null,
-    error: error || null,
-    hostname,
-    hostnameStatus,
-    ownershipVerification: toOwnershipVerification(customHostname.ownership_verification),
-    sslStatus,
-    status: customDomainStatus({ error, hostnameStatus, sslStatus }),
-    validationRecords,
-    wildcard: customHostname.ssl?.wildcard === true,
-  };
-}
-
-function toValidationRecord(
-  record: CloudflareValidationRecord,
-): { name: string; status: string | null; value: string } | null {
-  const name = stringValue(record.txt_name) ?? stringValue(record.name);
-  const value = stringValue(record.txt_value) ?? stringValue(record.value);
-  if (!name || !value) return null;
-  return { name, status: stringValue(record.status), value };
-}
-
-function toOwnershipVerification(
-  value: CloudflareCustomHostname["ownership_verification"],
-): { name: string; value: string } | null {
-  const name = stringValue(value?.name);
-  const verificationValue = stringValue(value?.value);
-  return name && verificationValue ? { name, value: verificationValue } : null;
-}
-
-function customDomainStatus(input: {
-  error: string;
-  hostnameStatus: string | null;
-  sslStatus: string | null;
-}): ProjectCustomDomainCloudflareSnapshot["status"] {
-  if (input.hostnameStatus === "active" && input.sslStatus === "active") return "active";
-  if (input.error) return "failed";
-
-  const failedStatuses = new Set(["deleted", "expired", "failed", "validation_timed_out"]);
-  if (
-    (input.hostnameStatus && failedStatuses.has(input.hostnameStatus)) ||
-    (input.sslStatus && failedStatuses.has(input.sslStatus))
-  ) {
-    return "failed";
-  }
-
-  const pendingStatuses = new Set([
-    "initializing",
-    "pending",
-    "pending_deployment",
-    "pending_validation",
-  ]);
-  if (
-    (input.hostnameStatus && pendingStatuses.has(input.hostnameStatus)) ||
-    (input.sslStatus && pendingStatuses.has(input.sslStatus))
-  ) {
-    return "pending_validation";
-  }
-
-  return "provisioning";
 }
 
 function stringValue(value: unknown): string | null {

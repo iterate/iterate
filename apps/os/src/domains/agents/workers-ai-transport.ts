@@ -258,7 +258,7 @@ export function maskCloudflareAiGatewayResponseCacheEntropy(serialized: string):
 
 /**
  * Extra chat-completions params for OpenAI reasoning models served through
- * Workers AI (`openai/gpt-5.6-sol`, o-series, codex): pin reasoning effort to
+ * Workers AI (`openai/gpt-5.6`, o-series, codex): pin reasoning effort to
  * medium (the pre-#1808 openai-ws posture) and ask streamed responses to
  * carry usage in their final chunk. Gated by model family — non-OpenAI
  * models reject unknown params with a whole-request failure, the same reason
@@ -307,7 +307,7 @@ async function drainSseResponse(input: {
   const handleChunk = async (chunk: unknown) => {
     text += extractChunkText(chunk);
     usage = extractUsage(chunk) ?? usage;
-    await input.onChunk(chunk, chunkCount);
+    await input.deadline.race(input.onChunk(chunk, chunkCount));
     chunkCount += 1;
   };
 

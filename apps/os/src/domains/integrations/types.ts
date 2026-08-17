@@ -5,7 +5,7 @@
  * (slack) can hold many connections (main-slack, support-slack).
  */
 
-import type { WakeableStreamProcessorRpc } from "iterate/processors";
+import type { StreamProcessorRpc } from "iterate/processors";
 
 /** The integration slugs whose call surfaces ship with the OS deployment
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
@@ -51,7 +51,7 @@ export type GithubConnection = { octokit: import("octokit").Octokit };
 /** A Slack WebClient connection. Web API namespaces and methods are dynamic;
  * `processor` is the connection's durable webhook router. */
 export type SlackConnection = Record<string, any> & {
-  processor: WakeableStreamProcessorRpc;
+  processor: StreamProcessorRpc;
 };
 
 /** The Gmail REST API connection exposed by a connected Google account.
@@ -74,7 +74,7 @@ export type GmailConnection = {
  * script types useful without maintaining a second copy of Telegram's API. */
 export type TelegramConnection = {
   getMe(params?: Record<string, unknown>): Promise<Record<string, unknown>>;
-  processor: WakeableStreamProcessorRpc;
+  processor: StreamProcessorRpc;
   sendChatAction(params: Record<string, unknown>): Promise<Record<string, unknown>>;
   sendMessage(
     params: { chat_id: number | string; text: string } & Record<string, unknown>,
@@ -119,6 +119,40 @@ export type IntegrationConnectionStatus = {
   displayName: string | null;
   externalId: string | null;
   metadata: Record<string, unknown>;
+};
+
+/**
+ * Narrow operator-only input for rebuilding a connection from a durable
+ * project seed. Each arm carries enough provider identity to validate the
+ * credential before any project state is written.
+ */
+export type RestoreIntegrationConnectionInput =
+  | {
+      botToken: string;
+      connection?: string;
+      provider: "slack";
+      teamId: string;
+    }
+  | {
+      connection?: string;
+      installationId: string;
+      provider: "github";
+    }
+  | {
+      connection: string;
+      googleUserId: string;
+      material: {
+        accessToken?: string;
+        refreshToken: string;
+      };
+      provider: "google";
+    };
+
+/** Proven provider identity returned after an integration seed restore succeeds. */
+export type RestoreIntegrationConnectionResult = {
+  connection: string;
+  externalId: string;
+  provider: "github" | "google" | "slack";
 };
 
 /**

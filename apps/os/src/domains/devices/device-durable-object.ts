@@ -1,20 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
-import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
-import {
-  type ProcessorState,
-  type StreamEventInput,
-  type StreamSubscriberWakeRequest,
-  type StreamSubscriberWakeResponse,
-} from "iterate/processors";
-import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import { type ProcessorState, type StreamEventInput } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
+import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { isUnconfiguredSubscriptionError } from "../streams/utils.ts";
 import { deviceCreationEvents } from "./device-defaults.ts";
 import { DeviceProcessorContract } from "./device-processor-contract.ts";
-import { DeviceProcessor, type DevicePushSender } from "./device-processor-implementation.ts";
-import { getExpoPushReceipt, sendExpoPushNotification } from "./expo-push-client.ts";
 import { appendAfterPushTokenSecretUpdate } from "./push-token-consistency.ts";
 import type { DeviceAppendInput, DeviceDescription, DeviceEnrollInput } from "./types.ts";
 import { PUBLIC_DEVICE_EVENT_TYPES } from "./types.ts";
@@ -22,6 +14,21 @@ import { PUBLIC_DEVICE_EVENT_TYPES } from "./types.ts";
 const INGEST_WAIT_TIMEOUT_MS = 15_000;
 const EXPO_PUSH_ORIGIN = "https://exp.host";
 
+/** The stream facade methods this DO reads its own fold through — the device
+ * processor runs as a facet of the device stream's own Durable Object
+ * (src/domains/processor-facet-durable-object.ts), not here. */
+type DeviceProcessorFacade = {
+  snapshot(): Promise<{ offset: number; state: ProcessorState<DeviceProcessorContract> }>;
+  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
+};
+
+/**
+ * The device's DOMAIN Durable Object: authenticated enrollment/revocation and
+ * the push-token Secret lifecycle, serialized on one credential-update chain.
+ * The device stream processor itself is hosted as a facet of the device's
+ * Stream Durable Object; this DO reads the committed fold back through the
+ * stream's processor facade.
+ */
 export class DeviceDurableObject extends DurableObject<Env> {
   /** Report this incarnation's code version for the deployment rollout gate. */
   deploymentVersion(): string {
@@ -35,79 +42,27 @@ export class DeviceDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
-  readonly #registry = createStreamProcessorRegistry(this.ctx, {
-    stream: this.#stream,
-    path: this.#name.path,
-    projectId: this.#name.projectId,
-    version: workerVersion(this.env),
-    getLiveState: (): DeviceDescription =>
-      describeDeviceState(this.#reads.currentState, this.#deviceId),
-  });
-  readonly #deviceProcessor = this.#registry.register(
-    new DeviceProcessor({
-      stream: this.#stream,
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-      now: Date.now,
-      clearPushToken: (input) =>
-        this.#serializeCredentialUpdate(() => this.#clearPushTokenSecret(input)),
-      getReceipt: getExpoPushReceipt,
-      repointReceiptAlarm: (atMs) => this.#registry.setAlarmSlice("device-receipts", atMs),
-      send: async ({
-        notification,
-        pushTokenSecretPath,
-        pushTokenSecretUpdatedOffset,
-      }): ReturnType<DevicePushSender> => {
-        const state: ProcessorState<DeviceProcessorContract> = this.#reads.currentState;
-        if (
-          state.pushTokenSecret === null ||
-          state.pushTokenSecret.path !== pushTokenSecretPath ||
-          state.pushTokenSecret.updatedOffset !== pushTokenSecretUpdatedOffset
-        ) {
-          throw new Error("device push token changed before the attempt began");
-        }
-        const secret = this.#pushTokenSecret(pushTokenSecretPath);
-        return await sendExpoPushNotification({ ...notification, pushTokenSecretPath }, (request) =>
-          secret.fetchAtUpdatedOffset(request, {
-            expectedUpdatedOffset: pushTokenSecretUpdatedOffset,
-          }),
-        );
-      },
-    }),
-    { recovery: true },
-  );
-  readonly #reads = this.#registry.reads(this.#deviceProcessor);
   #credentialUpdates: Promise<void> = Promise.resolve();
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#registry.wakeStreamSubscriber(args);
-  }
-
-  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    await this.#registry.handleAlarm(alarmInfo);
-    try {
-      await this.#registry.catchUp(DeviceProcessorContract.slug);
-      await this.#deviceProcessor.checkReceipts(this.#reads.currentState);
-      await this.#registry.catchUp(DeviceProcessorContract.slug);
-    } catch (error) {
-      await this.#registry.setAlarmSlice("device-receipts", Date.now() + 60_000);
-      throw error;
-    }
+  async #processorFacade(): Promise<DeviceProcessorFacade> {
+    // Safe: the Stream DO's processorFacade(name) forwards to the facet
+    // subclass registered for this path family, and the facet composition
+    // registers the DeviceProcessor under DeviceProcessorContract.slug on
+    // /devices/* paths — so snapshot() serves the device contract's fold.
+    // The RPC-generated facade type is untyped per name (the name is a
+    // runtime string), hence the assertion instead of a typed boundary.
+    return (await this.env.STREAM.getByName(
+      DurableObjectNameCodec.stringify({
+        path: this.#name.path,
+        projectId: this.#name.projectId,
+      }),
+    ).processorFacade({
+      name: DeviceProcessorContract.slug,
+    })) as unknown as DeviceProcessorFacade;
   }
 
   kill(): void {
     this.ctx.abort("kill requested");
-  }
-
-  get processor() {
-    return new StreamProcessorRpcTarget(this.#reads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(DeviceProcessorContract.slug),
-      publicState: (state) => describeDeviceState(state, this.#deviceId),
-    });
-  }
-
-  get liveState() {
-    return new LiveStateRpcTarget<DeviceDescription>(this.#registry);
   }
 
   enroll(input: DeviceEnrollInput & { ownerId: string }) {
@@ -141,7 +96,7 @@ export class DeviceDurableObject extends DurableObject<Env> {
       const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
       if (offset === 0) throw new Error("device enrollment committed no birth events");
       await this.#waitUntilProcessed(offset);
-      return describeDeviceState(this.#reads.currentState, this.#deviceId);
+      return describeDeviceState((await this.#snapshot()).state, this.#deviceId);
     }
     const [updated] = await this.#appendAfterPushTokenSecretUpdate(pushTokenSecretUpdatedOffset, {
       type: "events.iterate.com/device/push-token-updated",
@@ -156,7 +111,7 @@ export class DeviceDurableObject extends DurableObject<Env> {
       },
     } as StreamEventInput);
     await this.#waitUntilProcessed(updated!.offset);
-    return describeDeviceState(this.#reads.currentState, this.#deviceId);
+    return describeDeviceState((await this.#snapshot()).state, this.#deviceId);
   }
 
   async #appendAfterPushTokenSecretUpdate(
@@ -216,15 +171,45 @@ export class DeviceDurableObject extends DurableObject<Env> {
     return describeDeviceState((await this.#snapshot()).state, this.#deviceId);
   }
 
+  /**
+   * The facet-hosted device processor's `clearPushToken` dep door: credential
+   * updates must stay serialized against enroll/revoke on this DO's one
+   * chain, so the facet dials here instead of clearing the Secret itself.
+   */
+  processorClearPushToken(input: {
+    pushTokenSecretPath: string;
+    pushTokenSecretUpdatedOffset: number;
+  }): Promise<boolean> {
+    return this.#serializeCredentialUpdate(() => this.#clearPushTokenSecret(input));
+  }
+
   async #snapshot() {
-    await this.#registry.catchUp(DeviceProcessorContract.slug);
-    return await this.#reads.snapshot();
+    // UNBORN streams: before enrollment commits, the device's facet
+    // subscription does not exist and the Stream DO's facade refuses the
+    // name (reads must never materialize a facet). Substitute the unborn
+    // shape the facade used to serve: the schema-default fold.
+    try {
+      return await (await this.#processorFacade()).snapshot();
+    } catch (error) {
+      if (!isUnconfiguredSubscriptionError(error)) throw error;
+      return {
+        offset: 0,
+        state: DeviceProcessorContract.stateSchema.parse(
+          {},
+        ) as ProcessorState<DeviceProcessorContract>,
+      };
+    }
   }
 
   async #waitUntilProcessed(offset: number) {
     // The offset wait self-pulls and owns the complete read-your-writes
     // timeout. Do not put an unbounded catch-up RPC in front of it.
-    await this.#reads.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
+    await (
+      await this.#processorFacade()
+    ).waitUntilProcessed({
+      offset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
   }
 
   get #pushTokenSecretPath(): string {
@@ -265,7 +250,10 @@ export class DeviceDurableObject extends DurableObject<Env> {
   }
 }
 
-function describeDeviceState(
+/** The device's public projection — snapshots and live state leave the
+ * platform as this DESCRIPTION, never the raw fold. Shared with the facet
+ * host (src/domains/processor-facet-durable-object.ts) and the itx relay's publicState. */
+export function describeDeviceState(
   state: ProcessorState<DeviceProcessorContract>,
   deviceId: string,
 ): DeviceDescription {
@@ -283,7 +271,9 @@ function describeDeviceState(
   };
 }
 
-function deviceIdFromPath(path: string): string {
+/** Parse the device id out of a `/devices/<id>` stream path (throws on
+ * anything else) — shared with the facet host's family dispatch. */
+export function deviceIdFromPath(path: string): string {
   const match = /^\/devices\/([A-Za-z0-9_-]+)$/.exec(path);
   if (!match) throw new Error(`invalid device stream path ${path}`);
   return match[1]!;

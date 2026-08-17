@@ -25,12 +25,18 @@
 
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import {
+  ProjectProcessorContract,
+  type ProjectProcessorState,
+} from "../projects/project-processor-contract.ts";
 import type { SecretRefresh } from "../secrets/types.ts";
 import type {
   CompleteConnectResult,
   IntegrationConnectionStatus,
   BuiltinIntegrationSlug,
   OAuthProviderSlug,
+  RestoreIntegrationConnectionInput,
+  RestoreIntegrationConnectionResult,
 } from "./types.ts";
 import {
   createOAuthState,
@@ -54,6 +60,7 @@ import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
 import { callProjectTelegramBotApi, telegramApiBaseUrl } from "./telegram-api.ts";
 import { TelegramProcessorContract } from "./telegram-processor-contract.ts";
+import { mintGithubInstallationToken } from "./github-app.ts";
 import {
   GITHUB_CONNECTION_EGRESS_URLS,
   GOOGLE_CONNECTION_EGRESS_URLS,
@@ -99,6 +106,312 @@ function requestBaseUrl(input: { config: AppConfig }) {
   throw new Error("config.baseUrl is required to connect this integration.");
 }
 
+/**
+ * Rebuild an already-authorized connection without replaying its old stream.
+ * This is deliberately narrower than OAuth completion: only Slack bot tokens
+ * and this deployment's GitHub App installations are seedable, and the caller
+ * must name the immutable provider-side identity expected in the archive.
+ *
+ * Authorization stays at the RPC boundary (`restoreConnection` is admin-only).
+ * This domain function owns credential validation, fresh secret/fact creation,
+ * directory claiming, and the post-write ownership proof as one supported
+ * invariant boundary.
+ */
+export async function restoreIntegrationConnection(
+  input: RestoreIntegrationConnectionInput & {
+    config: AppConfig;
+    projectId: string;
+  },
+  dependencies: {
+    fetch?: typeof fetch;
+    validateGithubInstallation?: (input: {
+      apiBase: string;
+      appId: string;
+      installationId: string;
+      privateKeyPem: string;
+    }) => Promise<void>;
+  } = {},
+): Promise<RestoreIntegrationConnectionResult> {
+  if (input.provider === "slack") {
+    const slack = requireSlackConfig(input.config);
+    const response = await (dependencies.fetch ?? fetch)("https://slack.com/api/auth.test", {
+      headers: { authorization: `Bearer ${input.botToken}` },
+    });
+    const identity = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      team?: string;
+      team_id?: string;
+      url?: string;
+    } | null;
+    if (!response.ok || identity?.ok !== true || !identity.team_id) {
+      throw new Error(
+        `Slack bot token validation failed for expected team ${input.teamId} (HTTP ${response.status}).`,
+      );
+    }
+    if (identity.team_id !== input.teamId) {
+      throw new Error(
+        `Slack bot token belongs to team ${identity.team_id}, not archived team ${input.teamId}.`,
+      );
+    }
+
+    const existingClaim = await lookupConnectionClaim("slack", input.teamId);
+    if (existingClaim !== null && existingClaim.projectId !== input.projectId) {
+      throw new Error(
+        `Slack team ${input.teamId} is already claimed by project ${existingClaim.projectId}.`,
+      );
+    }
+    const requestedConnection = input.connection
+      ? requireCanonicalConnectionName(input.connection)
+      : null;
+    if (
+      requestedConnection !== null &&
+      existingClaim !== null &&
+      existingClaim.connection !== requestedConnection
+    ) {
+      throw new Error(
+        `Slack team ${input.teamId} is already connected as ${existingClaim.connection}, not archived connection ${requestedConnection}.`,
+      );
+    }
+    const teamDomain = slackTeamDomain(identity.url);
+    const connection =
+      existingClaim?.connection ??
+      requestedConnection ??
+      (sanitizeConnectionName(teamDomain ?? input.teamId) ||
+        `team-${sanitizeConnectionName(input.teamId)}`);
+    const responseScopes = response.headers
+      .get("x-oauth-scopes")
+      ?.split(",")
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+
+    await recordSlackConnection({
+      accessToken: input.botToken,
+      connection,
+      projectId: input.projectId,
+      scopes: responseScopes?.length ? responseScopes : slack.scopes,
+      teamDomain,
+      teamId: input.teamId,
+      teamName: identity.team ?? input.teamId,
+    });
+
+    const claim = await lookupConnectionClaim("slack", input.teamId);
+    if (claim?.projectId !== input.projectId || claim.connection !== connection) {
+      // Do not call Slack auth.revoke here: a racing winner may hold the same
+      // bot token. Brick only this losing local generation.
+      await recordDisconnection({
+        connection,
+        disconnectedEvent: {
+          type: "events.iterate.com/slack/disconnected",
+          payload: {
+            connection,
+            externalId: input.teamId,
+            projectId: input.projectId,
+            reason: "project-seed-claim-race-lost",
+            teamId: input.teamId,
+            teamName: identity.team ?? input.teamId,
+          },
+        },
+        projectId: input.projectId,
+        secretPath: slackBotTokenSecretPath(connection),
+        slug: "slack",
+      });
+      throw new Error(`Slack team ${input.teamId} changed ownership while it was being restored.`);
+    }
+    return { connection, externalId: input.teamId, provider: "slack" };
+  }
+
+  if (input.provider === "google") {
+    const google = requireGoogleConfig(input.config);
+    const connection = requireCanonicalConnectionName(input.connection);
+    const refreshToken = input.material.refreshToken.trim();
+    if (!refreshToken) {
+      throw new Error(
+        `Google connection ${connection} has no refresh token; reconnect it interactively.`,
+      );
+    }
+    const fetcher = dependencies.fetch ?? fetch;
+    const tokenResponse = await fetcher(GOOGLE_OAUTH_TOKEN_URL, {
+      body: new URLSearchParams({
+        client_id: google.oauthClientId,
+        client_secret: google.oauthClientSecret.exposeSecret(),
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+      }),
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    const tokenData = (await tokenResponse.json().catch(() => null)) as {
+      access_token?: string;
+      error?: string;
+      scope?: string;
+    } | null;
+    if (!tokenResponse.ok || !tokenData?.access_token) {
+      throw new Error(
+        `Google refresh-token validation failed for ${connection} (HTTP ${tokenResponse.status}${
+          tokenData?.error ? `, ${tokenData.error}` : ""
+        }); reconnect it interactively.`,
+      );
+    }
+    const userInfoResponse = await fetcher("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: { authorization: `Bearer ${tokenData.access_token}` },
+    });
+    const userInfo = (await userInfoResponse.json().catch(() => null)) as {
+      email?: string;
+      id?: string;
+      name?: string;
+      picture?: string;
+    } | null;
+    if (!userInfoResponse.ok || !userInfo?.id) {
+      throw new Error(
+        `Google identity validation failed for ${connection} (HTTP ${userInfoResponse.status}).`,
+      );
+    }
+    if (userInfo.id !== input.googleUserId) {
+      throw new Error(
+        `Google credential belongs to user ${userInfo.id}, not archived user ${input.googleUserId}.`,
+      );
+    }
+    const scopes = tokenData.scope?.split(" ").filter(Boolean) ?? google.scopes;
+    await recordConnection({
+      connection,
+      projectId: input.projectId,
+      slug: "google",
+      secrets: [
+        {
+          egressUrls: GOOGLE_CONNECTION_EGRESS_URLS,
+          material: {
+            accessToken: tokenData.access_token,
+            refreshToken,
+          },
+          path: googleConnectionSecretPath(connection),
+          refresh: {
+            kind: "oauth-refresh-token",
+            tokenEndpoint: GOOGLE_OAUTH_TOKEN_URL,
+            clientCreds: { platform: "integrations.google" },
+          },
+        },
+      ],
+      connectedEvent: {
+        type: "events.iterate.com/google/connected",
+        payload: {
+          connection,
+          email: userInfo.email,
+          googleUserId: userInfo.id,
+          name: userInfo.name,
+          picture: userInfo.picture,
+          projectId: input.projectId,
+          scopes,
+        },
+      },
+    });
+    const status = await getConnectionStatus({
+      connection,
+      projectId: input.projectId,
+      provider: "google",
+    });
+    if (!status.connected || status.externalId !== input.googleUserId) {
+      throw new Error(`Google connection ${connection} failed its post-write identity proof.`);
+    }
+    return { connection, externalId: input.googleUserId, provider: "google" };
+  }
+
+  const github = requireGithubConfig(input.config);
+  if (!github.appId || !github.privateKey) {
+    throw new Error("GitHub App id and private key are required to restore an installation.");
+  }
+  const validateGithubInstallation =
+    dependencies.validateGithubInstallation ??
+    (async (installation) => {
+      await mintGithubInstallationToken(installation);
+    });
+  await validateGithubInstallation({
+    apiBase: "https://api.github.com",
+    appId: github.appId,
+    installationId: input.installationId,
+    privateKeyPem: github.privateKey.exposeSecret(),
+  });
+
+  const requestedConnection = input.connection
+    ? requireCanonicalConnectionName(input.connection)
+    : null;
+  const existingClaim = await lookupConnectionClaim("github", input.installationId);
+  if (existingClaim !== null && existingClaim.projectId !== input.projectId) {
+    throw new Error(
+      `GitHub installation ${input.installationId} is already claimed by project ${existingClaim.projectId}.`,
+    );
+  }
+  if (
+    requestedConnection !== null &&
+    existingClaim !== null &&
+    existingClaim.connection !== requestedConnection
+  ) {
+    throw new Error(
+      `GitHub installation ${input.installationId} is already connected as ${existingClaim.connection}, not archived connection ${requestedConnection}.`,
+    );
+  }
+  if (
+    existingClaim?.projectId === input.projectId &&
+    (await restoreOwnedGithubConnection({
+      connection: existingClaim.connection,
+      githubAppId: github.appId,
+      installationId: input.installationId,
+      projectId: input.projectId,
+    }))
+  ) {
+    return {
+      connection: existingClaim.connection,
+      externalId: input.installationId,
+      provider: "github",
+    };
+  }
+
+  const connection = requestedConnection ?? newGithubConnectionName(input.installationId);
+  await recordGithubConnection({
+    connection,
+    directoryClaim: { externalId: input.installationId },
+    githubAppId: github.appId,
+    installationId: input.installationId,
+    projectId: input.projectId,
+  });
+  const claim = await lookupConnectionClaim("github", input.installationId);
+  if (claim?.projectId !== input.projectId || claim.connection !== connection) {
+    await recordDisconnection({
+      connection,
+      disconnectedEvent: {
+        type: "events.iterate.com/github/disconnected",
+        payload: {
+          connection,
+          projectId: input.projectId,
+          reason: "project-seed-claim-race-lost",
+        },
+      },
+      projectId: input.projectId,
+      secretPath: githubConnectionSecretPath(connection),
+      slug: "github",
+    });
+    throw new Error(
+      `GitHub installation ${input.installationId} changed ownership while it was being restored.`,
+    );
+  }
+  return { connection, externalId: input.installationId, provider: "github" };
+}
+
+function requireCanonicalConnectionName(connection: string): string {
+  const canonical = sanitizeConnectionName(connection);
+  if (!canonical || canonical !== connection) {
+    throw new Error(
+      `Integration connection ${JSON.stringify(connection)} is not canonical; use ${JSON.stringify(canonical)}.`,
+    );
+  }
+  return canonical;
+}
+
+function slackTeamDomain(url: string | undefined): string | undefined {
+  if (!url || !URL.canParse(url)) return undefined;
+  const hostname = new URL(url).hostname.toLowerCase();
+  return hostname.endsWith(".slack.com") ? hostname.slice(0, -".slack.com".length) : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // OAuth start
 // ---------------------------------------------------------------------------
@@ -108,8 +421,7 @@ export async function startOAuthFlow(input: {
   config: AppConfig;
   projectId: string;
   provider: OAuthProviderSlug;
-  /** The user to bind the OAuth state to. Browser-supplied, not authority; the
-   * callback's user check against the signed state is the backstop. */
+  /** The authenticated initiating user, resolved by the RPC boundary. */
   userId: string;
 }): Promise<{ authorizationUrl: string }> {
   const baseUrl = requestBaseUrl(input);
@@ -285,9 +597,10 @@ async function recordConnection(input: {
   connectedEvent: { idempotencyKey?: string; payload: Record<string, unknown>; type: string };
   /** Arm a webhook-router processor on the connection stream (providers that
    * route inbound events). Connect time is THE arming point — connection
-   * streams are born here, not at project create. */
+   * streams are born here, not at project create. The name is the router
+   * processor contract's slug. */
   processorSubscription?: {
-    processorSlug: string;
+    name: string;
   };
   /** Claim this connection's external id in the deployment-wide directory
    * (providers with first-party webhook ingress). The generic door folds it to
@@ -308,7 +621,7 @@ async function recordConnection(input: {
     const secretInput = {
       egress: { urls: [...secret.egressUrls] },
       material: secret.material,
-      ...(secret.refresh ? { refresh: secret.refresh } : {}),
+      ...(secret.refresh && { refresh: secret.refresh }),
     };
     if ((await secretStub.describe()).created) await secretStub.update(secretInput);
     else await secretStub.create(secretInput);
@@ -323,7 +636,7 @@ async function recordConnection(input: {
           buildIntegrationRouterSubscriptionConfiguredEvent({
             connection: input.connection,
             projectId: input.projectId,
-            processorSlug: input.processorSubscription.processorSlug,
+            name: input.processorSubscription.name,
             slug: input.slug,
           }),
         ]
@@ -459,7 +772,7 @@ async function recordSlackConnection(input: {
       },
     },
     processorSubscription: {
-      processorSlug: SlackProcessorContract.slug,
+      name: SlackProcessorContract.slug,
     },
     directoryClaim: { externalId: input.teamId },
   });
@@ -822,7 +1135,7 @@ async function recordGithubConnection(input: {
       },
     ],
     connectedEvent: githubConnectedEvent(input),
-    ...(input.directoryClaim ? { directoryClaim: input.directoryClaim } : {}),
+    ...(input.directoryClaim && { directoryClaim: input.directoryClaim }),
   });
 }
 
@@ -1046,7 +1359,7 @@ async function completeGoogleConnect(input: {
         egressUrls: GOOGLE_CONNECTION_EGRESS_URLS,
         material: {
           accessToken: tokenData.access_token,
-          ...(tokenData.refresh_token ? { refreshToken: tokenData.refresh_token } : {}),
+          ...(tokenData.refresh_token && { refreshToken: tokenData.refresh_token }),
         },
         path: googleConnectionSecretPath(connection),
         refresh: {
@@ -1172,7 +1485,7 @@ export async function connectTelegram(input: {
       },
     },
     processorSubscription: {
-      processorSlug: TelegramProcessorContract.slug,
+      name: TelegramProcessorContract.slug,
     },
     directoryClaim: {
       externalId: bot.id,
@@ -1693,12 +2006,19 @@ async function disconnectGoogle(input: {
 export async function listIntegrationConnections(
   projectId: string,
 ): Promise<{ connection: string; integration: string; path: string }[]> {
-  const project = itxEnv.PROJECT.getByName(
+  // The project processor runs as a facet of the root stream; its facade
+  // serves the catch-up-backed snapshot.
+  const facade = await itxEnv.STREAM.getByName(
     DurableObjectNameCodec.stringify({ projectId, path: "/" }),
-  );
-  const snapshot = await (await project.processor).snapshot();
+  ).processorFacade({ name: ProjectProcessorContract.slug });
+  const snapshot = await facade.snapshot();
+  // Safe: the root stream's facet composition registers the ProjectProcessor
+  // under ProjectProcessorContract.slug, so the facade selected by that name
+  // snapshots the project contract's fold. The facade's snapshot type is
+  // untyped per name (the name is a runtime string), hence the assertion.
+  const state = snapshot.state as ProjectProcessorState;
   const entries: { connection: string; integration: string; path: string }[] = [];
-  for (const stream of snapshot.state.streams) {
+  for (const stream of state.streams) {
     const coordinates = integrationCoordinatesFromStreamPath(stream.path);
     if (coordinates === null) continue;
     entries.push({

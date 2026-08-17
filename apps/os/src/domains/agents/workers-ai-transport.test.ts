@@ -5,7 +5,7 @@ import {
   maskCloudflareAiGatewayResponseCacheEntropy,
   runWorkersAiAttempt,
 } from "./workers-ai-transport.ts";
-const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol"; // the config schema default
+const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-terra"; // the config schema default
 
 describe("adaptMessagesForModel", () => {
   const messages = [
@@ -81,6 +81,31 @@ describe("runWorkersAiAttempt", () => {
     // caller records the timeout failure.
     expect(cancelled).toBe(true);
     expect(chunks).toEqual([{ response: "hel" }]);
+  });
+
+  it("applies the attempt deadline while a chunk callback is in flight", async () => {
+    const encoder = new TextEncoder();
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"response":"hel"}\n\n'));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    await expect(
+      runWorkersAiAttempt({
+        ai: { run: async () => body },
+        deadlineMs: 50,
+        messages: [{ role: "user", content: "hi" }],
+        model: "test-model",
+        onChunk: () => new Promise(() => {}),
+      }),
+    ).rejects.toThrow(/timed out/);
+
+    expect(cancelled).toBe(true);
   });
 
   it("caps the dial itself, not just the drain", async () => {
@@ -235,7 +260,7 @@ describe("the BYOK gateway lane", () => {
     expect(request.headers["cf-aig-cache-ttl"]).toBe("600");
     expect(request.headers["cf-aig-cache-key"]).toMatch(/^[0-9a-f]{64}$/);
     expect(request.query).toMatchObject({
-      model: "gpt-5.6-sol",
+      model: "gpt-5.6-terra",
       messages: [
         { role: "developer", content: "trusted application context" },
         { role: "user", content: "hi" },

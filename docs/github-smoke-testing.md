@@ -127,8 +127,14 @@ doppler run --config prd -- pnpm cli itx run \
         (event) => event.type === "events.iterate.com/github/webhook-received",
       ),
       processorSubscriptions: agentEvents
-        .filter((event) => event.type === "events.iterate.com/stream/subscription-configured")
-        .map((event) => event.payload?.delivery?.processorSlug),
+        .filter(
+          (event) =>
+            event.type ===
+              "events.iterate.com/stream/subscription-configured" &&
+            event.payload?.receiver?.action === "processor-wake",
+        )
+        // The subscription NAME selects the contract (name == registered slug).
+        .map((event) => event.payload?.name),
     };
   '
 ```

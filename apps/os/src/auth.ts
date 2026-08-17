@@ -7,9 +7,9 @@
 // host capabilities name only that project, agents reach their project through
 // an explicit host-owned member, and public durable addresses are only dynamic
 // worker/facet descriptions. So authority lives in the ItxAuthContext every
-// authenticated RPC target carries. The one non-product lane is a private
-// brand on auth contexts minted by the stream-delivery spine: it makes
-// transport receivers unreachable from project code without changing project
+// authenticated RPC target carries. The one non-product exception is a private
+// brand on auth contexts minted while a source stream calls a receiver: it makes
+// receiver-only methods unreachable from project code without changing project
 // authorization or trusting a caller-controlled principal string.
 //
 // Credential lanes (see resolveItxAuth):
@@ -70,15 +70,28 @@ export type ItxAuthCredentials =
   /**
    * A project's own long-lived machine credential — for externally deployed
    * apps that connect back to /api as their project (docs/remote-apps.md).
-   * Verified against the secret every project is born with at
-   * `/secrets/project-api-key` (the comparison happens inside the Secret
-   * Durable Object — this door never receives material, only a one-bit
-   * answer). None of the existing lanes fit this caller: `bearer` is a
-   * user identity, `operator-session` is a short-lived human grant, and
-   * `admin-secret` is deployment-global. Grants exactly one project, no
-   * admin, no user identity.
+   * The preferred address is the immutable project slug; the authentication
+   * door resolves it to the stable id before verifying the secret every
+   * project is born with at `/secrets/project-api-key`. The comparison happens
+   * inside the Secret Durable Object, so this door receives no secret material
+   * back. Grants exactly one resolved project, no admin, no user identity.
    */
-  | { type: "project-secret"; projectId: string; secret: string }
+  | {
+      type: "project-secret";
+      projectSlug: string;
+      projectId?: never;
+      secret: string;
+    }
+  /**
+   * Stable-id addressing for machine callers that already operate on ids.
+   * New user-facing setup flows should use `projectSlug`.
+   */
+  | {
+      type: "project-secret";
+      projectId: string;
+      projectSlug?: never;
+      secret: string;
+    }
   /**
    * The short-lived user-on-project token auth mints for project app hosts
    * (the `iterate-project-auth` cookie). A config worker reverse-proxying an
@@ -107,6 +120,14 @@ export type ItxAuthToken =
 /** Authority object carried by server-side RPC target instances. */
 export interface ItxAuth {
   readonly principal: string;
+  /**
+   * Where this authority came from: "external" when a credential was
+   * presented over the wire (any resolveItxAuth door, a middleware
+   * principal), "internal" for in-process trusted mints. The itx-vending
+   * boundary derives egress provenance from this — external sessions journal
+   * a client-session stream context naming the principal.
+   */
+  readonly origin: "external" | "internal";
   isAdmin(): boolean;
   canAccessProject(projectId: string): boolean;
   assertCanAccessProject(projectId: string | null): void;
@@ -126,6 +147,7 @@ type ProjectDirectory = {
 class ItxAuthContext implements ItxAuth {
   readonly #directory: ProjectDirectory | undefined;
   readonly #isAdmin: boolean;
+  readonly #origin: "external" | "internal";
   readonly #principal: string;
   readonly #projectIds: Set<string>;
   readonly #userPrincipal: UserPrincipal | undefined;
@@ -133,12 +155,14 @@ class ItxAuthContext implements ItxAuth {
   constructor(input: {
     directory?: ProjectDirectory;
     isAdmin: boolean;
+    origin: "external" | "internal";
     principal: string;
     projectIds?: Iterable<string>;
     userPrincipal?: UserPrincipal;
   }) {
     this.#directory = input.directory;
     this.#isAdmin = input.isAdmin;
+    this.#origin = input.origin;
     this.#principal = input.principal;
     this.#projectIds = new Set(input.projectIds || []);
     this.#userPrincipal = input.userPrincipal;
@@ -146,6 +170,10 @@ class ItxAuthContext implements ItxAuth {
 
   get principal(): string {
     return this.#principal;
+  }
+
+  get origin(): "external" | "internal" {
+    return this.#origin;
   }
 
   /** The signed-in user behind this context, when the credential carried one. */
@@ -201,14 +229,22 @@ class ItxAuthContext implements ItxAuth {
 }
 
 export function trustedInternalAuthContext(): ItxAuthContext {
-  return new ItxAuthContext({ isAdmin: true, principal: "trusted-internal" });
+  return new ItxAuthContext({ isAdmin: true, origin: "internal", principal: "trusted-internal" });
 }
 
 const streamDeliveryAuthContexts = new WeakSet<ItxAuthContext>();
 
-/** Authority minted only while the stream spine evaluates a delivery expression. */
-export function streamDeliveryAuthContext(): ItxAuthContext {
-  const auth = trustedInternalAuthContext();
+/** Authority minted only while one source stream resolves and calls a receiver.
+ * Project streams can reach exactly their own project; only a deployment-global
+ * stream receives deployment-global authority. The private brand grants access
+ * to receiver-only methods without widening the ordinary project boundary. */
+export function streamDeliveryAuthContext(projectId: string | null): ItxAuthContext {
+  const auth = new ItxAuthContext({
+    isAdmin: projectId === null,
+    origin: "internal",
+    principal: "trusted-internal",
+    ...(projectId === null ? {} : { projectIds: [projectId] }),
+  });
   streamDeliveryAuthContexts.add(auth);
   return auth;
 }
@@ -259,11 +295,15 @@ export async function resolveItxAuth(input: {
   credentials: ItxAuthCredentials;
   headers: Headers;
   requestUrl: string;
-  /** The `project-secret` lane's verifier — dials the project's born
-   * `/secrets/project-api-key` Secret Durable Object for a one-bit
-   * constant-time comparison (rpc-targets wires it; auth stays free of DO
-   * plumbing). Absent means the caller does not serve that lane. */
-  verifyProjectSecret?: (input: { projectId: string; secret: string }) => Promise<boolean>;
+  /** The `project-secret` lane's verifier resolves the supplied slug/id and
+   * dials the project's born `/secrets/project-api-key` Secret Durable Object
+   * for a constant-time comparison (rpc-targets wires it; auth stays free of
+   * directory and DO plumbing). It returns the canonical id only after a
+   * match. Absent means the caller does not serve that lane. */
+  verifyProjectSecret?: (input: {
+    projectIdentifier: string;
+    secret: string;
+  }) => Promise<string | null>;
   /** The `project-app-session` lane's verifier — a local HS256 signature +
    * expiry check against the shared session secret (rpc-targets wires it).
    * Answers the token's own claims or null; absent means the caller does not
@@ -276,24 +316,31 @@ export async function resolveItxAuth(input: {
 
   if (credentials.type === "admin-secret") {
     assertAdminSecret(config, credentials.secret);
-    return new ItxAuthContext({ isAdmin: true, principal: "admin" });
+    return new ItxAuthContext({ isAdmin: true, origin: "external", principal: "admin" });
   }
 
   if (credentials.type === "project-secret") {
     if (input.verifyProjectSecret === undefined) throw new ItxAuthenticationError();
-    if (credentials.secret.length === 0) throw new ItxAuthenticationError();
-    const verified = await input.verifyProjectSecret({
-      projectId: credentials.projectId,
+    const hasProjectId = credentials.projectId !== undefined;
+    const hasProjectSlug = credentials.projectSlug !== undefined;
+    if (hasProjectId === hasProjectSlug || credentials.secret.length === 0) {
+      throw new ItxAuthenticationError();
+    }
+    const projectIdentifier = credentials.projectSlug ?? credentials.projectId;
+    if (projectIdentifier.length === 0) throw new ItxAuthenticationError();
+    const projectId = await input.verifyProjectSecret({
+      projectIdentifier,
       secret: credentials.secret,
     });
-    if (!verified) throw new ItxAuthenticationError();
+    if (projectId === null) throw new ItxAuthenticationError();
     // Exactly one project, no admin, no user identity — and no directory
     // fallback: the credential IS the project scope; there is nothing to
     // widen into.
     return new ItxAuthContext({
       isAdmin: false,
-      principal: `project-secret:${credentials.projectId}`,
-      projectIds: [credentials.projectId],
+      origin: "external",
+      principal: `project-secret:${projectId}`,
+      projectIds: [projectId],
     });
   }
 
@@ -307,6 +354,7 @@ export async function resolveItxAuth(input: {
     // through the proxied app.
     return new ItxAuthContext({
       isAdmin: false,
+      origin: "external",
       principal: `project-app-session:${claims.userId}@${claims.projectId}`,
       projectIds: [claims.projectId],
     });
@@ -378,11 +426,12 @@ export function itxAuthFromPrincipal(
   options: { allowDirectoryFallback?: boolean } = {},
 ): ItxAuthContext {
   if (principal.type === "admin") {
-    return new ItxAuthContext({ isAdmin: true, principal: "admin" });
+    return new ItxAuthContext({ isAdmin: true, origin: "external", principal: "admin" });
   }
   return new ItxAuthContext({
     directory: options.allowDirectoryFallback === false ? undefined : authWorkerProjectDirectory(),
     isAdmin: principalIsAdmin(principal),
+    origin: "external",
     principal: principal.userId,
     projectIds: principal.projects.map((project) => project.id),
     userPrincipal: principal,
@@ -391,10 +440,15 @@ export function itxAuthFromPrincipal(
 
 function contextFromImpersonatedToken(token: ItxAuthToken): ItxAuthContext {
   if (token.type === "admin") {
-    return new ItxAuthContext({ isAdmin: true, principal: token.principal ?? "admin" });
+    return new ItxAuthContext({
+      isAdmin: true,
+      origin: "external",
+      principal: token.principal ?? "admin",
+    });
   }
   return new ItxAuthContext({
     isAdmin: false,
+    origin: "external",
     principal: token.principal,
     projectIds: token.projectScopes,
   });

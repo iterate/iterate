@@ -299,6 +299,21 @@ function hasTypePredicateReturnType(sourceCode: SourceCode, fn: any) {
   const returnTypeText = sourceCode.getText(returnType);
   return /\basserts\b/.test(returnTypeText) || /\bis\b/.test(returnTypeText);
 }
+/** Expression types that bind looser than `&&`, so they need wrapping parens
+ * when placed on either side of it. `??` may not even mix with `&&`
+ * unparenthesized (SyntaxError), and `a || b && c` / `f && a ? b : c` parse
+ * with different groupings than the pre-fix code meant. */
+function needsParensInsideLogicalAnd(node: any) {
+  if (node.type === "LogicalExpression") return node.operator !== "&&";
+  return (
+    node.type === "ConditionalExpression" ||
+    node.type === "AssignmentExpression" ||
+    node.type === "ArrowFunctionExpression" ||
+    node.type === "YieldExpression" ||
+    node.type === "SequenceExpression"
+  );
+}
+
 function findVariableInScopeChain(scope: Scope.Scope | null, name: string) {
   for (let current = scope; current; current = current.upper) {
     const variable = current.variables.find((v: any) => v.name === name);
@@ -759,6 +774,50 @@ const plugin: StrictPlugin = {
                 ],
               });
             }
+          },
+        };
+      },
+    },
+    "prefer-logical-and-spread": {
+      meta: {
+        type: "suggestion",
+        fixable: "code",
+        docs: {
+          description:
+            "Prefer ...(cond && obj) over ...(cond ? obj : {}) in object literals. Object spread " +
+            "treats any falsy value like {}, so the empty-object arm is dead weight.",
+        },
+      },
+      create(context) {
+        return {
+          "ObjectExpression > SpreadElement > ConditionalExpression": (node: any) => {
+            const { test, consequent, alternate } = node;
+            if (alternate.type !== "ObjectExpression" || alternate.properties.length > 0) return;
+
+            // Comments living inside the ternary but outside the parts we keep
+            // (e.g. `f ? /* why */ {…} : {}`) would be dropped by the rewrite —
+            // report without a fix in that case.
+            const wouldDropComment = context.sourceCode.getAllComments().some((comment: any) => {
+              if (!comment.range || !node.range) return false;
+              const inside = (range: [number, number]) =>
+                comment.range[0] >= range[0] && comment.range[1] <= range[1];
+              return inside(node.range) && !inside(test.range) && !inside(consequent.range);
+            });
+
+            const wrap = (child: any) => {
+              const text = context.sourceCode.getText(child);
+              return needsParensInsideLogicalAnd(child) ? `(${text})` : text;
+            };
+            context.report({
+              node,
+              message:
+                "Spreading a falsy value into an object literal is a no-op, same as spreading {}. " +
+                "Use ...(cond && obj) instead of ...(cond ? obj : {}).",
+              ...(!wouldDropComment && {
+                fix: (fixer: Rule.RuleFixer) =>
+                  fixer.replaceText(node, `${wrap(test)} && ${wrap(consequent)}`),
+              }),
+            });
           },
         };
       },
@@ -1269,6 +1328,18 @@ const plugin: StrictPlugin = {
                 if (expr.type === "AwaitExpression") break;
               }
               if (!expr) return;
+              // expect(locator).toBeVisible() / .toContainText() are
+              // middlewright/prefer-locator-waits' territory (same verdict,
+              // plus an autofix) — skip them so one mistake reports once.
+              const matcher = node.parent;
+              if (
+                matcher?.type === "MemberExpression" &&
+                matcher.property.type === "Identifier" &&
+                (matcher.property.name === "toBeVisible" ||
+                  matcher.property.name === "toContainText")
+              ) {
+                return;
+              }
               context.report({
                 node,
                 message: `Use locators, not expect. Locators are configured to wait for loading UI to complete, so allow for faster failures and more reliable assertions. For example: page.getByText("...").waitFor() instead of expect(page.getByText("...")).toBeVisible(). If you can't use a locator and must use polling, expect.poll is acceptable.`,

@@ -14,7 +14,7 @@ import {
 } from "iterate/processors/testing";
 import { EMAIL_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
 import { EmailProcessor } from "./email-processor-implementation.ts";
-import type { EmailProcessorContract, InboundEmailPayload } from "./email-processor-contract.ts";
+import { EmailProcessorContract, type InboundEmailPayload } from "./email-processor-contract.ts";
 
 // -----------------------------------------------------------------------------
 // Event literals: the router's birth and the recurring inbound-mail payload.
@@ -88,7 +88,11 @@ function makeRouterHarness(substrate?: {
   const harness = makeProcessorHarness<EmailProcessorContract>({
     createProcessor: (deps) =>
       new EmailProcessor({ stream: deps.stream, path: deps.path, projectId: "prj_1" }),
-    substrate: { clock, stream, progress: substrate?.progress ?? makeMemoryProgressStore() },
+    substrate: {
+      clock,
+      stream,
+      progress: substrate?.progress ?? makeMemoryProgressStore(EmailProcessorContract),
+    },
   });
   return { ...harness, network };
 }
@@ -403,7 +407,7 @@ describe("EmailProcessor (thread router)", () => {
     const replay = makeRouterHarness({
       clock: h.clock,
       network: h.network,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(EmailProcessorContract),
     });
     await replay.settle(); // replays the whole stream; a wedge would throw here
 

@@ -20,8 +20,19 @@ type ProjectDrawerProps = {
 };
 
 export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerProps) {
+  return <DrawerButton project={{ projectId, projectSlug }} />;
+}
+
+/** The same drawer outside any project — signed-out screens included. Build
+ * info must be reachable from EVERYWHERE (it names the running channel and
+ * commit, the first thing to check when a preview looks wrong). */
+export function AppDrawerButton() {
+  return <DrawerButton project={null} />;
+}
+
+function DrawerButton({ project }: { project: { projectId: string; projectSlug: string } | null }) {
   const queryClient = useQueryClient();
-  const drawerKey = ["project-drawer", projectId];
+  const drawerKey = ["project-drawer", project === null ? "app" : project.projectId];
   const drawer = useQuery({
     queryKey: drawerKey,
     queryFn: async () => false,
@@ -57,12 +68,22 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
   const projectRoute =
     (
       pathname:
+        | "/project/[projectId]"
         | "/project/[projectId]/repos"
-        | "/project/[projectId]/examples"
-        | "/project/[projectId]/approvals",
+        | "/project/[projectId]/integrations"
+        | "/project/[projectId]/media"
+        | "/project/[projectId]/notes"
+        | "/project/[projectId]/notifications",
     ) =>
-    () =>
-      router.push({ pathname, params: { projectId, slug: projectSlug } });
+    () => {
+      // Only rendered inside the project !== null branch below; the guard is
+      // for the type system, not a reachable path.
+      if (project === null) return;
+      router.push({
+        pathname,
+        params: { projectId: project.projectId, slug: project.projectSlug },
+      });
+    };
 
   return (
     <>
@@ -106,9 +127,11 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
                 <Image source={require("../../assets/images/icon.png")} style={styles.logo} />
                 <View style={styles.brandCopy}>
                   <Text style={styles.brandName}>Iterate</Text>
-                  <Text numberOfLines={1} style={styles.projectSlug}>
-                    {projectSlug}
-                  </Text>
+                  {project !== null ? (
+                    <Text numberOfLines={1} style={styles.projectSlug}>
+                      {project.projectSlug}
+                    </Text>
+                  ) : null}
                 </View>
                 <Pressable
                   accessibilityLabel="Close project menu"
@@ -121,22 +144,42 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
               </View>
 
               <View style={styles.items}>
+                {project !== null ? (
+                  <>
+                    <DrawerItem
+                      label="/agents"
+                      onPress={() => close(projectRoute("/project/[projectId]"))}
+                    />
+                    <DrawerItem
+                      label="/integrations"
+                      onPress={() => close(projectRoute("/project/[projectId]/integrations"))}
+                    />
+                    <DrawerItem
+                      label="/repos"
+                      onPress={() => close(projectRoute("/project/[projectId]/repos"))}
+                    />
+                    <DrawerItem
+                      label="/media"
+                      onPress={() => close(projectRoute("/project/[projectId]/media"))}
+                    />
+                    <DrawerItem
+                      label="/notes"
+                      onPress={() => close(projectRoute("/project/[projectId]/notes"))}
+                    />
+                    <DrawerItem
+                      label="/notifications"
+                      onPress={() => close(projectRoute("/project/[projectId]/notifications"))}
+                    />
+                    <View style={styles.separator} />
+                    <DrawerItem
+                      label="Switch project"
+                      onPress={() => close(() => router.push("/projects"))}
+                    />
+                  </>
+                ) : null}
                 <DrawerItem
-                  label="/repos"
-                  onPress={() => close(projectRoute("/project/[projectId]/repos"))}
-                />
-                <DrawerItem
-                  label="Examples"
-                  onPress={() => close(projectRoute("/project/[projectId]/examples"))}
-                />
-                <DrawerItem
-                  label="Approvals"
-                  onPress={() => close(projectRoute("/project/[projectId]/approvals"))}
-                />
-                <View style={styles.separator} />
-                <DrawerItem
-                  label="Switch project"
-                  onPress={() => close(() => router.push("/projects"))}
+                  label="Build info"
+                  onPress={() => close(() => router.push("/build-info"))}
                 />
               </View>
             </View>

@@ -40,9 +40,10 @@ import { STREAM_CONTEXT_HEADER } from "./domains/projects/stream-context.ts";
 
 // Every Durable Object class in the product, plus the loopback entrypoints
 // (`ctx.exports`) shared by the itx runtime.
-export { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
-export { AgentCollectionDurableObject } from "./domains/agents/agent-collection-durable-object.ts";
-export { CapabilityHostDurableObject } from "./domains/capability-host/capability-host-durable-object.ts";
+// The facet host for ALL first-party stream processors: the Stream DO looks
+// this class up by the EXACT export name "ProcessorFacet"
+// (stream-durable-object.ts's facet dial) — never rename the export.
+export { ProcessorFacet } from "./domains/processor-facet-durable-object.ts";
 export { DeviceDurableObject } from "./domains/devices/device-durable-object.ts";
 // One sandbox container class per instance type — see src/domains/sandboxes/instance-types.ts.
 export {
@@ -291,20 +292,16 @@ function ingressLogFields(request: Request, route: Awaited<ReturnType<typeof dec
   return {
     ingress: {
       lane: route.lane,
-      ...((route.lane === "api" && path === "/api") || route.lane === "project"
-        ? {
-            transport:
-              request.headers.get("upgrade")?.toLowerCase() === "websocket"
-                ? ("websocket" as const)
-                : ("http" as const),
-          }
-        : {}),
-      ...(route.lane === "project"
-        ? {
-            projectId: route.resolved.projectId,
-            appSlug: route.resolved.appSlug ?? undefined,
-          }
-        : {}),
+      ...(((route.lane === "api" && path === "/api") || route.lane === "project") && {
+        transport:
+          request.headers.get("upgrade")?.toLowerCase() === "websocket"
+            ? ("websocket" as const)
+            : ("http" as const),
+      }),
+      ...(route.lane === "project" && {
+        projectId: route.resolved.projectId,
+        appSlug: route.resolved.appSlug ?? undefined,
+      }),
     },
   };
 }

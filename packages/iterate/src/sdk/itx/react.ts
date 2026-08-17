@@ -26,7 +26,7 @@
  *               useIterateSessionQuery({ key, query })   session read; NON-suspending (shell)
  *   LIVE STATE  useLiveState((itx) => itx.liveState, selector)  project snapshot + diffs
  *               useIterateSessionLiveState(...)                 session snapshot + diffs
- *   SUBSCRIBE   useItxSubscription((itx) => handle, deps)   raw event stream (escape hatch)
+ *   CONNECT     useStreamConnection((itx) => handle, deps)  raw event batches (escape hatch)
  *   MOUNT       <ProjectScope slug>   ambient project + reconnectable Cap'n Web provider
  *
  *   ACTIONS (mutations) — imperative on the handle, no extra primitive:
@@ -37,7 +37,7 @@
  * `useSyncExternalStore`; `snapshot.session` holds the LAST live session and is
  * kept across a transport gap. So `useIterateSession()` suspends exactly once —
  * first load, on the stable first-connect promise — and never again: when the
- * socket dies we keep showing the last session while a fresh generation dials
+ * socket dies we keep showing the last session while a fresh generation connects
  * in the background, then swap when it establishes. TanStack keeps cached read
  * data through a reconnect (no re-suspend, no spinner); only an in-flight read
  * retries, on the transport-only policy — see useItxQuery. A stray action fired
@@ -79,12 +79,12 @@ import {
   currentSnapshot,
   isItxTransportError,
   projectStubFor,
-  releaseItxSubscription,
+  releaseItxConnection,
   reportTransportSuspicion,
   serverSnapshot,
   subscribeSession,
-  watchItxSubscription,
-  type ItxLiveSubscriptionHandle,
+  watchItxConnection,
+  type ItxRecoverableConnectionHandle,
   type ProjectStub,
   type SessionStub,
 } from "../../itx/itx-session.ts";
@@ -101,7 +101,7 @@ export {
   retryFailedIterateSession,
   reportTransportSuspicion,
   type Itx,
-  type ItxLiveSubscriptionHandle,
+  type ItxRecoverableConnectionHandle,
   type IterateSessionConfig,
   type ProjectStub,
   type SessionStub,
@@ -174,7 +174,7 @@ export function ProjectScope({ slug, children }: { slug: string; children?: Reac
 
 /**
  * The shared TanStack retry policy for itx reads: retry ONLY transport-close
- * failures (a fresh generation is already re-dialing), briefly — application
+ * failures (a fresh generation is already reconnecting), briefly — application
  * errors surface immediately.
  */
 const itxTransportRetry = {
@@ -289,11 +289,11 @@ type RootConnection<Root> =
  * (the effect is keyed on the session generation), whose first server push is
  * the recovery. A hand-rolled `useEffect` reaching itx through a closure would
  * omit that dep and not recover on reconnect. That generation dep is also the
- * whole retry story for a failed dial: the failing dial has already published
+ * whole retry story for a failed connection attempt: the failing connection attempt has already published
  * its (paced) successor, which re-runs the effect — no timer needed here.
  *
  *   useReconnectableEffect(async (itx, signal) => {
- *     const sub = await itx.streams.get("/logs").subscribe({ processEventBatch });
+ *     const sub = await itx.streams.get("/logs").openConnection({ processEventBatch });
  *     if (signal.disposed) { sub.unsubscribe(); return; }
  *     return () => sub.unsubscribe();
  *   }, []);
@@ -360,30 +360,30 @@ function useReconnectableEffect<Root>(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. Live subscriptions: useItxSubscription() — recovery + watchdog; useLiveState()
+// 4. Push connections: useStreamConnection() — recovery + watchdog; useLiveState()
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** How long useItxSubscription waits before retrying a transport-failed subscribe. */
-const SUBSCRIBE_RETRY_MS = 10_000;
-/** A subscribe RPC must either establish or give recovery ownership back to the hook. */
-const SUBSCRIBE_TIMEOUT_MS = 15_000;
-const SUBSCRIBE_TIMED_OUT = Symbol("itx-subscribe-timed-out");
+/** How long useStreamConnection waits before retrying a failed open. */
+const CONNECTION_RETRY_MS = 10_000;
+/** An open RPC must either establish or give recovery ownership back to the hook. */
+const CONNECTION_TIMEOUT_MS = 15_000;
+const CONNECTION_TIMED_OUT = Symbol("itx-connection-timed-out");
 
-export type ItxSubscriptionStatus = LiveStateStatus;
+export type ItxConnectionStatus = LiveStateStatus;
 
-/** Shared reconnect and watchdog engine behind the public subscription hooks. */
-function useRecoveringSubscription<Root>(
-  subscribe: (root: Root) => Promise<ItxLiveSubscriptionHandle>,
+/** Shared reconnect and watchdog engine behind stream and live-state push APIs. */
+function useRecoveringConnection<Root>(
+  open: (root: Root) => Promise<ItxRecoverableConnectionHandle>,
   deps: unknown[],
   connection: RootConnection<Root>,
   enabled = true,
-): { status: ItxSubscriptionStatus; error?: string; refresh: () => void } {
+): { status: ItxConnectionStatus; error?: string; refresh: () => void } {
   const [epoch, setEpoch] = useState(0);
-  const [state, setState] = useState<{ status: ItxSubscriptionStatus; error?: string }>({
+  const [state, setState] = useState<{ status: ItxConnectionStatus; error?: string }>({
     status: "connecting",
   });
 
-  // Disabling makes the whole effect inert; reset status so a subscription
+  // Disabling makes the whole effect inert; reset status so a connection
   // disabled after a live period doesn't keep reporting "live".
   useEffect(() => {
     if (!enabled) setState({ status: "connecting" });
@@ -393,26 +393,26 @@ function useRecoveringSubscription<Root>(
     async (root, signal) => {
       setState({ status: "connecting" });
 
-      let subscription: ItxLiveSubscriptionHandle;
+      let openedConnection: ItxRecoverableConnectionHandle;
       try {
-        const pending = subscribe(root);
+        const pending = open(root);
         let timeout: ReturnType<typeof setTimeout> | undefined;
         const result = await Promise.race([
           pending,
-          new Promise<typeof SUBSCRIBE_TIMED_OUT>((resolve) => {
-            timeout = setTimeout(() => resolve(SUBSCRIBE_TIMED_OUT), SUBSCRIBE_TIMEOUT_MS);
+          new Promise<typeof CONNECTION_TIMED_OUT>((resolve) => {
+            timeout = setTimeout(() => resolve(CONNECTION_TIMED_OUT), CONNECTION_TIMEOUT_MS);
           }),
         ]).finally(() => clearTimeout(timeout));
-        if (result === SUBSCRIBE_TIMED_OUT) {
-          // A transport can disappear after the server accepted subscribe but
+        if (result === CONNECTION_TIMED_OUT) {
+          // A transport can disappear after the server accepted the open but
           // before the browser receives its handle. No handle means no ping
           // watchdog, and a half-open WebSocket emits no close event: without
           // this bound the UI stays "connecting" forever. REPORT the suspicion
           // (never close the shared socket ourselves — the verifier two-strikes
-          // and, if genuinely half-open, re-dials, whose generation re-runs this
-          // effect); a straggler handle is unsubscribed AND disposed.
+          // and, if genuinely half-open, reconnects, whose generation re-runs this
+          // effect); a straggler handle is closed AND disposed.
           void pending.then(
-            (late) => releaseItxSubscription(late),
+            (late) => releaseItxConnection(late),
             () => {},
           );
           if (signal.disposed) return;
@@ -422,11 +422,11 @@ function useRecoveringSubscription<Root>(
           // replacing already-loaded data with terminal error UI.
           setState({ status: "connecting" });
           // Retry regardless of the verifier's verdict: a wedged-but-alive
-          // server (cold DO) recovers on the next attempt, not on a re-dial.
-          const retry = setTimeout(() => setEpoch((current) => current + 1), SUBSCRIBE_RETRY_MS);
+          // server (cold DO) recovers on the next attempt, not on a reconnect.
+          const retry = setTimeout(() => setEpoch((current) => current + 1), CONNECTION_RETRY_MS);
           return () => clearTimeout(retry);
         }
-        subscription = result;
+        openedConnection = result;
       } catch (error) {
         // The ONE cancellation signal: a run superseded mid-await (unmount,
         // deps, reconnect) must not touch state its successor now owns.
@@ -441,26 +441,27 @@ function useRecoveringSubscription<Root>(
         // Recoverable transport failures never become terminal UI errors. Keep
         // already-loaded consumers rendered while this hook retries.
         setState({ status: "connecting" });
-        const retry = setTimeout(() => setEpoch((current) => current + 1), SUBSCRIBE_RETRY_MS);
+        const retry = setTimeout(() => setEpoch((current) => current + 1), CONNECTION_RETRY_MS);
         return () => clearTimeout(retry);
       }
-      const dispose = () => releaseItxSubscription(subscription);
+      const dispose = () => releaseItxConnection(openedConnection);
       if (signal.disposed) {
         dispose();
         return;
       }
       setState({ status: "live" });
 
-      const stopWatchdog = watchItxSubscription(
-        () => subscription.ping(),
+      const stopWatchdog = watchItxConnection(
+        () => openedConnection.ping(),
         () => {
           if (signal.disposed) return;
           setState({ status: "connecting" });
-          // Re-subscribe unconditionally. On a dead subscription the socket is
-          // fine and this is the whole recovery; on a transport timeout the
-          // verifier may be re-dialing, and the generation dep will also re-run
+          // Open again unconditionally. When only the server-side callback
+          // connection died, the shared transport is still fine and this is
+          // the whole recovery; on a transport timeout the
+          // verifier may be reconnecting, and the generation dep will also re-run
           // this effect — the epoch bump covers both, and a doubled
-          // re-subscribe is idempotent.
+          // second open is idempotent by connection key.
           setEpoch((current) => current + 1);
         },
       );
@@ -475,7 +476,7 @@ function useRecoveringSubscription<Root>(
     {
       enabled,
       // A failed connect never reaches setup, so without this the hook would sit
-      // on "connecting" forever. No timer: the failed dial has already published
+      // on "connecting" forever. No timer: the failed connection attempt has already published
       // a paced successor, and that generation dep re-runs the effect.
       onConnectionError: (error) => {
         setState(
@@ -500,31 +501,31 @@ function useRecoveringSubscription<Root>(
 }
 
 /**
- * Hold one raw project subscription for the component's lifetime. Reconnects,
- * silent subscription death, and transport-failed subscribe attempts recover
+ * Hold one raw stream callback connection for the component's lifetime.
+ * Reconnects, silent connection death, and transport-failed open attempts recover
  * through the shared watchdog; permanent failures remain in `"error"` until
- * `refresh()` or a reconnect. Re-subscription replays the first push, so sinks
- * must be replay-tolerant. Teardown unsubscribes and disposes the handle.
+ * `refresh()` or a reconnect. Reopening replays the first push, so callbacks
+ * must be replay-tolerant. Teardown closes and disposes the handle.
  *
- * `enabled: false` is inert; `deps` re-subscribe on change. `opts.slug` targets
+ * `enabled: false` is inert; `deps` reopen on change. `opts.slug` targets
  * a project outside the ambient {@link ProjectScope} without suspending.
  */
-export function useItxSubscription(
-  subscribe: (itx: ProjectStub) => Promise<ItxLiveSubscriptionHandle>,
+export function useStreamConnection(
+  open: (itx: ProjectStub) => Promise<ItxRecoverableConnectionHandle>,
   deps: unknown[],
   opts?: { enabled?: boolean; slug?: string },
-): { status: ItxSubscriptionStatus; error?: string; refresh: () => void } {
+): { status: ItxConnectionStatus; error?: string; refresh: () => void } {
   const scopedSlug = useContext(ProjectScopeContext);
   const slug = opts?.slug ?? scopedSlug;
-  return useRecoveringSubscription(
-    subscribe,
+  return useRecoveringConnection(
+    open,
     deps,
     {
       key: slug,
       ...(slug === undefined
         ? {
             missingMessage:
-              "useItxSubscription needs a project: pass { slug } or render under <ProjectScope slug>.",
+              "useStreamConnection needs a project: pass { slug } or render under <ProjectScope slug>.",
           }
         : { connect: () => connectItx(slug) }),
     },
@@ -561,7 +562,7 @@ export function useLiveState<State, Selected = State>(
   opts?: { slug?: string; enabled?: boolean },
 ): {
   value: Selected | undefined;
-  status: ItxSubscriptionStatus;
+  status: ItxConnectionStatus;
   error?: string;
   refresh: () => void;
 } {
@@ -593,7 +594,7 @@ export function useIterateSessionLiveState<State, Selected = State>(
   opts?: { enabled?: boolean },
 ): {
   value: Selected | undefined;
-  status: ItxSubscriptionStatus;
+  status: ItxConnectionStatus;
   error?: string;
   refresh: () => void;
 } {

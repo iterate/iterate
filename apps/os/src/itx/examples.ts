@@ -4,7 +4,9 @@
 // script body that runs with `itx` and `vars` in scope and uses an explicit
 // `return` — exactly the shape every runtime accepts:
 //
-//   browser         the REPL (compileBrowserReplFunction wraps the body)
+//   browser         the project REPL — submits the body through
+//                   capabilityHosts.get("/repl/<user>").runScript, i.e. the
+//                   same server-side script isolate as run-script
 //   node            AsyncFunction("itx", "vars", code) on a Cap'n Web stub
 //   run-script      itx.capabilityHost.runScript(`async (itx) => { const vars = …; <body> }`)
 //                   — the server-side script isolate agents use
@@ -21,8 +23,9 @@
 // `runtimes` records where a snippet genuinely works unattended. Live
 // capabilities (provideCapability with a `capability` value) are session-bound
 // — the provider object lives in the calling process — so those entries stay
-// browser/node/cli only. Everything else must stay runtime-agnostic: no
-// pipelining tricks, plain serializable return values.
+// node/cli only (the browser REPL executes server-side and cannot host a live
+// provider). Everything else must stay runtime-agnostic: no pipelining
+// tricks, plain serializable return values.
 //
 // ENTRIES ARE NOT EDITED HERE: the catalogue is authored as TYPED FUNCTIONS
 // in ./examples-source.ts (so bodies typecheck against the real itx surface)
@@ -70,3 +73,12 @@ export type ItxExample = {
 };
 
 export { ITX_EXAMPLES } from "./examples.generated.ts";
+
+/** The run-script envelope every server-side runtime uses: the entry's body
+ * with the call's vars serialized inline (see the CapabilityHost contract).
+ * Lives with the catalogue so every runner — the e2e matrix, the mobile
+ * Examples screen's server round-trip, and chat's `/example` slash command —
+ * provably runs the SAME envelope. */
+export function runScriptEnvelope(code: string, vars: Record<string, unknown>): string {
+  return `async (itx) => {\nconst vars = ${JSON.stringify(vars)};\n${code}\n}`;
+}

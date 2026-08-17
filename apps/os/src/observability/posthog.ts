@@ -1,3 +1,4 @@
+import { shouldSendPosthogEvents } from "@iterate-com/shared/posthog";
 import { PostHog } from "posthog-node";
 import type { AppConfig } from "~/config.ts";
 
@@ -37,6 +38,8 @@ export async function withPosthogExceptionCapture<T>(
 /** Report an unhandled backend exception without changing the failed operation. */
 export function schedulePosthogException(input: PosthogExceptionContext & { error: unknown }) {
   try {
+    if (input.config.posthog?.capture !== true) return;
+    if (!shouldSendPosthogEvents(input.config.cloudflare.workerName)) return;
     const apiKey = input.config.posthog?.apiKey;
     if (!apiKey || scheduledOperations.has(input.operation)) return;
     scheduledOperations.add(input.operation);
@@ -78,7 +81,7 @@ async function capturePosthogException(
   const removeErrorListener = client.on("error", reportDeliveryFailure);
   const properties: Record<string, unknown> = {
     $environment: input.config.cloudflare.workerName ?? "os-local",
-    ...(input.projectId ? { $groups: { project: input.projectId } } : {}),
+    ...(input.projectId && { $groups: { project: input.projectId } }),
     ...requestProperties(input.request),
     ...input.properties,
   };
@@ -112,6 +115,6 @@ function requestProperties(request?: Request) {
   return {
     $current_url: `${url.origin}${url.pathname}`,
     http_method: request.method,
-    ...(request.headers.get("cf-ray") ? { cf_ray: request.headers.get("cf-ray") } : {}),
+    ...(request.headers.get("cf-ray") && { cf_ray: request.headers.get("cf-ray") }),
   };
 }

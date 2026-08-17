@@ -14,18 +14,21 @@ import {
 
 it("does not emit the local forge JWKS into deployed builds", () => {
   const forgePrivateJwk = JSON.stringify({
-    kty: "OKP",
+    kty: "EC",
     kid: "test-forge",
-    crv: "Ed25519",
-    alg: "EdDSA",
-    x: "public-key",
+    crv: "P-256",
+    alg: "ES256",
+    x: "public-x",
+    y: "public-y",
     d: "private-key",
   });
 
   expect(localDevAuthJwks({ forgePrivateJwk, deployedEnv: "prd" })).toBeUndefined();
   expect(localDevAuthJwks({ forgePrivateJwk, deployedEnv: undefined })).toBe(
     JSON.stringify({
-      keys: [{ kty: "OKP", kid: "test-forge", crv: "Ed25519", alg: "EdDSA", x: "public-key" }],
+      keys: [
+        { kty: "EC", kid: "test-forge", crv: "P-256", alg: "ES256", x: "public-x", y: "public-y" },
+      ],
     }),
   );
 });
@@ -49,6 +52,12 @@ it("names the top-level configs by service so cf:service script tags stay env-le
   expect(config.name).toBe("os");
   expect(typecheckerConfig.name).toBe("os-typechecker");
   expect(workerBundlerConfig.name).toBe("os-worker-bundler");
+});
+
+it("gives long-lived OS invocations the maximum subrequest headroom", () => {
+  expect(config.limits).toEqual({ subrequests: 10_000_000 });
+  expect(typecheckerConfig).not.toHaveProperty("limits");
+  expect(workerBundlerConfig).not.toHaveProperty("limits");
 });
 
 it("gives every deployed env its own worker name derived from the service name", () => {
@@ -96,7 +105,7 @@ it("binds local OS to the selected auth worker's default entrypoint", () => {
   expect(auth).toEqual({
     binding: "AUTH",
     service: selected.authWorkerName,
-    ...(selected.authRemote ? { remote: true } : {}),
+    ...(selected.authRemote && { remote: true }),
   });
 });
 
@@ -179,6 +188,13 @@ it("exposes the selected environment name to browser-facing config", () => {
 
 it("does not retain a reconciled Durable Object tombstone", () => {
   expect(config.exports).not.toHaveProperty("CloudflareSandboxDurableObject");
+});
+
+it("retires the deleted template coordinator namespace", () => {
+  expect(config.exports.RepoCreationCoordinatorDurableObject).toEqual({
+    type: "durable-object",
+    state: "deleted",
+  });
 });
 
 it("routes public event docs hosts to the os worker", () => {

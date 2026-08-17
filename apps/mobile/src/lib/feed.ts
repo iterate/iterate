@@ -7,6 +7,8 @@
 
 import {
   formatAgentUiActivitySummary,
+  formatAgentUiDuration,
+  summarizeAgentUiActivity,
   initialAgentUiState,
   isAgentUiActivityWorking,
   reduceAgentUi,
@@ -26,6 +28,9 @@ export type {
   AgentUiStep,
   AgentUiStreamWakeItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+// Round grouping lives with the reducer so the os web feed groups the same
+// way (apps/os/src/components/agent-feed.tsx renders the same rounds).
+export { groupActivityRounds } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 export type AgentFeed = {
   /** Settled items in order, then queued user messages, then the live activity. */
@@ -105,5 +110,22 @@ export function collapseConsecutiveStreamWakes(items: AgentUiItem[]): MobileFeed
 
 /** One-line summary for a collapsed activity row: "Ran code 2× · 3 requests · 7.4s". */
 export function summarizeActivity(activity: AgentUiActivity): string {
-  return formatAgentUiActivitySummary(activity);
+  // When the agent authored an activity label ("Factoring the number"), that
+  // plus the duration is the headline; the counts are one expand away —
+  // parity with the os feed's AgentActivityRow. Failures and interruptions
+  // keep the full stats line.
+  const summary = summarizeAgentUiActivity(activity);
+  const label = [...activity.steps]
+    .reverse()
+    .flatMap((step) => (step.kind === "code" && step.activitySummary ? [step.activitySummary] : []))
+    .at(0);
+  if (label == null || summary.outcome !== "clean") {
+    return `${label == null ? "" : `${label} · `}${formatAgentUiActivitySummary(activity)}`;
+  }
+  return [
+    label,
+    ...(activity.endedAtMs == null
+      ? []
+      : [formatAgentUiDuration(Math.max(0, activity.endedAtMs - activity.startedAtMs))]),
+  ].join(" · ");
 }

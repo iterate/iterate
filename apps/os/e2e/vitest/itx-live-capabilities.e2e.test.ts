@@ -296,7 +296,7 @@ test("Successful live capability replacement uses the new target", async () => {
   });
   using project = await itx.projects.get(`replace-live-${marker}`).create({});
 
-  using _oldProvision = await project.provideCapability({
+  using oldProvision = await project.provideCapability({
     path: ["replaceProbe"],
     type: "live",
     capability: {
@@ -309,7 +309,7 @@ test("Successful live capability replacement uses the new target", async () => {
   // @ts-expect-error - dynamic capability root
   expect(await project.replaceProbe.value()).toBe(`old:${marker}`);
 
-  using _newProvision = await project.provideCapability({
+  using newProvision = await project.provideCapability({
     path: ["replaceProbe"],
     type: "live",
     capability: {
@@ -320,6 +320,60 @@ test("Successful live capability replacement uses the new target", async () => {
   });
   // @ts-expect-error - dynamic capability root
   expect(await project.replaceProbe.value()).toBe(`new:${marker}`);
+  // Same settle-loop posture as the race test: expect.poll has been losing
+  // vitest test context on this file under preview retries.
+  const deadline = Date.now() + 15_000;
+  let oldActive = true;
+  while (Date.now() < deadline) {
+    oldActive = await capabilityProviderPagerActive(oldProvision);
+    if (!oldActive) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  expect(oldActive).toBe(false);
+  expect(await capabilityProviderPagerActive(newProvision)).toBe(true);
+});
+
+test("Racing same-path live provisions leave one coherent durable and socket winner", async () => {
+  const marker = crypto.randomUUID();
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = await itx.projects.get(`race-live-${marker}`).create({});
+
+  const firstMount = project.provideCapability({
+    path: ["raceProbe"],
+    type: "live",
+    capability: { value: () => `first:${marker}` },
+  });
+  const secondMount = project.provideCapability({
+    path: ["raceProbe"],
+    type: "live",
+    capability: { value: () => `second:${marker}` },
+  });
+  using firstProvision = await firstMount;
+  using secondProvision = await secondMount;
+
+  // Manual settle loop instead of expect.poll: after a race, one Pager-backed mount must
+  // become inactive before we assert the durable winner, and vitest's poll
+  // helper has been flaky about test context on this path under preview retry.
+  const deadline = Date.now() + 15_000;
+  let activeCount = -1;
+  while (Date.now() < deadline) {
+    activeCount =
+      Number(await capabilityProviderPagerActive(firstProvision)) +
+      Number(await capabilityProviderPagerActive(secondProvision));
+    if (activeCount === 1) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  expect(activeCount).toBe(1);
+  const expected = (await capabilityProviderPagerActive(firstProvision))
+    ? `first:${marker}`
+    : `second:${marker}`;
+  // @ts-expect-error - dynamic capability root
+  expect(await project.raceProbe.value()).toBe(expected);
 });
 
 test("itx expression replacement records the recipe without evaluating it", async () => {
@@ -348,14 +402,14 @@ test("itx expression replacement records the recipe without evaluating it", asyn
       ["get", { source: { createWorker: { files: { type: "inline" } } }, type: "stateless" }],
     ],
     path: ["replaceProbe"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   const description = await project.__describe();
   expect(description).toMatchObject({
     capabilities: expect.arrayContaining([
       expect.objectContaining({
         path: ["replaceProbe"],
-        type: "itx-expression",
+        type: "itx-call",
       }),
     ]),
   });
@@ -435,3 +489,9 @@ test("Authenticated project can provide the Slack SDK as nested dotted functions
     await mock.close();
   }
 });
+
+function capabilityProviderPagerActive(provision: unknown): Promise<boolean> {
+  return (
+    provision as { __capabilityProviderPagerActive(): Promise<boolean> }
+  ).__capabilityProviderPagerActive();
+}

@@ -28,8 +28,8 @@ const OsPlaywrightAuthEnv = z.object({
   APP_CONFIG_ITERATE_AUTH__CLIENT_ID: z.string().min(1),
   /** Auth issuer used for both forged access and id tokens. */
   APP_CONFIG_ITERATE_AUTH__ISSUER: z.url(),
-  /** Private half of the Auth signing key whose public half OS trusts. */
-  AUTH_FORGE_PRIVATE_JWK: z
+  /** Private half of the ES256 Auth signing key whose public half OS trusts. */
+  AUTH_FORGE_ES256_PRIVATE_JWK: z
     .string()
     .min(1)
     .refine((value) => {
@@ -140,17 +140,21 @@ export async function connectAdminItx(baseUrl: string) {
   return connectPlaywrightAdminItx({ baseUrl, config });
 }
 
+/** The OS admin API secret, for specs that dial project-scoped itx handles directly. */
+export async function resolveAdminSecret(): Promise<string> {
+  return (await resolveOsPlaywrightAuthConfig()).adminApiSecret;
+}
+
 async function createAdminProjectAfterPreviewRollout(input: {
   baseUrl: string;
   config: OsPlaywrightAuthConfig;
   slug: string;
 }) {
-  // itx-v4 cutover: this used to dial the legacy client (`withItx({baseUrl,
-  // token})`) and then poll `project.processor.onStateChange` until the
-  // project reached phase "ready". The itx create resolves only after the
-  // bootstrap saga commits project/ready (sibling processors born, config repo
-  // seeded, project worker probed), so the readiness wait is gone and auth is
-  // an explicit admin-secret credential on connect.
+  // create() resolves only after the bootstrap saga commits terminal
+  // project/created (sibling processors born, config repo seeded, the seed
+  // worker reachable, and its permanent feed installed), so no separate
+  // lifecycle poll is needed. The shared helper retries the initial admin
+  // connection while a preview deployment finishes converging.
   using session = await connectPlaywrightAdminItx(input);
   using created = await session.projects.get(input.slug).create({});
   const description = await created.__describe();
@@ -258,7 +262,7 @@ async function loadOsPlaywrightAuthConfig(): Promise<OsPlaywrightAuthConfig> {
   return {
     adminApiSecret: env.APP_CONFIG_ADMIN_API_SECRET,
     clientId: env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID,
-    forgePrivateJwk: env.AUTH_FORGE_PRIVATE_JWK,
+    forgePrivateJwk: env.AUTH_FORGE_ES256_PRIVATE_JWK,
     issuer: env.APP_CONFIG_ITERATE_AUTH__ISSUER,
   };
 }

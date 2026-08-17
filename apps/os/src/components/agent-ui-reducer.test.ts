@@ -180,6 +180,76 @@ describe("agent-ui reducer", () => {
     });
   });
 
+  test("stamps the summary activity onto the running code step as it lands", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 5,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: { executionId: "x1", code: "await work()", expiresAt: SCRIPT_EXPIRES_AT },
+      },
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { title: "FirstFT roundup", activity: "Searching the five most recent emails" },
+      },
+    ]);
+
+    expect(state.summaryActivity).toBe("Searching the five most recent emails");
+    expect(state.live?.steps.at(-1)).toMatchObject({
+      kind: "code",
+      status: "running",
+      activitySummary: "Searching the five most recent emails",
+    });
+  });
+
+  test("a round that never updates the summary inherits the stream status as of that round", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 5,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: { executionId: "x1", code: "await round1()", expiresAt: SCRIPT_EXPIRES_AT },
+      },
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { activity: "Running script 1 of 2" },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x1", settlement: { status: "succeeded", result: 1 } },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: { executionId: "x2", code: "await round2()", expiresAt: SCRIPT_EXPIRES_AT },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x2", settlement: { status: "succeeded", result: 2 } },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: { executionId: "x3", code: "await round3()", expiresAt: SCRIPT_EXPIRES_AT },
+      },
+    ]);
+
+    const codeSteps = state.live?.steps.filter((step) => step.kind === "code");
+    expect(codeSteps).toMatchObject([
+      { executionId: "x1", activitySummary: "Running script 1 of 2" },
+      // x2's script appended no summary — the round's status is whatever the
+      // stream's summary said as of that round.
+      { executionId: "x2", activitySummary: "Running script 1 of 2" },
+      // x3 inherits from BIRTH, so live headers and inferred (deadline/idle)
+      // closes carry the status too — not only durable settles.
+      { executionId: "x3", status: "running", activitySummary: "Running script 1 of 2" },
+    ]);
+  });
+
   test("llm-request-settled succeeded closes the step", () => {
     const state = reduceAll([
       {
@@ -437,6 +507,72 @@ describe("agent-ui reducer", () => {
     });
   });
 
+  // Regression: prod stream agents/web/2026-08-07t15-50-03-269z. The script
+  // sent the visible reply (deferred while its code step ran), settled, and
+  // the stream went quiet — the journal fold alone must emit the reply, not
+  // hold it hostage until a runtime transition or some future event arrives.
+  test("flushes a script-sent reply when its script settles and nothing else is running", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "ok what model are you using?",
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 10,
+        payload: { model: "xai/grok-4.5" },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "assistant",
+          llmRequestOffset: 10,
+          content: "```ts\nasync (itx) => {\n  await itx.chat.sendMessage('grok');\n}\n```",
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: { requestOffset: 10, result: { status: "succeeded", text: "…" } },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: {
+          executionId: "agent-output:12",
+          code: "async (itx) => {\n  await itx.chat.sendMessage('grok');\n}",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/web-message-sent",
+        payload: { message: "I'm using **xai/grok-4.5**." },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "agent-output:12", settlement: { status: "succeeded" } },
+      },
+    ]);
+
+    expect(state.live).toBeNull();
+    expect(state.deferredAssistantMessages).toEqual([]);
+    expect(state.items.map((item) => item.kind)).toEqual(["user", "activity", "assistant"]);
+    expect(state.items.at(-1)).toMatchObject({
+      kind: "assistant",
+      text: "I'm using **xai/grok-4.5**.",
+    });
+    expect(state.items[1]).toMatchObject({
+      kind: "activity",
+      status: "done",
+      steps: [
+        { kind: "llm", status: "done", outcome: "completed" },
+        { kind: "code", executionId: "agent-output:12", status: "done", success: true },
+      ],
+    });
+  });
+
   test("accumulates agent llm-response-chunk deltas", () => {
     const state = reduceAll([
       {
@@ -469,14 +605,14 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  test("tracks subscriber presence including processor announcements", () => {
+  test("tracks open callback connections including processor announcements", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/stream/subscriber-connected",
+        type: "events.iterate.com/stream/connection-opened",
         payload: {
-          subscriptionKey: "agent:agent",
-          direction: "outbound",
-          subscriber: {
+          connectionKey: "agent:agent",
+          kind: "hosted",
+          openedBy: {
             incarnationId: "i1",
             processor: {
               announcement: {
@@ -492,11 +628,11 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/stream/subscriber-connected",
+        type: "events.iterate.com/stream/connection-opened",
         payload: {
-          subscriptionKey: "browser:tab-1",
-          direction: "inbound",
-          subscriber: {
+          connectionKey: "browser:tab-1",
+          kind: "session",
+          openedBy: {
             description: "browser",
             user: {
               id: "usr_jonas",
@@ -508,19 +644,21 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/stream/subscriber-disconnected",
-        payload: { subscriptionKey: "browser:tab-1", reason: "unsubscribed" },
+        type: "events.iterate.com/stream/connection-closed",
+        payload: { connectionKey: "browser:tab-1", reason: "closed-by-owner" },
       },
     ]);
 
     expect(state.presence).toHaveLength(2);
     expect(state.presence[0]).toMatchObject({
-      subscriptionKey: "agent:agent",
+      connectionKey: "agent:agent",
+      connectionKind: "hosted",
       connected: true,
       processor: { slug: "agent", version: "0.1.0" },
     });
     expect(state.presence[1]).toMatchObject({
-      subscriptionKey: "browser:tab-1",
+      connectionKey: "browser:tab-1",
+      connectionKind: "session",
       connected: false,
       user: {
         id: "usr_jonas",
@@ -531,33 +669,33 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  test("clears stale subscriber metadata when a subscription key reconnects", () => {
+  test("clears stale opener metadata when a connection key reopens", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/stream/subscriber-connected",
+        type: "events.iterate.com/stream/connection-opened",
         payload: {
-          subscriptionKey: "browser:tab-1",
-          direction: "inbound",
-          subscriber: {
+          connectionKey: "browser:tab-1",
+          kind: "session",
+          openedBy: {
             description: "browser",
             user: { email: "jonas@example.com", name: "Jonas Temple" },
           },
         },
       },
       {
-        type: "events.iterate.com/stream/subscriber-connected",
+        type: "events.iterate.com/stream/connection-opened",
         payload: {
-          subscriptionKey: "browser:tab-1",
-          direction: "inbound",
-          subscriber: { description: "browser" },
+          connectionKey: "browser:tab-1",
+          kind: "session",
+          openedBy: { description: "browser" },
         },
       },
     ]);
 
     expect(state.presence).toEqual([
       {
-        subscriptionKey: "browser:tab-1",
-        direction: "inbound",
+        connectionKey: "browser:tab-1",
+        connectionKind: "session",
         connected: true,
         description: "browser",
       },
@@ -578,8 +716,8 @@ describe("agent-ui reducer", () => {
       { type: "events.iterate.com/stream/created" },
       { type: "events.iterate.com/stream/woken" },
       {
-        type: "events.iterate.com/stream/subscriber-connected",
-        payload: { subscriptionKey: "agent:agent", direction: "outbound" },
+        type: "events.iterate.com/stream/connection-opened",
+        payload: { connectionKey: "agent:agent", kind: "hosted" },
       },
       { type: "events.iterate.com/stream/woken" },
     ]);
@@ -592,7 +730,7 @@ describe("agent-ui reducer", () => {
         timestampMs: Date.parse("2026-06-11T00:00:04.000Z"),
       },
     ]);
-    expect(state.presence).toMatchObject([{ subscriptionKey: "agent:agent", connected: false }]);
+    expect(state.presence).toMatchObject([{ connectionKey: "agent:agent", connected: false }]);
   });
 
   test("a durable rebuild recovers the interrupted partial from the settled fact", () => {
@@ -1579,5 +1717,119 @@ describe("agent-ui reducer", () => {
       totalReasoningOutputTokens: 0,
       lastReport: null,
     });
+  });
+});
+
+describe("interpreted responses (userland response formats)", () => {
+  test("derived events mark the llm step interpreted; uninterpreted turns stay plain", () => {
+    const reduced = reduceAll([
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "assistant",
+          content: 'Hi!\n<codemode status="Working">\nreturn 1\n</codemode>',
+          llmRequestOffset: 1,
+        },
+      },
+      // The userland interpreter's derived events, in its committed order:
+      // the script extracted from the assistant event (offset 2) FIRST — so
+      // the code step joins the request's still-open activity — then the
+      // extracted prose (marked with the request offset).
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: {
+          code: "async (itx) => {\nreturn 1\n}",
+          executionId: "agent-output:2",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/web-message-sent",
+        payload: { message: "Hi!", llmRequestOffset: 1 },
+      },
+    ]);
+    const llmStep = reduced.live?.steps.find((step) => step.kind === "llm");
+    expect(llmStep).toMatchObject({ assistantEventOffset: 2, interpreted: true });
+    // The extracted prose still becomes the assistant bubble (deferred until
+    // the live round settles, like any mid-turn assistant message).
+    expect(reduced.deferredAssistantMessages).toMatchObject([{ text: "Hi!" }]);
+
+    // A plain turn (no derived events) is NOT marked.
+    const plain = reduceAll([
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "assistant", content: "Just prose.", llmRequestOffset: 1 },
+      },
+    ]);
+    const plainStep = plain.live?.steps.find((step) => step.kind === "llm");
+    expect(plainStep).toMatchObject({ assistantEventOffset: 2 });
+    expect(plainStep).not.toHaveProperty("interpreted");
+  });
+
+  test("a classic fenced turn's extracted script also marks its step interpreted", () => {
+    const reduced = reduceAll([
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "assistant",
+          content: "```ts\nasync (itx) => 1\n```",
+          llmRequestOffset: 1,
+        },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: {
+          code: "async (itx) => 1",
+          executionId: "agent-output:2",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+    ]);
+    expect(reduced.live?.steps.find((step) => step.kind === "llm")).toMatchObject({
+      interpreted: true,
+    });
+  });
+});
+
+describe("interpreted turn grouping", () => {
+  test("script-before-prose keeps the whole turn in ONE activity, rounds paired", () => {
+    const reduced = reduceAll([
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "assistant",
+          content: 'Hi!\n<codemode status="Working">\nreturn 1\n</codemode>',
+          llmRequestOffset: 1,
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: { requestOffset: 1, result: { status: "succeeded", text: "…" } },
+      },
+      // Userland order: script first (joins the request's activity), prose
+      // second (defers — the activity is now working again).
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: {
+          code: "async (itx) => 1",
+          executionId: "agent-output:2",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/web-message-sent",
+        payload: { message: "Hi!", llmRequestOffset: 1 },
+      },
+    ]);
+    // No settled activity item was flushed mid-turn: the request and its
+    // extracted code live in the SAME activity.
+    expect(reduced.items.filter((item) => item.kind === "activity")).toHaveLength(0);
+    expect(reduced.live?.steps.map((step) => step.kind)).toEqual(["llm", "code"]);
+    // The prose deferred (the activity is working) instead of splitting it.
+    expect(reduced.deferredAssistantMessages).toMatchObject([{ text: "Hi!" }]);
   });
 });

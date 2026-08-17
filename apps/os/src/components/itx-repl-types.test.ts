@@ -8,8 +8,11 @@ import { itxReplAutocompleteWorker } from "./itx-repl-autocomplete.ts";
 import { getAutocompletionWithDocs } from "./itx-repl-autocomplete-worker.ts";
 import {
   ITX_TYPES_PATH,
+  REPL_SCOPE_GLOBALS_PATH,
+  REPL_SCOPE_PREAMBLE_PATH,
   itxReplDeclaration,
   itxTypesDeclaration,
+  replScopeModules,
   type ItxReplTypeScriptWorker,
 } from "./itx-repl-types.ts";
 
@@ -37,14 +40,13 @@ describe("itx REPL TypeScript declarations", () => {
       context: { explicit: true, pos: "itx.".length },
     });
 
-    // The handle is Session & Project (see the prelude): the Session catalog and
-    // every project built-in must complete.
+    // The handle is the Project surface (see the prelude — the REPL always
+    // holds a project context now): every project built-in must complete.
     const labels = new Set(result?.options.map((option) => option.label));
     for (const member of [
       "__describe",
       "capabilityHost",
       "capabilityHosts",
-      "projects",
       "provideCapability",
       "repo",
       "secrets",
@@ -55,21 +57,20 @@ describe("itx REPL TypeScript declarations", () => {
     }
   });
 
-  test("REPL session globals from the prelude type-check in a snippet", () => {
-    // Every global the REPL runtime injects (see ~/itx/browser-repl.ts) must
-    // be declared by the prelude, with the design-of-record types attached.
+  test("REPL globals from the prelude type-check in a snippet", () => {
+    // Every global the script runtime injects (`itx`, `vars` — see the wrap
+    // in itx-scope-repl-entries.ts) must be declared by the prelude, with the
+    // design-of-record types attached.
     const code = [
-      'const projectScoped: string = projectId ?? "global";',
-      "const target: object = new RpcTarget();",
+      "const parameters: Record<string, any> = vars;",
       "const read: (handle: Project) => Promise<StreamEvent[]> = (handle) =>",
       '  handle.streams.get("/chat").getEvents();',
       "const recipe: ProvideCapabilityInput = {",
       '  expression: ["streams", ["get", "/x"]],',
       '  path: ["alias"],',
-      '  type: "itx-expression",',
+      '  type: "itx-call",',
       "};",
-      "const previous: unknown[] = [$_, _, vars.anything, recipe];",
-      "[projectScoped, target, read, previous];",
+      "[parameters, read, recipe];",
     ].join("\n");
     const env = createReplTypeScriptEnv(code);
 
@@ -79,10 +80,46 @@ describe("itx REPL TypeScript declarations", () => {
     expect(diagnostics).toEqual([]);
   });
 
+  test("scope preamble modules give results its real types", () => {
+    // What the platform assembles for a scope with one small settled result
+    // (see capability-host-preamble.ts renderResultsArray).
+    const preambleTs = [
+      "// ── prior script results, newest first (assembled by the platform) ──",
+      "const __resultRows = [",
+      '  { offset: 12, executionId: "run-1", data: { count: 3 } },',
+      "] as const;",
+      "const results = Object.assign(__resultRows, {",
+      '  byOffset: <O extends (typeof __resultRows)[number]["offset"]>(offset: O) => {',
+      "    const match = __resultRows.find((row) => row.offset === offset);",
+      '    if (!match) throw new Error("no retained script result settled at offset " + offset);',
+      "    return match as Extract<(typeof __resultRows)[number], { offset: O }>;",
+      "  },",
+      "});",
+    ].join("\n");
+    const code = [
+      "const count: number = results[0].data.count;",
+      "const stable: number = results.byOffset(12).data.count;",
+      "[count, stable];",
+    ].join("\n");
+    const env = createReplTypeScriptEnv(code, replScopeModules(preambleTs));
+
+    const diagnostics = env.languageService
+      .getSemanticDiagnostics(REPL_SOURCE_PATH)
+      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+    expect(diagnostics).toEqual([]);
+  });
+
+  test("without settled results the results name does not exist", () => {
+    const env = createReplTypeScriptEnv("results;", replScopeModules(null));
+    const diagnostics = env.languageService
+      .getSemanticDiagnostics(REPL_SOURCE_PATH)
+      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+    expect(diagnostics).toEqual(["Cannot find name 'results'."]);
+  });
+
   test("core itx calls type-check against the raw types file", () => {
     const code = [
-      // itx is Session & Project; pin the project overload of __describe.
-      "const description = await (itx as Project).__describe();",
+      "const description = await itx.__describe();",
       'const events = await itx.streams.get("/x").append({ type: "demo", payload: { a: 1 } });',
       "const commit = await itx.repo.commitFiles({",
       '  changes: [{ content: "hi", path: "notes/hi.md" }],',
@@ -108,7 +145,7 @@ describe("itx REPL TypeScript declarations", () => {
     });
 
     const labels = new Set(result?.options.map((option) => option.label));
-    for (const member of ["append", "getEvents", "subscribe", "waitForEvent"]) {
+    for (const member of ["append", "getEvents", "openConnection", "waitForEvent"]) {
       expect(labels, `expected completion "${member}"`).toContain(member);
     }
   });
@@ -138,18 +175,30 @@ describe("itx REPL TypeScript declarations", () => {
   });
 });
 
-function createReplTypeScriptEnv(code: string): VirtualTypeScriptEnvironment {
-  const service = createReplLanguageService(code);
+function createReplTypeScriptEnv(
+  code: string,
+  scopeModules?: { globals: string; preamble: string },
+): VirtualTypeScriptEnvironment {
+  const service = createReplLanguageService(code, scopeModules);
   return {
     getSourceFile: (path: string) => service.getProgram()?.getSourceFile(path),
     languageService: service,
   } as VirtualTypeScriptEnvironment;
 }
 
-function createReplLanguageService(code: string): ts.LanguageService {
+function createReplLanguageService(
+  code: string,
+  scopeModules?: { globals: string; preamble: string },
+): ts.LanguageService {
   const files = new Map<string, string>([
     [ITX_TYPES_PATH, itxTypesDeclaration],
     [REPL_TYPES_PATH, itxReplDeclaration],
+    ...(scopeModules
+      ? ([
+          [REPL_SCOPE_PREAMBLE_PATH, scopeModules.preamble],
+          [REPL_SCOPE_GLOBALS_PATH, scopeModules.globals],
+        ] as const)
+      : []),
     [REPL_SOURCE_PATH, code],
   ]);
   const host: ts.LanguageServiceHost = {

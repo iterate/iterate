@@ -1,7 +1,4 @@
 import { DurableObject } from "cloudflare:workers";
-import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
-import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
-import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { isStreamOffsetConflictError } from "iterate/processors";
 import type { StreamEventInput } from "iterate/processors";
 import type { ProcessorState } from "iterate/processors";
@@ -9,17 +6,18 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
 import {
   assertGithubInstallationTokenMintAuthorized,
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
 import { assertPushTokenSecretRevision } from "../devices/push-token-consistency.ts";
+import { isUnconfiguredSubscriptionError } from "../streams/utils.ts";
 import { secretCreationEvents } from "./secret-defaults.ts";
 import type {
   SecretCreateInput,
   SecretDescription,
+  SecretProjectSeedExport,
   SecretRefresh,
   SecretUpdateInput,
 } from "./types.ts";
@@ -27,7 +25,6 @@ import { decryptSecretCellMaterial, encryptSecretCellMaterial } from "./crypto.t
 import { fetchWithCredentialRedirects } from "./credential-fetch.ts";
 import { resolvePlatformClientCreds, resolvePlatformGithubAppKey } from "./platform-secrets.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
-import { SecretProcessor } from "./secret-processor-implementation.ts";
 import {
   secretErrorResponse,
   secretReferencesFromRequest,
@@ -39,6 +36,15 @@ import { withWebSocketHandshakeHeaders } from "./websocket-handshake.ts";
 
 type SecretState = ProcessorState<typeof SecretProcessorContract>;
 type SecretSnapshot = { offset: number; state: SecretState };
+
+/** The stream facade methods this DO reads its own fold through — the secret
+ * processor runs as a facet of the secret stream's own Durable Object
+ * (src/domains/processor-facet-durable-object.ts), not here. */
+type SecretProcessorFacade = {
+  snapshot(): Promise<SecretSnapshot>;
+  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
+};
+
 const MAX_MATERIAL_APPEND_ATTEMPTS = 8;
 // Secret reduction is pure and normally completes during catchUp. If ingestion
 // is broken, fail the command instead of retaining its RPC forever.
@@ -72,38 +78,24 @@ export class SecretDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
-  readonly #registry = createStreamProcessorRegistry(this.ctx, {
-    stream: this.#stream,
-    path: this.#name.path,
-    projectId: this.#name.projectId,
-    version: workerVersion(this.env),
-    // Secret material is write-only: the live state that leaves this DO is the
-    // DESCRIPTION (hasMaterial), never the ciphertext — same redaction the
-    // processor facade applies via publicState. The explicit return type does
-    // double duty: it makes the registry a LiveState<SecretDescription>, and
-    // it breaks the field-initializer inference cycle (this closure reads
-    // #reads, which is built from this registry).
-    getLiveState: (): SecretDescription => describeSecretState(this.#reads.currentState),
-  });
-  // The DO constructs the processor — no host-injected readState/writeState/
-  // keepAliveWhile deps; the runner owns durable progress and keepalive. NO
-  // recovery on purpose: the processor's only side effect (the secret/created
-  // catalog cross-post) is a blocked per-event append — the cursor holds until
-  // it commits, so an eviction just redelivers the event; there is no
-  // runInBackground work an eviction could lose (see the registry module
-  // doc's rule).
-  readonly #secretProcessor = this.#registry.register(
-    new SecretProcessor({
-      stream: this.#stream,
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    }),
-  );
-  // Runner-backed reads: under runner drive the runner owns the cursors and
-  // the processor instance's internal checkpoint never advances, so every
-  // read this DO serves (snapshots, the processor facade, live state) must go
-  // through the runner's committed progress.
-  readonly #reads = this.#registry.reads(this.#secretProcessor);
+
+  /** The facet-hosted secret processor's read surface on the stream. */
+  async #processorFacade(): Promise<SecretProcessorFacade> {
+    // Safe: the Stream DO's processorFacade(name) forwards to the facet
+    // subclass registered for this path family, and the facet composition
+    // registers the SecretProcessor under SecretProcessorContract.slug on
+    // /secrets/* paths — so snapshot() serves the secret contract's fold.
+    // The RPC-generated facade type is untyped per name (the name is a
+    // runtime string), hence the assertion instead of a typed boundary.
+    return (await this.env.STREAM.getByName(
+      DurableObjectNameCodec.stringify({
+        path: this.#name.path,
+        projectId: this.#name.projectId,
+      }),
+    ).processorFacade({
+      name: SecretProcessorContract.slug,
+    })) as unknown as SecretProcessorFacade;
+  }
 
   // In-flight refresh, shared across concurrent callers (single-flight): a
   // burst of 401s must not fan out into N token exchanges — duplicate mints
@@ -115,35 +107,9 @@ export class SecretDurableObject extends DurableObject<Env> {
   // public stream appends remain concurrent and are handled by the assertion.
   #updates: Promise<void> = Promise.resolve();
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#registry.wakeStreamSubscriber(args);
-  }
-
-  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
-  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return this.#registry.handleAlarm(alarmInfo);
-  }
-
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): void {
     this.ctx.abort("kill requested");
-  }
-
-  get processor() {
-    // Runner-backed reads (#reads), never the processor instance — see the
-    // field comment: instance reads are stale forever under runner drive.
-    return new StreamProcessorRpcTarget(this.#reads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(SecretProcessorContract.slug),
-      // Secret material is write-only: the live state that leaves this DO is
-      // the DESCRIPTION — snapshots and onStateChange pushes must never carry
-      // the ciphertext, only the hasMaterial fact.
-      publicState: describeSecretState,
-    });
-  }
-
-  /** The secret's live state — the DESCRIPTION only, behind `itx.secrets.get(path).liveState`. */
-  get liveState() {
-    return new LiveStateRpcTarget<SecretDescription>(this.#registry);
   }
 
   create(input: SecretCreateInput) {
@@ -381,6 +347,27 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   /**
+   * Operator-only recovery input. The public Secret RPC checks admin authority
+   * before calling this method. It returns the current encrypted cell, not
+   * plaintext and not stream history.
+   */
+  async exportForProjectSeed(): Promise<SecretProjectSeedExport> {
+    const state = await this.#snapshot();
+    assertSecretCreated(state, this.#name.path);
+    if (state.encryptedMaterial === null) {
+      throw new Error(`secret has no material: ${this.#name.path}`);
+    }
+    const { offset, ...encrypted } = state.encryptedMaterial;
+    return {
+      egressUrls: state.egress.urls,
+      encrypted,
+      offset,
+      refresh: state.refresh,
+      visibility: state.birthCertificate!.config.visibility,
+    };
+  }
+
+  /**
    * The one lane material travels: substitute this secret's placeholders into
    * the request and dispatch it to a pinned host. With a refresh strategy
    * configured, a missing token mints before the first use and a 401 triggers
@@ -388,6 +375,9 @@ export class SecretDurableObject extends DurableObject<Env> {
    * that used to do exactly this.
    */
   async fetch(request: Request): Promise<Response> {
+    // The secret's liveState is facet-hosted (it rides the secret STREAM
+    // Durable Object's keyed pager lane), so this fetch only ever serves
+    // secret substitution requests.
     return await this.#fetch(request, { kind: "any-revision" });
   }
 
@@ -638,7 +628,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         ...material,
         accessToken: data.access_token,
         // Providers may rotate the refresh token on use; keep the newest.
-        ...(typeof data.refresh_token === "string" ? { refreshToken: data.refresh_token } : {}),
+        ...(typeof data.refresh_token === "string" && { refreshToken: data.refresh_token }),
       },
       snapshot,
     );
@@ -753,8 +743,28 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   async #snapshotWithOffset(): Promise<SecretSnapshot> {
-    await this.#registry.catchUp(SecretProcessorContract.slug);
-    return await this.#reads.snapshot();
+    // The facade's snapshot pulls through the durable stream tail first
+    // (read-your-writes — the old catchUp-then-snapshot pair, one door).
+    //
+    // UNBORN streams: before the birth batch commits, the secret's facet
+    // subscription does not exist and the Stream DO's facade refuses the name
+    // (reads must never materialize a facet). Substitute the unborn shape the
+    // facade used to serve — the schema-default fold at the stream's current
+    // head — which keeps create()'s offset-bound encryption rider exactly
+    // where the old catch-up snapshot put it.
+    try {
+      return await (await this.#processorFacade()).snapshot();
+    } catch (error) {
+      if (!isUnconfiguredSubscriptionError(error)) throw error;
+      const page = await this.#stream.getEventPage({
+        afterOffset: Number.MAX_SAFE_INTEGER,
+        limit: 1,
+      });
+      return {
+        offset: page.streamMaxOffset,
+        state: SecretProcessorContract.stateSchema.parse({}) as SecretState,
+      };
+    }
   }
 
   async #waitUntilProcessed(offset: number): Promise<void> {
@@ -762,7 +772,12 @@ export class SecretDurableObject extends DurableObject<Env> {
     // self-pulls when the runner is behind. A separate catchUp here would put
     // an unbounded Stream RPC in front of the timeout and can orphan the
     // command even after the target Stream DO finished serving the read.
-    await this.#reads.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
+    await (
+      await this.#processorFacade()
+    ).waitUntilProcessed({
+      offset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
   }
 
   async #decrypt(
@@ -816,7 +831,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   async #commitRefreshedMaterial(material: unknown, snapshot: SecretSnapshot): Promise<void> {
     let current = snapshot;
     for (let attempt = 1; attempt <= MAX_MATERIAL_APPEND_ATTEMPTS; attempt += 1) {
-      // Offset-only stream facts (subscriber connection telemetry, wake facts,
+      // Offset-only stream facts (callback-connection telemetry, processor wake facts,
       // or concurrent audit events) may advance the raw stream while a token
       // is being minted. They do not invalidate the refresh. A real secret
       // update does: updatedOffset covers material, egress, and refresh policy.
@@ -936,10 +951,11 @@ function sameRefresh(current: SecretRefresh | null, expected: SecretRefresh | nu
 
 /**
  * The one projection from internal processor state to the public description.
- * Shared by describe() and the processor facade's publicState so the two can
- * never disagree about what leaves the DO.
+ * Shared by describe(), the facet host's live-state projection
+ * (src/domains/processor-facet-durable-object.ts), and the itx relay's publicState so they can
+ * never disagree about what leaves the platform.
  */
-function describeSecretState(state: SecretState): SecretDescription {
+export function describeSecretState(state: SecretState): SecretDescription {
   return {
     audit: state.audit,
     created: state.birthCertificate !== null,

@@ -117,7 +117,7 @@ const AMBIENT_NAMES = new Set([
 function openProject(fsOverlay?: Map<string, string>) {
   const api = new API({
     cwd: projectDir,
-    ...(fsOverlay ? { fs: { readFile: (fileName) => fsOverlay.get(path.resolve(fileName)) } } : {}),
+    ...(fsOverlay && { fs: { readFile: (fileName) => fsOverlay.get(path.resolve(fileName)) } }),
   });
   const snapshot = api.updateSnapshot({ openProjects: [tsconfigPath] });
   const project = snapshot.getProject(tsconfigPath);
@@ -294,7 +294,7 @@ export function generateItxApi(): string {
     path.resolve(projectDir, "../../packages/iterate/src/processors/processor-contracts.ts"),
     path.resolve(projectDir, "../../packages/iterate/src/processors/rpc-types.ts"),
     path.resolve(projectDir, "../../packages/iterate/src/processors/stream-runtime-metrics.ts"),
-    path.resolve(projectDir, "../../packages/iterate/src/processors/subscriber-metrics.ts"),
+    path.resolve(projectDir, "../../packages/iterate/src/processors/event-consumption-metrics.ts"),
   ]) {
     const sourceFile = project.program.getSourceFile(fileName);
     if (!sourceFile) {

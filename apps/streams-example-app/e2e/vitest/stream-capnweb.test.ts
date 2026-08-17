@@ -17,7 +17,7 @@ import {
 import { withStreamConnectionFromBrowser } from "../../src/lib/stream-rpc.ts";
 import type { WebSocketFrame } from "../../src/lib/stream-connection.ts";
 
-class TestSubscriptionCallback extends RpcTarget {
+class TestEventBatchCallback extends RpcTarget {
   readonly batches: StreamEvent[][] = [];
 
   /** All delivered events, flattened — initial/state-only batches are empty. */
@@ -43,7 +43,7 @@ describe("stream capnweb protocol", () => {
     });
 
     // The standalone playground has no project worker, so its birth
-    // certificate is only created + woken. It does not invent a subscriber.
+    // certificate is only created + woken. It does not invent an event callback.
     expect(appended).toMatchObject({
       type: "test.stream.browser-client",
       payload: { path },
@@ -53,16 +53,16 @@ describe("stream capnweb protocol", () => {
   });
 
   it("appends events after the stream-created event over capnweb", async () => {
-    // Re-dial ONCE on a fresh path after a pause. This test dials a FRESH
+    // Open one new WebSocket on a fresh path after a pause. This test creates a FRESH
     // stream DO per attempt, so it is the fleet's canary for Durable Object
     // weather: during the 2026-07-06/07 Cloudflare "DO increased error rate
     // in ENAM" incident it failed in minutes-long windows (socket dead <1s
     // after a clean upgrade, on workers.dev AND custom domains alike) while
-    // warm-DO tests sailed on. The re-dial is safe (nothing was appended when
+    // warm-DO tests sailed on. Reopening is safe (nothing was appended when
     // the socket dies mid-first-call; a fresh path per attempt means a late
     // duplicate could only land on an abandoned stream) and absorbs blips; a
     // window longer than the pause still fails — correct, that's an outage.
-    const dialAndAppend = async () => {
+    const connectAndAppend = async () => {
       const path = e2eStreamPathLabel("stream-capnweb-append");
       using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
       const [appended] = await stream.stream.append({
@@ -71,13 +71,13 @@ describe("stream capnweb protocol", () => {
       });
       return { appended, path };
     };
-    let result: Awaited<ReturnType<typeof dialAndAppend>>;
+    let result: Awaited<ReturnType<typeof connectAndAppend>>;
     try {
-      result = await dialAndAppend();
+      result = await connectAndAppend();
     } catch (error) {
       if (!/Network connection lost|WebSocket connection failed/i.test(String(error))) throw error;
       await new Promise((resolve) => setTimeout(resolve, 15_000));
-      result = await dialAndAppend();
+      result = await connectAndAppend();
     }
 
     expect(result.appended).toMatchObject({
@@ -93,8 +93,8 @@ describe("stream capnweb protocol", () => {
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
     // Large enough to exceed the old single-row SQLite target and span multiple
     // storage chunks. Keep this below Cloudflare's 32 MiB inbound WebSocket frame
-    // ceiling: that limit applies to client append calls, while stream-to-sink
-    // `processEventBatch` fan-out can still deliver larger events once stored.
+    // ceiling: that limit applies to client append calls, while a stream calling
+    // `processEventBatch` can still send larger events once stored.
     const body = "x".repeat(2 * 1024 * 1024 + 256 * 1024);
     const event: StreamEventInput = {
       type: "test.stream.capnweb-large-row",
@@ -363,7 +363,7 @@ describe("stream capnweb protocol", () => {
     ]);
   });
 
-  it("replays history and then delivers live batches to subscribers", async () => {
+  it("replays earlier events and then sends new batches to an open callback", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-replay");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
@@ -372,9 +372,9 @@ describe("stream capnweb protocol", () => {
       payload: { n: 1 },
     });
 
-    const callback = new TestSubscriptionCallback();
-    using subscription = await stream.stream.subscribe({
-      subscriptionKey: "replay",
+    const callback = new TestEventBatchCallback();
+    using connection = await stream.stream.openConnection({
+      connectionKey: "replay",
       processEventBatch: (batch) => callback.processEventBatch(batch),
       replayAfterOffset: 0,
     });
@@ -399,6 +399,7 @@ describe("stream capnweb protocol", () => {
           payload: {
             projectId: coreProcessorState.projectId,
             path,
+            streamId: expect.any(String),
           },
         }),
         expect.objectContaining({
@@ -409,48 +410,48 @@ describe("stream capnweb protocol", () => {
           },
         }),
         first,
-        // The subscriber's own connect is a durable presence fact, appended
-        // after the replay cursor is fixed — so it arrives as the tail of the
-        // subscriber's first batch.
+        // Opening the callback appends a presence fact (ephemeral, but session
+        // connections receive buffered ephemeral events) after the replay
+        // cursor is fixed, so it arrives at the end of the first batch.
         expect.objectContaining({
-          type: "events.iterate.com/stream/subscriber-connected",
+          type: "events.iterate.com/stream/connection-opened",
           offset: 4,
           payload: {
-            subscriptionKey: "replay",
-            subscriptionType: "ephemeral",
+            connectionKey: "replay",
+            kind: "session",
           },
         }),
       ],
       [second],
     ]);
-    await subscription.unsubscribe();
+    await connection.close();
   });
 
-  it("assigns a subscription key when subscribe omits one", async () => {
-    const path = e2eStreamPathLabel("stream-capnweb-anon-sub");
+  it("assigns a connection key when openConnection omits one", async () => {
+    const path = e2eStreamPathLabel("stream-capnweb-anonymous-connection");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
-    const callbackA = new TestSubscriptionCallback();
-    const callbackB = new TestSubscriptionCallback();
-    using first = await stream.stream.subscribe({
+    const callbackA = new TestEventBatchCallback();
+    const callbackB = new TestEventBatchCallback();
+    using first = await stream.stream.openConnection({
       processEventBatch: (batch) => callbackA.processEventBatch(batch),
     });
-    using second = await stream.stream.subscribe({
+    using second = await stream.stream.openConnection({
       processEventBatch: (batch) => callbackB.processEventBatch(batch),
     });
 
-    const firstKey = await first.subscriptionKey;
-    const secondKey = await second.subscriptionKey;
+    const firstKey = await first.connectionKey;
+    const secondKey = await second.connectionKey;
     expect(firstKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
     expect(secondKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
     expect(firstKey).not.toBe(secondKey);
 
     const runtime = await stream.stream.runtimeState();
     expect(runtime.runtime.connections[firstKey]).toMatchObject({
-      subscriptionType: "ephemeral",
+      kind: "session",
     });
     expect(runtime.runtime.connections[secondKey]).toMatchObject({
-      subscriptionType: "ephemeral",
+      kind: "session",
     });
 
     const [appended] = await stream.stream.append({
@@ -458,27 +459,27 @@ describe("stream capnweb protocol", () => {
       payload: { path },
     });
     if (appended === undefined) throw new Error("append returned no event");
-    // Each subscribe also appends a subscriber-connected presence fact, and
-    // every subscription gets an initial state push — batch counts are not
+    // Each openConnection call also appends a connection-opened presence fact, and
+    // every connection gets an initial state callback — batch counts are not
     // stable here, so wait for the content instead.
-    const delivered = (callback: TestSubscriptionCallback, offset: number) =>
+    const received = (callback: TestEventBatchCallback, offset: number) =>
       callback.batches.flat().some((event) => event.offset === offset);
     await waitFor(
-      () => delivered(callbackA, appended.offset) && delivered(callbackB, appended.offset),
+      () => received(callbackA, appended.offset) && received(callbackB, appended.offset),
       1_000,
     );
     expect(callbackA.batches.at(-1)).toEqual([appended]);
     expect(callbackB.batches.at(-1)).toEqual([appended]);
-    const callbackABatchesBeforeUnsubscribe = callbackA.batches.length;
+    const callbackABatchesBeforeClose = callbackA.batches.length;
 
-    await first.unsubscribe();
-    const [afterUnsubscribe] = await stream.stream.append({
-      type: "test.stream.capnweb-anon-sub-after-unsub",
+    await first.close();
+    const [afterClose] = await stream.stream.append({
+      type: "test.stream.capnweb-anonymous-connection-after-close",
       payload: { path },
     });
-    if (afterUnsubscribe === undefined) throw new Error("append returned no event");
-    await waitFor(() => delivered(callbackB, afterUnsubscribe.offset), 1_000);
-    expect(callbackA.batches.length).toBe(callbackABatchesBeforeUnsubscribe);
+    if (afterClose === undefined) throw new Error("append returned no event");
+    await waitFor(() => received(callbackB, afterClose.offset), 1_000);
+    expect(callbackA.batches.length).toBe(callbackABatchesBeforeClose);
   });
 
   // The pre-itx-v4 hosted circuit-breaker processor is gone; the pause
@@ -511,20 +512,20 @@ describe("stream capnweb protocol", () => {
     expect(afterResume).toMatchObject({ type: "test.stream.pause-gate.accepted" });
   });
 
-  it("delivers event batches without subscriber-originated requests", async () => {
+  it("sends event batches without callback-owner requests", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-wire");
-    const callback = new TestSubscriptionCallback();
+    const callback = new TestEventBatchCallback();
 
-    using subscriber = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
+    using callbackClient = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
     const frames: WebSocketFrame[] = [];
-    subscriber.onWebSocketFrame((frame) => frames.push(frame));
-    await subscriber.stream.subscribe({
-      subscriptionKey: "wire",
+    callbackClient.onWebSocketFrame((frame) => frames.push(frame));
+    await callbackClient.stream.openConnection({
+      connectionKey: "wire",
       processEventBatch: (batch) => callback.processEventBatch(batch),
       // Skip the standalone birth certificate (created, woken).
       replayAfterOffset: 2,
     });
-    const afterSubscribe = frames.length;
+    const afterConnectionOpened = frames.length;
 
     using publisher = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
     const input: StreamEventInput = {
@@ -533,9 +534,9 @@ describe("stream capnweb protocol", () => {
     };
     const [appended] = await publisher.stream.append(input);
     if (appended === undefined) throw new Error("append returned no event");
-    // Deliveries before the published event: the subscription's initial state
-    // push (events: []) and/or the subscriber's own subscriber-connected
-    // presence fact (offset 3, appended during subscribe) — wait for content.
+    // Calls before the published event: the connection's initial state update
+    // (events: []) and/or its own connection-opened presence fact (offset 3,
+    // appended while opening) — wait for content.
     await waitFor(
       () => callback.batches.flat().some((event) => event.offset === appended.offset),
       1_000,
@@ -548,30 +549,30 @@ describe("stream capnweb protocol", () => {
       createdAt: expect.any(String),
     });
     // Batch boundaries race (initial push, presence fact commit timing), but
-    // the delivered EVENTS are exact: the subscriber's own connected fact,
+    // the received EVENTS are exact: the callback connection's own opened fact,
     // then the published event — each exactly once, in offset order.
     expect(callback.batches.at(-1)).toEqual([appended]);
     expect(callback.batches.flat()).toEqual([
       expect.objectContaining({
-        type: "events.iterate.com/stream/subscriber-connected",
+        type: "events.iterate.com/stream/connection-opened",
         offset: 3,
       }),
       appended,
     ]);
-    // Deliveries are server pushes: the subscriber never ORIGINATES a request
+    // These are server-initiated callback calls: the owner never originates a request
     // for them. Unlike the pre-itx-v4 implementation, the itx worker→DO bridge
     // observes each delivery's result, so the browser answers every push with
     // one `resolve` frame — allowed here; anything else outbound is not.
-    const outbound = outboundFrames(frames, afterSubscribe);
+    const outbound = outboundFrames(frames, afterConnectionOpened);
     expect(outbound.every((frame) => Array.isArray(frame) && frame[0] === "resolve")).toBe(true);
 
     const inbound = parsedFrames(frames)
-      .slice(afterSubscribe)
+      .slice(afterConnectionOpened)
       .filter((frame) => frame.direction === "in");
-    expect(inbound.every((frame) => isDeliveryProtocolFrame(frame.data))).toBe(true);
-    // Earlier push frames race the `afterSubscribe` snapshot and each other:
-    // the subscription's initial state push (events: []) and the
-    // subscriber-connected fact's delivery. Assert the last frame (the
+    expect(inbound.every((frame) => isCallbackProtocolFrame(frame.data))).toBe(true);
+    // Earlier push frames race the `afterConnectionOpened` snapshot and each other:
+    // the connection's initial state callback (events: []) and the callback
+    // for its connection-opened fact. Assert the last frame (the
     // published event's) exactly; earlier ones are push frames by the
     // `isPushOrReleaseFrame` check above.
     const pushFrames = inbound.filter((frame) => isPushFrame(frame.data));
@@ -619,12 +620,12 @@ function outboundFrames(messages: WebSocketFrame[], afterFrameIndex: number) {
 }
 
 /**
- * Protocol predicate for inbound frames that batch delivery may produce: the
- * push itself, the server's pull of the delivery result (itx
+ * Protocol predicate for inbound frames that a batch callback may produce: the
+ * push itself, the server's pull of the callback result (itx
  * observes it — see the resolve-frame note in the wire test), and releases
- * during subscribe teardown.
+ * while closing the connection.
  */
-function isDeliveryProtocolFrame(value: unknown) {
+function isCallbackProtocolFrame(value: unknown) {
   return (
     isPushFrame(value) || (Array.isArray(value) && (value[0] === "release" || value[0] === "pull"))
   );

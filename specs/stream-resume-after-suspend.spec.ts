@@ -175,6 +175,7 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
     await expect
       .poll(async () => (await readSuspendTimerEvidence(page)).maxTimerGapMs, {
         message: "the armed page timer should remain suspended for the stimulus window",
+        // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
         timeout: 5_000,
       })
       .toBeGreaterThanOrEqual(SUSPEND_EVIDENCE_MIN_GAP_MS);
@@ -220,9 +221,10 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   page,
   baseURL,
 }) => {
-  // The greeting-settle wait (up to 120s) stacks on the probe window and the
-  // two send assertions, so this lane gets the heavy ceiling.
-  test.setTimeout(300_000);
+  // The greeting-settle wait (up to 120s) stacks on the probe window, the
+  // paint wait (90s — see that step), and the two send assertions, so this
+  // lane gets the heavy ceiling.
+  test.setTimeout(360_000);
   await using fixture = await helpers.createFixture("suspend-halfopen");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
   await installSocketKillSwitch(page);
@@ -254,11 +256,21 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   // the explicit bounded waits.
   await test.step("half-open: paint greeting and settle composer", async () => {
     await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      // 90s, not 30s: on a cold preview deployment this first paint rides a
+      // freshly deployed worker plus a cold Stream DO chain, and 30s failed
+      // BOTH in-run tries on 3 of 5 preview runs during 2026-08-07 (every
+      // job-level retry passed — pure cold-start latency, and this step runs
+      // BEFORE any half-open is induced, so no resilience signal is at
+      // stake). The 120s waits around this step already assume this lane is
+      // slow. If this step keeps flaking at 90s, stop bumping and QUARANTINE
+      // the spec per docs/testing.md — at that point the lane is telling us
+      // preview first-paint has a real problem, and absorbing it here would
+      // hide it.
       await page
         .locator('[data-testid="agent-feed-message"][data-kind="assistant"]')
         .first()
-        .waitFor({ timeout: 30_000 });
-      await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 });
+        .waitFor({ timeout: 90_000 }); // timeout: manual, see the cold-preview note above — spinner-waiter is disabled for this step
+      await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 }); // timeout: manual, same cold-preview lane — spinner-waiter is disabled for this step
     });
   });
 
@@ -304,7 +316,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
               window as unknown as { __mutedApiSocketsStillOpen: () => number }
             ).__mutedApiSocketsStillOpen(),
           ),
-        { timeout: 30_000 },
+        { timeout: 30_000 }, // timeout: poll budget spanning two 10s probe strikes — outside the spinner-waiter's reach
       )
       .toBe(0);
   });
@@ -354,13 +366,13 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
           landed || enabled,
           "the mid-outage send never settled — stranded on a ghost session",
         ).toBe(true);
-      }).toPass({ timeout: 60_000, intervals: [1_000] });
+      }).toPass({ timeout: 60_000, intervals: [1_000] }); // timeout: toPass poll budget — outside the spinner-waiter's reach
       if (!(await sentRow.isVisible())) {
         // The stranded call rejected; the composer kept the draft — resend on
         // the recovered transport.
         await sendButton.click();
       }
-      await sentRow.waitFor({ timeout: 30_000 });
+      await sentRow.waitFor({ timeout: 30_000 }); // timeout: manual — spinner-waiter is disabled for this step
     });
   });
 
@@ -377,7 +389,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
             window as unknown as { __mutedApiSocketsStillOpen: () => number }
           ).__mutedApiSocketsStillOpen(),
         ),
-      { timeout: 20_000 },
+      { timeout: 20_000 }, // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
     )
     .toBe(0);
   await expect
@@ -386,7 +398,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
         page.evaluate(() =>
           (window as unknown as { __countLiveApiSockets: () => number }).__countLiveApiSockets(),
         ),
-      { timeout: 10_000 },
+      { timeout: 10_000 }, // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
     )
     .toBeLessThanOrEqual(socketsBaseline);
 });
@@ -394,9 +406,9 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
 // The stream view mounts ONE browser mirror runtime on the agent stream — it
 // downloads once and fans out to the canonical processors (raw events cache +
 // feed projector). Its debug-registry key is `${projectId} ${streamPath}
-// browser-stream-mirror` (stream-browser-store.ts).
+// browser-stream-processors` (stream-browser-store.ts).
 function runtimeDebugKeys(projectId: string) {
-  return [`${projectId} ${ONBOARDING_AGENT_PATH} browser-stream-mirror`];
+  return [`${projectId} ${ONBOARDING_AGENT_PATH} browser-stream-processors`];
 }
 
 type RuntimeDebug = {
@@ -420,10 +432,10 @@ async function waitForSubscribed(page: Page, keys: string[], timeoutMs = 90_000)
   let last: DebugSnapshot = {};
   for (;;) {
     last = await readDebugSnapshot(page);
-    if (keys.every((key) => last[key]?.connectionStatus === "subscribed")) return last;
+    if (keys.every((key) => last[key]?.connectionStatus === "receiving-events")) return last;
     if (Date.now() > deadline) {
       throw new Error(
-        `Timed out waiting for runtimes ${keys.join(", ")} to reach "subscribed". Last __streamRuntimeDebug:\n${JSON.stringify(last, null, 2)}`,
+        `Timed out waiting for runtimes ${keys.join(", ")} to reach "receiving-events". Last __streamRuntimeDebug:\n${JSON.stringify(last, null, 2)}`,
       );
     }
     await page.waitForTimeout(500);

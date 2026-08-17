@@ -219,27 +219,26 @@ export class RetryTelemetryReporter {
           tests.push({
             fullName: test.fullName,
             moduleId: testModule.moduleId,
-            ...(test.location
-              ? { testLine: test.location.line, testColumn: test.location.column }
-              : {}),
-            ...(test.id ? { runnerTestId: test.id } : {}),
-            ...(test.options
-              ? {
-                  expectedState:
-                    test.options.mode === "skip" || test.options.mode === "todo"
-                      ? test.options.mode
-                      : test.options.fails
-                        ? "failed"
-                        : "passed",
-                }
-              : {}),
+            ...(test.location && {
+              testLine: test.location.line,
+              testColumn: test.location.column,
+            }),
+            ...(test.id && { runnerTestId: test.id }),
+            ...(test.options && {
+              expectedState:
+                test.options.mode === "skip" || test.options.mode === "todo"
+                  ? test.options.mode
+                  : test.options.fails
+                    ? "failed"
+                    : "passed",
+            }),
             ...(test.options?.timeout === undefined
               ? {}
               : { configuredTimeoutMs: test.options.timeout }),
             tags: [...(test.tags ?? [])],
             annotations: annotations.map(({ type, message }) => ({
               type,
-              ...(message ? { description: message } : {}),
+              ...(message && { description: message }),
             })),
             ...(diagnostic?.repeatCount === undefined
               ? {}
@@ -274,7 +273,7 @@ export class RetryTelemetryReporter {
             attempts: [],
             phases: parseTelemetryPhases(annotations),
             errors,
-            ...(firstFailure ? { firstFailure } : {}),
+            ...(firstFailure && { firstFailure }),
           });
         }
       }
@@ -304,7 +303,7 @@ export class RetryTelemetryReporter {
           startedAt: new Date(this.runStartedAtMs).toISOString(),
           finishedAt: new Date(finishedAtMs).toISOString(),
           durationMs: Math.max(0, finishedAtMs - this.runStartedAtMs),
-          ...(unhandled[0] ? { error: unhandled[0] } : {}),
+          ...(unhandled[0] && { error: unhandled[0] }),
         },
         lanes: [
           {
@@ -371,8 +370,8 @@ function parseTelemetryPhases(
         {
           name: parsed.name,
           durationMs: Math.round(parsed.durationMs),
-          ...(typeof parsed.category === "string" ? { category: parsed.category } : {}),
-          ...(typeof parsed.startedAt === "string" ? { startedAt: parsed.startedAt } : {}),
+          ...(typeof parsed.category === "string" && { category: parsed.category }),
+          ...(typeof parsed.startedAt === "string" && { startedAt: parsed.startedAt }),
         },
       ];
     } catch {

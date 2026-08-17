@@ -126,20 +126,30 @@ case "approve":
     fail("approve needs message and request on stdin")
   }
 
-  // One native dialog per held request. Approving signs in the same gesture:
-  // the button click leads straight into the Touch ID sheet, so what the
-  // human read is what the signature covers.
+  // One native dialog per held BATCH (a lone request is a batch of one).
+  // Approving signs the whole batch in the same gesture: the button click
+  // leads straight into the Touch ID sheet, so what the human read is what
+  // the signature covers.
   let app = NSApplication.shared
   app.setActivationPolicy(.accessory)
 
-  let method = request["method"] as? String ?? "?"
-  let url = request["url"] as? String ?? "?"
-  let secretPaths = request["secretPaths"] as? [String] ?? []
-  var lines = ["\(method) \(url)"]
+  let requests = request["requests"] as? [[String: Any]] ?? []
+  var lines: [String] = []
+  for held in requests.prefix(6) {
+    let method = held["method"] as? String ?? "?"
+    let url = held["url"] as? String ?? "?"
+    lines.append("\(method) \(url)")
+  }
+  if requests.count > 6 { lines.append("… and \(requests.count - 6) more") }
+  let secretPaths = Array(
+    Set(requests.flatMap { $0["secretPaths"] as? [String] ?? [] })
+  ).sorted()
   if !secretPaths.isEmpty {
     lines.append("spends secret\(secretPaths.count > 1 ? "s" : ""): \(secretPaths.joined(separator: ", "))")
   }
-  if let body = request["body"] as? [String: Any], let content = body["content"] as? String {
+  if requests.count == 1, let body = requests[0]["body"] as? [String: Any],
+    let content = body["content"] as? String
+  {
     let prefix = body["encoding"] as? String == "base64" ? "[base64] " : ""
     let preview = prefix + content
     lines.append("body: \(preview.count > 200 ? String(preview.prefix(200)) + "…" : preview)")
@@ -148,7 +158,9 @@ case "approve":
   if let expiresAt = request["expiresAt"] as? String { lines.append("expires: \(expiresAt)") }
 
   let alert = NSAlert()
-  alert.messageText = "Approve this egress request?"
+  alert.messageText =
+    requests.count == 1
+    ? "Approve this egress request?" : "Approve these \(requests.count) egress requests?"
   alert.informativeText = lines.joined(separator: "\n")
   alert.alertStyle = .warning
   alert.addButton(withTitle: "Approve & Sign")
@@ -158,12 +170,16 @@ case "approve":
   app.activate(ignoringOtherApps: true)
   let response = alert.runModal()
 
+  let firstUrl = requests.first?["url"] as? String ?? "?"
+  let reason =
+    requests.count == 1
+    ? "approve \(requests.first?["method"] as? String ?? "?") to \(URL(string: firstUrl)?.host ?? firstUrl)"
+    : "approve \(requests.count) egress requests"
   switch response {
   case .alertFirstButtonReturn:
     do {
       let signature = try signMessage(
-        blobBase64: envelope.keyBlob, message: message,
-        reason: "approve \(method) to \(URL(string: url)?.host ?? url)")
+        blobBase64: envelope.keyBlob, message: message, reason: reason)
       jsonOut(["decision": "granted", "signatureDer": signature.base64EncodedString()])
     } catch {
       // A cancelled Touch ID sheet is the human changing their mind — Ignore.

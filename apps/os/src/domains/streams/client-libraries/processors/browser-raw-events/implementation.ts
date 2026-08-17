@@ -9,13 +9,17 @@ import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserRawEventsContract } from "./contract.ts";
 export { BrowserRawEventsContract } from "./contract.ts";
 
-// v7 clears mirrors that may contain replayed historical ephemeral rows. The
-// durable-only replay contract cannot leave those old rows visible after the
-// live-only ephemeral cutover.
-export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 7;
+// v7 clears local event tables that may contain ephemeral events persisted by
+// the previous browser projection. Ephemeral events now feed only the volatile
+// UI overlay, so those old rows cannot remain visible after an upgrade.
+// v8 makes local_index a browser-allocated dense position instead of
+// offset - 1: connection presence facts are ephemeral now, so offset gaps are
+// routine, and the virtualized list (indexes 0..count-1 over local_index)
+// silently lost every row after a gap.
+export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 8;
 
 /**
- * Tables this processor owns. Views pass this to the runtime so a mirror
+ * Tables this processor owns. Views pass this to the runtime so a database
  * discard clears the projection AND its derived counts together — clearing
  * `events` alone would leave stale totals behind (rows are append-only, so
  * the counts trigger has no delete arm to bring the totals back down).
@@ -25,13 +29,13 @@ export const BROWSER_RAW_EVENTS_TABLES = ["events", "event_type_counts"];
 export type BrowserRawEventsState = Record<string, never>;
 
 /**
- * Mirrors raw stream events into the browser's `events` SQLite table.
+ * Stores raw stream events in the browser's `events` SQLite table.
  * Stateless apart from the resume cursor: the table itself is the projection.
  *
  * Driven by the StreamProcessorRunner: `processEvent` buffers one INSERT per
  * event into {@link projectionBuffer}, and the browser progress store
  * (processor-state-storage.ts) flushes the buffered inserts and the two-cursor
- * progress record in ONE SQLite transaction per delivered frame — the mirror
+ * progress record in ONE SQLite transaction per delivered batch — the event
  * rows and the resume cursor can no longer disagree (the legacy path committed
  * them separately). Schema creation and version resets, which the retired
  * `prepare()` hook used to run, now land in {@link ensureProjectionSchema} —
@@ -58,16 +62,21 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
     args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEvent"]>[0],
   ): undefined {
     const event = args.event;
-    // Event-less at-head pass: this projection has no at-head work.
+    // Event-less caught-up call: this projection has no caught-up work.
     if (event === null) return;
-    // Sparse offsets are expected: historical ephemerals are intentionally
-    // absent. The runner validates the enclosing scan envelope before this
+    // Sparse offsets are expected: memory-only ephemeral events are
+    // intentionally absent. The runner validates the enclosing scan envelope before this
     // hook runs, so accepting a gap here means "proved omitted", not "lost".
+    // local_index is allocated densely at insert (0, 1, 2, …) so the
+    // virtualized list's window query stays aligned with the row count even
+    // across offset gaps. A replayed duplicate is RAISE(IGNORE)d by the
+    // insert trigger, so its computed allocation is simply discarded.
     this.projectionBuffer.append(event.offset, [
       {
         build: () => ({
-          sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
-          params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
+          sql: `INSERT INTO events (local_index, raw_jsonb)
+                SELECT COALESCE(MAX(local_index) + 1, 0), jsonb(?) FROM events`,
+          params: [JSON.stringify(event)] satisfies SqlValue[],
         }),
       },
     ]);
@@ -85,8 +94,8 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
       // cursorRevision bump, staling any in-flight commit from an old-schema
       // writer), the legacy checkpoint delete, the table drops, and the
       // user_version stamp. All-or-nothing — no crash window can separate the
-      // dropped mirror from the rewound resume cursor (a stale checkpoint over
-      // an empty mirror would skip historical replay and silently rebuild
+      // dropped event tables from the rewound resume cursor (a stale checkpoint over
+      // an empty table would skip historical replay and silently rebuild
       // without the skipped prefix; the gap-tolerant trigger accepts the hole).
       await sql.batch(
         [
@@ -105,16 +114,17 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
       [
         {
           sql: `
-            -- Browser-owned append log mirror. raw_jsonb is the source of truth:
+            -- Browser-owned copy of the append log. raw_jsonb is the source of truth:
             -- SQLite derives the queryable event fields from it, so future JSON-field
             -- indexes can use the same payload without duplicating text JSON.
             --
-            -- local_index is deliberately separate from offset. Today it is offset - 1,
-            -- because server offsets are one-based and TanStack Virtual indexes are
-            -- zero-based. Neither column is guaranteed dense: the server may evict
-            -- ephemeral rows (their offsets stay consumed), so replays can carry
-            -- permanent gaps. The actual consumers (inspector panels' offset point
-            -- reads and ORDER BY offset walks) are gap-proof.
+            -- local_index is deliberately separate from offset: it is the DENSE
+            -- zero-based local list position (allocated at insert as
+            -- MAX(local_index) + 1), which is what TanStack Virtual indexes
+            -- against the row count. offset keeps the stream identity and is
+            -- NOT dense: ephemeral event bodies (connection presence facts,
+            -- streaming chunks) are never written to durable storage while
+            -- their offsets stay consumed, so replays carry permanent gaps.
             CREATE TABLE IF NOT EXISTS events (
               local_index INTEGER PRIMARY KEY,
               raw_jsonb BLOB NOT NULL,
@@ -122,8 +132,7 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
               type TEXT GENERATED ALWAYS AS (json_extract(raw_jsonb, '$.type')) STORED NOT NULL,
               idempotency_key TEXT GENERATED ALWAYS AS (json_extract(raw_jsonb, '$.idempotencyKey')) STORED,
               created_at TEXT GENERATED ALWAYS AS (json_extract(raw_jsonb, '$.createdAt')) STORED NOT NULL,
-              inserted_at TEXT NOT NULL DEFAULT (datetime('now')),
-              CHECK (local_index = offset - 1)
+              inserted_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
           `,
         },
@@ -137,14 +146,14 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
             -- Incrementally-maintained per-type row counts. The UI's reactive
             -- count queries (total, per-type, filter dropdown) re-run after
             -- every delivered batch; COUNT(*) over the events table rescans
-            -- the whole mirror, and because reads and ingest writes share the
-            -- one OPFS connection, those rescans throttle live-tail apply on
-            -- deep mirrors (measured: 1M rows → ~12s tail lag at 5k events/s
+            -- the whole events table, and because reads and ingest writes share the
+            -- one OPFS connection, those rescans delay applying new events on
+            -- deep local copies (measured: 1M rows → ~12s lag at 5k events/s
             -- with the counts as full scans). Reading this table is O(#types).
             --
             -- Kept correct by events_count_after_insert below. There is no
-            -- delete arm on purpose: mirror rows are append-only, and the only
-            -- delete is the whole-mirror clear, which clears this table in the
+            -- delete arm on purpose: event rows are append-only, and the only
+            -- delete is a full local-database clear, which clears this table in the
             -- same discard (see BROWSER_RAW_EVENTS_TABLES).
             CREATE TABLE IF NOT EXISTS event_type_counts (
               type TEXT PRIMARY KEY,
@@ -172,9 +181,8 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
             --    "first stored locally".
             -- 2. Same offset with different JSON is a conflicting duplicate.
             -- 3. New rows must append in increasing offset order. Gaps are legal:
-            --    the server may evict ephemeral rows (offsets stay consumed), so a
-            --    strict-continuity check would wedge every replay of a stream whose
-            --    chunks were swept.
+            --    memory-only ephemeral events consume offsets without entering
+            --    durable replay, so strict continuity would wedge every later row.
             CREATE TRIGGER IF NOT EXISTS events_before_insert
             BEFORE INSERT ON events
             BEGIN
@@ -189,9 +197,9 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
                   SELECT 1
                   FROM events
                   WHERE offset = NEW.offset
-                ) THEN RAISE(ABORT, 'stream browser mirror replay changed an existing offset')
+                ) THEN RAISE(ABORT, 'browser event replay changed an existing stream offset')
                 WHEN NEW.offset <= COALESCE((SELECT MAX(offset) FROM events), 0)
-                  THEN RAISE(ABORT, 'stream browser mirror offsets must increase')
+                  THEN RAISE(ABORT, 'browser event offsets must increase')
               END;
             END
           `,

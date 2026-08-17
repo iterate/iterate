@@ -12,16 +12,17 @@
 // Artifacts event queue (`repo/cloudflare-artifact-event-received` →
 // `repo/commit-completed`), and the optional GitHub mirror: link lifecycle,
 // mirror-push outcomes, and the durable default-branch import obligation
-// (`github-import-requested/started/completed/failed`) opened by cross-posted
+// (`github-import-requested/started/completed/failed`) opened by received
 // GitHub push webhooks.
 
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/processors";
+import { isSafeConfigRepoTemplatePath } from "../../lib/config-repo-template-reference.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
-  version: "0.6.0",
+  version: "0.8.0",
   description: "Projects repo lifecycle, Git activity, and linked GitHub default-branch imports.",
   stateSchema: z.object({
     createRequest: repoCreateRequestSchema().nullable().default(null).meta({
@@ -124,7 +125,10 @@ export const RepoProcessorContract = defineProcessorContract({
   events: {
     "events.iterate.com/repos/create-requested": {
       description:
-        "Requests the repo creation saga: seed an empty repo, import a private GitHub repo at depth one, or import a public GitHub repo through Cloudflare Artifacts (full history unless depth is set). Terminates in repos/created or repos/create-failed.",
+        "Requests the repo creation saga: seed an empty repo, copy a public GitHub template " +
+        "subtree, import a private GitHub repo at depth one, or import a public GitHub repo " +
+        "through Cloudflare Artifacts (full history unless depth is set). Terminates in " +
+        "repos/created or repos/create-failed.",
       payloadSchema: repoCreateRequestSchema(),
     },
     "events.iterate.com/repos/created": {
@@ -156,7 +160,7 @@ export const RepoProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/repo/commit-completed": {
       description:
-        "The repo's default branch advanced, normalized from a Cloudflare Artifacts pushed event. This includes pushes made outside OS through Git.",
+        "The repo's default branch advanced. OS-owned writes append this fact directly; Cloudflare Artifacts pushed events normalize external Git writes into the same fact.",
       payloadSchema: z.object({
         beforeCommitOid: z.string().trim().min(1).nullable().meta({
           description: "The branch head before the push, or null for a newly created ref.",
@@ -279,7 +283,7 @@ export const RepoProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/github/webhook-received": {
       description:
-        "One GitHub push delivery, captured as decoded JSON on the connection stream and cross-posted here by the repo's linkGithub subscription. The trusted envelope is structural while the vendor body stays loose.",
+        "One GitHub push delivery, captured as decoded JSON on the connection stream and copied here by the repo's linkGithub subscription. The trusted envelope is structural while the vendor body stays loose.",
       payloadSchema: z
         .object({
           body: z
@@ -387,6 +391,28 @@ function repoCreateRequestSchema() {
       .meta({ description: "Seed a fresh repo with iterate's starter files." }),
     z
       .strictObject({
+        type: z.literal("github-public-template"),
+        owner: z.string().trim().min(1).meta({ description: "GitHub owner (org or user)." }),
+        path: z
+          .string()
+          .trim()
+          .min(1)
+          .refine(isSafeConfigRepoTemplatePath, {
+            error: "Template path must stay within the public repository and outside .git.",
+          })
+          .optional()
+          .meta({ description: "Repository-relative directory copied as the new repo root." }),
+        ref: z.string().trim().min(1).optional().meta({
+          description: "Branch, tag, or commit to copy; the default branch when omitted.",
+        }),
+        repo: z.string().trim().min(1).meta({ description: "GitHub repository name." }),
+      })
+      .meta({
+        description:
+          "Copy the text files in one public GitHub repository folder into a fresh Artifact.",
+      }),
+    z
+      .strictObject({
         type: z.literal("github-private"),
         connection: z
           .string()
@@ -408,7 +434,13 @@ function repoCreateRequestSchema() {
           .string()
           .trim()
           .min(1)
-          .meta({ description: "The named GitHub connection (App installation) minting tokens." }),
+          .optional()
+          .meta({
+            description:
+              "Optional named GitHub connection (App installation) to link after the import — " +
+              "enables webhook ingestion and sync. Omit for a plain public clone (Artifacts " +
+              "clones public repos unauthenticated; link later with linkGithub).",
+          }),
         depth: z.number().int().positive().optional().meta({
           description:
             "Shallow-import depth; omit to let Cloudflare Artifacts import the full history.",
@@ -419,7 +451,7 @@ function repoCreateRequestSchema() {
       .meta({
         description:
           "Have Cloudflare Artifacts clone the public GitHub repository directly (no transfer " +
-          "through the Worker), then link it.",
+          "through the Worker), then link it when a connection is given.",
       }),
   ]);
 }

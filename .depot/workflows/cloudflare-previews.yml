@@ -35,22 +35,12 @@ permissions:
   pull-requests: write
   statuses: read
 
-# Draft PRs don't claim a preview slot unless they ask — the `preview` label,
-# marking ready for review, or a manual dispatch (dispatch passes
-# --allow-draft below). The policy lives in scripts/preview/preview.ts
-# (decideDraftPreviewPolicy) where it's unit-tested; the trigger types beyond
-# open/reopen/synchronize just make sure the script runs whenever a PR's
-# draft or label state changes, so it can claim a slot or give one back.
 on:
   pull_request:
     types:
       - opened
       - reopened
       - synchronize
-      - ready_for_review
-      - converted_to_draft
-      - labeled
-      - unlabeled
     paths:
       - .depot/workflows/cloudflare-previews.yml
       - packages/shared/**
@@ -70,6 +60,8 @@ on:
       - apps/auth/**
       - apps/auth-contract/**
       - apps/os/src/domains/streams/**
+      - apps/docs/**
+      - packages/workspace-documents/**
       - apps/semaphore/**
       - apps/streams-example-app/**
       - apps/dummy-petshop/**
@@ -85,11 +77,6 @@ concurrency:
 
 jobs:
   preview:
-    # Label events for anything but the preview opt-in label change nothing
-    # about the preview lifecycle — skip the checkout+install entirely.
-    if: |-
-      (github.event.action != 'labeled' || github.event.label.name == 'preview') &&
-        (github.event.action != 'unlabeled' || github.event.label.name == 'preview')
     name: Preview / deploy + e2e
     # The overlapping test pools peaked below ten cores. Keep the 16-core
     # shape, but start from the same baked workspace used by mainline checks
@@ -137,13 +124,12 @@ jobs:
           TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
         run: |-
           set -euo pipefail
-          # A manual dispatch is an explicit ask for a fresh preview, so it
-          # overrides the draft policy and redeploys even when this exact head
-          # was previously cleaned up and recorded as released.
+          # A manual dispatch is an explicit ask for a fresh preview of the
+          # whole fleet, regardless of what the diff touches.
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview run \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}" \
-            ${{ github.event_name == 'workflow_dispatch' && '--allow-draft --all-apps' || '' }}
+            ${{ github.event_name == 'workflow_dispatch' && '--all-apps' || '' }}
       - name: Normalize and send preview test telemetry
         if: always()
         env:

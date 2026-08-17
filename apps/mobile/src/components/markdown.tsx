@@ -1,16 +1,38 @@
+import { useQuery } from "@tanstack/react-query";
+import { router, useLocalSearchParams } from "expo-router";
 import { EnrichedMarkdownText, type MarkdownStyle } from "react-native-enriched-markdown";
 import { Linking, StyleSheet, View } from "react-native";
+import { resolveInAppLink } from "../lib/in-app-links.ts";
+import { DEFAULT_SERVER } from "../lib/servers.ts";
+import { getServerBaseUrl } from "../lib/storage.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 export function Markdown({ markdown, preview = false }: { markdown: string; preview?: boolean }) {
+  // Same-deployment special links (/media/..., /repos/...) open the rich
+  // in-app screen; everything else goes to the system browser. Rendered
+  // inside a project route this knows the project; outside one, projectId is
+  // undefined and the resolver declines.
+  const { projectId } = useLocalSearchParams<{ projectId?: string }>();
+  const server = useQuery({
+    queryKey: ["server"],
+    queryFn: async () => (await getServerBaseUrl()) || DEFAULT_SERVER,
+    staleTime: Infinity,
+  });
   return (
     <View style={preview ? styles.preview : styles.message}>
       <EnrichedMarkdownText
         flavor="github"
         markdown={markdown}
-        markdownStyle={markdownStyle}
+        markdownStyle={preview ? previewMarkdownStyle : markdownStyle}
         md4cFlags={{ latexMath: false, underline: false }}
-        onLinkPress={({ url }) => void Linking.openURL(url)}
+        onLinkPress={({ url }) => {
+          const inApp = resolveInAppLink(url, { baseUrl: server.data, projectId });
+          if (inApp) {
+            router.push(inApp);
+          } else {
+            void Linking.openURL(url);
+          }
+        }}
         selectable
         streamingAnimation={!preview}
       />
@@ -77,6 +99,20 @@ const markdownStyle: MarkdownStyle = {
   },
   taskList: { borderColor: colors.textMuted, checkedColor: colors.accent },
   thematicBreak: { color: colors.border, height: 1, marginBottom: 12, marginTop: 12 },
+};
+
+// Preview contexts (media rows, viewer chrome): toMarkdown loves to open
+// with "# Screenshot Overview" — huge heading text reads absurd in a list
+// row, so headings collapse to bold body-sized text.
+const previewMarkdownStyle: MarkdownStyle = {
+  ...markdownStyle,
+  h1: { color: colors.text, fontSize: 14, lineHeight: 19, marginBottom: 4, marginTop: 2 },
+  h2: { color: colors.text, fontSize: 14, lineHeight: 19, marginBottom: 4, marginTop: 4 },
+  h3: { color: colors.text, fontSize: 13, lineHeight: 18, marginBottom: 4, marginTop: 4 },
+  h4: { color: colors.text, fontSize: 13, lineHeight: 18, marginBottom: 4, marginTop: 4 },
+  h5: { color: colors.textMuted, fontSize: 13, lineHeight: 18, marginBottom: 4, marginTop: 4 },
+  h6: { color: colors.textMuted, fontSize: 13, lineHeight: 18, marginBottom: 4, marginTop: 4 },
+  paragraph: { color: colors.text, fontSize: 13, lineHeight: 18, marginBottom: 6 },
 };
 
 const styles = StyleSheet.create({

@@ -7,34 +7,28 @@ import {
   type LiveStateRpc,
 } from "../../sdk/capnweb/index.ts";
 import type { StreamProcessorRegistry } from "../../processors/cloudflare.ts";
-import { IterateDurableObject, createProcessorHost, type StreamEvent } from "../../sdk.ts";
+import {
+  StreamProcessorDurableObject,
+  type ProcessorHostDeps,
+  type StreamEvent,
+} from "../../sdk.ts";
 import { guestbookCreationEvents, guestbookStreamPath } from "./app-ref.ts";
 import { GuestbookProcessor, type GuestbookState } from "./processor.ts";
 
-/** One packaged Durable Object owns the page, API, processor, and live value. */
-export class GuestbookApp extends IterateDurableObject {
-  #host = createProcessorHost<GuestbookState>({
-    ctx: this.ctx,
-    env: this.env,
-    path: guestbookStreamPath,
-    createProcessor: (deps) => new GuestbookProcessor(deps),
-  });
-
-  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    await this.#host.handleAlarm(alarmInfo);
+/** One packaged Durable Object owns the page, API, processor, and live value.
+ * `alarm()`, the `processor` wake door, `snapshot()`, and `registry()` come
+ * from {@link StreamProcessorDurableObject}; all this class writes is how to
+ * build its processor plus its own HTTP + append verbs. */
+export class GuestbookApp extends StreamProcessorDurableObject<GuestbookState> {
+  protected readonly streamPath = guestbookStreamPath;
+  protected createProcessor(deps: ProcessorHostDeps) {
+    return new GuestbookProcessor(deps);
   }
 
-  /** Compatibility door for the former config-owned WAKE subscription.
-   * Initialization removes that persisted subscription, but it may still dial
-   * this source once while the removal fact and source upgrade cross. */
-  get processor() {
-    return this.#host.wakeSubscriber;
-  }
-
-  /** Lazily initialize the stream and retire the former config-owned WAKE
-   * subscription. The idempotency-keyed facts may be offered by every caller. */
+  /** Lazily initialize the stream. The idempotency-keyed creation fact may be
+   * offered by every caller. */
   async #ensureInitialized(): Promise<StreamProcessorRegistry<GuestbookState>> {
-    const registry = await this.#host.registry();
+    const registry = await this.registry();
     await registry.catchUp("guestbook");
     using project = await this.env.ITX.get();
     await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents());
@@ -54,7 +48,7 @@ export class GuestbookApp extends IterateDurableObject {
   /** Internal worker RPC surface used to verify source upgrades and delivery. */
   async getState(): Promise<GuestbookState> {
     await this.#ensureInitialized();
-    return (await this.#host.snapshot()).state;
+    return (await this.snapshot()).state;
   }
 
   async sign(name: string, message: string): Promise<void> {

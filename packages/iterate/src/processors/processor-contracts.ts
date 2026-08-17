@@ -50,18 +50,32 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 // payload types from the same declaration and typos fail at the definition site.
 // =============================================================================
 
-/** One owned event: its payload schema plus an optional human description. */
+/**
+ * One documented example payload for an owned event, rendered on the public
+ * event docs site (events.iterate.com). The payload must parse against the
+ * event's `payloadSchema` — enforced by the event-docs unit tests rather than
+ * at module load, so a bad example fails CI instead of bricking a worker boot.
+ */
+export type EventExample = {
+  /** What this example shows, e.g. "Durable delivery to another stream". */
+  description: string;
+  /** The example payload, in the payload schema's input shape. */
+  payload: unknown;
+};
+
+/** One owned event: its payload schema plus optional human description and examples. */
 export type EventDefinition<PayloadOutput = unknown, PayloadInput = PayloadOutput> = {
   description?: string;
   payloadSchema: z.ZodType<PayloadOutput, PayloadInput>;
   /**
-   * FORCIBLY ephemeral: every append/parse lane built from this definition
+   * FORCIBLY ephemeral: every append and parse built from this definition
    * defaults the envelope's `ephemeral` flag to `true` and REJECTS an explicit
    * `ephemeral: false`. For events that must never become durable stream
    * facts (streaming chunks) — declaring it here makes forgetting the flag at
    * an append site impossible instead of a silent storage leak.
    */
   ephemeral?: true;
+  examples?: readonly EventExample[];
 };
 
 /** A contract's owned events, keyed by the durable event type string. */
@@ -139,7 +153,7 @@ type TypedStreamEventInput<Type extends string = string, Payload = Record<string
 };
 
 /**
- * A durable processor input. Wake processors never receive ephemeral rows, so
+ * A durable processor input. Wake processors never receive ephemeral events, so
  * a domain object's processor-typed append door must not claim that they do.
  */
 type TypedConsumedEventInput<
@@ -286,7 +300,7 @@ export type ConsumedEvent<Contract> = Contract extends {
 
 /**
  * Union of durable append-input shapes accepted by a contract's `consumes`
- * list. Ephemeral rows are excluded because wake processors cannot consume
+ * list. Ephemeral events are excluded because hosted processors cannot consume
  * them; append those intentionally through the raw Stream door. This is a
  * schema/vocabulary union, not proof that an event is valid in the processor's
  * current state or came from a particular provenance.
@@ -384,7 +398,7 @@ type ProcessorContractParseEvent<
  * Same as `parseEvent`, but for append inputs that do not yet have an offset or
  * createdAt. This exists for stream-owned pre-commit policy: the Stream Durable
  * Object must reject some contract-owned events BEFORE they become durable
- * facts (see `validateAppend` in stream-durable-object.ts) — validating them
+ * facts (see the core processor's `validate`) — validating them
  * later, in the wake side effect, would leave the invalid event committed and
  * reduced into durable state. The lifecycle e2e tests assert both the rejection
  * and that nothing was committed.
@@ -436,20 +450,38 @@ function getEventSchema<const Type extends string, const PayloadSchema extends z
   TypedStreamEvent<Type, z.output<PayloadSchema>>,
   TypedStreamEvent<Type, z.input<PayloadSchema>>
 > {
-  return z.looseObject({
-    type: z.literal(args.type),
-    payload: args.payloadSchema,
-    metadata: StreamEventSchema.shape.metadata,
-    source: StreamEventSchema.shape.source,
-    idempotencyKey: StreamEventSchema.shape.idempotencyKey,
-    ephemeral: ephemeralEnvelopeSchema(args.ephemeral, StreamEventSchema.shape.ephemeral),
-    offset: StreamEventSchema.shape.offset,
-    createdAt: StreamEventSchema.shape.createdAt,
-    path: StreamEventSchema.shape.path,
-  }) as unknown as z.ZodType<
-    TypedStreamEvent<Type, z.output<PayloadSchema>>,
-    TypedStreamEvent<Type, z.input<PayloadSchema>>
-  >;
+  return (
+    z
+      .looseObject({
+        type: z.literal(args.type),
+        payload: args.payloadSchema,
+        metadata: StreamEventSchema.shape.metadata,
+        source: StreamEventSchema.shape.source,
+        idempotencyKey: StreamEventSchema.shape.idempotencyKey,
+        // COMMITTED events keep their stored flag verbatim — never the
+        // definition's forced default. A definition that later became
+        // `ephemeral: true` (the connection presence facts) must not rewrite
+        // history: durable rows committed before the change parse without the
+        // flag and replay durably, exactly as they were folded at commit time.
+        // Only the INPUT schema (getEventInputSchema) forces the definition's
+        // choice, so no new durable instance can be appended.
+        ephemeral: StreamEventSchema.shape.ephemeral,
+        offset: StreamEventSchema.shape.offset,
+        createdAt: StreamEventSchema.shape.createdAt,
+        path: StreamEventSchema.shape.path,
+      })
+      // Zod widens the object after a dynamic envelope shape plus `superRefine`,
+      // so it cannot retain the relationship between `Type`, `PayloadSchema`,
+      // and this function's generic result. Every envelope field above comes
+      // from the canonical StreamEvent schema, while the literal type and
+      // payload schema supply exactly the two narrowed fields; the refinement
+      // only rejects an otherwise-invalid combination. The cast restores that
+      // precise generic relationship without weakening runtime validation.
+      .superRefine(rejectEphemeralIdempotency) as unknown as z.ZodType<
+      TypedStreamEvent<Type, z.output<PayloadSchema>>,
+      TypedStreamEvent<Type, z.input<PayloadSchema>>
+    >
+  );
 }
 
 /** The envelope `ephemeral` slot: for a definition marked `ephemeral: true`,
@@ -458,6 +490,19 @@ function getEventSchema<const Type extends string, const PayloadSchema extends z
  * durable stream fact. */
 function ephemeralEnvelopeSchema(forced: boolean | undefined, standard: z.ZodType): z.ZodType {
   return forced === true ? z.literal(true).default(true) : standard;
+}
+
+function rejectEphemeralIdempotency(
+  event: { ephemeral?: unknown; idempotencyKey?: unknown },
+  context: z.RefinementCtx,
+): void {
+  if (event.ephemeral === true && event.idempotencyKey !== undefined) {
+    context.addIssue({
+      code: "custom",
+      message: "ephemeral events cannot have an idempotencyKey",
+      path: ["idempotencyKey"],
+    });
+  }
 }
 
 /**
@@ -477,19 +522,27 @@ export function getEventInputSchema<
   TypedStreamEventInput<Type, z.output<PayloadSchema>>,
   TypedStreamEventInput<Type, z.input<PayloadSchema>>
 > {
-  return z
-    .object({
-      type: z.literal(args.type),
-      payload: args.payloadSchema,
-      metadata: StreamEventInputSchema.shape.metadata,
-      source: StreamEventInputSchema.shape.source,
-      idempotencyKey: StreamEventInputSchema.shape.idempotencyKey,
-      ephemeral: ephemeralEnvelopeSchema(args.ephemeral, StreamEventInputSchema.shape.ephemeral),
-    })
-    .strict() as unknown as z.ZodType<
-    TypedStreamEventInput<Type, z.output<PayloadSchema>>,
-    TypedStreamEventInput<Type, z.input<PayloadSchema>>
-  >;
+  return (
+    z
+      .strictObject({
+        type: z.literal(args.type),
+        payload: args.payloadSchema,
+        metadata: StreamEventInputSchema.shape.metadata,
+        source: StreamEventInputSchema.shape.source,
+        idempotencyKey: StreamEventInputSchema.shape.idempotencyKey,
+        ephemeral: ephemeralEnvelopeSchema(args.ephemeral, StreamEventInputSchema.shape.ephemeral),
+      })
+      // As above, Zod cannot express that this dynamically assembled and
+      // refined object has the input/output types of `PayloadSchema` paired with
+      // the literal `Type`. The remaining fields come directly from the
+      // canonical StreamEventInput schema and `strictObject` rejects extras, so
+      // the cast only recovers the generic relationship already enforced by the
+      // runtime shape; it does not admit values the parser would accept unsafely.
+      .superRefine(rejectEphemeralIdempotency) as unknown as z.ZodType<
+      TypedStreamEventInput<Type, z.output<PayloadSchema>>,
+      TypedStreamEventInput<Type, z.input<PayloadSchema>>
+    >
+  );
 }
 
 // =============================================================================
@@ -785,6 +838,15 @@ function assertDefaultStateSchema(contract: unknown): void {
  * `z.unknown()` definition when the contract consumes `"*"`, and `undefined`
  * when the event is not consumed at all. Runtime counterpart of
  * `ConsumedEvent<Contract>`.
+ *
+ * `"*"` NEVER MATCHES AN EPHEMERAL EVENT, and that one rule is what lets
+ * ephemeral types live in `consumes` beside durable ones instead of in a
+ * parallel list. Naming a type explicitly is the opt-in: you cannot be handed
+ * a microphone firehose by a wildcard you wrote for durable facts, and a
+ * processor that wants live events says so by type. Ephemeral bodies live
+ * only in the Stream DO's bounded buffer, so a processor receiving one must
+ * have decided it can cope with never seeing it again — a decision nobody
+ * makes by writing `"*"`.
  */
 export function getConsumedEventDefinition(args: {
   contract: {
@@ -793,8 +855,11 @@ export function getConsumedEventDefinition(args: {
     consumes: readonly string[];
   };
   eventType: string;
+  /** Whether the event being resolved is ephemeral; gates the `"*"` fallback. */
+  ephemeral?: boolean;
 }): EventDefinition | undefined {
   if (!args.contract.consumes.includes(args.eventType)) {
+    if (args.ephemeral === true) return undefined;
     if (args.contract.consumes.includes("*")) return { payloadSchema: z.unknown() };
     return undefined;
   }
@@ -802,6 +867,20 @@ export function getConsumedEventDefinition(args: {
   if (eventDefinition == null) {
     throw new Error(`Unresolved stream processor consumes event type "${args.eventType}".`);
   }
+  /*
+   * NAMING A TYPE IS NOT THE SAME AS ACCEPTING AN EPHEMERAL COPY OF IT.
+   *
+   * A type is only ephemeral if its DEFINITION says so; the envelope flag is
+   * otherwise per-append, so anyone may append an ephemeral copy of an
+   * ordinarily-durable type. Admitting that would let it be folded into
+   * reduced state, and reduced state must equal folding the durable log —
+   * caught by an existing test that appends `scheduler/schedule-set` both
+   * ways and asserts only the durable one survives.
+   *
+   * So the contract decides on both sides: the catalogue says which types are
+   * live-only, `consumes` says which of them you want.
+   */
+  if (args.ephemeral === true && eventDefinition.ephemeral !== true) return undefined;
   return eventDefinition;
 }
 
@@ -912,11 +991,9 @@ function getProcessorSlug(contract: unknown): string {
 export const STREAM_PROCESSOR_REVIVED_EVENT_TYPE = "events.iterate.com/stream/processor-revived";
 
 /**
- * A processor contract announcement carried on the connect event when the
- * subscriber is a hosted stream processor. UIs and tooling read it from the
- * presence facts (the `subscriber-connected` events) and, for configured
- * subscriptions, from the reduced roster
- * (`connectionsByKey[..].subscriber.processor.announcement`).
+ * A processor contract announcement carried on `connection-opened` when the
+ * callback owner is a hosted stream processor. UIs and tooling read it from
+ * that event and from `runtime.connections[..].openedBy`.
  */
 export const ProcessorContractAnnouncement = z.object({
   slug: z.string().trim().min(1),

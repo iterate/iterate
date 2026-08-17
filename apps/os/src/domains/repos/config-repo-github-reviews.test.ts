@@ -1,15 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GithubRepoLink, Project, StreamEvent, StreamEventInput } from "iterate/sdk";
 import {
-  makeMemoryProgressStore,
-  makeProcessorHarness,
-  type HarnessSubstrate,
-} from "iterate/processors/testing";
-import {
+  githubAiLinterEventTypes,
   handleGithubPullRequestWebhook as handleGithubPullRequestWebhookWithPolicy,
-  ReviewBotProcessor,
-  ReviewBotProcessorContract,
-  reviewBotFreshnessHorizonMs,
 } from "iterate/starter-apps/github-ai-linter/worker";
 
 const testAndSpecFileGlobs = [
@@ -21,22 +14,39 @@ const rules = {
     files: ["**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
     invariant:
       "Do not introduce a small helper used only once when keeping the logic at its call site would be clearer.",
+    severity: "error" as const,
   },
   "typescript/no-inferable-type-annotation": {
     files: ["**/*.{ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
     invariant: "Do not declare a type annotation that TypeScript can infer from the value.",
+    severity: "error" as const,
   },
   "typescript/explain-type-cast": {
     files: ["**/*.{ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
     invariant:
       "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.",
+    severity: "error" as const,
   },
 };
-const policy = { loadRules: async () => rules, policyVersion: "2" };
+const config = {
+  policyVersion: "2",
+  rules: { paths: Object.keys(rules).map((id) => `rules/${id}.md`), repoPath: "/repos/config" },
+};
+const policy = {
+  config,
+  loadRules: async () => ({ commitOid: "rules-abc", rules }),
+};
 const ruleFiles = Object.fromEntries(
   Object.entries(rules).map(([id, rule]) => [
     `rules/${id}.md`,
-    ["---", `id: ${id}`, `files: ${JSON.stringify(rule.files)}`, "---", rule.invariant].join("\n"),
+    [
+      "---",
+      `id: ${id}`,
+      `files: ${JSON.stringify(rule.files)}`,
+      `severity: ${rule.severity}`,
+      "---",
+      rule.invariant,
+    ].join("\n"),
   ]),
 );
 
@@ -53,13 +63,16 @@ const route = {
 } satisfies GithubRepoLink;
 
 const agentPath = "/agents/repos/config/pr/7";
+const linterPath = `${agentPath}/ai-linter`;
 const iterateAgentPath = "/agents/repos/iterate/pr/7";
+const iterateLinterPath = `${iterateAgentPath}/ai-linter`;
 
 function webhook(input?: {
   action?: string;
   appSlug?: string;
   authorAssociation?: string;
   authorType?: string;
+  baseSha?: string;
   commentBody?: string | null;
   draft?: boolean;
   headSha?: string;
@@ -106,6 +119,7 @@ function webhook(input?: {
           id: 991,
         },
         pull_request: {
+          base: { sha: input?.baseSha ?? "base-abc" },
           draft: input?.draft ?? false,
           head: { sha: input?.headSha ?? "head-abc" },
           number: 7,
@@ -142,34 +156,69 @@ function harness(input?: {
   }
   const appendBatches: Array<{ events: StreamEventInput[]; path: string }> = [];
   const agentAppendBatches: Array<{ events: StreamEventInput[]; path: string }> = [];
+  const committedEvents = new Map<string, StreamEvent[]>();
+  const nextOffsets = new Map<string, number>();
+  for (const [path, birth] of births) {
+    committedEvents.set(path, [birth]);
+    nextOffsets.set(path, 2);
+  }
+  const commit = (path: string, events: StreamEventInput[]) => {
+    const committed = committedEvents.get(path) ?? [];
+    const results = events.map((event) => {
+      const existing = committed.find(
+        ({ idempotencyKey }) =>
+          event.idempotencyKey !== undefined && idempotencyKey === event.idempotencyKey,
+      );
+      if (existing !== undefined) return existing;
+      const appended: StreamEvent = {
+        ...event,
+        createdAt: "2026-07-17T12:00:02.000Z",
+        offset: nextOffsets.get(path) ?? 1,
+        path,
+      };
+      nextOffsets.set(path, appended.offset + 1);
+      committed.push(appended);
+      return appended;
+    });
+    committedEvents.set(path, committed);
+    return results;
+  };
   const append = vi.fn(async (path: string, ...events: StreamEventInput[]) => {
     appendBatches.push({ events, path });
-    return [];
+    return commit(path, events);
   });
   const agentAppend = vi.fn(async (path: string, ...events: StreamEventInput[]) => {
     agentAppendBatches.push({ events, path });
-    return [];
+    return commit(path, events);
   });
   const create = vi.fn(async (path: string) => {
-    births.set(path, {
+    const birth: StreamEvent = {
       type: "events.iterate.com/agent/created",
       createdAt: "2026-07-17T12:00:01.000Z",
       idempotencyKey: `agent/created:prj_1:${path}`,
       offset: 1,
       path,
       payload: {},
-    });
+    };
+    births.set(path, birth);
+    committedEvents.set(path, [birth]);
+    nextOffsets.set(path, 2);
   });
   const getEvents = vi.fn(async (path: string) => {
     const birth = births.get(path);
     return birth === undefined ? [] : [birth];
   });
+  const subscribeToEventsFrom = vi.fn(async (_path: string, _args: unknown) => ({
+    inbound: {},
+    outbound: {},
+  }));
   const agentGet = vi.fn((path: string) => ({
     append: (...events: StreamEventInput[]) => agentAppend(path, ...events),
     create: () => create(path),
     stream: {
       append: (...events: StreamEventInput[]) => append(path, ...events),
       getEvents: () => getEvents(path),
+      subscribeToEventsFrom: (args: unknown) => subscribeToEventsFrom(path, args),
     },
   }));
   const routes = input?.routes ?? {
@@ -208,11 +257,16 @@ function harness(input?: {
     itx,
     repoGet,
     repoList,
+    subscribeToEventsFrom,
   };
 }
 
+function eventsFor(batches: Array<{ events: StreamEventInput[]; path: string }>, path: string) {
+  return batches.filter((batch) => batch.path === path).flatMap((batch) => batch.events);
+}
+
 describe("userspace GitHub pull-request routing", () => {
-  it("creates the repo-addressed agent and queues one structural review", async () => {
+  it("creates separate conversational and linter agents and queues one analysis", async () => {
     const event = webhook();
     const test = harness();
 
@@ -220,86 +274,171 @@ describe("userspace GitHub pull-request routing", () => {
 
     expect(test.repoGet).toHaveBeenCalledWith("/repos/config");
     expect(test.agentGet).toHaveBeenCalledWith(agentPath);
-    expect(test.create).toHaveBeenCalledOnce();
+    expect(test.agentGet).toHaveBeenCalledWith(linterPath);
+    expect(test.create).toHaveBeenCalledTimes(2);
     expect(test.create).toHaveBeenCalledWith(agentPath);
-    expect(test.agentAppendBatches).toHaveLength(1);
-    expect(test.agentAppendBatches[0]).toMatchObject({
-      path: agentPath,
-      events: [
-        {
-          idempotencyKey: "github-pr/agent-policy:v2",
-          payload: {
-            key: "github/pull-request-policy",
-            llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            role: "developer",
-          },
+    expect(test.create).toHaveBeenCalledWith(linterPath);
+    const parentAgentEvents = eventsFor(test.agentAppendBatches, agentPath);
+    const parentStreamEvents = eventsFor(test.appendBatches, agentPath);
+    const linterAgentEvents = eventsFor(test.agentAppendBatches, linterPath);
+    const linterStreamEvents = eventsFor(test.appendBatches, linterPath);
+
+    expect(parentAgentEvents).toMatchObject([
+      {
+        idempotencyKey: "github-pr/agent-policy:v5",
+        payload: {
+          key: "github/pull-request-policy",
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+          role: "developer",
         },
-        {
-          idempotencyKey: "github-pr/summary",
-          payload: {
-            activity: "Reviewing acme/widgets#7",
-            description:
-              "Reviewing pull request #7 in acme/widgets and reporting findings on GitHub.",
-            title: "PR #7",
-          },
-          type: "events.iterate.com/agent/summary-updated",
+      },
+      {
+        idempotencyKey: "github-pr/summary:acme/widgets",
+        payload: {
+          activity: "Helping with acme/widgets#7",
+          description: "Conversational GitHub agent for pull request #7 in acme/widgets.",
+          title: "PR #7",
         },
-      ],
-    });
-    expect(JSON.stringify(test.agentAppendBatches[0]?.events[0])).toContain(
-      "Do not change code, refs, labels, or merge state",
+        type: "events.iterate.com/agent/summary-updated",
+      },
+    ]);
+    expect(JSON.stringify(parentAgentEvents[0])).toContain(
+      "The sibling /ai-linter stream is the sole author of linter Check Runs and non-blocking COMMENT reviews",
     );
-    expect(test.appendBatches).toHaveLength(1);
-    expect(test.appendBatches[0]?.path).toBe(agentPath);
-    expect(test.appendBatches[0]?.events).toHaveLength(3);
-    expect(test.appendBatches[0]?.events[0]).toEqual({
-      type: "events.iterate.com/agent/binding-set",
-      idempotencyKey: "github-pr/binding",
-      payload: {
-        type: "github_pull_request",
-        connection: "install-789",
-        installationId: "789",
-        owner: "acme",
-        repo: "widgets",
-        number: 7,
+    expect(JSON.stringify(parentAgentEvents[0])).toContain(
+      "Never create, submit, or dismiss a pull-request review",
+    );
+    expect(parentStreamEvents).toEqual([
+      {
+        type: "events.iterate.com/agent/binding-set",
+        idempotencyKey: "github-pr/binding:install-789:789:101:acme/widgets",
+        payload: {
+          type: "github_pull_request",
+          connection: "install-789",
+          installationId: "789",
+          owner: "acme",
+          repo: "widgets",
+          number: 7,
+        },
       },
-    });
-    expect(test.appendBatches[0]?.events[1]).toMatchObject({
-      idempotencyKey: "github-pr/webhook:/integrations/github/install-789:12",
-      payload: event.payload,
-      source: {
-        crossPostedFrom: [
-          expect.objectContaining({
-            offset: 12,
-            path: "/integrations/github/install-789",
-            projectId: "prj_1",
-            subscriptionKey: "userspace:github-pr:/repos/config",
-          }),
-        ],
+    ]);
+    expect(test.subscribeToEventsFrom).not.toHaveBeenCalled();
+    expect(linterAgentEvents).toMatchObject([
+      {
+        idempotencyKey: "github-ai-linter/turn-budget:v1",
+        payload: {
+          config: {
+            maxAutonomousTurns: 10,
+          },
+        },
+        type: "events.iterate.com/agent/configured",
       },
-    });
-    expect(test.appendBatches[0]?.events[2]).toMatchObject({
-      idempotencyKey: "github-pr/review:install-789:101:acme/widgets:iterate:2:head-abc",
-      payload: {
-        key: "github/review-task",
-        llmRequestPolicy: { behaviour: "interrupt-current-request" },
-        role: "developer",
+      {
+        idempotencyKey: "github-ai-linter/agent-policy:v3",
+        payload: {
+          key: "github-ai-linter/policy",
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+          role: "developer",
+        },
       },
-      type: "events.iterate.com/agents/context-added",
-    });
-    const task = JSON.stringify(test.appendBatches[0]?.events[2]);
+      {
+        idempotencyKey: "github-ai-linter/summary:acme/widgets",
+        payload: {
+          activity: "Linting acme/widgets#7",
+          description: "Automated rule diagnostics for pull request #7 in acme/widgets.",
+          title: "AI linter · PR #7",
+        },
+      },
+      {
+        idempotencyKey: "github-ai-linter/task:7",
+        payload: {
+          key: "github-ai-linter/analysis:7",
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+          refs: [
+            {
+              eventType: "events.iterate.com/github-ai-linter/analysis-requested",
+              offset: 7,
+              streamPath: linterPath,
+              type: "event",
+            },
+          ],
+          role: "developer",
+        },
+      },
+      {
+        idempotencyKey: "github-ai-linter/trigger:7",
+        payload: {
+          actor: { name: "github-ai-linter", type: "integration" },
+          llmRequestPolicy: { behaviour: "interrupt-current-request" },
+          role: "user",
+        },
+      },
+    ]);
+    expect(linterStreamEvents).toMatchObject([
+      {
+        type: "events.iterate.com/agent/binding-set",
+        idempotencyKey: "github-ai-linter/binding:install-789:789:101:acme/widgets",
+      },
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        idempotencyKey:
+          "github-ai-linter/subscription:install-789:101:7:policy:2:stream:/agents/repos/config/pr/7/ai-linter",
+        payload: {
+          name: "github-ai-linter",
+          filter: {
+            eventTypes: Object.values(githubAiLinterEventTypes),
+          },
+          receiver: {
+            action: "wake-processor",
+          },
+        },
+      },
+      {
+        type: "events.iterate.com/github-ai-linter/analysis-requested",
+        idempotencyKey:
+          "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:3:rules-abc:base-abc:head-abc",
+        payload: {
+          appSlug: "iterate",
+          baseSha: "base-abc",
+          connection: "install-789",
+          headSha: "head-abc",
+          policyVersion: "2",
+          promptVersion: "3",
+          pullRequestNumber: 7,
+          repository: { id: 101, owner: "acme", repo: "widgets" },
+          rules,
+          rulesCommit: "rules-abc",
+        },
+      },
+    ]);
+    expect(JSON.stringify(linterStreamEvents[1])).toContain('"className":"GithubAiLinterApp"');
+    expect(JSON.stringify(linterStreamEvents[1])).toMatch(
+      /"durableWorkerKey":"app-gh-linter-[0-9a-f]{32}"/,
+    );
+    expect(JSON.stringify(linterAgentEvents[1])).toContain(
+      "The stream processor mechanically publishes a green Check Run for clean analyses",
+    );
+
+    const task = JSON.stringify(linterAgentEvents[3]);
     expect(task).toContain("complete changed-file list");
     expect(task).toContain("octokit.paginate");
     expect(task).toContain("GET /repos/{owner}/{repo}/pulls/{pull_number}/files");
-    expect(task).toContain("Never pass an `octokit.rest` method to `octokit.paginate`");
-    expect(task).toContain("Return plain JSON data from the script");
-    expect(task).toContain("exactly one consolidated COMMENT review");
+    expect(task).toContain("Never pass an `octokit.rest` method to `paginate`");
+    expect(task).toContain("diagnostic-reported");
+    expect(task).toContain("diagnostic-suppressed");
+    expect(task).toContain("analysis-settled");
+    expect(task).toContain("diagnosticKey");
+    expect(task).toContain('\\"kind\\": \\"suggestion\\"');
+    expect(task).toContain("iterate-lint-disable");
+    expect(task).toContain("iterate-lint-enable");
+    expect(task).toContain("iterate-lint-disable-line");
     expect(task).toContain("iterate-lint-disable-next-line");
     expect(task).toContain("structure/no-small-single-use-helper");
     expect(task).toContain("no `!`-prefixed negative glob");
     expect(task).toContain("!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}");
     expect(task).toContain("!**/{__tests__,test,tests,spec,specs}/**");
-    expect(task).toContain("<!-- iterate-ai-lint:101:policy:2:head:head-abc -->");
+    expect(task).toContain("Do not publish anything to GitHub yourself");
+    expect(task).not.toContain("exactly one consolidated COMMENT review");
   });
 
   it("routes each linked GitHub repository through its project-controlled repo path", async () => {
@@ -314,16 +453,14 @@ describe("userspace GitHub pull-request routing", () => {
 
     expect(test.repoList).toHaveBeenCalledOnce();
     expect(test.agentGet).toHaveBeenCalledWith(iterateAgentPath);
+    expect(test.agentGet).toHaveBeenCalledWith(iterateLinterPath);
     expect(test.create).toHaveBeenCalledWith(iterateAgentPath);
+    expect(test.create).toHaveBeenCalledWith(iterateLinterPath);
     expect(test.appendBatches[0]?.path).toBe(iterateAgentPath);
-    expect(test.appendBatches[0]?.events[1]).toMatchObject({
-      source: {
-        crossPostedFrom: [{ subscriptionKey: "userspace:github-pr:/repos/iterate" }],
-      },
-    });
+    expect(test.subscribeToEventsFrom).not.toHaveBeenCalled();
   });
 
-  it("does not create from an unmentioned later delivery", async () => {
+  it("self-heals both agents from a later synchronize delivery", async () => {
     const test = harness();
 
     await handleGithubPullRequestWebhook(
@@ -331,24 +468,41 @@ describe("userspace GitHub pull-request routing", () => {
       webhook({ action: "synchronize", headSha: "head-next" }),
     );
 
-    expect(test.create).not.toHaveBeenCalled();
-    expect(test.append).not.toHaveBeenCalled();
+    expect(test.create).toHaveBeenCalledTimes(2);
+    expect(test.create).toHaveBeenCalledWith(agentPath);
+    expect(test.create).toHaveBeenCalledWith(linterPath);
+    expect(
+      eventsFor(test.appendBatches, linterPath).find(
+        ({ type }) => type === "events.iterate.com/github-ai-linter/analysis-requested",
+      ),
+    ).toMatchObject({ payload: { headSha: "head-next" } });
   });
 
-  it("does not recreate the agent when an opened delivery is redelivered", async () => {
+  it("does not recreate either agent when an opened delivery is redelivered", async () => {
     const test = harness();
     const event = webhook();
 
     await handleGithubPullRequestWebhook(test.itx, event);
     await handleGithubPullRequestWebhook(test.itx, event);
 
-    expect(test.create).toHaveBeenCalledOnce();
-    expect(test.appendBatches).toHaveLength(2);
-    expect(test.appendBatches[1]?.events.map((item) => item.idempotencyKey)).toEqual([
-      "github-pr/binding",
-      "github-pr/webhook:/integrations/github/install-789:12",
-      "github-pr/review:install-789:101:acme/widgets:iterate:2:head-abc",
-    ]);
+    expect(test.create).toHaveBeenCalledTimes(2);
+    expect(test.create).toHaveBeenCalledWith(agentPath);
+    expect(test.create).toHaveBeenCalledWith(linterPath);
+    const analyses = eventsFor(test.appendBatches, linterPath).filter(
+      ({ type }) => type === "events.iterate.com/github-ai-linter/analysis-requested",
+    );
+    expect(analyses).toHaveLength(2);
+    expect(analyses[0]?.idempotencyKey).toBe(analyses[1]?.idempotencyKey);
+    const tasks = eventsFor(test.agentAppendBatches, linterPath).filter(({ idempotencyKey }) =>
+      idempotencyKey?.startsWith("github-ai-linter/task:"),
+    );
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0]?.idempotencyKey).toBe(tasks[1]?.idempotencyKey);
+    const triggers = eventsFor(test.agentAppendBatches, linterPath).filter(({ idempotencyKey }) =>
+      idempotencyKey?.startsWith("github-ai-linter/trigger:"),
+    );
+    expect(triggers).toHaveLength(2);
+    expect(triggers[0]?.idempotencyKey).toBe(triggers[1]?.idempotencyKey);
   });
 
   it("reuses one agent, interrupts on a new head, and deduplicates an unchanged head", async () => {
@@ -367,16 +521,30 @@ describe("userspace GitHub pull-request routing", () => {
       webhook({ action: "synchronize", headSha: "head-two", offset: 22 }),
     );
 
-    expect(test.create).not.toHaveBeenCalled();
-    const reviews = test.appendBatches.map((batch) => batch.events[2]);
-    expect(reviews.map((review) => review?.idempotencyKey)).toEqual([
-      "github-pr/review:install-789:101:acme/widgets:iterate:2:head-one",
-      "github-pr/review:install-789:101:acme/widgets:iterate:2:head-two",
-      "github-pr/review:install-789:101:acme/widgets:iterate:2:head-two",
+    expect(test.create).toHaveBeenCalledOnce();
+    expect(test.create).toHaveBeenCalledWith(linterPath);
+    const analyses = eventsFor(test.appendBatches, linterPath).filter(
+      ({ type }) => type === "events.iterate.com/github-ai-linter/analysis-requested",
+    );
+    expect(analyses.map(({ idempotencyKey }) => idempotencyKey)).toEqual([
+      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:3:rules-abc:base-abc:head-one",
+      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:3:rules-abc:base-abc:head-two",
+      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:3:rules-abc:base-abc:head-two",
     ]);
-    expect(reviews[1]).toMatchObject({
-      payload: { llmRequestPolicy: { behaviour: "interrupt-current-request" } },
+    const tasks = eventsFor(test.agentAppendBatches, linterPath).filter(({ idempotencyKey }) =>
+      idempotencyKey?.startsWith("github-ai-linter/task:"),
+    );
+    expect(tasks).toHaveLength(3);
+    expect(tasks[1]).toMatchObject({
+      payload: { llmRequestPolicy: { behaviour: "dont-trigger-request" } },
     });
+    expect(tasks[1]?.idempotencyKey).toBe(tasks[2]?.idempotencyKey);
+    const triggers = eventsFor(test.agentAppendBatches, linterPath).filter(({ idempotencyKey }) =>
+      idempotencyKey?.startsWith("github-ai-linter/trigger:"),
+    );
+    expect(triggers).toHaveLength(3);
+    expect(triggers[0]?.idempotencyKey).not.toBe(triggers[1]?.idempotencyKey);
+    expect(triggers[1]?.idempotencyKey).toBe(triggers[2]?.idempotencyKey);
   });
 
   it.each([
@@ -398,19 +566,23 @@ describe("userspace GitHub pull-request routing", () => {
       webhook({ owner: "renamed", repo: "widgets-next" }),
     );
 
-    expect(test.agentAppendBatches[0]?.events[1]).toEqual({
+    const parentAgentEvents = eventsFor(test.agentAppendBatches, agentPath);
+    const parentStreamEvents = eventsFor(test.appendBatches, agentPath);
+    const linterAgentEvents = eventsFor(test.agentAppendBatches, linterPath);
+    const linterStreamEvents = eventsFor(test.appendBatches, linterPath);
+
+    expect(parentAgentEvents[1]).toEqual({
       type: "events.iterate.com/agent/summary-updated",
-      idempotencyKey: "github-pr/summary",
+      idempotencyKey: "github-pr/summary:renamed/widgets-next",
       payload: {
         title: "PR #7",
-        activity: "Reviewing renamed/widgets-next#7",
-        description:
-          "Reviewing pull request #7 in renamed/widgets-next and reporting findings on GitHub.",
+        activity: "Helping with renamed/widgets-next#7",
+        description: "Conversational GitHub agent for pull request #7 in renamed/widgets-next.",
       },
     });
-    expect(test.appendBatches[0]?.events[0]).toEqual({
+    expect(parentStreamEvents[0]).toEqual({
       type: "events.iterate.com/agent/binding-set",
-      idempotencyKey: "github-pr/binding",
+      idempotencyKey: "github-pr/binding:install-789:789:101:renamed/widgets-next",
       payload: {
         type: "github_pull_request",
         connection: "install-789",
@@ -420,11 +592,17 @@ describe("userspace GitHub pull-request routing", () => {
         number: 7,
       },
     });
-    expect(JSON.stringify(test.appendBatches[0]?.events[2])).toContain(
-      "renamed/widgets-next pull request #7",
-    );
-    expect(test.appendBatches[0]?.events[2]?.idempotencyKey).toBe(
-      "github-pr/review:install-789:101:renamed/widgets-next:iterate:2:head-abc",
+    expect(
+      linterStreamEvents.find(
+        ({ type }) => type === "events.iterate.com/github-ai-linter/analysis-requested",
+      ),
+    ).toMatchObject({
+      idempotencyKey:
+        "github-ai-linter/analysis:install-789:iterate:101:renamed/widgets-next:7:2:3:rules-abc:base-abc:head-abc",
+      payload: { repository: { id: 101, owner: "renamed", repo: "widgets-next" } },
+    });
+    expect(JSON.stringify(linterAgentEvents)).toContain(
+      "Analyse renamed/widgets-next pull request #7",
     );
   });
 
@@ -435,16 +613,16 @@ describe("userspace GitHub pull-request routing", () => {
       webhook({ action: "created", mentionedUsers: ["iterate"], name: "issue_comment" }),
     );
 
-    expect(test.appendBatches[0]?.events).toHaveLength(4);
-    expect(test.appendBatches[0]?.events[2]).toMatchObject({
+    expect(test.appendBatches[0]?.events).toHaveLength(3);
+    expect(test.appendBatches[0]?.events[1]).toMatchObject({
       idempotencyKey: "github-pr/mention-instructions:/integrations/github/install-789:12",
       payload: {
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
         role: "developer",
       },
     });
-    expect(test.appendBatches[0]?.events[2]?.payload).not.toHaveProperty("actor");
-    expect(test.appendBatches[0]?.events[3]).toMatchObject({
+    expect(test.appendBatches[0]?.events[1]?.payload).not.toHaveProperty("actor");
+    expect(test.appendBatches[0]?.events[2]).toMatchObject({
       idempotencyKey: "github-pr/mention:/integrations/github/install-789:12",
       payload: {
         actor: { login: "jonas", senderType: "User", type: "github" },
@@ -459,11 +637,12 @@ describe("userspace GitHub pull-request routing", () => {
         ],
       },
     });
-    const instructions = JSON.stringify(test.appendBatches[0]?.events[2]);
+    const instructions = JSON.stringify(test.appendBatches[0]?.events[1]);
     expect(instructions).toContain("GitHub's signed webhook identifies @jonas as MEMBER");
     expect(instructions).toContain("issues.createComment");
+    expect(instructions).toContain("never create, submit, or dismiss a pull-request review");
     expect(instructions).not.toContain("@iterate please review");
-    const request = JSON.stringify(test.appendBatches[0]?.events[3]);
+    const request = JSON.stringify(test.appendBatches[0]?.events[2]);
     expect(request).toContain("@iterate please review");
     expect(request).toContain("https://github.com/acme/widgets/pull/7#issuecomment-991");
     expect(JSON.stringify(test.appendBatches[0]?.events)).not.toContain("checkCollaborator");
@@ -478,7 +657,8 @@ describe("userspace GitHub pull-request routing", () => {
         name: "issue_comment",
       }),
     );
-    expect(ignored.appendBatches[0]?.events).toHaveLength(2);
+    expect(ignored.repoList).not.toHaveBeenCalled();
+    expect(ignored.appendBatches).toHaveLength(0);
   });
 
   it("takes submitted review text from the committed webhook without rereading its ref", async () => {
@@ -494,10 +674,10 @@ describe("userspace GitHub pull-request routing", () => {
       }),
     );
 
-    expect(JSON.stringify(test.appendBatches[0]?.events[3])).toContain(
+    expect(JSON.stringify(test.appendBatches[0]?.events[2])).toContain(
       "@iterate answer this review",
     );
-    expect(JSON.stringify(test.appendBatches[0]?.events[3])).not.toContain("wrong field");
+    expect(JSON.stringify(test.appendBatches[0]?.events[2])).not.toContain("wrong field");
   });
 
   it("does not wake from normalized mention metadata when the native message body is absent", async () => {
@@ -512,7 +692,8 @@ describe("userspace GitHub pull-request routing", () => {
       }),
     );
 
-    expect(test.appendBatches[0]?.events).toHaveLength(2);
+    expect(test.repoList).not.toHaveBeenCalled();
+    expect(test.appendBatches).toHaveLength(0);
   });
 
   it("creates the pull-request agent from a trusted mention", async () => {
@@ -523,8 +704,8 @@ describe("userspace GitHub pull-request routing", () => {
     );
 
     expect(test.create).toHaveBeenCalledOnce();
-    expect(test.appendBatches[0]?.events).toHaveLength(4);
-    expect(test.appendBatches[0]?.events[3]).toMatchObject({
+    expect(test.appendBatches[0]?.events).toHaveLength(3);
+    expect(test.appendBatches[0]?.events[2]).toMatchObject({
       payload: {
         actor: { login: "jonas", senderType: "User", type: "github" },
         llmRequestPolicy: { behaviour: "after-current-request" },
@@ -542,151 +723,28 @@ describe("userspace GitHub pull-request routing", () => {
     await handleGithubPullRequestWebhookWithPolicy(
       test.itx,
       webhook({ action: "created", mentionedUsers: ["iterate"], name: "issue_comment" }),
-      { loadRules, policyVersion: "2" },
+      { config, loadRules },
     );
 
     expect(loadRules).not.toHaveBeenCalled();
     expect(test.create).toHaveBeenCalledOnce();
-    expect(test.appendBatches[0]?.events).toHaveLength(4);
+    expect(test.appendBatches[0]?.events).toHaveLength(3);
   });
 
   it("creates draft history without waking a review", async () => {
     const test = harness();
     await handleGithubPullRequestWebhook(test.itx, webhook({ draft: true }));
     expect(test.create).toHaveBeenCalledOnce();
-    expect(test.appendBatches[0]?.events).toHaveLength(2);
+    expect(test.appendBatches[0]?.events).toHaveLength(1);
   });
 
-  it("copies native thread resolution without waking the agent", async () => {
+  it("leaves native thread resolution to the durable agent subscription", async () => {
     const test = harness({ agentExists: true });
     await handleGithubPullRequestWebhook(
       test.itx,
       webhook({ action: "resolved", name: "pull_request_review_thread" }),
     );
-    expect(test.appendBatches[0]?.events).toHaveLength(2);
-    expect(test.appendBatches[0]?.events[1]).toMatchObject({
-      payload: { body: { action: "resolved" }, delivery: { name: "pull_request_review_thread" } },
-      type: "events.iterate.com/github/webhook-received",
-    });
-  });
-});
-
-// The processor half (`iterate/starter-apps/github-ai-linter/worker`)
-// driven by the REAL runner over an in-memory journal via the shared
-// `iterate/processors/testing` harness. The router itself is covered above;
-// these prove the delivery skin around it: which events reach it at all, and
-// the at-least-once redelivery contract.
-describe("userspace review-bot stream processor", () => {
-  function reviewBotHarness(input?: {
-    fake?: ReturnType<typeof harness>;
-    substrate?: HarnessSubstrate;
-  }) {
-    const fake = input?.fake ?? harness();
-    const bot = makeProcessorHarness<typeof ReviewBotProcessorContract, ReviewBotProcessor>({
-      createProcessor: ({ stream, path, projectId, now }) =>
-        new ReviewBotProcessor({
-          stream,
-          path,
-          projectId,
-          now,
-          config: {
-            policyVersion: policy.policyVersion,
-            rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
-          },
-          // The DO host passes `() => env.ITX.get()`; the fake adds the
-          // disposal the handler's `using` expects. Structural cast as in
-          // harness().
-          getItx: async () => ({ ...fake.itx, [Symbol.dispose]: () => {} }) as Project & Disposable,
-        }),
-      path: "/integrations/github/install-789",
-      ...(input?.substrate === undefined ? {} : { substrate: input.substrate }),
-    });
-    return { bot, fake };
-  }
-
-  it("routes a delivered first-hand webhook and re-runs it on a from-zero replay", async () => {
-    const { bot, fake } = reviewBotHarness();
-    await bot.append({
-      type: "events.iterate.com/github/webhook-received",
-      payload: webhook().payload ?? {},
-    });
-    expect(fake.create).toHaveBeenCalledOnce();
-    expect(fake.appendBatches).toHaveLength(1);
-    expect(fake.appendBatches[0]?.path).toBe(agentPath);
-
-    // A fresh progress store over the same journal is the redelivery/replay
-    // shape: the router runs again (at-least-once), and its stable
-    // idempotency keys are what collapse the re-run at the agent stream
-    // (proven above in "does not recreate the agent when an opened delivery
-    // is redelivered").
-    const replay = reviewBotHarness({
-      fake,
-      substrate: { clock: bot.clock, stream: bot.stream, progress: makeMemoryProgressStore() },
-    });
-    await replay.bot.settle();
-    expect(fake.appendBatches).toHaveLength(2);
-  });
-
-  it("routes a trusted mention when structural review rules are unavailable", async () => {
-    const fake = harness({ ruleFiles: {} });
-    const { bot } = reviewBotHarness({ fake });
-
-    await bot.append({
-      type: "events.iterate.com/github/webhook-received",
-      payload:
-        webhook({
-          action: "created",
-          mentionedUsers: ["iterate"],
-          name: "issue_comment",
-        }).payload || {},
-    });
-
-    expect(fake.create).toHaveBeenCalledOnce();
-    expect(fake.appendBatches[0]?.events).toHaveLength(4);
-  });
-
-  it("skips cross-posted copies", async () => {
-    const { bot, fake } = reviewBotHarness();
-    await bot.append({
-      type: "events.iterate.com/github/webhook-received",
-      payload: webhook().payload ?? {},
-      source: {
-        crossPostedFrom: [
-          {
-            subscriptionKey: "userspace:github-pr:/repos/config",
-            createdAt: "2026-07-17T12:00:00.000Z",
-            offset: 12,
-            path: "/integrations/github/install-789",
-            projectId: "prj_1",
-            type: "events.iterate.com/github/webhook-received",
-          },
-        ],
-      },
-    });
-    expect(fake.create).not.toHaveBeenCalled();
-    expect(fake.append).not.toHaveBeenCalled();
-  });
-
-  it("treats webhooks beyond the freshness horizon as history, not work", async () => {
-    // A newly attached wake subscription replays the stream from offset zero;
-    // the horizon is what keeps that replay from reviewing long-dead PRs. The
-    // raw stream append does NOT drive delivery, so the clock can move before
-    // the runner first sees the event — the replayed-history shape.
-    const stale = reviewBotHarness();
-    await stale.bot.stream.append({
-      type: "events.iterate.com/github/webhook-received",
-      payload: webhook().payload,
-    });
-    await stale.bot.advanceTime(reviewBotFreshnessHorizonMs + 1);
-    expect(stale.fake.create).not.toHaveBeenCalled();
-    expect(stale.fake.append).not.toHaveBeenCalled();
-
-    const fresh = reviewBotHarness();
-    await fresh.bot.stream.append({
-      type: "events.iterate.com/github/webhook-received",
-      payload: webhook().payload,
-    });
-    await fresh.bot.advanceTime(reviewBotFreshnessHorizonMs - 1);
-    expect(fresh.fake.create).toHaveBeenCalledOnce();
+    expect(test.repoList).not.toHaveBeenCalled();
+    expect(test.appendBatches).toHaveLength(0);
   });
 });

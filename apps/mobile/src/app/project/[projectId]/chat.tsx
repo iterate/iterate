@@ -1,10 +1,10 @@
 // Chat thread — one agent stream rendered as a feed. The heart of the app.
 //
 // Data flow: useLiveEvents reads the stream, then uses iterate/sdk/itx/react's
-// useItxSubscription to feed server-pushed batches into the same query cache.
+// useStreamConnection to feed server-pushed batches into the same query cache.
 // Sending appends to the agent stream over itx (the same lane the web dashboard
 // uses); the echo of our own message and everything the agent does arrive
-// through the subscription.
+// through the connection.
 //
 // Rendering runs the SAME reduction as the web dashboard (packages/ui
 // agent-ui-reducer via lib/feed.ts): user/assistant bubbles plus activity
@@ -41,7 +41,11 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { RpcStub } from "capnweb";
 import type { Agent, StreamEvent } from "iterate/sdk/itx/react";
-import { ActivityCard, CodeBlock } from "../../../components/activity-card.tsx";
+import {
+  ActivityCard,
+  CodeBlock,
+  type ActivityApprovalContext,
+} from "../../../components/activity-card.tsx";
 import { Markdown } from "../../../components/markdown.tsx";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
 import { SignInRequiredError } from "../../../lib/auth.ts";
@@ -52,7 +56,20 @@ import {
   type AgentUiMessageItem,
   type MobileFeedItem,
 } from "../../../lib/feed.ts";
+import { awaitingAgentActivity, latestAgentTitle } from "../../../lib/chat.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
+// APPROVAL_STREAM_EVENT_TYPES is module-level (identity-stable) on purpose:
+// useLiveEvents folds eventTypes into its connection-hook deps, so an inline
+// literal (fresh identity every render) would tear down and reopen the
+// stream connection in a render loop.
+import {
+  APPROVAL_STREAM_EVENT_TYPES,
+  deriveOpenBatches,
+  readAllApprovalEvents,
+} from "../../../lib/approvals.ts";
+import { approverKeyStatus } from "../../../lib/approver.ts";
+import { InThreadApprovalCard } from "../../../components/in-thread-approval.tsx";
+import { useClaimReplyPresented } from "../../../lib/reply-presented.ts";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
@@ -94,6 +111,35 @@ export default function ChatScreen() {
     streamPath: path,
   });
 
+  // While this screen shows the newest reply to a foregrounded user, claim
+  // it so the reply push stays quiet (suppression, not read-state).
+  useClaimReplyPresented({ baseUrl, events: events.data || [], path, projectId });
+
+  // Approvals live on the project ROOT stream; a held batch whose
+  // script-execution provenance names THIS thread renders as a dialog inside
+  // the conversation (same query key as the Approvals screen — shared cache).
+  const approvalEvents = useLiveEvents({
+    queryKey: ["approval-events", baseUrl || "pending", projectId],
+    read: async () => {
+      const project = await getProjectItx(baseUrl!, projectId);
+      return await readAllApprovalEvents(project.streams.get("/"));
+    },
+    enabled: baseUrl !== undefined,
+    eventTypes: APPROVAL_STREAM_EVENT_TYPES,
+    projectId,
+    streamPath: "/",
+  });
+  const threadBatches = deriveOpenBatches(approvalEvents.data || []).filter(
+    (batch) =>
+      batch.payload.streamContext?.kind === "script-execution" &&
+      batch.payload.streamContext.streamPath === path,
+  );
+  const approverKey = useQuery({
+    queryKey: ["approver-key-status", projectId, baseUrl],
+    queryFn: () => approverKeyStatus(baseUrl!, projectId),
+    enabled: baseUrl !== undefined,
+  });
+
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<PickedImage[]>([]);
   const [viewMode, setViewMode] = useState<"chat" | "events">("chat");
@@ -113,19 +159,20 @@ export default function ChatScreen() {
       // requires an explicit create() before the first message either way.
       await agent.create();
       if (input.files.length === 0) {
-        await agent.message(input.message);
-        return;
+        const event = await agent.message(input.message);
+        return event.offset;
       }
       // Same shape as the web composer: ONE addFiles call → one input event
       // carrying every attachment → one feed message + one agent turn.
-      await agent.addFiles({
+      const added = await agent.addFiles({
         files: input.files.map((file) => ({
           contentType: file.contentType,
           data: base64ToUint8Array(file.base64),
           filename: file.filename,
         })),
-        ...(input.message ? { message: input.message } : {}),
+        ...(input.message && { message: input.message }),
       });
+      return added.event.offset;
     },
     onMutate: () => {
       setDraft("");
@@ -138,6 +185,8 @@ export default function ChatScreen() {
   });
 
   const feed = reduceFeed(path, events.data || []);
+  const sendPending =
+    send.isPending || (send.data ? awaitingAgentActivity(events.data || [], send.data) : false);
   const insets = useSafeAreaInsets();
   const streamUrl =
     baseUrl && slug ? buildStreamViewerUrl({ baseUrl, projectSlug: slug, streamPath: path }) : null;
@@ -184,7 +233,9 @@ export default function ChatScreen() {
     >
       <Stack.Screen
         options={{
-          title: path.replace(/^\/agents\//, ""),
+          // Agent-set title once the first-turn summary lands; the raw path
+          // (still one tap away in the ••• menu) until then.
+          title: latestAgentTitle(events.data || []) || path.replace(/^\/agents\//, ""),
           headerRight: () => (
             <Pressable
               accessibilityLabel="Stream actions"
@@ -199,7 +250,7 @@ export default function ChatScreen() {
       />
       {events.isPending ? (
         <View style={styles.center}>
-          <ActivityIndicator color={colors.textMuted} />
+          <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
         </View>
       ) : events.isError ? (
         <View style={styles.center}>
@@ -209,7 +260,34 @@ export default function ChatScreen() {
           </Pressable>
         </View>
       ) : viewMode === "chat" ? (
-        <FeedList feed={feed} sendPending={send.isPending} />
+        <FeedList
+          approvals={
+            baseUrl === undefined
+              ? null
+              : threadBatches.map((batch) => (
+                  <InThreadApprovalCard
+                    baseUrl={baseUrl}
+                    batch={batch}
+                    canApprove={approverKey.data?.kind === "enrolled"}
+                    key={batch.offset}
+                    projectId={projectId}
+                  />
+                ))
+          }
+          feed={feed}
+          // The card's Approvals tab and status glyphs derive from the same
+          // live root-stream approval events the in-thread dialogs use.
+          activityApprovals={{
+            baseUrl: baseUrl!,
+            events: approvalEvents.data || [],
+            projectId,
+            projectSlug: slug || "",
+          }}
+          sendPending={sendPending}
+          // The Meta tab replays each llm request's exact prompt from the
+          // thread's own event window (same pure fold as the os trace panel).
+          threadEvents={events.data || []}
+        />
       ) : (
         <EventList events={events.data || []} />
       )}
@@ -231,7 +309,9 @@ export default function ChatScreen() {
       ) : null}
       <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
         <Pressable
-          onPress={async () => setAttachments([...attachments, ...(await pickImages())])}
+          onPress={async () =>
+            setAttachments([...attachments, ...(await pickImages({ selectionLimit: 6 }))])
+          }
           disabled={send.isPending}
           style={styles.attach}
         >
@@ -246,6 +326,8 @@ export default function ChatScreen() {
           style={styles.input}
         />
         <Pressable
+          accessibilityLabel="Send"
+          accessibilityRole="button"
           onPress={() => {
             const message = draft.trim();
             const canSend = message !== "" || attachments.length > 0;
@@ -282,11 +364,17 @@ export default function ChatScreen() {
 }
 
 function FeedList({
+  activityApprovals,
+  approvals,
   feed,
   sendPending,
+  threadEvents,
 }: {
+  activityApprovals: ActivityApprovalContext;
+  approvals: React.ReactNode;
   feed: ReturnType<typeof reduceFeed>;
   sendPending: boolean;
+  threadEvents: StreamEvent[];
 }) {
   // Inverted list keeps the newest item at the bottom and pinned on keyboard
   // open; data is reversed to match. The live activity is part of the feed,
@@ -299,13 +387,19 @@ function FeedList({
       keyExtractor={(item) => item.id}
       contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
       ListHeaderComponent={
-        // Inverted list: the "header" renders at the visual bottom.
-        sendPending || (feed.working && feed.live?.steps.length === 0) ? (
-          <View style={styles.workingRow}>
-            <ActivityIndicator size="small" color={colors.working} />
-            <Text style={styles.workingText}>working…</Text>
-          </View>
-        ) : null
+        // Inverted list: the "header" renders at the visual bottom — held
+        // approval dialogs for THIS thread sit at the thread's bottom edge
+        // (above the transient working row), right where the human is
+        // already looking.
+        <View style={styles.bottomStack}>
+          {approvals}
+          {sendPending || (feed.working && feed.live?.steps.length === 0) ? (
+            <View style={styles.workingRow}>
+              <ActivityIndicator accessibilityLabel="Loading" size="small" color={colors.working} />
+              <Text style={styles.workingText}>working…</Text>
+            </View>
+          ) : null}
+        </View>
       }
       ListEmptyComponent={
         <View style={styles.emptyFlip}>
@@ -315,15 +409,27 @@ function FeedList({
           </Text>
         </View>
       }
-      renderItem={({ item }) => <FeedItem item={item} />}
+      renderItem={({ item }) => (
+        <FeedItem activityApprovals={activityApprovals} item={item} threadEvents={threadEvents} />
+      )}
     />
   );
 }
 
-function FeedItem({ item }: { item: MobileFeedItem }) {
+function FeedItem({
+  activityApprovals,
+  item,
+  threadEvents,
+}: {
+  activityApprovals: ActivityApprovalContext;
+  item: MobileFeedItem;
+  threadEvents: StreamEvent[];
+}) {
   switch (item.kind) {
     case "activity":
-      return <ActivityCard activity={item} />;
+      return (
+        <ActivityCard activity={item} approvals={activityApprovals} threadEvents={threadEvents} />
+      );
     case "stream-woken":
       return (
         <Text style={styles.wakeMarker}>
@@ -471,6 +577,7 @@ const styles = StyleSheet.create({
   },
   bubbleUserText: { color: colors.background, fontSize: 15, lineHeight: 21 },
   bubbleAssistantText: { color: colors.text, fontSize: 15, lineHeight: 21 },
+  bottomStack: { gap: spacing.sm },
   workingRow: {
     flexDirection: "row",
     alignItems: "center",

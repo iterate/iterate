@@ -78,14 +78,17 @@ export interface Session {
  * host, chaining up to the project root.
  */
 export interface Project {
+  [Symbol.dispose](): void;
   /** The project this itx is scoped into. */
   projectId: string;
   /**
-   * Register (for a prospective slug) and append the complete root birth
-   * batch. By default this resolves once the bootstrap saga has committed
-   * `project/ready` — the right shape for scripts that use the project
-   * immediately. `waitUntilReady: false` resolves as soon as the project
-   * EXISTS (identity registered, directory primed, birth events appended):
+   * Register (for a prospective slug) and append the complete root creation
+   * request batch. By default this resolves once the bootstrap saga has
+   * committed terminal `project/created` — the right shape for scripts that
+   * use the project immediately. `configRepoTemplate`, when present, is a
+   * pnpm-style public GitHub reference copied into the config repo before
+   * that terminal fact. `waitUntilCreated: false` resolves as soon as the
+   * identity is registered, directory primed, and request events appended:
    * the caller renders bootstrap progress itself, so nobody is left waiting.
    * The durable-delivery subscriptions committed in the birth batch are what
    * guarantee the saga runs; create also nudges both root processors AFTER
@@ -94,8 +97,8 @@ export interface Project {
    * same handle, and addressing an unknown slug is side-effect free.
    */
   create(
-    args: { organizationSlug?: string; projectId?: string },
-    options?: { waitUntilReady?: boolean },
+    args: { configRepoTemplate?: string; organizationSlug?: string; projectId?: string },
+    options?: { waitUntilCreated?: boolean },
   ): Promise<Project>;
   /**
    * Canonical identity from the project directory: id, slug (the auth
@@ -106,14 +109,34 @@ export interface Project {
    */
   identity(): Promise<ProjectIdentity>;
   /**
-   * Resolve once the bootstrap saga has committed `project/ready`. Replays
-   * stream history first, so an already-ready project resolves immediately,
+   * Canonical URL for one named app on this project's platform hostname.
+   * The deployment config keeps links on the matching production, preview,
+   * or localhost environment.
+   */
+  appUrl(appSlug: string): Promise<string>;
+  /**
+   * Admin-only project-seed repair for a platform-owned apex that already
+   * reaches this worker through Worker routes. Primes the routing directory,
+   * records the hostname in the small project catalog, and waits for it.
+   */
+  restoreDirectHostname(input: { hostname: string }): Promise<{ hostname: string }>;
+  /**
+   * Admin-only project-seed command for a Cloudflare-managed custom hostname.
+   * This submits a fresh idempotent provision intent through the normal
+   * project processor. The hostname routing directory is the ownership and
+   * routing authority; project state only catalogs the hostname and kind.
+   */
+  restoreCloudflareHostname(input: { hostname: string }): Promise<{ hostname: string }>;
+  /**
+   * Resolve once the bootstrap saga has committed terminal `project/created`,
+   * or throw the durable `project/create-failed` explanation.
+   * Replays stream history first, so an already-created project resolves immediately,
    * and dialing the processor here heals a lost birth wake rather than just
    * observing. `create()` waits here by default; this remains useful after a
    * non-blocking create or when a caller receives an existing handle while a
    * bootstrap is in flight.
    */
-  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;
+  waitUntilCreated(args?: { timeoutMs?: number }): Promise<void>;
   /**
    * Identity + full capability inventory: `projectId`/`name`, every reachable
    * capability (built-ins + dynamic mounts), the children map, and the
@@ -125,7 +148,7 @@ export interface Project {
   debug(): Promise<string>;
   /** Restart the project's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
-  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */
+  /** The project stream processor (snapshot/state; `birthCertificate` records terminal creation). */
   processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
   /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
   liveState: LiveStateRpc<ProjectLiveState>;
@@ -163,6 +186,8 @@ export interface Project {
   streams: ProjectStreamCollection;
   /** Agent catalog: get(path), list(). */
   agents: AgentCollection;
+  /** Connected clients: the project processor's catalog plus each scope's capability host. */
+  clients: Clients;
   /** Project-attributed outbound fetch (+ intercept). */
   egress: ProjectEgress;
   /** Project email: send(...) and the connection-scoped inbound address. */
@@ -205,10 +230,10 @@ export interface Project {
   workspaces: WorkspaceCollection;
   /**
    * Platform dispatch point: streams deliver committed event batches here
-   * for the project worker. Scripts should not call this — subscribe to a
-   * stream (or configure a subscription) instead.
+   * for the project worker. Scripts should not call this — open an event
+   * connection or configure a subscription instead.
    */
-  processEventBatch(batch: StreamPushEventBatch): Promise<void>;
+  processEventBatch(batch: StreamDeliveryBatch): Promise<void>;
   /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is `workers.get(ref)`. Flattened: the seeded worker implements
@@ -246,9 +271,38 @@ export interface ProjectCollection {
    */
   get(idOrSlug: string): Promise<Project>;
   /**
+   * `get` plus presence: connect as a project CLIENT. A client is nothing
+   * platform-specific — it is a capability-host scope at the caller-chosen
+   * `path` (e.g. `"/clients/desk-robot"`; encode a tab id or device serial in
+   * the path if you want several). Connect appends the scope's idempotent
+   * birth batch (reconnecting dedupes to a no-op) plus one narrow copy
+   * subscription that sends the scope's provider connect/disconnect facts to
+   * the project root, where the project processor reduces the clients
+   * catalog (`itx.clients.list()`). When `capabilities` is passed, it is
+   * provided as a LIVE capability mounted at `capabilities` on the scope —
+   * the shipped capability machinery holds it behind a hibernating Provider
+   * Pager (no pinned Durable Objects), journals the provision, and journals
+   * the disconnect when this session's socket dies; the mount is retired
+   * with it. Callers invoke it through the scope's capability host:
+   * `itx.clients.get(path).capabilities.browser.navigate(url)`.
+   * Returns the project itx, exactly like `get`.
+   */
+  connect(
+    idOrSlug: string,
+    opts: {
+      /** The client's identity: an absolute stream path, e.g. "/clients/chrome". */
+      path: string;
+      /** Human label for this client; journals as the provision's instructions. */
+      description: string;
+      /** Live capabilities target (an RpcTarget or plain object in the caller's process). */
+      capabilities?: unknown;
+    },
+  ): Promise<Project>;
+  /**
    * The session's projects, enriched: identity (id/slug/org) from the auth
    * claims or the project directory, deployment status from a concurrent
-   * engine probe (`state.ready` on each project's processor snapshot). A
+   * engine probe (the terminal birth certificate on each project's processor
+   * snapshot). A
    * probe failure degrades THAT entry to "unknown" — the list always renders.
    * Scope is explicit: "mine" (default for user principals) is the caller's
    * own claims even when admin credentials ride the same socket;
@@ -306,6 +360,10 @@ export interface Ai {
   /** List the Workers AI model catalog. */
   models(): Promise<unknown>;
   /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).
+   * For outputs the caller cannot produce itself — images, audio, transcription,
+   * embeddings, classification at volume. An LLM agent shouldn't run a text
+   * model over content it is about to read or relay (summarize, draft, answer):
+   * return the data and write that yourself.
    * Outputs are model-shaped: instantiate `run<T>` with the response shape you
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
@@ -314,7 +372,14 @@ export interface Ai {
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
-  /** Convert one document (`{ name, blob }`) to Markdown. */
+  /** Convert one document (`{ name, blob }`) to Markdown — `blob` accepts
+   * bytes or base64 (a Blob made in a script cannot cross the RPC
+   * boundary). An in-hand HTML string (a fetched page, an email body)
+   * converts via `new TextEncoder().encode(html)` with a `.html` name;
+   * never strip HTML by hand.
+   * `{ conversionOptions: { output: { format: "text" } } }` returns plain
+   * text with link targets and image URLs stripped — the compact choice for
+   * emails and newsletters, whose bytes are mostly tracking links. */
   toMarkdown(
     document: CfMarkdownDocument,
     options?: CfMarkdownConversionOptions,
@@ -389,8 +454,8 @@ export interface Agent {
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
   /** Shortcut for `capabilityHost.revokeCapability`. */
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
-  /** The agent stream processor (snapshot/state). */
-  processor: WakeableStreamProcessorRpc<AgentProcessorState>;
+  /** The agent stream processor (snapshot/state) — facet-hosted on the agent stream. */
+  processor: StreamProcessorRpc<AgentProcessorState>;
   /** The agent's transient runtime as a push-driven live-state surface. */
   liveState: LiveStateRpc<AgentLiveState>;
   /** The agent's own event stream. */
@@ -480,7 +545,8 @@ export interface Agent {
   }): Promise<{ event: StreamEvent; files: AgentFileAttachment[] }>;
   /** Includes `whoami` (`"agent <projectId>:<agentPath>"`), `projectId`, `agentPath`. */
   __describe(): Promise<Description & { agentPath: string; projectId: string; whoami: string }>;
-  /** Restart the agent's server-side object; the next request boots it fresh. */
+  /** Restart the agent's server-side objects (the stream and its hosted
+   * facets die together); the next request boots them fresh. */
   kill(): Promise<void>;
 }
 
@@ -507,7 +573,8 @@ export interface AgentChat {
 /**
  * The host surface for ONE capability scope: mount, revoke, invoke, describe,
  * and run scripts against the durable capability table at `path` (backed by
- * the CapabilityHostDurableObject with that name). Mounting is always local to
+ * the capability-host processor hosted as a facet of that scope's own stream).
+ * Mounting is always local to
  * this scope; on a local miss, reads follow the scope's journaled `fallback`
  * expression — usually one hop straight to the project root host.
  * `itx.capabilityHost` is the current scope's host;
@@ -519,7 +586,7 @@ export interface CapabilityHost {
   path: string;
   /** This scope's capability-host stream processor (snapshot/state). A real
    * member, so it also claims the name: mounts cannot shadow `processor`. */
-  processor: WakeableStreamProcessorRpc;
+  processor: StreamProcessorRpc;
   /**
    * Create this capability host: append the atomic birth batch (created +
    * processor subscription; the payload defaults to `{}` config with the
@@ -534,6 +601,33 @@ export interface CapabilityHost {
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
   /** Remove the current mount at a path, or one exact mount by its offset. */
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
+  /**
+   * Upsert one keyed preamble entry: TypeScript injected above every later
+   * script in this scope, at typecheck and at execution — constants, helper
+   * functions, anything scripts should see as in-scope typed symbols. Example:
+   * `await itx.capabilityHost.setPreamble({ key: "channels", code: 'const TECH_CHANNEL_ID = "C1234";' })`.
+   * Compiled at set time against the scope's assembled preamble; an entry
+   * that would break later scripts' checks rejects here instead.
+   */
+  setPreamble(input: SetPreambleInput): Promise<void>;
+  /** Remove one preamble entry by key (platform-derived `results` is not an entry and cannot be removed). */
+  removePreamble(input: { key: string }): Promise<void>;
+  /**
+   * The scope's current assembled preamble — the exact TypeScript injected
+   * above the next script (the derived `results` array plus user entries) —
+   * and the raw user entry table. Null when there is nothing to inject.
+   */
+  getPreamble(): Promise<{
+    text: string;
+    entries: { key: string; code: string }[];
+  } | null>;
+  /**
+   * One settled script result, read back from the scope's stream by
+   * executionId — the durable storage behind the preamble `results` array's
+   * async `load(itx)` helpers for results too large to embed inline. Throws
+   * for unknown executions and for scripts that failed.
+   */
+  getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }>;
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;
   /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */
@@ -544,7 +638,8 @@ export interface CapabilityHost {
     executionId: string;
     result: unknown;
   }>;
-  /** Restart this scope's server-side object; the next request boots it fresh. */
+  /** Restart this scope's server-side objects (the stream and its hosted
+   * facets die together); the next request boots them fresh. */
   kill(): Promise<void>;
 }
 
@@ -590,10 +685,8 @@ export interface ProjectStreamCollection extends StreamCollection {
 /** Agent catalog within one project. */
 export interface AgentCollection {
   __describe(): Promise<Description>;
-  processor: WakeableStreamProcessorRpc<AgentCollectionProcessorState>;
+  processor: StreamProcessorRpc<AgentCollectionProcessorState>;
   liveState: LiveStateRpc<AgentCollectionProcessorState>;
-  /** Stateless push sink: forwarding and authorization are its entire job. */
-  processEvent(batch: StreamPushEventBatch): Promise<void>;
   /**
    * The agent control surface at a path (`"/agents/<name>"`, or relative to
    * the calling scope — `".."` climbs). The returned handle is a plain,
@@ -606,7 +699,29 @@ export interface AgentCollection {
    */
   get(path: string): Agent;
   /** Known agents, read from the collection processor's reduced database. */
-  list(): Promise<StreamListItem[]>;
+  list(): Promise<AgentListItem[]>;
+}
+
+/**
+ * Connected clients within one project (`itx.clients`). A client is a
+ * capability-host scope — typically under `/clients/**` — that
+ * `projects.connect` provided a live capability to; nothing client-specific
+ * exists at the platform layer. The birth batch every connect appends
+ * configures a narrow copy subscription sending the scope's
+ * `capability-provider-pager-connected` / `-disconnected` facts to the
+ * project root, where the project processor reduces the clients catalog
+ * (`list()`). Presence is last-known but honest: the platform journals the
+ * disconnect when the provider's Pager socket dies. `get(path)` returns the
+ * scope's capability host — `get(path).capabilities.browser.navigate(url)`
+ * invokes the live capability mounted there through the shipped capability
+ * machinery (hibernating Provider Pager, no pinned Durable Objects).
+ */
+export interface Clients {
+  __describe(): Promise<Description>;
+  /** The client scope's capability host — the full shipped surface, no wrapper. */
+  get(path: string): CapabilityHost;
+  /** Known clients, read from the project processor's reduced catalog. */
+  list(): Promise<ProjectClientListItem[]>;
 }
 
 /**
@@ -618,10 +733,11 @@ export interface AgentCollection {
  */
 export interface ProjectEgress {
   __describe(): Promise<Description>;
-  /** Outbound fetch with project identity and secret substitution. Set
+  /** Outbound fetch with project identity and secret substitution — the
+   * standard fetch signature: a Request, or a URL plus optional init. Set
    * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
    * values in an `application/json` (or `+json`) body. */
-  fetch(request: Request): Promise<EgressResponse>;
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<EgressResponse>;
   /** Install a live egress interceptor (last writer wins); returns a release handle. */
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
 }
@@ -637,11 +753,15 @@ export interface ProjectEgress {
  */
 export interface EmailCapability {
   __describe(): Promise<Description>;
-  /** The email router's stream processor: the project-class host Durable
-   * Object at /integrations/email, whose EmailProcessor routes inbound mail.
-   * Wake subscriptions for it persist `["email", "processor",
-   * "wakeStreamSubscriber"]`. */
-  processor: WakeableStreamProcessorRpc;
+  /** The email router's stream processor: facet-hosted on the
+   * /integrations/email stream, whose EmailProcessor routes inbound mail. */
+  processor: StreamProcessorRpc<EmailProcessorState>;
+  /**
+   * Admin-only project-seed restore for inbound email policy. The archive is a
+   * minimum desired set: this adds or proves every declared sender, but never
+   * removes a sender omitted from an older seed.
+   */
+  restoreAllowedSenders(input: { patterns: string[] }): Promise<{ allowedSenders: string[] }>;
   /**
    * Send one email from the project's own address (`<slug>@<hostname base>`).
    * From ANY agent scope, send binds the conversation to the calling agent:
@@ -702,10 +822,13 @@ export interface Docs {
    * noise and a word matching a row's NAME counts double, so `"itx.docs"`,
    * `"worker"`, or `"agents"` rank their subject first instead of every row
    * that mentions the word. Example hits are working scripts — prefer copying
-   * them over writing calls from scratch. Each hit's `fetchCall` field holds
-   * the ready-made docs.get call that fetches its full doc.
+   * them over writing calls from scratch. The TOP hit arrives with its full
+   * doc inlined in `result` (tune with `expand`: how many hits to expand,
+   * default 1) — when the first hit is the right one, skip the follow-up
+   * `docs.get` round and use `result` directly. Other hits carry `fetchCall`,
+   * the ready-made docs.get call. `limit` caps the hit count (default 5).
    */
-  search(input: { q: string }): Promise<DocsSearchHit[]>;
+  search(input: { q: string; limit?: number; expand?: number }): Promise<DocsSearchHit[]>;
   /**
    * Fetch one entry by the name a search hit gave you. An example name
    * returns its full script, annotated with its provenance (most examples
@@ -763,10 +886,9 @@ export interface Files {
  * The SDK connection targets are thin dispatchers over the normal vendor
  * clients. A project extends the collection with ordinary
  * `provideCapability({ path: ["integrations", ...] })` — data, not deployment.
- * `completeConnect` is called by the app worker's
- * OAuth callback routes (/api/integrations/<provider>/callback); its
- * authority is the HMAC-signed OAuth state minted by startOAuthFlow,
- * verified itx-side.
+ * Native `completeConnect` calls are bound to this RPC target's authenticated
+ * user; browser callbacks use the same domain operation with their cookie
+ * session. Both re-verify the HMAC-signed state minted by startOAuthFlow.
  */
 export interface ProjectIntegrations {
   /** Slack WebClient connections. `get()` selects the first connected workspace. */
@@ -807,6 +929,7 @@ export interface ProjectIntegrations {
         gmail: string;
         list: string;
         parallel: string;
+        restoreConnection: string;
         slack: string;
         startOAuthFlow: string;
         telegram: string;
@@ -842,16 +965,23 @@ export interface ProjectIntegrations {
    * disconnected first; possession of the token is the authorization).
    */
   connectTelegram(input: { botToken: string; steal?: boolean }): Promise<ConnectTelegramResult>;
+  /**
+   * Admin-only project-seed restore. Unlike hand-appending connected facts,
+   * this validates the provider identity, writes a fresh secret and lifecycle
+   * journal through the owning connect boundary, claims webhook routing, and
+   * proves the resulting claim before returning.
+   */
+  restoreConnection(
+    input: RestoreIntegrationConnectionInput,
+  ): Promise<RestoreIntegrationConnectionResult>;
   /** Begin the OAuth connect flow; returns the authorization URL. */
   startOAuthFlow(input: {
     callbackUrl?: string;
     provider: OAuthProviderSlug;
-    /** The user to bind the OAuth state to. Browser-supplied, not authority;
-     * the callback's check against the signed state is the backstop. */
-    userId: string;
   }): Promise<{ authorizationUrl: string }>;
-  /** Called by the app worker's OAuth callback route; authority is the
-   * HMAC-signed OAuth state minted by startOAuthFlow. */
+  /** Complete a native OAuth callback using this authenticated RPC session.
+   * Browser callbacks use the app worker route, which supplies its session
+   * identity directly to the same domain operation. */
   completeConnect(input: {
     /** OAuth authorization code (Slack/Google, or GitHub's proof callback). */
     code?: string;
@@ -859,7 +989,6 @@ export interface ProjectIntegrations {
     installationId?: string;
     provider: OAuthProviderSlug;
     state: string;
-    userId: string | null;
   }): Promise<CompleteConnectResult>;
   /** Move a GitHub installation after a signed, user-bound OAuth proof has
    * been returned to the dashboard for explicit confirmation. */
@@ -936,9 +1065,10 @@ export interface SandboxCollection {
 
 /**
  * One Scheduler: keyed Schedules on one `/scheduler/**` stream, triggered by
- * a durable alarm. Everything it does is events on that stream — `set`/`cancel`
- * append, `list` reads reduced state, and every Trigger's request and outcome
- * are appended back, so the stream is the complete audit log. Scripts run
+ * a durable alarm. Everything it does is events on that stream —
+ * `set`/`cancel` append when desired state changes, `list` reads reduced state,
+ * and every Trigger's request and outcome are appended back, so the stream is
+ * the complete audit log. Scripts run
  * with project-root itx authority, at least once per Trigger (derive append
  * idempotency keys from `trigger.executionId`).
  *
@@ -949,10 +1079,15 @@ export interface SandboxCollection {
 export interface Scheduler {
   __describe(): Promise<Description>;
   /** The scheduler stream processor (snapshot/state). */
-  processor: WakeableStreamProcessorRpc<SchedulerProcessorState>;
+  processor: StreamProcessorRpc<SchedulerProcessorState>;
   /** Create this Scheduler and return only after it has processed the complete birth batch. */
   create(_input: Record<string, never>): Promise<Scheduler>;
-  /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
+  /**
+   * Upsert by key. An unchanged definition preserves its clock and run count;
+   * a missing or changed definition is appended and ingested before return.
+   * Relative `{ in }` input is resolved against each call's current time, so
+   * use canonical `{ at }` when a one-shot definition must compare unchanged.
+   */
   set(input: SetScheduleInput): Promise<ScheduleView>;
   /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
   cancel(key: string): Promise<void>;
@@ -999,11 +1134,11 @@ export interface Repo {
   /**
    * Request creation and wait for the repo creation saga's terminal fact.
    * The request chooses an empty starter seed (the default), a private
-   * GitHub pull at depth one, or a public import performed by Cloudflare
-   * Artifacts outside the Worker isolate (full history unless `depth` is
-   * provided). Appends the atomic request batch (`repos/create-requested` +
-   * the repo processor subscription, plus the catalog cross-post rule that
-   * copies the terminal certificate onto `/`), then waits for
+   * GitHub pull at depth one, a full public import performed by Cloudflare
+   * Artifacts, or a one-time copy of a public GitHub template subtree.
+   * Appends the atomic request batch (`repos/create-requested` +
+   * the repo processor subscription, plus the catalog subscription that copies the
+   * terminal certificate onto `/`), then waits for
    * `repos/created` and resolves with this same handle, so create chains —
    * or throws the saga's recorded error when creation fails. An
    * identical-payload retry dedupes on the request idempotency keys and
@@ -1053,13 +1188,23 @@ export interface Repo {
    * GitHub best-effort (failures journal on the repo stream and self-heal on
    * the next commit), fast-forward default-branch pushes made on GitHub are
    * imported through the Cloudflare Artifacts queue, and every GitHub webhook
-   * about that repository is cross-posted onto this repo's stream. If the
+   * about that repository is delivered to this repo's stream. If the
    * GitHub repository does not exist and the installation can create org
    * repositories, it is created private. Re-linking replaces the previous
    * link.
    */
-  linkGithub(input: { connection: string; owner: string; repo: string }): Promise<LinkGithubResult>;
-  /** Remove the GitHub link and its webhook cross-post rule. */
+  linkGithub(input: {
+    connection: string;
+    /** Refuse to create a missing remote. Project-seed restore uses this
+     * because GitHub must already be the config authority. */
+    createIfMissing?: boolean;
+    /** Disable the usual starter-history push when GitHub is already the
+     * authority and the caller will immediately resetFromGithub(). */
+    initialPush?: boolean;
+    owner: string;
+    repo: string;
+  }): Promise<LinkGithubResult>;
+  /** Remove the GitHub link and the subscription that copies its webhooks here. */
   unlinkGithub(): Promise<{ unlinked: boolean }>;
   /**
    * Push the default branch head to the linked GitHub repository now — the
@@ -1087,8 +1232,8 @@ export interface Repo {
    * large histories without changing anything on GitHub.
    */
   resetFromGithub(input: { depth?: number }): Promise<GithubResetResult>;
-  /** The repo stream processor (snapshot/state). */
-  processor: WakeableStreamProcessorRpc<RepoProcessorState>;
+  /** The repo stream processor (snapshot/state) — facet-hosted on the repo stream. */
+  processor: StreamProcessorRpc<RepoProcessorState>;
   /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */
   liveState: LiveStateRpc<RepoProcessorState>;
 }
@@ -1151,7 +1296,7 @@ export interface ProjectWorker {
    * (`ephemeral: true` appends — e.g. `agent/llm-response-chunk`) are never
    * delivered to this feed; their durable truth arrives as its own event.
    */
-  processEventBatch(batch: StreamPushEventBatch): Promise<void>;
+  processEventBatch(batch: StreamDeliveryBatch): Promise<void>;
 }
 
 /**
@@ -1165,11 +1310,14 @@ export interface Stream {
   __describe(): Promise<Description>;
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
+  /** Commit only if this path still names the supplied stream lifetime. */
+  appendIfStreamId(args: { streamId: string; events: StreamEventInput[] }): Promise<StreamEvent[]>;
   /** The stream at a sub-path, resolved relative to this stream's path. */
   at(path: string): Stream;
   /** One event by offset or idempotencyKey; undefined when it does not exist.
-   * Point reads return ephemeral rows too — but those rows are evictable, so
-   * an offset that once resolved may later read as undefined. */
+   * An offset read returns a buffered ephemeral event too, but restart or FIFO
+   * eviction can make that same offset read as undefined later. Ephemeral
+   * events cannot have idempotency keys. */
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined>;
@@ -1182,6 +1330,11 @@ export interface Stream {
    */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;
   /**
+   * Read one page together with the stream identity and raw-log head observed
+   * in the same Durable Object turn. Use this whenever offsets are persisted.
+   */
+  getEventPage(args?: StreamEventReadInput): Promise<StreamEventPage>;
+  /**
    * A stateful pager over a read window: repeated `next()` calls walk forward
    * through pages, `[]` means "caught up for now". Dispose it when finished
    * (`using pager = stream.readEvents(...)`).
@@ -1190,9 +1343,8 @@ export interface Stream {
   /**
    * Block until an event lands that is after `afterOffset`, matches
    * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.
-   * Durable rows after `afterOffset` are replayed. It can also match an
-   * `ephemeral: true` event appended after this wait opens, but historical
-   * ephemeral rows are never replayed.
+   * Durable events and currently buffered ephemeral events after `afterOffset`
+   * are replayed; it can also match a new event appended after this wait opens.
    */
   waitForEvent(args: {
     afterOffset?: number;
@@ -1201,13 +1353,11 @@ export interface Stream {
     timeoutMs: number;
   }): Promise<StreamEvent>;
   /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */
-  getProcessorRuntimeState(args: {
-    subscriptionKey: string;
-  }): Promise<ProcessorRuntimeState | null>;
+  getProcessorRuntimeState(args: { name: string }): Promise<ProcessorRuntimeState | null>;
   /**
    * Live debug view of the stream Durable Object: core processor state, open
-   * connections with real delivery metrics (lag, bytes, commit→settled
-   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the
+   * connections with real callback metrics (lag, bytes, append→callback
+   * latency, mutual-ping RTT), each subscription's cursor/lag, and the
    * stream's own throughput windows. All runtime metrics are in-memory and
    * reset on eviction (`metrics.measuredSince` says how long the window has
    * been collecting); latency stats fields are absent until a real sample
@@ -1216,90 +1366,148 @@ export interface Stream {
    * sampling); live debug surfaces should subscribe through `liveState`.
    */
   runtimeState(): Promise<StreamRuntimeDebugState>;
-  /** Push-driven stream runtime state for polling-free debug surfaces. */
+  /**
+   * Push-driven stream runtime state for polling-free debug surfaces.
+   *
+   * Rides the client-given hibernatable Live State Pager —
+   * a watched idle stream hibernates at zero duration and pushes frames only
+   * when something actually changes. Snapshot-only degrade on purpose, never
+   * the pinning fallback the generic hosts use: the DO's `liveState` property
+   * is deliberately never traversed from here (a retained diff callback
+   * would pin the stream), and `runtimeState()` is the transient read.
+   */
   liveState: LiveStateRpc<StreamRuntimeDebugState>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
+  /** Arm the stream's shared facet-alarm slot, min-merged to the earliest desired ms. */
+  proxySetAlarm(scheduledTimeMs: number): Promise<void>;
+  /** Clear a facet's alarm desire (a no-op on the shared slot: no per-facet
+   * identity, and one spurious level-triggered fire is harmless). */
+  proxyDeleteAlarm(): Promise<void>;
+  /** The shared facet-alarm slot's currently desired fire time, or null. */
+  proxyGetAlarm(): Promise<number | null>;
   /**
-   * Session-scoped live event delivery (the "ephemeral" subscription lane):
-   * `processEventBatch` first receives durable history after
-   * `replayAfterOffset`, then new commits. Ephemeral events are delivered only
-   * when appended after this exact subscription opens and are never replayed.
-   * Returns an unsubscribe handle.
-   * Forgotten on disconnect — durable delivery is configured as data instead,
-   * by appending a `subscription-configured` event (wake or push mode) to the
+   * Open one session-owned callback connection to this stream.
+   *
+   * `processEventBatch` first receives durable events plus any ephemeral events
+   * still buffered after `replayAfterOffset`, then new commits.
+   * The stream forgets the connection when the session disconnects. Durable
+   * event sending is configured separately by appending events to the source
    * stream.
    */
-  subscribe(args: {
-    subscriptionKey?: string;
+  openConnection(args: {
+    connectionKey?: string;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
     /**
      * Atomically bind this open to the stream identity observed during
      * catch-up. `null` means the caller observed a stream with no committed
-     * creation fact yet. A mismatch rejects before replacing any connection.
+     * creation event yet. A mismatch rejects before replacing any connection.
      */
-    expectedIncarnation?: string | null;
+    expectedStreamId?: string | null;
     /**
      * Atomically reject instead of opening when the current raw-log head is
      * more than this many offsets beyond `replayAfterOffset`.
      */
     maxReplayOffsetGap?: number;
-    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */
+    /** Sugar for `filter.eventTypes` — one filter shape for every receiver. */
     eventTypes?: readonly string[];
-    selector?: { eventTypes?: string[]; condition?: string };
+    filter?: EventFilter;
     events?: boolean;
-    subscriber?: unknown;
-    /** Optional live debug hook, retained for the subscription's lifetime. */
+    /**
+     * Per-connection ceiling on events in one delivery batch, for
+     * constrained consumers (an embedded client reassembling each batch
+     * into a fixed buffer). Excess matching events arrive in subsequent
+     * batches with no gap. Clamped to the platform batch limit.
+     */
+    maxDeliveryEvents?: number;
+    /**
+     * Per-connection ceiling on the summed event bytes in one delivery
+     * batch. At least one event is always delivered, so a single event
+     * larger than the cap surfaces at the consumer instead of stalling
+     * the cursor silently.
+     */
+    maxDeliveryBytes?: number;
+    /**
+     * `false` omits the reduced core state from every batch — bandwidth
+     * relief for consumers that only want events. Invalid together with
+     * `events: false` (a state-only connection is nothing without state).
+     */
+    state?: boolean;
+    openedBy?: unknown;
+    /** Optional live debug hook, retained for the connection's lifetime. */
     getRuntimeState?: GetProcessorRuntimeState;
     /**
      * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`
-     * in rpc-types.ts), retained for the subscription's lifetime. The stream
+     * in rpc-types.ts), retained for the connection's lifetime. The stream
      * pings it — throttled, and only while someone is watching runtimeState —
-     * to measure real transport RTT to this subscriber.
+     * to measure real transport RTT to this callback owner.
      */
-    ping?: StreamSubscriberPing;
-  }): Promise<StreamSubscriptionHandle>;
+    ping?: StreamConnectionPing;
+  }): Promise<StreamConnectionHandle>;
+  /** Change where one subscription whose cursor this stream stores reads next. An already-started receiver call may finish. */
+  setSubscriptionCursor(args: { name: string; afterOffset: number }): Promise<StreamEvent>;
+  /** Un-halt one subscription without changing its cursor. */
+  resumeSubscription(args: { name: string }): Promise<StreamEvent>;
+  /** Change where one subscription reads next and resume it. An already-started receiver call may finish. */
+  setSubscriptionCursorAndResume(args: {
+    name: string;
+    afterOffset: number;
+  }): Promise<{ cursorSet: StreamEvent; resumed: StreamEvent }>;
   /**
-   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that
-   * appends the batch's events into THIS stream with provenance stamping,
-   * structural loop protection, and source-derived idempotency keys. A source
-   * stream cross-posts here by configuring
-   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.
+   * Configure this stream to durably receive matching events from `source`.
+   * The source owns the matching-event read position. It appends a
+   * `subscription-configured` event and returns the effective key and that
+   * committed event; the receiver learns about the subscription when its
+   * first copy arrives, and a broken receiver surfaces later as a durable
+   * delivery halt.
    */
-  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;
-  /**
-   * "When events matching this land HERE, post them onto stream `path`" — the
-   * cross-post verb. Pure sugar over appending a `subscription-configured`
-   * push subscription targeting the destination's `acceptCrossPost` sink; the appended
-   * event (returned) is the real interface and shows in the log like any
-   * other config. Same-`key` calls replace the previous cross-post; remove
-   * with `removeCrossPost`. Copies carry the full provenance chain
-   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`
-   * is an optional JSONata expression CONSTRUCTING the copied event's body
-   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":
-   * payload.body.repository.full_name } }`); omitted fields copy verbatim.
-   */
-  crossPostTo(args: {
-    /** Destination stream path (this project). */
-    path: string;
-    /** Subscription identity; defaults to `cross-post:<destination path>`. */
-    key?: string;
-    /**
-     * Human-readable note for operators and the stream state panel (why this
-     * cross-post exists). Optional on the API; platform call sites always set it.
-     */
-    description?: string;
-    eventTypes?: string[];
-    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */
-    condition?: string;
-    /** JSONata constructor for the copied event's `{type?, payload?, metadata?}`. */
-    transform?: string;
-    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */
-    deliver?: "all" | "new" | { afterOffset: number };
-  }): Promise<StreamEvent>;
-  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */
-  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;
+  subscribeToEventsFrom(
+    args: {
+      /** Source stream path in this project. */
+      sourceStreamPath: string;
+      description?: string;
+      /** Selects source events by type (`eventTypes`) and/or an exact-true JSONata condition (`jsonataCondition`). */
+      filter?: EventFilter;
+      /**
+       * Optional JSONata constructor shaping what this receiving stream
+       * commits (`{ type?, payload?, metadata? }`; omitted fields copy
+       * verbatim). Provenance (`source.copiedFrom`) and deduplication stay
+       * keyed to the source event.
+       */
+      jsonataTransform?: string;
+      /** Initial cursor stored by the source stream. Defaults to events configured from now onward. */
+      start?: "beginning" | "now";
+    } & (
+      | {
+          /** Source-local identity: ensure or replace this named subscription. */
+          name: string;
+          idempotencyKey?: string;
+        }
+      | {
+          /**
+           * Omit the source-local identity to generate `subscription:<offset>`
+           * from the committed configuration event.
+           */
+          name?: never;
+          /** Required so a retry cannot create a duplicate configuration event. */
+          idempotencyKey: string;
+        }
+    ),
+  ): Promise<{
+    name: string;
+    subscriptionConfiguredEvent: CommittedSubscriptionConfiguredEvent;
+  }>;
+  /** Stop receiving from `source`: the source appends the removal event. */
+  unsubscribeFromEvents(args: {
+    sourceStreamPath: string;
+    name: string;
+  }): Promise<
+    | { status: "removed"; subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent }
+    | { status: "already-absent" }
+  >;
+  /** This source stream's durable subscription catalog. */
+  subscriptions: StreamSubscriptionCollection;
 }
 
 /**
@@ -1331,6 +1539,10 @@ export interface DocsSearchHit {
   summary: string;
   /** The literal itx call that fetches the full entry — copy it verbatim. */
   fetchCall: string;
+  /** The full entry (exactly what `fetchCall` would return), inlined on the
+   * top hit(s) per the search's `expand` input so the best match usually
+   * needs no second call. Absent on the rest — fetch those via `fetchCall`. */
+  result?: string;
 }
 
 /** One project file, addressed by path. */
@@ -1377,7 +1589,7 @@ export interface Device {
   /** Idempotently disable push; null means this installation was never enrolled. */
   revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent | null>;
   kill(): Promise<void>;
-  processor: WakeableStreamProcessorRpc<DeviceDescription>;
+  processor: StreamProcessorRpc<DeviceDescription>;
   liveState: LiveStateRpc<DeviceDescription>;
 }
 
@@ -1432,8 +1644,11 @@ export interface Secret {
    * (audit, egress, whether material is present, the refresh strategy). The
    * raw value is never part of it. */
   __describe(): Promise<Description & SecretDescription>;
-  /** Egress fetch with this secret's placeholders substituted server-side. */
-  fetch(request: Request): Promise<Response>;
+  /** Egress fetch with this secret's placeholders substituted server-side —
+   * the standard fetch signature: a Request, or a URL plus optional init. */
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+  /** Admin-only recovery read of the current encrypted cell. */
+  exportForProjectSeed(): Promise<SecretProjectSeedExport>;
   /** Restart the secret's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
   /**
@@ -1459,34 +1674,43 @@ export interface Secret {
    * Replacement material requires its complete egress policy in the same
    * update. Every update without replacement material clears stored material. */
   update(input: SecretUpdateInput): Promise<StreamEvent>;
-  /** The secret stream processor; its public state IS the SecretDescription. */
-  processor: WakeableStreamProcessorRpc<SecretDescription>;
-  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */
+  /** The secret stream processor; its public state IS the SecretDescription
+   * (the ciphertext never leaves — the relay's projection redacts it). */
+  processor: StreamProcessorRpc<SecretDescription>;
+  /** The secret's live state — its public SecretDescription (never the
+   * ciphertext; the facet host's projection redacts it). See {@link LiveStateRpc}. */
   liveState: LiveStateRpc<SecretDescription>;
 }
 
 /**
- * One durable workspace: an event-sourced, mount-routed private filesystem.
- * Its mount table (getConfig/configure) maps repos into the tree: reads under
- * a mount fall through to that repo's main at HEAD, writes land in a private
- * copy-on-write local layer (large files spill to R2 transparently), and
- * `git.commit({ scope })` turns ONE mount's changes into one commit on that
- * repo's main (honoring the mount's policy). Paths outside every mount are
- * private scratch. The `.git` name is reserved (platform-managed).
+ * One durable workspace: an event-sourced, mount-routed private working copy
+ * of the project's one path namespace. Every project repo is mounted at its
+ * own `/repos/**` stream path (derived from the project repo list — a fresh
+ * repo just appears); reads under a mount fall through to that repo's main at
+ * HEAD, writes land in a private copy-on-write local layer (large files spill
+ * to R2 transparently), and `git.commit({ scope })` turns ONE mount's changes
+ * into one commit on that repo's main (honoring the mount's policy). Private
+ * files live only under the workspace's own path (relative paths resolve
+ * there); writes anywhere else error. The `.git` name is reserved
+ * (platform-managed).
  */
 export interface Workspace {
   __describe(): Promise<Description>;
-  /** Explicitly create this workspace and wait through its complete birth batch. */
-  create(input: { mounts?: Record<string, WorkspaceMount> }): Promise<Workspace>;
+  /** Explicitly create this workspace and wait through its complete birth
+   * batch. Optional `mounts` are overlay DEVIATIONS from the derived table
+   * (every project repo at its own /repos/** path). */
+  create(input: { mounts?: Record<string, WorkspaceMountOverlay> }): Promise<Workspace>;
   whoami(): Promise<string>;
   /** Restart the workspace's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
-  /** The workspace stream processor (snapshot/state). */
-  processor: WakeableStreamProcessorRpc<WorkspaceProcessorState>;
-  /** The folded configuration (birth certificate + configured patches). */
-  getConfig(): Promise<WorkspaceConfig>;
-  /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */
-  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig>;
+  /** The workspace stream processor (snapshot/state) — facet-hosted on the workspace stream. */
+  processor: StreamProcessorRpc<WorkspaceProcessorState>;
+  /** The live configuration: the EFFECTIVE mount table (every project repo
+   * at its own /repos/** path, with stored overlay deviations merged in). */
+  getConfig(): Promise<WorkspaceEffectiveConfig>;
+  /** Patch mount overlays — deep-merged per mount point; null clears one
+   * back to the derived default (appends workspace/configured). */
+  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceEffectiveConfig>;
   /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */
   readFile(path: string): Promise<string | null>;
   /** The collaborative session lane (rebase model, no Yjs) — workspace.collab. */
@@ -1525,13 +1749,26 @@ export interface Workspace {
  * A tiny object-capability cursor: it holds only the caller's read window and
  * the last offset it returned, so there is no server-side snapshot or lease to
  * maintain (events still come from the Stream DO on every page). This is not a
- * live subscription; `[]` means "caught up for now". Dispose it when finished
+ * live connection; `[]` means "caught up for now". Dispose it when finished
  * (`using pager = stream.readEvents(...)`).
  */
 export interface StreamEventPager {
   /** Returns [] when no newer matching page is currently available. */
   next(): Promise<StreamEvent[]>;
   [Symbol.dispose](): void;
+}
+
+/**
+ * The subscription catalog of ONE source stream
+ * (`streams.get(path).subscriptions`): every durable delivery intent the
+ * stream owes, by its opaque source-local name.
+ */
+export interface StreamSubscriptionCollection {
+  __describe(): Promise<Description>;
+  /** Every configured subscription joined with its durable cursor row. */
+  list(): Promise<StreamSubscriptionListEntry[]>;
+  /** One subscription handle by its source-local name. */
+  get(name: string): StreamSubscription;
 }
 
 /** Cloudflare Images binding exposed through itx as one-call helpers. */
@@ -1541,6 +1778,13 @@ export interface CfImagesCapability {
   info(image: ReadableStream<Uint8Array>): Promise<unknown>;
   /** Apply ordered image transforms/draws and output a Response. */
   transform(input: CfImageTransformInput): Promise<Response>;
+  /**
+   * `transform`, buffered: Response bodies (like streams and Blobs) cannot
+   * cross the RPC boundary back into a script sandbox, so scripts use this
+   * to get plain bytes — e.g. downscaling an oversized screenshot before a
+   * vision-model call.
+   */
+  transformBytes(input: CfImageTransformInput): Promise<{ bytes: Uint8Array; contentType: string }>;
 }
 
 /** Cloudflare Media Transformations binding exposed through itx as one-call helpers. */
@@ -1659,6 +1903,35 @@ export interface WorkspaceGit {
   log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]>;
 }
 
+/**
+ * One durable subscription on one source stream: its committed configuration
+ * and cursor (`describe`), the uniform barrier (`waitUntilProcessed` — one
+ * verb for EVERY receiver kind: processor-wake rows delegate to the hosted
+ * runner's own barrier, push kinds resolve off the confirmed cursor), and —
+ * for processor-wake subscriptions — the hosted processor instance's facade.
+ * Cursor seeks and resumes stay stream verbs (`setSubscriptionCursor` /
+ * `resumeSubscription`).
+ */
+export interface StreamSubscription {
+  __describe(): Promise<Description>;
+  /** Committed configuration plus the durable cursor; null when no such
+   * subscription is configured. */
+  describe(): Promise<StreamSubscriptionDescription | null>;
+  /**
+   * The uniform barrier: resolve once this subscription's receiver has
+   * durably processed through `offset`. Processor-wake rows delegate to the
+   * hosted runner's own barrier (precise even mid-connection); every other
+   * kind resolves off the confirmed cursor — the awaited push
+   * acknowledgement. One-shot: it dies with the caller, like waitForEvent.
+   */
+  waitUntilProcessed(args: { offset: number; timeoutMs?: number }): Promise<void>;
+  /** The hosted processor instance behind a processor-wake subscription
+   * (snapshot/getRuntimeState/waitUntilProcessed), dialed by placement: the
+   * Stream DO's facade serves a facet row from its facet and replays the
+   * read verbs onto an expression row's own `processor` node. */
+  processor: StreamProcessorRpc;
+}
+
 /** Attributed tracked changes since the last commit: author-tagged inserted
  * spans and deleted-text markers in current-head coordinates, plus the ONE
  * baseline both redline layers render against. */
@@ -1769,15 +2042,28 @@ export type ItxAuthCredentials =
   /**
    * A project's own long-lived machine credential — for externally deployed
    * apps that connect back to /api as their project (docs/remote-apps.md).
-   * Verified against the secret every project is born with at
-   * `/secrets/project-api-key` (the comparison happens inside the Secret
-   * Durable Object — this door never receives material, only a one-bit
-   * answer). None of the existing lanes fit this caller: `bearer` is a
-   * user identity, `operator-session` is a short-lived human grant, and
-   * `admin-secret` is deployment-global. Grants exactly one project, no
-   * admin, no user identity.
+   * The preferred address is the immutable project slug; the authentication
+   * door resolves it to the stable id before verifying the secret every
+   * project is born with at `/secrets/project-api-key`. The comparison happens
+   * inside the Secret Durable Object, so this door receives no secret material
+   * back. Grants exactly one resolved project, no admin, no user identity.
    */
-  | { type: "project-secret"; projectId: string; secret: string }
+  | {
+      type: "project-secret";
+      projectSlug: string;
+      projectId?: never;
+      secret: string;
+    }
+  /**
+   * Stable-id addressing for machine callers that already operate on ids.
+   * New user-facing setup flows should use `projectSlug`.
+   */
+  | {
+      type: "project-secret";
+      projectId: string;
+      projectSlug?: never;
+      secret: string;
+    }
   /**
    * The short-lived user-on-project token auth mints for project app hosts
    * (the `iterate-project-auth` cookie). A config worker reverse-proxying an
@@ -1814,61 +2100,81 @@ export type ProjectDescription = Description & {
 };
 
 /**
- * A processor node that is also its HOST's wake-mode delivery door. This is
- * what the domain surfaces expose (`itx.agents.get(path).processor`,
- * `itx.repos.get(path).processor`, `itx.processor`, …) and what wake-mode
- * stream subscriptions persist as their delivery expression:
- * `["agents", ["get", path], "processor", "wakeStreamSubscriber"]`.
+ * The internal extension used when stream delivery calls a hosted processor.
+ * Public processor properties expose only {@link StreamProcessorRpc}; a stored
+ * subscription persists an ITX expression that continues one
+ * step past that public property to this trusted-only method:
+ * `["agents", ["get", path], "processor", "wakeStreamProcessor"]`.
  *
- * `wakeStreamSubscriber` is dialed by stream delivery spines only
- * (trusted-internal): the handshake's sink drives the host's durable
+ * `wakeStreamProcessor` is called by trusted stream delivery only
+ * (trusted-internal): its processEventBatch callback drives the host's durable
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
- * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
- * processor wakes from the request's `processorSlug`. Each public domain
- * surface selects that same named processor for inspection, so
- * `agent.processor`, `agent.slack.processor`, and other siblings expose their
- * own snapshots and checkpoints.
+ * agent stream hosts agent + slack-agent + more) resolve WHICH processor
+ * wakes from the request's `name` (which equals the contract slug). Each
+ * public domain surface selects that same named processor for inspection,
+ * while deliberately omitting this method from its public TypeScript
+ * contract, so `agent.processor`, `agent.slack.processor`, and other siblings
+ * expose their own snapshots and checkpoints.
  */
 export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
-  wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
+  wakeStreamProcessor(request: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse>;
 };
 
 /**
  * The project processor's reduced state, inferred from the contract's
- * `stateSchema` — the one definition of the shape. `ready` flips when the
- * bootstrap saga lands; the list fields are what the collection `list()`
- * methods read.
+ * `stateSchema` — the one definition of the shape. A non-null
+ * `birthCertificate` is the terminal creation marker; the list fields are
+ * what the collection `list()` methods read.
  */
 export type ProjectProcessorState = {
+  createRequest: {
+    config: {
+      slug: string;
+      onboardingActive?: boolean | undefined;
+      creatorEmail?: string | undefined;
+      configRepoTemplate?: string | undefined;
+    };
+  } | null;
+  createRequestedAtOffset: number | null;
+  createFailure: {
+    createRequestedAtOffset: number;
+    error: string;
+    request: {
+      config: {
+        slug: string;
+        onboardingActive?: boolean | undefined;
+        creatorEmail?: string | undefined;
+        configRepoTemplate?: string | undefined;
+      };
+    };
+  } | null;
   birthCertificate: {
     config: {
       slug: string;
       onboardingActive?: boolean | undefined;
       creatorEmail?: string | undefined;
+      configRepoTemplate?: string | undefined;
     };
+    createRequestedAtOffset: number;
   } | null;
-  ready: boolean;
   onboardingActive: boolean;
   onboardingCompletedAt: string | null;
   devices: { createdAt: string; path: string }[];
   repos: { createdAt: string; path: string }[];
   secrets: { createdAt: string; path: string }[];
   streams: { createdAt: string; path: string }[];
-  customDomains: {
-    kind: "cloudflare" | "direct";
-    createdAt: string;
-    updatedAt: string;
-    cloudflareHostnameId: string | null;
-    error: string | null;
-    hostname: string;
-    hostnameStatus: string | null;
-    ownershipVerification: { name: string; value: string } | null;
-    sslStatus: string | null;
-    status: "active" | "failed" | "pending_validation" | "provisioning" | "removing" | "requested";
-    validationRecords: { name: string; status: string | null; value: string }[];
-    wildcard: boolean;
-  }[];
+  clients: Record<
+    string,
+    {
+      path: string;
+      connected: boolean;
+      lastConnectedAt: string;
+      lastDisconnectedAt?: string | undefined;
+      connectedAtOffsets: number[];
+    }
+  >;
+  customDomains: { hostname: string; kind: "cloudflare" | "direct" }[];
   egressRules: {
     ruleKey: string;
     description: string;
@@ -1880,6 +2186,7 @@ export type ProjectProcessorState = {
     };
     verdict: "deny" | "hold";
     approvalTimeoutMs: number;
+    debounceMs: number | null;
   }[];
   humanApprovalKeys: {
     keyId: string;
@@ -1889,6 +2196,7 @@ export type ProjectProcessorState = {
     revokedAt: string | null;
   }[];
   notificationReady: boolean;
+  defaults: Record<string, unknown>;
 };
 
 /**
@@ -1953,7 +2261,7 @@ export type ProvideCapabilityInput =
       flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];
-      type: "itx-expression";
+      type: "itx-call";
       types?: string;
     };
 
@@ -1971,24 +2279,44 @@ export type RevokeCapabilityInput = {
 export type OpenApiRpc = object;
 
 /**
- * The batch a PUSH subscription's receiver is invoked with: the delivery
- * coordinates and events, plus the fields an at-least-once stateless receiver
- * needs to dedupe and self-configure. Deliberately NOT the live lanes'
- * {@link StreamEventBatch}: push receivers include userspace project workers
- * and sibling streams, and the folded core state — other subscriptions'
- * delivery expressions, park errors, the presence roster — is internal to the
- * deployment (the webhook envelope strips it for the same reason). Live sinks
- * (ephemeral subscribers, wake-mode processors) still get state-carrying
- * batches: they are the lanes that paint from state.
+ * The batch sent to a durable receiver for a subscription whose cursor the
+ * source stream stores: delivery coordinates and events plus the fields an
+ * at-least-once receiver needs to deduplicate and self-configure. Deliberately
+ * not the state-carrying callback batch
+ * {@link StreamEventBatch}: ITX calls and copy destinations do not get
+ * folded core state, because other subscriptions' configuration, halt errors,
+ * and the presence roster are deployment-internal. Webhooks use a narrower
+ * per-event envelope for the same reason. Session callbacks and hosted
+ * processors still get state-carrying batches because they paint or reduce
+ * from stream state.
  */
-export type StreamPushEventBatch = {
+export type StreamDeliveryBatch = {
   projectId: string | null;
   path: string;
+  /** Random identity assigned when this source stream's storage was created. */
+  streamId: string;
+  /** Creation time of this source stream; orders recreated streams whose offsets restarted. */
+  streamCreatedAt: string;
+  /**
+   * For an ITX-call subscription with a `jsonataTransform`, each event's
+   * `type`/`payload`/`metadata` are the transform's output while the
+   * coordinates keep naming the source rows. Copy batches always carry the
+   * untransformed source events: the receiving stream applies its transform
+   * before committing.
+   */
   events: StreamEvent[];
   streamMaxOffset: number;
-  subscriptionKey: SubscriptionKey;
+  /** The source stream's subscription this delivery serves, by NAME. */
+  name: SubscriptionName;
   /**
-   * Stable across retries of the same batch (`${subscriptionKey}:${firstOffset}-${lastOffset}`),
+   * Offset of the configure or cursor-set event that started this delivery run.
+   * It stays stable across network retries, but changes after an explicit seek
+   * or same-key reconfiguration so those deliberate replays are not deduped as
+   * old transport attempts.
+   */
+  cursorChangedAtSourceOffset: number;
+  /**
+   * Stable across retries of the same batch and cursor-control event,
    * so receivers can dedupe redeliveries even without per-event bookkeeping.
    * (`${event.path}@${event.offset}` remains the per-event idempotency idiom.)
    */
@@ -1998,11 +2326,11 @@ export type StreamPushEventBatch = {
   /**
    * The committed `subscription-configured` event this delivery serves — so a
    * receiver can configure itself from committed stream state without a
-   * side-channel registry (which stream, which selector, whose params).
+   * side-channel registry for the source stream, filter, and receiver settings.
    * Narrowed to the fields the fold stores; an honest shape instead of a
    * `StreamEvent` cast that pretends metadata/source survived.
    */
-  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
+  configuredEvent: SubscriptionConfigurationForDelivery;
 };
 
 /**
@@ -2056,51 +2384,60 @@ export type CapabilityDescription = {
    * built-ins (they exist at every scope).
    */
   scope?: string;
-  type: "builtin" | "live" | "itx-expression";
+  type: "builtin" | "live" | "itx-call";
   types?: string;
 };
 
 /**
- * What the stream sends when poking a durable wake-mode subscriber
- * (`wakeStreamSubscriber`): serializable coordinates only.
+ * What the stream sends when waking a hosted processor through
+ * `wakeStreamProcessor`: serializable coordinates only.
  */
-export type StreamSubscriberWakeRequest = {
+export type StreamProcessorWakeRequest = {
   stream: {
     projectId: string | null;
     path: string;
+    /** Random identity of this event log; fences persisted processor checkpoints. */
+    streamId: string;
     streamMaxOffset: number;
   };
-  subscriptionKey: SubscriptionKey;
-  /** Which hosted processor the poke is for (multi-processor hosts resolve on it). */
-  processorSlug?: string;
+  /**
+   * The subscription's NAME — the caller-chosen per-stream binding this wake
+   * serves. Processor-wake names EQUAL their contract slug, so it is also the
+   * registered processor name (and, under facet placement, the facet name):
+   * hosts route on this one identity, and a name matching no registered
+   * processor fails loudly here with the registry's unknown-name error.
+   */
+  name: SubscriptionName;
 };
 
 /**
- * What the poked subscriber hands back — the entire handshake in one return
- * value. The stream retains `sink` (ownership of a returned stub transfers to
+ * What the woken processor hands back in one response. The stream retains
+ * `processEventBatch` (ownership of a returned stub transfers to
  * the caller) and streams one-way batches into it from `checkpointOffset + 1`;
- * there is no subscribe-back call and therefore no handshake race to fence.
+ * there is no callback registration call in the other direction.
  */
-export type StreamSubscriberWakeResponse = {
+export type StreamProcessorWakeResponse = {
+  /** Stream identity to which `checkpointOffset` and the returned callback are bound. */
+  streamId: string;
   /** The processor's durable checkpoint offset — replay resumes after it. */
   checkpointOffset: number;
   /**
    * The live delivery callback the stream retains and invokes per batch.
    * Calls are one-way; each batch reports completion through its independent
-   * `settleDelivery` capability.
+   * `reportDeliveryResult` callback.
    */
-  sink: ProcessStreamWakeEventBatch;
+  processEventBatch: ProcessStreamWakeEventBatch;
   /**
-   * Serializable subscriber identity (validated against
-   * `StreamSubscriberDescriptor` by the stream) appended as the
-   * subscriber-connected presence fact; carries the processor's contract
+   * Serializable callback-owner identity (validated against
+   * `ConnectionOpenerDescriptor` by the stream) appended as the
+   * connection-opened presence fact; carries the processor's contract
    * announcement for the stream's `processorsBySlug` registry.
    */
-  subscriber?: unknown;
+  openedBy?: unknown;
   /** Live runtime-state capability, retained for the connection lifetime. */
   getRuntimeState?: GetProcessorRuntimeState;
-  /** Optional ping capability, retained for the connection lifetime (see {@link StreamSubscriberPing}). */
-  ping?: StreamSubscriberPing;
+  /** Optional ping capability, retained for the connection lifetime (see {@link StreamConnectionPing}). */
+  ping?: StreamConnectionPing;
 };
 
 /**
@@ -2159,18 +2496,26 @@ export type CfMarkdownSupportedFormat = {
 };
 
 /** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
- * a filename plus the raw bytes as a Blob. */
+ * a filename plus the raw bytes. */
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
   name: string;
-  blob: Blob;
+  /** The document bytes: any `FileData` shape (Uint8Array, base64 string,
+   * Blob, …), coerced server-side. Blob does not survive the capnweb hop
+   * from script sandboxes, so pass bytes or base64 from scripts. */
+  blob: FileData;
 };
 
-/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,
+/** Per-format tuning for `ai.toMarkdown`: output format (markdown, or plain
+ * text with link targets and image URLs stripped — the compact choice for
+ * emails and newsletters full of tracking links), HTML scoping (CSS selector,
  * hostname for relative links), image description language, PDF metadata
  * exclusion. */
 export type CfMarkdownConversionOptions = {
   conversionOptions?: {
+    output?: {
+      format?: "markdown" | "text";
+    };
     html?: {
       cssSelector?: string;
       hostname?: string;
@@ -2184,12 +2529,13 @@ export type CfMarkdownConversionOptions = {
   };
 };
 
-/** One converted document from `ai.toMarkdown`: `format` is "markdown" with
- * the markdown text in `data` (plus a token estimate), or "error" with the
- * failure message in `error`. */
+/** One converted document from `ai.toMarkdown`: `format` is "markdown" — or
+ * "text" when `output.format: "text"` was requested — with the converted
+ * text in `data` (plus a token estimate), or "error" with the failure
+ * message in `error`. */
 export type CfMarkdownConversionResult = {
   name: string;
-  format: "markdown" | "error";
+  format: "markdown" | "text" | "error";
   mimeType?: string;
   tokens?: number;
   data?: string;
@@ -2237,6 +2583,7 @@ export type AgentProcessorState = {
     maxAutonomousTurns: number;
     scriptResultHistoryLimit: number;
     compactionTriggerFraction: number;
+    driver: "agent" | "agent-headless";
   };
   contextItems: {
     offset: number;
@@ -2256,7 +2603,7 @@ export type AgentProcessorState = {
           )[]
         | undefined;
       actor?:
-        | { type: "user"; origin: "mcp" | "web" }
+        | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
         | { type: "agent"; path: string }
         | { type: "script"; executionId: string }
         | { type: "integration"; name: string }
@@ -2286,6 +2633,7 @@ export type AgentProcessorState = {
     };
   }[];
   lastLlmRequestOffset: number;
+  latestExternalTriggerOffset: number;
   pendingLlmRequestTrigger: {
     offset: number;
     atMs: number;
@@ -2357,6 +2705,7 @@ export type AgentEventInput =
           maxAutonomousTurns?: number | undefined;
           scriptResultHistoryLimit?: number | undefined;
           compactionTriggerFraction?: number | undefined;
+          driver?: "agent" | "agent-headless" | undefined;
         };
       }
     >
@@ -2392,7 +2741,10 @@ export type AgentEventInput =
             };
       }
     >
-  | TypedConsumedEventInput<"events.iterate.com/agent/paused", { reason?: string | undefined }>
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/paused",
+      { reason?: string | undefined; triggerOffset?: number | undefined }
+    >
   | TypedConsumedEventInput<"events.iterate.com/agent/resumed", { reason?: string | undefined }>
   | TypedConsumedEventInput<
       "events.iterate.com/agent/summary-updated",
@@ -2440,7 +2792,7 @@ export type AgentEventInput =
             )[]
           | undefined;
         actor?:
-          | { type: "user"; origin: "mcp" | "web" }
+          | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
           | { type: "agent"; path: string }
           | { type: "script"; executionId: string }
           | { type: "integration"; name: string }
@@ -2477,7 +2829,13 @@ export type AgentEventInput =
         files?:
           | { contentType: string; filename: string; path: string; size: number; url: string }[]
           | undefined;
+        llmRequestOffset?: number | undefined;
       }
+    >
+  | TypedConsumedEventInput<"events.iterate.com/capability-host/preamble-removed", { key: string }>
+  | TypedConsumedEventInput<
+      "events.iterate.com/capability-host/preamble-set",
+      { key: string; code: string }
     >
   | TypedConsumedEventInput<
       "events.iterate.com/capability-host/script-run-requested",
@@ -2514,10 +2872,10 @@ export type AgentEventInput =
       }
     >;
 
-/** One committed event on a durable stream: type, JSON payload, offset,
- * idempotency key, and provenance (processor stamp / cross-post chain), plus
- * the commit-time `createdAt` and stream `path`. `ephemeral: true` marks a
- * second-class row (see `StreamEventInput`). */
+/** One offset-assigned stream event: type, JSON payload, offset, provenance
+ * (processor stamp / source-stream chain), plus the commit-time `createdAt`
+ * and stream `path`. Durable events may have an idempotency key;
+ * `ephemeral: true` marks a memory-only event (see `StreamEventInput`). */
 export type StreamEvent = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -2528,13 +2886,16 @@ export type StreamEvent = {
           | {
               slug: string;
               version: string;
-              stream: { path: string; projectId: string | null };
+              stream: { path: string; projectId: string | null; streamId: string };
               whileProcessing?: { offset: number; type: string } | undefined;
             }
           | undefined;
-        crossPostedFrom?:
+        copiedFrom?:
           | {
-              subscriptionKey: string;
+              name: string;
+              streamId: string;
+              streamCreatedAt: string;
+              cursorChangedAtSourceOffset: number;
               createdAt: string;
               offset: number;
               path: string;
@@ -2570,6 +2931,18 @@ export type AgentFileAttachment = NonNullable<AgentContextAddedPayload["files"]>
 
 /** The `capability-host/created` payload — the scope's birth certificate. */
 export type CapabilityHostCreateInput = { config: Record<string, never>; fallback?: unknown };
+
+/**
+ * `setPreamble` recipe: one keyed entry of TypeScript injected above every
+ * later script in the scope (typecheck and execution). A re-set at the same
+ * key replaces the code but keeps the entry's injection position. Compiled
+ * against the scope's assembled preamble at set time — an entry that breaks
+ * compilation rejects here instead of degrading every later script's check.
+ */
+export type SetPreambleInput = {
+  key: string;
+  code: string;
+};
 
 /** Target shape for a live capability that wants to receive flattened paths. */
 export type FlattenedCapabilityTarget = {
@@ -2608,6 +2981,23 @@ export type AgentCollectionProcessorState = {
   waitingForSinceOffsets: Record<string, number>;
 };
 
+/** One row of `itx.agents.list()`: stream identity plus the agent-authored
+ * title when one has been set (agents set it on their first turn via
+ * `agent/summary-updated`). Clients fall back to the path when absent. */
+export type AgentListItem = {
+  path: string;
+  createdAt: string;
+  title?: string;
+};
+
+/** What `itx.clients.list()` returns per client: the catalog record minus reducer bookkeeping. */
+export type ProjectClientListItem = {
+  path: string;
+  connected: boolean;
+  lastConnectedAt: string;
+  lastDisconnectedAt?: string | undefined;
+};
+
 /**
  * What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned
  * to `Promise<unknown>` ahead of the ambient signature. Pinned because the
@@ -2627,6 +3017,14 @@ export type EgressResponse = {
 
 /** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
 export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;
+
+/** Reduced project email-routing state exposed through the processor capability. */
+export type EmailProcessorState = {
+  birthCertificate: { config: Record<string, never> } | null;
+  threads: Record<string, string>;
+  threadByMessageId: Record<string, string>;
+  allowedSenders: string[];
+};
 
 /**
  * One outbound email attachment as the CALLER passes it: either a stored
@@ -2663,7 +3061,7 @@ export type IntegrationFamily<Connection> = {
 /** A Slack WebClient connection. Web API namespaces and methods are dynamic;
  * `processor` is the connection's durable webhook router. */
 export type SlackConnection = Record<string, any> & {
-  processor: WakeableStreamProcessorRpc;
+  processor: StreamProcessorRpc;
 };
 
 /** The Gmail REST API connection exposed by a connected Google account.
@@ -2690,7 +3088,7 @@ export type GithubConnection = { octokit: import("octokit").Octokit };
  * script types useful without maintaining a second copy of Telegram's API. */
 export type TelegramConnection = {
   getMe(params?: Record<string, unknown>): Promise<Record<string, unknown>>;
-  processor: WakeableStreamProcessorRpc;
+  processor: StreamProcessorRpc;
   sendChatAction(params: Record<string, unknown>): Promise<Record<string, unknown>>;
   sendMessage(
     params: { chat_id: number | string; text: string } & Record<string, unknown>,
@@ -2792,6 +3190,40 @@ export type ConnectTelegramResult =
   /** The bot is claimed by another project (never named — the caller may be a
    * different org). Retry with `steal: true` to move it. */
   | { botUsername: string | null; error: "telegram_bot_already_claimed"; ok: false };
+
+/**
+ * Narrow operator-only input for rebuilding a connection from a durable
+ * project seed. Each arm carries enough provider identity to validate the
+ * credential before any project state is written.
+ */
+export type RestoreIntegrationConnectionInput =
+  | {
+      botToken: string;
+      connection?: string;
+      provider: "slack";
+      teamId: string;
+    }
+  | {
+      connection?: string;
+      installationId: string;
+      provider: "github";
+    }
+  | {
+      connection: string;
+      googleUserId: string;
+      material: {
+        accessToken?: string;
+        refreshToken: string;
+      };
+      provider: "google";
+    };
+
+/** Proven provider identity returned after an integration seed restore succeeds. */
+export type RestoreIntegrationConnectionResult = {
+  connection: string;
+  externalId: string;
+  provider: "github" | "google" | "slack";
+};
 
 /** The built-ins that connect via a redirect flow (OAuth code exchange or
  * GitHub App installation) — the `startOAuthFlow`/`completeConnect` pair.
@@ -2895,7 +3327,7 @@ export type SchedulerProcessorState = {
       [x: string]: unknown;
       action: { [x: string]: unknown; kind: "itx-script"; script: string };
       definedAtOffset: number;
-      metadata?: Record<string, unknown> | undefined;
+      metadata?: Record<string, JsonValue> | undefined;
       path: string;
       nextTriggerAt: number | null;
       recurrence:
@@ -2909,13 +3341,17 @@ export type SchedulerProcessorState = {
 };
 
 /**
- * Input to `scheduler.set(...)`: a keyed upsert. `recurrence` additionally
- * accepts `{ in: seconds }` sugar, converted to a canonical `{ at }` before
- * anything is appended — the event log has exactly one spelling of every
- * schedule.
+ * Input to `scheduler.set(...)`: a keyed desired definition. `recurrence`
+ * additionally accepts `{ in: seconds }` sugar, converted to a canonical
+ * `{ at }` before anything is appended — the event log has exactly one
+ * spelling of every schedule.
  */
 export type SetScheduleInput = {
   key: string;
+  /**
+   * Caller-owned JSON annotations. The RPC boundary validates and canonicalizes
+   * this recursively before comparing or committing it.
+   */
   metadata?: Record<string, unknown>;
   recurrence: SchedulerRecurrence | { in: number };
   /**
@@ -2978,10 +3414,17 @@ export type CollectSecretLink = {
 /** The `repos/create-requested` payload — the creation saga's durable intent. */
 export type RepoCreateInput =
   | { type: "empty" }
+  | {
+      type: "github-public-template";
+      owner: string;
+      path?: string | undefined;
+      ref?: string | undefined;
+      repo: string;
+    }
   | { type: "github-private"; connection: string; owner: string; repo: string }
   | {
       type: "github-public";
-      connection: string;
+      connection?: string | undefined;
       depth?: number | undefined;
       owner: string;
       repo: string;
@@ -3073,10 +3516,17 @@ export type GithubResetResult = {
 export type RepoProcessorState = {
   createRequest:
     | { type: "empty" }
+    | {
+        type: "github-public-template";
+        owner: string;
+        path?: string | undefined;
+        ref?: string | undefined;
+        repo: string;
+      }
     | { type: "github-private"; connection: string; owner: string; repo: string }
     | {
         type: "github-public";
-        connection: string;
+        connection?: string | undefined;
         depth?: number | undefined;
         owner: string;
         repo: string;
@@ -3086,10 +3536,17 @@ export type RepoProcessorState = {
     error: string;
     request:
       | { type: "empty" }
+      | {
+          type: "github-public-template";
+          owner: string;
+          path?: string | undefined;
+          ref?: string | undefined;
+          repo: string;
+        }
       | { type: "github-private"; connection: string; owner: string; repo: string }
       | {
           type: "github-public";
-          connection: string;
+          connection?: string | undefined;
           depth?: number | undefined;
           owner: string;
           repo: string;
@@ -3098,10 +3555,17 @@ export type RepoProcessorState = {
   birthCertificate: {
     request:
       | { type: "empty" }
+      | {
+          type: "github-public-template";
+          owner: string;
+          path?: string | undefined;
+          ref?: string | undefined;
+          repo: string;
+        }
       | { type: "github-private"; connection: string; owner: string; repo: string }
       | {
           type: "github-public";
-          connection: string;
+          connection?: string | undefined;
           depth?: number | undefined;
           owner: string;
           repo: string;
@@ -3158,16 +3622,83 @@ export type DynamicWorkerDispatchOptions = {
   flattenNestedPaths?: boolean;
 };
 
-/** Stable identity for one stream subscription connection. */
-export type SubscriptionKey = string;
+/** Source-local identity for one durable subscription that sends matching stream events. */
+export type SubscriptionName = string;
+
+/**
+ * The committed subscription fields carried with a delivery whose cursor the
+ * source stream stores. This deliberately omits metadata, provenance, and
+ * idempotency bookkeeping that the core reducer does not retain. A receiver
+ * uses the included event coordinates and payload to verify the delivery
+ * against the subscription it recorded.
+ */
+export type SubscriptionConfigurationForDelivery = {
+  type: "events.iterate.com/stream/subscription-configured";
+  offset: number;
+  createdAt: string;
+  path: string;
+  payload: {
+    /** The subscription's caller-chosen name; omitted when the effective name
+     * is derived from this event's offset (`subscription:<offset>`). */
+    name?: string;
+    description?: string;
+    filter?: {
+      eventTypes?: string[];
+      jsonataCondition?: string;
+    };
+    receiver:
+      | {
+          /** The processor runs as a facet of the stream's own Durable Object:
+           * the subscription NAME is the facet name and the registered-contract
+           * selector; delivery is an in-process parent→facet dial (no wake
+           * lane). `source` chooses the class — `builtin` (resolved by the
+           * stream's path-family registration) or `userspace` (the DurableObject
+           * class is loaded from `worker` and hosted as a facet). */
+          action: "facet-processor";
+          source: { kind: "builtin" } | { kind: "userspace"; worker: StatefulDynamicWorkerRef };
+        }
+      | {
+          /** The processor runs in ANOTHER Durable Object, woken by dialing this
+           * itx expression (own-DO or userspace-worker placement). */
+          action: "wake-processor";
+          expression: Array<string | [method: string, ...args: unknown[]]>;
+        }
+      | {
+          action: "copy-to-stream";
+          receivingStreamPath: string;
+          jsonataTransform?: string;
+          delivery: {
+            start: "beginning" | "now";
+            onFailingEvent: "halt";
+          };
+        }
+      | {
+          action: "itx-call";
+          expression: Array<string | [method: string, ...args: unknown[]]>;
+          jsonataTransform?: string;
+          delivery: {
+            start: "beginning" | "now";
+            onFailingEvent: "halt" | "skip";
+          };
+        }
+      | {
+          action: "webhook-post";
+          url: string;
+          jsonataTransform?: string;
+          delivery: {
+            start: "beginning" | "now";
+            onFailingEvent: "halt" | "skip";
+          };
+        };
+  };
+};
 
 /** Append input for `Stream.append`: event type, JSON payload, optional
  * metadata, provenance source, and idempotency key — everything before the
- * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
- * second-class row: excluded from range reads unless `includeEphemeral`,
- * excluded from durable delivery unless a push/webhook explicitly opts in, and evictable —
- * for transient signals (LLM streaming chunks) whose durable truth lands as
- * its own event. */
+ * stream assigns offset and timestamp at commit. `ephemeral: true` assigns a
+ * real offset but keeps the event body only in the Stream Durable Object's
+ * bounded memory until eviction or restart; it cannot be combined with an
+ * idempotency key. */
 export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -3178,13 +3709,16 @@ export type StreamEventInput = {
           | {
               slug: string;
               version: string;
-              stream: { path: string; projectId: string | null };
+              stream: { path: string; projectId: string | null; streamId: string };
               whileProcessing?: { offset: number; type: string } | undefined;
             }
           | undefined;
-        crossPostedFrom?:
+        copiedFrom?:
           | {
-              subscriptionKey: string;
+              name: string;
+              streamId: string;
+              streamCreatedAt: string;
+              cursorChangedAtSourceOffset: number;
               createdAt: string;
               offset: number;
               path: string;
@@ -3202,18 +3736,34 @@ export type StreamEventInput = {
 export type StreamEventReadInput = {
   /** Exclusive lower bound. Defaults to 0. */
   afterOffset?: number;
-  /** Exclusive upper bound. Omit/null to read through the current tail. */
+  /** Exclusive upper bound. Omit/null to read through the latest offset. */
   beforeOffset?: number | null;
   /** Event types to include. Omit or include "*" for all; [] matches none. */
   eventTypes?: readonly string[];
   /** Page size, 1-500. Defaults to 500. */
   limit?: number;
   /**
-   * Include ephemeral events (default false). Ephemeral rows are second-class:
-   * excluded from every range read unless explicitly requested, and the stream
-   * may evict them later — never derive durable state from one.
+   * Include ephemeral events (default false). The Durable Object incarnation
+   * keeps their bodies in a bounded memory buffer;
+   * this opt-in merges the events still buffered into the durable page.
+   * Restart and FIFO eviction leave permanent offset gaps, so never derive
+   * durable state from an ephemeral event.
    */
   includeEphemeral?: boolean;
+};
+
+/**
+ * One atomic stream read: the matching events plus the identity and raw-log
+ * head they were read from. Consumers that persist offsets must use this
+ * envelope instead of pairing `getEvents()` with a separate state read — a
+ * reset between those calls would make equal offsets name a different log.
+ */
+export type StreamEventPage = {
+  /** Random identity of the event log that served this page. */
+  streamId: string;
+  /** Highest assigned raw-log offset when this page was read. */
+  streamMaxOffset: number;
+  events: StreamEvent[];
 };
 
 /** Serializable snapshot plus optional live runtime debug state for a processor. */
@@ -3224,24 +3774,41 @@ export type ProcessorRuntimeState<State = unknown> = {
 
 /** Serializable stream-core and delivery-runtime state exposed through `Stream.liveState`. */
 export type StreamRuntimeDebugState = {
-  /** Kept opaque at the public stream boundary; consumers may inspect known fields defensively. */
-  coreProcessorState: unknown;
+  /** Durable stream events reduced by the core processor. */
+  coreProcessorState: CoreProcessorState;
   runtime: {
     connections: Record<string, ConnectionRuntimeState>;
+    /**
+     * Idle-closed session connections whose subscriber is still present on a
+     * hibernatable Subscriber Pager that the client gave the Stream DO
+     * (stream-subscriber-pager.ts). Presence surfaces should
+     * render these as dormant, not gone: their `connection-closed
+     * reason:"idle"` fact is deliberately not a departure.
+     */
+    dormantSubscribers: Record<string, { idleDeliveredThrough: number; pageSentAtOffset?: number }>;
+    /** Stored subscription progress, keyed by subscription key. */
     subscriptions: Record<string, SubscriptionRuntimeState>;
     metrics: StreamThroughputMetrics;
-    /** SQLite database size in bytes (event log + spine rows + chunks). */
+    /** Memory-only ephemeral events retained by this Durable Object incarnation. */
+    ephemeralEvents: EphemeralEventBufferRuntimeState;
+    /** SQLite database size in bytes (event log + delivery rows + chunks). */
     storageSizeBytes: number;
   };
 };
 
 /**
- * Callback invoked by the stream pump for each delivered batch.
+ * Callback invoked by the stream send loop for each delivered batch.
  *
  * It stays as a named type because Workers RPC callback lifecycle helpers need
  * to duplicate, retain, and dispose exactly this callback shape.
  */
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
+
+/** A declarative event filter; an absent filter or empty object matches every event. */
+export type EventFilter = {
+  eventTypes?: string[] | undefined;
+  jsonataCondition?: string | undefined;
+};
 
 /**
  * Optional runtime-state callback exposed by a hosted processor.
@@ -3252,42 +3819,525 @@ export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<ProcessorRuntimeState>;
 
 /**
- * Optional ping capability a subscriber hands the stream (ephemeral
- * `subscribe()` argument or wake-handshake field). Absent on older
- * subscribers — the stream then simply has no RTT samples for them.
+ * Optional ping capability a connection owner hands the stream (session
+ * `openConnection()` argument or processor wake-response field).
  */
-export type StreamSubscriberPing = (
+export type StreamConnectionPing = (
   input: StreamPingInput,
 ) => StreamPingReply | Promise<StreamPingReply>;
 
 /**
- * Live subscription handle returned by `Stream.subscribe`.
+ * Live handle returned by `Stream.openConnection`.
  *
  * `ping()` reports liveness: `true` while
  * the connection is still open on the live stream, `false` after it closed
- * (replaced, delivery failure, unsubscribe); it rejects when the stream's
+ * (replaced, delivery failure, or explicit close); it rejects when the stream's
  * Durable Object incarnation is gone. Either non-`true` outcome means the
- * subscriber should re-subscribe.
+ * owner should open another connection.
  */
-export type StreamSubscriptionHandle = Disposable & {
-  /** Stable identity of this subscription connection. */
-  subscriptionKey: SubscriptionKey;
-  /** The stream's max offset at subscribe time (durable replay starts behind it). */
+export type StreamConnectionHandle = Disposable & {
+  /** Stable identity of this live connection. */
+  connectionKey: ConnectionKey;
+  /** The stream's max offset when the connection opened. */
   streamMaxOffset: number;
   ping(): boolean | Promise<boolean>;
   /** Close this connection; safe to call more than once. */
-  unsubscribe(): void;
+  close(): void;
 };
+
+/** One committed event that created or replaced a subscription on its source stream. */
+export type CommittedSubscriptionConfiguredEvent = Omit<
+  {
+    type: string;
+    payload?: Record<string, unknown> | undefined;
+    metadata?: Record<string, unknown> | undefined;
+    source?:
+      | {
+          processor?:
+            | {
+                slug: string;
+                version: string;
+                stream: { path: string; projectId: string | null; streamId: string };
+                whileProcessing?: { offset: number; type: string } | undefined;
+              }
+            | undefined;
+          copiedFrom?:
+            | {
+                name: string;
+                streamId: string;
+                streamCreatedAt: string;
+                cursorChangedAtSourceOffset: number;
+                createdAt: string;
+                offset: number;
+                path: string;
+                projectId: string | null;
+                type: string;
+              }[]
+            | undefined;
+        }
+      | undefined;
+    idempotencyKey?: string | undefined;
+    ephemeral?: true | undefined;
+    offset: number;
+    createdAt: string;
+    path: string;
+  },
+  "payload" | "type"
+> &
+  Omit<
+    {
+      type: string;
+      payload?: Record<string, unknown> | undefined;
+      metadata?: Record<string, unknown> | undefined;
+      source?:
+        | {
+            processor?:
+              | {
+                  slug: string;
+                  version: string;
+                  stream: { path: string; projectId: string | null; streamId: string };
+                  whileProcessing?: { offset: number; type: string } | undefined;
+                }
+              | undefined;
+            copiedFrom?:
+              | {
+                  name: string;
+                  streamId: string;
+                  streamCreatedAt: string;
+                  cursorChangedAtSourceOffset: number;
+                  createdAt: string;
+                  offset: number;
+                  path: string;
+                  projectId: string | null;
+                  type: string;
+                }[]
+              | undefined;
+          }
+        | undefined;
+      idempotencyKey?: string | undefined;
+      ephemeral?: true | undefined;
+    },
+    "payload" | "type"
+  > & {
+    type: "events.iterate.com/stream/subscription-configured";
+    payload: {
+      name?: string | undefined;
+      description?: string | undefined;
+      filter?:
+        | { eventTypes?: string[] | undefined; jsonataCondition?: string | undefined }
+        | undefined;
+      receiver:
+        | {
+            action: "facet-processor";
+            source:
+              | { kind: "builtin" }
+              | {
+                  kind: "userspace";
+                  worker: {
+                    path: string;
+                    source:
+                      | {
+                          createApp: {
+                            bundle?: boolean | undefined;
+                            conditions?: string[] | undefined;
+                            define?: Record<string, string> | undefined;
+                            externals?: string[] | undefined;
+                            jsx?: "automatic" | "preserve" | "transform" | undefined;
+                            jsxImportSource?: string | undefined;
+                            loader?:
+                              | Record<
+                                  string,
+                                  | "base64"
+                                  | "binary"
+                                  | "css"
+                                  | "dataurl"
+                                  | "js"
+                                  | "json"
+                                  | "jsx"
+                                  | "text"
+                                  | "ts"
+                                  | "tsx"
+                                >
+                              | undefined;
+                            minify?: boolean | undefined;
+                            registry?: string | undefined;
+                            sourcemap?: boolean | undefined;
+                            target?: string | undefined;
+                            assetConfig?:
+                              | {
+                                  headers?:
+                                    | Record<
+                                        string,
+                                        {
+                                          set?: Record<string, string> | undefined;
+                                          unset?: string[] | undefined;
+                                        }
+                                      >
+                                    | undefined;
+                                  html_handling?:
+                                    | "auto-trailing-slash"
+                                    | "drop-trailing-slash"
+                                    | "force-trailing-slash"
+                                    | "none"
+                                    | undefined;
+                                  not_found_handling?:
+                                    | "404-page"
+                                    | "none"
+                                    | "single-page-application"
+                                    | undefined;
+                                  redirects?:
+                                    | {
+                                        dynamic?:
+                                          | Record<string, { status: number; to: string }>
+                                          | undefined;
+                                        static?:
+                                          | Record<string, { status: number; to: string }>
+                                          | undefined;
+                                      }
+                                    | undefined;
+                                }
+                              | undefined;
+                            assets?: Record<string, string> | undefined;
+                            client?: string | string[] | undefined;
+                            files:
+                              | { files: Record<string, string>; type: "inline" }
+                              | {
+                                  exclude?: string[] | undefined;
+                                  include?: string[] | undefined;
+                                  ref?:
+                                    | { branch: string }
+                                    | { branch?: string | undefined; commitOid: string }
+                                    | undefined;
+                                  repoPath: string;
+                                  type: "repo";
+                                };
+                            server?: string | undefined;
+                          };
+                        }
+                      | {
+                          createWorker: {
+                            bundle?: boolean | undefined;
+                            conditions?: string[] | undefined;
+                            define?: Record<string, string> | undefined;
+                            externals?: string[] | undefined;
+                            jsx?: "automatic" | "preserve" | "transform" | undefined;
+                            jsxImportSource?: string | undefined;
+                            loader?:
+                              | Record<
+                                  string,
+                                  | "base64"
+                                  | "binary"
+                                  | "css"
+                                  | "dataurl"
+                                  | "js"
+                                  | "json"
+                                  | "jsx"
+                                  | "text"
+                                  | "ts"
+                                  | "tsx"
+                                >
+                              | undefined;
+                            minify?: boolean | undefined;
+                            registry?: string | undefined;
+                            sourcemap?: boolean | undefined;
+                            target?: string | undefined;
+                            entryPoint?: string | undefined;
+                            files:
+                              | { files: Record<string, string>; type: "inline" }
+                              | {
+                                  exclude?: string[] | undefined;
+                                  include?: string[] | undefined;
+                                  ref?:
+                                    | { branch: string }
+                                    | { branch?: string | undefined; commitOid: string }
+                                    | undefined;
+                                  repoPath: string;
+                                  type: "repo";
+                                };
+                            virtualModules?: Record<string, string> | undefined;
+                          };
+                        };
+                    className: string;
+                    durableWorkerKey: string;
+                    type: "stateful";
+                  };
+                };
+          }
+        | { action: "wake-processor"; expression: ItxExpression }
+        | {
+            action: "copy-to-stream";
+            receivingStreamPath: string;
+            jsonataTransform?: string | undefined;
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" };
+          }
+        | {
+            action: "itx-call";
+            expression: ItxExpression;
+            jsonataTransform?: string | undefined;
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+          }
+        | {
+            action: "webhook-post";
+            url: string;
+            jsonataTransform?: string | undefined;
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+          };
+    };
+  } & {
+    payload: {
+      name?: string | undefined;
+      description?: string | undefined;
+      filter?:
+        | { eventTypes?: string[] | undefined; jsonataCondition?: string | undefined }
+        | undefined;
+      receiver:
+        | {
+            action: "facet-processor";
+            source:
+              | { kind: "builtin" }
+              | {
+                  kind: "userspace";
+                  worker: {
+                    path: string;
+                    source:
+                      | {
+                          createApp: {
+                            bundle?: boolean | undefined;
+                            conditions?: string[] | undefined;
+                            define?: Record<string, string> | undefined;
+                            externals?: string[] | undefined;
+                            jsx?: "automatic" | "preserve" | "transform" | undefined;
+                            jsxImportSource?: string | undefined;
+                            loader?:
+                              | Record<
+                                  string,
+                                  | "base64"
+                                  | "binary"
+                                  | "css"
+                                  | "dataurl"
+                                  | "js"
+                                  | "json"
+                                  | "jsx"
+                                  | "text"
+                                  | "ts"
+                                  | "tsx"
+                                >
+                              | undefined;
+                            minify?: boolean | undefined;
+                            registry?: string | undefined;
+                            sourcemap?: boolean | undefined;
+                            target?: string | undefined;
+                            assetConfig?:
+                              | {
+                                  headers?:
+                                    | Record<
+                                        string,
+                                        {
+                                          set?: Record<string, string> | undefined;
+                                          unset?: string[] | undefined;
+                                        }
+                                      >
+                                    | undefined;
+                                  html_handling?:
+                                    | "auto-trailing-slash"
+                                    | "drop-trailing-slash"
+                                    | "force-trailing-slash"
+                                    | "none"
+                                    | undefined;
+                                  not_found_handling?:
+                                    | "404-page"
+                                    | "none"
+                                    | "single-page-application"
+                                    | undefined;
+                                  redirects?:
+                                    | {
+                                        dynamic?:
+                                          | Record<string, { status: number; to: string }>
+                                          | undefined;
+                                        static?:
+                                          | Record<string, { status: number; to: string }>
+                                          | undefined;
+                                      }
+                                    | undefined;
+                                }
+                              | undefined;
+                            assets?: Record<string, string> | undefined;
+                            client?: string | string[] | undefined;
+                            files:
+                              | { files: Record<string, string>; type: "inline" }
+                              | {
+                                  exclude?: string[] | undefined;
+                                  include?: string[] | undefined;
+                                  ref?:
+                                    | { branch: string }
+                                    | { branch?: string | undefined; commitOid: string }
+                                    | undefined;
+                                  repoPath: string;
+                                  type: "repo";
+                                };
+                            server?: string | undefined;
+                          };
+                        }
+                      | {
+                          createWorker: {
+                            bundle?: boolean | undefined;
+                            conditions?: string[] | undefined;
+                            define?: Record<string, string> | undefined;
+                            externals?: string[] | undefined;
+                            jsx?: "automatic" | "preserve" | "transform" | undefined;
+                            jsxImportSource?: string | undefined;
+                            loader?:
+                              | Record<
+                                  string,
+                                  | "base64"
+                                  | "binary"
+                                  | "css"
+                                  | "dataurl"
+                                  | "js"
+                                  | "json"
+                                  | "jsx"
+                                  | "text"
+                                  | "ts"
+                                  | "tsx"
+                                >
+                              | undefined;
+                            minify?: boolean | undefined;
+                            registry?: string | undefined;
+                            sourcemap?: boolean | undefined;
+                            target?: string | undefined;
+                            entryPoint?: string | undefined;
+                            files:
+                              | { files: Record<string, string>; type: "inline" }
+                              | {
+                                  exclude?: string[] | undefined;
+                                  include?: string[] | undefined;
+                                  ref?:
+                                    | { branch: string }
+                                    | { branch?: string | undefined; commitOid: string }
+                                    | undefined;
+                                  repoPath: string;
+                                  type: "repo";
+                                };
+                            virtualModules?: Record<string, string> | undefined;
+                          };
+                        };
+                    className: string;
+                    durableWorkerKey: string;
+                    type: "stateful";
+                  };
+                };
+          }
+        | { action: "wake-processor"; expression: ItxExpression }
+        | {
+            action: "copy-to-stream";
+            receivingStreamPath: string;
+            jsonataTransform?: string | undefined;
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" };
+          }
+        | {
+            action: "itx-call";
+            expression: ItxExpression;
+            jsonataTransform?: string | undefined;
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+          }
+        | {
+            action: "webhook-post";
+            url: string;
+            jsonataTransform?: string | undefined;
+            delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+          };
+    };
+  };
+
+/** One committed event that removed a subscription from its source stream. */
+export type CommittedSubscriptionRemovedEvent = Omit<
+  {
+    type: string;
+    payload?: Record<string, unknown> | undefined;
+    metadata?: Record<string, unknown> | undefined;
+    source?:
+      | {
+          processor?:
+            | {
+                slug: string;
+                version: string;
+                stream: { path: string; projectId: string | null; streamId: string };
+                whileProcessing?: { offset: number; type: string } | undefined;
+              }
+            | undefined;
+          copiedFrom?:
+            | {
+                name: string;
+                streamId: string;
+                streamCreatedAt: string;
+                cursorChangedAtSourceOffset: number;
+                createdAt: string;
+                offset: number;
+                path: string;
+                projectId: string | null;
+                type: string;
+              }[]
+            | undefined;
+        }
+      | undefined;
+    idempotencyKey?: string | undefined;
+    ephemeral?: true | undefined;
+    offset: number;
+    createdAt: string;
+    path: string;
+  },
+  "payload" | "type"
+> &
+  Omit<
+    {
+      type: string;
+      payload?: Record<string, unknown> | undefined;
+      metadata?: Record<string, unknown> | undefined;
+      source?:
+        | {
+            processor?:
+              | {
+                  slug: string;
+                  version: string;
+                  stream: { path: string; projectId: string | null; streamId: string };
+                  whileProcessing?: { offset: number; type: string } | undefined;
+                }
+              | undefined;
+            copiedFrom?:
+              | {
+                  name: string;
+                  streamId: string;
+                  streamCreatedAt: string;
+                  cursorChangedAtSourceOffset: number;
+                  createdAt: string;
+                  offset: number;
+                  path: string;
+                  projectId: string | null;
+                  type: string;
+                }[]
+              | undefined;
+          }
+        | undefined;
+      idempotencyKey?: string | undefined;
+      ephemeral?: true | undefined;
+    },
+    "payload" | "type"
+  > & {
+    type: "events.iterate.com/stream/subscription-removed";
+    payload: { name: string; reason: "requested" };
+  } & { payload: { name: string; reason: "requested" } };
 
 /**
  * Whether a project the directory knows about actually exists in THIS
  * deployment's engine:
- * - `ready` — the project stream's bootstrap saga ran (`state.ready`).
+ * - `created` — the project stream's bootstrap saga committed `project/created`.
+ * - `creating` — `project/create-requested` exists but no terminal fact does.
+ * - `failed` — the saga committed terminal `project/create-failed`.
  * - `missing` — the engine has no state for it (e.g. the deployment was reset
  *   while the auth worker kept its rows); it can be set up again.
  * - `unknown` — the probe failed (engine hiccup); don't block the list on it.
  */
-export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
+export type ProjectDeploymentStatus = "created" | "creating" | "failed" | "missing" | "unknown";
 
 /** One consistent read of a processor (what `snapshot()` returns): the folded
  * state pinned to the offset of the last event folded into it. */
@@ -3296,7 +4346,7 @@ export type ProcessorSnapshot<State> = {
   state: State;
 };
 
-/** Durable wake-mode sink. Its call result is always disposed unpulled. */
+/** Hosted processor callback. Its call result is always disposed without being awaited. */
 export type ProcessStreamWakeEventBatch = (batch: StreamWakeEventBatch) => unknown;
 
 /**
@@ -3314,7 +4364,7 @@ export type LiveStatePatch =
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
 /**
- * A durable processor input. Wake processors never receive ephemeral rows, so
+ * A durable processor input. Wake processors never receive ephemeral events, so
  * a domain object's processor-typed append door must not claim that they do.
  */
 type TypedConsumedEventInput<
@@ -3386,6 +4436,8 @@ export type DeviceAppendInput =
   | TypedConsumedEventInput<
       "events.iterate.com/device/notification-requested",
       {
+        agentReplyEventOffset?: number | undefined;
+        approvalRequestEventOffset?: number | undefined;
         body: string;
         destination:
           | { kind: "project" }
@@ -3473,6 +4525,19 @@ export type SecretDescription = {
   visibility: SecretVisibility;
   /** The configured refresh strategy's kind, or null when none is configured. */
   refresh: SecretRefresh["kind"] | null;
+};
+
+/** Encrypted current-value snapshot used only by the admin project-seed CLI. */
+export type SecretProjectSeedExport = {
+  egressUrls: string[];
+  encrypted: {
+    algorithm: string;
+    ciphertext: string;
+    iv: string;
+  };
+  offset: number;
+  refresh: SecretRefresh | null;
+  visibility: SecretVisibility;
 };
 
 /** Input to `itx.secrets.get(path).create` — the birth policy (egress pin,
@@ -3612,23 +4677,36 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
   durableWorkerKey: string;
 };
 
-/** One repo mount: the repo a workspace subtree reads from and its commit policy. */
-export type WorkspaceMount = WorkspaceConfig["mounts"][string];
+/** One stored overlay: the fields it deviates from (or adds over) the derived table. */
+export type WorkspaceMountOverlay = WorkspaceConfig["mounts"][string];
 
-/** The workspace processor's reduced state: birth certificate plus the merged config. */
+/** The workspace processor's reduced state: existence plus the merged overlays. */
 export type WorkspaceProcessorState = {
-  birthCertificate: {
-    config: {
-      mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }>;
-    };
-  } | null;
-  config: { mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }> };
+  birthCertificate: { [x: string]: unknown } | null;
+  config: {
+    mounts: Record<
+      string,
+      { policy?: "commit-to-main" | "read-only" | undefined; repoPath?: string | undefined }
+    >;
+  };
 };
 
-/** A workspace's complete configuration: the mount table, keyed by mount path. */
-export type WorkspaceConfig = WorkspaceProcessorState["config"];
+/**
+ * The workspace's LIVE configuration: the effective mount table that routes
+ * reads and commits — every project repo at its own /repos/** stream path
+ * (commit-to-main), with the workspace's stored overlay deviations merged in.
+ */
+export type WorkspaceEffectiveConfig = {
+  mounts: Record<
+    string,
+    {
+      policy: "commit-to-main" | "read-only";
+      repoPath: string;
+    }
+  >;
+};
 
-/** A configuration patch: deep-merged per mount point; null unmounts.
+/** A configuration patch: deep-merged per mount point; null clears an overlay.
  * (Spelled as one z.output<> reference — not an indexed access over it — so
  * the itx-api generator expands it structurally instead of copying the
  * expression verbatim into the generated public API.) */
@@ -3658,60 +4736,230 @@ export type EditWorkspaceFileResult = {
   path: string;
 };
 
-/** Serializable debug view of one live connection, for `runtimeState()`. */
-export type ConnectionRuntimeState = {
-  subscriptionType: StreamSubscriptionType;
-  startedAt: string;
-  cursor: number;
-  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */
-  lag: number;
-  batchesSent: number;
-  eventsSent: number;
-  /** Serialized payload bytes delivered into this connection's sink (cumulative). */
-  bytesSent: number;
-  lastDeliveredAt?: string;
-  /**
-   * Commit-to-settled latency, stream clock only: `createdAt` of the newest
-   * event in a batch → the subscriber's explicit settlement callback.
-   * Durable (wake) lane only — ephemeral results are disposed unpulled, so
-   * ephemeral consumption is self-reported by the host through
-   * `getRuntimeState` instead. Absent until a sample exists.
-   */
-  settleLatencyMs?: LatencyStats;
-  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
-  pingRttMs?: LatencyStats;
-  /**
-   * The connect-time identity descriptor. The runtime table is the ONLY home
-   * for ephemeral identity — ephemeral connections don't fold into the
-   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces
-   * read who's connected from here.
-   */
-  subscriber?: StreamSubscriberDescriptor;
-  /**
-   * True while any batch handed to this connection's sink is unsettled —
-   * exactly the signal idle teardown consults to classify a sink as wedged.
-   */
-  hasPendingDelivery: boolean;
+/** Durable state reduced from the events in one stream. */
+export type CoreProcessorState = {
+  projectId?: string | null | undefined;
+  path?: string | undefined;
+  streamId?: string | undefined;
+  createdAt?: string | undefined;
+  incarnationId?: string | undefined;
+  eventCount: number;
+  maxOffset: number;
+  childPaths: string[];
+  paused: boolean;
+  pauseReason: string | null;
+  circuitBreaker: {
+    availableTokens: number;
+    lastRefillAtMs: number | null;
+    burstCapacity: number;
+    refillRatePerMinute: number;
+    trippedAtOffset: number | null;
+  };
+  subscriptions: {
+    inbound: {
+      bySourcePath: Record<
+        string,
+        Record<
+          string,
+          {
+            streamId: string;
+            streamCreatedAt: string;
+            cursorChangedAtSourceOffset: number;
+            numEventsReceived: number;
+            lastEventReceivedAt?: string | undefined;
+          }
+        >
+      >;
+    };
+    outbound: {
+      byName: Record<
+        string,
+        {
+          configuration: {
+            description?: string | undefined;
+            filter?:
+              | { eventTypes?: string[] | undefined; jsonataCondition?: string | undefined }
+              | undefined;
+            receiver:
+              | {
+                  action: "facet-processor";
+                  source:
+                    | { kind: "builtin" }
+                    | {
+                        kind: "userspace";
+                        worker: {
+                          path: string;
+                          source:
+                            | {
+                                createApp: {
+                                  bundle?: boolean | undefined;
+                                  conditions?: string[] | undefined;
+                                  define?: Record<string, string> | undefined;
+                                  externals?: string[] | undefined;
+                                  jsx?: "automatic" | "preserve" | "transform" | undefined;
+                                  jsxImportSource?: string | undefined;
+                                  loader?:
+                                    | Record<
+                                        string,
+                                        | "base64"
+                                        | "binary"
+                                        | "css"
+                                        | "dataurl"
+                                        | "js"
+                                        | "json"
+                                        | "jsx"
+                                        | "text"
+                                        | "ts"
+                                        | "tsx"
+                                      >
+                                    | undefined;
+                                  minify?: boolean | undefined;
+                                  registry?: string | undefined;
+                                  sourcemap?: boolean | undefined;
+                                  target?: string | undefined;
+                                  assetConfig?:
+                                    | {
+                                        headers?: Record<string, any> | undefined;
+                                        html_handling?:
+                                          | "auto-trailing-slash"
+                                          | "drop-trailing-slash"
+                                          | "force-trailing-slash"
+                                          | "none"
+                                          | undefined;
+                                        not_found_handling?:
+                                          | "404-page"
+                                          | "none"
+                                          | "single-page-application"
+                                          | undefined;
+                                        redirects?: any | undefined;
+                                      }
+                                    | undefined;
+                                  assets?: Record<string, string> | undefined;
+                                  client?: string | string[] | undefined;
+                                  files:
+                                    | { files: Record<string, string>; type: "inline" }
+                                    | {
+                                        exclude?: string[] | undefined;
+                                        include?: string[] | undefined;
+                                        ref?: any | any | undefined;
+                                        repoPath: string;
+                                        type: "repo";
+                                      };
+                                  server?: string | undefined;
+                                };
+                              }
+                            | {
+                                createWorker: {
+                                  bundle?: boolean | undefined;
+                                  conditions?: string[] | undefined;
+                                  define?: Record<string, string> | undefined;
+                                  externals?: string[] | undefined;
+                                  jsx?: "automatic" | "preserve" | "transform" | undefined;
+                                  jsxImportSource?: string | undefined;
+                                  loader?:
+                                    | Record<
+                                        string,
+                                        | "base64"
+                                        | "binary"
+                                        | "css"
+                                        | "dataurl"
+                                        | "js"
+                                        | "json"
+                                        | "jsx"
+                                        | "text"
+                                        | "ts"
+                                        | "tsx"
+                                      >
+                                    | undefined;
+                                  minify?: boolean | undefined;
+                                  registry?: string | undefined;
+                                  sourcemap?: boolean | undefined;
+                                  target?: string | undefined;
+                                  entryPoint?: string | undefined;
+                                  files:
+                                    | { files: Record<string, string>; type: "inline" }
+                                    | {
+                                        exclude?: string[] | undefined;
+                                        include?: string[] | undefined;
+                                        ref?: any | any | undefined;
+                                        repoPath: string;
+                                        type: "repo";
+                                      };
+                                  virtualModules?: Record<string, string> | undefined;
+                                };
+                              };
+                          className: string;
+                          durableWorkerKey: string;
+                          type: "stateful";
+                        };
+                      };
+                }
+              | { action: "wake-processor"; expression: ItxExpression }
+              | {
+                  action: "copy-to-stream";
+                  receivingStreamPath: string;
+                  jsonataTransform?: string | undefined;
+                  delivery: { start: "beginning" | "now"; onFailingEvent: "halt" };
+                }
+              | {
+                  action: "itx-call";
+                  expression: ItxExpression;
+                  jsonataTransform?: string | undefined;
+                  delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+                }
+              | {
+                  action: "webhook-post";
+                  url: string;
+                  jsonataTransform?: string | undefined;
+                  delivery: { start: "beginning" | "now"; onFailingEvent: "halt" | "skip" };
+                };
+            name: string;
+          };
+          configuredAtOffset: number;
+          configuredAt: string;
+          cursorSet?: { afterOffset: number; setAtSourceOffset: number } | undefined;
+          deliveryHalted?:
+            | {
+                reason: "delivery-failed";
+                afterOffset: number;
+                attempts: number;
+                error?: string | undefined;
+              }
+            | undefined;
+        }
+      >;
+    };
+  };
 };
 
-/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */
+/** Serializable debug view of one live callback connection. */
+export type ConnectionRuntimeState = ConnectionRuntimeDetails &
+  (
+    | { kind: "session" }
+    | {
+        kind: "hosted";
+        /** The durable subscription whose processor callback this connection serves. */
+        name: string;
+      }
+  );
+
+/** Serializable debug view of one stored subscription's cursor row, for `runtimeState()`. */
 export type SubscriptionRuntimeState = {
-  mode: SubscriptionDelivery["mode"];
-  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */
-  ackedOffset: number;
-  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */
+  /** Exclusive: the receiver durably claims through this offset. */
+  confirmedOffset: number;
+  /** `maxOffset - confirmedOffset`. */
   lag: number;
+  /** Mirrored delivery status: `active` or `halted`. */
+  status: "active" | "halted";
   attempt: number;
   nextAttemptAt: number | null;
+  inFlightDeadlineAt: number | null;
   lastError: string | null;
-  parkedAtOffset: number | null;
-  /** Whether a live delivery connection currently exists (wake mode). */
-  connected: boolean;
-  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */
+  /** Serialized payload bytes delivered by copy, ITX-call, and webhook subscriptions. */
   bytesSent?: number;
   /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
-  settleLatencyMs?: LatencyStats;
-  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */
+  completionLatencyMs?: LatencyStats;
+  /** Duration of the awaited copy, ITX, or webhook call itself. */
   deliveryDurationMs?: LatencyStats;
 };
 
@@ -3723,12 +4971,23 @@ export type StreamThroughputMetrics = {
   reportedAt: string;
   /** Appends committed (all producers). */
   ingress: ThroughputReport;
-  /** Deliveries dispatched (all lanes, all subscribers). */
+  /** Event batches sent to all receiving streams and open callbacks. */
   egress: ThroughputReport;
 };
 
+/** Memory use and FIFO eviction totals for one Durable Object incarnation. */
+export type EphemeralEventBufferRuntimeState = {
+  maxBytes: number;
+  bytes: number;
+  eventCount: number;
+  oldestOffset?: number;
+  newestOffset?: number;
+  evictedEventCount: number;
+  evictedBytes: number;
+};
+
 /**
- * Batch delivered to stream processors and live subscribers.
+ * Batch delivered to stream processors and live connections.
  *
  * Kept named because callback retention, processor hosts, and tests all depend
  * on the same cross-RPC batch envelope.
@@ -3736,18 +4995,21 @@ export type StreamThroughputMetrics = {
 export type StreamEventBatch = {
   projectId: string | null;
   path: string;
+  /** Random identity of this event log; changes when the stream is recreated. */
+  streamId: string;
   events: StreamEvent[];
   /** Exclusive raw-log cursor from which this delivery scan began. */
   scannedAfterOffset: number;
   /** Inclusive raw-log cursor through which this delivery scan completed. */
   scannedThroughOffset: number;
   streamMaxOffset: number;
+  /** Reduced core state, or null when the connection opts out with `state: false`. */
   state: unknown;
 };
 
 /**
  * The mutual ping's request half (NTP-style, for real latency measurement
- * between a stream and its subscribers): the requester stamps `t0` on its own
+ * between a stream and its callback owners): the requester stamps `t0` on its own
  * clock and observes `t3` when the reply lands.
  */
 export type StreamPingInput = { t0: number };
@@ -3762,9 +5024,28 @@ export type StreamPingInput = { t0: number };
  */
 export type StreamPingReply = { t0: number; t1: number; t2: number };
 
-/** Internal wake-mode frame: an ordinary batch plus its one-shot settlement door. */
+/** Stable identity for one live connection to a processEventBatch callback. */
+export type ConnectionKey = string;
+
+/**
+ * One row of `subscriptions.list()`: the committed catalog entry joined with
+ * its durable cursor — name, receiver kind, status, and lag
+ * (head − confirmed).
+ */
+export type StreamSubscriptionListEntry = {
+  name: string;
+  action: string;
+  placement?: "facet";
+  configuredAtOffset: number;
+  status: "active" | "halted";
+  lag: number;
+  confirmedOffset: number;
+  lastError: string | null;
+};
+
+/** Internal hosted-processor frame: an ordinary batch plus its one-shot completion callback. */
 export type StreamWakeEventBatch = StreamEventBatch & {
-  settleDelivery: SettleStreamWakeDelivery;
+  reportDeliveryResult: ReportStreamWakeDeliveryResult;
 };
 
 /** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
@@ -3780,10 +5061,13 @@ type TypedStreamEventInput<Type extends string = string, Payload = Record<string
  * ordered transform steps, optional overlay draws (watermarks — each with its
  * own transforms), and the output encoding. */
 export type CfImageTransformInput = {
-  image: ReadableStream<Uint8Array>;
+  /** Source image: a stream, or any FileData shape (bytes/base64/Blob) —
+   * coerced server-side; streams and Blobs do not survive the RPC hop from
+   * script sandboxes, so pass bytes or base64 from scripts. */
+  image: ReadableStream<Uint8Array> | FileData;
   transforms?: CfImageTransformOptions[];
   draws?: Array<{
-    image: ReadableStream<Uint8Array>;
+    image: ReadableStream<Uint8Array> | FileData;
     options?: CfImageDrawOptions;
     transforms?: CfImageTransformOptions[];
   }>;
@@ -3872,6 +5156,9 @@ export type DynamicWorkerRefBase = {
   source: DynamicWorkerSource;
 };
 
+/** A workspace's stored configuration: the mount OVERLAY table, keyed by mount path. */
+export type WorkspaceConfig = WorkspaceProcessorState["config"];
+
 /** Ephemeral cursor presence for one session: who has a caret where, in the
  * sender's head coordinates. In-memory only — an eviction loses it and
  * clients re-announce on their next throttle tick — delivered on the wait()
@@ -3927,8 +5214,22 @@ export type WorkspaceGitLogEntry = {
   timestamp: number;
 };
 
-/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
-export type StreamSubscriptionType = "configured" | "ephemeral";
+/** Delivery progress and retry details shared by every live callback connection. */
+type ConnectionRuntimeDetails = {
+  startedAt: string;
+  deliveredThroughOffset: number;
+  lag: number;
+  batchesSent: number;
+  eventsSent: number;
+  bytesSent: number;
+  lastDeliveredAt?: string;
+  completionLatencyMs?: LatencyStats;
+  pingRttMs?: LatencyStats;
+  openedBy?: ConnectionOpenerDescriptor;
+  hasPendingDelivery: boolean;
+  pendingDeliveryStartedAt?: string;
+  pendingDeliveryDeadlineAt?: string;
+};
 
 /** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */
 export type LatencyStats = {
@@ -3941,37 +5242,6 @@ export type LatencyStats = {
   /** Epoch ms of the most recent sample. */
   lastAt: number;
 };
-
-/** Serializable subscriber identity carried on presence facts and the runtime connection table. */
-export type StreamSubscriberDescriptor = {
-  description?: string | undefined;
-  user?:
-    | {
-        id?: string | undefined;
-        email: string;
-        name?: string | undefined;
-        picture?: string | undefined;
-      }
-    | undefined;
-  processor?:
-    | {
-        announcement: {
-          slug: string;
-          version: string;
-          description: string;
-          consumes: string[];
-          emits: string[];
-          ownedEvents: { type: string; description?: string | undefined }[];
-        };
-      }
-    | undefined;
-};
-
-/** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
-export type SubscriptionDelivery =
-  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }
-  | { mode: "push"; expression: ItxExpression }
-  | { mode: "webhook"; url: string };
 
 /**
  * One direction's throughput report: a responsive trailing-5s rate (the
@@ -3986,14 +5256,29 @@ export type ThroughputReport = {
   series: ThroughputSeries;
 };
 
+/** `subscriptions.get(name).describe()`: the committed configuration plus the
+ * durable confirmed cursor and retry state. */
+export type StreamSubscriptionDescription = {
+  name: string;
+  configuration: unknown;
+  configuredAtOffset: number;
+  status: "active" | "halted";
+  lag: number;
+  confirmedOffset: number;
+  attempt: number;
+  nextAttemptAt: number | null;
+  lastError: string | null;
+};
+
 /**
  * One-shot acknowledgement capability owned by a single durable wake batch.
  *
- * It is deliberately independent of the sink call's return value. A
+ * It is deliberately independent of the callback call's return value. A
  * processor may append back to the stream that delivered the batch; making
- * the stream pull that sink result creates a cyclic actor-drain dependency.
+ * the stream await that return value can make two Durable Objects wait for
+ * each other forever.
  */
-export type SettleStreamWakeDelivery = (settlement: StreamWakeDeliverySettlement) => unknown;
+export type ReportStreamWakeDeliveryResult = (result: StreamWakeDeliveryResult) => unknown;
 
 /** One Cloudflare Images transform step (width, height, fit, rotate, …),
  * passed through to the Images binding verbatim. */
@@ -4046,6 +5331,31 @@ export type WorkspaceChange = {
   path: string;
 };
 
+/** Serializable identity of the caller that opened a connection. */
+export type ConnectionOpenerDescriptor = {
+  description?: string | undefined;
+  user?:
+    | {
+        id?: string | undefined;
+        email: string;
+        name?: string | undefined;
+        picture?: string | undefined;
+      }
+    | undefined;
+  processor?:
+    | {
+        announcement: {
+          slug: string;
+          version: string;
+          description: string;
+          consumes: string[];
+          emits: string[];
+          ownedEvents: { type: string; description?: string | undefined }[];
+        };
+      }
+    | undefined;
+};
+
 /** One rolling-minute throughput window. */
 export type MinuteWindow = {
   /** Events in the last 60 seconds. */
@@ -4062,8 +5372,8 @@ export type ThroughputSeries = {
   bytes: number[];
 };
 
-/** The subscriber's terminal verdict for one durable wake delivery. */
-export type StreamWakeDeliverySettlement =
+/** The hosted processor's final result for one durable wake delivery. */
+export type StreamWakeDeliveryResult =
   | { outcome: "ok" }
   | { outcome: "error"; error: StreamWakeDeliveryError };
 
@@ -4092,14 +5402,15 @@ export type WorkerBundlerCreateWorkerOptions = WorkerBundlerOptions & {
 /**
  * Serializable failure reported after a durable wake delivery finishes.
  *
- * The settlement crosses an independent one-way RPC hop, so preserve the
- * lifecycle flags the stream uses to distinguish a dead Durable Object from
- * an application failure. Error prototypes and arbitrary properties do not
- * survive that hop reliably.
+ * The result crosses an independent one-way RPC hop, so preserve the lifecycle
+ * flags and ITX call correlation that distinguish and locate failures. Error
+ * prototypes and arbitrary properties do not survive that hop reliably.
  */
 export type StreamWakeDeliveryError = {
   name: string;
   message: string;
+  /** Wide-log ID of the failed ITX call, when the failure crossed that boundary. */
+  itxCallId?: string;
   durableObjectReset?: true;
   overloaded?: true;
   retryable?: true;

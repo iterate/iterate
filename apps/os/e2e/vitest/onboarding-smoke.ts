@@ -209,7 +209,7 @@ function writeSmokeTelemetry(input: {
     attempts: input.attempts,
     phases: [],
     errors: input.errors,
-    ...(input.errors[0] ? { firstFailure: input.errors[0].message.slice(0, 300) } : {}),
+    ...(input.errors[0] && { firstFailure: input.errors[0].message.slice(0, 300) }),
   };
   writeTestTelemetryArtifact({
     artifactSchemaVersion: 1,
@@ -223,7 +223,7 @@ function writeSmokeTelemetry(input: {
       startedAt: new Date(runStartedAt).toISOString(),
       finishedAt: new Date(finishedAtMs).toISOString(),
       durationMs: input.durationMs,
-      ...(input.state === "failed" && input.errors.at(-1) ? { error: input.errors.at(-1) } : {}),
+      ...(input.state === "failed" && input.errors.at(-1) && { error: input.errors.at(-1) }),
     },
     lanes: [
       {

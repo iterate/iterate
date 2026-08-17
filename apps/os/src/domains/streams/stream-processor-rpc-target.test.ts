@@ -3,16 +3,20 @@ import type { StreamEvent } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import {
   ProcessorRelayRpcTarget,
+  STREAM_DURABLE_OBJECT_STUB,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
+import { streamDeliveryAuthContext } from "../../auth.ts";
+import { unconfiguredSubscriptionError } from "./utils.ts";
 
 describe("StreamRpcTarget", () => {
-  it("relays the stream runtime LiveState property without polling runtimeState", async () => {
+  it("serves liveState from the socket-fed relay engine, never the DO's liveState property", async () => {
     const runtimeState = {
       coreProcessorState: { maxOffset: 4 },
       runtime: {
         connections: {},
+        dormantSubscribers: {},
         subscriptions: {},
         metrics: {
           measuredSince: new Date(0).toISOString(),
@@ -23,19 +27,23 @@ describe("StreamRpcTarget", () => {
         storageSizeBytes: 42,
       },
     };
-    const handle = { ping: () => true, unsubscribe: vi.fn() };
-    const get = vi.fn(async () => runtimeState);
-    const subscribe = vi.fn(async (onUpdate: (update: unknown) => void) => {
-      onUpdate({ type: "snapshot", revision: 0, state: runtimeState });
-      return handle;
-    });
-    const runtimeStatePoll = vi.fn();
+    // The DO's liveState property must never be traversed: subscribing there
+    // retains a diff callback inside the DO and pins it — the exact cost the
+    // state-socket lane removes.
+    const doLiveState = vi.fn();
+    const runtimeStateRead = vi.fn(async () => runtimeState);
 
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         return {
-          liveState: Promise.resolve({ get, subscribe }),
-          runtimeState: runtimeStatePoll,
+          get liveState() {
+            doLiveState();
+            return Promise.resolve({});
+          },
+          runtimeState: runtimeStateRead,
+          // No webSocket on the response: the relay degrades to
+          // snapshot-per-read, which is all this unit needs.
+          fetch: async () => new Response(null, { status: 400 }),
         } as never;
       }
     }
@@ -45,16 +53,24 @@ describe("StreamRpcTarget", () => {
       projectId: "prj_test",
     });
 
-    await expect(stream.liveState.get()).resolves.toBe(runtimeState);
-    const updates: unknown[] = [];
-    await expect(stream.liveState.subscribe((update) => void updates.push(update))).resolves.toBe(
-      handle,
-    );
+    const live = stream.liveState;
+    await expect(live.get()).resolves.toEqual(runtimeState);
 
-    expect(get).toHaveBeenCalledOnce();
-    expect(subscribe).toHaveBeenCalledOnce();
-    expect(updates).toEqual([{ type: "snapshot", revision: 0, state: runtimeState }]);
-    expect(runtimeStatePoll).not.toHaveBeenCalled();
+    const updates: unknown[] = [];
+    const handle = await live.subscribe((update) => void updates.push(update));
+    expect(updates).toEqual([
+      { type: "snapshot", revision: expect.any(Number), state: runtimeState },
+    ]);
+    // This fixture serves the DEGRADED path (the upgrade above returns no
+    // socket), so the subscription is frozen at its first paint and must
+    // report unhealthy — that is what makes the owner's watchdog re-subscribe
+    // and try for a socket again.
+    expect(handle.ping()).toBe(false);
+    handle.unsubscribe();
+
+    // One transient snapshot read per get/subscribe; zero DO-side liveState.
+    expect(runtimeStateRead).toHaveBeenCalledTimes(2);
+    expect(doLiveState).not.toHaveBeenCalled();
   });
 
   it("detaches every plain-data result and releases its native RPC invocation", async () => {
@@ -85,6 +101,7 @@ describe("StreamRpcTarget", () => {
     const waitDispose = vi.fn();
     const processorStateDispose = vi.fn();
     const runtimeStateDispose = vi.fn();
+    const runtimeStateStubDispose = vi.fn();
     Object.defineProperty(appended, Symbol.dispose, { value: appendDispose });
     Object.defineProperty(read, Symbol.dispose, { enumerable: true, value: readDispose });
     Object.defineProperty(page, Symbol.dispose, { value: pageDispose });
@@ -93,15 +110,17 @@ describe("StreamRpcTarget", () => {
     Object.defineProperty(runtimeState, Symbol.dispose, { value: runtimeStateDispose });
 
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
-        return {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
+        const stub = {
           append: async () => appended,
           getEvent: async () => read,
           getEvents: async () => page,
           getProcessorRuntimeState: async () => processorState,
           runtimeState: async () => runtimeState,
           waitForEvent: async () => waited,
-        } as never;
+        };
+        Object.defineProperty(stub, Symbol.dispose, { value: runtimeStateStubDispose });
+        return stub as never;
       }
     }
     const stream = new TestStreamRpcTarget({
@@ -115,7 +134,7 @@ describe("StreamRpcTarget", () => {
     const pageResult = await stream.getEvents();
     const waitedResult = await stream.waitForEvent({ afterOffset: 8, timeoutMs: 1_000 });
     const processorStateResult = await stream.getProcessorRuntimeState({
-      subscriptionKey: "project-worker",
+      name: "project-worker",
     });
     const runtimeStateResult = await stream.runtimeState();
 
@@ -138,6 +157,7 @@ describe("StreamRpcTarget", () => {
     expect(waitDispose).toHaveBeenCalledOnce();
     expect(processorStateDispose).toHaveBeenCalledOnce();
     expect(runtimeStateDispose).toHaveBeenCalledOnce();
+    expect(runtimeStateStubDispose).toHaveBeenCalledOnce();
   });
 
   it("preserves a successful plain-data result when native disposal throws", async () => {
@@ -158,7 +178,7 @@ describe("StreamRpcTarget", () => {
     });
 
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         return { getEvents: async () => result } as never;
       }
     }
@@ -199,7 +219,7 @@ describe("StreamRpcTarget", () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
 
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return {
           append: () => (acquisitions === 1 ? firstAppend.promise : Promise.resolve(secondResult)),
@@ -259,7 +279,7 @@ describe("StreamRpcTarget", () => {
     let acquisitions = 0;
 
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return { append: () => firstAppend.promise } as never;
       }
@@ -299,7 +319,7 @@ describe("StreamRpcTarget", () => {
     let acquisitions = 0;
 
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return { append: () => firstAppend.promise } as never;
       }
@@ -327,6 +347,48 @@ describe("StreamRpcTarget", () => {
     }
   });
 
+  it("replays a keyed root append once after an explicit Durable Object reset", async () => {
+    const reset = Object.assign(new Error("kill requested"), { durableObjectReset: true });
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      idempotencyKey: "human-approval-settled:41:0",
+      offset: 42,
+      path: "/",
+      payload: { approvalRequestEventOffset: 41, index: 0, status: 200 },
+      type: "events.iterate.com/project/human-approval-settled",
+    } satisfies StreamEvent;
+    const append = vi.fn().mockRejectedValueOnce(reset).mockResolvedValueOnce([event]);
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
+        return { append } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/",
+      projectId: "prj_test",
+    });
+
+    try {
+      await expect(
+        stream.append({
+          idempotencyKey: event.idempotencyKey,
+          payload: event.payload,
+          type: event.type,
+        }),
+      ).resolves.toEqual([event]);
+      expect(append).toHaveBeenCalledTimes(2);
+      expect(info).toHaveBeenCalledWith(
+        "keyed stream append retrying after Durable Object unavailability",
+        expect.objectContaining({ path: "/", projectId: "prj_test" }),
+      );
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it("re-acquires when a remote stream waiter is orphaned", async () => {
     vi.useFakeTimers();
     const firstWait = Promise.withResolvers<StreamEvent>();
@@ -338,7 +400,7 @@ describe("StreamRpcTarget", () => {
     } satisfies StreamEvent;
     let acquisitions = 0;
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return {
           waitForEvent: () => (acquisitions === 1 ? firstWait.promise : Promise.resolve(event)),
@@ -382,7 +444,7 @@ describe("StreamRpcTarget", () => {
     let acquisitions = 0;
     const remoteTimeouts: number[] = [];
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return {
           waitForEvent: (input: { timeoutMs: number }) => {
@@ -430,7 +492,7 @@ describe("StreamRpcTarget", () => {
     const waitInputs: { afterOffset?: number; timeoutMs: number }[] = [];
     let headReads = 0;
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         return {
           getMaxOffset: () => {
             headReads += 1;
@@ -482,7 +544,7 @@ describe("StreamRpcTarget", () => {
     let headReads = 0;
     let waits = 0;
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         return {
           getMaxOffset: () => {
             headReads += 1;
@@ -519,7 +581,7 @@ describe("StreamRpcTarget", () => {
     const predicateError = new Error("predicate failed");
     let acquisitions = 0;
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return { waitForEvent: () => Promise.reject(predicateError) } as never;
       }
@@ -532,7 +594,7 @@ describe("StreamRpcTarget", () => {
 
     await expect(
       stream.waitForEvent({ afterOffset: 0, predicate: () => true, timeoutMs: 30_000 }),
-    ).rejects.toBe(predicateError);
+    ).rejects.toThrow("predicate failed");
     expect(acquisitions).toBe(1);
   });
 
@@ -542,7 +604,7 @@ describe("StreamRpcTarget", () => {
     });
     let acquisitions = 0;
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return { waitForEvent: () => Promise.reject(lifecycleError) } as never;
       }
@@ -563,7 +625,7 @@ describe("StreamRpcTarget", () => {
     vi.useFakeTimers();
     let acquisitions = 0;
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return { waitForEvent: () => new Promise<StreamEvent>(() => undefined) } as never;
       }
@@ -590,6 +652,58 @@ describe("StreamRpcTarget", () => {
       await waiting.catch(() => undefined);
       vi.useRealTimers();
     }
+  });
+
+  it("requires branded sender authority and the receiving stream's project", async () => {
+    const receiveCopiedEvents = vi.fn(async () => ({ accepted: 0, dropped: [] }));
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
+        return { receiveCopiedEvents } as never;
+      }
+    }
+    const batch = {
+      projectId: "prj_receiver",
+      path: "/source",
+      events: [],
+      streamMaxOffset: 1,
+      name: "test",
+      cursorChangedAtSourceOffset: 1,
+      deliveryId: "test",
+      attempt: 1,
+      configuredEvent: {
+        type: "events.iterate.com/stream/subscription-configured",
+        offset: 1,
+        createdAt: new Date(0).toISOString(),
+        path: "/source",
+        payload: {},
+      },
+    };
+
+    const forged = new TestStreamRpcTarget({
+      auth: {
+        assertCanAccessProject: vi.fn(),
+        principal: "trusted-internal",
+      } as never,
+      path: "/receiver",
+      projectId: "prj_receiver",
+    });
+    expect(() => forged.receiveCopiedEvents(batch as never)).toThrow(
+      "accepted only from trusted internal senders",
+    );
+
+    const branded = new TestStreamRpcTarget({
+      auth: streamDeliveryAuthContext("prj_receiver"),
+      path: "/receiver",
+      projectId: "prj_receiver",
+    });
+    expect(() =>
+      branded.receiveCopiedEvents({ ...batch, projectId: "prj_other" } as never),
+    ).toThrow("must come from the receiving stream's project");
+    await expect(branded.receiveCopiedEvents(batch as never)).resolves.toEqual({
+      accepted: 0,
+      dropped: [],
+    });
+    expect(receiveCopiedEvents).toHaveBeenCalledOnce();
   });
 });
 
@@ -636,24 +750,102 @@ describe("StreamProcessorRpcTarget", () => {
 });
 
 describe("ProcessorRelayRpcTarget", () => {
+  it.each(["user:test", "trusted-internal"])(
+    "rejects hosted-processor wake calls carrying only principal %s",
+    async (principal) => {
+      const wakeStreamProcessor = vi.fn(async () => ({ accepted: true as const })) as never;
+      const relay = new ProcessorRelayRpcTarget({
+        auth: { principal } as never,
+        host: () => ({
+          processor: Promise.resolve({
+            getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+            snapshot: async () => ({ offset: 0, state: {} }),
+            waitUntilProcessed: async () => undefined,
+          }),
+          wakeStreamProcessor,
+        }),
+      });
+
+      await expect(
+        relay.wakeStreamProcessor({
+          name: "test",
+        } as never),
+      ).rejects.toThrow("wakeStreamProcessor may be called only by trusted stream event sending");
+      expect(wakeStreamProcessor).not.toHaveBeenCalled();
+    },
+  );
+
   it("resolves an asynchronous host for processor reads and wake delivery", async () => {
-    const wakeStreamSubscriber = vi.fn(async () => ({ accepted: true as const })) as never;
+    const wakeStreamProcessor = vi.fn(async () => ({ accepted: true as const })) as never;
     const relay = new ProcessorRelayRpcTarget({
-      auth: { principal: "trusted-internal" } as never,
+      auth: streamDeliveryAuthContext("prj_test"),
       host: async () => ({
         processor: Promise.resolve({
           getRuntimeState: async () => ({ snapshot: { offset: 4, state: { running: true } } }),
           snapshot: async () => ({ offset: 4, state: { running: true } }),
           waitUntilProcessed: async () => undefined,
         }),
-        wakeStreamSubscriber,
+        wakeStreamProcessor,
       }),
     });
 
     await expect(relay.snapshot()).resolves.toEqual({ offset: 4, state: { running: true } });
-    const request = { processorSlug: "sandbox", subscriptionKey: "sandbox-test" } as never;
-    await expect(relay.wakeStreamSubscriber(request)).resolves.toEqual({ accepted: true });
-    expect(wakeStreamSubscriber).toHaveBeenCalledWith(request);
+    const request = { name: "sandbox-test" } as never;
+    await expect(relay.wakeStreamProcessor(request)).resolves.toEqual({ accepted: true });
+    expect(wakeStreamProcessor).toHaveBeenCalledWith(request);
+  });
+
+  it("answers an unconfigured processor snapshot with its initial fold only", async () => {
+    const refusal = unconfiguredSubscriptionError("agent");
+    let configured = false;
+    const host = vi.fn(async () => {
+      if (!configured) throw refusal;
+      return {
+        processor: Promise.resolve({
+          getRuntimeState: async () => ({
+            snapshot: { offset: 3, state: { birthCertificate: { created: true } } },
+          }),
+          snapshot: async () => ({
+            offset: 3,
+            state: { birthCertificate: { created: true } },
+          }),
+          waitUntilProcessed: async () => undefined,
+        }),
+        wakeStreamProcessor: (async () => ({ accepted: true as const })) as never,
+      };
+    });
+    const relay = new ProcessorRelayRpcTarget({
+      auth: streamDeliveryAuthContext("prj_test"),
+      host,
+      initialStateWhenUnconfigured: () => ({ birthCertificate: null }),
+    });
+
+    await expect(relay.snapshot()).resolves.toEqual({
+      offset: 0,
+      state: { birthCertificate: null },
+    });
+    await expect(relay.getRuntimeState()).rejects.toBe(refusal);
+    await expect(relay.waitUntilProcessed({ offset: 1 })).rejects.toBe(refusal);
+    await expect(relay.wakeStreamProcessor({ name: "agent" } as never)).rejects.toBe(refusal);
+
+    configured = true;
+    await expect(relay.snapshot()).resolves.toEqual({
+      offset: 3,
+      state: { birthCertificate: { created: true } },
+    });
+  });
+
+  it("does not mistake an unrelated missing-subscription message for the modeled refusal", async () => {
+    const unrelated = new Error('subscription "agent" does not exist');
+    const relay = new ProcessorRelayRpcTarget({
+      auth: streamDeliveryAuthContext("prj_test"),
+      host: async () => {
+        throw unrelated;
+      },
+      initialStateWhenUnconfigured: () => ({ birthCertificate: null }),
+    });
+
+    await expect(relay.snapshot()).rejects.toBe(unrelated);
   });
 
   it("disposes the transient remote processor facade after success and failure", async () => {
@@ -676,7 +868,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: processorFacade(),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -701,7 +893,7 @@ describe("ProcessorRelayRpcTarget", () => {
           snapshot: async () => ({ offset: 1, state: { configured: true } }),
           waitUntilProcessed: async () => undefined,
         }),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -732,7 +924,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -781,7 +973,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve(processor),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -810,7 +1002,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -847,7 +1039,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve(processor),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -880,7 +1072,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -928,7 +1120,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -964,7 +1156,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -1005,7 +1197,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -1051,7 +1243,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -1096,7 +1288,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -1125,7 +1317,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),

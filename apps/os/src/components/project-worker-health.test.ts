@@ -5,125 +5,182 @@ import {
 } from "./project-worker-health-logic.ts";
 
 const healthy = {
-  ackedOffset: 40,
-  parkedAtOffset: null,
+  confirmedOffset: 40,
   lag: 0,
   attempt: 0,
   nextAttemptAt: null,
   lastError: null,
 };
 
+const sourceOwnedConfiguration = {
+  configuration: { receiver: { action: "itx-call" } },
+};
+
 describe("selectStrugglingSubscriptions", () => {
-  it("surfaces parked subscriptions", () => {
+  it("surfaces halted subscriptions from durable reduced state", () => {
     const struggling = selectStrugglingSubscriptions({
-      "root#project": {
-        ackedOffset: 300,
-        parkedAtOffset: 300,
-        lag: 12,
-        attempt: 15,
-        nextAttemptAt: null,
-        lastError: "userspace processor threw on offset 300",
+      configured: {
+        "project-worker": {
+          ...sourceOwnedConfiguration,
+          deliveryHalted: {
+            afterOffset: 300,
+            attempts: 15,
+            error: "userspace processor threw on offset 300",
+          },
+        },
+        "iterate-platform-posthog": sourceOwnedConfiguration,
       },
-      "root#healthy": healthy,
+      runtime: {
+        "project-worker": {
+          confirmedOffset: 300,
+          lag: 12,
+          attempt: 0,
+          nextAttemptAt: null,
+          lastError: null,
+        },
+        "iterate-platform-posthog": healthy,
+      },
     });
     expect(struggling).toEqual([
       {
-        subscriptionKey: "root#project",
-        status: "parked",
-        ackedOffset: 300,
-        parkedAtOffset: 300,
+        name: "project-worker",
+        status: "halted",
+        confirmedOffset: 300,
+        haltedAfterOffset: 300,
         lag: 12,
         attempt: 15,
         lastError: "userspace processor threw on offset 300",
+        canSetCursor: true,
       },
     ]);
   });
 
-  it("surfaces subscriptions failing in backoff before they park", () => {
+  it("surfaces subscriptions failing in backoff before they halt", () => {
     const struggling = selectStrugglingSubscriptions({
-      "root#project": {
-        ackedOffset: 118,
-        parkedAtOffset: null,
-        lag: 4,
-        attempt: 3,
-        nextAttemptAt: 1_000,
-        lastError: "receiver unavailable",
+      configured: { "project-worker": sourceOwnedConfiguration },
+      runtime: {
+        "project-worker": {
+          confirmedOffset: 118,
+          lag: 4,
+          attempt: 3,
+          nextAttemptAt: 1_000,
+          lastError: "receiver unavailable",
+        },
       },
     });
     expect(struggling).toEqual([
       {
-        subscriptionKey: "root#project",
+        name: "project-worker",
         status: "backoff",
-        ackedOffset: 118,
-        parkedAtOffset: null,
+        confirmedOffset: 118,
+        haltedAfterOffset: null,
         lag: 4,
         attempt: 3,
         lastError: "receiver unavailable",
+        canSetCursor: true,
       },
     ]);
+  });
+
+  it("ranks a durable halt above the retry row", () => {
+    const struggling = selectStrugglingSubscriptions({
+      configured: {
+        "project-worker": {
+          ...sourceOwnedConfiguration,
+          deliveryHalted: { afterOffset: 300, attempts: 15 },
+        },
+      },
+      runtime: {
+        "project-worker": {
+          confirmedOffset: 300,
+          lag: 1,
+          attempt: 2,
+          nextAttemptAt: 1_000,
+          lastError: "late",
+        },
+      },
+    });
+    expect(struggling.map((subscription) => subscription.status)).toEqual(["halted"]);
   });
 
   it("is empty when everything is healthy or the runtime has not loaded", () => {
-    expect(selectStrugglingSubscriptions({ "root#project": healthy })).toEqual([]);
-    expect(selectStrugglingSubscriptions(undefined)).toEqual([]);
+    expect(
+      selectStrugglingSubscriptions({
+        configured: { "project-worker": sourceOwnedConfiguration },
+        runtime: { "project-worker": healthy },
+      }),
+    ).toEqual([]);
+    expect(selectStrugglingSubscriptions({ configured: undefined, runtime: undefined })).toEqual(
+      [],
+    );
   });
 });
 
 describe("buildRedriveEvents", () => {
-  const parked = {
-    subscriptionKey: "root#project",
-    status: "parked" as const,
-    ackedOffset: 300,
-    parkedAtOffset: 300,
+  const halted = {
+    name: "project-worker",
+    status: "halted" as const,
+    confirmedOffset: 300,
+    haltedAfterOffset: 300,
     lag: 12,
     attempt: 15,
     lastError: null,
+    canSetCursor: true,
   };
 
-  it("resume just un-parks at the stopped cursor", () => {
-    expect(buildRedriveEvents("resume", parked)).toEqual([
+  it("resume clears the halt at the stopped cursor", () => {
+    expect(buildRedriveEvents("resume", halted)).toEqual([
       {
-        type: "events.iterate.com/stream/subscription-resumed",
-        payload: { subscriptionKey: "root#project" },
+        type: "events.iterate.com/stream/subscription-delivery-resumed",
+        payload: { name: "project-worker" },
       },
     ]);
   });
 
-  it("skip seeks to ackedOffset + 1 — past the stuck event, not a no-op resume", () => {
-    // ackedOffset is the last DELIVERED offset; the stuck event is the next one.
-    // Seeking to ackedOffset would be a no-op (delivery already reads past it).
-    expect(buildRedriveEvents("skip", parked)).toEqual([
+  it("skip seeks to confirmedOffset + 1 — past the stuck event", () => {
+    expect(buildRedriveEvents("skip", halted)).toEqual([
       {
         type: "events.iterate.com/stream/subscription-cursor-set",
-        payload: { subscriptionKey: "root#project", afterOffset: 301 },
+        payload: { name: "project-worker", afterOffset: 301 },
       },
       {
-        type: "events.iterate.com/stream/subscription-resumed",
-        payload: { subscriptionKey: "root#project" },
+        type: "events.iterate.com/stream/subscription-delivery-resumed",
+        payload: { name: "project-worker" },
       },
     ]);
   });
 
-  it("skip on a backoff subscription seeks past its stuck event too", () => {
+  it("skip on a backing-off subscription seeks past its stuck event too", () => {
     expect(
       buildRedriveEvents("skip", {
-        subscriptionKey: "root#project",
+        name: "project-worker",
         status: "backoff",
-        ackedOffset: 118,
-        parkedAtOffset: null,
+        confirmedOffset: 118,
+        haltedAfterOffset: null,
         lag: 4,
         attempt: 3,
         lastError: null,
+        canSetCursor: true,
       }),
     ).toEqual([
       {
         type: "events.iterate.com/stream/subscription-cursor-set",
-        payload: { subscriptionKey: "root#project", afterOffset: 119 },
+        payload: { name: "project-worker", afterOffset: 119 },
       },
       {
-        type: "events.iterate.com/stream/subscription-resumed",
-        payload: { subscriptionKey: "root#project" },
+        type: "events.iterate.com/stream/subscription-delivery-resumed",
+        payload: { name: "project-worker" },
       },
     ]);
+  });
+
+  it("does not construct a cursor move for a receiver-owned hosted checkpoint", () => {
+    expect(() =>
+      buildRedriveEvents("skip", {
+        ...halted,
+        name: "agent",
+        canSetCursor: false,
+      }),
+    ).toThrow(/owns its cursor at the receiver/);
   });
 });

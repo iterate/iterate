@@ -200,25 +200,58 @@ using agent = connectItx({ agentPath: "/agents/demo", auth, baseUrl, projectId }
 without creating anything. `handle.create({ organizationSlug?, projectId? })`
 registers that slug with the auth worker (the project directory — OS has no
 database of its own), adopts the directory-issued project ID, primes the KV
-cache, then appends the Project and notification birth certificates plus both
-processor subscriptions onto the project's root stream in one atomic batch.
-It waits both processors through that batch and then waits for `project/ready`
-before returning the same handle. The Project processor
+cache, then appends `project/create-requested` plus Notification's birth and
+the two platform processor subscriptions onto the project's root stream. By
+default it waits for terminal `project/created`; callers rendering live
+bootstrap progress pass `{ waitUntilCreated: false }`. The Project processor
 creates the root capability host, scheduler, email router, and config repo at
 `/repos/config` (an ordinary repo on its own stream — `itx.repo` is the
 shorthand). The config repo is seeded from the template folder at
-`apps/os/config-repo-template` (thin TypeScript `worker.ts` router, modular
+`configs/default` (thin TypeScript `worker.ts` router, modular
 apps under `apps/`, and `package.json` — platform types come from its
 `iterate` devDependency's `iterate/sdk` export — `AGENTS.md`, `ONBOARDING.md`;
 codegen keeps the seeded file map in
-`domains/repos/config-repo-template.generated.ts` in sync), builds and loads
-the seeded project worker through the worker build pipeline, and then emits
-`project/ready`. The onboarding agent is created separately and explicitly
-when its dashboard chat opens; its path alone never creates it. The config
-repo's stream carries a `cross-post:/` subscription from birth, so every
-config-repo event (including `repos/created`) is copied onto the project stream
-`/` with provenance. Streams are the coordination layer for all of this —
-bootstrap is events and processors, not a setup RPC.
+`domains/repos/config-repo-template.generated.ts` in sync). Once that trusted
+seed worker builds and answers a readiness probe, the Project processor
+atomically installs the ordinary root worker feed (starting after the creation
+request), emits terminal `project/created`, and appends the first
+`project/worker-updated` with the OS-stamped seed commit. It does not wait for
+userspace to consume either event. A config-repo or deterministic worker
+source-build failure emits terminal `project/create-failed`; transient
+infrastructure availability and in-progress builds stay open for durable
+redelivery. The onboarding agent is created separately and explicitly when its
+dashboard chat opens; its path alone never creates it. The config repo's stream
+carries a `project-config-to-root` copy subscription from birth, so every config-repo event
+(including `repos/created` and `repo/commit-completed`) is copied onto the
+project stream `/` with provenance. Streams are the coordination layer for all
+of this — bootstrap is events and processors, not a setup RPC.
+
+After terminal creation, the Project processor recognizes each exact
+`/repos/config` `repo/commit-completed` copy, waits for the authoritative
+current default worker to build, load, and answer, then appends root
+`project/worker-updated`. The trusted seed commit is creation input and is not
+translated; creation's worker probe publishes its first certificate instead. A
+deterministic source-build failure instead appends
+`project/worker-update-failed`; head convergence, in-progress builds, and
+transient availability leave the processor cursor behind for redelivery. A
+later HEAD may satisfy an earlier commit fact, so this certifies that current
+configuration is runnable rather than activating one exact artifact.
+
+The seeded worker's literal switch exposes `project/worker-updated`,
+`project/heartbeat-triggered`, and root `stream/woken`. Each case is ordinary
+userspace TypeScript: get `itx` and make whatever calls belong to that
+lifecycle event. There is no reconciliation framework or shared hook.
+`project/create-requested` and `project/created` remain platform saga facts and
+are not userspace hooks.
+
+The seeded `project/worker-updated` case calls `scheduler.set(...)` for one
+15-minute heartbeat whose script appends
+`project/heartbeat-triggered` with `{ scheduleKey }`. An unchanged canonical
+definition preserves the schedule's clock, run count, and defining event. Copy
+the call for multiple schedules, change it to test-speed `{ every: 1 }`, or
+remove it for none. Existing schedule changes and cancellation are explicit
+itx calls too. Interval schedules coalesce missed occurrences; they do not
+backfill one event per missed interval.
 
 ## Events
 
@@ -355,21 +388,27 @@ the send-and-wait convenience.
 
 `StreamDurableObject` owns the journal (DO SQLite); its storage methods stay
 synchronous internally while the public `Stream` capability is async through
-an RpcTarget. Processors are hosted by their domain DO via
-`createStreamProcessorHost(...)` — `host.add((deps) => new SomeProcessor(deps))`
-— and receive a full public `Stream` capability, never raw DO stubs.
-Subscription handshakes are identity-only: the stream tells the host which
-`subscriptionKey` to open; the host answers with the one public
-`subscribe({ subscriptionKey, configured: true })` verb on its own stream
-capability, handing the stream a live `processEventBatch` callback (the same
-live-capability shape as itx provision). State is a fold of the journal; the
-`{offset, state}` checkpoint is a disposable cache. The domain's own guide is
+an RpcTarget. A domain Durable Object constructs its processors and one
+`StreamProcessorRunner` per processor. A thin `StreamProcessorRegistry` routes
+`wakeStreamProcessor` calls and alarms to the right runner.
+
+When a hosted-processor subscription has events to send, the source stream
+calls `wakeStreamProcessor({ name, stream })` (the name equals the contract
+slug). The
+runner's `openEventBatchCallback()` returns its committed checkpoint plus a
+live `processEventBatch` callback. The source retains that callback and sends
+ordered batches after the checkpoint. The processor, not the source, commits
+the authoritative processing cursor with its reduced state. There is no
+callback-registration call in the opposite direction.
+
+Processors receive a full public `Stream` capability, never raw Durable Object
+stubs. The domain's own guide is
 `domains/streams/README.md`; the doctrine is
 `docs/domain-objects-and-stream-processors.md`.
 
-The browser stream mirror is a second host of the same engine: the dashboard
+The browser stream database uses the same runner directly: the dashboard
 keeps a local event table plus derived tables and runs real `StreamProcessor`
-contracts in the browser host, with announcements preserved
+contracts over SQLite, with announcements preserved
 (`domains/streams/client-libraries/browser/`).
 
 ## Workers RPC types patch
