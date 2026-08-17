@@ -344,3 +344,89 @@ The one bug worth recording: `ask()` resolves on `agents/web-message-sent`,
 whose payload field is `message`. Reading `content` — the field on context
 items — returned an empty string for a perfectly good answer, and the voice
 dutifully told the customer their colleague could not help.
+
+## Postscript 4: what the stream actually costs, on v2, measured four times
+
+`ptt-marginal` alternates a stream turn and a direct turn in one process,
+speaking identical audio at identical pacing, so the provider's mood cancels
+instead of being subtracted across two runs minutes apart. Repointed at
+`voice-agent2` and run on preview-3, project `voice-test`,
+`grok-voice-think-fast-2.0`, a 3.84 s synthetic utterance, twenty rounds each.
+
+| run | change                          | stream p50 | direct p50 | marginal |    ours | backlog p50 |
+| --- | ------------------------------- | ---------: | ---------: | -------: | ------: | ----------: |
+| A   | append probe ON                 |    2261 ms |    1142 ms | +1119 ms | 1154 ms |      712 ms |
+| B   | probe OFF                       |    1552 ms |    1049 ms |  +503 ms |  244 ms |      −84 ms |
+| C   | probe OFF, `grok-event` slimmed |    1957 ms |    1187 ms |  +770 ms |  775 ms |      391 ms |
+| D   | identical to C, fresh stream    |    2005 ms |     989 ms | +1016 ms |  865 ms |       36 ms |
+
+**Read the spread before reading any single row.** C differs from B only by a
+change that strictly REMOVES work — the provider's audio deltas no longer ride
+the verbatim `grok-event` lane as well as the paced `spk-frame` one — and it
+came back 267 ms worse; D is byte-identical to C and came back 246 ms worse
+again. Identical code spans 244–865 ms of "ours", which is wider than any
+change under test. Twenty rounds pins a median for one run; it does not pin
+the system.
+
+**And D says where the variance lives.** Its uplink backlog is 36 ms — the
+microphone lane running at real time — while "ours" is 865 ms, so on that run
+nearly all of our cost is the DOWNLINK: the answer's first delta leaving the
+facet and reaching this laptop. Every run heard all 192 microphone frames of
+every round (`micFramesSeen`), so nothing is lost anywhere; what varies is
+how promptly the delivery lane moves. Each run also creates a fresh stream
+path, hence a fresh Durable Object with its own placement, which is the
+leading suspect for why whole runs have moods. Distinguishing that needs the
+same stream measured across runs, and rounds interleaved between two streams
+— not more rounds on one.
+
+What IS stable across every round of every run:
+
+|                                              | facet's view | this laptop's view |
+| -------------------------------------------- | -----------: | -----------------: |
+| round trip to xAI                            |   174–188 ms |         153–162 ms |
+| the facet's own work, end seen → commit sent |         0 ms |                  — |
+
+**Cloudflare's edge is not closer to xAI than a London office is.** The round
+trip is 25–35 ms WORSE from the colo, in every round of all three runs, which
+retires an assumption this project has carried since the first bridge. And the
+facet itself costs nothing: whatever the marginal number settles at, none of
+it is the processor thinking.
+
+### Run A said +1119 ms and was measuring itself
+
+Backlog p50 712 ms, worst frame gap p50 559 ms, everything-that-is-ours
+1154 ms. The attribution was emphatic and consistent — one stall per
+utterance, in the uplink, sized between 400 ms and 2.2 s — and the probe
+caused it.
+
+`ptt-marginal` measures a bare append round trip before each press. On v1 it
+did that with an empty `mic-frame`, which is harmless. On v2 a microphone
+frame is the thing that OPENS A CALL, so the probe had to move to the only
+event v2 consumes that starts nothing — `warmup`. `warmup` is durable.
+Durable events get a one-at-a-time delivery boundary and the facet answers
+each with a durable `warmup-ready`, so three probes put six head-of-line
+deliveries in front of the microphone frames, on exactly the lane whose
+stalling was under investigation.
+
+It is `--append-probe`, off by default. Given the spread across B–D, part of
+what the probe appeared to cost is the same run-to-run mood — though A's
+712 ms median backlog with the probe's deliveries at the head of the lane
+remains the worst uplink of the four runs. What is certain is that an instrument
+sharing a queue with the thing it measures will find something, the finding
+will be internally consistent, and the attribution will point at the right
+lane for the wrong reason.
+
+### And a naked Grok connection is slower than either
+
+`voicelab direct`, twenty turns, server VAD rather than a button:
+
+|                                                  |     p50 |
+| ------------------------------------------------ | ------: |
+| ask → first audio                                | 2299 ms |
+| — the provider's VAD deciding the question ended | 1993 ms |
+| — everything after that                          |  332 ms |
+
+Which reframes "our 1.5 s feels worse than the Grok app". Server VAD costs two
+seconds of hangover; a button costs none. Push-to-talk over our stream at
+1.5–2.0 s is comparable to or faster than an open microphone straight to xAI
+at 2.3 s, and the model's own contribution is a third of a second either way.

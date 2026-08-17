@@ -573,6 +573,44 @@ describe("opening a call", () => {
 });
 
 /* ========================================================================== */
+/* THE PROVIDER'S TIMELINE, FOR INSTRUMENTS                                   */
+/* ========================================================================== */
+
+describe("the grok-event lane", () => {
+  it("replaces an audio delta's bytes with their decoded length", async () => {
+    /*
+     * The delta's content already goes out once, cut and paced, on
+     * `spk-frame`. Riding this lane too meant every answer went out twice —
+     * the second time whole, in one message, to every subscriber.
+     */
+    const h = makeHarness();
+    await callIsLive(h);
+    h.grok.answerAudio(100);
+    await h.settle();
+    const deltas = eventsOfType(h, "grok-event")
+      .map((event) => event.payload as Record<string, unknown>)
+      .filter((payload) => payload.type === "response.output_audio.delta");
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]!.delta).toBeUndefined();
+    /* 100 ms of 16 kHz PCM16 is 3,200 bytes, and the field means BYTES —
+     * not the base64 string's length, which is a third longer. */
+    expect(deltas[0]!.deltaBytes).toBe(100 * PCM16_BYTES_PER_MS);
+  });
+
+  it("still carries every other provider event whole", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.grok.push({ type: "response.done", usage: { total_tokens: 7 } });
+    await h.settle();
+    const done = eventsOfType(h, "grok-event")
+      .map((event) => event.payload as Record<string, unknown>)
+      .filter((payload) => payload.type === "response.done");
+    expect(done).toHaveLength(1);
+    expect(done[0]!.usage).toEqual({ total_tokens: 7 });
+  });
+});
+
+/* ========================================================================== */
 /* TURN TIMING                                                                */
 /* ========================================================================== */
 

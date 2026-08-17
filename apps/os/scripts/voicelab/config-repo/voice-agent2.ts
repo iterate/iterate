@@ -116,9 +116,10 @@
  *   be a stream event like everything else.
  *
  * WHAT IT DELIBERATELY DOES NOT DO: no visemes, no head gestures, no tool
- * calling, no turn-timing instrumentation. Those are real features of the first
- * cut and belong in their own files, wired to the same events. This one runs a
- * call.
+ * calling. Those are real features of the first cut and belong in their own
+ * files, wired to the same events. This one runs a call — and stamps where
+ * each turn's time went (`turn-timing`), because a lane nobody can attribute
+ * is a lane nobody can fix.
  */
 import {
   IterateWorkerEntrypoint,
@@ -536,7 +537,8 @@ export const VoiceAgent2Contract = defineProcessorContract({
       }),
     },
     "events.iterate.com/voice-agent/grok-event": {
-      description: "Grok's own events, verbatim, for instruments.",
+      description:
+        "Grok's own events for instruments — verbatim, except an audio delta's bytes become `deltaBytes`.",
       ...EPH,
       payloadSchema: z.looseObject({
         conversationId: z.string(),
@@ -1104,7 +1106,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
   ): void {
     if (this.#grokSocket !== null || this.#dialInFlight) return;
     this.#dialInFlight = true;
-    this.#dialInFlight = true;
     const dialStartedAtFacetMs = this.deps.nowAtFacetMs();
     /* THIS DIAL'S OWN IDENTITY, for keys that must not collide with the
      * previous dial of the SAME call. A timestamp is not enough: a re-dial
@@ -1410,10 +1411,15 @@ export class VoiceAgent2Processor extends StreamProcessor<
     receivedAtFacetMs: number,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
-    const body =
-      grokEventType === "response.output_audio.delta"
-        ? { ...grok, delta: undefined, deltaBytes: String(grok.delta ?? "").length }
-        : grok;
+    let body = grok;
+    if (grokEventType === "response.output_audio.delta") {
+      const { delta, ...rest } = grok;
+      const base64 = typeof delta === "string" ? delta : "";
+      /* DECODED length, not the base64 string's: the field says bytes and it
+       * should mean the audio's bytes. */
+      const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+      body = { ...rest, deltaBytes: Math.floor(base64.length / 4) * 3 - padding };
+    }
     void append({
       type: "events.iterate.com/voice-agent/grok-event",
       payload: { ...body, conversationId, receivedAtFacetMs },
