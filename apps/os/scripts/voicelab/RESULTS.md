@@ -577,3 +577,28 @@ it is the model thinking (408 vs 812 ms) — the wire terms are identical
 provider, with the OpenAI tail actually TIGHTER (ours p90 128 vs 232), so
 the 24 kHz resample is free at these scales. The first live OpenAI round
 ever attempted answered in 503 ms end to end through the stream.
+
+## Postscript 9: nothing waits for an ack any more
+
+Two closures of the remaining fix list (commits 96209246a, 5833df7ef, both
+deployed):
+
+**Colocation: nothing to fix — and a measurement confession.** The stream DO
+runs in LHR, co-located with the worker, proven by a facet-side trace fetch
+(`warmup-ready` now carries `colo`, kept as a permanent placement
+instrument). The earlier "27 ms worker↔DO cross-colo gap" was a measurement
+error: `itx run` executes its script on the operator's laptop with `itx` as
+a remote handle, so that 27 ms was the laptop↔LHR round trip. Geography is
+already optimal.
+
+**Durable batches pipeline too.** Dispatch never waits for an ack, durable
+included — only the wake greeting stays single-flight, because it is the
+handshake proving the facet is up. The durable in-flight row became an
+oldest-outstanding watermark (same one-write-per-ack cadence, no longer a
+gate); a mid-pipeline failure self-heals through the runner's contiguity
+check. Measured on the same stream: ours p50 81 ms, uplink lateness p90
+17 ms — the tightest uplink ever recorded — one conversation for nine
+presses, marginal +21 ms. The first post-deploy run even caught a genuine
+provider socket drop mid-round and answered the press anyway through the
+deferred-commit path, re-dial and all: the resilience machinery and the
+pipeline coexist.
