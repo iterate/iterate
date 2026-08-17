@@ -573,41 +573,6 @@ describe("opening a call", () => {
 });
 
 /* ========================================================================== */
-/* THE KEEP-WARM HEARTBEAT                                                    */
-/* ========================================================================== */
-
-describe("keepalive", () => {
-  it("changes nothing: no call opened, nothing sent, nothing answered", async () => {
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/created",
-      payload: { grokBaseUrl: "https://fake.grok.test/v1/realtime" },
-    });
-    await h.append({ type: "events.iterate.com/voice-agent/keepalive", payload: {} });
-    await h.settle();
-    /* No call: a keepalive is not somebody talking. */
-    expect(eventsOfType(h, "call-started")).toHaveLength(0);
-    expect(h.sockets).toHaveLength(0);
-  });
-
-  it("does not keep a silent call alive past the deadline", async () => {
-    /*
-     * THE HALF THAT MAKES IT SAFE. It must warm the LANE without feeding the
-     * CALL's idle deadline — otherwise a crashed client whose heartbeat
-     * outlived it would hold a call open for ever.
-     */
-    const h = makeHarness();
-    await callIsLive(h);
-    for (let tick = 0; tick < 26; tick++) {
-      await h.append({ type: "events.iterate.com/voice-agent/keepalive", payload: {} });
-      await h.advanceTime(3_000);
-      await h.settle();
-    }
-    expect(eventsOfType(h, "conversation-end-requested").length).toBeGreaterThan(0);
-  });
-});
-
-/* ========================================================================== */
 /* THE PROVIDER'S TIMELINE, FOR INSTRUMENTS                                   */
 /* ========================================================================== */
 

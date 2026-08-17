@@ -445,27 +445,14 @@ export const VoiceAgent2Contract = defineProcessorContract({
       ...EPH,
       payloadSchema: z.looseObject({}),
     },
-    /**
-     * BEING DELIVERED IS ITS WHOLE JOB.
-     *
-     * The stream tears down idle delivery connections after five seconds of
-     * quiet, and the quiet between two turns of a push-to-talk conversation
-     * is longer than that — so every turn was paying the resurrection: an
-     * alarm hop plus a facet re-dial on the way up, a page plus a re-dial on
-     * the way down. Measured as multi-second first-frame stalls at the start
-     * of a press. A client that wants the lane warm appends one of these
-     * every few seconds while its call is up; the facet consumes it and does
-     * nothing, and the delivery itself is what resets the idle clock.
-     *
-     * Deliberately NOT folded as device input: it must keep the LANE alive
-     * without keeping the CALL alive, or a crashed client's call would never
-     * hit the sixty-second deadline.
-     */
-    "events.iterate.com/voice-agent/keepalive": {
-      description: "The client is still here; consumed so the delivery lane stays warm.",
-      ...EPH,
-      payloadSchema: z.looseObject({}),
-    },
+    /* There was briefly a `keepalive` event here — a client-appended no-op
+     * whose delivery reset the stream's five-second idle teardown, because
+     * the teardown fired in every between-turn gap and charged its
+     * resurrection to every press. It measured what it needed to measure
+     * (uplink lateness p90 188ms -> 38ms) and then died: the platform now
+     * holds delivery lanes open on its own while a facet has work in flight,
+     * which it can see from the facet keepalive's alarm desire. A contract
+     * should never need to say "I am still here" — the platform knows. */
 
     "events.iterate.com/voice-agent/call-started": {
       description: "The server opened a call and what it is called.",
@@ -640,7 +627,6 @@ export const VoiceAgent2Contract = defineProcessorContract({
     "events.iterate.com/voice-agent/ptt-start",
     "events.iterate.com/voice-agent/mic-frame",
     "events.iterate.com/voice-agent/ptt-end",
-    "events.iterate.com/voice-agent/keepalive",
   ],
   emits: [
     "events.iterate.com/voice-agent/warmup-ready",
@@ -969,10 +955,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
         });
         return;
       }
-
-      case "events.iterate.com/voice-agent/keepalive":
-        /* Its delivery already did its work. See the contract. */
-        return;
 
       case "events.iterate.com/voice-agent/ptt-start":
       case "events.iterate.com/voice-agent/mic-frame":

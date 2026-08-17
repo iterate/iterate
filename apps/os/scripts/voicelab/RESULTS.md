@@ -478,3 +478,36 @@ WS-proxy worker in the loop — or a facet that proxies without the event
 machinery — shows none of this, because the cost is the delivery machinery's
 gated writes and ack serialization, not Workers, DOs, or facets as such.
 `direct --url` is ready to measure it.
+
+## Postscript 6: the fix, deployed and measured
+
+Platform commit `74ec81fd7` (all in `stream-event-sender.ts` + the keepalive
+module): all-ephemeral hosted batches and non-initial empty frames ride
+without the durable in-flight insurance (nothing they carry can be
+redelivered by anyone); consecutive all-filtered scan windows merge into the
+next dispatched batch instead of each costing an acknowledged round trip;
+idle teardown stands down while the facet-keepalive alarm desire says a
+processor holds work; the keepalive's redundant re-assert is rate-limited.
+Deployed to preview-3 (`5df8b49c`), then both moody streams re-measured with
+NO client heartbeat — the platform gate working unaided:
+
+|                       | bad host, before | bad host, after | good host, before | good host, after |
+| --------------------- | ---------------: | --------------: | ----------------: | ---------------: |
+| ours p50              |      842–1125 ms |      **105 ms** |            232 ms |        **86 ms** |
+| ours p90              |     2227–3865 ms |      **126 ms** |            399 ms |           241 ms |
+| uplink lateness p50   |       491–845 ms |           12 ms |              8 ms |             5 ms |
+| downlink lateness p50 |       110–190 ms |           12 ms |             19 ms |             8 ms |
+| best-case legs RTT    |       351–383 ms |       **78 ms** |        198–203 ms |            74 ms |
+| backlog p50           |  +174 to +741 ms |     **−218 ms** |            −99 ms |          −216 ms |
+
+The "host mood" is gone: both streams now measure the same, because the fix
+removed the storage writes the slow host was slow at rather than needing the
+host to be fast. The uplink runs AHEAD of the microphone on both. Total
+marginal against a direct xAI socket, same run, alternating turns: **+33 ms**
+on one stream; the other read +296 ms of which 105 ms was ours and the rest
+was the model thinking longer on the stream half of that particular
+alternation — provider noise, not plumbing.
+
+The `keepalive` contract event died the same hour it was born, as intended:
+a contract should never need to say "I am still here" — the platform can see
+a working facet from the alarm desire it already maintains.
