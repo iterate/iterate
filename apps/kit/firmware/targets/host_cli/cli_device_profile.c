@@ -64,7 +64,7 @@ enum {
    */
   CLI_DEVICE_PROFILE_S3_LEAD_FRAMES = 4,
   /* ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES: 30 s of PSRAM, not a cushion. */
-  CLI_DEVICE_PROFILE_S3_RING_BYTES = 960000,
+  CLI_DEVICE_PROFILE_S3_RING_BYTES = 320000,
   /*
    * The firmware's prefill, not a transcription of it.
    *

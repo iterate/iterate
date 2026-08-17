@@ -2045,8 +2045,17 @@ describe("hosted delivery coalesces ephemeral events", () => {
     expect(hostedDeliveryLimit([0, 1, 2, 3, 4].map((o) => frame(o + 1, true)))).toBe(5);
   });
 
-  it("caps the run so one burst cannot monopolise a callback turn", () => {
-    expect(hostedDeliveryLimit(Array.from({ length: 40 }, (_u, o) => frame(o + 1, true)))).toBe(10);
+  it("does not cap the run by COUNT, because bytes are what cost a turn", () => {
+    /*
+     * This asserted a cap of ten, described as "a fifth of a second of audio"
+     * — a number about a lane that sent one event per 20 ms frame and no
+     * longer exists. A count was always the wrong unit: ten tiny events and
+     * ten megabyte events cost a callback turn wildly different amounts.
+     * `DELIVERY_BATCH_BYTE_LIMIT` bounds a batch in bytes, for every
+     * connection kind, and keeps an escape hatch so a lone oversized event
+     * cannot wedge delivery. That is the cap that was ever doing the work.
+     */
+    expect(hostedDeliveryLimit(Array.from({ length: 40 }, (_u, o) => frame(o + 1, true)))).toBe(40);
   });
 
   it("stops at the first durable event, which keeps its own boundary", () => {

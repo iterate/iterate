@@ -64,7 +64,6 @@ struct cli_report_turn {
   uint32_t frames_received;
   uint32_t frames_played;
   uint32_t frames_concealed;
-  uint32_t sequence_gaps;
   uint32_t underruns;
   uint32_t occupancy_min_ms;
   uint32_t occupancy_max_ms;
@@ -91,6 +90,23 @@ struct cli_report_summary {
   /** First output/input platform status; zero means the boundary stayed healthy. */
   int32_t speaker_platform_error;
   int32_t microphone_platform_error;
+  /**
+   * DID THE CALL LOSE ANY OF THE ANSWER? The numbers that can answer it.
+   *
+   * Everything else in this struct measures what happened AFTER a chunk
+   * arrived — whether it decoded, whether the ring had room, whether the
+   * hardware pulled it in time. None of them can see a chunk that never
+   * arrived at all, and for a long conversation that is the question worth
+   * asking. The second voice agent numbers every chunk within a call, so a
+   * hole in the numbering is a lost chunk; the first sends no numbers and
+   * leaves all four of these at zero, which is why the reader has to know
+   * which agent it is reading before "0 gaps" means anything.
+   */
+  uint32_t spk_frames_received;
+  uint32_t spk_seq_gaps;
+  uint32_t spk_seq_missing;
+  uint32_t spk_seq_regressions;
+  uint32_t spk_decode_failures;
 };
 
 /** Every turn of one run, bounded, with an honest count of what did not fit. */

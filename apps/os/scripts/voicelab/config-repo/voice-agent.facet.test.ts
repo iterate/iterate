@@ -332,8 +332,9 @@ describe("the speaker lane's buffer verbs", () => {
     provider.ready();
     await harness.settle();
 
-    /* 700 bytes is one whole frame and 60 left over — the ordinary case, since
-     * a provider's final delta almost never lands on a 640-byte boundary. */
+    /* 700 bytes is 21.875 ms — not a whole number of milliseconds, which is
+     * the ordinary case, since a provider's deltas do not land on millisecond
+     * boundaries any more than they landed on 640-byte ones. */
     provider.speak(700);
     await harness.settle();
     expect(harness.events(SPK_FRAME)).toHaveLength(1);
@@ -343,11 +344,29 @@ describe("the speaker lane's buffer verbs", () => {
 
     const frames = harness.events(SPK_FRAME);
     expect(frames).toHaveLength(2);
+    /* THE END IS ANNOUNCED, exactly once, on the final chunk. A device holds
+     * its half-duplex fence until it hears this. */
+    expect(frames.filter((f) => f.payload.last === true)).toHaveLength(1);
+    expect(frames[1]!.payload.last).toBe(true);
+    /* AND THE TAIL SURVIVES. Every byte the provider sent is in one of these
+     * two chunks; the fractional millisecond at the end is not rounded away. */
+    const sent = frames.reduce(
+      (total, f) => total + Buffer.from(String(f.payload.pcm), "base64").length,
+      0,
+    );
+    /* 700 PCM16 bytes is 350 mu-law bytes, rounded up to whole 20 ms frames
+     * (320 bytes each) because the device cannot place a partial one. Padded
+     * with silence, never truncated. */
+    expect(sent).toBe(640);
+    expect(sent - 350).toBeLessThan(320);
     /* The remainder is PLAYED, not dropped. It used to be carried into a next
      * delta that never came, losing up to 20 ms off every answer's tail. */
     expect(frames[1]!.payload.pcm).not.toBe("");
     expect(frames[1]!.payload.last).toBe(true);
-    expect(frames.slice(0, -1).every((f) => f.payload.last === false)).toBe(true);
+    /* Absent, not `false`: both bits are exceptions and they ride in every
+     * chunk's envelope, so the wire carries nothing for the common case and
+     * the device treats missing as false. */
+    expect(frames.slice(0, -1).every((f) => f.payload.last === undefined)).toBe(true);
   });
 
   it("still ends the answer when the audio divided evenly", async () => {
@@ -401,7 +420,7 @@ describe("one call across many presses", () => {
   it("keeps the SAME call over five presses, and numbers its answers 1..5", async () => {
     const { harness, providers } = harnessWithFreshProviders();
     const rounds = 5;
-    const answered: { conversationId: string; answer: number; frame: number }[] = [];
+    const answered: { conversationId: string; drop: boolean }[] = [];
 
     for (let round = 0; round < rounds; round++) {
       const seen = harness.events(SPK_FRAME).length;
@@ -411,11 +430,7 @@ describe("one call across many presses", () => {
       const fresh = harness.events(SPK_FRAME).slice(seen);
       expect(fresh.length).toBeGreaterThan(0);
       const first = fresh[0]!.payload;
-      answered.push({
-        conversationId: first.conversationId,
-        answer: Number(first.answer),
-        frame: Number(first.frame),
-      });
+      answered.push({ conversationId: first.conversationId, drop: first.drop === true });
     }
 
     /* ONE dial, ONE `call-started`, for five presses — the whole difference. */
@@ -423,15 +438,14 @@ describe("one call across many presses", () => {
     expect(harness.events(CALL_STARTED)).toHaveLength(1);
     expect(new Set(answered.map((round) => round.conversationId)).size).toBe(1);
     /*
-     * The answer counter runs on for the life of the call, and each answer
-     * still starts at frame zero. Both halves are wire facts the firmware
-     * depends on (a LOWER answer at frame zero means the sender restarted,
-     * `audio_playout.c`), and any instrument comparing answer numbers must
-     * scope the comparison to a conversation — reading it as a run-wide clock
-     * is what made the previous design look like a dead server.
+     * EVERY ANSWER OPENS BY TELLING THE DEVICE TO CLEAR, and that one bit is
+     * now the whole of what used to be an answer/frame numbering scheme the
+     * board had to reason about. It replaced 230 lines of high-water marks and
+     * abandoned-answer latches in `audio_playout.c`, every one of which could
+     * silence the device permanently, and it says the same thing: what you are
+     * still holding belongs to an answer that is over.
      */
-    expect(answered.map((round) => round.answer)).toEqual([1, 2, 3, 4, 5]);
-    expect(answered.map((round) => round.frame)).toEqual(Array(rounds).fill(0));
+    expect(answered.map((round) => round.drop)).toEqual(Array(rounds).fill(true));
   });
 });
 
@@ -904,8 +918,10 @@ describe("the face", () => {
     expect(pose).not.toBeNull();
     expect(pose!.viseme).toBeGreaterThanOrEqual(0);
     expect(pose!.viseme).toBeLessThanOrEqual(14);
-    /* Positioned against the answer the frames carry, or the mouth drifts. */
-    expect(pose!.answer).toBe(harness.events(SPK_FRAME)[0]!.payload.answer);
+    /* Positioned against the answer it belongs to, or the mouth drifts. The
+     * number is the facet's own; the speaker lane stopped carrying it when the
+     * device stopped needing to reason about which answer it was playing. */
+    expect(pose!.answer).toBe(1);
   });
 
   it("closes the mouth when the answer ends", async () => {
@@ -983,7 +999,18 @@ describe("the release", () => {
 });
 
 describe("the answer", () => {
-  it("arrives as whole 20 ms frames in one batch per delta", async () => {
+  /** Total mu-law bytes across a run of speaker chunks. */
+  const audioBytes = (events: { payload: Record<string, unknown> }[]) =>
+    events.reduce((n, e) => n + Buffer.from(String(e.payload.pcm), "base64").length, 0);
+
+  it("arrives as ONE event per delta, not one per 20 ms of speech", async () => {
+    /*
+     * THE COST THAT DROVE THE REDESIGN. Cut into 20 ms frames, a delta became
+     * one event per frame — fifty a second, against a device transport that
+     * sustains a few dozen messages a second in total, each one a JSON parse
+     * and a dispatch on a microcontroller. The audio is identical; the number
+     * of times the board is interrupted to receive it is not.
+     */
     const provider = fakeGrok();
     const harness = harnessWith(provider);
     await harness.append({ type: PTT_START, payload: {} });
@@ -991,19 +1018,27 @@ describe("the answer", () => {
     provider.ready();
     await harness.settle();
 
-    // 2048 PCM16 bytes is three whole 640-byte frames with 128 left over.
-    provider.speak(2048);
+    provider.speak(2048); // 64 ms, which the old lane sent as three events
     await harness.settle();
 
     const frames = harness.events(SPK_FRAME);
-    expect(frames).toHaveLength(3);
-    /* Contiguous numbering is what a jitter buffer needs; a gap here is
-     * audible as chopped speech. */
-    expect(frames.map((f) => f.payload.frame)).toEqual([0, 1, 2]);
-    expect(frames.every((f) => f.payload.enc === "u")).toBe(true);
+    expect(frames).toHaveLength(1);
+    /* Three whole 20 ms frames go now; the remaining 4 ms is held for the next
+     * delta rather than sent as a partial frame the device would refuse. */
+    expect(audioBytes(frames)).toBe(960);
+
+    /* And it is held, not lost: the close flushes it, padded to a frame. */
+    provider.finishAudio();
+    await harness.settle();
+    expect(audioBytes(harness.events(SPK_FRAME))).toBe(1280);
   });
 
-  it("carries a partial frame into the next delta rather than emitting it short", async () => {
+  it("loses nothing across deltas that do not divide evenly", async () => {
+    /*
+     * The provider's deltas land wherever they land. What must not happen is
+     * that the remainder between two of them is silently dropped — which is a
+     * click, or at the end of an answer a truncated last word.
+     */
     const provider = fakeGrok();
     const harness = harnessWith(provider);
     await harness.append({ type: PTT_START, payload: {} });
@@ -1011,23 +1046,35 @@ describe("the answer", () => {
     provider.ready();
     await harness.settle();
 
-    provider.speak(700); // one whole frame, 60 bytes left over
+    provider.speak(700); // 21.875 ms
     await harness.settle();
-    expect(harness.events(SPK_FRAME)).toHaveLength(1);
+    provider.speakMore(580); // 18.125 ms; 40 ms exactly, together
+    await harness.settle();
+    provider.finishAudio();
+    await harness.settle();
 
-    provider.speakMore(580); // 60 + 580 = 640: exactly one more, no short frame
-    await harness.settle();
-    expect(harness.events(SPK_FRAME)).toHaveLength(2);
+    expect(audioBytes(harness.events(SPK_FRAME))).toBe(640); // 1280 PCM16 bytes
 
     /*
-     * A NEW ANSWER DROPS THE TAIL, deliberately. Sixty bytes of the previous
-     * answer prepended to this one would be a click at the start of every
-     * reply, and after a barge-in it would be audio from a reply the listener
-     * already interrupted.
+     * A NEW ANSWER DROPS THE TAIL, deliberately. Bytes of the previous answer
+     * prepended to this one would be a click at the start of every reply, and
+     * after a barge-in it would be audio from a reply the listener already
+     * interrupted.
      */
-    provider.speak(600); // under a frame, and the old 0 bytes do not help it
+    const before = harness.events(SPK_FRAME).length;
+    provider.speak(600);
     await harness.settle();
-    expect(harness.events(SPK_FRAME)).toHaveLength(2);
+    /* 600 PCM16 bytes is 18.75 ms — under one wire frame, so it waits for
+     * company rather than going out as a partial frame the device refuses.
+     * The close is what flushes it. */
+    expect(harness.events(SPK_FRAME)).toHaveLength(before);
+    provider.finishAudio();
+    await harness.settle();
+    const fresh = harness.events(SPK_FRAME).slice(before);
+    expect(fresh[0]!.payload.drop).toBe(true);
+    /* 600 PCM16 bytes is 300 mu-law bytes: one padded frame, and not a byte of
+     * the previous answer carried into it. */
+    expect(audioBytes(fresh)).toBe(320);
   });
 });
 
@@ -1053,8 +1100,9 @@ describe("what the facet reports about itself", () => {
     const { harness, providers } = harnessWithFreshProviders();
     await takeTurn(harness, providers, 12_800);
 
-    // Twenty frames of answer, every one of them appended by this facet.
-    expect(harness.events(SPK_FRAME).length).toBeGreaterThan(10);
+    // The answer's chunks, every one of them appended by this facet and
+    // consumed by nobody — which is the point: they must not be sampled.
+    expect(harness.events(SPK_FRAME).length).toBeGreaterThan(0);
     expect(harness.events(CALL_STARTED)).toHaveLength(1);
 
     const report = harness.processor().eventConsumptionMetrics.report();

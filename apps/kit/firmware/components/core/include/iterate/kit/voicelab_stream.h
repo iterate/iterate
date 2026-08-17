@@ -6,7 +6,6 @@
 #include <stdint.h>
 
 #include "capnweb/capnweb.h"
-#include "iterate/kit/audio_playout.h"
 #include "iterate/kit/voice_device_profile.h"
 
 #ifdef __cplusplus
@@ -15,9 +14,18 @@ extern "C" {
 
 enum {
   /*
-   * One 20 ms 16 kHz mono PCM16 frame (640 bytes) base64-encodes to 854
-   * characters unpadded; the whole single-event append argument array stays
-   * under ~1.1 KiB, inside one 2 KiB control outbox slot.
+   * THE UPLINK CAPTURE FRAME, and only that. One 20 ms 16 kHz mono PCM16 frame
+   * (640 bytes) base64-encodes to 854 characters unpadded; the whole
+   * single-event append argument array stays under ~1.1 KiB, inside one 2 KiB
+   * control outbox slot.
+   *
+   * IT IS NOT THE DOWNLINK UNIT. It was, and that was the mistake: the speaker
+   * path cut every arriving chunk into 640-byte pieces and refused whatever was
+   * left over, which pushed an alignment rule all the way back to a provider
+   * whose audio has no particular length. The speaker consumers absorb their
+   * own phase now — see `speaker_partial` in voice_loop.c, whose size comes
+   * from that file's own FRAME_BYTES, because the queue's item size and the
+   * microphone's capture size are equal by coincidence and not by cause.
    */
   ITERATE_KIT_VOICELAB_FRAME_BYTES = 640,
   /*
@@ -31,9 +39,13 @@ enum {
    * one 8 KiB transport message.
    */
   /*
-   * 12, at mu-law. Twice the audio per append and half the bytes per sample,
-   * so the message rate falls fourfold against PCM16 at 6 — which is what the
-   * uplink could not sustain: it stalled the TCP flow outright.
+   * BACK TO PCM16, AND THIS IS THE NUMBER THAT PAID FOR MU-LAW.
+   *
+   * At PCM16 each frame is 854 base64 characters plus ~125 of envelope, so
+   * four frames is ~3.9 KiB of the 7600-byte args buffer — it fits, with room.
+   * What does not fit is the history: PCM16 on this uplink once stalled the
+   * TCP flow outright, and mu-law is what fixed it. If the microphone starts
+   * going quiet on a board, lower this before blaming anything else.
    */
   ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND =
       ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND,
@@ -46,8 +58,21 @@ enum {
    * the failure counter. Six frames (120 ms) is 5.9 KiB, with real margin.
    */
   ITERATE_KIT_VOICELAB_ARGS_CAPACITY = 7600,
-  /* Base64 scratch for one inbound speaker frame (854 chars + padding slack). */
-  ITERATE_KIT_VOICELAB_B64_CAPACITY = 1200,
+  /*
+   * THE SENDER NOW PACES, so a speaker event carries a CHUNK, not a frame.
+   *
+   * The server holds the answer and releases it at playback rate. It has to
+   * hold the LARGER of what either agent sends: the first's 300 ms of mu-law
+   * (4800 bytes, 6400 base64 characters) and the second's 100 ms of PCM16
+   * (3200 bytes, 4268 characters). At 1200 this buffer refused every one of
+   * them, SILENTLY — one counter, no log, a board that hears nothing at all.
+   *
+   * Raising either sender's frame size without raising this is exactly that
+   * silence, so they move together. PCM16 is twice the bytes per millisecond,
+   * which is why the second agent's chunk is a third of the duration.
+   */
+  ITERATE_KIT_VOICELAB_CHUNK_BYTES = 4800,
+  ITERATE_KIT_VOICELAB_B64_CAPACITY = 6912,
   /*
    * Recycle the live connection before the platform's ~1000-push
    * per-connection delivery budget goes silent (measured; see
@@ -107,10 +132,7 @@ enum iterate_kit_voicelab_control {
  * It is passed by pointer and borrowed for the duration of the call.
  */
 typedef void (*iterate_kit_voicelab_speaker_fn)(
-    void *context,
-    const uint8_t *pcm,
-    size_t pcm_length,
-    const struct iterate_kit_playout_frame *identity);
+    void *context, const uint8_t *pcm, size_t pcm_length);
 
 typedef void (*iterate_kit_voicelab_control_fn)(
     void *context, enum iterate_kit_voicelab_control control);
@@ -321,14 +343,43 @@ struct iterate_kit_voicelab {
   uint32_t batches_on_connection;
   uint32_t spk_frames_received;
   uint32_t spk_decode_failures;
+  /*
+   * SEQUENCE CONTINUITY, and it is the only way to prove a long call lost
+   * nothing.
+   *
+   * `spk-frame` is an ephemeral event, so it is never persisted and no amount
+   * of reading the stream afterwards can say how many frames there were. The
+   * device is the only witness. The second voice agent numbers every chunk
+   * within a conversation for exactly this reason, so a hole in the numbering
+   * is a lost chunk — which is a different fact from "the answer was short",
+   * and until now the two were indistinguishable from outside.
+   *
+   * The first agent sends no sequence number at all, and these stay untouched
+   * when it is the one talking: absent is not zero.
+   */
+  int64_t spk_seq_last;
+  /* Gaps as EVENTS, so one hole of forty frames is one gap. */
   uint32_t spk_seq_gaps;
-  int64_t last_spk_sequence;
+  /* And as frames, because a run of ten one-frame gaps is not one big one. */
+  uint32_t spk_seq_missing;
+  /*
+   * A number at or below the last one seen: a duplicate, or a reordering.
+   *
+   * Expected to be zero and worth counting BECAUSE of that. The offset dedupe
+   * at the top of `batch_dispatch` already drops redelivered events, so a
+   * regression here means something the dedupe cannot see — the sender
+   * renumbering mid-call, or two senders on one stream.
+   */
+  uint32_t spk_seq_regressions;
   int64_t last_event_offset;
   char args_buffer[ITERATE_KIT_VOICELAB_ARGS_CAPACITY];
   char b64_buffer[ITERATE_KIT_VOICELAB_B64_CAPACITY];
-  uint8_t pcm_buffer[ITERATE_KIT_VOICELAB_FRAME_BYTES];
-  /* One frame of mu-law, half the size of the PCM16 it came from. */
-  uint8_t mulaw_buffer[ITERATE_KIT_VOICELAB_FRAME_BYTES / 2U];
+  /*
+   * One inbound chunk of mu-law, decoded once and then handed out a frame at
+   * a time. Bounded and static: the decode never allocates, and a chunk larger
+   * than this is refused at the door rather than overrunning anything.
+   */
+  uint8_t chunk_buffer[ITERATE_KIT_VOICELAB_CHUNK_BYTES];
 };
 
 enum capnweb_status iterate_kit_voicelab_start(

@@ -25,22 +25,56 @@ repo (the real deployment shape).
 Every type below is prefixed `events.iterate.com/voice-agent/`, elided here
 for width.
 
-| Event                    | Durability | Payload                                                                    |
-| ------------------------ | ---------- | -------------------------------------------------------------------------- |
-| `conversation-requested` | durable    | `{ conversationId, model?, voice?, effort }` — client opens a conversation |
-| `conversation-accepted`  | durable    | `{ conversationId, bridge, model }` — bridge's Grok session is ready       |
-| `conversation-ended`     | durable    | `{ conversationId, reason }`                                               |
-| `mic-frame`              | ephemeral  | `{ conversationId, seq, t, pcm }` — 20ms base64 PCM16 @16kHz               |
-| `spk-frame`              | ephemeral  | `{ conversationId, seq, t, tGrok, pcm }`                                   |
-| `grok-event`             | ephemeral  | `{ conversationId, t, event }` — VAD/transcript/response lifecycle subset  |
-| `ping` / `pong`          | ephemeral  | RTT + clock-offset probe                                                   |
-| `bench-frame`            | ephemeral  | transport bench traffic                                                    |
+| Event                    | Durability | Payload                                                                                                                                                                                                                                      |
+| ------------------------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `conversation-requested` | durable    | `{ conversationId, model?, voice?, effort }` — client opens a conversation                                                                                                                                                                   |
+| `conversation-accepted`  | durable    | `{ conversationId, bridge, model }` — bridge's Grok session is ready                                                                                                                                                                         |
+| `conversation-ended`     | durable    | `{ conversationId, reason }`                                                                                                                                                                                                                 |
+| `mic-frame`              | ephemeral  | `{ conversationId, seq, t, pcm }` — 20ms base64 PCM16 @16kHz                                                                                                                                                                                 |
+| `spk-frame`              | ephemeral  | `{ conversationId, pcm, drop?, last? }` — see below                                                                                                                                                                                          |
+| `grok-event`             | ephemeral  | `{ conversationId, t, event }` — the provider's own lane, verbatim, for observability only. No client subscribes to it: the two bits a board ever needed off it (`speech_started`, `response.done`) now ride the audio as `drop` and `last`. |
+| `bench-frame`            | ephemeral  | transport bench traffic                                                                                                                                                                                                                      |
 
 Ephemeral frames are only visible to live `openConnection()` callbacks — never
 to durable subscriptions or hosted processors — which is exactly the delivery
-contract audio wants (no replay of stale audio after reconnect). Barge-in:
-the bridge forwards Grok's `input_audio_buffer.speech_started` and the client
-clears its playout buffer.
+contract audio wants (no replay of stale audio after reconnect).
+
+## The speaker lane
+
+**A client's entire buffer policy is three lines.** On a `spk-frame`: if
+`drop`, clear the speaker buffer; write `pcm`; if `last`, the answer is over
+and the half-duplex fence can be released. There is nothing else to implement
+and deliberately nothing else to get wrong.
+
+That is possible because **the server holds the answer**. The provider emits a
+ninety-second answer in a few seconds; `config-repo/speaker.ts` buffers it and
+releases it at playback rate, never running more than `leadMs` ahead of the
+listener. It is a pure reducer — no clock, no timer, no I/O — so the whole
+policy is unit-tested in `speaker.test.ts`, and `voice-agent.count-to-100.test.ts`
+drives the real facet against a simulated board with the board's real bounds.
+
+It used to be the other way round: the device's ring was grown to thirty
+seconds and described in its own comment as "the answer" rather than a
+cushion, with catch-up, high-water and lag-skip machinery around it all
+compensating for a sender that would not wait. `drop`/`last` replaced
+`audio_playout.c`, 230 lines of answer numbering whose latches could silence a
+board permanently.
+
+### Knobs, and what each is coupled to
+
+`DEFAULT_SPEAKER_LIMITS` in `config-repo/speaker.ts`. **None of these moves
+alone** — each has a counterpart in the firmware, and the failure when they
+disagree is silent from the server's side.
+
+| Knob         | Default | Moves with                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `leadMs`     | 3000    | `ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES` (10 s). The ring must exceed the lead with margin for jitter, or the board refuses audio at the door — and a frame refused on arrival was never a frame that went missing, so the loss counters stay innocent while whole seconds vanish.                                                                                                                                            |
+| `maxChunkMs` | 300     | `ITERATE_KIT_VOICELAB_B64_CAPACITY` and `ITERATE_KIT_VOICELAB_CHUNK_MULAW_BYTES`, and the 16 KiB `ITERATE_KIT_VOICE_CONTROL_INBOX_SLOT_CAPACITY`. An oversized `pcm` string is dropped **silently**; an oversized **message** is **terminal** and latches the socket generation. The device cannot defend itself here: it asks for `maxDeliveryBytes: 13000`, but `capSessionDelivery` always ships at least one event whole. |
+| `minChunkMs` | 100     | nothing — pure event-count/latency trade. Not applied to an answer's opening chunk, which always goes immediately.                                                                                                                                                                                                                                                                                                            |
+| `frameMs`    | 20      | `ITERATE_KIT_VOICELAB_FRAME_BYTES` (640). Both device consumers reject any other length outright, so chunks are a whole number of frames and an answer's tail is padded with silence rather than truncated.                                                                                                                                                                                                                   |
+
+Raising `maxChunkMs` toward "one event per answer" is the obvious win for
+device CPU and needs three firmware buffers and a PSRAM budget raised first.
 
 ## Commands
 

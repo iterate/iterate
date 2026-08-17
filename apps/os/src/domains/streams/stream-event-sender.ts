@@ -168,10 +168,14 @@ const HOSTED_CALLBACK_EVENT_LIMIT = 1;
  * user let go of the button — ~700 ms of the ~1900 ms press-to-answer, against
  * 1084 ms dialling the same provider directly.
  *
- * Sized to a fifth of a second of audio: enough that the lane outruns capture
- * with margin, small enough that a burst cannot monopolise one callback turn.
+ * There is deliberately NO COUNT CAP any more. It was ten — "a fifth of a
+ * second of audio" — which is a number about a lane that no longer exists, and
+ * a count is the wrong unit for the thing it was protecting against anyway. A
+ * turn is expensive in BYTES, and `DELIVERY_BATCH_BYTE_LIMIT` below already
+ * bounds a batch in bytes, for every connection kind, with an escape hatch so
+ * a lone oversized event can never wedge delivery. Two caps for one hazard,
+ * and only the arbitrary one ever bound.
  */
-const HOSTED_EPHEMERAL_EVENT_LIMIT = 10;
 /**
  * How long a facet's FIRST wake may take before it counts as a failure.
  *
@@ -199,7 +203,7 @@ export function hostedDeliveryLimit(matched: readonly { event: StreamEvent }[]):
   if (matched[0]?.event.ephemeral !== true) return HOSTED_CALLBACK_EVENT_LIMIT;
   let count = 0;
   while (count < matched.length && matched[count]!.event.ephemeral === true) count++;
-  return Math.min(count, HOSTED_EPHEMERAL_EVENT_LIMIT);
+  return count;
 }
 
 /** Soft cap on a delivery batch's payload bytes (large events shrink the batch). */

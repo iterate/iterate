@@ -44,16 +44,42 @@ enum {
   ITERATE_KIT_VOICE_DEVICE_EVENT_POLL_BUDGET = 8,
 
   /*
-   * Twenty milliseconds is the provider/device wire frame. Capture is
-   * latest-wins within 640 ms, and four frames per independent append gives
-   * the sender catch-up margin without assigning ordering to RPC completion.
+   * Twenty milliseconds is the provider/device wire frame, and four frames per
+   * independent append gives the sender catch-up margin without assigning
+   * ordering to RPC completion.
    */
   ITERATE_KIT_VOICE_FRAME_MS = 20,
   ITERATE_KIT_VOICE_FRAME_SAMPLES = 320,
   ITERATE_KIT_VOICE_FRAME_BYTES = 640,
   ITERATE_KIT_VOICE_SAMPLE_RATE_HZ =
       ITERATE_KIT_VOICE_FRAME_SAMPLES * 1000 / ITERATE_KIT_VOICE_FRAME_MS,
-  ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH = 32,
+  /*
+   * FIVE SECONDS OF SPEECH THE LINK CANNOT YET CARRY. It was 32 frames — 640
+   * ms — and the number was chosen for a different job.
+   *
+   * This queue is latest-wins, and while a call is up it never fills: capture
+   * produces 50 frames a second and the sender is polled once per captured
+   * frame and takes four, so it drains at four times the rate it fills. The
+   * ONLY thing that makes it grow is a link that will not accept an append —
+   * which is precisely the seconds between a person starting to speak and the
+   * transport coming up.
+   *
+   * Measured, cold start: the prompt invited speech at t=622 ms and the
+   * transport did not reach READY until t=8297 ms. A press at t=3105 and a
+   * release at t=5289 fell entirely inside that window, and at 640 ms of hold
+   * every word of it was displaced by the next word. The person said a
+   * sentence and the agent received the last syllable, or nothing.
+   *
+   * 256 frames covers that connect with margin, costs 164 KB — SPIRAM on the
+   * board, nothing on a host — and changes NOTHING during a call, because
+   * during a call the queue is empty. Sizing it to the connect rather than to
+   * the jitter is the whole point: jitter was never what overflowed it.
+   *
+   * It does NOT size the platform capture ring any more; see
+   * ITERATE_KIT_DARWIN_AUDIO_INPUT_RING_FRAMES for why those are now two
+   * numbers.
+   */
+  ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH = 256,
   /*
    * FOUR, and the argument for twelve is written down because it is a good
    * argument that loses to a measurement.
@@ -85,21 +111,32 @@ enum {
    * audible only as bounded latency recovery rather than pitch distortion.
    */
   /*
-   * THIRTY SECONDS, because the sender no longer paces.
+   * TEN SECONDS: A CUSHION AGAIN, because the sender paces once more.
    *
-   * This was a jitter cushion when the server dripped frames to arrive just
-   * in time. That server is gone: a whole answer now leaves as fast as the
-   * wire takes it, so the ring is not a cushion any more — it IS the answer,
-   * and it has to hold the longest one anybody will ask for.
+   * It was thirty, and the comment here argued the case honestly: the server
+   * of the day shipped a whole answer as fast as the wire took it, so the ring
+   * "is not a cushion any more — it IS the answer, and it has to hold the
+   * longest one anybody will ask for". That was a true description of a wrong
+   * arrangement. A microcontroller had become the buffer for a server that
+   * would not wait, and the catch-up, high-water and lag-skip machinery around
+   * it was all compensation for the same missing wait.
    *
-   * Sized at 1.5 s it did not. Measured over two minutes of ordinary
-   * conversation: 2080 frames — forty-one seconds of speech — discarded at
-   * the door for want of room, while the loss counters stayed small and
-   * innocent because a frame refused on arrival was never a frame that went
-   * missing. 30 s of 16 kHz mono PCM16 is 960 KiB of PSRAM this board has
-   * spare, and overflowing THAT is a real fault worth shouting about.
+   * The buffer now lives on the server, where memory is free and a unit test
+   * can watch it, and the server releases at playback rate with a bounded
+   * budget: voice-agent2's MAX_DEVICE_SPEAKER_BACKLOG_BYTES, 128,000 bytes —
+   * four seconds. Ten seconds is that budget plus six of margin for jitter,
+   * and 320 KiB rather than 960 KiB of PSRAM.
+   *
+   * DO NOT SHRINK THIS BELOW THE SENDER'S BUDGET, and read the budget from
+   * voice-agent2.ts rather than from here — this comment is a copy and copies
+   * go stale. It described v1's `leadMs: 3_000` for a while after v2 stopped
+   * having a `leadMs` at all. The failure is silent from
+   * here: a frame refused at the door was never a frame that went missing, so
+   * the loss counters stay small and innocent while the listener loses whole
+   * seconds. That is how the 1.5 s version hid 2080 discarded frames — 41
+   * seconds of speech — across two minutes of ordinary conversation.
    */
-  ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES = 960000,
+  ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES = 320000,
   /*
    * 60 ms of cushion, plus one hardware ring. DOWN FROM 300.
    *
@@ -116,26 +153,13 @@ enum {
    * of the server round trip it sits behind (48 ms up, 46 ms down).
    *
    * And it buys nothing the sender is not already buying. The facet's pacer
-   * releases an opening burst of 150 frames — three seconds of audio — the
-   * instant an answer begins, so the frames behind the first one are already
-   * in flight when it lands. Two cushions for one hazard, and only this one
-   * costs the listener.
+   * hands over its whole budget — four seconds of audio — as fast as it can
+   * append the instant an answer begins, so the frames behind the first one
+   * are already in flight when it lands. Two cushions for one hazard, and only
+   * this one costs the listener.
    */
   ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 60 * 32 + 2880,
   ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS = 400,
-  /*
-   * Backlog beyond which a frame is skipped to catch up — effectively never,
-   * and deliberately so. Catching up on DEPTH made sense when a deep buffer
-   * meant the sender was running ahead of realtime. With a whole answer
-   * arriving at once a deep buffer is the NORMAL state, and skipping then
-   * deletes speech from the middle of a sentence at a steady rate. Just under
-   * the ring, so it can only fire if something has gone truly wrong.
-   *
-   * Lateness is measured against the audio timeline instead — see
-   * ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS, which is the signal this one
-   * was standing in for and getting wrong.
-   */
-  ITERATE_KIT_VOICE_SPEAKER_HIGH_WATER_MS = 29000,
   /*
    * How far behind its own timeline playback may fall before a frame is
    * dropped to recover.
@@ -152,7 +176,6 @@ enum {
    * they would notice a single 20 ms frame missing.
    */
   ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS = 500,
-  ITERATE_KIT_VOICE_SPEAKER_CATCHUP_EVERY = 50,
   ITERATE_KIT_VOICE_SPEAKER_IDLE_POWERDOWN_MS = 1500,
 
   /*

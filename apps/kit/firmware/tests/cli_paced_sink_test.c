@@ -356,7 +356,7 @@ static bool rig_feed_once(struct rig *rig, uint64_t now_ms)
     return false;
   }
   if (iterate_kit_voice_playback_clock_frame(
-          &rig->clock, (uint32_t)rig_speaker.used, rig->result.frames_played,
+          &rig->clock, (uint32_t)rig_speaker.used,
           0U, now_ms) != ITERATE_KIT_VOICE_PLAYBACK_PLAY) {
     return false;
   }

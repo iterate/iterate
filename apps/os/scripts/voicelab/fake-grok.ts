@@ -3,9 +3,18 @@
 //
 // The real provider mostly behaves, which makes it useless for testing what
 // happens when a provider does not. This speaks enough of the realtime
-// protocol to hold a conversation — session.created/updated, binary mic in,
-// binary speaker out, transcripts, response lifecycle, one function tool —
+// protocol to hold a conversation — session.created/updated, mic in (binary or
+// base64), speaker out, transcripts, response lifecycle, one function tool —
 // and every deviation from that is selectable per call with `?script=`.
+//
+// SELECTION IS THE QUERY STRING AND NOTHING ELSE, which is what makes it
+// usable against a DEPLOYED bridge: the URL rides the `voice-agent/created`
+// event as `providerBaseUrl`, `dialGrokSocket` adds `model` and changes
+// nothing else, and everything from "hold the upgrade for twelve seconds" to
+// "take three seconds to say the first word" is a parameter on it. There is no
+// second configuration channel and there must not be — one would only be
+// reachable by whoever is running the fake, which is exactly not the case when
+// the thing under test is a worker somewhere else.
 //
 // It lives in THIS process rather than in a deployed worker on purpose:
 //
@@ -20,6 +29,11 @@
 // `pnpm dev` uses for webhooks) forwards public WebSockets to a local fetch
 // handler: `https://<name>.tunnels.iterate.com`.
 import { Buffer } from "node:buffer";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   createCaptunTunnel,
   createWebSocketResponse,
@@ -51,6 +65,42 @@ const BYTES_PER_MS = (SAMPLE_RATE * 2) / 1000;
  * a script name for it.
  */
 export interface FakeGrokBehaviour {
+  /**
+   * Ms to hold the UPGRADE itself before answering it (0 = answer at once).
+   *
+   * The layer under everything else here: until this existed, connecting was
+   * instantaneous and "the provider is slow to answer the door" could not be
+   * expressed at all — only "the provider answers and then misbehaves". The
+   * bridge has a ten-second handshake deadline
+   * (`GROK_HANDSHAKE_DEADLINE_MS`), and a dial that is merely SLOW must not be
+   * treated like one that is broken, so both sides of that number need to be
+   * reachable from a query string.
+   *
+   * THE SESSION IS RECORDED BEFORE THE WAIT, deliberately. A driver watching
+   * `sessions` can then see that the provider was dialled at all, which is the
+   * difference between "still connecting" and "never asked" — and it is what
+   * lets a test assert what a slow preset WILL do without waiting out its
+   * twelve seconds. {@link FakeGrokHandler.close} releases anything still
+   * waiting, so nothing lingers past the driver that started it.
+   */
+  upgradeDelayMs: number;
+  /**
+   * Answer the upgrade with a plain HTTP response and no socket at all.
+   *
+   * `dialGrokSocket` returns null for that (`response.webSocket === null`) and
+   * the facet writes `conversation-failed` — the door being answered and shut,
+   * as against {@link upgradeDelayMs}'s door nobody comes to.
+   */
+  refuseUpgrade: boolean;
+  /**
+   * The HTTP status of that refusal: 429 is "come back later", 503 "not now",
+   * 401 "never".
+   *
+   * INERT ON ITS OWN, and that is the trap: a status without
+   * {@link refuseUpgrade} refuses nothing, because a WebSocket upgrade that
+   * succeeds does not have a status the caller ever sees.
+   */
+  upgradeStatus: number;
   /** Never send session.created — the handshake simply never completes. */
   noSessionCreated: boolean;
   /**
@@ -101,8 +151,40 @@ export interface FakeGrokBehaviour {
   answerSeconds: number;
   /** Ship the whole answer in one burst rather than in ~200ms chunks. */
   burst: boolean;
-  /** Ms to wait after a commit before starting to answer. */
+  /**
+   * Ms to wait after a commit before the answer STARTS — `response.created`
+   * and everything after it.
+   *
+   * This is silence with no acknowledgement in it, which is not what a slow
+   * model looks like: a real one takes the turn immediately and then thinks.
+   * For that, see {@link firstDeltaDelayMs}.
+   */
   answerDelayMs: number;
+  /**
+   * Ms between `response.created` and the first byte of speech — time to first
+   * token, on its own.
+   *
+   * Distinct from {@link answerDelayMs} because the two break different
+   * things. A late `response.created` delays the moment the client learns it
+   * has been heard at all; a late first delta delays only the audio, with the
+   * turn already visibly taken. Anything measuring "press to first word" needs
+   * to be able to move one without the other.
+   */
+  firstDeltaDelayMs: number;
+  /**
+   * Ms between deltas in paced (non-burst) mode; 0 keeps the derived default.
+   *
+   * The default paces at 90% of each chunk's own playback time, so a paced
+   * provider still finishes slightly AHEAD of realtime — which is why nothing
+   * before this knob could simulate a provider slower than the listener.
+   *
+   * THE TRAP IS THAT SLOWER THAN REALTIME IS SUPPOSED TO STARVE. Set a gap
+   * longer than `audioChunkBytes` is worth in playback time and the device
+   * legitimately runs dry between chunks: an underrun in that run is the
+   * scenario working, not the lane failing. Every "no underruns" assertion
+   * elsewhere assumes a provider that is at least as fast as speech.
+   */
+  deltaGapMs: number;
   /** Send audio as base64 response.output_audio.delta rather than binary. */
   base64Audio: boolean;
   /** Ask the colleague on every Nth turn (0 = never). */
@@ -120,6 +202,22 @@ export interface FakeGrokBehaviour {
   toolMaxTotal: number;
   /** Bytes per binary speaker frame (real Grok ships 0.4–1s at a time). */
   audioChunkBytes: number;
+  /**
+   * Words to answer with, rendered by this Mac's `say` instead of a tone.
+   *
+   * A sine wave is the right answer audio for every test that only counts
+   * bytes, and the wrong one for the only test that listens: an echo
+   * canceller's whole job is speech, and a transcriber asked whether it can
+   * still hear the assistant cannot be asked about 440 Hz. Empty keeps the
+   * tone, so no existing scenario changes.
+   *
+   * The text is the WHOLE answer — {@link answerSeconds} is ignored when this
+   * is set, because the length of a sentence is not a knob, it is a fact
+   * about the sentence.
+   */
+  speech: string;
+  /** Which `say` voice renders {@link speech}. */
+  speechVoice: string;
 }
 
 const DEFAULTS: FakeGrokBehaviour = {
@@ -136,17 +234,24 @@ const DEFAULTS: FakeGrokBehaviour = {
   closeDuringAnswerMs: 0,
   closeOnSessionUpdate: false,
   createdThenNothing: false,
+  deltaGapMs: 0,
   doubleCreated: false,
   errorEvent: false,
+  firstDeltaDelayMs: 0,
   ignoreCommits: false,
   malformedJson: false,
   noSessionCreated: false,
+  refuseUpgrade: false,
   repeatSessionCreated: false,
   sessionCreatedDelayMs: 400,
+  speech: "",
+  speechVoice: "Samantha",
   toolCallsPerTurn: 1,
   toolEveryTurn: 0,
   toolMaxTotal: 0,
   unknownEvents: false,
+  upgradeDelayMs: 0,
+  upgradeStatus: 502,
 };
 
 /** Named bundles. `?script=<name>` picks one; query params override fields. */
@@ -167,6 +272,15 @@ const SCRIPTS: Record<string, Partial<FakeGrokBehaviour>> = {
     closeDuringAnswerMs: 1500,
   },
   "created-then-nothing": { createdThenNothing: true },
+  /**
+   * Slow to answer the door, and then FAILS to: past the bridge's ten-second
+   * handshake deadline, so the call is a corpse before the socket ever opens.
+   *
+   * The socket does eventually arrive, which is the interesting part — a
+   * bridge that has already given up must not be surprised by it, and must not
+   * end up holding two.
+   */
+  "dead-connect": { upgradeDelayMs: 12_000 },
   "double-created": { doubleCreated: true },
   "error-event": { errorEvent: true },
   flood: { answerSeconds: 90, burst: true },
@@ -178,7 +292,37 @@ const SCRIPTS: Record<string, Partial<FakeGrokBehaviour>> = {
   "no-answer": { ignoreCommits: true },
   "no-session-created": { noSessionCreated: true },
   normal: {},
+  /** The door is answered and shut: an upgrade refused with a bad gateway. */
+  refused: { refuseUpgrade: true },
   "short-lifetime": { closeAfterOpenMs: 20_000 },
+  /**
+   * Slow to answer the door, but inside the bridge's handshake deadline, so
+   * the call that eventually opens is the SAME call that was dialled.
+   *
+   * Eight seconds is deliberately close to the ten-second deadline rather than
+   * comfortably under it: the interesting question is what a press DURING the
+   * wait does, and a two-second window is the honest one to ask it in.
+   */
+  "slow-connect": { upgradeDelayMs: 8_000 },
+  /**
+   * The turn is taken instantly and the first word takes three seconds.
+   *
+   * Not the same scenario as `answerDelayMs` and it is worth keeping them
+   * apart: this one leaves `response.created` where it was, so anything that
+   * reacts to the turn being taken — a listening indicator, a barge-in guard,
+   * the facet's own turn timing — sees it on time and only the audio is late.
+   */
+  "slow-first-token": { firstDeltaDelayMs: 3_000 },
+  /**
+   * A provider slower than speech: 600 ms between 400 ms chunks.
+   *
+   * THE DEVICE IS MEANT TO STARVE HERE. Nothing can pace its way out of a
+   * provider that produces six seconds of audio in nine, so this is the one
+   * scenario in the table where an underrun is a pass — it is what a listener
+   * hears when the model itself cannot keep up, and telling that apart from
+   * the lane's own stutter is the whole reason to be able to select it.
+   */
+  "slow-speech": { answerSeconds: 6, burst: false, deltaGapMs: 600 },
   tool: { toolEveryTurn: 1 },
   "tool-storm": { toolEveryTurn: 1, toolCallsPerTurn: 3 },
   "unknown-events": { unknownEvents: true },
@@ -188,6 +332,16 @@ const SCRIPTS: Record<string, Partial<FakeGrokBehaviour>> = {
 export interface FakeGrokSession {
   id: number;
   script: string;
+  /**
+   * What this session resolved to be, script and query overrides applied.
+   *
+   * Recorded so a driver can assert what a session WILL do without waiting for
+   * it to do it — `dead-connect` holds its upgrade for twelve seconds, and a
+   * test that had to sit through that to find out which preset it got would
+   * simply not be written.
+   */
+  behaviour: FakeGrokBehaviour;
+  /** When the dial ARRIVED, which for a slow upgrade is before it opened. */
   openedAt: number;
   closedAt: number | null;
   /** Why WE closed it, when we did. */
@@ -195,6 +349,15 @@ export interface FakeGrokSession {
   /** Total mic bytes the bridge handed us, and per committed turn. */
   micBytes: number;
   micBytesByTurn: number[];
+  /**
+   * Speaker bytes we handed the bridge, as PCM16 — what the answer WAS.
+   *
+   * The provider's own record of what it sent, which is the only honest left
+   * hand side of "did everything arrive?". Comparing against `answerSeconds`
+   * instead compares the delivery to what the test ASKED for, and would call a
+   * fake that shipped nothing a pass the day it stopped shipping.
+   */
+  speakerBytes: number;
   /** Every JSON event type the bridge sent us, in order. */
   received: string[];
   /** Text of every conversation.item.create the bridge injected. */
@@ -220,6 +383,42 @@ export interface FakeGrok {
   close(): void;
 }
 
+/**
+ * The same fake, before anybody publishes it: a request handler and the record
+ * of what it did.
+ *
+ * THE HANDLER IS THE WHOLE PROVIDER, and the tunnel is only how a deployed
+ * worker reaches it. Lifted out, a test in this process can call it directly
+ * and hand `response.webSocket` to the facet's injected `dialGrok` — so the
+ * real facet talks the real realtime protocol over a real socket with no
+ * gateway, no deployment, no credentials and no network at all. Every
+ * misbehaviour still selects the same way, because selection happens inside
+ * the handler off the request's query string.
+ */
+export interface FakeGrokHandler {
+  /**
+   * Answer one request, Workers-style.
+   *
+   * A WebSocket upgrade returns a response whose `webSocket` is the CLIENT
+   * end, exactly as a Worker's would; the caller accepts it. Anything else
+   * gets a small JSON health body.
+   *
+   * ASYNCHRONOUS BECAUSE THE DOOR CAN BE SLOW: `upgradeDelayMs` is the wait
+   * before this resolves at all, and `refuseUpgrade` resolves it with no
+   * socket on it.
+   */
+  handler(request: Request): Promise<Response>;
+  sessions: FakeGrokSession[];
+  /** Every line the fake logged, newest last. */
+  log: string[];
+  /** Add a line of the caller's own to that log, stamped the same way. */
+  note(line: string): void;
+  /** Push a message into the newest live session (scenario control). */
+  poke(send: (session: FakeGrokSession, raw: (data: string | Uint8Array) => void) => void): boolean;
+  /** Hang up every live session — the provider going away, on purpose. */
+  close(): void;
+}
+
 function parseBehaviour(params: URLSearchParams): { behaviour: FakeGrokBehaviour; script: string } {
   const script = params.get("script") ?? "normal";
   const behaviour: FakeGrokBehaviour = { ...DEFAULTS, ...(SCRIPTS[script] ?? {}) };
@@ -229,11 +428,42 @@ function parseBehaviour(params: URLSearchParams): { behaviour: FakeGrokBehaviour
     const current = DEFAULTS[key];
     if (typeof current === "boolean") {
       (behaviour[key] as boolean) = raw !== "0" && raw !== "false";
+    } else if (typeof current === "string") {
+      (behaviour[key] as string) = raw;
     } else {
       (behaviour[key] as number) = Number(raw);
     }
   }
   return { behaviour, script };
+}
+
+/**
+ * Render words to 16 kHz mono PCM16 with this Mac's own text-to-speech.
+ *
+ * DETERMINISTIC BECAUSE IT IS CACHED, not because `say` promises to be: the
+ * same text and voice resolve to the same file for the life of the machine,
+ * so a calibration run compared against yesterday's is comparing the same
+ * waveform. Cached in tmp under a content hash rather than regenerated per
+ * session, because a hardware sweep renders the same sentence dozens of times
+ * and `say` takes about a second each.
+ *
+ * `sox` does the resampling rather than `say --data-format`, which accepts
+ * the flag and then writes a header claiming a rate it did not produce.
+ */
+export function renderSpeech(text: string, voice: string): Buffer {
+  const digest = createHash("sha256").update(`${voice}::${text}`).digest("hex").slice(0, 16);
+  const cached = path.join(os.tmpdir(), `iterate-say-${digest}.raw`);
+  if (!fs.existsSync(cached)) {
+    const aiff = `${cached}.aiff`;
+    execFileSync("say", ["-v", voice, "-o", aiff, text], { stdio: "ignore" });
+    execFileSync(
+      "sox",
+      [aiff, "-r", String(SAMPLE_RATE), "-c", "1", "-b", "16", "-e", "signed-integer", cached],
+      { stdio: "ignore" },
+    );
+    fs.rmSync(aiff, { force: true });
+  }
+  return fs.readFileSync(cached);
 }
 
 /** A 440Hz tone, because the bridge cannot tell speech from a sine wave. */
@@ -249,16 +479,14 @@ function tone(bytes: number, phase: number): { pcm: Buffer; phase: number } {
 }
 
 /**
- * Start the fake and publish it. Returns the public https URL to hand to
- * `startCall({ grokBaseUrl })` — append `?script=…` to pick a misbehaviour.
+ * Build the fake without publishing it — see {@link FakeGrokHandler}.
+ *
+ * {@link startFakeGrok} is this plus a tunnel.
  */
-export async function startFakeGrok(options?: {
-  name?: string;
-  gateway?: string;
-  token?: string;
+export function createFakeGrokHandler(options?: {
   /** Mirror the log to stderr as it happens. */
   verbose?: boolean;
-}): Promise<FakeGrok> {
+}): FakeGrokHandler {
   const sessions: FakeGrokSession[] = [];
   const log: string[] = [];
   const startedAt = Date.now();
@@ -273,21 +501,30 @@ export async function startFakeGrok(options?: {
   const live: {
     session: FakeGrokSession;
     send: (data: string | Uint8Array) => void;
+    hangUp: (why: string) => void;
   }[] = [];
+  /**
+   * Upgrades being held open, and how to let them go.
+   *
+   * Tracked rather than fire-and-forget because `dead-connect` waits twelve
+   * seconds: without this, a driver that has finished with the fake is held
+   * hostage by a timer belonging to a dial nobody is waiting for any more.
+   */
+  const waitingUpgrades = new Set<{ timer: NodeJS.Timeout; release: (open: boolean) => void }>();
 
-  const handler = (request: Request): Response => {
+  const handler = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     if (!isWebSocketUpgradeRequest(request)) {
       return Response.json({ fakeGrok: true, sessions: sessions.length });
     }
     const { behaviour, script } = parseBehaviour(url.searchParams);
-    const pair = new WebSocketPair();
-    const client = pair[0];
-    const server = pair[1];
-    server.accept();
-
-    const session: FakeGrokSession = {
+    /*
+     * THE DIAL IS RECORDED BEFORE THE DOOR IS ANSWERED, so "still connecting"
+     * and "never asked" are different states rather than the same empty list.
+     */
+    const dialledAt: FakeGrokSession = {
       answers: 0,
+      behaviour,
       cancels: 0,
       closedAt: null,
       closedBy: null,
@@ -300,10 +537,43 @@ export async function startFakeGrok(options?: {
       received: [],
       responseCreates: 0,
       script,
+      speakerBytes: 0,
       toolCallIds: [],
       toolOutputs: [],
     };
-    sessions.push(session);
+    sessions.push(dialledAt);
+    if (behaviour.upgradeDelayMs > 0) {
+      say(`session ${dialledAt.id} holding the upgrade for ${behaviour.upgradeDelayMs}ms`);
+      const opened = await new Promise<boolean>((resolve) => {
+        const waiting = {
+          release: (open: boolean) => {
+            clearTimeout(waiting.timer);
+            waitingUpgrades.delete(waiting);
+            resolve(open);
+          },
+          timer: setTimeout(() => waiting.release(true), behaviour.upgradeDelayMs),
+        };
+        waitingUpgrades.add(waiting);
+      });
+      if (!opened) {
+        dialledAt.closedAt = Date.now();
+        dialledAt.closedBy = "shut down mid-upgrade";
+        say(`session ${dialledAt.id} upgrade abandoned: fake grok shut down`);
+        return new Response("fake grok shut down while connecting", { status: 503 });
+      }
+    }
+    if (behaviour.refuseUpgrade) {
+      dialledAt.closedAt = Date.now();
+      dialledAt.closedBy = `refused the upgrade (${behaviour.upgradeStatus})`;
+      say(`session ${dialledAt.id} REFUSING the upgrade with ${behaviour.upgradeStatus}`);
+      return new Response("fake grok is not taking calls", { status: behaviour.upgradeStatus });
+    }
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    server.accept();
+
+    const session = dialledAt;
     say(`session ${session.id} open (script=${script})`);
 
     let alive = true;
@@ -338,9 +608,19 @@ export async function startFakeGrok(options?: {
       return timer;
     };
 
-    live.push({ send: raw, session });
+    live.push({ hangUp, send: raw, session });
 
     let phase = 0;
+    /*
+     * Rendered ONCE PER SESSION, at the top, so a slow first render is paid
+     * before the bridge is told anything — not in the middle of the first
+     * answer, where a second of `say` would read as a second of provider
+     * latency in every measurement taken through this fake.
+     */
+    const speechPcm =
+      behaviour.speech === "" ? null : renderSpeech(behaviour.speech, behaviour.speechVoice);
+    /** How far into {@link speechPcm} the current answer has spoken. */
+    let speechOffset = 0;
     let micSinceCommit = 0;
     let turn = 0;
     let answering = false;
@@ -348,12 +628,20 @@ export async function startFakeGrok(options?: {
     let answerGeneration = 0;
 
     const sendAudio = (chunkBytes: number) => {
-      const made = tone(chunkBytes, phase);
-      phase = made.phase;
-      if (behaviour.base64Audio) {
-        emit({ delta: made.pcm.toString("base64"), type: "response.output_audio.delta" });
+      let pcm: Buffer;
+      if (speechPcm === null) {
+        const made = tone(chunkBytes, phase);
+        phase = made.phase;
+        pcm = made.pcm;
       } else {
-        raw(new Uint8Array(made.pcm));
+        pcm = speechPcm.subarray(speechOffset, speechOffset + chunkBytes);
+        speechOffset += pcm.length;
+      }
+      session.speakerBytes += pcm.length;
+      if (behaviour.base64Audio) {
+        emit({ delta: pcm.toString("base64"), type: "response.output_audio.delta" });
+      } else {
+        raw(new Uint8Array(pcm));
       }
     };
 
@@ -384,7 +672,14 @@ export async function startFakeGrok(options?: {
         say(`session ${session.id} answer ${generation}: created, then nothing`);
         return;
       }
-      const totalBytes = Math.floor(behaviour.answerSeconds * SAMPLE_RATE * 2);
+      /* Every answer says the whole sentence from the top — an answer that
+       * resumed where the last one stopped would make turn two quieter than
+       * turn one for no reason a calibration run could account for. */
+      speechOffset = 0;
+      const totalBytes =
+        speechPcm === null
+          ? Math.floor(behaviour.answerSeconds * SAMPLE_RATE * 2)
+          : speechPcm.length;
       const chunk = behaviour.audioChunkBytes;
       const chunks = Math.max(1, Math.ceil(totalBytes / chunk));
       if (
@@ -407,24 +702,40 @@ export async function startFakeGrok(options?: {
         );
         if (behaviour.closeAfterAnswer) later(50, () => hangUp("between-turns close"));
       };
-      emit({ delta: transcript, type: "response.output_audio_transcript.delta" });
-      if (behaviour.burst) {
-        for (let index = 0; index < chunks; index++) {
-          if (generation !== answerGeneration) return;
-          sendAudio(Math.min(chunk, totalBytes - index * chunk));
+      /*
+       * The transcript travels WITH the audio, not ahead of it. A provider
+       * that had not produced a syllable yet has not transcribed one either,
+       * so holding both behind `firstDeltaDelayMs` is what makes that knob
+       * "time to first token" rather than "time to first PCM".
+       */
+      const speak = () => {
+        if (!alive || generation !== answerGeneration) return;
+        emit({ delta: transcript, type: "response.output_audio_transcript.delta" });
+        if (behaviour.burst) {
+          for (let index = 0; index < chunks; index++) {
+            if (generation !== answerGeneration) return;
+            sendAudio(Math.min(chunk, totalBytes - index * chunk));
+          }
+          finish();
+          return;
         }
-        finish();
-      } else {
+        /* 90% of a chunk's own playback time by default, so a paced provider
+         * still finishes a shade ahead of the listener; `deltaGapMs` is how a
+         * scenario asks for one that does not. */
+        const gapMs =
+          behaviour.deltaGapMs > 0 ? behaviour.deltaGapMs : (chunk / BYTES_PER_MS) * 0.9;
         let index = 0;
         const step = () => {
           if (!alive || generation !== answerGeneration) return;
           if (index >= chunks) return finish();
           sendAudio(Math.min(chunk, totalBytes - index * chunk));
           index++;
-          later((chunk / BYTES_PER_MS) * 0.9, step);
+          later(gapMs, step);
         };
         step();
-      }
+      };
+      if (behaviour.firstDeltaDelayMs > 0) later(behaviour.firstDeltaDelayMs, speak);
+      else speak();
     };
 
     /*
@@ -480,6 +791,28 @@ export async function startFakeGrok(options?: {
       const type = message.type;
       session.received.push(type);
       switch (type) {
+        case "input_audio_buffer.append": {
+          /*
+           * THE MICROPHONE ARRIVES AS BASE64 ON THIS TRANSPORT, and counting
+           * only the binary one made the fake's headline instrument lie.
+           *
+           * The realtime session picks a transport: "binary" puts mic PCM in
+           * raw WebSocket frames, "json" puts it in `input_audio_buffer.append`
+           * as base64 (see grok.ts, which speaks both). The retired bridge
+           * asked for binary; the facet does not ask at all and therefore
+           * speaks json — so against today's bridge every `micBytes` this fake
+           * reported was ZERO. "The customer heard nothing" becomes "the
+           * provider was handed 0 bytes" is the whole reason this double
+           * exists, and it was saying that about a bridge that had handed over
+           * every frame. Decoded length, so both transports count the same
+           * thing: PCM bytes.
+           */
+          const bytes =
+            typeof message.audio === "string" ? Buffer.from(message.audio, "base64").length : 0;
+          session.micBytes += bytes;
+          micSinceCommit += bytes;
+          break;
+        }
         case "session.update": {
           if (behaviour.closeOnSessionUpdate) return hangUp("close on session.update");
           emit({ session: { id: `sess_${session.id}` }, type: "session.updated" });
@@ -585,10 +918,45 @@ export async function startFakeGrok(options?: {
     return createWebSocketResponse(client);
   };
 
+  return {
+    close: () => {
+      /* A copy, because hanging up splices the entry out of `live`. */
+      for (const entry of [...live]) entry.hangUp("fake grok shut down");
+      /* And let go of every door nobody is standing at any more. */
+      for (const waiting of [...waitingUpgrades]) waiting.release(false);
+    },
+    handler,
+    log,
+    note: say,
+    poke: (send) => {
+      const newest = live[live.length - 1];
+      if (newest === undefined) return false;
+      send(newest.session, newest.send);
+      return true;
+    },
+    sessions,
+  };
+}
+
+/**
+ * Start the fake and publish it. Returns the public https URL to hand to
+ * `startCall({ grokBaseUrl })` — append `?script=…` to pick a misbehaviour.
+ */
+export async function startFakeGrok(options?: {
+  name?: string;
+  gateway?: string;
+  token?: string;
+  /** Mirror the log to stderr as it happens. */
+  verbose?: boolean;
+}): Promise<FakeGrok> {
+  const fake = createFakeGrokHandler(
+    options?.verbose === undefined ? {} : { verbose: options.verbose },
+  );
+
   let tunnel: CaptunTunnel;
   try {
     tunnel = await createCaptunTunnel({
-      fetch: handler,
+      fetch: fake.handler,
       gateway:
         options?.gateway ?? process.env.CAPTUN_GATEWAY?.trim() ?? "https://tunnels.iterate.com",
       ...(options?.name ? { name: options.name } : {}),
@@ -601,18 +969,13 @@ export async function startFakeGrok(options?: {
       `fake grok could not publish a tunnel (need CAPTUN_TOKEN from the Doppler config): ${String(error)}`,
     );
   }
-  say(`fake grok published at ${tunnel.url}`);
+  fake.note(`fake grok published at ${tunnel.url}`);
 
   return {
     close: () => tunnel[Symbol.dispose](),
-    log,
-    poke: (send) => {
-      const newest = live[live.length - 1];
-      if (newest === undefined) return false;
-      send(newest.session, newest.send);
-      return true;
-    },
-    sessions,
+    log: fake.log,
+    poke: fake.poke,
+    sessions: fake.sessions,
     url: tunnel.url,
   };
 }

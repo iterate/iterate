@@ -25,11 +25,10 @@ void cli_delivery_fault_configure(
 /** Put one frame into the output, in the order it must be delivered. */
 static void emit(
     struct cli_delivery_fault_out *out,
-    const struct iterate_kit_playout_frame *identity,
     const uint8_t *pcm,
     size_t bytes)
 {
-  assert(out != NULL && identity != NULL && pcm != NULL);
+  assert(out != NULL && pcm != NULL);
   /*
    * The bound is arithmetic, not a hope: every held slot falling due at once
    * plus the current frame twice is exactly CLI_DELIVERY_FAULT_MAX_EMIT. An
@@ -37,7 +36,6 @@ static void emit(
    * would be a fault this module invented and did not count.
    */
   assert(out->count < CLI_DELIVERY_FAULT_MAX_EMIT);
-  out->frames[out->count].identity = *identity;
   out->frames[out->count].pcm = pcm;
   out->frames[out->count].bytes = bytes;
   out->count++;
@@ -50,7 +48,7 @@ static void release(
   struct cli_delivery_held *held;
   assert(fault != NULL && out != NULL && slot < CLI_FAULT_SCHEDULE_MAX_REORDER_HOLD);
   held = &fault->held[slot];
-  emit(out, &held->identity, held->pcm, held->bytes);
+  emit(out, held->pcm, held->bytes);
   held->remaining = 0U;
 }
 
@@ -76,17 +74,15 @@ static void age_held(
 /** Copy the frame into a free slot; false when every slot is taken. */
 static bool hold(
     struct cli_delivery_fault *fault,
-    const struct iterate_kit_playout_frame *identity,
     const uint8_t *pcm,
     size_t bytes,
     uint32_t frames)
 {
   size_t slot;
-  assert(fault != NULL && identity != NULL && pcm != NULL);
+  assert(fault != NULL && pcm != NULL);
   if (bytes > ITERATE_KIT_VOICE_FRAME_BYTES) return false;
   for (slot = 0U; slot < CLI_FAULT_SCHEDULE_MAX_REORDER_HOLD; slot++) {
     if (fault->held[slot].remaining != 0U) continue;
-    fault->held[slot].identity = *identity;
     memcpy(fault->held[slot].pcm, pcm, bytes);
     fault->held[slot].bytes = bytes;
     fault->held[slot].remaining = frames;
@@ -97,14 +93,13 @@ static bool hold(
 
 enum cli_delivery_fault_status cli_delivery_fault_offer(
     struct cli_delivery_fault *fault,
-    const struct iterate_kit_playout_frame *identity,
     const uint8_t *pcm,
     size_t bytes,
     struct cli_delivery_fault_out *out)
 {
   enum cli_frame_fate fate;
   uint32_t hold_frames = 1U;
-  if (fault == NULL || identity == NULL || pcm == NULL || out == NULL) {
+  if (fault == NULL || pcm == NULL || out == NULL) {
     return CLI_DELIVERY_FAULT_ERR_ARG;
   }
   out->count = 0U;
@@ -118,23 +113,23 @@ enum cli_delivery_fault_status cli_delivery_fault_offer(
     return CLI_DELIVERY_FAULT_OK;
   }
   if (fate == CLI_FRAME_FATE_REORDER) {
-    if (hold(fault, identity, pcm, bytes, hold_frames)) {
+    if (hold(fault, pcm, bytes, hold_frames)) {
       fault->reordered++;
       return CLI_DELIVERY_FAULT_OK;
     }
     /* Nowhere to put it: deliver rather than invent an uncounted drop. */
     fault->hold_unavailable++;
   }
-  emit(out, identity, pcm, bytes);
+  emit(out, pcm, bytes);
   fault->delivered++;
   if (fate != CLI_FRAME_FATE_DUPLICATE) return CLI_DELIVERY_FAULT_OK;
   /*
-   * The SAME identity twice, which is the point: the playout classifier must
-   * recognise the second one as already played and ignore it. A duplicate
-   * wearing a fresh identity would be a different frame, and would test
-   * nothing.
+   * The SAME audio twice, back to back, which is what a recycle overlap
+   * delivers: 20ms of the answer is heard again. There is nothing left on the
+   * device to recognise it as a repeat, so this is now a fault the listener
+   * hears rather than one a classifier absorbs.
    */
-  emit(out, identity, pcm, bytes);
+  emit(out, pcm, bytes);
   fault->duplicated++;
   return CLI_DELIVERY_FAULT_OK;
 }

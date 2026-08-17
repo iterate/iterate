@@ -124,7 +124,6 @@ enum iterate_kit_voice_playback_action
 iterate_kit_voice_playback_clock_frame(
     struct iterate_kit_voice_playback_clock *clock,
     uint32_t queued_bytes,
-    uint32_t frames_played,
     uint32_t lag_ms,
     uint64_t now_ms) {
   const uint32_t queued_ms = queued_bytes / 32U;
@@ -162,14 +161,24 @@ iterate_kit_voice_playback_clock_frame(
    * attacks the first words of every answer, which is precisely the part
    * nobody can afford to lose.
    */
+  /*
+   * ONE CATCH-UP RULE, NOT TWO. A second trigger used to sit here, firing on
+   * queue DEPTH past a 9,000 ms high-water mark and dropping one frame every
+   * N — and the paragraphs above are the argument against it, written beside
+   * it: depth cannot tell "the sender is ahead of realtime" from "playback has
+   * stalled", and dropping gradually is hopeless against a stall (3.1 s of lag,
+   * three frames dropped, 60 ms recovered).
+   *
+   * It was also unreachable. voice-agent2 caps the device at
+   * MAX_DEVICE_SPEAKER_BACKLOG_BYTES — 128,000 bytes, 4,000 ms — so 9,000 ms of
+   * backlog required the server's model of this device's memory to be wrong by
+   * more than five seconds. Kept as a backstop against exactly that, it was a
+   * backstop nobody had ever seen fire, which is a comment rather than a
+   * mechanism. If the model does go that wrong, the honest signal is the same
+   * one this function already trusts: lateness against the audio timeline.
+   */
   if (lag_ms > ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS &&
       queued_ms > ITERATE_KIT_VOICE_FRAME_MS) {
-    return ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP;
-  }
-  if (queued_ms > ITERATE_KIT_VOICE_SPEAKER_HIGH_WATER_MS &&
-      frames_played >= clock->next_catchup_at_frame) {
-    clock->next_catchup_at_frame =
-        frames_played + ITERATE_KIT_VOICE_SPEAKER_CATCHUP_EVERY;
     return ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP;
   }
   clock->last_write_ms = now_ms;

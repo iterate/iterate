@@ -60,10 +60,22 @@ enum {
    */
   ITERATE_KIT_DARWIN_AUDIO_INPUT_BUFFER_COUNT = 8,
   /*
-   * The handoff ring, sized to the device's own microphone queue depth so the
-   * host cannot quietly hold more speech than the board does.
+   * A HANDOFF ACROSS A THREAD BOUNDARY, NOT A PLACE TO KEEP SPEECH. 640 ms.
+   *
+   * This used to read `= ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH`, on the argument
+   * that the host should not hold more speech than the board does. That
+   * argument was about the HOLD queue, and when the hold queue grew to cover a
+   * cold transport connect this ring would have grown with it — so a press
+   * would begin by sending five seconds of the room from BEFORE the press,
+   * because the consumer's cursor starts wherever the last read left it.
+   *
+   * Depth here buys one thing: tolerance for the cooperative poll owner
+   * missing its turn while CoreAudio keeps filling. Beyond that it only delays
+   * the discovery that nobody is draining, and the discarded-oldest policy
+   * below means the frames a listener actually wants — the newest — are the
+   * ones that survive either way.
    */
-  ITERATE_KIT_DARWIN_AUDIO_INPUT_RING_FRAMES = ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH,
+  ITERATE_KIT_DARWIN_AUDIO_INPUT_RING_FRAMES = 32,
 };
 
 /** One status per way capture can refuse work. */

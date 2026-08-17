@@ -57,8 +57,28 @@ export async function connectProject(options: VoicelabConnectOptions) {
  * knows the shape.
  */
 export function deviceClientPath(name: string) {
-  return name.startsWith("/") ? name : `/clients/${name}`;
+  return name.startsWith("/") ? name : `/clients/${BOARD_ALIASES[name] ?? name}`;
 }
+
+/**
+ * Short names for boards whose client path nobody remembers.
+ *
+ * `havpe` is what everyone calls the Home Assistant Voice PE, in conversation,
+ * in the log and in every command typed at it. Its firmware registers
+ * `/clients/home-assistant-voice-preview-edition`
+ * (`devices/havpe/havpe_device.c:292`), and asking for the short name fails as
+ * "subscription capability-host does not exist" — which is indistinguishable
+ * from an unplugged board, and was read as one for an entire evening while the
+ * board sat there healthy with a 200-second uptime.
+ *
+ * The alias lives HERE rather than in each script because the failure is not a
+ * script's: every caller that resolves a board goes through this function, so
+ * this is the one place that can make the name people use be the name that
+ * works.
+ */
+const BOARD_ALIASES: Record<string, string> = {
+  havpe: "home-assistant-voice-preview-edition",
+};
 
 /**
  * The live capability a board mounted, by device name or client path.

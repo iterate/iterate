@@ -30,7 +30,9 @@ const RECORDED_FILES = ["mic.pcm", "speaker.pcm", "call.log"];
 
 /** The device's capability surface, as this script uses it. */
 interface DeviceCapability {
-  conversation: { start(): Promise<boolean>; hangUp(): Promise<boolean> };
+  /* `end` is the name the firmware mounts; `hangUp` never existed on a
+   * board and failed as "unknown device capability". */
+  conversation: { start(): Promise<boolean>; end(): Promise<boolean> };
   pushToTalk: { start(): Promise<boolean>; stop(): Promise<boolean> };
   setBackground(colour: string): Promise<boolean>;
   health(): Promise<Record<string, unknown>>;
@@ -280,7 +282,7 @@ export async function device(options: DeviceOptions) {
 
     console.error("journey: screenshotting idle screen");
     await shot("1-idle");
-    await timed("hangUp (clear any stale call)", () => capability.conversation.hangUp());
+    await timed("end (clear any stale call)", () => capability.conversation.end());
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
     console.error("journey: pressing call");
@@ -362,7 +364,7 @@ export async function device(options: DeviceOptions) {
 
   if (action === "call" || action === "hangup") {
     const started = action === "call";
-    await (started ? capability.conversation.start() : capability.conversation.hangUp());
+    await (started ? capability.conversation.start() : capability.conversation.end());
     console.error(started ? "call requested" : "hung up");
     return;
   }

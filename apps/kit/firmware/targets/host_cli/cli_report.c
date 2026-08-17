@@ -25,7 +25,6 @@ static uint64_t cli_report_metric_sent(const struct cli_report_turn *t);
 static uint64_t cli_report_metric_received(const struct cli_report_turn *t);
 static uint64_t cli_report_metric_played(const struct cli_report_turn *t);
 static uint64_t cli_report_metric_concealed(const struct cli_report_turn *t);
-static uint64_t cli_report_metric_gaps(const struct cli_report_turn *t);
 static uint64_t cli_report_metric_underruns(const struct cli_report_turn *t);
 static uint64_t cli_report_metric_occupancy_min(
     const struct cli_report_turn *t);
@@ -51,7 +50,6 @@ static const struct {
   {"framesReceived", cli_report_metric_received},
   {"framesPlayed", cli_report_metric_played},
   {"framesConcealed", cli_report_metric_concealed},
-  {"sequenceGaps", cli_report_metric_gaps},
   {"underruns", cli_report_metric_underruns},
   {"ringOccupancyMinMs", cli_report_metric_occupancy_min},
   {"ringOccupancyP10Ms", cli_report_metric_occupancy_p10},
@@ -245,7 +243,10 @@ static enum cli_report_status cli_report_write_body(
       "\"roomStarvedBuffers\":%u,\"speakerPlatformError\":%" PRId32 ","
       "\"microphonePlatformError\":%" PRId32 ","
       "\"colleagueQuestionsAsked\":%u,"
-      "\"colleagueQuestionsAnswered\":%u}\n}\n",
+      "\"colleagueQuestionsAnswered\":%u,"
+      "\"spkFramesReceived\":%u,\"spkSeqGaps\":%u,"
+      "\"spkSeqMissing\":%u,\"spkSeqRegressions\":%u,"
+      "\"spkDecodeFailures\":%u}\n}\n",
       report->count, cli_report_failure_count(report),
       summary->session_restarts, summary->transport_restarts,
       summary->connection_recycles, summary->calls_lost,
@@ -253,7 +254,10 @@ static enum cli_report_status cli_report_write_body(
       summary->room_completed_bytes, summary->room_dropped_bytes,
       summary->room_starved_buffers, summary->speaker_platform_error,
       summary->microphone_platform_error,
-      summary->back_office_sent, summary->back_office_heard);
+      summary->back_office_sent, summary->back_office_heard,
+      summary->spk_frames_received, summary->spk_seq_gaps,
+      summary->spk_seq_missing, summary->spk_seq_regressions,
+      summary->spk_decode_failures);
   return CLI_REPORT_OK;
 }
 
@@ -315,13 +319,13 @@ static enum cli_report_status cli_report_write_turn(
       ",\"colleague\":%s,\"failure\":%s,\"timeToFirstAudioMs\":%" PRIu64
       ",\"timeToAnswerCompleteMs\":%" PRIu64
       ",\"framesSent\":%u,\"framesReceived\":%u,\"framesPlayed\":%u,"
-      "\"framesConcealed\":%u,\"sequenceGaps\":%u,\"underruns\":%u,"
+      "\"framesConcealed\":%u,\"underruns\":%u,"
       "\"ringOccupancyMs\":{\"min\":%u,\"p10\":%u,\"max\":%u}}%s\n",
       turn->back_office ? "true" : "false", turn->failed ? "true" : "false",
       cli_report_time_to_first_audio_ms(turn),
       cli_report_time_to_answer_ms(turn), turn->frames_sent,
       turn->frames_received, turn->frames_played, turn->frames_concealed,
-      turn->sequence_gaps, turn->underruns,
+      turn->underruns,
       turn->occupancy_samples == 0U ? 0U : turn->occupancy_min_ms,
       cli_report_occupancy_percentile(turn, CLI_REPORT_P10),
       turn->occupancy_max_ms, last ? "" : ",");
@@ -406,11 +410,6 @@ static uint64_t cli_report_metric_played(const struct cli_report_turn *t)
 static uint64_t cli_report_metric_concealed(const struct cli_report_turn *t)
 {
   return t->frames_concealed;
-}
-
-static uint64_t cli_report_metric_gaps(const struct cli_report_turn *t)
-{
-  return t->sequence_gaps;
 }
 
 static uint64_t cli_report_metric_underruns(const struct cli_report_turn *t)

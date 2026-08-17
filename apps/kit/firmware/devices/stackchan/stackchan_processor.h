@@ -48,6 +48,18 @@ struct iterate_kit_audio_processor stackchan_processor(void);
 
 /** Engine rebuilds forced by reset(), and rebuilds that failed. */
 uint32_t stackchan_processor_recreates(void);
+
+/**
+ * How many times the canceller had to settle for the fallback mode.
+ *
+ * Nonzero means the board is NOT running the mode the source asks for. A
+ * calibration sweep that could not see this would compare two firmware builds
+ * that were secretly the same one.
+ */
+uint32_t stackchan_processor_mode_fallbacks(void);
+
+/** The esp-sr `AEC_MODE_*` the canceller is actually running in. */
+uint32_t stackchan_processor_mode(void);
 uint32_t stackchan_processor_recreate_failures(void);
 
 /** Lifetime saturating clip counters, for the health surface. */

@@ -13,12 +13,12 @@ extern "C" {
 /*
  * Shared playout-clock policy; it owns no ring, clock, task, or audio device.
  *
- * The producer first uses audio_playout.h to decide whether an arriving frame
- * is current and whether the ring must be replaced.  This module answers the
- * separate realtime question at each 20 ms sink tick: wait for opening
- * prefill, play, conceal a mid-answer hole, or discard one late frame to bound
- * excessive backlog.  Keeping those two decisions separate is essential:
- * sequence identity is exact, while occupancy is local to the consumer.
+ * The producer decides what to queue — which is now nothing at all, because
+ * the sender paces the answer and marks the chunk that replaces one.  This
+ * module answers the separate realtime question at each 20 ms sink tick: wait
+ * for opening prefill, play, conceal a mid-answer hole, or discard one late
+ * frame to bound excessive backlog.  That question is about occupancy, which
+ * is local to the consumer and knowable nowhere else.
  *
  * There was a fifth answer, DROP_DEBT: one frame discarded per frame
  * concealed, so concealment could not permanently add its own duration to
@@ -34,7 +34,6 @@ extern "C" {
 struct iterate_kit_voice_playback_clock {
   bool priming;
   bool answer_done;
-  uint32_t next_catchup_at_frame;
   uint64_t last_write_ms;
   uint64_t starve_at_ms;
 };
@@ -103,7 +102,6 @@ enum iterate_kit_voice_playback_action
 iterate_kit_voice_playback_clock_frame(
     struct iterate_kit_voice_playback_clock *clock,
     uint32_t queued_bytes,
-    uint32_t frames_played,
     uint32_t lag_ms,
     uint64_t now_ms);
 

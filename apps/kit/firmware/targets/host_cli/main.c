@@ -21,15 +21,15 @@ enum {
   CLI_MAIN_EXIT_OPTIONS = 2,
   CLI_MAIN_LOOP_MS = 5,
   CLI_MAIN_HOST_STALL_FRAMES = 4,
-  CLI_MAIN_CALL_START_RETRY_MS = 8000,
-  CLI_MAIN_CALL_PENDING_TIMEOUT_MS = 20000,
   CLI_MAIN_CALL_OUTBOX_SLOTS = 3,
   CLI_MAIN_RECYCLE_OUTBOX_SLOTS = 4,
   CLI_MAIN_RECYCLES_BEFORE_TRANSPORT = 3,
   CLI_MAIN_PULSE_ACTIVE_TAIL_MS = 3000,
   CLI_MAIN_PULSE_INTERVAL_MS = 1000,
+  /* How stale a Ctrl-C'd recording may be. See the sync site for why it is
+   * not one second. */
+  CLI_MAIN_SINK_SYNC_INTERVAL_MS = 5000,
   CLI_MAIN_RESTART_REPLY_MS = 400,
-  CLI_MAIN_INITIAL_PLAYOUT_SEQUENCE = 1,
   CLI_MAIN_MS_PER_SECOND = 1000,
   /*
    * How long a schedule assumes a session lasts when nobody said. Episodes
@@ -52,8 +52,6 @@ enum {
   CLI_MAIN_HANGUP_GRACE_MS = 3000,
 };
 
-#define CLI_MAIN_CALL_GREETING \
-  "Hi, I am your Iterate device. What can I do for you?"
 #define CLI_MAIN_CALL_END_REASON "host-cli"
 #define CLI_MAIN_CONNECTION_INSTRUCTIONS \
   "Iterate voice device (macOS CLI target)"
@@ -122,14 +120,10 @@ static void cli_main_start_voicelab(struct cli_runtime *runtime);
 static void cli_main_accept_speaker_frame(
     struct cli_runtime *runtime,
     const uint8_t *pcm,
-    size_t length,
-    const struct iterate_kit_playout_frame *identity);
+    size_t length);
 
 static void cli_main_on_speaker(
-    void *context,
-    const uint8_t *pcm,
-    size_t length,
-    const struct iterate_kit_playout_frame *identity);
+    void *context, const uint8_t *pcm, size_t length);
 
 /* Receives response and call lifecycle controls from voicelab. */
 static void cli_main_on_control(
@@ -176,10 +170,10 @@ static void cli_main_poll_playback(
     struct cli_runtime *runtime, uint64_t now_ms);
 
 /* Captures one scheduled microphone frame into the latest-wins queue. */
-static void cli_main_capture_frame(struct cli_runtime *runtime);
+static void cli_main_capture_frame(struct cli_runtime *runtime, bool keep);
 
 /* Takes one frame from the CoreAudio capture ring, if one is waiting. */
-static void cli_main_capture_live_frame(struct cli_runtime *runtime);
+static void cli_main_capture_live_frame(struct cli_runtime *runtime, bool keep);
 
 /* Takes one frame from the recording, latching its end. */
 static void cli_main_capture_recorded_frame(struct cli_runtime *runtime);
@@ -241,7 +235,7 @@ static void cli_main_reconcile_talk(
 
 /* Reconciles desired call state with the mounted runtime. */
 static void cli_main_reconcile_call(
-    struct cli_runtime *runtime, uint64_t now_ms, size_t outbox_free);
+    struct cli_runtime *runtime, size_t outbox_free);
 
 /* Supervises fatal transport state and the process-level liveness deadline. */
 static void cli_main_supervise_transport(
@@ -358,6 +352,24 @@ uint64_t cli_runtime_now_us(void)
 void cli_runtime_log(const char *level, const char *format, ...)
 {
   if (level == NULL || format == NULL) return;
+  /*
+   * A SCREEN OWNS THE TERMINAL EXCLUSIVELY. Left to write here, these lines
+   * would land in the middle of a frame being redrawn and tear it — so once a
+   * screen is up they become the log tail INSIDE it, which is where somebody
+   * watching a live session was going to read them anyway. Every run without
+   * a screen — scripted, recorded, piped — is untouched, and those are the
+   * runs whose output another program parses.
+   */
+  struct cli_screen *screen = cli_screen_active();
+  if (screen != NULL) {
+    char line[CLI_SCREEN_LINE_BYTES];
+    va_list screen_args;
+    va_start(screen_args, format);
+    (void)vsnprintf(line, sizeof(line), format, screen_args);
+    va_end(screen_args);
+    cli_screen_note(screen, level, line);
+    return;
+  }
   (void)fprintf(
       stderr, "t=%" PRIu64 " level=%s ", cli_runtime_now_ms(NULL), level);
   va_list args;
@@ -389,7 +401,21 @@ int main(int argc, char **argv)
     cli_main_close_runtime(runtime);
     return CLI_MAIN_EXIT_RUNTIME;
   }
+  /*
+   * A TERMINAL, A PERSON, AND A KEY TO HOLD — all three, or no screen.
+   *
+   * A frame that redraws in place is the right interface for somebody
+   * watching and the wrong one for everything else: scripted conversations,
+   * recorded runs and the fault harnesses are read by other programs, and
+   * what those programs read is the line log the screen would swallow. Piped
+   * output fails the isatty check for the same reason.
+   */
+  cli_screen_enable(
+      &runtime->screen,
+      runtime->options.push_to_talk && !runtime->options.sealed &&
+          isatty(fileno(stderr)) != 0);
   cli_main_run_loop(runtime);
+  cli_screen_finish(&runtime->screen);
   const bool audio_drained = cli_main_drain_audio(runtime);
   cli_main_close_runtime(runtime);
   const struct iterate_kit_darwin_audio_codec_metrics audio =
@@ -945,7 +971,6 @@ static bool cli_main_init_runtime(struct cli_runtime *runtime)
   if (!cli_main_init_keyboard(runtime)) return false;
   cli_speaker_clear(&runtime->speaker);
   cli_microphone_clear(&runtime->microphone);
-  iterate_kit_playout_reset(&runtime->playout, CLI_MAIN_INITIAL_PLAYOUT_SEQUENCE);
   iterate_kit_voice_playback_clock_init(&runtime->playback_clock);
   cli_runtime_log(
       "info", "iterate-kit-cli ready client=%s stream=%s staticBytes=%zu outbox=%u",
@@ -1044,28 +1069,21 @@ static void cli_main_start_voicelab(struct cli_runtime *runtime)
  * One frame that has survived the injector, from arrival to the speaker.
  *
  * Split from the callback so the schedule's lost, repeated and reordered
- * frames take EXACTLY this path — the classifier, the barge-in clear, the
- * overflow accounting. An injector that fed a shortcut would be testing a
- * pipeline nobody ships.
+ * frames take EXACTLY this path — the overflow accounting, the underrun
+ * observation, the turn's own census. An injector that fed a shortcut would
+ * be testing a pipeline nobody ships.
+ *
+ * There is no per-frame decision left to make. The sender paces the answer
+ * and announces a replacing one with `drop`, which arrives as SPEECH_STARTED
+ * ahead of the audio it invalidates, so a frame reaching here is a frame to
+ * play.
  */
 static void cli_main_accept_speaker_frame(
     struct cli_runtime *runtime,
     const uint8_t *pcm,
-    size_t length,
-    const struct iterate_kit_playout_frame *identity)
+    size_t length)
 {
-  assert(runtime != NULL && pcm != NULL && identity != NULL);
-  const enum iterate_kit_playout_action action = iterate_kit_playout_classify(
-      &runtime->playout, identity);
-  if (action == ITERATE_KIT_PLAYOUT_IGNORE) return;
-  if (action == ITERATE_KIT_PLAYOUT_REPLACE) {
-    iterate_kit_darwin_audio_codec_set_playback_expected(&runtime->audio_codec, false);
-    cli_speaker_clear(&runtime->speaker);
-    iterate_kit_voice_playback_clock_reprime(&runtime->playback_clock);
-    /* A new answer is a new timeline: lag does not carry across answers. */
-    runtime->answer_started_ms = 0U;
-    runtime->answer_emitted_ms = 0U;
-  }
+  assert(runtime != NULL && pcm != NULL);
   if (length > cli_speaker_space(&runtime->speaker)) {
     ++runtime->speaker_overflow_drops;
     return;
@@ -1087,18 +1105,45 @@ static void cli_main_accept_speaker_frame(
 }
 
 static void cli_main_on_speaker(
-    void *context,
-    const uint8_t *pcm,
-    size_t length,
-    const struct iterate_kit_playout_frame *identity)
+    void *context, const uint8_t *pcm, size_t length)
 {
   struct cli_runtime *runtime = context;
   struct cli_delivery_fault_out out;
   size_t slot;
-  if (runtime == NULL || pcm == NULL || identity == NULL ||
-      (length & 1U) != 0U || length != ITERATE_KIT_VOICE_FRAME_BYTES) {
+  /*
+   * ANY LENGTH, so long as it is whole samples. The speaker below is a byte
+   * ring and splices chunks end to end, so the sender is free to hand over
+   * audio of whatever length it has; an ODD length is still refused, because
+   * that would shift the 16-bit sample grid permanently rather than merely
+   * cutting the waveform somewhere unexpected.
+   */
+  if (runtime == NULL || pcm == NULL || length == 0U || (length & 1U) != 0U) {
     if (runtime != NULL) ++runtime->speaker_bad_frames;
     return;
+  }
+  /*
+   * THE FIRST AUDIO OF AN ANSWER IS WHERE THE WAIT ENDS, so the whole turn is
+   * differenced here — once, on the frame that ends it, rather than sampled
+   * by whatever happens to look. `turn_released_ms` is cleared by the same
+   * line, which is what makes this the FIRST frame and not every frame.
+   */
+  if (runtime->turn_released_ms != 0U) {
+    const uint64_t now_ms = cli_runtime_now_ms(NULL);
+    runtime->turn_answer_seen_ms = now_ms;
+    const uint64_t commit_ms = runtime->turn_committed_ms == 0U
+        ? now_ms
+        : runtime->turn_committed_ms;
+    cli_runtime_log(
+        "info",
+        "turn release->commit=%" PRIu64 "ms commit->audio=%" PRIu64
+        "ms total=%" PRIu64 "ms",
+        commit_ms - runtime->turn_released_ms,
+        now_ms - commit_ms,
+        now_ms - runtime->turn_released_ms);
+    runtime->turn_release_to_commit_ms =
+        (uint32_t)(commit_ms - runtime->turn_released_ms);
+    runtime->turn_commit_to_audio_ms = (uint32_t)(now_ms - commit_ms);
+    runtime->turn_released_ms = 0U;
   }
   /*
    * The schedule gets to lose, repeat or delay this frame before anything
@@ -1106,15 +1151,14 @@ static void cli_main_on_speaker(
    * unharnessed path is the path that has always run.
    */
   if (cli_delivery_fault_offer(
-          &runtime->delivery_fault, identity, pcm, length, &out) !=
+          &runtime->delivery_fault, pcm, length, &out) !=
       CLI_DELIVERY_FAULT_OK) {
     ++runtime->speaker_bad_frames;
     return;
   }
   for (slot = 0U; slot < out.count; slot++) {
     cli_main_accept_speaker_frame(
-        runtime, out.frames[slot].pcm, out.frames[slot].bytes,
-        &out.frames[slot].identity);
+        runtime, out.frames[slot].pcm, out.frames[slot].bytes);
   }
 }
 
@@ -1153,16 +1197,26 @@ static void cli_main_on_control(
   struct cli_runtime *runtime = context;
   if (runtime == NULL) return;
   if (control == ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED) {
+    /*
+     * A NEW ANSWER BEGINS, AND WHATEVER IS QUEUED BELONGS TO THE LAST ONE.
+     *
+     * `drop` rides the first chunk of the replacing answer and is raised
+     * before that chunk's audio is handed over, so the clear here provably
+     * precedes the audio that replaces it. This is where the old per-frame
+     * REPLACE branch's work now lives, timeline included.
+     */
     iterate_kit_darwin_audio_codec_set_playback_expected(&runtime->audio_codec, false);
     cli_speaker_clear(&runtime->speaker);
-    iterate_kit_playout_interrupt(&runtime->playout);
     iterate_kit_voice_playback_clock_reprime(&runtime->playback_clock);
+    /* A new answer is a new timeline: lag does not carry across answers. */
+    runtime->answer_started_ms = 0U;
+    runtime->answer_emitted_ms = 0U;
     ++runtime->barge_in_flushes;
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
     /*
-     * Completion can precede its audio on the wire. Marking playout abandoned
-     * here discarded every following frame as stale, so only the clock learns
-     * the answer is closed; the queued identity remains valid until drained.
+     * The answer is closed, but the tail of it is still queued: this edge
+     * rides the answer's last chunk and is raised after that chunk's audio is
+     * handed over. Only the clock is told; nothing is thrown away.
      */
     runtime->answer_done = true;
     iterate_kit_voice_playback_clock_answer_done(&runtime->playback_clock);
@@ -1179,8 +1233,7 @@ static void cli_main_on_control(
     cli_delivery_fault_flush(&runtime->delivery_fault, &tail);
     for (slot = 0U; slot < tail.count; slot++) {
       cli_main_accept_speaker_frame(
-          runtime, tail.frames[slot].pcm, tail.frames[slot].bytes,
-          &tail.frames[slot].identity);
+          runtime, tail.frames[slot].pcm, tail.frames[slot].bytes);
     }
     cli_runtime_log("warn", "call ended by the bridge");
     runtime->answer_done = true;
@@ -1189,9 +1242,7 @@ static void cli_main_on_control(
     runtime->flushing_turn = false;
     (void)cli_main_request_talk(
         runtime, false, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
-    cli_runtime_log(
-        "warn", "call ended; wantsCall=%s",
-        runtime->wants_call ? "true" : "false");
+    cli_runtime_log("warn", "call ended");
   }
 }
 
@@ -1364,7 +1415,6 @@ static void cli_main_play_frame(
   const enum iterate_kit_voice_playback_action action =
       iterate_kit_voice_playback_clock_frame(
           &runtime->playback_clock, (uint32_t)runtime->speaker.used,
-          runtime->speaker_frames_played,
           iterate_kit_voice_playout_lag_ms(
               runtime->answer_started_ms, runtime->answer_emitted_ms,
               now_ms),
@@ -1509,38 +1559,60 @@ static void cli_main_feed_playback(
                  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_LEAD_BYTES)));
 }
 
-static void cli_main_capture_frame(struct cli_runtime *runtime)
+static void cli_main_capture_frame(struct cli_runtime *runtime, bool keep)
 {
   assert(runtime != NULL);
   if (runtime->options.live_mic) {
-    cli_main_capture_live_frame(runtime);
+    cli_main_capture_live_frame(runtime, keep);
     return;
   }
+  /* A RECORDING IS NOT A ROOM. Nothing accumulates in a file while nobody
+   * reads it, so between turns the honest thing is not to read: consuming the
+   * WAV to throw it away would silently eat the next utterance. */
+  if (!keep) return;
   cli_main_capture_recorded_frame(runtime);
 }
 
-static void cli_main_capture_live_frame(struct cli_runtime *runtime)
+static void cli_main_capture_live_frame(struct cli_runtime *runtime, bool keep)
 {
   assert(runtime != NULL);
   /*
-   * Nothing is captured once the turn is flushing. The frames already queued
-   * are what the person said; adding more would keep the queue from ever
-   * draining and hold the commit open until its timeout, so every turn would
-   * end a second and a half after the key came up.
+   * DRAIN TO EMPTY, EVERY PASS. Reading exactly one frame per tick could not
+   * work and the arithmetic says so: CoreAudio produces one frame per 20 ms
+   * and this loop consumed one per 20 ms, so the two only stay level while
+   * the loop never misses its slot. It has no way to catch up from a single
+   * late pass, and every frame it falls behind is permanent — the ring laps
+   * after 32 of them and counts the rest as lost. Measured after the previous
+   * fix: 333 frames lost in 37 seconds, from a drain that was supposedly
+   * always running.
+   *
+   * A bounded loop only because the ring is bounded; there is nothing else to
+   * read once it is empty.
    */
-  if (runtime->flushing_turn) return;
-  int16_t capture[ITERATE_KIT_VOICE_FRAME_SAMPLES] = {0};
-  size_t sample_count = 0U;
-  if (iterate_kit_audio_codec_read(
-          &runtime->audio_codec.codec,
-          capture,
-          NULL,
-          ITERATE_KIT_VOICE_FRAME_SAMPLES,
-          &sample_count) != ITERATE_KIT_OK) {
-    return;
+  for (size_t frames = 0U; frames <= ITERATE_KIT_DARWIN_AUDIO_INPUT_RING_FRAMES;
+       ++frames) {
+    int16_t capture[ITERATE_KIT_VOICE_FRAME_SAMPLES] = {0};
+    size_t sample_count = 0U;
+    if (iterate_kit_audio_codec_read(
+            &runtime->audio_codec.codec,
+            capture,
+            NULL,
+            ITERATE_KIT_VOICE_FRAME_SAMPLES,
+            &sample_count) != ITERATE_KIT_OK) {
+      return;
+    }
+    assert(sample_count == ITERATE_KIT_VOICE_FRAME_SAMPLES);
+    /*
+     * READ ALWAYS, KEEP SOMETIMES — and the flush is the case that proves the
+     * two must be separate. Nothing is KEPT once the turn is flushing: the
+     * frames already queued are what the person said, and adding more would
+     * hold the commit open until its timeout. But this used to return BEFORE
+     * the read, so a flush stopped draining the ring as well as stopping
+     * capture, and the backlog it left was charged to the next turn.
+     */
+    if (!keep || runtime->flushing_turn) continue;
+    cli_main_accept_capture_frame(runtime, capture);
   }
-  assert(sample_count == ITERATE_KIT_VOICE_FRAME_SAMPLES);
-  cli_main_accept_capture_frame(runtime, capture);
 }
 
 static void cli_main_capture_recorded_frame(struct cli_runtime *runtime)
@@ -1632,11 +1704,26 @@ static void cli_main_poll_microphone(
     ++runtime->mic_frames_dropped;
     runtime->next_mic_at_ms = now_ms + ITERATE_KIT_VOICE_FRAME_MS;
   }
+  /*
+   * ALWAYS DRAIN THE CAPTURE RING; KEEP ONLY WHAT A TURN ASKED FOR.
+   *
+   * The old shape returned here without reading, and CoreAudio does not stop
+   * capturing because nobody is listening — so between turns the ring filled,
+   * lapped, and counted every frame it displaced. Measured in one 34-second
+   * session: 1,735 frames captured, 1,162 of them lost, and the loss counter
+   * is the first thing anybody reads when audio sounds wrong. It was reporting
+   * a healthy microphone as a broken one.
+   *
+   * It was not only cosmetic. A ring left full means the first frames read
+   * after a press are whatever the room said before it, and the discarded-
+   * oldest policy then jumps the cursor mid-turn. Draining continuously keeps
+   * the cursor at the live edge, so a press begins with the present.
+   */
+  cli_main_capture_frame(runtime, runtime->talking);
   if (!runtime->talking) {
     ++runtime->mic_frames_gated;
     return;
   }
-  cli_main_capture_frame(runtime);
   cli_main_send_microphone(runtime, now_ms);
 }
 
@@ -1644,8 +1731,21 @@ static void cli_main_start_talk(
     struct cli_runtime *runtime, uint64_t now_ms, size_t outbox_free)
 {
   assert(runtime != NULL);
-  const bool wants_talk = runtime->wants_call && runtime->wants_talk;
-  if (!wants_talk || runtime->talking || !runtime->voicelab.call_active ||
+  /*
+   * THE BUTTON IS THE WHOLE CONDITION.
+   *
+   * A push-to-talk client differs from an open-mic one in exactly one way: it
+   * sends microphone frames while a key is down instead of always. It has no
+   * opinion about calls, sessions or provider connections, and every opinion
+   * it used to hold cost a turn. This test read
+   * `runtime->wants_call && runtime->wants_talk && ... && call_active`, so
+   * speech was discarded unless a call already existed — while the far end's
+   * rule is that a call is OPENED by somebody talking, holds what arrives
+   * before the provider handshake finishes, and replays it the moment it is
+   * usable. The client was refusing to produce the frames the server was
+   * waiting to hold.
+   */
+  if (!runtime->wants_talk || runtime->talking ||
       outbox_free < CLI_MAIN_CALL_OUTBOX_SLOTS) return;
   /* A recording has to be rewound for each turn; a room does not. */
   if (runtime->conversation.state == CLI_CONVERSATION_DISABLED &&
@@ -1665,7 +1765,6 @@ static void cli_main_start_talk(
   runtime->frame_sequence = 0U;
   cli_microphone_clear(&runtime->microphone);
   cli_speaker_clear(&runtime->speaker);
-  iterate_kit_playout_interrupt(&runtime->playout);
   iterate_kit_voice_playback_clock_reprime(&runtime->playback_clock);
   (void)iterate_kit_voicelab_mark_turn(
       &runtime->voicelab, ITERATE_KIT_VOICELAB_TURN_START);
@@ -1687,22 +1786,39 @@ static void cli_main_finish_talk(
   runtime->flushing_turn = false;
   (void)iterate_kit_voicelab_mark_turn(
       &runtime->voicelab, ITERATE_KIT_VOICELAB_TURN_COMMIT);
+  runtime->turn_committed_ms = now_ms;
 }
 
 static void cli_main_reconcile_talk(
     struct cli_runtime *runtime, uint64_t now_ms, size_t outbox_free)
 {
   assert(runtime != NULL);
-  const bool ready = runtime->voicelab.state == ITERATE_KIT_VOICELAB_READY &&
-      runtime->voicelab.call_active;
-  if (runtime->talking && !runtime->flushing_turn && !ready) {
+  /*
+   * A LINK THAT IS STILL COMING UP IS NOT A LINK THAT WENT AWAY.
+   *
+   * This asked for READY and a live call, and cancelled the turn whenever
+   * either was missing — so a turn begun during a cold connect was cancelled
+   * on the very next pass, before a single frame was captured. A turn should
+   * survive the wait; the hold queue is what it waits in.
+   *
+   * A transport that has actually FAILED is different: nothing is coming and
+   * the supervisor is about to restart it, so holding speech for it would be
+   * holding it for nobody. Runaway turns are already bounded elsewhere by
+   * ITERATE_KIT_VOICE_TURN_MAX_MS.
+   */
+  const bool link_lost =
+      runtime->transport.state == ITERATE_KIT_POSIX_ITX_FAILED ||
+      runtime->transport.state == ITERATE_KIT_POSIX_ITX_STOPPED;
+  if (runtime->talking && !runtime->flushing_turn && link_lost) {
     runtime->talking = false;
     runtime->flushing_turn = false;
   }
   cli_main_start_talk(runtime, now_ms, outbox_free);
-  const bool wants_talk = runtime->wants_call && runtime->wants_talk;
-  if (!wants_talk && runtime->talking && !runtime->flushing_turn) {
+  if (!runtime->wants_talk && runtime->talking && !runtime->flushing_turn) {
     runtime->flushing_turn = true;
+    runtime->turn_released_ms = now_ms;
+    runtime->turn_committed_ms = 0U;
+    runtime->turn_answer_seen_ms = 0U;
     runtime->flush_frames_left = (uint32_t)runtime->microphone.used;
     runtime->flush_deadline_ms =
         now_ms + ITERATE_KIT_VOICE_TURN_FLUSH_TIMEOUT_MS;
@@ -1711,29 +1827,19 @@ static void cli_main_reconcile_talk(
 }
 
 static void cli_main_reconcile_call(
-    struct cli_runtime *runtime, uint64_t now_ms, size_t outbox_free)
+    struct cli_runtime *runtime, size_t outbox_free)
 {
   assert(runtime != NULL);
-  if (runtime->voicelab.call_pending &&
-      runtime->call_pending_since_ms != 0U &&
-      iterate_kit_voice_elapsed_ms(now_ms, runtime->call_pending_since_ms) >
-          CLI_MAIN_CALL_PENDING_TIMEOUT_MS) {
-    iterate_kit_voicelab_forget_call(&runtime->voicelab);
-    runtime->call_pending_since_ms = 0U;
-    runtime->next_call_attempt_at_ms = 0U;
-  }
-  if (!runtime->voicelab.call_pending) runtime->call_pending_since_ms = 0U;
-  if (runtime->wants_call && !runtime->voicelab.call_active &&
-      !runtime->voicelab.call_pending &&
-      outbox_free >= CLI_MAIN_CALL_OUTBOX_SLOTS &&
-      now_ms >= runtime->next_call_attempt_at_ms) {
-    runtime->call_pending_since_ms = now_ms;
-    runtime->next_call_attempt_at_ms =
-        now_ms + CLI_MAIN_CALL_START_RETRY_MS;
-    (void)iterate_kit_voicelab_start_call(
-        &runtime->voicelab, CLI_MAIN_CALL_GREETING);
-  }
-  if (!runtime->wants_call && runtime->voicelab.call_active &&
+  /*
+   * NOBODY ASKS FOR A CALL ANY MORE. A block here used to dial one whenever
+   * `wants_call` was set and none existed, retrying on a timer — a second
+   * source of truth for a fact the server owns, and one that opened a
+   * provider connection for somebody who had not yet said anything. The
+   * server opens a call on the first microphone frame; the only call
+   * lifecycle left on this side is ENDING one, below, because hanging up is
+   * something a person does and the server cannot guess.
+   */
+  if (runtime->hanging_up && runtime->voicelab.call_active &&
       outbox_free >= CLI_MAIN_CALL_OUTBOX_SLOTS) {
     (void)iterate_kit_voicelab_end_call(
         &runtime->voicelab, CLI_MAIN_CALL_END_REASON);
@@ -1779,7 +1885,8 @@ static void cli_main_supervise_downlink(
 {
   assert(runtime != NULL);
   const bool silent = runtime->voicelab.state == ITERATE_KIT_VOICELAB_READY &&
-      runtime->wants_call && runtime->voicelab.has_connection_capability &&
+      runtime->voicelab.call_active &&
+      runtime->voicelab.has_connection_capability &&
       !runtime->voicelab.recycle_pending &&
       outbox_free >= CLI_MAIN_RECYCLE_OUTBOX_SLOTS &&
       runtime->voicelab.last_batch_ms != 0U &&
@@ -1810,6 +1917,83 @@ static void cli_main_supervise(
   assert(runtime != NULL);
   cli_main_supervise_transport(runtime, now_ms);
   cli_main_supervise_downlink(runtime, now_ms, outbox_free);
+}
+
+/**
+ * Latch the two edges the screen reports as connectivity.
+ *
+ * WHY BOTH ARE HERE AND NOT AT THEIR CAUSES. Reaching /api and having a
+ * provider call accepted happen in two unrelated parts of the stack, and both
+ * are only observable as a state that is now different from the state last
+ * seen. Written at their causes they would be two latches nobody could find;
+ * written together they are the definition of what the lights mean.
+ */
+static void cli_main_track_connectivity(
+    struct cli_runtime *runtime, uint64_t now_ms)
+{
+  assert(runtime != NULL);
+  const bool api_up = runtime->transport.state == ITERATE_KIT_POSIX_ITX_READY &&
+      runtime->voicelab.state == ITERATE_KIT_VOICELAB_READY;
+  if (api_up) {
+    if (runtime->api_connected_at_ms == 0U) {
+      runtime->api_connected_at_ms = now_ms;
+    }
+  } else {
+    runtime->api_connected_at_ms = 0U;
+  }
+  if (runtime->voicelab.call_active) {
+    if (runtime->call_established_at_ms == 0U) {
+      runtime->call_established_at_ms = now_ms;
+    }
+  } else {
+    runtime->call_established_at_ms = 0U;
+  }
+}
+
+static void cli_main_draw_screen(struct cli_runtime *runtime, uint64_t now_ms)
+{
+  assert(runtime != NULL);
+  if (!runtime->screen.enabled) return;
+  struct iterate_kit_spsc_ring_metrics outbox = {0};
+  iterate_kit_spsc_ring_metrics(&runtime->control_outbox, &outbox);
+  const struct iterate_kit_darwin_audio_codec_metrics audio =
+      cli_main_audio_metrics(runtime);
+  const struct cli_screen_state state = {
+    .stream_path = runtime->options.stream_path,
+    .elapsed_ms = iterate_kit_voice_elapsed_ms(now_ms, runtime->started_ms),
+    .api_connected_at_ms = runtime->api_connected_at_ms == 0U
+        ? 0U
+        : iterate_kit_voice_elapsed_ms(
+              runtime->api_connected_at_ms, runtime->started_ms),
+    .call_established_at_ms = runtime->call_established_at_ms == 0U
+        ? 0U
+        : iterate_kit_voice_elapsed_ms(
+              runtime->call_established_at_ms, runtime->started_ms),
+    .call_pending = runtime->voicelab.call_pending,
+    .transport_state =
+        iterate_kit_posix_itx_transport_state_name(runtime->transport.state),
+    .space_held = runtime->wants_talk,
+    .talking = runtime->talking,
+    .flushing = runtime->flushing_turn,
+    .mic_captured = audio.capture_frames,
+    .mic_held = (uint32_t)cli_microphone_queued(&runtime->microphone),
+    .mic_sent = runtime->voicelab.frames_sent,
+    .mic_lost = audio.capture_frames_dropped,
+    .spk_received = runtime->voicelab.spk_frames_received,
+    .spk_played = runtime->speaker_frames_played,
+    .spk_ring_ms = cli_speaker_queued_ms(&runtime->speaker),
+    .spk_conceal = runtime->speaker_conceal_frames,
+    .spk_underruns = runtime->speaker_underruns,
+    .spk_dropped = runtime->speaker_room_drops + runtime->speaker_overflow_drops,
+    .spk_starved = audio.playback_starved_buffers,
+    .spk_catchup = runtime->speaker_catchup_frames,
+    .turn_release_to_commit_ms = runtime->turn_release_to_commit_ms,
+    .turn_commit_to_audio_ms = runtime->turn_commit_to_audio_ms,
+    .outbox_used = (uint32_t)outbox.current_slots,
+    .outbox_slots = (uint32_t)ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS,
+    .loops = runtime->loop_count,
+  };
+  cli_screen_draw(&runtime->screen, &state);
 }
 
 static void cli_main_announce_states(struct cli_runtime *runtime)
@@ -1878,28 +2062,53 @@ static void cli_main_pulse(
    * Keep both recordings openable. An interactive session ends with Ctrl-C,
    * which never reaches the close path, and a header patched only at close
    * left every such recording unplayable.
+   *
+   * NEVER WHILE THERE IS AUDIO TO PLAY, and never faster than the recovery is
+   * worth. Each of these is an fsync on the cooperative loop's own thread, and
+   * the output boundary this loop feeds keeps an 80 ms refill reserve — so a
+   * sync that blocks longer than that is silence the listener hears. Measured:
+   * 42 starved buffers over 78 seconds against 78 pulses, roughly one every
+   * other sync, with a ring holding 965 ms and nothing else dropping a frame.
+   *
+   * What the syncs buy is a playable recording after a Ctrl-C, which nobody
+   * needs to be one second fresh. Deferring them to the gaps costs at most the
+   * tail of an answer in a killed session and costs a live listener nothing.
    */
-  (void)cli_wav_sink_sync(&runtime->sink);
-  if (runtime->options.mic_record != NULL) {
-    (void)cli_wav_sink_sync(&runtime->mic_sink);
+  if (cli_speaker_queued_ms(&runtime->speaker) == 0U &&
+      iterate_kit_voice_elapsed_ms(now_ms, runtime->last_sink_sync_ms) >=
+          CLI_MAIN_SINK_SYNC_INTERVAL_MS) {
+    runtime->last_sink_sync_ms = now_ms;
+    (void)cli_wav_sink_sync(&runtime->sink);
+    if (runtime->options.mic_record != NULL) {
+      (void)cli_wav_sink_sync(&runtime->mic_sink);
+    }
+    if (runtime->options.pretend_speaker != NULL) {
+      (void)cli_wav_sink_sync(&runtime->pretend_sink);
+    }
   }
-  if (runtime->options.pretend_speaker != NULL) {
-    (void)cli_wav_sink_sync(&runtime->pretend_sink);
-  }
+  /*
+   * THE FRAME IS THE PULSE, when there is a frame. Every number below is
+   * already on screen and refreshed continuously, so emitting this as well
+   * only fills the eight-line log tail with itself once a second — which is
+   * exactly what happened to somebody looking for the "talking" and "sent"
+   * lines that told them their key had registered. Those had scrolled out
+   * behind ten copies of a redundant line.
+   */
+  if (runtime->screen.enabled) return;
   const struct iterate_kit_darwin_audio_codec_metrics audio =
       cli_main_audio_metrics(runtime);
   cli_runtime_log(
       "info",
       "pulse loops=%u outbox=%u/%u sent=%u frames=%u batches=%u rx=%u "
-      "gaps=%u submitted=%u conceal=%u under=%u ringMs=%u convUnder=%u "
+      "submitted=%u conceal=%u under=%u ringMs=%u convUnder=%u "
       "convRefused=%u micIn=%u micLost=%u roomDrop=%u roomStarve=%u "
       "roomPlayed=%u roomMs=%u roomErr=%" PRId32 " micErr=%" PRId32
-      " injLost=%u injDup=%u injLate=%u",
+      " injLost=%u injDup=%u injLate=%u seqGaps=%u/%u",
       runtime->loop_count, outbox->current_slots,
       ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS,
       runtime->transport.control_sender.messages_sent,
       runtime->voicelab.frames_sent, runtime->voicelab.batches_on_connection,
-      runtime->voicelab.spk_frames_received, runtime->playout.gaps,
+      runtime->voicelab.spk_frames_received,
       runtime->speaker_frames_played, runtime->speaker_conceal_frames,
       runtime->speaker_underruns, cli_speaker_queued_ms(&runtime->speaker),
       /*
@@ -1929,7 +2138,18 @@ static void cli_main_pulse(
        * proof.
        */
       runtime->delivery_fault.dropped, runtime->delivery_fault.duplicated,
-      runtime->delivery_fault.reordered);
+      runtime->delivery_fault.reordered,
+      /*
+       * HOLES IN THE ANSWER, which no other counter on this line can see.
+       *
+       * Everything above measures a chunk that arrived. These count the ones
+       * that did not: the second voice agent numbers every speaker chunk
+       * within a call, so a break in the numbering is audio that was sent and
+       * never landed. Printed as gaps/frames because one hole of forty is a
+       * different failure from forty holes of one, and the first agent — which
+       * sends no numbers — leaves both at zero.
+       */
+      runtime->voicelab.spk_seq_gaps, runtime->voicelab.spk_seq_missing);
 }
 
 static void cli_main_poll_ready(
@@ -1943,9 +2163,7 @@ static void cli_main_poll_ready(
       runtime->voicelab_generation != runtime->connection.generation) return;
   const size_t outbox_free = ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS -
       outbox->current_slots;
-  cli_main_reconcile_call(runtime, now_ms, outbox_free);
-  cli_main_reconcile_talk(runtime, now_ms, outbox_free);
-  cli_main_poll_microphone(runtime, now_ms);
+  cli_main_reconcile_call(runtime, outbox_free);
   cli_main_recycle_if_ready(runtime, outbox_free);
   cli_main_poll_periodic(runtime, now_ms, outbox_free);
   cli_main_pulse(runtime, now_ms, outbox);
@@ -2015,6 +2233,17 @@ static void cli_main_apply_key(
     case CLI_KEYBOARD_TALK_START:
       (void)cli_main_request_talk(
           runtime, true, ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL);
+      /*
+       * THE KEY IS WHAT ASKS FOR A CALL, and until it is pressed there is no
+       * reason for one to exist.
+       *
+       * This used to be set unconditionally on every interactive poll, so the
+       * process dialled a provider the moment it started and held the session
+       * open through however long somebody sat looking at the prompt — paying
+       * for it, and burning the idle deadline. Waiting costs nothing now: the
+       * far end opens a call on the first frame of speech and holds what
+       * arrives while it does, and this end holds what it cannot yet send.
+       */
       cli_runtime_log("info", "talking");
       break;
     case CLI_KEYBOARD_TALK_STOP:
@@ -2047,7 +2276,6 @@ static void cli_main_begin_hangup(
   if (runtime->hanging_up) return;
   runtime->hanging_up = true;
   (void)cli_main_request_talk(runtime, false, source);
-  runtime->wants_call = false;
   runtime->hangup_deadline_ms = now_ms + CLI_MAIN_HANGUP_GRACE_MS;
   cli_runtime_log("info", "hanging up");
 }
@@ -2074,8 +2302,6 @@ static void cli_main_poll_interactive(
     return;
   }
   if (!runtime->options.push_to_talk) return;
-  /* Nothing else asks for a call in this mode, so the key holder does. */
-  runtime->wants_call = true;
   enum cli_keyboard_event event = CLI_KEYBOARD_NONE;
   if (cli_keyboard_poll(&runtime->keyboard, now_ms, &event) !=
       CLI_KEYBOARD_OK) return;
@@ -2208,8 +2434,31 @@ static void cli_main_run_loop(struct cli_runtime *runtime)
     const size_t outbox_free = ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS -
         outbox.current_slots;
     cli_main_supervise(runtime, now_ms, outbox_free);
+    /*
+     * THE MICROPHONE IS NOT PART OF BEING READY, and putting it there cost
+     * every frame said before the link came up.
+     *
+     * These two lived inside `cli_main_poll_ready`, which returns unless the
+     * transport and the voicelab chain have both finished. CoreAudio does not
+     * wait for either: it captures from the moment the process starts, into a
+     * 32-frame ring, and for the whole of a seven-second connect nobody was
+     * emptying it. Measured: 341 frames lost, against ~350 captured during
+     * the connect and a ring that holds 32. Not a leak — an unattended tap.
+     *
+     * `reconcile_talk` moves for the other half of the same reason. A key
+     * pressed during the connect could not start a turn while the gate held
+     * it, however willing the far end was to hold what arrived.
+     *
+     * Neither needs a link. Capture keeps only what a turn asked for, the
+     * sender declines gracefully when the outbox or the stream cannot take a
+     * batch, and what it declines to send stays queued.
+     */
+    cli_main_reconcile_talk(runtime, now_ms, outbox_free);
+    cli_main_poll_microphone(runtime, now_ms);
     cli_main_poll_ready(runtime, now_ms, &outbox);
     ++runtime->loop_count;
+    cli_main_track_connectivity(runtime, now_ms);
+    cli_main_draw_screen(runtime, now_ms);
     cli_main_reexec_if_ready(runtime, now_ms);
     cli_main_sleep();
   }

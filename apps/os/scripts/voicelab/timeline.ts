@@ -57,7 +57,6 @@ const COLUMNS = [
   "echoFramesMuted",
   "gateRefused",
   "gateLoudestRefused",
-  "bargeIns",
   "spkSupersededMidplay",
   "spkAnswerStarts",
 ] as const;

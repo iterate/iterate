@@ -267,10 +267,22 @@ BaseType_t xQueueReceive(QueueHandle_t queue, void *item, TickType_t wait) {
    * fills the queue; on one thread that would deadlock, so an empty queue
    * answers immediately and the caller sees the same "nothing arrived in time"
    * it sees on a device whose producer is late.
+   *
+   * THE TIMEOUT IS SPENT ONLY WHEN IT IS ACTUALLY WAITED OUT. Charging it on
+   * every receive made the modelled speaker consume 40 ms of clock per 20 ms
+   * frame — half realtime — so playback accumulated lag it could never have on
+   * a board, and the catch-up rule then deleted frames to pay for the fake's
+   * own arithmetic. A receive that finds a frame returns at once on hardware,
+   * and does here.
    */
-  if (wait != 0U) iterate_kit_fake_esp_idf_advance_ms((uint32_t)wait);
-  if (queue == NULL || !queue->live || item == NULL) return pdFAIL;
-  if (queue->count == 0U) return pdFAIL;
+  if (queue == NULL || !queue->live || item == NULL) {
+    if (wait != 0U) iterate_kit_fake_esp_idf_advance_ms((uint32_t)wait);
+    return pdFAIL;
+  }
+  if (queue->count == 0U) {
+    if (wait != 0U) iterate_kit_fake_esp_idf_advance_ms((uint32_t)wait);
+    return pdFAIL;
+  }
   memcpy(item, slot(queue, 0U), queue->item_bytes);
   queue->head = (queue->head + 1U) % queue->depth;
   --queue->count;

@@ -58,12 +58,40 @@ enum {
   AW88298_I2SBCK_MASK = 0x30,
   AW88298_I2SBCK_64FS = 0x20,
   /*
-   * The donor's final tuned levels. Volume 80 buys ~1.5 dB of acoustic
-   * headroom over the earlier 85/90; +18 dB PGA sits 6 dB below the run
-   * that peaked at 31,932 of 32,767; the divider stays at unity — its x8
-   * calibration is digital, inside the processor, where clipping is counted.
+   * VOLUME 60, BECAUSE ABOVE ABOUT 60 THE ECHO CANCELLER STOPS CONVERGING.
+   *
+   * This was 80, chosen for ~1.5 dB of acoustic headroom over 85/90 — a real
+   * measurement, but of loudness, and the thing it costs is not loudness. The
+   * canceller's residual over a spoken answer, measured on this board's own
+   * microphone against a fixed sentence (`voicelab aec`, 2026-08-11):
+   *
+   *   volume 80   -33.4 / -33.3 dBFS peak   filter never settles
+   *   volume 60   -42.4 / -44.9 dBFS peak   settles after ~1.5 s
+   *   volume 50   -43.3 / -47.2 dBFS peak   settles
+   *
+   * A person speaking into the same microphone at the same distance measures
+   * -31 dBFS peak. So at 80 the assistant's own echo arrives at the customer's
+   * level — the far end is handed two voices it cannot separate, and an
+   * interruption that transcribes perfectly in silence transcribes as nothing
+   * at all over an answer. At 60 the voice stands +10 to +12 dB clear of the
+   * residual and the words come back. THAT is what "practically shouting at
+   * it" was.
+   *
+   * Sixty rather than fifty because fifty is not measurably better: the knee
+   * is between 60 and 80, and the loudest setting on the good side of it is
+   * the one to ship. It also agrees with `loudness.ts` from the other
+   * direction — second-harmonic distortion -34.9 dB at 60 against -16.8 dB at
+   * 100 — so this is the same knee seen twice: past it the speaker stops being
+   * a linear device, the echo stops being a linear function of the reference,
+   * and no linear adaptive filter can model what it is not being told about.
+   * The reference is NOT the problem; `aecReferenceClipped` was 0 at every
+   * volume on every turn.
+   *
+   * +18 dB PGA sits 6 dB below the run that peaked at 31,932 of 32,767; the
+   * divider stays at unity — its x8 calibration is digital, inside the
+   * processor, where clipping is counted.
    */
-  SPEAKER_VOLUME_PERCENT = 80,
+  SPEAKER_VOLUME_PERCENT = 60,
   MICROPHONE_GAIN_DB = 18,
   REFERENCE_GAIN_DB = 0,
   /* One 20 ms wire frame staged into 8 ms hardware edges. */
@@ -744,12 +772,15 @@ uint32_t stackchan_audio_epoch_resets(void) {
 
 /*
  * THE SPEAKER LEVEL IS ALSO THE AEC REFERENCE LEVEL on this board, which is
- * why the shipped default is 80 rather than 100: the donor measured ~1.5 dB
- * of extra acoustic headroom there against 85/90, and echo cancellation is
- * spent from the same budget as loudness. The ceiling below is not a physical
- * limit — the amplifier will happily go to 100 — it is the point past which
- * this board starts cancelling its own voice less well, so raising it is a
- * trade a person should make deliberately and hear.
+ * why the shipped default is 60 rather than 100 — see the constant for the
+ * measurement. Echo cancellation is spent from the same budget as loudness,
+ * and past about 60 the whole budget goes on loudness: the residual jumps ten
+ * decibels and an interruption stops arriving at all.
+ *
+ * The ceiling below is not a physical limit — the amplifier will happily go to
+ * 100 — so this method can still put the board into the deaf band. That is
+ * deliberate, because a person may want the volume and not the interruption;
+ * it is worth knowing that is the trade being made.
  */
 enum iterate_kit_status stackchan_audio_set_volume(
     uint8_t percent, uint8_t *applied) {

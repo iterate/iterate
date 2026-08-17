@@ -8,6 +8,7 @@
 //
 //   doppler run --config preview_3 -- pnpm cli voicelab deploy --project prj_…
 import fs from "node:fs";
+import path from "node:path";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 import { withRpcResult } from "./rpc-ownership.ts";
 
@@ -25,18 +26,62 @@ export interface InstallResult {
   changed: boolean;
   bytes: number;
   file: string;
+  /** Every path committed, entry point first — derived, so worth printing. */
+  paths: string[];
 }
 
-/*
- * Modules voice-agent.ts imports at runtime, committed WITH it.
+/**
+ * Relative import specifiers, which are the ones that have to travel.
  *
- * The dynamic worker is built from repo files alone, so an import that was
- * never committed builds fine on the machine that has the file and dies at
- * the project's cold start with `No such module`. The model rides inside
- * viseme-model.generated.ts because repo files are read as text — a .bin
- * cannot make the trip.
+ * Package imports resolve from the platform at build time; a `./x.ts` resolves
+ * from the repo, and is `No such module` if it is not in it.
  */
-const runtimeImportNames = ["viseme.ts", "viseme-model.generated.ts"] as const;
+const RELATIVE_IMPORT = /(?:from|import)\s*\(?\s*["'](\.[^"']*)["']/g;
+
+/**
+ * Everything the guest needs, walked from the entry point's own imports.
+ *
+ * DERIVED, AND IT HAS TO BE. This was a hand-written list of two filenames
+ * next to a file that imports three, and the day `speaker.ts` was extracted
+ * the deployed worker stopped building entirely — `Failed to resolve
+ * './speaker.ts' from voice-agent.ts`, at the project's cold start, hours
+ * after a commit that looked fine everywhere it was tested. A second copy of
+ * a list the source already contains will drift; the only question is when.
+ *
+ * The repo is FLAT — every file lands at the root beside the entry point — so
+ * a specifier that names a subdirectory or climbs out of one cannot be
+ * committed at all, and saying so here beats a `No such module` later.
+ */
+function voiceAgentSources(
+  entryFile: string,
+  entryName: string,
+): { path: string; content: string }[] {
+  const directory = path.dirname(entryFile);
+  const files = new Map<string, string>();
+  /* The entry lands under the name the matching *-ref.ts asks the platform to
+   * build, whatever it is called on disk. Parameterised because the two tracks
+   * share this repo: committing v2's source as `voice-agent.ts` would not add a
+   * second agent, it would overwrite the first one. */
+  const queue: { name: string; readFrom: string }[] = [{ name: entryName, readFrom: entryFile }];
+  while (queue.length > 0) {
+    const next = queue.shift()!;
+    if (files.has(next.name)) continue;
+    const content = fs.readFileSync(next.readFrom, "utf8");
+    files.set(next.name, content);
+    for (const match of content.matchAll(RELATIVE_IMPORT)) {
+      const specifier = match[1]!;
+      const name = specifier.slice(2);
+      if (!specifier.startsWith("./") || name.includes("/")) {
+        throw new Error(
+          `${next.name} imports ${specifier}, but a project's config repo is flat: ` +
+            `everything the guest imports must sit beside it.`,
+        );
+      }
+      queue.push({ name, readFrom: path.join(directory, name) });
+    }
+  }
+  return [...files].map(([name, content]) => ({ content, path: name }));
+}
 
 interface ConfigRepo {
   readFile(input: { path: string }): Promise<{ content?: string } | string | null>;
@@ -60,22 +105,16 @@ interface ConfigRepo {
  */
 export async function installVoiceAgent(
   itx: unknown,
-  options: { file?: string; message?: string } = {},
+  options: { file?: string; message?: string; entryName?: string } = {},
 ): Promise<InstallResult> {
-  const file = options.file ?? new URL("./config-repo/voice-agent.ts", import.meta.url).pathname;
-  const content = fs.readFileSync(file, "utf8");
-  const changes = [
-    { content, path: "voice-agent.ts" },
-    ...runtimeImportNames.map((name) => ({
-      content: fs.readFileSync(new URL(`./config-repo/${name}`, import.meta.url).pathname, "utf8"),
-      path: name,
-    })),
-  ];
+  const entryName = options.entryName ?? "voice-agent.ts";
+  const file = options.file ?? new URL(`./config-repo/${entryName}`, import.meta.url).pathname;
+  const changes = voiceAgentSources(file, entryName);
   const repo = (itx as { repo: ConfigRepo }).repo;
   const result = await withRpcResult(
     repo.commitFiles({
       changes,
-      message: options.message ?? "voicelab: deploy voice-agent.ts",
+      message: options.message ?? `voicelab: deploy ${entryName}`,
     }),
     ({ commitOid, changedPaths, noChanges }) => ({ commitOid, changedPaths, noChanges }),
   );
@@ -84,7 +123,27 @@ export async function installVoiceAgent(
     changed: !result.noChanges,
     commitOid: result.commitOid,
     file,
+    paths: changes.map((change) => change.path),
   };
+}
+
+/**
+ * Commit the SECOND track's guest, beside the first rather than over it.
+ *
+ * The config repo is flat and both entry points sit in it at once, so a
+ * project can run `voice-agent.ts` on one stream and `voice-agent2.ts` on
+ * another and be compared without redeploying between runs — which is the only
+ * way a comparison means anything, since redeploying is itself a variable.
+ */
+export async function deploy2(options: DeployOptions) {
+  using itx = await connectProject(options);
+  const result = await installVoiceAgent(itx, { ...options, entryName: "voice-agent2.ts" });
+  console.log(
+    result.changed
+      ? `committed ${result.commitOid.slice(0, 8)}: ${result.paths.join(", ")}`
+      : `no change — the project already runs this worker (${result.commitOid.slice(0, 8)})`,
+  );
+  console.log(`${String(result.bytes)} bytes from ${result.file}`);
 }
 
 export async function deploy(options: DeployOptions) {
@@ -92,7 +151,7 @@ export async function deploy(options: DeployOptions) {
   const result = await installVoiceAgent(itx, options);
   console.log(
     result.changed
-      ? `committed ${result.commitOid.slice(0, 8)}: voice-agent.ts, ${runtimeImportNames.join(", ")}`
+      ? `committed ${result.commitOid.slice(0, 8)}: ${result.paths.join(", ")}`
       : `no change — the project already runs this worker (${result.commitOid.slice(0, 8)})`,
   );
   /*

@@ -499,6 +499,8 @@ static size_t health(void *context, char *out, size_t capacity) {
        * every board runs one.
        */
       {"aecRecreates", stackchan_processor_recreates()},
+      {"aecModeFallbacks", stackchan_processor_mode_fallbacks()},
+      {"aecMode", stackchan_processor_mode()},
       {"aecRecreateFailures", stackchan_processor_recreate_failures()},
       {"aecReferenceClipped",
        (uint32_t)stackchan_processor_reference_clipped_samples()},

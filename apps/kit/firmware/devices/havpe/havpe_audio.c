@@ -10,7 +10,8 @@
  * the XMOS, and no MCLK reaches the ESP32 on either bus. Capture is a
  * separate controller (I2S_NUM_1, slave RX, 16 kHz stereo 32-bit) whose two
  * channels are same-time XMOS taps: ch0 = the selected cumulative DSP output
- * (NS), ch1 = the original microphone (diagnostic only). Both ESP channels
+ * (AEC — see voice_pe_hardware_config.c for why not the AGC tap), ch1 = the
+ * original microphone (diagnostic only, and the oracle). Both ESP channels
  * are slaves on SEPARATE controllers precisely because one duplex channel
  * pair would force shared BCLK/WS, impossible with two independent clock
  * domains.
@@ -46,7 +47,6 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
-#include "iterate/kit/barge_in.h"
 #include "voice_pe_hardware_config.h"
 #include "voice_pe_pcm_format.h"
 
@@ -55,35 +55,30 @@ static const char tag[] = "havpe-audio";
 enum {
   PLAYBACK_RATE_HZ = 48000,
   /*
-   * The XMOS NS tap is deliberately quiet, and the donor validated a fixed
-   * x16 make-up gain for provider VAD (worker-side then; measured 3/3 with
-   * VAD threshold 0.1). On this lane the wire is mu-law — a logarithmic
-   * companding that spends resolution where the signal lives — so the gain
-   * belongs BEFORE encoding, on the device. Saturating, with a lifetime
-   * clip counter so an abnormal level stays observable; never adaptive.
+   * ONE CONSTANT, APPLIED TO EVERY FRAME, WHATEVER THE SPEAKER IS DOING.
+   *
+   * The AEC tap this board reads is clean and quiet: the echo residual sits
+   * about a decibel above the room floor at -83 dBFS, and a person a couple of
+   * feet away arrives some thirty decibels above that. Both are too quiet for
+   * a provider's detector — measured, x.ai answered before the question had
+   * finished, twice, because it barely heard it.
+   *
+   * So the whole uplink is multiplied by one number. That number does not
+   * change the only thing that matters, which is the DISTANCE between the
+   * person and the residue; it moves both into a range something downstream
+   * can hear. Saturating, with a lifetime clip counter, so an abnormal level
+   * stays visible.
+   *
+   * WHAT MUST NOT COME BACK. This constant previously had three companions: a
+   * duck to x1 whenever the speaker was running, a ramp back over sixteen
+   * frames, and an absolute floor of 300 with a memset that deleted every
+   * frame below it. Those made the gain conditional on the device's own
+   * state, and a device that quietens its microphone while it talks cannot be
+   * interrupted — measured, a full sentence spoken over the answer reached
+   * the far end as digital silence. If the level is ever wrong, change this
+   * number. Do not make it depend on anything.
    */
   CAPTURE_MAKEUP_GAIN = 16,
-  /*
-   * ...AND ONE WHILE THE SPEAKER IS PLAYING, WHICH IS THE WHOLE POINT.
-   *
-   * The x16 above was validated with this board in PUSH-TO-TALK, where the
-   * microphone is shut while the assistant speaks, so the gain only ever
-   * multiplied a person's voice. With the microphone open for the whole call
-   * it also multiplies what the XMOS did NOT cancel — and sixteen is +24 dB
-   * against a measured residual of about -15 dB, which hands the provider an
-   * echo LOUDER than the microphone heard. Its VAD then reports the device
-   * interrupting itself, the barge-in flush empties the speaker, and the
-   * answer stops mid-word. "The AEC is not working" is what that sounds
-   * like; the AEC was working and this was undoing it.
-   *
-   * Ducking is immediate and recovery is gradual, the ordinary asymmetry: an
-   * answer must not be preceded by one loud frame of echo, while a person
-   * starting to speak just after one can wait a few frames for full
-   * sensitivity. Neither value is adaptive — they are two constants and a
-   * hardware fact about whether the speaker is running.
-   */
-  CAPTURE_MAKEUP_GAIN_WHILE_PLAYING = 1,
-  CAPTURE_GAIN_RECOVERY_FRAMES = 16,
   /*
    * How long after the last queued audio the speaker still counts as active.
    * Longer than the pause between two counted numbers and far shorter than
@@ -164,8 +159,6 @@ static volatile uint32_t playback_driver_failures;
 static volatile uint32_t capture_queue_overflow_count;
 static volatile uint32_t playback_queue_overflow_count;
 static volatile uint32_t capture_gain_clipped_samples;
-/* Capture-task owned; read for telemetry, so single aligned words. */
-static volatile int32_t capture_gain = CAPTURE_MAKEUP_GAIN;
 static volatile uint32_t capture_raw_peak;
 static volatile uint32_t capture_clean_peak;
 /* Maxima seen WHILE THE SPEAKER WAS RUNNING: the echo, before and after. */
@@ -173,22 +166,6 @@ static volatile uint32_t capture_echo_raw_peak;
 static volatile uint32_t capture_echo_clean_peak;
 /* What each XMOS output tap is currently selecting; 0..4, see the stage enum. */
 static uint8_t pipeline_stage[2];
-/* Capture-task owned: is a person talking, and how much echo was withheld. */
-static struct iterate_kit_barge_in capture_gate;
-static volatile uint32_t capture_echo_frames_muted;
-/*
- * THE LOUDEST THING THIS DEVICE REFUSED TO TRANSMIT.
- *
- * The barge-in floor is one number, ITERATE_KIT_BARGE_IN_FLOOR, and it was
- * calibrated against speech measured while the speaker was SILENT ("800 and
- * up"). What it actually has to clear is speech on the cancelled plane while
- * the speaker is RUNNING, which is a different and much smaller quantity —
- * measured on this board at 293 against a floor of 300. A threshold set in
- * one condition and applied in another cannot be argued about without this
- * number, so the device keeps it: the high-water mark of what the gate saw
- * and still called echo.
- */
-static volatile uint32_t capture_loudest_refused;
 
 /* --- the shared codec seam ------------------------------------------------ */
 
@@ -436,11 +413,6 @@ static void capture_hardware_task(void *argument) {
        * attempt collected thirteen samples across a thirty-second answer and
        * could say nothing at all. One health() read now answers the question.
        */
-      /* The gate's evidence, from the cancelled plane, before any gain. */
-      iterate_kit_barge_in_observe(
-          &capture_gate,
-          (uint32_t)clean_peak,
-          (uint64_t)(esp_timer_get_time() / 1000));
       if (havpe_audio_speaker_is_playing()) {
         if ((uint32_t)raw_peak > capture_echo_raw_peak) {
           capture_echo_raw_peak = (uint32_t)raw_peak;
@@ -450,68 +422,9 @@ static void capture_hardware_task(void *argument) {
         }
       }
     }
-    /*
-     * DO NOT SEND THE PROVIDER YOUR OWN VOICE.
-     *
-     * Its VAD listens to what arrives and cannot tell this device's echo from
-     * a person interrupting; when it decides it has been interrupted it
-     * CANCELS the answer it is generating. Measured: every reply came back
-     * two words long and marked complete — "One. Two." for a request to count
-     * to twelve — with nobody in the room speaking.
-     *
-     * So while the speaker is running, the uplink carries silence unless this
-     * device's own microphone says somebody is actually talking, on the same
-     * measured floor the barge-in gate uses. Real speech opens it inside one
-     * 20 ms frame and holds it open; the echo never does. This is not a
-     * half-duplex fence — the microphone keeps running and a person can still
-     * interrupt at any moment — it is a refusal to testify about a voice this
-     * device knows is its own.
-     */
-    {
-      /* On the edge into playback, the room's history stops counting. */
-      static bool was_playing;
-      const bool playing_now = havpe_audio_speaker_is_playing();
-      if (playing_now && !was_playing) {
-        iterate_kit_barge_in_forget(&capture_gate);
-      }
-      was_playing = playing_now;
-    }
-    /*
-     * `admit`, not `person_present`, and the difference is not cosmetic: only
-     * `admit` counts the decision. This site IS the decision — it is what
-     * silences an interruption — and it was calling the const, silent variant,
-     * so `gateRefused` read 0 through an entire call in which every frame was
-     * being muted. An instrument that reports zero while the thing it measures
-     * is happening is worse than no instrument, because it is believed.
-     */
-    if (havpe_audio_speaker_is_playing() &&
-        !iterate_kit_barge_in_admit(
-            &capture_gate, (uint64_t)(esp_timer_get_time() / 1000))) {
-      memset(frame.samples, 0, sizeof(frame.samples));
-      ++capture_echo_frames_muted;
-      /* `capture_clean_peak` rather than the block-local above: this frame's
-       * cancelled-plane peak, published in the same iteration. */
-      if (capture_clean_peak > capture_loudest_refused) {
-        capture_loudest_refused = capture_clean_peak;
-      }
-    }
-    {
-      const bool playing = havpe_audio_speaker_is_playing();
-      if (playing) {
-        capture_gain = CAPTURE_MAKEUP_GAIN_WHILE_PLAYING;
-      } else if (capture_gain < CAPTURE_MAKEUP_GAIN) {
-        /* One step per 20 ms frame back to full sensitivity. */
-        capture_gain += (CAPTURE_MAKEUP_GAIN -
-                         CAPTURE_MAKEUP_GAIN_WHILE_PLAYING +
-                         CAPTURE_GAIN_RECOVERY_FRAMES - 1) /
-            CAPTURE_GAIN_RECOVERY_FRAMES;
-        if (capture_gain > CAPTURE_MAKEUP_GAIN) {
-          capture_gain = CAPTURE_MAKEUP_GAIN;
-        }
-      }
-    }
+    /* The one constant, unconditionally. See CAPTURE_MAKEUP_GAIN. */
     for (size_t index = 0U; index < HAVPE_AUDIO_FRAME_SAMPLES; ++index) {
-      const int32_t amplified = (int32_t)frame.samples[index] * capture_gain;
+      const int32_t amplified = (int32_t)frame.samples[index] * CAPTURE_MAKEUP_GAIN;
       if (amplified > INT16_MAX) {
         frame.samples[index] = INT16_MAX;
         ++capture_gain_clipped_samples;
@@ -522,6 +435,25 @@ static void capture_hardware_task(void *argument) {
         frame.samples[index] = (int16_t)amplified;
       }
     }
+    /*
+     * AND THE UPLINK CARRIES IT, WHOLE, WHETHER OR NOT THE SPEAKER IS RUNNING.
+     *
+     * What stood here was a fence: while the speaker played, every frame that
+     * did not clear an absolute floor was overwritten with zeros, so that the
+     * provider's VAD would never hear this device's own echo and cancel the
+     * answer it was generating. It worked on the echo. It also deleted the
+     * person — measured, a Mac speaking a full sentence a couple of feet away
+     * came out as digital silence, and `voicelab aec` read it as -120 dBFS
+     * through a whole double-talk window.
+     *
+     * A loudness threshold cannot separate a quiet person from a loud residue,
+     * so a fence built out of one is always trading one failure for the other.
+     * The separation has to happen where the far-end reference is — the XMOS
+     * AGC stage, which is what this board's uplink now reads. Full duplex
+     * means the microphone testifies continuously and something upstream that
+     * can actually tell the two apart decides; it does not mean a device that
+     * covers its own mouth and hopes nobody spoke during it.
+     */
     if (atomic_load_explicit(
             &capture_consumer_started, memory_order_acquire) &&
         uxQueueMessagesWaiting(capture_mailbox) > 0U) {
@@ -1042,10 +974,6 @@ uint32_t havpe_audio_capture_gain_clipped(void) {
   return capture_gain_clipped_samples;
 }
 
-uint32_t havpe_audio_capture_gain(void) {
-  return (uint32_t)capture_gain;
-}
-
 uint32_t havpe_audio_capture_raw_peak(void) {
   return capture_raw_peak;
 }
@@ -1093,13 +1021,3 @@ enum iterate_kit_status havpe_audio_set_pipeline_stage(
 uint8_t havpe_audio_pipeline_stage(uint8_t channel) {
   return channel > 1U ? 0xffU : pipeline_stage[channel];
 }
-
-uint32_t havpe_audio_echo_frames_muted(void) {
-  return capture_echo_frames_muted;
-}
-
-uint32_t havpe_audio_barge_in_admitted(void) { return capture_gate.admitted; }
-
-uint32_t havpe_audio_barge_in_refused(void) { return capture_gate.rejected; }
-
-uint32_t havpe_audio_loudest_refused(void) { return capture_loudest_refused; }

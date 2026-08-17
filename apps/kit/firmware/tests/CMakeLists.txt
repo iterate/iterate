@@ -34,7 +34,6 @@ endfunction()
 
 iterate_kit_add_core_test(iterate-kit-atomic-test atomic_test.c)
 iterate_kit_add_core_test(iterate-kit-barge-in-test barge_in_test.c)
-iterate_kit_add_core_test(iterate-kit-audio-playout-test audio_playout_test.c)
 iterate_kit_add_core_test(iterate-kit-configuration-test configuration_test.c)
 iterate_kit_add_core_test(
   iterate-kit-conversation-launch-test conversation_launch_test.c)
@@ -76,6 +75,28 @@ target_link_libraries(iterate-kit-voice-loop-intent-test PRIVATE
 add_test(
   NAME iterate-kit-voice-loop-intent-test
   COMMAND iterate-kit-voice-loop-intent-test)
+
+# THE SAME LOOP, DRIVEN FROM THE AUDIO SIDE. A separate executable rather than
+# more scenarios in the file above, because the loop is a PROGRAM: its state is
+# one file-static and it brings itself up once, so a board that takes turns
+# differently is a different process. `on_control` is reachable only by
+# delivering a spk-frame batch, which is why the bug in it was in no host build.
+add_executable(
+  iterate-kit-voice-loop-answer-clock-test voice_loop_answer_clock_test.c)
+target_compile_features(
+  iterate-kit-voice-loop-answer-clock-test PRIVATE c_std_11)
+target_compile_options(iterate-kit-voice-loop-answer-clock-test PRIVATE
+  -UNDEBUG
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic)
+target_link_libraries(iterate-kit-voice-loop-answer-clock-test PRIVATE
+  iterate-kit-voice
+  iterate-kit-esp-idf-fakes)
+add_test(
+  NAME iterate-kit-voice-loop-answer-clock-test
+  COMMAND iterate-kit-voice-loop-answer-clock-test)
 
 add_executable(iterate-kit-audio-seams-test audio_seams_test.c)
 target_compile_features(iterate-kit-audio-seams-test PRIVATE c_std_99)
@@ -256,6 +277,10 @@ if(APPLE)
     ../targets/host_cli/cli_paced_sink.c
     ../targets/host_cli/cli_speaker.c
     cli_paced_sink_test.c)
+  iterate_kit_add_cli_test(
+    iterate-kit-cli-screen-test
+    ../targets/host_cli/cli_screen.c
+    cli_screen_test.c)
   iterate_kit_add_cli_test(
     iterate-kit-cli-report-test
     ../targets/host_cli/cli_report.c

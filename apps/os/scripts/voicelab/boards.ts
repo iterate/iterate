@@ -86,8 +86,6 @@ interface BoardResult {
   barge?: {
     /** Speaker writes seen at the moment the interruption was spoken. */
     spokeOverPlaybackAt: number;
-    /** The device's own count of interruptions it acted on. */
-    bargeIns: number;
     /** Answers the device abandoned mid-play, which is what stopping IS. */
     superseded: number;
     /** A second answer started after the interruption. */
@@ -263,7 +261,6 @@ export async function boards(options: BoardsOptions) {
            */
           const during = await healthWithRetry(kit);
           const startsBefore = Number(during.spkAnswerStarts ?? 0);
-          const bargeInsBefore = Number(during.bargeIns ?? 0);
           const supersededBefore = Number(during.spkSupersededMidplay ?? 0);
 
           if (board.pushToTalk) await kit.pushToTalk.start();
@@ -271,11 +268,9 @@ export async function boards(options: BoardsOptions) {
           if (board.pushToTalk) await kit.pushToTalk.stop();
 
           let answeredAgain = false;
-          let bargeIns = 0;
           let superseded = 0;
           for (let attempt = 0; attempt < 30; attempt++) {
             const health = await healthWithRetry(kit);
-            bargeIns = Number(health.bargeIns ?? 0) - bargeInsBefore;
             superseded = Number(health.spkSupersededMidplay ?? 0) - supersededBefore;
             if (Number(health.spkAnswerStarts ?? 0) > startsBefore) {
               answeredAgain = true;
@@ -288,11 +283,18 @@ export async function boards(options: BoardsOptions) {
            * talking" is the barge-in; "it then said something new" is the
            * second turn. A board that stops but never answers again is a
            * different defect from one that answers without ever stopping.
+           *
+           * THERE WERE THREE COLUMNS AND ONLY TWO CLAIMS. `bargeIns` stood
+           * beside `superseded` and reported what `answeredAgain` already did:
+           * the firmware incremented it on the `drop` that STARTS an answer, so
+           * it moved once per reply whether or not anything was interrupted.
+           * The counter is gone from the device; what is left here is the
+           * honest pair — audio was thrown away mid-play, and a new answer
+           * arrived.
            */
-          const noticed = bargeIns > 0 || superseded > 0;
+          const noticed = superseded > 0;
           record.barge = {
             spokeOverPlaybackAt: Number(during.spkWrites ?? 0),
-            bargeIns,
             superseded,
             answeredAgain,
             verdict:
@@ -305,7 +307,7 @@ export async function boards(options: BoardsOptions) {
                     : "FAIL: talked straight through the interruption",
           };
           console.error(
-            `  barge: bargeIns+${String(bargeIns)} superseded+${String(superseded)} ` +
+            `  barge: superseded+${String(superseded)} ` +
               `answeredAgain=${String(answeredAgain)} — ${record.barge.verdict}`,
           );
           record.deviceSaid = saidBack.trim();

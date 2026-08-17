@@ -59,6 +59,36 @@ export class MemoryStream implements ProcessorStream {
   now: () => number = Date.now;
   /** Simulate a transient Stream DO outage: appends of this type throw. */
   failAppendsOfType: string | undefined;
+  /**
+   * OPT-IN ASYNCHRONOUS COMMIT. Undefined — the default — is today's behaviour
+   * and every existing suite's behaviour.
+   *
+   * `append` below validates and publishes in its own SYNCHRONOUS body: it is
+   * declared `async`, but nothing inside it awaits, so the events are in
+   * `this.events` and their offsets are taken before the returned promise is
+   * even handed back. Two call sites therefore commit in the order they
+   * CALLED, whoever awaited and whoever did not. That determinism is what
+   * makes scenario steps reproducible and it is why ~250 suites rest on it.
+   *
+   * It is also a lie about production. A real append is an RPC to the Stream
+   * Durable Object; two of them can be in flight at once, and the one issued
+   * first is not guaranteed to commit first. Every ordering bug of that shape
+   * — an un-awaited append racing an awaited one, and the un-awaited one
+   * losing — is structurally invisible here.
+   *
+   * Set this and an append waits for the returned promise before it validates
+   * anything or takes an offset, so offsets are assigned at COMMIT the way the
+   * Durable Object assigns them. Return `undefined` to let a batch commit at
+   * once, which is what keeps the cost of the mode to the batches a test
+   * actually cares about.
+   *
+   * A test is expected to DECIDE which of two in-flight appends wins rather
+   * than to wait and see: a race whose loser cannot be pinned is a flake, not
+   * a test. Whatever the hook waits on must be bounded, because the fix for
+   * such a bug is usually to make the overtake impossible — and then a hook
+   * that waits for it forever hangs the suite that proves it.
+   */
+  holdAppend: ((events: readonly StreamEventInput[]) => Promise<void> | undefined) | undefined;
   /** Set by MemoryStreamNetwork.get(); a detached stream answers `at()` with itself. */
   network: MemoryStreamNetwork | undefined;
 
@@ -75,6 +105,11 @@ export class MemoryStream implements ProcessorStream {
   async kill(): Promise<void> {}
 
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
+    // Before ANYTHING else, including taking offsets: see `holdAppend`. The
+    // `undefined` check keeps the default path free of an await, so with no
+    // hook installed this method still commits inside its synchronous body.
+    const held = this.holdAppend?.(inputs);
+    if (held !== undefined) await held;
     // TWO-PHASE like the Stream DO: validate the whole batch against existing
     // AND same-batch state first, then publish — a failing input must not
     // leave earlier inputs committed (production batches are atomic).
@@ -394,6 +429,10 @@ export function makeMemoryProgressStore(
  * append wakes it or a due keepalive alarm appends the revival fact. Pass
  * another harness's `substrate` to run a second incarnation over the same
  * durable state (the zombie-race setup).
+ *
+ * Appends commit synchronously unless a suite opts out through
+ * `harness.stream.holdAppend` — the one seam for reproducing a processor that
+ * appends the same lane from two places and orders only one of them.
  */
 export function makeProcessorHarness<
   Contract extends StreamProcessorContract,

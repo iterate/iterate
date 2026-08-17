@@ -340,7 +340,7 @@ interface XaiSecret {
  * matches; silently rotating the provider key of a running project because
  * somebody ran a voice command would be a genuinely bad surprise.
  */
-async function ensureXaiSecret(itx: unknown): Promise<string> {
+export async function ensureXaiSecret(itx: unknown): Promise<string> {
   const secret = (itx as { secrets: { get(path: string): XaiSecret } }).secrets.get(XAI_SECRET);
   try {
     const described = await withRpcResult(secret.__describe(), ({ created, hasMaterial }) => ({
@@ -380,7 +380,7 @@ async function ensureXaiSecret(itx: unknown): Promise<string> {
  * because "cannot find the CLI" without saying where it looked is the class of
  * message that cost an evening on this project already.
  */
-function resolveKitDir(explicit?: string): string {
+export function resolveKitDir(explicit?: string): string {
   const here = fileURLToPath(new URL(".", import.meta.url));
   const worktree = path.resolve(here, "../../../..");
   const candidates = [
@@ -407,7 +407,7 @@ function resolveKitDir(explicit?: string): string {
  * report would describe a conversation neither of them had — so choosing one
  * is a branch rather than a set of flags that happen not to collide.
  */
-function driverArgs(options: TalkOptions, minutes: number): string[] {
+export function driverArgs(options: TalkOptions, minutes: number): string[] {
   if (options.converse === undefined) {
     return [
       ...(options.pretendSpeaker === undefined ? ["--live-audio"] : []),
@@ -437,7 +437,7 @@ function driverArgs(options: TalkOptions, minutes: number): string[] {
 }
 
 /** Incrementally build the host CLI from the current source tree. */
-function buildHostCli(kitDir: string): string {
+export function buildHostCli(kitDir: string): string {
   const firmware = path.join(kitDir, "firmware");
   const build = path.join(firmware, ".build", "voicelab");
   const binary = path.join(build, "iterate-kit-cli");
@@ -459,7 +459,7 @@ function defaultStreamPath(): string {
   return `/agents/voice/${stamp}`;
 }
 
-async function promptWithDefault(label: string, defaultValue: string): Promise<string> {
+export async function promptWithDefault(label: string, defaultValue: string): Promise<string> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return defaultValue;
   const input = createInterface({ input: process.stdin, output: process.stdout });
   try {
@@ -482,12 +482,12 @@ async function promptWithDefault(label: string, defaultValue: string): Promise<s
  * system — the C client, the stream, the facet — and burying it under one app
  * implies it belongs to that app.
  */
-function voicelabRunsDir(): string {
+export function voicelabRunsDir(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "../../../../.voicelab-runs");
 }
 
-function runInherited(command: string, args: string[], env = process.env): void {
+export function runInherited(command: string, args: string[], env = process.env): void {
   const result = spawnSync(command, args, { env, stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.signal) throw new Error(`${command} terminated by ${result.signal}`);

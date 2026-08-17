@@ -240,7 +240,7 @@ static void cli_capabilities_write_health_start(
       (int)runtime->connection.state,
       runtime->voicelab.call_active ? "true" : "false",
       runtime->voicelab.call_pending ? "true" : "false",
-      runtime->wants_call ? "true" : "false",
+      runtime->hanging_up ? "true" : "false",
       runtime->talking ? "true" : "false", gate ? "true" : "false",
       runtime->stats_sequence++, cli_runtime_now_ms(NULL),
       runtime->voicelab.frames_sent, runtime->voicelab.frame_send_failures,
@@ -267,7 +267,7 @@ static void cli_capabilities_write_health_audio(
       ",\"spkUnderruns\":%u,\"spkConceal\":%u,\"spkCatchup\":%u,"
       "\"spkWriteFailures\":%u,"
       "\"talkReadFailures\":0,\"spkMarginMaxMs\":%u,"
-      "\"spkBadFrames\":%u,\"spkSeqGaps\":%u,"
+      "\"spkBadFrames\":%u,"
       "\"spkDecodeFailures\":%u,\"bargeIns\":%u,\"batches\":%u,"
       "\"connGeneration\":%u,"
       "\"bridgeAgeMs\":%u,\"downlinkRecycles\":%u,\"batchAgeMs\":%u,"
@@ -275,7 +275,7 @@ static void cli_capabilities_write_health_audio(
       runtime->speaker_underruns, runtime->speaker_conceal_frames,
       runtime->speaker_catchup_frames,
       runtime->speaker_write_failures, runtime->speaker_margin_max_ms,
-      runtime->speaker_bad_frames, runtime->playout.gaps,
+      runtime->speaker_bad_frames,
       runtime->voicelab.spk_decode_failures, runtime->barge_in_flushes,
       runtime->voicelab.batches_on_connection,
       runtime->voicelab.connection_generation, bridge_age,
@@ -335,7 +335,14 @@ static enum capnweb_status cli_capabilities_start_call(
   (void)call;
   struct cli_capabilities *capabilities = context;
   assert(capabilities != NULL && capabilities->runtime != NULL);
-  capabilities->runtime->wants_call = true;
+  /*
+   * NOTHING TO DO, AND THAT IS THE ANSWER. This set an intent flag that made
+   * the client dial a provider. Calls are opened by the server on the first
+   * frame of speech, so the honest implementation of "start a call" is to
+   * agree that one will exist as soon as somebody talks. Kept because it is a
+   * wire contract other things call.
+   */
+  (void)capabilities;
   return cli_capabilities_reply_true(reply);
 }
 
@@ -352,7 +359,7 @@ static enum capnweb_status cli_capabilities_hang_up(
     return capnweb_reply_set_error(
         reply, "Error", "device control queue is full");
   }
-  capabilities->runtime->wants_call = false;
+  capabilities->runtime->hanging_up = true;
   return cli_capabilities_reply_true(reply);
 }
 

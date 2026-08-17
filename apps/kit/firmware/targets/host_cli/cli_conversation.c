@@ -115,7 +115,7 @@ enum cli_conversation_status cli_conversation_init(
   if (conversation->utterance_count == 0U) return CLI_CONVERSATION_ERR_EMPTY;
   qsort(conversation->utterances, conversation->utterance_count,
         sizeof(conversation->utterances[0]), cli_conversation_compare_paths);
-  conversation->state = CLI_CONVERSATION_WAIT_CALL;
+  conversation->state = CLI_CONVERSATION_WAIT_READY;
   conversation->back_office_every = options->back_office_every;
   conversation->finish_at_ms =
       options->now_ms +
@@ -135,9 +135,12 @@ void cli_conversation_poll(struct cli_runtime *runtime, uint64_t now_ms)
     return;
   }
   switch (conversation->state) {
-    case CLI_CONVERSATION_WAIT_CALL:
-      runtime->wants_call = true;
-      if (runtime->voicelab.call_active) {
+    case CLI_CONVERSATION_WAIT_READY:
+      /* A MOUNTED STREAM IS ENOUGH. This waited for `call_active` and set
+       * `wants_call` to make one happen — back when the client dialled. The
+       * server opens a call on the first frame of speech now, so waiting for
+       * one before speaking waits for something only speaking can cause. */
+      if (runtime->voicelab.state == ITERATE_KIT_VOICELAB_READY) {
         conversation->state = CLI_CONVERSATION_START_TURN;
       }
       break;
@@ -149,8 +152,8 @@ void cli_conversation_poll(struct cli_runtime *runtime, uint64_t now_ms)
       cli_conversation_finish_sending(runtime, now_ms);
       break;
     case CLI_CONVERSATION_WAIT_ANSWER:
-      if (!runtime->voicelab.call_active) {
-        conversation->state = CLI_CONVERSATION_WAIT_CALL;
+      if (runtime->voicelab.state != ITERATE_KIT_VOICELAB_READY) {
+        conversation->state = CLI_CONVERSATION_WAIT_READY;
       }
       break;
     case CLI_CONVERSATION_GAP:
@@ -172,7 +175,6 @@ void cli_conversation_finish_turn(struct cli_runtime *runtime, uint64_t now_ms)
   turn->completed_ms = now_ms;
   turn->failed = turn->frames_played == 0U;
   turn->frames_sent = runtime->voicelab.frames_sent - turn->frames_sent;
-  turn->sequence_gaps = runtime->playout.gaps - turn->sequence_gaps;
   if (turn->back_office && !turn->failed) {
     ++runtime->conversation.back_office_heard;
   }
@@ -180,12 +182,12 @@ void cli_conversation_finish_turn(struct cli_runtime *runtime, uint64_t now_ms)
       turn->failed ? "error" : "info",
       "turn=%zu complete=%s firstAudioMs=%" PRIu64
       " answerMs=%" PRIu64 " sent=%u received=%u played=%u conceal=%u"
-      " gaps=%u underruns=%u",
+      " underruns=%u",
       runtime->conversation.report.count, turn->failed ? "failure" : "ok",
       cli_report_time_to_first_audio_ms(turn),
       cli_report_time_to_answer_ms(turn), turn->frames_sent,
       turn->frames_received, turn->frames_played, turn->frames_concealed,
-      turn->sequence_gaps, turn->underruns);
+      turn->underruns);
   runtime->conversation.current_turn = NULL;
 }
 
@@ -211,6 +213,11 @@ enum cli_conversation_status cli_conversation_write_report(
     .room_starved_buffers = audio.playback_starved_buffers,
     .speaker_platform_error = audio.playback_platform_error,
     .microphone_platform_error = audio.capture_platform_error,
+    .spk_frames_received = runtime->voicelab.spk_frames_received,
+    .spk_seq_gaps = runtime->voicelab.spk_seq_gaps,
+    .spk_seq_missing = runtime->voicelab.spk_seq_missing,
+    .spk_seq_regressions = runtime->voicelab.spk_seq_regressions,
+    .spk_decode_failures = runtime->voicelab.spk_decode_failures,
   };
   const enum cli_report_status status = cli_report_write(
       &runtime->conversation.report, &summary, runtime->options.report_json);
@@ -321,8 +328,8 @@ static enum cli_conversation_status cli_conversation_start_turn(
 {
   assert(runtime != NULL);
   struct cli_conversation *conversation = &runtime->conversation;
-  if (!runtime->voicelab.call_active) {
-    conversation->state = CLI_CONVERSATION_WAIT_CALL;
+  if (runtime->voicelab.state != ITERATE_KIT_VOICELAB_READY) {
+    conversation->state = CLI_CONVERSATION_WAIT_READY;
     return CLI_CONVERSATION_OK;
   }
   const size_t number = conversation->report.count + 1U;
@@ -391,7 +398,6 @@ static void cli_conversation_begin_report(
     return;
   }
   turn->frames_sent = runtime->voicelab.frames_sent;
-  turn->sequence_gaps = runtime->playout.gaps;
   struct iterate_kit_darwin_audio_codec_metrics audio;
   iterate_kit_darwin_audio_codec_metrics(&runtime->audio_codec, &audio);
   runtime->turn_room_completed_start_bytes = audio.playback_completed_bytes;
@@ -410,7 +416,6 @@ static void cli_conversation_finish_run(
           ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM) != ITERATE_KIT_OK) {
     cli_runtime_log("error", "scripted shutdown exceeded device event bound");
   }
-  runtime->wants_call = false;
   if (runtime->conversation.current_turn != NULL) {
     /*
      * The operator's wall-clock bound cancels work; it does not prove the

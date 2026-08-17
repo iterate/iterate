@@ -30,7 +30,7 @@ enum {
  * Bring up the Home Assistant Voice Preview Edition audio path.
  *
  * Fails CLOSED on the XMOS: the DSP must report firmware 1.3.1 exactly and
- * echo back the pipeline stages written to it (ch0 = the NS uplink tap,
+ * echo back the pipeline stages written to it (ch0 = the AEC uplink tap,
  * ch1 = NONE), or this returns false — an unverified XMOS means AEC evidence
  * cannot be trusted and slave I2S would block forever on a dead clock.
  * The complete boot ordering (reset pulse, 3 s XMOS boot, AIC3204 scripts
@@ -69,7 +69,7 @@ uint32_t havpe_audio_capture_queue_overflows(void);
 /** TX DMA send-queue overflows reported by the driver ISR. */
 uint32_t havpe_audio_playback_queue_overflows(void);
 
-/** Samples the x16 capture make-up gain had to clip (lifetime). */
+/** Samples the fixed capture make-up gain had to clip (lifetime). */
 uint32_t havpe_audio_capture_gain_clipped(void);
 
 /* The absolute-deadline starvation ledger; semantics identical to the other
@@ -89,13 +89,11 @@ bool havpe_audio_speaker_is_playing(void);
  * The echo-cancellation oracle, sampled every 20 ms frame.
  *
  * `raw` is the microphone before any XMOS processing and `clean` is the same
- * instant after AEC/IC/NS, both BEFORE the make-up gain. While the speaker is
- * running, clean/raw is this board's cancellation, and it can be watched
+ * instant at whatever stage channel 0 is tapped at. Nothing scales either one
+ * on the way past — the uplink is the XMOS output unaltered — so while the
+ * speaker is running, clean/raw IS this board's cancellation, watchable
  * during a real conversation rather than reconstructed from files.
- * `capture_gain` is the make-up factor in force, which drops to one for as
- * long as the speaker is playing.
  */
-uint32_t havpe_audio_capture_gain(void);
 uint32_t havpe_audio_capture_raw_peak(void);
 uint32_t havpe_audio_capture_clean_peak(void);
 
@@ -121,21 +119,6 @@ enum iterate_kit_status havpe_audio_set_pipeline_stage(
     uint8_t channel, uint8_t stage);
 uint8_t havpe_audio_pipeline_stage(uint8_t channel);
 void havpe_audio_reset_echo_peaks(void);
-
-/** Frames of this device's own echo that were withheld from the uplink. */
-uint32_t havpe_audio_echo_frames_muted(void);
-/** Frames the barge-in gate believed were a person. */
-uint32_t havpe_audio_barge_in_admitted(void);
-/** Frames it called echo — the decision that silences an interruption. */
-uint32_t havpe_audio_barge_in_refused(void);
-/**
- * The loudest cancelled-plane peak the gate still called echo.
- *
- * The number the floor should be argued about with. If this sits close under
- * ITERATE_KIT_BARGE_IN_FLOOR across real conversations, the floor is the
- * reason interruptions do not work.
- */
-uint32_t havpe_audio_loudest_refused(void);
 
 #ifdef __cplusplus
 }

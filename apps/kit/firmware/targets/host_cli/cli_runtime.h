@@ -22,13 +22,13 @@
 #include "cli_microphone.h"
 #include "cli_options.h"
 #include "cli_paced_sink.h"
+#include "cli_screen.h"
 #include "cli_speaker.h"
 #include "cli_delivery_fault.h"
 #include "cli_device_profile.h"
 #include "cli_fault_schedule.h"
 #include "cli_virtual_clock.h"
 #include "cli_wav.h"
-#include "iterate/kit/audio_playout.h"
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
@@ -73,7 +73,6 @@ struct cli_runtime {
   uint32_t frame_sequence;
   struct cli_microphone microphone;
   struct cli_speaker speaker;
-  struct iterate_kit_playout playout;
   /* Loses, repeats and delays arriving frames per the schedule. */
   struct cli_delivery_fault delivery_fault;
   struct iterate_kit_voice_playback_clock playback_clock;
@@ -86,6 +85,21 @@ struct cli_runtime {
   struct iterate_kit_darwin_audio_codec audio_codec;
   struct iterate_kit_audio_processor audio_processor;
   struct cli_keyboard keyboard;
+  /** The one place a person reads this session; off unless interactive. */
+  struct cli_screen screen;
+  /*
+   * THE TWO CONNECTIVITY TIMESTAMPS, latched at the transition rather than
+   * derived on every draw.
+   *
+   * Both are "when did this last become true", and both are zero when it is
+   * not true now — a call that ended clears its own, because "established
+   * four minutes ago" drawn beside a dead call is the most misleading thing
+   * this screen could say. Neither can be recovered after the fact: the
+   * states they mark are edges, and the poll loop is the only thing that sees
+   * them.
+   */
+  uint64_t api_connected_at_ms;
+  uint64_t call_established_at_ms;
   /* Models the converter's clock; unpaced by default. See cli_paced_sink.h. */
   struct cli_paced_sink paced_sink;
   /* This session's adversity, drawn in full before the first frame moves. */
@@ -102,7 +116,6 @@ struct cli_runtime {
   /** A hang-up is in progress: the call is being ended before the process is. */
   bool hanging_up;
   uint64_t hangup_deadline_ms;
-  bool wants_call;
   bool wants_talk;
   bool talking;
   bool flushing_turn;
@@ -114,6 +127,22 @@ struct cli_runtime {
   uint32_t flush_frames_left;
   uint64_t flush_deadline_ms;
   uint64_t turn_started_ms;
+  /*
+   * THE ONE THING NOBODY COULD SEE: where the wait after a key comes up goes.
+   *
+   * Six hops sit between letting go of a button and hearing a reply — the
+   * loop noticing, the commit reaching the outbox, the stream carrying it, the
+   * provider being asked, the first delta coming back, and the first sample
+   * reaching the speaker — and not one of them was timed. Every diagnosis of
+   * "it takes ages" so far has been somebody's reading of a scrolling log,
+   * including two of mine that were wrong. These are stamped at the edges and
+   * differenced once, when the answer starts.
+   */
+  uint64_t turn_released_ms;
+  uint64_t turn_committed_ms;
+  uint64_t turn_answer_seen_ms;
+  uint32_t turn_release_to_commit_ms;
+  uint32_t turn_commit_to_audio_ms;
   /**
    * When this turn's answer last made progress — a frame played or arrived.
    *
@@ -137,10 +166,9 @@ struct cli_runtime {
   uint64_t next_mic_at_ms;
   uint64_t next_playback_at_ms;
   uint64_t next_stats_at_ms;
-  uint64_t next_call_attempt_at_ms;
-  uint64_t call_pending_since_ms;
   uint64_t unhealthy_since_ms;
   uint64_t last_pulse_ms;
+  uint64_t last_sink_sync_ms;
   uint64_t started_ms;
   uint32_t downlink_recycles_running;
   uint32_t stats_sequence;

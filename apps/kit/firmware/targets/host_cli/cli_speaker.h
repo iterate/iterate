@@ -4,11 +4,10 @@
 /*
  * cli_speaker: the queue between "a frame arrived" and "a frame was heard".
  *
- * It owns a byte ring and nothing else about audio. WHICH frames are worth
- * queueing is iterate_kit_playout's decision; WHEN a queued frame is due is
- * iterate_kit_voice_playback_clock's. Keeping all three apart is what makes
- * each testable, and it is the arrangement the device uses — a host copy of
- * any of those policies would prove nothing about the device.
+ * It owns a byte ring and nothing else about audio. WHEN a queued frame is
+ * due is iterate_kit_voice_playback_clock's decision. Keeping the two apart is
+ * what makes each testable, and it is the arrangement the device uses — a host
+ * copy of either policy would prove nothing about the device.
  *
  * The ring is sized from the shared profile, so the CLI cannot quietly hold
  * more audio than the board does.

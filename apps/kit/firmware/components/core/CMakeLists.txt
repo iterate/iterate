@@ -1,5 +1,4 @@
 set(ITERATE_KIT_CORE_SOURCES
-  src/audio_playout.c
   src/barge_in.c
   src/configuration.c
   src/conversation_launch.c

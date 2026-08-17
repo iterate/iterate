@@ -67,61 +67,24 @@ static const char base64_alphabet[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /*
- * G.711 mu-law: 16-bit PCM to 8 bits, halving the uplink.
+ * THE UPLINK MU-LAW ENCODER WAS HERE, AND WHY IT MIGHT HAVE TO COME BACK.
  *
- * The device could not send its own microphone. A 3-second turn put ~100 KB/s
- * of base64 PCM16 on the wire in one burst, and the TCP flow stalled dead —
- * both directions, no errors, for twenty seconds at a time, which is exactly
- * the "I hold the button and nothing happens" everyone was seeing.
+ * It was removed deliberately: two codecs on one wire is two chances for the
+ * ends to disagree, and they did — a server that read the bytes as PCM16 while
+ * the device sent mu-law produced a call that heard nothing, answered nothing
+ * and logged nothing. PCM16 both ways deletes that whole class of fault.
  *
- * mu-law is the telephone network's answer to the same problem and is
- * transparent for speech: half the bytes, and small enough per frame that
- * twice as many frames fit one append, so the MESSAGE rate falls fourfold
- * too. The bridge expands it back to PCM16 before the provider ever sees it.
+ * What it cost is on record and is NOT theoretical. Before mu-law, a 3-second
+ * turn put roughly 100 KB/s of base64 PCM16 on the wire in one burst and the
+ * TCP flow stalled dead — both directions, no errors, twenty seconds at a
+ * time. That is the "I hold the button and nothing happens" this lab spent
+ * days on. Halving the bytes fixed it, and also quartered the message rate,
+ * because twice as many frames fit one append.
+ *
+ * So the uplink is back to where that happened. A host CLI on a wired network
+ * will never show it; only a board on Wi-Fi can. If the stall returns, this is
+ * the first thing to put back, and `git log` has the exact encoder.
  */
-static uint8_t mulaw_encode_sample(int16_t sample) {
-  const int BIAS = 0x84;
-  const int CLIP = 32635;
-  const int sign = (sample >> 8) & 0x80;
-  int magnitude;
-  int exponent;
-  int mantissa;
-  /*
-   * THE MAGNITUDE IS TAKEN IN int, NOT BACK INTO int16_t.
-   *
-   * -32768 has no positive counterpart in sixteen bits. Negating it into an
-   * int16_t wrapped it straight back to -32768, so the clip below never
-   * fired, the segment search ran over a NEGATIVE magnitude, and the sample
-   * encoded as 0x7F — which expands to zero. One full-scale negative sample,
-   * which is exactly what a clipping input stage produces, became silence in
-   * the middle of loud speech: the loudest click this format can express, on
-   * the uplink, where nothing downstream could attribute it.
-   *
-   * Found by sweeping all 65536 samples through encode and expand; it was the
-   * only value in the range that did not come back.
-   */
-  int value = sign != 0 ? -(int)sample : (int)sample;
-  if (value > CLIP) value = CLIP;
-  magnitude = value + BIAS;
-  exponent = 7;
-  for (int mask = 0x4000; (magnitude & mask) == 0 && exponent > 0; mask >>= 1) {
-    --exponent;
-  }
-  mantissa = (magnitude >> (exponent + 3)) & 0x0F;
-  return (uint8_t)~(sign | (exponent << 4) | mantissa);
-}
-
-/** Encode a frame of little-endian PCM16 in place into mu-law bytes. */
-static size_t mulaw_encode(const uint8_t *pcm, size_t pcm_length, uint8_t *out) {
-  size_t index;
-  const size_t samples = pcm_length / 2U;
-  for (index = 0U; index < samples; ++index) {
-    const int16_t sample =
-        (int16_t)((uint16_t)pcm[index * 2U] | ((uint16_t)pcm[index * 2U + 1U] << 8));
-    out[index] = mulaw_encode_sample(sample);
-  }
-  return samples;
-}
 
 static size_t base64_encode(
     const uint8_t *bytes,
@@ -217,189 +180,183 @@ static bool base64_decode(
 /* --- inbound delivery batches (the exported callback capability) ---------- */
 
 /*
- * G.711 mu-law expansion, the mirror of mulaw_encode_sample above.
- *
- * The downlink carries mu-law for the same reason the uplink does: this
- * device receives 9-31 frames a second of PCM16 base64 against the 50
- * realtime needs, and conceals the shortfall. Half the bytes is the only
- * lever that does not require the far end to guess at this network.
+ * THE DOWNLINK MU-LAW EXPANDER WAS HERE. Same story as the encoder above, and
+ * the same warning: it was measured delivering 9-31 frames a second against
+ * the 50 that realtime needs, and halving the bytes was the only lever that
+ * did not require the far end to guess at this network. PCM16 is what the
+ * speaker path wants anyway, so nothing decodes anything now — but if a board
+ * starts concealing, this is where the fix went.
  */
-static int16_t mulaw_decode_sample(uint8_t encoded) {
-  static const int16_t exponent_base[8] = {
-    0, 132, 396, 924, 1980, 4092, 8316, 16764,
-  };
-  const uint8_t value = (uint8_t)~encoded;
-  const uint8_t exponent = (uint8_t)((value >> 4) & 0x07U);
-  const uint8_t mantissa = (uint8_t)(value & 0x0FU);
-  const int32_t magnitude =
-      exponent_base[exponent] + (int32_t)((uint32_t)mantissa << (exponent + 3U));
-  return (value & 0x80U) != 0U ? (int16_t)(-magnitude) : (int16_t)magnitude;
-}
 
-/** Expands `length` mu-law bytes into 2*length bytes of little-endian PCM16. */
-static size_t mulaw_expand(uint8_t *buffer, size_t length, size_t capacity) {
-  size_t index = length;
-  if (length * 2U > capacity) {
-    return 0U;
-  }
-  /* Backwards, in place: the last byte expands to the last two bytes. */
-  while (index > 0U) {
-    const int16_t sample = mulaw_decode_sample(buffer[index - 1U]);
-    buffer[(index - 1U) * 2U] = (uint8_t)((uint16_t)sample & 0xFFU);
-    buffer[(index - 1U) * 2U + 1U] = (uint8_t)(((uint16_t)sample >> 8) & 0xFFU);
-    --index;
-  }
-  return length * 2U;
-}
-
+/*
+ * THE WHOLE OF THE DEVICE'S SPEAKER POLICY: clear it, or write it.
+ *
+ * WHAT USED TO BE HERE. Every chunk carried an answer number, a frame index
+ * and a sequence, and the board ran a 230-line classifier (`audio_playout.c`)
+ * over them to work out for itself whether the audio was still wanted:
+ * high-water marks, abandoned-answer latches, restart detection, duplicate
+ * rejection. Three separate bugs in it silenced the device PERMANENTLY — each
+ * one a number the sender could never reach again — and all three were found
+ * by listening to a board go quiet and then guessing. It was answering a
+ * question the sender already knows the answer to.
+ *
+ * The sender says `drop` instead, on the first chunk of a replacing answer.
+ * It cannot be reordered against the audio it invalidates because it IS that
+ * audio, and there is nothing left to get wrong.
+ *
+ * DEDUPLICATION IS NOT DONE HERE EITHER. A make-before-break recycle really
+ * does deliver the same events twice, and that is handled one layer up by
+ * event OFFSET (`dispatch_batch`), which is where the identity of an event
+ * actually lives. Doing it again by audio content was a second answer to the
+ * same question, and the two could disagree.
+ */
 static void handle_spk_frame(
     struct iterate_kit_voicelab *voicelab,
     const struct capnweb_value *payload) {
   struct capnweb_value pcm_value;
-  struct capnweb_value sequence_value;
-  struct iterate_kit_playout_frame identity;
-  int64_t sequence = -1;
-  int64_t answer = 0;
-  int64_t frame_index = -1;
+  struct capnweb_value flag;
   size_t b64_length;
-  size_t pcm_length;
-  if (capnweb_value_object_get(payload, "seq", &sequence_value)) {
-    (void)capnweb_value_get_int64(&sequence_value, &sequence);
+  size_t chunk_length = 0U;
+  bool drop = false;
+  bool last = false;
+
+
+  if (capnweb_value_object_get(payload, "drop", &flag)) {
+    (void)capnweb_value_get_boolean(&flag, &drop);
   }
   /*
-   * `answer` and `frame` are the sender's account of WHICH answer this belongs
-   * to and where in it. They are what makes a superseded answer rejectable
-   * without a cancellation message and without a clock, so they are read from
-   * the payload and never substituted from local state — doing that once
-   * already made the "newer answer" test compare a number with itself.
+   * THE SAME INSTRUCTION UNDER THE SECOND AGENT'S NAME FOR IT.
    *
-   * A sender that omits them is one answer numbered zero whose frames are its
-   * call-wide sequence: older, but still monotonic, so nothing here breaks.
+   * `drop` named no audio: it said "empty your ring" and nothing about which
+   * answer it meant, so a late one discarded the answer that had already
+   * replaced the one it was about. The rewrite binds the clear to a numbered
+   * frame and calls it what the device DOES — clear the buffer, then play THIS
+   * frame — and the device's whole buffer policy is readable off the payload.
+   *
+   * Both are honoured, because both agents are in service and the point of
+   * running them side by side is that the instrument does not change between
+   * them. Either being true means clear.
    */
-  if (capnweb_value_object_get(payload, "answer", &sequence_value)) {
-    (void)capnweb_value_get_int64(&sequence_value, &answer);
+  if (!drop &&
+      capnweb_value_object_get(payload, "clearSpeakerBufferBeforeFrame", &flag)) {
+    (void)capnweb_value_get_boolean(&flag, &drop);
   }
-  if (capnweb_value_object_get(payload, "frame", &sequence_value)) {
-    (void)capnweb_value_get_int64(&sequence_value, &frame_index);
+  if (capnweb_value_object_get(payload, "last", &flag)) {
+    (void)capnweb_value_get_boolean(&flag, &last);
   }
-  if (!capnweb_value_object_get(payload, "pcm", &pcm_value) ||
-      capnweb_value_copy_string(
-          &pcm_value,
-          voicelab->b64_buffer,
-          sizeof(voicelab->b64_buffer),
-          &b64_length) != CAPNWEB_OK ||
-      !base64_decode(
-          voicelab->b64_buffer,
-          b64_length,
-          voicelab->pcm_buffer,
-          sizeof(voicelab->pcm_buffer),
-          &pcm_length)) {
-    ++voicelab->spk_decode_failures;
-    return;
+  /*
+   * The second agent's name for the same edge. It says what the frame MEANS —
+   * this is the last frame of the answer — rather than `last`, which needed
+   * the reader to already know what it was the last of.
+   */
+  if (!last && capnweb_value_object_get(payload, "lastFrameOfAnswer", &flag)) {
+    (void)capnweb_value_get_boolean(&flag, &last);
   }
-  if (voicelab->last_spk_sequence >= 0 &&
-      sequence > voicelab->last_spk_sequence + 1) {
-    ++voicelab->spk_seq_gaps;
-  }
-  if (sequence > voicelab->last_spk_sequence) {
-    voicelab->last_spk_sequence = sequence;
-  }
+
+  /*
+   * COUNTED BEFORE THE AUDIO IS TOUCHED, so a chunk that fails to decode is
+   * still counted as having ARRIVED. Continuity is a question about the
+   * delivery lane; whether the bytes were good is a separate counter, and
+   * folding the two would let a decode failure masquerade as a lost frame.
+   */
   {
-    /* `enc:"u"` means the payload is mu-law and doubles when expanded. */
-    struct capnweb_value encoding;
-    char encoding_text[4] = {0};
-    size_t encoding_length = 0U;
-    if (capnweb_value_object_get(payload, "enc", &encoding) &&
-        capnweb_value_copy_string(
-            &encoding, encoding_text, sizeof(encoding_text),
-            &encoding_length) == CAPNWEB_OK &&
-        encoding_text[0] == 'u') {
-      pcm_length = mulaw_expand(
-          voicelab->pcm_buffer, pcm_length, sizeof(voicelab->pcm_buffer));
-      /*
-       * A FRAME WITH NO AUDIO IS NOT A BROKEN FRAME.
-       *
-       * The sender's closing frame carries the answer's leftover remainder,
-       * and when the audio divided evenly by 640 there is no remainder — so
-       * `pcm` is empty and this expands to nothing. That is the ordinary case
-       * roughly half the time, not a decode failure.
-       *
-       * Returning here skipped the `last` handling below, so the end of the
-       * answer was never announced: the owner never drained, never released
-       * the half-duplex fence, and the next answer played into a queue that
-       * was still holding the previous one. Heard as speech that speeds up and
-       * then stops, after two or three turns of a conversation, depending on
-       * whether the deltas happened to land on a frame boundary.
-       */
-      if (pcm_length == 0U && b64_length > 0U) {
-        ++voicelab->spk_decode_failures;
-        return;
+    struct capnweb_value seq_value;
+    int64_t seq = 0;
+    if (capnweb_value_object_get(payload, "deviceSpeakerFrameSeq", &seq_value) &&
+        capnweb_value_get_int64(&seq_value, &seq)) {
+      if (voicelab->spk_seq_last >= 0) {
+        if (seq > voicelab->spk_seq_last + 1) {
+          ++voicelab->spk_seq_gaps;
+          voicelab->spk_seq_missing +=
+              (uint32_t)(seq - voicelab->spk_seq_last - 1);
+        } else if (seq <= voicelab->spk_seq_last) {
+          ++voicelab->spk_seq_regressions;
+        }
       }
+      /* Only ever forwards: a regression must not rewind the watermark, or the
+       * frames after it would each be counted as a gap in turn. */
+      if (seq > voicelab->spk_seq_last) voicelab->spk_seq_last = seq;
     }
   }
-  ++voicelab->spk_frames_received;
+
   /*
-   * BARGE-IN RIDES THE AUDIO IT INVALIDATES.
+   * `drop` FIRST, AND BEFORE ANYTHING CAN GO WRONG WITH THE AUDIO.
    *
-   * This was a separate `grok-event` carrying `speech_started`, on its own
-   * event type, and it could arrive either side of the frames it was supposed
-   * to invalidate — two lanes, one ordering question, no answer. `drop` is set
-   * on the FIRST frame of a replacing answer, so it cannot be reordered
-   * against that audio: it IS that audio.
+   * The device does not decide turns; it does what the server's frames say.
+   * `drop` is the server saying "empty your ring", and it is true whether or
+   * not this chunk carries audio, so nothing about decoding audio may stand
+   * between it and being obeyed.
    *
-   * Announced BEFORE the frame is handed over, so the owner has emptied the
-   * queue by the time this frame is classified into it.
+   * It used to sit BELOW the decode, which has an early `return` on failure.
+   * A barge-in is exactly the case where the sender has no audio left to
+   * attach the flag to — it has just thrown the answer away — so it sends the
+   * flag on an empty chunk, whose empty `pcm` string decodes to nothing, takes
+   * that early return, and never reaches the drop. The server said stop, the
+   * device agreed to obey, and the message was discarded on the doorstep for
+   * being an empty envelope. Three fixes upstream of here were measured
+   * against that and moved nothing.
    */
-  {
-    struct capnweb_value flag;
-    bool drop = false;
-    if (capnweb_value_object_get(payload, "drop", &flag)) {
-      (void)capnweb_value_get_boolean(&flag, &drop);
-    }
-    if (drop && voicelab->options.on_control != NULL) {
-      voicelab->options.on_control(
-          voicelab->options.downlink_context,
-          ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED);
-    }
-  }
-  if (voicelab->options.on_speaker != NULL) {
-    identity.call = 1U;
-    identity.answer = answer < 0 ? 0U : (uint32_t)answer;
-    identity.frame =
-        frame_index < 0 ? (uint32_t)(sequence < 0 ? 0 : sequence)
-                        : (uint32_t)frame_index;
-    voicelab->options.on_speaker(
+  if (drop && voicelab->options.on_control != NULL) {
+    voicelab->options.on_control(
         voicelab->options.downlink_context,
-        voicelab->pcm_buffer,
-        pcm_length,
-        &identity);
+        ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED);
   }
+
   /*
-   * AND THE END OF THE ANSWER RIDES ITS LAST FRAME.
-   *
-   * This was `response.done` on the `grok-event` lane, and the ordering hazard
-   * ran the other way: one small text event against hundreds of large audio
-   * events, all sent as fast as the wire takes them, so the completion
-   * routinely arrived FIRST. The comment at the old handler records what that
-   * cost when someone treated it as "the answer is over" — 258 frames received,
-   * none played, and a transcript proving the model had spoken.
-   *
-   * `last` cannot arrive early, because it is set on the final frame and that
-   * frame also carries the padded remainder that used to be dropped. Announced
-   * AFTER the frame is handed over, so the buffer the owner is about to call
-   * drained already contains everything it will ever contain.
+   * A CHUNK WITH NO AUDIO IS NOT A BROKEN CHUNK. The sender closes an answer
+   * whose audio has already all gone with a bare `last`, and that chunk is the
+   * only thing that releases the half-duplex fence. Treating it as a decode
+   * failure and returning early is what made a conversation go deaf after two
+   * or three turns.
    */
-  {
-    struct capnweb_value flag;
-    bool last = false;
-    if (capnweb_value_object_get(payload, "last", &flag)) {
-      (void)capnweb_value_get_boolean(&flag, &last);
+  if (capnweb_value_object_get(payload, "pcm", &pcm_value)) {
+    if (capnweb_value_copy_string(
+            &pcm_value,
+            voicelab->b64_buffer,
+            sizeof(voicelab->b64_buffer),
+            &b64_length) != CAPNWEB_OK ||
+        !base64_decode(
+            voicelab->b64_buffer,
+            b64_length,
+            voicelab->chunk_buffer,
+            sizeof(voicelab->chunk_buffer),
+            &chunk_length)) {
+      ++voicelab->spk_decode_failures;
+      return;
     }
-    if (last && voicelab->options.on_control != NULL) {
-      voicelab->options.on_control(
-          voicelab->options.downlink_context,
-          ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE);
-    }
+  }
+
+  /*
+   * STRAIGHT THROUGH, WHATEVER THE LENGTH. The speaker is a byte ring and the
+   * chunk is appended to the end of it; where one chunk stops and the next
+   * starts is not a thing either side has to agree on.
+   *
+   * IT USED TO GO OUT 640 BYTES AT A TIME, and that rule cost more than it ever
+   * bought. It made a chunk with anything left over on the end a protocol
+   * violation to be counted and dropped, which every chunk had, because Grok's
+   * deltas are audio of no particular length: 118 dropped chunks in three turns.
+   * Buying it back needed the sender to carry a remainder between deltas and pad
+   * an answer's tail with silence. The click that the rule was supposed to
+   * prevent cannot happen — a ring has no phase, and consecutive PCM16 samples
+   * written consecutively are the same waveform however they were cut.
+   */
+  if (chunk_length > 0U && voicelab->options.on_speaker != NULL) {
+    ++voicelab->spk_frames_received;
+    voicelab->options.on_speaker(
+        voicelab->options.downlink_context, voicelab->chunk_buffer, chunk_length);
+  }
+
+  /*
+   * AND THE END OF THE ANSWER RIDES ITS LAST CHUNK, announced AFTER the audio
+   * is handed over so the buffer the owner is about to call drained already
+   * holds everything it will ever hold. This was once a separate
+   * `response.done` on the provider's own event lane, where it routinely
+   * arrived FIRST and cost 258 received frames that were never played.
+   */
+  if (last && voicelab->options.on_control != NULL) {
+    voicelab->options.on_control(
+        voicelab->options.downlink_context,
+        ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE);
   }
 }
 
@@ -512,6 +469,17 @@ static enum capnweb_status batch_dispatch(
       }
       voicelab->call_active = true;
       voicelab->call_pending = false;
+      /*
+       * THE WATERMARK IS PER-CONVERSATION; THE TOTALS ARE PER-RUN.
+       *
+       * Sequence numbers restart at zero with each call, so carrying the
+       * watermark across one would score every new call's first frame as a
+       * regression and the rest as a fresh gap. The gap and regression TOTALS
+       * deliberately survive: the question a long session is asking is how
+       * much audio it lost in all, not how much it lost since the last time
+       * somebody pressed the button.
+       */
+      voicelab->spk_seq_last = -1;
       if (voicelab->options.on_control != NULL) {
         voicelab->options.on_control(
             voicelab->options.downlink_context,
@@ -964,6 +932,9 @@ enum capnweb_status iterate_kit_voicelab_start(
     (void)iterate_kit_voicelab_close(voicelab);
   }
   memset(voicelab, 0, sizeof(*voicelab));
+  /* -1 rather than the memset's 0, because 0 is a legal first sequence number
+   * and "none seen yet" has to be a value no frame can carry. */
+  voicelab->spk_seq_last = -1;
   if (!valid_options(options)) {
     voicelab->state = ITERATE_KIT_VOICELAB_FAILED;
     voicelab->failure = ITERATE_KIT_VOICELAB_FAILURE_INVALID_OPTIONS;
@@ -971,7 +942,6 @@ enum capnweb_status iterate_kit_voicelab_start(
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
   voicelab->options = *options;
-  voicelab->last_spk_sequence = -1;
   voicelab->last_event_offset = -1;
   voicelab->state = ITERATE_KIT_VOICELAB_AUTHENTICATING;
   project_id = (struct capnweb_expression){
@@ -1060,7 +1030,10 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
          */
         "%s{\"type\":\"events.iterate.com/voice-agent/mic-frame\",\"ephemeral\":true,"
         "\"payload\":{\"seq\":%" PRIu32
-        ",\"t\":%" PRIu64 ",\"enc\":\"u\",\"pcm\":\"",
+        /* No codec field. It said "p" for PCM16 while the servers still had a
+         * mu-law arm to avoid; with that arm gone it was a constant nobody
+         * read, sent fifty times a second. */
+        ",\"t\":%" PRIu64 ",\"pcm\":\"",
         index == 0U ? "" : ",",
         sequence + (uint32_t)index,
         captured_at_ms);
@@ -1070,15 +1043,12 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
       return CAPNWEB_E_LIMIT;
     }
     offset += (size_t)written;
-    {
-      const size_t mulaw_length =
-          mulaw_encode(frames[index], frame_length, voicelab->mulaw_buffer);
-      encoded_length = base64_encode(
-          voicelab->mulaw_buffer,
-          mulaw_length,
-          voicelab->args_buffer + offset,
-          sizeof(voicelab->args_buffer) - offset - sizeof("\"}}]"));
-    }
+    /* Straight from the capture buffer: no transcode, no staging buffer. */
+    encoded_length = base64_encode(
+        frames[index],
+        frame_length,
+        voicelab->args_buffer + offset,
+        sizeof(voicelab->args_buffer) - offset - sizeof("\"}}]"));
     if (encoded_length == 0U) {
       /* The args buffer could not hold this batch — count it, or the
        * microphone goes quiet with every counter reading zero. */
@@ -1310,6 +1280,9 @@ void iterate_kit_voicelab_forget_call(struct iterate_kit_voicelab *voicelab) {
   voicelab->call_pending = false;
   voicelab->live_bridge_id[0] = '\0';
   voicelab->last_bridge_ms = 0U;
+  /* Forgotten along with the call it belonged to — see the note where
+   * conversation-accepted resets it. */
+  voicelab->spk_seq_last = -1;
 }
 
 enum capnweb_status iterate_kit_voicelab_end_call(

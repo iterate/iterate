@@ -49,29 +49,11 @@ static void concealment_never_costs_a_real_frame(void) {
   /* Every frame that arrives after them is PLAYED. None pays for anything. */
   for (index = 0U; index < 10U; ++index) {
     assert(iterate_kit_voice_playback_clock_frame(
-               &clock, 0U, index, 0U, 1200U + index * 20U) ==
+               &clock, 0U, 0U, 1200U + index * 20U) ==
         ITERATE_KIT_VOICE_PLAYBACK_PLAY);
   }
 }
 
-/*
- * Catch-up is allowed only once per second of played audio.  A free-running
- * drop loop empties seconds of backlog in milliseconds and sounds like most
- * of the answer vanished, the production defect this rate limit prevents.
- */
-static void catchup_is_rate_limited(void) {
-  struct iterate_kit_voice_playback_clock clock;
-  const uint32_t flooded =
-      (ITERATE_KIT_VOICE_SPEAKER_HIGH_WATER_MS + 1U) * 32U;
-  iterate_kit_voice_playback_clock_init(&clock);
-  assert(iterate_kit_voice_playback_clock_frame(&clock, flooded, 0U, 0U, 1000U) ==
-      ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP);
-  assert(iterate_kit_voice_playback_clock_frame(&clock, flooded, 0U, 0U, 1020U) ==
-      ITERATE_KIT_VOICE_PLAYBACK_PLAY);
-  assert(iterate_kit_voice_playback_clock_frame(
-      &clock, flooded, ITERATE_KIT_VOICE_SPEAKER_CATCHUP_EVERY, 0U, 2000U) ==
-      ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP);
-}
 
 /*
  * response.done turns an empty ring into normal answer completion, never an
@@ -119,13 +101,13 @@ static void falling_behind_its_timeline_is_recovered(void)
   for (index = 0U; index < 20U; ++index) {
     assert(
         iterate_kit_voice_playback_clock_frame(
-            &clock, backlog, index, late, 1000U + index * 20U) ==
+            &clock, backlog, late, 1000U + index * 20U) ==
         ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP);
   }
   /* Level again: skipping stops at once, so the cut is bounded by the lag. */
   assert(
       iterate_kit_voice_playback_clock_frame(
-          &clock, backlog, 20U, level, 1400U) ==
+          &clock, backlog, level, 1400U) ==
       ITERATE_KIT_VOICE_PLAYBACK_PLAY);
   /*
    * And late with NOTHING QUEUED plays: the next frame is the live edge, so
@@ -133,27 +115,32 @@ static void falling_behind_its_timeline_is_recovered(void)
    * ate the opening of every answer — lag peaks exactly when one starts.
    */
   assert(
-      iterate_kit_voice_playback_clock_frame(&clock, 0U, 21U, late, 1500U) ==
+      iterate_kit_voice_playback_clock_frame(&clock, 0U, late, 1500U) ==
       ITERATE_KIT_VOICE_PLAYBACK_PLAY);
 }
 
 /*
- * And on time, nothing is ever dropped — however deep the queue. A whole
- * answer arriving at once is the normal case, and deleting speech from the
- * middle of it because the sender was quick is the failure the depth rule
- * had to be disabled to avoid.
+ * And on time, nothing is dropped for being deep. Deleting speech from the
+ * middle of a sentence because the sender was quick is the failure the depth
+ * rule had to be all but disabled to avoid.
+ *
+ * EIGHT SECONDS, WHICH IS TWICE THE SENDER'S BUDGET. voice-agent2 holds the
+ * device to MAX_DEVICE_SPEAKER_BACKLOG_BYTES — 128,000 bytes, four seconds —
+ * so a ring this deep is already past anything the sender should produce.
+ * Depth alone still must not cost a frame: there was a second catch-up rule
+ * that fired on exactly this, and it is gone. Lateness is the only signal.
  */
 static void a_deep_queue_on_time_loses_nothing(void)
 {
   struct iterate_kit_voice_playback_clock clock;
-  const uint32_t deep = 20000U * 32U; /* 20 seconds queued, comfortably */
+  const uint32_t deep = 8000U * 32U; /* twice the sender's budget */
   uint32_t index;
 
   iterate_kit_voice_playback_clock_init(&clock);
   for (index = 0U; index < 200U; ++index) {
     assert(
         iterate_kit_voice_playback_clock_frame(
-            &clock, deep, index, 0U, 1000U + index * 20U) ==
+            &clock, deep, 0U, 1000U + index * 20U) ==
         ITERATE_KIT_VOICE_PLAYBACK_PLAY);
   }
 }
@@ -161,7 +148,6 @@ static void a_deep_queue_on_time_loses_nothing(void)
 int main(void) {
   opening_prefill_is_exact();
   concealment_never_costs_a_real_frame();
-  catchup_is_rate_limited();
   completed_answer_returns_to_priming_without_silence();
   falling_behind_its_timeline_is_recovered();
   a_deep_queue_on_time_loses_nothing();

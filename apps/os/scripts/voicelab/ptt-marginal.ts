@@ -224,7 +224,15 @@ export interface HeardFrame {
   facetT: number;
   /** The call it belongs to. Answer numbers only mean anything inside one. */
   conversationId: string;
-  /** Which answer of that call. Restarts at 1 for every call. */
+  /**
+   * Which answer of that call, counted HERE from the `drop` bit.
+   *
+   * The sender used to stamp this on every frame, and stopped: the device's
+   * whole buffer policy is now `drop` and `last`, so a number naming which
+   * answer a chunk belongs to had no reader left on the wire. A probe that
+   * wants to tell one answer from the next counts the drops, which is the same
+   * information from the same source. Restarts at 1 for every call.
+   */
   answer: number;
 }
 
@@ -304,6 +312,8 @@ export async function pttMarginal(options: PttMarginalOptions) {
    * See `firstFrameOfNewAnswer` for why the pair, and not the number alone.
    */
   const answersSeen = new Set<string>();
+  /** Answers opened so far, per call — counted from `drop`. Lifetime, not per turn. */
+  const answersByCall = new Map<string, number>();
   let lastSpkAt = 0;
   /** The facet's stamps for the turn in flight; at most one per turn. */
   const timing: TurnMarks[] = [];
@@ -329,11 +339,17 @@ export async function pttMarginal(options: PttMarginalOptions) {
         delivered.set(event.type, (delivered.get(event.type) ?? 0) + 1);
         if (event.type === "events.iterate.com/voice-agent/spk-frame") {
           lastSpkAt = at;
+          const conversationId = String(payload.conversationId ?? "");
+          /* `drop` opens an answer, so counting drops per call reproduces the
+           * numbering the sender used to carry. */
+          if (payload.drop === true) {
+            answersByCall.set(conversationId, (answersByCall.get(conversationId) ?? 0) + 1);
+          }
           const frame: HeardFrame = {
             at,
             facetT: typeof payload.t === "number" ? payload.t : Number.NaN,
-            conversationId: String(payload.conversationId ?? ""),
-            answer: typeof payload.answer === "number" ? payload.answer : -1,
+            conversationId,
+            answer: answersByCall.get(conversationId) ?? 0,
           };
           spkAt.push(frame);
           answersSeen.add(answerKey(frame));

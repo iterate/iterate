@@ -93,3 +93,6 @@ experiments/archil-node-modules/disk-config.json
 
 # The host CLI's default playback file: an artifact of running it, not source.
 iterate-kit-playback.wav
+
+# Whisper models: build-tool input, fetched on demand. 141MB — over GitHub's limit.
+apps/kit/firmware/tools/models/

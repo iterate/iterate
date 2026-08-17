@@ -10,7 +10,7 @@
  * compile time rather than sending an invented command to hardware.
  */
 #ifndef ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE
-#define ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE 3
+#define ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE 1
 #endif
 
 #if ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE < 0 || \
@@ -85,10 +85,73 @@ iterate_kit_voice_pe_aic3204_power_up_writes(size_t *count) {
 enum iterate_kit_voice_pe_xmos_stage
 iterate_kit_voice_pe_xmos_uplink_stage(void) {
   /*
-   * XMOS exposes cumulative taps in the order AEC -> IC -> NS -> AGC. AGC is
-   * excluded because a production full-duplex run showed it expanding quiet
-   * speaker residue by roughly two orders of magnitude and retriggering server
-   * VAD. The corrected IC experiment held the control and double-talk captures
+   * AEC, WITH A FIXED GAIN AFTER IT — because the choice between the taps is a
+   * choice between two ways of being wrong, and only one of them is fixable
+   * with a constant.
+   *
+   * Measured against the real provider, two turns each, question asked out
+   * loud into the room (`voicelab aec --real --stages N`):
+   *
+   *   tap 4 AGC : room floor -39 dBFS, echo +22 dB over it. x.ai HEARD ITSELF
+   *               and cancelled its own answer 5.6 s into a count to forty.
+   *   tap 3 NS  : room floor -110 dBFS, echo +25 dB over it.
+   *   tap 1 AEC : room floor  -83 dBFS, echo +1.0 dB over it — the echo sits
+   *               AT the room floor, and whisper hears nothing of the answer.
+   *
+   * So the canceller works and the AGC undoes it. An automatic gain has to
+   * raise quiet passages to hit its target, and between the assistant's words
+   * the only thing there IS to raise is the residue; the ratio that separates
+   * a person from an echo is exactly what it spends. The device then reports
+   * its own voice to a detector that cannot know better, and the answer stops
+   * mid-word.
+   *
+   * A FIXED gain cannot do that. It moves the person and the residue by the
+   * same number of decibels, so the 30-odd dB between them at tap 1 survives
+   * intact; all it changes is that both land somewhere a provider's detector
+   * can see. That is the whole reason the constant below is a constant and
+   * must never become adaptive, ducked, or gated — every previous attempt to
+   * make it clever is what deleted the customer.
+   *
+   * The vendor ships tap 4 because it ships with wake-word-then-listen, where
+   * the microphone is not open while the speaker runs and the AGC never has to
+   * choose. Open-mic full duplex is a different problem and needs the tap
+   * underneath.
+   *
+   * XMOS exposes cumulative taps in the order AEC -> IC -> NS -> AGC, and the
+   * shipping Home Assistant Voice PE configuration selects AGC on channel 0
+   * and NS on channel 1 (esphome/components/voice_kit/__init__.py:86-90). It
+   * then feeds channel 0 to the assistant with `noise_suppression_level: 0`,
+   * `auto_gain: 0 dbfs`, `volume_multiplier: 1` (home-assistant-voice.yaml
+   * :1804-1807) — no host-side processing of any kind, because the tap is
+   * already the finished thing.
+   *
+   * The AGC stage is not a loudness knob bolted on the end. It is the only
+   * stage that receives the AEC's own opinion of the frame
+   * (modules/audio_pipelines/reference/fixed_delay/audio_pipeline_t0.c
+   * :124-131): `aec_ref_power` says how loud the far end is, `aec_corr_factor`
+   * says how much of what the microphone hears correlates with it, and
+   * `vnr_flag` says whether a voice is present at all. `AGC_PROFILE_ASR` uses
+   * those three to hold gain down while the residue is ours and let it up
+   * while a person is talking. That is echo-aware level control, tuned against
+   * this microphone array by the people who built it.
+   *
+   * Stopping at NS discards it, and this device then reimplemented it badly in
+   * userspace three times over: a fixed x16 make-up gain standing in for the
+   * level target, a duck to x1 during playback standing in for loss control,
+   * and an absolute barge-in floor with a memset standing in for the
+   * correlation test. Each of the three has a comment explaining why it is
+   * needed; each is needed only by the one before it; none of them can see
+   * `aec_corr_factor`, so none can tell echo from a person except by loudness,
+   * and by loudness a person two feet away loses. All three are deleted.
+   *
+   * The previous note here recorded a production run in which AGC "expanded
+   * quiet speaker residue by roughly two orders of magnitude and retriggered
+   * server VAD". That run had the x16 make-up gain downstream of it, so the
+   * measured expansion is at least partly ours, and it read the tap through a
+   * gate that was deleting frames. The experiment is not evidence about AGC
+   * and is not treated as any; the board's own raw/cancelled oracle decides.
+   *
+   * The corrected IC experiment held the control and double-talk captures
    * on the same path, supplied adequate spoken SNR, and kept transport and
    * network valid; it still reached only 0.888 similarity and -7.50 dB
    * residual. A corrected NS run measured two matched-path Mac-only captures at
@@ -103,18 +166,21 @@ iterate_kit_voice_pe_xmos_uplink_stage(void) {
    * VAD opened a second turn, and Grok transcribed its own exact words, "How can
    * I help?". The first measured playback windows also showed raw and processed
    * peaks of the same order, identifying an onset/convergence problem that the
-   * settled matrix could not expose. In contrast, the retained NS production
-   * run produced exactly three VAD starts for three deliberate utterances,
-   * including barge-in, with no speaker-echo turn. Select NS as the only
-   * measured stable conversational output; keep the fixed userspace gain so
-   * provider VAD sees its otherwise quiet but bounded signal.
+   * settled matrix could not expose. Both of those runs measured a tap with
+   * no loss control in front of a userspace gain that had none either, which
+   * is the arrangement being removed; they are kept because the AEC-tap
+   * onset/convergence observation is still a real thing to watch for, not
+   * because either verdict still selects a stage.
    *
    * This is deliberately guarded by the physical oracle rather than assumed
-   * from the tap name. A production run must reject this policy if the complete
-   * NS output erases or materially changes nearby speech, or if spoken far-only
-   * leakage creates any provider turn. Userspace may apply one fixed
-   * post-transport gain for provider VAD, but it must never substitute adaptive
-   * AGC, speaker-time muting, or a weakened double-talk gate.
+   * from the tap name. `aec.setStage` moves this tap at runtime, so the
+   * comparison is a measurement and not a rebuild: `voicelab aec --stages`
+   * walks 1/2/3/4 through the same four windows and reads raw-versus-cancelled
+   * off the board at each. Reject AGC here if it erases or materially changes
+   * nearby speech, or if far-only leakage opens any provider turn. What must
+   * NOT come back if it disappoints is the userspace replacement — a fixed
+   * make-up gain, a speaker-time duck, or a floor that deletes frames. Those
+   * are the three pieces of the stage this line selects, rebuilt blind.
    */
   return (enum iterate_kit_voice_pe_xmos_stage)
       ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE;

@@ -20,12 +20,19 @@
  * mid-answer delivers its successor's frames alongside its own. Every one of
  * those is a sender-side event that a socket-level adversary cannot express.
  *
- * WHAT IT IS FOR. `iterate_kit_playout` decides what to do with each arriving
- * frame from its identity — ignore, append, or replace. Its rules are unit
- * tested, but on a real run nothing ever exercised them: the provider is
- * orderly, so the duplicate branch and the gap counter were dead code in every
- * session anybody had ever recorded. This module makes those branches
- * reachable in a live conversation, deterministically, from a seed.
+ * WHAT IT IS FOR. The speaker path is a straight line — arrive, queue, play —
+ * and a straight line is only as good as what it does when the line is not
+ * straight. A live provider is orderly, so a run against one exercises the
+ * loss, repeat and reorder cases never. This module makes them happen in a
+ * real conversation, deterministically, from a seed, so a report can say what
+ * a hole in the audio sounded like rather than that none appeared.
+ *
+ * FRAMES CARRY NO IDENTITY, so neither does this. They used to arrive stamped
+ * with a call, an answer and a position, and the device ran a classifier over
+ * those three numbers; a duplicate was interesting because the classifier was
+ * supposed to recognise and refuse it. The sender now paces the audio and the
+ * device plays what it is given, so a duplicated frame is simply heard twice —
+ * still worth injecting, and nothing here has to name it.
  *
  * ORDERING IS THE WHOLE POINT. A held frame must be released BEFORE the frame
  * that displaced it is offered onward, or the reordering is a drop followed by
@@ -46,7 +53,6 @@
 #include <stdint.h>
 
 #include "cli_fault_schedule.h"
-#include "iterate/kit/audio_playout.h"
 #include "iterate/kit/voice_device_profile.h"
 
 enum {
@@ -65,13 +71,12 @@ enum cli_delivery_fault_status {
 };
 
 /**
- * One frame as it is handed onward: its identity and its audio.
+ * One frame as it is handed onward.
  *
  * `pcm` points either at the caller's own buffer or at this module's hold
  * storage, and is valid only until the next call — see OWNERSHIP above.
  */
 struct cli_delivery_frame {
-  struct iterate_kit_playout_frame identity;
   const uint8_t *pcm;
   size_t bytes;
 };
@@ -91,7 +96,6 @@ struct cli_delivery_fault_out {
  * immediately or never.
  */
 struct cli_delivery_held {
-  struct iterate_kit_playout_frame identity;
   uint8_t pcm[ITERATE_KIT_VOICE_FRAME_BYTES];
   size_t bytes;
   uint32_t remaining;
@@ -147,7 +151,6 @@ void cli_delivery_fault_configure(
  */
 enum cli_delivery_fault_status cli_delivery_fault_offer(
     struct cli_delivery_fault *fault,
-    const struct iterate_kit_playout_frame *identity,
     const uint8_t *pcm,
     size_t bytes,
     struct cli_delivery_fault_out *out);

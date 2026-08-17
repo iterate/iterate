@@ -10,6 +10,7 @@ add_executable(iterate-kit-cli
   cli_options.c
   cli_paced_sink.c
   cli_report.c
+  cli_screen.c
   cli_speaker.c
   cli_virtual_clock.c
   cli_wav.c

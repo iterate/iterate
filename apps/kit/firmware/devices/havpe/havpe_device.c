@@ -232,7 +232,6 @@ static size_t health(void *context, char *out, size_t capacity) {
      * checked: the same DSP with both taps exposed, one raw and one cancelled,
      * moved by aec.setStage above.
      */
-    {"captureGain", havpe_audio_capture_gain()},
     {"micRawPeak", havpe_audio_capture_raw_peak()},
     {"micCleanPeak", havpe_audio_capture_clean_peak()},
     {"speakerPlaying", havpe_audio_speaker_is_playing() ? 1U : 0U},
@@ -243,15 +242,6 @@ static size_t health(void *context, char *out, size_t capacity) {
     /* Driver-level DMA overflows: the slave buses' own loss signals. */
     {"captureQueueOverflows", havpe_audio_capture_queue_overflows()},
     {"playbackQueueOverflows", havpe_audio_playback_queue_overflows()},
-    /*
-     * Echo this device declined to SEND, and the driver's own copy of the
-     * gate that decided. Distinct from the loop's `bargeInsRejected`, which
-     * refuses a provider's claim; this one refuses a frame.
-     */
-    {"echoFramesMuted", havpe_audio_echo_frames_muted()},
-    {"gateAdmitted", havpe_audio_barge_in_admitted()},
-    {"gateRefused", havpe_audio_barge_in_refused()},
-    {"gateLoudestRefused", havpe_audio_loudest_refused()},
   };
   size_t used = 0U;
   size_t index;
