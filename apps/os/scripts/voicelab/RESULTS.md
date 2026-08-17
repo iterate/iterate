@@ -430,3 +430,51 @@ Which reframes "our 1.5 s feels worse than the Grok app". Server VAD costs two
 seconds of hangover; a button costs none. Push-to-talk over our stream at
 1.5–2.0 s is comparable to or faster than an open microphone straight to xAI
 at 2.3 s, and the model's own contribution is a third of a second either way.
+
+## Postscript 5: the discrepancy, identified
+
+Validated four ways before believing it: the mood follows the STREAM (both
+original streams reproduced their moods hours later), survives `kill()` (a
+fresh incarnation of the slow stream is still slow), is not distance (append
+RTT to both DOs is equal), and is not retries (`attempt: 0`, no errors, on
+every subscription of the slow stream). The server's own
+`runtimeState()` corroborates the client: hosted delivery
+`completionLatencyMs` p50 339 ms on the fast stream, 495–600 ms on the slow
+one — for a delivery to a facet in the SAME Durable Object.
+
+Two mechanisms, one multiplier (file refs in stream-event-sender.ts unless
+said otherwise):
+
+1. **The hosted lane serializes on a processing ack, and every cycle does
+   4–6 output-gated storage writes for pure-ephemeral audio.** One batch in
+   flight (`:2266`, `:2434`); the next dispatches only on ack (`:2416`).
+   Each cycle: `markInFlight` write + `setAlarm(+20s)` write — deliberately
+   issued so the output gate holds the RPC (`:2366-2375`) — then the facet
+   runner processes the batch and makes ONE DURABLE COMMIT PER BATCH
+   (stream-processor-runner.ts:745), plus keepalive `kv.put` + parent
+   `setAlarm` (stream-durable-object.ts:1372-1388), then `clearInFlight`.
+   All for ephemeral frames that cannot be replayed and need none of the
+   in-flight protection. Per-DO-host storage latency multiplies through
+   those serialized writes: 339 ms/cycle on one host, 495+ on another. A
+   50 Hz microphone produces 240 ms of audio per append batch — 339 ms
+   marginally keeps up by coalescing, 495 ms falls behind for ever.
+
+2. **The 5 s idle teardown fires between every voice turn**, and both lanes
+   resurrect expensively and independently: uplink pays a `setAlarm(now)`
+   ALARM HOP (a fresh DO invocation with no dispatch-latency guarantee — the
+   one cost nothing instruments) plus a facet re-dial and a durable
+   `connection-opened` append; downlink pays a Page → relay re-dial →
+   `openConnection`. Hence uplink p90 stalls of 3.5 s, stalls located at
+   frame 1, and the two legs going bad independently.
+
+The code's own docstring records ~25 ms/cycle when healthy — that is the
+floor these fixes would return to: (a) all-ephemeral batches skip
+markInFlight/setAlarm/watchdog; (b) the runner skips the per-batch durable
+commit when nothing durable folded; (c) pipeline ephemeral dispatch rather
+than ack-serializing it; (d) hold the idle teardown while a call is live.
+
+Prediction for the proxy bisect (deliberately falsifiable): a stateless
+WS-proxy worker in the loop — or a facet that proxies without the event
+machinery — shows none of this, because the cost is the delivery machinery's
+gated writes and ack serialization, not Workers, DOs, or facets as such.
+`direct --url` is ready to measure it.

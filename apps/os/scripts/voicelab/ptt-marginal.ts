@@ -115,6 +115,14 @@ function median(values: number[]): number | null {
   return summary === null ? null : summary.p50;
 }
 
+/** Each value minus the set's minimum: lateness against the run's own floor. */
+function latenesses(raw: (number | null)[]): ReturnType<typeof summarize> {
+  const values = raw.filter((value): value is number => value !== null);
+  if (values.length === 0) return null;
+  const floor = Math.min(...values);
+  return summarize(values.map((value) => value - floor));
+}
+
 /** What one turn cost, however it was carried. */
 interface Turn {
   /** Release -> first answer audio at this process. What a person feels. */
@@ -172,6 +180,18 @@ interface StreamTurn extends Turn {
   maxFrameGapMs: number | null;
   /** Where that gap fell. Near zero means the lane was asleep, not slow. */
   maxFrameGapAfterFrames: number | null;
+  /**
+   * RAW CROSS-CLOCK LAGS, useless alone and decisive together.
+   *
+   * `downlinkLagMs` is the heard frame's arrival here minus the facet's stamp
+   * on it: clock skew plus real delivery delay. `uplinkLagMs` is the facet
+   * seeing the release minus the release here: MINUS the same skew plus real
+   * delay. Neither is a duration — but the skew is constant for a run, so
+   * each round's lag minus the RUN'S MINIMUM is that round's lateness on that
+   * leg, and the two legs come apart without any clock protocol at all.
+   */
+  downlinkLagMs: number | null;
+  uplinkLagMs: number | null;
 }
 
 /** A direct turn, measured on the socket it was spoken into. */
@@ -565,9 +585,22 @@ export async function pttMarginal(options: PttMarginalOptions) {
       maxFrameGapAfterFrames: marks?.maxMicFrameGapAfterFrames ?? null,
     };
     if (heard === undefined) {
-      return { totalMs: null, ourMs: null, appendRttMs, clean: !faultThisTurn, ...facetSide };
+      return {
+        totalMs: null,
+        ourMs: null,
+        appendRttMs,
+        clean: !faultThisTurn,
+        downlinkLagMs: null,
+        uplinkLagMs: null,
+        ...facetSide,
+      };
     }
     const totalMs = heard.atDeviceMs - releasedAtDeviceMs;
+    const downlinkLagMs = Number.isNaN(heard.sentAtFacetMs)
+      ? null
+      : Math.round(heard.atDeviceMs - heard.sentAtFacetMs);
+    const uplinkLagMs =
+      marks === null ? null : Math.round(marks.endSeenAtFacetMs - releasedAtDeviceMs);
     const provider =
       facetSide.providerRttMs === null || facetSide.providerThinkMs === null
         ? null
@@ -577,6 +610,8 @@ export async function pttMarginal(options: PttMarginalOptions) {
       ourMs: provider === null ? null : totalMs - provider,
       appendRttMs,
       clean: !faultThisTurn,
+      downlinkLagMs,
+      uplinkLagMs,
       ...facetSide,
     };
   }
@@ -725,6 +760,22 @@ export async function pttMarginal(options: PttMarginalOptions) {
     appendRttMs: summarize(
       cleanStream.map((t) => t.appendRttMs).filter((v): v is number => v !== null),
     ),
+    /**
+     * THE TWO LEGS, SEPARATED WITHOUT A CLOCK PROTOCOL.
+     *
+     * Each round's raw lag minus the run's minimum lag on that leg is that
+     * round's LATENESS: how much longer the leg took than the best this run
+     * ever saw. The floors themselves (skew plus best-case delay, equal and
+     * opposite skews) are reported too — their SUM is the run's best-case
+     * round trip through the delivery machinery, skew cancelled.
+     */
+    downlinkLatenessMs: latenesses(cleanStream.map((t) => t.downlinkLagMs)),
+    uplinkLatenessMs: latenesses(cleanStream.map((t) => t.uplinkLagMs)),
+    bestCaseLegRoundTripMs: (() => {
+      const down = cleanStream.map((t) => t.downlinkLagMs).filter((v): v is number => v !== null);
+      const up = cleanStream.map((t) => t.uplinkLagMs).filter((v): v is number => v !== null);
+      return down.length === 0 || up.length === 0 ? null : Math.min(...down) + Math.min(...up);
+    })(),
     /** The model's own time, measured where nothing of ours can colour it. */
     providerThinkMs: summarize(
       directTurns.map((t) => t.providerMs).filter((v): v is number => v !== null),
@@ -785,6 +836,13 @@ export async function pttMarginal(options: PttMarginalOptions) {
   line("  facet's own work", report.facetMs);
   line("  facet→xAI→facet", report.providerRttFromFacetMs);
   line("  model thinking", report.providerThinkFromFacetMs);
+  line("uplink lateness", report.downlinkLatenessMs === null ? null : report.uplinkLatenessMs);
+  line("downlink lateness", report.downlinkLatenessMs);
+  if (report.bestCaseLegRoundTripMs !== null) {
+    console.log(
+      `  ${"best-case legs RTT".padEnd(22)}     ${String(report.bestCaseLegRoundTripMs).padStart(5)}ms  (run floor, skew cancelled)`,
+    );
+  }
   line("direct release→audio", report.directReleaseToAudioMs);
   line("  mac→xAI→mac", report.providerRttFromHereMs);
   line("  model thinking", report.providerThinkMs);
