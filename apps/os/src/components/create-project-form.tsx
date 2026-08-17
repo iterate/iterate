@@ -23,39 +23,54 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
 import { connectIterateSession, reconnectIterateSession } from "iterate/sdk/itx/react";
 import { parseConfigRepoTemplateReference } from "~/lib/config-repo-template-reference.ts";
+import type { ConfigRepoTemplateOption } from "~/lib/config-repo-template-options.ts";
 import { projectsListQueryKey } from "~/lib/projects-query.ts";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const DEFAULT_CONFIG_REPO_TEMPLATE_ID = "default";
+const CUSTOM_CONFIG_REPO_TEMPLATE_ID = "__custom-github-reference__";
 
-const CreateProjectInput = z.object({
-  slug: z
-    .string()
-    .trim()
-    .min(1, "Slug is required")
-    .regex(PROJECT_SLUG_PATTERN, "Slug must be lowercase kebab-case"),
-  organizationSlug: z.string(),
-  configRepoTemplate: z
-    .string()
-    .trim()
-    .superRefine((value, context) => {
-      if (value.length === 0) return;
-      try {
-        parseConfigRepoTemplateReference(value);
-      } catch (error) {
-        context.addIssue({
-          code: "custom",
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }),
-});
+const CreateProjectInput = z
+  .object({
+    slug: z
+      .string()
+      .trim()
+      .min(1, "Slug is required")
+      .regex(PROJECT_SLUG_PATTERN, "Slug must be lowercase kebab-case"),
+    organizationSlug: z.string(),
+    templateId: z.string().trim().min(1, "Project template is required"),
+    customConfigRepoTemplate: z.string().trim(),
+  })
+  .superRefine((value, context) => {
+    if (value.templateId !== CUSTOM_CONFIG_REPO_TEMPLATE_ID) return;
+    if (!value.customConfigRepoTemplate) {
+      context.addIssue({
+        code: "custom",
+        message: "GitHub template reference is required",
+        path: ["customConfigRepoTemplate"],
+      });
+      return;
+    }
+
+    try {
+      parseConfigRepoTemplateReference(value.customConfigRepoTemplate);
+    } catch (error) {
+      context.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : String(error),
+        path: ["customConfigRepoTemplate"],
+      });
+    }
+  });
 
 export function CreateProjectForm({
+  configRepoTemplates,
   onPendingChange,
 }: {
+  configRepoTemplates: ConfigRepoTemplateOption[];
   /** Fired when create submit starts/ends so a host sheet can block dismiss. */
   onPendingChange?: (pending: boolean) => void;
-} = {}) {
+}) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { refresh, session } = useAuthClient();
@@ -118,9 +133,10 @@ export function CreateProjectForm({
 
   const form = useForm({
     defaultValues: {
-      configRepoTemplate: "",
+      customConfigRepoTemplate: "",
       slug: "",
       organizationSlug: organizations[0]?.slug ?? "",
+      templateId: DEFAULT_CONFIG_REPO_TEMPLATE_ID,
     },
     validators: {
       onChange: CreateProjectInput,
@@ -128,8 +144,18 @@ export function CreateProjectForm({
     },
     onSubmit: async ({ value }) => {
       const parsed = CreateProjectInput.parse(value);
+      const selectedTemplate = configRepoTemplates.find(
+        (template) => template.id === parsed.templateId,
+      );
+      if (parsed.templateId !== CUSTOM_CONFIG_REPO_TEMPLATE_ID && selectedTemplate === undefined) {
+        throw new Error(`Unknown project template: ${JSON.stringify(parsed.templateId)}.`);
+      }
+      const configRepoTemplate =
+        parsed.templateId === CUSTOM_CONFIG_REPO_TEMPLATE_ID
+          ? parsed.customConfigRepoTemplate
+          : selectedTemplate?.reference;
       await createProject.mutateAsync({
-        ...(parsed.configRepoTemplate && { configRepoTemplate: parsed.configRepoTemplate }),
+        ...(configRepoTemplate && { configRepoTemplate }),
         slug: parsed.slug,
         organizationSlug: parsed.organizationSlug,
       });
@@ -203,31 +229,69 @@ export function CreateProjectForm({
             );
           }}
         </form.Field>
-        <form.Field name="configRepoTemplate">
+        <form.Field name="templateId">
           {(field) => {
             const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
 
             return (
               <Field data-invalid={isInvalid}>
-                <FieldLabel htmlFor={field.name}>Config template (optional)</FieldLabel>
-                <Input
-                  id={field.name}
-                  name={field.name}
-                  placeholder="github:iterate/iterate#main&path:configs/with-voice"
+                <FieldLabel htmlFor={field.name}>Project template</FieldLabel>
+                <Select
                   value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(event) => field.handleChange(event.target.value)}
-                  aria-invalid={isInvalid}
-                />
+                  onValueChange={(value) => field.handleChange(value ?? "")}
+                >
+                  <SelectTrigger id={field.name} aria-invalid={isInvalid}>
+                    <SelectValue placeholder="Select a project template" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {configRepoTemplates.map((template) => (
+                      <SelectItem key={template.id} value={template.id}>
+                        {template.label}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value={CUSTOM_CONFIG_REPO_TEMPLATE_ID}>
+                      Custom GitHub reference
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
                 <FieldDescription>
-                  Public GitHub reference. Iterate copies one pinned snapshot; it does not stay
-                  linked.
+                  Built-in templates use the files from this deployed OS revision.
                 </FieldDescription>
                 {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
               </Field>
             );
           }}
         </form.Field>
+        <form.Subscribe selector={(state) => state.values.templateId}>
+          {(templateId) =>
+            templateId === CUSTOM_CONFIG_REPO_TEMPLATE_ID ? (
+              <form.Field name="customConfigRepoTemplate">
+                {(field) => {
+                  const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
+
+                  return (
+                    <Field data-invalid={isInvalid}>
+                      <FieldLabel htmlFor={field.name}>GitHub template reference</FieldLabel>
+                      <Input
+                        id={field.name}
+                        name={field.name}
+                        placeholder="github:owner/repo#ref&path:path/to/template"
+                        value={field.state.value}
+                        onBlur={field.handleBlur}
+                        onChange={(event) => field.handleChange(event.target.value)}
+                        aria-invalid={isInvalid}
+                      />
+                      <FieldDescription>
+                        Iterate copies one pinned snapshot; it does not stay linked.
+                      </FieldDescription>
+                      {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
+                    </Field>
+                  );
+                }}
+              </form.Field>
+            ) : null
+          }
+        </form.Subscribe>
       </FieldGroup>
       <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
         {([canSubmit, isSubmitting]) => (

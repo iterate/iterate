@@ -14,6 +14,11 @@ Every template root, and every direct child under its optional `apps/`
 directory, must contain a `tsconfig.json`; the OS typecheck validates all of
 them against the current workspace packages.
 
+The OS project-creation form catalogs every direct child of `configs/` through
+Oxlint codegen. Adding a template directory therefore adds it to the same PR's
+preview dropdown, where non-default templates are pinned to that preview's
+exact GitHub commit before they are copied.
+
 Project creation accepts pnpm-style public GitHub references:
 
 ```text
