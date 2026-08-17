@@ -13,6 +13,7 @@ import { parseConfig } from "../../config.ts";
 import {
   assertGithubInstallationTokenMintAuthorized,
   mintGithubInstallationToken,
+  mintGithubRepositoryInstallationToken,
 } from "../integrations/github-app.ts";
 import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
 import type {
@@ -68,7 +69,7 @@ import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./githu
 import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts";
 import { getOrCreateArtifact, type GetOrCreateArtifactResult } from "./artifact-creation.ts";
 import { artifactWriteToken, seedArtifactRepo } from "./artifact-seeding.ts";
-import { downloadPublicGithubTemplate } from "./public-github-template.ts";
+import { downloadPublicGithubTemplate, isIterateConfigTemplate } from "./public-github-template.ts";
 
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
 const REPO_DIR = "/repo";
@@ -147,7 +148,24 @@ export class RepoDurableObject extends DurableObject<Env> {
     repo: string;
   }): Promise<{ artifactName: string; defaultBranch: string; remote: string }> {
     return this.#serializeWrite(() =>
-      this.createSeededArtifactRepo(() => downloadPublicGithubTemplate(input)),
+      this.createSeededArtifactRepo(async () => {
+        if (!isIterateConfigTemplate(input)) return downloadPublicGithubTemplate(input);
+
+        const github = parseConfig(this.env).integrations.github;
+        if (!github?.appId || !github.privateKey) {
+          throw new Error(
+            "GitHub App is not configured to download a built-in config template (appId/privateKey).",
+          );
+        }
+        const accessToken = await mintGithubRepositoryInstallationToken({
+          apiBase: "https://api.github.com",
+          appId: github.appId,
+          owner: input.owner,
+          privateKeyPem: github.privateKey.exposeSecret(),
+          repo: input.repo,
+        });
+        return downloadPublicGithubTemplate(input, { accessToken });
+      }),
     );
   }
 
