@@ -25,10 +25,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "## Project lifecycle hooks\n" +
       "\n" +
       "The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each\n" +
-      "case is ordinary userspace TypeScript: `const itx = await this.itx` gives that\n" +
-      "stateless invocation one memoized project-root session, then write whatever\n" +
-      "calls the project needs. There is no configuration-reconciliation framework\n" +
-      "around them.\n" +
+      "case is ordinary userspace TypeScript: call through `this.itx` directly, such\n" +
+      "as `await this.itx.scheduler.set(...)`. The getter memoizes the native Workers\n" +
+      "RPC promise-proxy for that stateless invocation, so nested calls pipeline\n" +
+      "without first awaiting the project root. There is no\n" +
+      "configuration-reconciliation framework around them.\n" +
       "\n" +
       "- `project/heartbeat-triggered` is the ordinary event appended by that\n" +
       "  Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary\n" +
@@ -130,10 +131,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "## Project lifecycle hooks\n" +
       "\n" +
       "The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each\n" +
-      "case is ordinary userspace TypeScript: `const itx = await this.itx` gives that\n" +
-      "stateless invocation one memoized project-root session, then write whatever\n" +
-      "calls the project needs. There is no configuration-reconciliation framework\n" +
-      "around them.\n" +
+      "case is ordinary userspace TypeScript: call through `this.itx` directly, such\n" +
+      "as `await this.itx.scheduler.set(...)`. The getter memoizes the native Workers\n" +
+      "RPC promise-proxy for that stateless invocation, so nested calls pipeline\n" +
+      "without first awaiting the project root. There is no\n" +
+      "configuration-reconciliation framework around them.\n" +
       "\n" +
       "- `project/heartbeat-triggered` is the ordinary event appended by that\n" +
       "  Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary\n" +
@@ -790,7 +792,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "   */\n" +
       "  async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {\n" +
       "    if (agentPaths.length === 0) return;\n" +
-      "    const itx = await this.itx;\n" +
+      "    const itx = this.itx;\n" +
       "    const file = await itx.repo.readFile({ path: \"AGENTS.md\" });\n" +
       "    const content =\n" +
       "      file === null\n" +
@@ -846,7 +848,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "   * cost — keep it lean.\n" +
       "   */\n" +
       "  async #publishAgentBirthDefaults(): Promise<void> {\n" +
-      "    const itx = await this.itx;\n" +
+      "    const itx = this.itx;\n" +
       "    const file = await itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
       "    const birthEvents: AgentBirthDefaultsValue[\"birthEvents\"] =\n" +
       "      file === null\n" +
@@ -897,7 +899,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    switch (event.type) {\n" +
       "      case \"events.iterate.com/project/created\": {\n" +
       "        if (event.path !== \"/\") break;\n" +
-      "        const itx = await this.itx;\n" +
+      "        const itx = this.itx;\n" +
       "        const instructions = await itx.repo.readFile({ path: \"ONBOARDING.md\" });\n" +
       "        if (instructions === null) {\n" +
       "          throw new Error(\"The default template enables onboarding but ONBOARDING.md is missing.\");\n" +
@@ -965,7 +967,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        // Any config-repo commit MAY have changed AGENTS.md — the sync's\n" +
       "        // read-compare step turns the ones that didn't into no-ops.\n" +
       "        if (event.path !== \"/repos/config\") break;\n" +
-      "        const itx = await this.itx;\n" +
+      "        const itx = this.itx;\n" +
       "        const agents = await itx.agents.list();\n" +
       "        await this.#syncAgentsMdContext(agents.map((agent) => agent.path));\n" +
       "        break;\n" +
@@ -974,13 +976,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        if (event.path !== \"/\") break;\n" +
       "        console.log(\"Project heartbeat fired\", { scheduleKey: event.payload?.scheduleKey });\n" +
       "        // Write arbitrary periodic work against itx here:\n" +
-      "        // const itx = await this.itx;\n" +
+      "        // await this.itx.scheduler.set(/* ... */);\n" +
       "        break;\n" +
       "      }\n" +
       "      case \"events.iterate.com/stream/woken\": {\n" +
       "        if (event.path !== \"/\") break;\n" +
       "        // Write arbitrary project-stream wake work against itx here:\n" +
-      "        // const itx = await this.itx;\n" +
+      "        // await this.itx.streams.get(\"/\").append(/* ... */);\n" +
       "        break;\n" +
       "      }\n" +
       "      case \"events.iterate.com/project/worker-updated\": {\n" +
@@ -988,8 +990,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        // The platform appends this only after the current config worker has\n" +
       "        // built, loaded, and answered. Put arbitrary idempotent ITX calls\n" +
       "        // directly in this case.\n" +
-      "        const itx = await this.itx;\n" +
-      "        await itx.scheduler.set({\n" +
+      "        await this.itx.scheduler.set({\n" +
       "          key: \"iterate/config/heartbeat/every-15-minutes\",\n" +
       "          recurrence: { every: 15 * 60 },\n" +
       "          script: `async (itx, schedule, trigger) => {\n" +
@@ -1018,8 +1019,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  async fetch(req: Request): Promise<Response> {\n" +
       "    const app = req.headers.get(\"x-iterate-app\");\n" +
       "    if (app === \"todo\") {\n" +
-      "      const itx = await this.itx;\n" +
-      "      const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
+      "      const authResponse = await this.fetchProjectAuth(req, { policy: \"project-member\" });\n" +
       "      if (authResponse) return authResponse;\n" +
       "      return this.#todoApp.fetch(req);\n" +
       "    }\n" +

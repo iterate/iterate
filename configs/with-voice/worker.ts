@@ -4,7 +4,7 @@ export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
   protected override async processEvent(event: StreamEvent): Promise<void> {
     if (event.type !== "events.iterate.com/project/created" || event.path !== "/") return;
 
-    const itx = await this.itx;
+    const itx = this.itx;
     const instructions = await itx.repo.readFile({ path: "ONBOARDING.md" });
     if (instructions === null) {
       throw new Error("The voice template enables onboarding but ONBOARDING.md is missing.");

@@ -47,8 +47,10 @@ is ignored") instead of fixing it.
 
 - Internal platform-only fetch paths (e.g. `ProjectEgressEntrypoint` used as
   workerd `globalOutbound`) — workerd always hands those a real `Request`.
-- `ProjectAuthPolicyRpcTarget.fetch` — it already has a deliberate
-  `ProjectAuthRpcMetadata | Request` union signature for the app-RPC lane.
+- `ProjectAuthRpcTarget.fetch` — it deliberately remains a one-argument
+  `Request` method; `IterateWorkerEntrypoint.fetchProjectAuth()` preserves an
+  app request body by sending a fresh bodyless request on paths auth may
+  decline.
 - The browser binding target already accepts `(input, init)` — no change.
 
 ## Notes

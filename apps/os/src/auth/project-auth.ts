@@ -19,25 +19,6 @@ export type ProjectAuthActor = Pick<ValidatedProjectAppSession, "userId">;
 /** The request fields consumed by the server-side auth implementation. */
 type ProjectAuthRequest = Pick<Request, "body" | "headers" | "method" | "url">;
 
-/** Metadata sent by the worker-side partial-fetch facade for body-free paths. */
-export type ProjectAuthRpcMetadata = {
-  headers: [string, string][];
-  method: string;
-  url: string;
-};
-
-export function projectAuthRequestFromRpc(
-  request: ProjectAuthRpcMetadata | Request,
-): ProjectAuthRequest {
-  if (request instanceof Request) return request;
-  return {
-    body: null,
-    headers: new Headers(request.headers),
-    method: request.method,
-    url: request.url,
-  };
-}
-
 const AUTH_COOKIE = "iterate-project-auth";
 const CALLBACK_PATH = "/_iterate/auth/callback";
 const LOGIN_PATH = "/_iterate/auth/login";

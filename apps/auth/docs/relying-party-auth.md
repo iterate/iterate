@@ -77,8 +77,9 @@ It asks its project capability for the stronger project-member gate:
 ```ts
 export class PrivateApp extends IterateWorkerEntrypoint {
   async fetch(request: Request): Promise<Response> {
-    using itx = await this.env.ITX.get();
-    const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(request);
+    const authResponse = await this.fetchProjectAuth(request, {
+      policy: "project-member",
+    });
     if (authResponse) return authResponse;
 
     return new Response("private project app");

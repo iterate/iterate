@@ -16,6 +16,10 @@ function templateFile(path: string): string {
   return PROJECT_REPO_INITIAL_FILES.find((file) => file.path === path)!.content;
 }
 
+function pipelinedProject<Project extends object>(project: Project) {
+  return Object.assign(Promise.resolve(project), project);
+}
+
 function deliver(
   worker: { processEventBatch(batch: never): Promise<void> },
   event: {
@@ -94,7 +98,7 @@ test.each([
     };
     const instance = makeWorker({
       ITERATE_WORKER_VERSION: "test",
-      ITX: { get: vi.fn(async () => project) },
+      ITX: { get: vi.fn(() => pipelinedProject(project)) },
     } as never);
 
     await deliver(instance, {
@@ -203,7 +207,7 @@ test("project lifecycle cases directly install and handle the default heartbeat"
     capabilityHosts: { get: () => ({ provideCapability: async () => null }) },
     [Symbol.dispose]: vi.fn(),
   };
-  const get = vi.fn(async () => project);
+  const get = vi.fn(() => pipelinedProject(project));
   const worker = new ProjectWorker(
     {} as never,
     {
@@ -339,7 +343,7 @@ test.each([null, ""])(
       {} as never,
       {
         ITERATE_WORKER_VERSION: "test",
-        ITX: { get: vi.fn(async () => project) },
+        ITX: { get: vi.fn(() => pipelinedProject(project)) },
       } as never,
     );
 
@@ -356,6 +360,74 @@ test.each([null, ""])(
     );
   },
 );
+
+test("the project auth helper leaves a declined request body for the app", async () => {
+  const authFetch = vi.fn(async (_request: Request) => null);
+  const todoFetch = vi.fn(async (request: Request) => new Response(await request.text()));
+  const project = {
+    auth: { get: vi.fn(() => ({ fetch: authFetch })) },
+    [Symbol.dispose]: vi.fn(),
+  };
+  const worker = new ProjectWorker(
+    {} as never,
+    {
+      ITERATE_WORKER_VERSION: "test",
+      ITX: {
+        fetch: todoFetch,
+        get: vi.fn(() => pipelinedProject(project)),
+      },
+    } as never,
+  );
+  const request = new Request("https://todo--example.iterate.app/items", {
+    body: "still here",
+    headers: { "content-type": "text/plain", "x-iterate-app": "todo" },
+    method: "POST",
+  });
+
+  await expect(worker.fetch(request).then((response) => response.text())).resolves.toBe(
+    "still here",
+  );
+  expect(authFetch).toHaveBeenCalledOnce();
+  const authRequest = authFetch.mock.calls[0]![0];
+  expect(authRequest).not.toBe(request);
+  expect(authRequest.body).toBeNull();
+  expect(authRequest.method).toBe("POST");
+  expect(authRequest.url).toBe("https://todo--example.iterate.app/items");
+  expect(Object.fromEntries(authRequest.headers)).toEqual({
+    "content-type": "text/plain",
+    "x-iterate-app": "todo",
+  });
+});
+
+test("the project auth helper transfers the callback POST that auth owns", async () => {
+  const appFetch = vi.fn();
+  const authFetch = vi.fn(async (request: Request) => new Response(await request.text()));
+  const project = {
+    auth: { get: vi.fn(() => ({ fetch: authFetch })) },
+    [Symbol.dispose]: vi.fn(),
+  };
+  const worker = new ProjectWorker(
+    {} as never,
+    {
+      ITERATE_WORKER_VERSION: "test",
+      ITX: {
+        fetch: appFetch,
+        get: vi.fn(() => pipelinedProject(project)),
+      },
+    } as never,
+  );
+  const request = new Request("https://todo--example.iterate.app/_iterate/auth/callback", {
+    body: "auth token",
+    headers: { "x-iterate-app": "todo" },
+    method: "POST",
+  });
+
+  await expect(worker.fetch(request).then((response) => response.text())).resolves.toBe(
+    "auth token",
+  );
+  expect(authFetch).toHaveBeenCalledExactlyOnceWith(request);
+  expect(appFetch).not.toHaveBeenCalled();
+});
 
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {
   // Seeded repos used to carry a 2000-line sdk.ts frozen at seed time. Now

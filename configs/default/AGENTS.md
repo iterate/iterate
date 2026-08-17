@@ -15,10 +15,11 @@ every agent.
 ## Project lifecycle hooks
 
 The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each
-case is ordinary userspace TypeScript: `const itx = await this.itx` gives that
-stateless invocation one memoized project-root session, then write whatever
-calls the project needs. There is no configuration-reconciliation framework
-around them.
+case is ordinary userspace TypeScript: call through `this.itx` directly, such
+as `await this.itx.scheduler.set(...)`. The getter memoizes the native Workers
+RPC promise-proxy for that stateless invocation, so nested calls pipeline
+without first awaiting the project root. There is no
+configuration-reconciliation framework around them.
 
 - `project/heartbeat-triggered` is the ordinary event appended by that
   Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary

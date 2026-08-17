@@ -148,8 +148,7 @@ This is the general rule for remote apps:
 The project config worker calls the project capability's partial auth fetch:
 
 ```ts
-using itx = await this.env.ITX.get();
-const denied = await itx.auth.get({ policy: "project-member" }).fetch(request);
+const denied = await this.fetchProjectAuth(request, { policy: "project-member" });
 if (denied) return denied;
 ```
 

@@ -91,7 +91,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // (idempotent per agent, so later deploys no-op).
         if (event.path !== "/") break;
         await this.#publishAgentBirthDefaults();
-        const itx = await this.itx;
+        const itx = this.itx;
         const agents = await itx.agents.list();
         await this.#handoverToHeadless(agents.map((agent) => agent.path));
         await this.#syncSystemPromptContext(agents.map((agent) => agent.path));
@@ -104,7 +104,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // the iteration loop: edit prompts/agent-system-prompt.md, commit,
         // and every agent picks it up.
         if (event.path !== "/repos/config") break;
-        const itx = await this.itx;
+        const itx = this.itx;
         const agents = await itx.agents.list();
         await this.#syncSystemPromptContext(agents.map((agent) => agent.path));
         await this.#syncAgentsMdContext(agents.map((agent) => agent.path));
@@ -159,7 +159,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    * caveat; closing it fully needs a platform-side adopt guard.)
    */
   async #handoverToHeadless(agentPaths: string[]): Promise<void> {
-    const itx = await this.itx;
+    const itx = this.itx;
     for (const path of agentPaths) {
       if (!path.startsWith("/agents/")) continue;
       if (/^\/agents\/(slack|telegram|email)\//.test(path)) continue;
@@ -201,7 +201,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    * read.
    */
   async #publishAgentBirthDefaults(): Promise<void> {
-    const itx = await this.itx;
+    const itx = this.itx;
     const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
     if (file === null) return;
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(file.content));
@@ -254,7 +254,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    */
   async #syncSystemPromptContext(agentPaths: string[]): Promise<void> {
     if (agentPaths.length === 0) return;
-    const itx = await this.itx;
+    const itx = this.itx;
     const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
     // A deleted prompt file leaves the platform prompt standing — this
     // experiment degrades to fenced-ts prompting, never to no prompt at all.
@@ -301,7 +301,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    */
   async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {
     if (agentPaths.length === 0) return;
-    const itx = await this.itx;
+    const itx = this.itx;
     const file = await itx.repo.readFile({ path: "AGENTS.md" });
     const content =
       file === null
@@ -360,7 +360,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     if (typeof payload.llmRequestOffset !== "number") return;
     if (typeof payload.content !== "string") return;
     const outcome = parseCodemodeResponse(payload.content);
-    const itx = await this.itx;
+    const itx = this.itx;
     const agent = itx.agents.get(event.path);
     if (outcome.kind === "malformed" || outcome.kind === "multiple") {
       const keySuffix =
@@ -483,7 +483,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         text,
       });
     }
-    const itx = await this.itx;
+    const itx = this.itx;
     await this.#appendUnlessAlreadyRecorded(() =>
       itx.agents.get(event.path).append({
         type: "events.iterate.com/agents/context-added",
@@ -523,7 +523,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       // form.
       const relativePath = `script-results/${executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}.${isRawText ? "txt" : "json"}`;
       const workspace = itxWorkspacePathForAgent(agentPath);
-      const itx = await this.itx;
+      const itx = this.itx;
       await itx.workspaces.get(workspace).writeFile(`${workspace}/${relativePath}`, text);
       const shown = text.slice(0, RESULT_SPILL_PREVIEW_CHARS);
       return [

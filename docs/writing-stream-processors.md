@@ -91,10 +91,12 @@ different settle policy).
 
 The default worker in each project's config repo handles raw lifecycle events
 in its literal `processEvent` switch. There is no userspace configuration
-framework: each case can `await this.itx` and run arbitrary project code
-directly. `IterateWorkerEntrypoint` memoizes that project-root session for its
-one stateless invocation; Cloudflare releases the RPC stubs with the execution
-context. This is deliberately not a Durable Object lifetime contract.
+framework: each case can run arbitrary project code directly through calls
+such as `await this.itx.scheduler.set(...)`. `IterateWorkerEntrypoint`
+memoizes the native Workers RPC promise-proxy for its one stateless invocation,
+so nested calls pipeline without first awaiting the project root. Cloudflare
+releases the RPC stubs with the execution context. This is deliberately not a
+Durable Object lifetime contract.
 
 - `project/heartbeat-triggered` is appended to `/` by a project-owned Scheduler
   script and carries only `{ scheduleKey }`.
