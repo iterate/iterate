@@ -71,6 +71,12 @@ export interface PttMarginalOptions extends VoicelabConnectOptions {
    * effect it is measuring has to be something you turn on deliberately.
    */
   appendProbe?: boolean;
+  /**
+   * Append a consumed no-op `keepalive` this often, so the delivery lanes
+   * never go idle mid-run. 0 disables — which restores the per-turn idle
+   * teardown and its resurrection costs, on purpose, for A/B runs.
+   */
+  keepWarmSeconds?: number;
 }
 
 const FRAME_MS = 20;
@@ -339,11 +345,33 @@ export async function pttMarginal(options: PttMarginalOptions) {
   const spoken = framesFromWav(options.micWav);
   console.log(
     `  ${spoken.length} frames (${((spoken.length * FRAME_MS) / 1000).toFixed(1)}s) from ` +
-      `${options.micWav}, ${rounds} rounds, alternating stream and direct\n`,
+      `${options.micWav}, ${rounds} rounds, alternating stream and direct, ` +
+      `keep-warm ${(options.keepWarmSeconds ?? 3) > 0 ? `${options.keepWarmSeconds ?? 3}s` : "OFF"}\n`,
   );
 
   using itx = await connectProject(options);
   const stream = itx.streams.get(streamPath);
+
+  /*
+   * THE LANE STAYS WARM FOR THE WHOLE RUN. The stream tears down idle
+   * delivery connections after five seconds of quiet, and every between-turn
+   * gap here is longer than that — so without this, every round pays the
+   * resurrection (an alarm hop plus a facet re-dial up, a page plus a re-dial
+   * down) and the run measures the teardown policy as much as the lane.
+   */
+  const keepWarmSeconds = options.keepWarmSeconds ?? 3;
+  const keepWarmTimer =
+    keepWarmSeconds > 0
+      ? setInterval(() => {
+          void stream
+            .append({
+              type: "events.iterate.com/voice-agent/keepalive",
+              ephemeral: true,
+              payload: {},
+            })
+            .catch(() => undefined);
+        }, keepWarmSeconds * 1_000)
+      : null;
 
   /*
    * ONLY WHAT A DEVICE SUBSCRIBES TO. The provider's verbatim `grok-event`
@@ -705,6 +733,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
         "nothing"
       }`,
     );
+    if (keepWarmTimer !== null) clearInterval(keepWarmTimer);
     closeAndDisposeRpcHandle(connection);
     direct.socket.close();
   }
@@ -724,6 +753,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
     micWav: options.micWav,
     utteranceFrames: spoken.length,
     framesPerAppend: batch,
+    keepWarmSeconds,
     /** Release -> first answer audio, with the provider already connected. */
     streamReleaseToAudioMs: summarize(streamTotals),
     directReleaseToAudioMs: summarize(directTotals),

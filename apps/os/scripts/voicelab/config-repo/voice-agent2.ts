@@ -215,6 +215,19 @@ const PCM16_BYTES_PER_MS = 32;
 /** No input from the device for this long and the call is over. */
 const IDLE_TIMEOUT_MS = 60_000;
 
+/**
+ * The idle stamp advances in steps of this, not per frame.
+ *
+ * Folding every mic frame's commit stamp made EVERY delivery batch dirty the
+ * reduced state, and the runner durably commits dirtied state once per batch,
+ * inside the delivery acknowledgement — an output-gated storage write per
+ * 240 ms of audio, paid before the next batch may dispatch. The deadline this
+ * stamp feeds is sixty seconds; knowing the device's last input to five is
+ * every bit as good, and it makes the fold a no-op for ~95% of mic batches —
+ * which is what lets the runner skip the commit entirely once it learns to.
+ */
+const IDLE_STAMP_STEP_MS = 5_000;
+
 /** How often the idle countdown looks at the facet clock. */
 const IDLE_TICK_MS = 5_000;
 
@@ -432,6 +445,27 @@ export const VoiceAgent2Contract = defineProcessorContract({
       ...EPH,
       payloadSchema: z.looseObject({}),
     },
+    /**
+     * BEING DELIVERED IS ITS WHOLE JOB.
+     *
+     * The stream tears down idle delivery connections after five seconds of
+     * quiet, and the quiet between two turns of a push-to-talk conversation
+     * is longer than that — so every turn was paying the resurrection: an
+     * alarm hop plus a facet re-dial on the way up, a page plus a re-dial on
+     * the way down. Measured as multi-second first-frame stalls at the start
+     * of a press. A client that wants the lane warm appends one of these
+     * every few seconds while its call is up; the facet consumes it and does
+     * nothing, and the delivery itself is what resets the idle clock.
+     *
+     * Deliberately NOT folded as device input: it must keep the LANE alive
+     * without keeping the CALL alive, or a crashed client's call would never
+     * hit the sixty-second deadline.
+     */
+    "events.iterate.com/voice-agent/keepalive": {
+      description: "The client is still here; consumed so the delivery lane stays warm.",
+      ...EPH,
+      payloadSchema: z.looseObject({}),
+    },
 
     "events.iterate.com/voice-agent/call-started": {
       description: "The server opened a call and what it is called.",
@@ -606,6 +640,7 @@ export const VoiceAgent2Contract = defineProcessorContract({
     "events.iterate.com/voice-agent/ptt-start",
     "events.iterate.com/voice-agent/mic-frame",
     "events.iterate.com/voice-agent/ptt-end",
+    "events.iterate.com/voice-agent/keepalive",
   ],
   emits: [
     "events.iterate.com/voice-agent/warmup-ready",
@@ -837,8 +872,10 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * a queue no restart can replay — but their commit stamps are as
          * durable as any event's, and folding the newest is what makes the idle
          * deadline outlive an eviction. `max` so a redelivered batch cannot
-         * walk the deadline backwards. */
-        return state.call === null
+         * walk the deadline backwards, and IDLE_STAMP_STEP_MS so fifty frames
+         * a second do not dirty the state fifty times a second. */
+        return state.call === null ||
+          committedAtStreamMs - state.call.lastDeviceInputAtStreamMs < IDLE_STAMP_STEP_MS
           ? state
           : {
               ...state,
@@ -932,6 +969,10 @@ export class VoiceAgent2Processor extends StreamProcessor<
         });
         return;
       }
+
+      case "events.iterate.com/voice-agent/keepalive":
+        /* Its delivery already did its work. See the contract. */
+        return;
 
       case "events.iterate.com/voice-agent/ptt-start":
       case "events.iterate.com/voice-agent/mic-frame":
