@@ -419,3 +419,37 @@ live on preview-3 (`/agents/voice2/hangup-162055`, gpt-realtime-2.1):
 4.7 s goodbye press → model speaks 3.35 s goodbye → `hang_up({})` →
 function_call_output on the flight recorder → end-requested "the model
 hung up" → ended. 69/69 unit tests.
+
+**F17 (found by the live proofs after the greenlit refactor; grok cannot
+repair a barged answer's memory AT ALL): both wire verbs are broken on
+grok.** `conversation.item.truncate` is a silent no-op — no ack, no
+error, even for a bogus item id (OpenAI errors). The fallback,
+`conversation.item.delete`, is half-implemented: it acks for
+client-created items (direct-dial probe) but answers "Item not found"
+for the assistant's own response items — the only ones a barge needs
+gone — twelve seconds after grok minted the id itself. So on grok the
+heard-prefix note is the entire repair, the PROVIDERS table says so
+(`truncates: false`), and `interject-recall` on grok is an EXPECTED
+FAIL until xAI fixes either verb: asked "how far did you get", the
+model re-counts from one, grounding on the untouchable full-count item.
+Everything else on grok is healthy — instant clear at the press, clean
+lane (zero provider errors), note delivered and acked. OpenAI passes
+the same gauntlet on the final code ("The last number I said out loud
+was 7", truncate acked at 11,287 ms heard).
+
+**The greenlit refactor, landed and live-proven** (13 commits,
+1b980cedc…f2bd30e2d): B1/B2/B6 + full append-lane discipline (zero
+floating `void append`); the Dial/Answer state collapse (26 fields →
+one object, #dialInFlight gone, fences strengthened, B5 dead by
+construction); B3+B4 (open-mic barge repairs memory; a tentative onset
+HOLDS the tail — retraction resumes it, confirmation discards it with
+heard-ms frozen at the clear); the sweeps — warmup handshake deleted
+for the platform's own `waitUntilProcessed` barrier (cold 1,251 ms,
+warm 140 ms, live), turn-timing deleted wholesale, fromProviderDeltaSeq
+deleted, dead spkBufferedMs read deleted, birth certificate split
+(existence-only `created` + content-keyed `configured`, contract
+6.0.0, dedupe live-proven), idle daemon → self-rescheduling tick chain,
+provider pins (interrupt_response/create_response/silence_duration_ms
+explicit + far_field on openai). Hot file 3,041 → ~2,900 lines with
+three bug-fix subsystems ADDED; sweeps alone were net −223. Suite 67
+green + 7 ptt-marginal + 10 pcm. Hang-up tool re-proven post-refactor.
