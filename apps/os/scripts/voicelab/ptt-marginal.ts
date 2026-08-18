@@ -106,7 +106,9 @@ const DIRECT_PROVIDERS = {
   },
   openai: {
     url: "https://api.openai.com/v1/realtime",
-    model: "gpt-realtime",
+    /* Tracks voice-agent2's default: a direct baseline on a different
+     * model than the agent dials measures the models, not our overhead. */
+    model: "gpt-realtime-2.1",
     voice: "marin",
     rate: 24_000,
     keyEnvs: ["OPENAI_API_KEY", "APP_CONFIG_OPENAI_API_KEY"],

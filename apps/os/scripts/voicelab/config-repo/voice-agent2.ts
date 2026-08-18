@@ -168,7 +168,10 @@ const PROVIDERS: Record<
   },
   openai: {
     url: "https://api.openai.com/v1/realtime",
-    model: "gpt-realtime",
+    /* The bare `gpt-realtime` alias stays on the ORIGINAL 2025 GA family
+     * for ever; the successors ship under new names. Proven through the
+     * barge/truncate/note gauntlet 2026-08-18 before becoming the default. */
+    model: "gpt-realtime-2.1",
     voice: "marin",
     rate: 24_000,
   },
