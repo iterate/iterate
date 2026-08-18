@@ -130,3 +130,27 @@ pre-diet figures on both providers, tails tighter than ever), while the
 processor lost its vestigial event machinery, the client lost two probe
 files and gained transport-owned liveness, and every remaining contract
 event has a reader.
+
+**F7 (course correction on F5, per Jonas):** the protocol pings are
+REVERTED — both the Node itx client's and the firmware keepalive retune.
+They were the wrong shape: artificial traffic pinning a stateless worker
+socket open to dodge a reconnect, the exact pinning the platform avoids.
+Capnweb stays vanilla (verified: the built package contains zero ping
+logic — the protocol supports pings; nothing sends them; browsers cannot).
+The replacement is the honest mechanism: a quiet session is ALLOWED to die,
+and the next press buries it, redials, and presses again — with the redial
+cost reported (measured ~1.2–1.35 s, dominated by connect+openConnection).
+That number is the actual product question: what the first press after a
+long pause costs. Options if 1.2 s is too dear: redial eagerly on press-down
+(the handshake hides under the utterance, exactly like the provider dial),
+or a hibernatable client channel — a platform conversation, not a ping.
+
+**F8 (environment, open):** during the redial soak, sessions died within
+SECONDS with traffic actively flowing (an answer cut at 1.4 s mid-delivery,
+a release batch timing out 4 s after a fresh redial) — a different failure
+from the clean ~30 s idle closes of last night, on the same code that ran
+24/24 forty minutes earlier. Preview-3's /api path was actively unstable in
+this hour; the redial machinery carried the run regardless. Whether the
+probe's 5 s append deadline is too tight for a degraded hour, and who
+exactly closes idle sockets (edge policy vs worker isolate eviction),
+remain open — needs worker logs during a quiet window.
