@@ -5437,7 +5437,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     this.#lazyRunner ??= new DynamicWorkerRunner({
       streamContext: this.#props.streamContext,
       exports: this.#props.ctx.exports,
-      loaderNonceScope: "parent-isolate",
+      loaderScope: "shared",
       projectId: this.#props.projectId,
       scopePath: this.#ref.path,
     });

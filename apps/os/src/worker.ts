@@ -201,7 +201,7 @@ async function apiFetch(
     const runner = new DynamicWorkerRunner({
       streamContext: { kind: "scope", scopePath: ref.path },
       exports: ctx.exports,
-      loaderNonceScope: "parent-isolate",
+      loaderScope: "shared",
       projectId: route.resolved.projectId,
       scopePath: ref.path,
     });

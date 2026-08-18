@@ -191,7 +191,7 @@ it("reuses a loaded worker within one runner but not across runner lifetimes", a
   expect(loaderNonces[2]).not.toBe(loaderNonces[0]);
 });
 
-it("shares one loaded worker across parent-isolate-scoped runners", async () => {
+it("loads shared-scope runners under the bare identity, with no nonce at all", async () => {
   h.resolveWorkerSource.mockResolvedValue({
     ok: true,
     source: {
@@ -208,31 +208,34 @@ it("shares one loaded worker across parent-isolate-scoped runners", async () => 
   h.loadResolvedWorker.mockImplementation(() => ({
     getEntrypoint: () => ({ fetch: () => Promise.resolve(new Response("ok")) }),
   }));
-  const createRunner = (loaderNonceScope?: "parent-isolate" | "runner") =>
+  const createRunner = (loaderScope?: "shared" | "runner") =>
     new DynamicWorkerRunner({
       streamContext: { kind: "scope", scopePath: inlineRef.path },
       exports: {} as ExecutionContext["exports"],
-      loaderNonceScope,
+      loaderScope,
       projectId: "prj_private",
       scopePath: inlineRef.path,
     });
 
-  await createRunner("parent-isolate").fetch({
+  await createRunner("shared").fetch({
     ref: inlineRef,
     request: new Request("https://example.com/1"),
   });
-  await createRunner("parent-isolate").fetch({
+  await createRunner("shared").fetch({
     ref: inlineRef,
     request: new Request("https://example.com/2"),
   });
   await createRunner().fetch({ ref: inlineRef, request: new Request("https://example.com/3") });
 
   const loaderNonces = h.loadResolvedWorker.mock.calls.map(([input]) => input.loaderInstanceNonce);
-  expect(loaderNonces[0]).toBe(loaderNonces[1]);
-  expect(loaderNonces[2]).not.toBe(loaderNonces[0]);
+  // Undefined IS the design: the bare identity is the key, so parent isolates
+  // coming and going mint no new billable Dynamic Workers.
+  expect(loaderNonces[0]).toBeUndefined();
+  expect(loaderNonces[1]).toBeUndefined();
+  expect(loaderNonces[2]).toEqual(expect.any(String));
 });
 
-it("moves later parent-isolate runners off a clone-skew-replaced loader", async () => {
+it("moves every later shared-scope runner onto the clone-skew recovery nonce", async () => {
   const workerFetch = vi
     .fn()
     .mockRejectedValueOnce(
@@ -259,7 +262,7 @@ it("moves later parent-isolate runners off a clone-skew-replaced loader", async 
     new DynamicWorkerRunner({
       streamContext: { kind: "scope", scopePath: inlineRef.path },
       exports: {} as ExecutionContext["exports"],
-      loaderNonceScope: "parent-isolate",
+      loaderScope: "shared",
       projectId: "prj_private",
       scopePath: inlineRef.path,
     });
@@ -269,9 +272,11 @@ it("moves later parent-isolate runners off a clone-skew-replaced loader", async 
 
   const loaderNonces = h.loadResolvedWorker.mock.calls.map(([input]) => input.loaderInstanceNonce);
   expect(loaderNonces).toHaveLength(3);
-  // The skew retry replaced the shared nonce; the next runner must reuse the
-  // replacement, never return to the known-stale shared loader.
-  expect(loaderNonces[1]).not.toBe(loaderNonces[0]);
+  // Steady state loads the bare identity; the skew retry mints a recovery
+  // nonce, and the next runner must reuse that replacement rather than
+  // return to the known-stale shared entry.
+  expect(loaderNonces[0]).toBeUndefined();
+  expect(loaderNonces[1]).toEqual(expect.any(String));
   expect(loaderNonces[2]).toBe(loaderNonces[1]);
 });
 

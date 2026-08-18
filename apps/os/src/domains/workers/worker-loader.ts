@@ -213,8 +213,9 @@ export function loadResolvedWorker({
 }: {
   bindings: WorkerBindings;
   globalOutbound: Fetcher;
-  /** The runner lifetime that minted these loopback RPC bindings. */
-  loaderInstanceNonce: string;
+  /** Extra key component partitioning the loader cache by binding lifetime.
+   * Undefined loads under the bare identity — the cheap steady state. */
+  loaderInstanceNonce: string | undefined;
   /** Reusable apps keep a content-addressed isolate warm; one-off code-mode
    * executions must not leave a cache entry behind after every unique run. */
   mode: "cached" | "one-off";
@@ -238,18 +239,18 @@ export function loadResolvedWorker({
   // the key's cardinality is a direct dollar amount: a per-request component
   // here turned ordinary traffic into ~3.9M billable identities (~$7.8k) in
   // three weeks (2026-08), while also forcing a cold isolate build on every
-  // request and every stream delivery. Never add a component that varies more
-  // often than parent-isolate lifetime without pricing it first.
+  // request and every stream delivery. Never add a key component without
+  // pricing its cardinality first.
   //
-  // Loader isolates capture the minting runner's loopback RPC bindings; using
-  // them from a mismatched lifetime fails with "Unable to deserialize cloned
-  // data due to invalid or unsupported version". The nonce scopes that
-  // lifetime (see DynamicWorkerRunner's loaderNonceScope): parent-isolate for
-  // request-scoped lanes so warm isolates are reused instead of billed and
-  // cold-started per request, per-runner for Durable Object incarnations.
-  // Build artifacts remain content-addressed and shared; only the loaded
-  // isolate is nonce-scoped. The deployment id still keeps identities easy
-  // to attribute and guarantees separation across a rollout.
+  // Loader isolates capture loopback RPC bindings minted by whoever loaded
+  // them first; using those from a mismatched lifetime fails with "Unable to
+  // deserialize cloned data due to invalid or unsupported version". The
+  // request-scoped lanes load under the bare identity below and recover from
+  // that skew reactively (see DynamicWorkerRunner's loaderScope: the retry
+  // supplies a recovery nonce); Durable Object hosts pass a per-runner nonce
+  // so an incarnation's facet isolate is never reused by its successor. Build
+  // artifacts remain content-addressed and shared. The deployment id keeps
+  // identities easy to attribute and guarantees separation across a rollout.
   const loaderIdentity = [
     "worker-loader",
     env.WORKER_SELF,
@@ -259,6 +260,9 @@ export function loadResolvedWorker({
     JSON.stringify(StreamContext.parse(streamContext)),
     resolved.cacheKey,
   ].join(":");
-  const cacheKey = [loaderIdentity, loaderInstanceNonce].join(":");
+  const cacheKey =
+    loaderInstanceNonce === undefined
+      ? loaderIdentity
+      : [loaderIdentity, loaderInstanceNonce].join(":");
   return env.LOADER.get(cacheKey, () => workerCode);
 }

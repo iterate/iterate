@@ -429,6 +429,42 @@ describe("resolveWorkerSource", () => {
     ]);
   });
 
+  test("loads the bare identity when no instance nonce is supplied", async () => {
+    const resolved = sourceFrom(
+      await resolveWorkerSource({
+        projectId: "prj_bare",
+        source: {
+          createWorker: {
+            files: { files: { "main.js": "export default {};" }, type: "inline" },
+          },
+        },
+      }),
+    );
+    const load = () =>
+      loadResolvedWorker({
+        bindings: {},
+        globalOutbound: {} as Fetcher,
+        loaderInstanceNonce: undefined,
+        mode: "cached",
+        projectId: "prj_bare",
+        resolved,
+        scopePath: "/",
+        streamContext: { kind: "scope", scopePath: "/" },
+      });
+
+    load();
+    load();
+
+    const [first, second] = h.state.loaderCalls.map(({ key }) => key);
+    // Every distinct key is a billable Dynamic Worker per day: without a
+    // nonce the key ends at the content hash, so repeat loads anywhere in
+    // the deployment converge on one identity.
+    expect(first).toBe(
+      `worker-loader:os-test:version-1:prj_bare:/:{"kind":"scope","scopePath":"/"}:${resolved.cacheKey}`,
+    );
+    expect(second).toBe(first);
+  });
+
   test("scopes loaded workers to the runner that minted their RPC bindings", async () => {
     const resolved = sourceFrom(
       await resolveWorkerSource({
