@@ -404,3 +404,18 @@ the 13:57:53Z preview deploy's DO-reset wave mid-run, not the code:
 two `conversation-accepted` 32 s apart with "Durable Object reset
 because its code was updated" across the tail. Preview evidence keeps
 its shelf life.)
+
+**F16 (the 16-agent review + tools): voice-agent2.ts reviewed from eight
+lenses with adversarial verification; tools landed and live-proven.** The
+full report — six confirmed bugs, a ~350-line simplification ledger, the
+unused-provider-features dossier, the Gemini Live dossier — is
+`2026-08-18-voice-agent2-review.md` beside this log. Tools shipped the
+same day (contract 5.0.0, clean break): the birth certificate carries
+`tools` as plain data, expressions are the platform's own persisted-
+capability shape walked from a fresh `env.ITX.get()` session per call,
+and hang_up is the expression-less base case — one atomic append of
+conversation-end-requested settled at the pacer's drain point. Proven
+live on preview-3 (`/agents/voice2/hangup-162055`, gpt-realtime-2.1):
+4.7 s goodbye press → model speaks 3.35 s goodbye → `hang_up({})` →
+function_call_output on the flight recorder → end-requested "the model
+hung up" → ended. 69/69 unit tests.
