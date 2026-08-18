@@ -977,3 +977,25 @@ ahead of that."
 80 unit tests green; deploy `entry-1`: full proof board ALL PASS (crisp/facet/userspace/
 ephemeral/push/facet-address) — stateless run+fetch, stateful env.ITX callback, and the SDK
 runner's append/read all riding the entrypoint.
+
+## Increment 40 (restore-2): Kenton's persistent-stub machinery IN USE (owner: "that's really what I want")
+
+- **The flag is ON everywhere:** `allow_irrevocable_stub_storage` in wrangler.jsonc AND on
+  every loader-loaded isolate (confinedWorker compatibilityFlags) — the whole chain is
+  restore-eligible, which the gating requires of every member.
+- **The demo is Kenton's own motivating shape:** `/keeper.js` — a USERSPACE durable object that
+  `storage.put`s its live capability handle (`env.ITX`, the ctx.exports-minted
+  IterateContextEntrypoint stub — increment 39 is what made this storable at all) and later
+  calls through the handle read back from storage. `storage.put` throws for any non-restorable
+  stub, so put succeeding + the restored call answering IS the machinery working.
+- **Proven live TWICE over:** (1) same-run stash → restored whoami → second load replays again
+  (`prove_restore.mjs`, ALL PASS first try); (2) THE CROSS-DEPLOY PROOF — handle stashed under
+  `prj_keepx42` on deploy restore-1, then a full redeploy (restore-2) killed every isolate that
+  minted it, then `useStashed` answered correctly: the restore chain replayed across total
+  isolate death. This is the property the whole KV-cached-capabilities future rests on.
+- Doctrine note: stored handles ride the ROUTED entrypoint (whoami resolves through the table),
+  so deletion-is-revocation is preserved for stored stubs exactly as the alignment doctrine
+  demands — we use his irrevocable-storage machinery without inheriting its irrevocability.
+
+80 unit tests green; deploy `restore-2`: full seven-suite board ALL PASS (crisp/facet/
+userspace/ephemeral/push/facet-address/restore).

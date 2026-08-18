@@ -1,6 +1,7 @@
 {
   "name": "project-worker",
   "main": "src/worker.ts",
+  "compatibility_flags": ["allow_irrevocable_stub_storage"],
   "compatibility_date": "2026-07-01",
   // Pure-play: NO nodejs_compat (workerd/miniflare/Raspberry-Pi portability). The runner is the lean half.
   "account_id": "04b3b57291ef2626c6a8daa9d47065a7",

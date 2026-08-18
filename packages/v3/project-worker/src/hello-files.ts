@@ -21,6 +21,22 @@ export class Counter extends DurableObject {
   // own cursor + counts in its OWN facet storage. Drives are fire-and-forget and a delivered
   // batch is only a WAKE-UP: both deliver and snapshot catch up from the stream via env.ITX (the
   // parent stub) from the OWN cursor, so a dropped drive can never leave a gap.
+  // THE RESTORE DEMO: a userspace durable object that STORES its live capability handle in its
+  // own storage and uses the restored handle later — Kenton's persistent-stub machinery end to
+  // end (storage.put accepts the ctx.exports-minted env.ITX because every chain member carries
+  // allow_irrevocable_stub_storage; storage.get replays the restore chain on use).
+  "/keeper.js": `import { DurableObject } from "cloudflare:workers";
+export class Keeper extends DurableObject {
+  async stash() {
+    await this.ctx.storage.put("itx-cap", this.env.ITX);
+    return { stashed: true };
+  }
+  async useStashed() {
+    const cap = await this.ctx.storage.get("itx-cap");
+    if (!cap) throw new Error("keeper: nothing stashed");
+    return await cap.invokeCapability("itx.whoami", []);
+  }
+}`,
   // The stateless push consumer: a plain code cap the stream drives via a push subscription
   // (target "itx.digest.run"). No cursor of its own — the stream owns offsets/retries/halt.
   "/digest.js": `export default async (itx, events, window) => {

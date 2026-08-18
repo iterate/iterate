@@ -112,6 +112,10 @@ export function confinedWorker(
 ) {
   return loader.get(cacheKey, () => ({
     compatibilityDate: "2026-07-01",
+    // Chain-enable Kenton's persistent-stub machinery: a loaded worker may STORE its env.ITX
+    // (a ctx.exports-minted entrypoint stub) in its own durable storage and get a replay-on-use
+    // handle back — every chain member needs the flag (see iterate-context-entrypoint.ts).
+    compatibilityFlags: ["allow_irrevocable_stub_storage"],
     mainModule,
     modules: { "itx.js": ITX_SURFACE_MODULE, ...modules },
     env: { ITX: host },
