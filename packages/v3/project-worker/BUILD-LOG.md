@@ -846,3 +846,46 @@ Three call sites: default-deny throws `NO_CAPABILITY_MATCH`; idempotency conflic
 (the message-regex fragility the owner flagged is gone). Human messages verbatim — the code
 rides beside them, never instead. 75 tests green; deploy `verdicts-2`: crisp 17/17, live
 fetch-lane miss = 404 by code.
+
+## Increment 35 (pump-3): THE COLLAPSE + THE SDK + THE PUMP + EPHEMERALS + QUIESCE (jam increments 1+2)
+
+The owner's go: "implement the cleanest possible version of all we said." Four suites live
+ALL PASS (crisp 17/17, facet spine, userspace SDK tally, the NEW ephemeral suite 9/9).
+
+- **The registry is DEAD.** `StreamProcessor` (core/processor.ts, 446→~370 lines and now
+  dependency-free, types only) is a PURE class that IS its own runner: the five rules, the
+  cursor, refold, `wake()`, `processEventBatch(events, window)`, `snapshot()`,
+  `waitUntilProcessed()`. The durable objects around it are thin shells: the built-in
+  `ProcessorFacet` and the injected userspace `ProcessorFacetRunner` are each five one-line
+  forwards plus construction. `runnerHooks`, `reads()`, `catchUp(name)`, `register()` — gone.
+- **DELIVERY IS PUSH-FIRST with the scan-window proof.** Append assigns offsets from ONE shared
+  sequence, commits durable rows, then PUSHES `processEventBatch(batch, {scannedAfterOffset,
+scannedThroughOffset})` into every facet row, fire-and-forget. Contiguous window → fold with
+  ZERO log reads (proven in unit tests); gap → cursor-driven repair; stale → no-op. `deliver`
+  and every nudge concept are dead.
+- **EPHEMERAL EVENTS, end to end** (owner: "we absolutely must have ephemeral events"):
+  `ephemeral: true` on the envelope (idempotencyKey rejected, loud both locally and across
+  capnweb); offsets consumed from the shared sequence, bodies NEVER in the log (no ring —
+  pushes deliver them; nothing can redeliver, by design); THE one deliberate write per append
+  batch (`maxAssignedOffset` kv — offset reuse is a corruption class); ephemeral-only windows
+  persist NOTHING processor-side; "_" never sweeps — naming the type is the opt-in; refolds are
+  durable-only. Live: 3 chunks + 2 marks, named consumer folds all 5, "_" tally sees marks
+  only, both cursors at 5 over the holes.
+- **THE SDK** (owner: "the base class is part of our SDK… isolates absolutely get zod and
+  userspace contract schemas"): build-sdk.mjs bundles src/sdk.ts (base class + the zod
+  contract helper + zod itself, 308 KiB min) into a generated module injected as
+  `processor.js`; the generic `ProcessorFacetRunner` DO rides beside it as `runner.js`.
+  Userspace writes EXACTLY what built-ins write — user-tally went from a 17-line hand-rolled
+  cursor loop to a contract + reduce on the base class; `ref.className` → `ref.export`.
+- **THE #6800 QUIESCE:** 60s after the last append/materialization, the parent's alarm aborts
+  every facet (`ctx.facets.abort` — storage kept, next push rebuilds; loss-free per the
+  output-gate research). Alarm arming is deduped (one write per quiet-period start, never per
+  append). Facet stubs are never retained across bursts.
+- **`Itx.invoke(expression)`** — the generic client door for FULL expressions (mid-path call
+  args: `itx.streams.get('/').append({...})`), found missing when the ephemeral proof tried to
+  ride the fetch lane with a non-fetch terminal (the 500s that "failed" were the terminal-fetch
+  rule working; the appends themselves committed).
+- Parent `read()` now answers `{events, scannedThroughOffset}` — the scan-window proof on pulls.
+
+79 unit tests green (the registry suite rewritten class-direct with a DO-faithful in-memory
+pump; +push-door and ephemeral blocks), typecheck clean.

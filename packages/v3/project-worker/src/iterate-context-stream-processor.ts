@@ -19,7 +19,7 @@
 
 import { z } from "zod";
 import { codedError } from "./core/errors.ts";
-import { deeper } from "./core/events.ts";
+import { deeper, defineProcessorContract } from "./core/events.ts";
 import {
   apply,
   compareSpecificity,
@@ -34,7 +34,7 @@ import {
   type Expression,
   type Match,
 } from "./core/expression.ts";
-import { defineProcessorContract, StreamProcessor, type ReduceArgs } from "./core/processor.ts";
+import { StreamProcessor, type ReduceArgs } from "./core/processor.ts";
 
 export const IterateContextContract = defineProcessorContract({
   slug: "iterate-context",
@@ -86,6 +86,7 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
 
   constructor(args: {
     stream: ConstructorParameters<typeof StreamProcessor>[0]["stream"];
+    storage: ConstructorParameters<typeof StreamProcessor>[0]["storage"];
     path: string;
     projectId: string;
     seeds: { pattern: Expression; target: Expression }[];

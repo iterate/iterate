@@ -1,9 +1,10 @@
-// core/events.ts — the stream event envelope + idempotency rules. API mirrors apps/os
-// (`packages/iterate/src/processors/schemas.ts` / `idempotency.ts`) so processors port both ways;
-// the clean room deliberately omits the pieces it doesn't have yet (ephemeral events, copiedFrom
-// subscription-copy provenance) rather than carrying dead schema.
+// core/events.ts — the stream event envelope + idempotency rules + the zod contract helper.
+// API mirrors apps/os (`packages/iterate/src/processors/schemas.ts` / `idempotency.ts`) so
+// processors port both ways. This is the ZOD side of the processor world; the base class in
+// core/processor.ts is dependency-free on purpose (it doubles as the injected userspace SDK).
 
 import { z } from "zod";
+import type { EventDefinition, ProcessorContract } from "./processor.ts";
 
 /** ONE non-resetting depth budget for every recursive JSON walk in this package (parser values,
  *  substitution, hole scans, `jsonEqual`). Cycles are impossible (everything is parsed JSON, no
@@ -18,7 +19,7 @@ export function deeper(depth: number, what: string): number {
 }
 
 /** What `append` accepts: the event body, before the stream assigns its committed identity. */
-export const StreamEventInput = z.strictObject({
+const eventInputShape = z.strictObject({
   /** Convention: `events.iterate.com/<domain>/<fact>`. */
   type: z.string().trim().min(1),
   payload: z.record(z.string(), z.unknown()).optional(),
@@ -42,11 +43,20 @@ export const StreamEventInput = z.strictObject({
     .optional(),
   /** Same key + same body = dedupe (the existing event is returned); different body = loud error. */
   idempotencyKey: z.string().trim().min(1).optional(),
+  /** An EPHEMERAL event rides the stream to live subscribers but is NEVER persisted: it consumes
+   *  an offset (which survives as a valid gap), triggers zero fold/cursor writes, and its body is
+   *  gone the moment the incarnation ends — it cannot be redelivered by anyone. `ephemeral: false`
+   *  is a loud input error, not a synonym for durable. */
+  ephemeral: z.literal(true).optional(),
 });
+export const StreamEventInput = eventInputShape.refine(
+  (e) => !(e.ephemeral && e.idempotencyKey),
+  "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
+);
 export type StreamEventInput = z.infer<typeof StreamEventInput>;
 
 /** A committed event: the input plus the identity the stream assigned at its commit point. */
-export const StreamEvent = StreamEventInput.safeExtend({
+export const StreamEvent = eventInputShape.safeExtend({
   offset: z.number().int().positive(),
   createdAt: z.string(),
   path: z.string().trim().min(1),
@@ -98,4 +108,65 @@ export function jsonEqual(a: unknown, b: unknown, depth = 0): boolean {
     );
   }
   return false;
+}
+
+// ── the zod contract helper (the host-side way to author a ProcessorContract) ──
+// Userspace SDK contracts are plain object literals with `initialState`; built-ins get schema
+// validation on top. Both produce the SAME ProcessorContract shape the base class consumes.
+
+export function defineProcessorContract<StateSchema extends z.ZodType>(contract: {
+  slug: string;
+  version: string;
+  description: string;
+  /** Must parse `{}` — the initial state is `stateSchema.parse({})` (all fields defaulted). */
+  stateSchema: StateSchema;
+  events: Record<string, EventDefinition>;
+  consumes: readonly string[];
+  emits: readonly string[];
+}): ProcessorContract<z.infer<StateSchema>> & {
+  stateSchema: StateSchema;
+  /** Build a typed input for an owned event (validates the payload against its schema). */
+  buildEvent: (event: {
+    type: string;
+    payload?: unknown;
+    idempotencyKey?: string;
+  }) => StreamEventInput;
+  /** Validate a committed event against the owned catalog (throws on unknown/malformed). */
+  parseEvent: (event: StreamEvent) => StreamEvent;
+  /** Validate an append input against the owned catalog (throws on unknown/malformed). */
+  parseEventInput: (event: StreamEventInput) => StreamEventInput;
+} {
+  const initial = contract.stateSchema.safeParse({});
+  if (!initial.success)
+    throw new Error(`contract "${contract.slug}": stateSchema must parse {} (default every field)`);
+  const payloadOf = (type: string, payload: unknown, where: string): unknown => {
+    const def = contract.events[type];
+    if (!def)
+      throw new Error(`contract "${contract.slug}": ${where} event type "${type}" is not owned`);
+    return def.payloadSchema.parse(payload ?? {});
+  };
+  return {
+    slug: contract.slug,
+    version: contract.version,
+    description: contract.description,
+    consumes: contract.consumes,
+    emits: contract.emits,
+    stateSchema: contract.stateSchema,
+    initialState: () => contract.stateSchema.parse({}) as z.infer<StateSchema>,
+    buildEvent: (event) => ({
+      type: event.type,
+      payload: payloadOf(event.type, event.payload, "buildEvent") as Record<string, unknown>,
+      ...(event.idempotencyKey ? { idempotencyKey: event.idempotencyKey } : {}),
+    }),
+    parseEvent: (event) => {
+      const parsed = StreamEvent.parse(event);
+      payloadOf(parsed.type, parsed.payload, "parseEvent");
+      return parsed;
+    },
+    parseEventInput: (event) => {
+      const parsed = StreamEventInput.parse(event);
+      payloadOf(parsed.type, parsed.payload, "parseEventInput");
+      return parsed;
+    },
+  };
 }

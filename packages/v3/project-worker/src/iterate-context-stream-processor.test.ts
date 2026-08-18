@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { parse, type Expression } from "./core/expression.ts";
 import { IterateContextStreamProcessor } from "./iterate-context-stream-processor.ts";
-import { createStreamProcessorRegistry, type ProcessorStream } from "./core/processor.ts";
+import { type ProcessorStream } from "./core/processor.ts";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
@@ -34,8 +34,16 @@ function memoryStream(path = "/") {
         if (input.idempotencyKey) byKey.set(input.idempotencyKey, event);
         return event;
       }),
-    read: (afterOffset = 0, limit = 500) =>
-      events.filter((e) => e.offset > afterOffset).slice(0, limit),
+    read: (afterOffset = 0, limit = 500) => {
+      const page = events.filter((e) => e.offset > afterOffset).slice(0, limit);
+      return Promise.resolve({
+        events: page,
+        scannedThroughOffset:
+          page.length === limit
+            ? page[page.length - 1].offset
+            : Math.max(afterOffset, events.length),
+      });
+    },
   };
   return { stream, events };
 }
@@ -75,36 +83,27 @@ const setup = (seeds: [string, string][] = []) => {
   const { stream, events } = memoryStream();
   const storage = memoryStorage();
   const roots = fakeRoots();
-  const registry = createStreamProcessorRegistry({
-    storage,
+  const host = new IterateContextStreamProcessor({
     stream,
+    storage,
     path: "/",
     projectId: "prj_t",
+    roots,
+    seeds: [
+      ...[
+        ["itx.whoami", "roots.whoami"],
+        ["itx.kv", "roots.kv"],
+        ["itx.clients", "roots.clients"],
+      ],
+      ...seeds,
+    ].map(([pattern, target]) => ({ pattern: parse(pattern), target: parse(target) })),
   });
-  const host = registry.register(
-    new IterateContextStreamProcessor({
-      stream,
-      path: "/",
-      projectId: "prj_t",
-      roots,
-      seeds: [
-        ...[
-          ["itx.whoami", "roots.whoami"],
-          ["itx.kv", "roots.kv"],
-          ["itx.clients", "roots.clients"],
-        ],
-        ...seeds,
-      ].map(([pattern, target]) => ({ pattern: parse(pattern), target: parse(target) })),
-    }),
-  );
-  const reads = registry.reads(host);
   // wire the recursion: `itx.…` inside a target re-enters resolve with the freshly folded state
   host.resolveCurrent = async (call: Expression, depth = 0) => {
-    await registry.catchUp("iterate-context");
-    return host.resolve((await reads.snapshot()).state, call, undefined, depth);
+    return host.resolve((await host.snapshot()).state, call, undefined, depth);
   };
   const invoke = (call: string) => host.resolveCurrent(parse(call));
-  return { stream, events, registry, host, reads, roots, invoke };
+  return { stream, events, host, roots, invoke };
 };
 
 describe("seeds (config provenance)", () => {
@@ -130,13 +129,12 @@ describe("seeds (config provenance)", () => {
   });
 
   test("even a smuggled event mount cannot reach roots (gate is scope-absence, not validation)", async () => {
-    const { stream, invoke, registry } = setup();
+    const { stream, invoke } = setup();
     // bypass provide() entirely — append the raw event, as a hostile writer would
     stream.append({
       type: "events.iterate.com/capability-host/capability-provided",
       payload: { pattern: ["itx", "evil"], target: ["roots", "kv"] },
     });
-    await registry.catchUp();
     await expect(invoke("itx.evil.get('a')")).rejects.toThrow(/"roots" is not in scope/);
   });
 });

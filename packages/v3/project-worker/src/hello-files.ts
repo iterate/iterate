@@ -21,22 +21,42 @@ export class Counter extends DurableObject {
   // own cursor + counts in its OWN facet storage. Drives are fire-and-forget and a delivered
   // batch is only a WAKE-UP: both deliver and snapshot catch up from the stream via env.ITX (the
   // parent stub) from the OWN cursor, so a dropped drive can never leave a gap.
-  "/user-tally.js": `import { DurableObject } from "cloudflare:workers";
-export class UserTally extends DurableObject {
-  configure() {} // identity unused — env.ITX already IS this stream
-  async #catchUp() {
-    let offset = this.ctx.storage.kv.get("offset") ?? 0;
-    const counts = this.ctx.storage.kv.get("counts") ?? {};
-    for (const e of await this.env.ITX.read(offset)) {
-      counts[e.type] = (counts[e.type] ?? 0) + 1;
-      offset = e.offset;
-    }
-    this.ctx.storage.kv.put("counts", counts);
-    this.ctx.storage.kv.put("offset", offset);
-    return { offset, state: { counts } };
+  // A userspace processor consuming a NAMED ephemeral type ("chunk" — the voice-chunk shape):
+  // naming the type is the opt-in; "*" never sweeps ephemerals.
+  "/chunky.js": `import { StreamProcessor, defineProcessorContract, z } from "./processor.js";
+const contract = defineProcessorContract({
+  slug: "chunky",
+  version: "1.0.0",
+  description: "Counts named ephemeral chunks beside durable marks.",
+  stateSchema: z.object({ chunks: z.number().default(0), marks: z.number().default(0) }),
+  events: {},
+  consumes: ["chunk", "mark"],
+  emits: [],
+});
+export class Chunky extends StreamProcessor {
+  contract = contract;
+  reduce({ event, state }) {
+    if (event.type === "chunk") return { ...state, chunks: state.chunks + 1 };
+    if (event.type === "mark") return { ...state, marks: state.marks + 1 };
   }
-  deliver() { return this.#catchUp(); }
-  snapshot() { return this.#catchUp(); }
+}`,
+  // A userspace stream processor ON THE SDK: same contract helper, same schemas, same base
+  // class as built-ins — the five rules, the cursor, refold and the read verbs all come free.
+  "/user-tally.js": `import { StreamProcessor, defineProcessorContract, z } from "./processor.js";
+const contract = defineProcessorContract({
+  slug: "user-tally",
+  version: "1.0.0",
+  description: "Counts committed events by type — the userspace SDK demo.",
+  stateSchema: z.object({ counts: z.record(z.string(), z.number()).default({}) }),
+  events: {},
+  consumes: ["*"],
+  emits: [],
+});
+export class UserTally extends StreamProcessor {
+  contract = contract;
+  reduce({ event, state }) {
+    return { counts: { ...state.counts, [event.type]: (state.counts[event.type] ?? 0) + 1 } };
+  }
 }`,
   // A fetch-serving stateless worker: an HTTP page AND a WebSocket upgrade (101) — the stand-in
   // for "a device presents a website with WebSocket functionality", reached on the fetch lane.

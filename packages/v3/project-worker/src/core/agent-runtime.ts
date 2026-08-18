@@ -44,6 +44,47 @@ export default {
 // (Reflect.apply in StatefulWorkerDurableObject.invokeCapability), the runner loads the user's
 // `DurableObject` class DIRECTLY and calls its methods — no `__HostedActor` fetch-tunnel wrapper.)
 
+// The generic userspace PROCESSOR RUNNER — the DO class every loaded processor facet hosts.
+// Injected as `runner.js` beside the SDK (`processor.js` — base class + contract helper + zod,
+// see build-sdk.mjs) and the user's own modules. The user exports
+// `class X extends StreamProcessor` from cap.js and NEVER writes a DurableObject; identity
+// (which export, whose stream) arrives via the same durable first-contact `configure` the
+// built-in facet uses. `env.ITX` is the owning Stream DO, so append/read are direct RPC.
+export const PROCESSOR_RUNNER_MODULE = /* js */ `
+import { DurableObject } from "cloudflare:workers";
+import * as user from "./cap.js";
+
+export class ProcessorFacetRunner extends DurableObject {
+  #p;
+  configure(identity) { this.ctx.storage.kv.put("identity", identity); return { ok: true }; }
+  #processor() {
+    if (this.#p) return this.#p;
+    const identity = this.ctx.storage.kv.get("identity");
+    if (!identity) throw new Error("processor runner: not configured (call configure() first)");
+    const C = user[identity.export ?? "default"];
+    if (typeof C !== "function")
+      throw new Error("processor runner: no processor export " + JSON.stringify(identity.export));
+    this.#p = new C({
+      stream: {
+        append: (...events) => this.env.ITX.append(...events),
+        read: (after, limit) => this.env.ITX.read(after, limit),
+      },
+      storage: {
+        get: (key) => this.ctx.storage.kv.get(key),
+        put: (key, value) => this.ctx.storage.kv.put(key, value),
+      },
+      path: identity.path,
+      projectId: identity.projectId,
+    });
+    return this.#p;
+  }
+  processEventBatch(events, window) { return this.#processor().processEventBatch(events, window); }
+  snapshot() { return this.#processor().snapshot(); }
+  waitUntilProcessed(input) { return this.#processor().waitUntilProcessed(input); }
+}
+export default { fetch: () => new Response("processor facet runner\\n") };
+`;
+
 /** Load a confined dynamic worker — THE one loader wiring (stateless code caps, userspace facet
  *  processors, the stateful runner all ride it). The confinement contract, stated once: `itx.js`
  *  (the dotted surface above) is always injected, and the worker's WHOLE world — `env.ITX` and

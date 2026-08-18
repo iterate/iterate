@@ -24,7 +24,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import { confinedWorker } from "./core/agent-runtime.ts";
+import { confinedWorker, PROCESSOR_RUNNER_MODULE } from "./core/agent-runtime.ts";
 import { codedError } from "./core/errors.ts";
 import {
   idempotencyConflictMessage,
@@ -37,6 +37,8 @@ import { hashSource } from "./core/hash.ts";
 import { PAGER_HEADER } from "./core/hibernatable-pager.ts";
 import { HibernatableStubs, type Invoker, type Stub } from "./core/hibernatable-stub.ts";
 import { parseName } from "./core/names.ts";
+import type { ScanWindow } from "./core/processor.ts";
+import { PROCESSOR_SDK_MODULE } from "./generated/processor-sdk.ts";
 import type { FacetIdentity, ProcessorFacet } from "./processor-facet.ts";
 
 // What THIS class touches of the shared worker env (the facets see the rest — a built-in facet
@@ -53,18 +55,19 @@ interface Env {
 }
 
 /** One enabled facet-hosted processor: a built-in slug, or — with `ref` — USERSPACE code (a
- *  source expression resolved to modules + the exported DurableObject class name). */
+ *  source expression resolved to modules + which export is the StreamProcessor subclass). */
 type FacetProcessorEntry = {
   slug: string;
-  ref?: { source: Expression; className: string };
+  ref?: { source: Expression; export: string };
 };
 
-/** The duck-typed contract BOTH facet kinds satisfy (the built-in ProcessorFacet and any
- *  loader-loaded userspace class): identity in, commit drives in, fold out. */
+/** The duck-typed contract BOTH facet kinds satisfy (the built-in ProcessorFacet and the
+ *  SDK-injected runner.js): identity in, pushed windows in, fold + barrier out. */
 type FacetProcessorHandle = {
   configure(identity: FacetIdentity): Promise<unknown> | unknown;
-  deliver(events: StreamEvent[], streamMaxOffset: number): Promise<unknown> | unknown;
+  processEventBatch(events: StreamEvent[], window: ScanWindow): Promise<unknown> | unknown;
   snapshot(): Promise<{ offset: number; state: unknown }>;
+  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<unknown>;
 };
 
 /** The capability host's slug — the one facet processor this class itself depends on. */
@@ -116,12 +119,44 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   // ── the event log (the commit point) ──
 
-  /** Commit events: idempotency-checked, offset-assigned, then every enabled facet processor
-   *  driven. Reads stay read-after-write because every read path catches up from the log. */
+  /** The highest offset EVER ASSIGNED — including to ephemeral events whose bodies are gone.
+   *  Backed by ONE tiny kv value (the deliberate write that makes a pure-ephemeral append cost
+   *  exactly one storage write): offset REUSE after an incarnation dies is a data-corruption
+   *  class, because consumers key durable truth by offset. */
+  #maxAssignedCache?: number;
+  #maxAssigned(): number {
+    if (this.#maxAssignedCache !== undefined) return this.#maxAssignedCache;
+    const kvHigh = (this.ctx.storage.kv.get("maxAssignedOffset") as number | undefined) ?? 0;
+    const sqlHigh = this.#eventsTableExists()
+      ? Number(this.ctx.storage.sql.exec("SELECT COALESCE(MAX(offset),0) AS m FROM events").one().m)
+      : 0;
+    this.#maxAssignedCache = Math.max(kvHigh, sqlHigh);
+    return this.#maxAssignedCache;
+  }
+
+  #eventsTableExists(): boolean {
+    return (
+      this.#storageReady ||
+      this.ctx.storage.sql
+        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+        .toArray().length > 0
+    );
+  }
+
+  /** Commit events: idempotency-checked, offsets assigned from ONE shared sequence (ephemeral
+   *  events consume offsets but never touch the log — their bodies exist only in this batch and
+   *  in whatever pushes deliver them; after a reboot their offsets survive as valid gaps), then
+   *  every enabled facet processor is PUSHED the batch with its scan-window proof. */
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     this.#touch();
     const committed: StreamEvent[] = [];
+    const scannedAfterOffset = this.#maxAssigned();
+    let nextOffset = scannedAfterOffset;
     for (const input of inputs) {
+      if (input.ephemeral && input.idempotencyKey)
+        throw new Error(
+          "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
+        );
       if (input.idempotencyKey) {
         const hit = this.ctx.storage.sql
           .exec("SELECT offset, body FROM events WHERE idempotency_key = ?", input.idempotencyKey)
@@ -134,7 +169,7 @@ export class StreamDurableObject extends DurableObject<Env> {
               offset: Number(hit.offset),
               path: this.#name.path,
             } as StreamEvent);
-            continue;
+            continue; // a dedupe hit consumes NO offset
           }
           throw codedError(
             "IDEMPOTENCY_CONFLICT",
@@ -143,41 +178,42 @@ export class StreamDurableObject extends DurableObject<Env> {
           );
         }
       }
+      nextOffset += 1;
       const body = { ...input, createdAt: new Date().toISOString() };
-      this.ctx.storage.sql.exec(
-        "INSERT INTO events (body, idempotency_key) VALUES (?, ?)",
-        JSON.stringify(body),
-        input.idempotencyKey ?? null,
-      );
-      const offset = Number(this.ctx.storage.sql.exec("SELECT last_insert_rowid() AS o").one().o);
-      committed.push({ ...body, offset, path: this.#name.path } as StreamEvent);
+      if (!input.ephemeral) {
+        this.ctx.storage.sql.exec(
+          "INSERT INTO events (offset, body, idempotency_key) VALUES (?, ?, ?)",
+          nextOffset,
+          JSON.stringify(body),
+          input.idempotencyKey ?? null,
+        );
+      }
+      committed.push({ ...body, offset: nextOffset, path: this.#name.path } as StreamEvent);
     }
-    if (committed.length) {
-      const head = committed[committed.length - 1].offset;
-      // THE FACET SPINE: drive every enabled facet-hosted processor (each an isolated workerd
-      // facet with its own storage — including the iterate-context capability host itself).
+    if (nextOffset > scannedAfterOffset) {
+      this.ctx.storage.kv.put("maxAssignedOffset", nextOffset); // THE one deliberate write
+      this.#maxAssignedCache = nextOffset;
+      const window = { scannedAfterOffset, scannedThroughOffset: nextOffset };
+      // THE PUMP: push the batch + window into every enabled facet processor (each an isolated
+      // workerd facet with its own storage — including the iterate-context capability host).
       // Fire-and-forget ON PURPOSE: an awaited drive would deadlock if a facet processor
       // APPENDS during its batch (append → this method → await the same facet's busy chain) —
       // and the capability host DOES append (provide/revoke). Reads stay correct because every
-      // snapshot/invoke catches up from the log first.
+      // snapshot/invoke gap-repairs from the log; only ephemeral bodies are unrepairable, by
+      // design. The push itself is what wakes an aborted facet.
       for (const { slug } of this.#facetEntries())
         void this.#facet(slug)
-          .then((f) => f.deliver(committed, head))
-          .catch((e) => console.error(`facet "${slug}" deliver failed`, e));
+          .then((f) => f.processEventBatch(committed, window))
+          .catch((e) => console.error(`facet "${slug}" drive failed`, e));
     }
+    this.#noteActivity();
     return committed;
   }
 
-  read(afterOffset = 0, limit = 500): StreamEvent[] {
+  read(afterOffset = 0, limit = 500): { events: StreamEvent[]; scannedThroughOffset: number } {
     // A virgin stream has no events table (and reading must not create one — see #touch).
-    if (
-      !this.#storageReady &&
-      this.ctx.storage.sql
-        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'")
-        .toArray().length === 0
-    )
-      return [];
-    return this.ctx.storage.sql
+    if (!this.#eventsTableExists()) return { events: [], scannedThroughOffset: afterOffset };
+    const events = this.ctx.storage.sql
       .exec(
         "SELECT offset, body FROM events WHERE offset > ? ORDER BY offset LIMIT ?",
         afterOffset,
@@ -189,6 +225,43 @@ export class StreamDurableObject extends DurableObject<Env> {
         offset: Number(r.offset),
         path: this.#name.path,
       }));
+    // The scan-window proof: a FULL page is only contiguously known through its last row; a
+    // short page proves the read scanned to the head (ephemeral holes and all).
+    const scannedThroughOffset =
+      events.length === limit
+        ? events[events.length - 1].offset
+        : Math.max(afterOffset, this.#maxAssigned());
+    return { events, scannedThroughOffset };
+  }
+
+  // ── the #6800 quiesce: idle facets un-pinned so this actor can hibernate ──
+
+  #lastActivityMs = 0;
+  #noteActivity(): void {
+    this.#lastActivityMs = Date.now();
+    void this.#armAlarmNoLaterThan(this.#lastActivityMs + 60_000).catch(() => {});
+  }
+  /** ONE alarm write per quiet-period start, never per append (an ephemeral flood arms once). */
+  async #armAlarmNoLaterThan(target: number): Promise<void> {
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || current > target) await this.ctx.storage.setAlarm(target);
+  }
+  async alarm(): Promise<void> {
+    // workerd #6800: a live facet client holds this actor idle-but-non-hibernatable, converting
+    // quiet time into billed duration. Abort every facet once the stream has been quiet — their
+    // cursors are durable in their OWN storage and delivery is cursor-driven, so nothing is
+    // lost (replies are output-gated; abort keeps storage; the next push rebuilds, ~50-700ms).
+    if (Date.now() - this.#lastActivityMs >= 60_000) {
+      for (const { slug } of this.#facetEntries()) {
+        try {
+          this.ctx.facets.abort(`proc:${slug}`, "idle quiesce");
+        } catch {
+          /* facet not running — already quiesced */
+        }
+      }
+    } else {
+      await this.#armAlarmNoLaterThan(this.#lastActivityMs + 60_000);
+    }
   }
 
   // ── facet-hosted processors (built-ins via processor-facet.ts; userspace via the LOADER) ──
@@ -197,11 +270,14 @@ export class StreamDurableObject extends DurableObject<Env> {
     return (this.ctx.storage.kv.get("facet-processors") as FacetProcessorEntry[] | undefined) ?? [];
   }
 
-  /** Materialize (or reuse) the facet hosting `slug`. A stored `ref` means USERSPACE: the class
-   *  arrives via the Worker Loader (source resolved through this context's own dispatch — the
-   *  same repo-agnostic resolution as dynamic workers) instead of the built-in ProcessorFacet.
-   *  Both speak the same duck-typed contract: configure / deliver / snapshot. */
+  /** Materialize (or reuse) the facet hosting `slug`. A stored `ref` means USERSPACE: the
+   *  user's modules ride the Worker Loader beside the injected SDK (`processor.js` — base class
+   *  + contract helper + zod) and the generic runner DO (`runner.js`); the user exports
+   *  `class X extends StreamProcessor` and never writes a DurableObject. Both facet kinds speak
+   *  the same duck contract: configure / processEventBatch / snapshot / waitUntilProcessed.
+   *  NEVER retain the returned handle (#6800: re-`get` per burst; the quiesce alarm aborts). */
   async #facet(slug: string): Promise<FacetProcessorHandle> {
+    this.#noteActivity();
     const ref = this.#facetEntries().find((e) => e.slug === slug)?.ref;
     if (!ref) {
       const exports = (this.ctx as unknown as { exports: Record<string, unknown> }).exports;
@@ -209,22 +285,25 @@ export class StreamDurableObject extends DurableObject<Env> {
         class: exports.ProcessorFacet as DurableObjectClass,
       })) as unknown as FacetProcessorHandle;
     }
-    const modules = (await this.invoke(ref.source)) as Record<string, string>;
-    const version = hashSource(JSON.stringify(modules));
+    const userModules = (await this.invoke(ref.source)) as Record<string, string>;
+    const version = hashSource(JSON.stringify(userModules));
     const v = this.env.CF_VERSION_METADATA?.id ?? "unversioned";
     const worker = confinedWorker(
       this.env.LOADER,
       // Deploy id in the key (the stale-isolate/DataCloneError family): see the stateful runner.
       `procfacet:${v}:${this.#doName}:${slug}:${version}`,
-      "cap.js",
-      modules,
+      "runner.js",
+      {
+        ...userModules,
+        "processor.js": PROCESSOR_SDK_MODULE,
+        "runner.js": PROCESSOR_RUNNER_MODULE,
+      },
       this.env.CONTEXT.getByName(this.#doName),
     );
-    const klass = worker.getDurableObjectClass(ref.className);
-    if (!klass) throw new Error(`userspace processor "${slug}": no class "${ref.className}"`);
+    const klass = worker.getDurableObjectClass("ProcessorFacetRunner");
+    if (!klass) throw new Error(`userspace processor "${slug}": runner class missing`);
     // Abort + recreate the facet on a source change, KEEPING its storage — the stateful runner's
-    // version-marker pattern, keyed per slug. The parent only ever calls the duck-typed methods
-    // directly (facet.configure/deliver/snapshot), which is Reflect.apply-safe by construction.
+    // version-marker pattern, keyed per slug.
     const markerKey = `procfacet:${slug}:version`;
     const prev = this.ctx.storage.kv.get(markerKey) as string | undefined;
     if (prev !== undefined && prev !== version)
@@ -237,18 +316,19 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Enable a facet-hosted processor on this stream (idempotent; identity configured durably).
    *  With a `ref` the processor is USERSPACE code: `source` (an expression resolved to modules)
-   *  + the exported `className` — stored durably so every incarnation rebuilds the same facet. */
+   *  + which `export` is the StreamProcessor subclass — stored durably so every incarnation
+   *  rebuilds the same facet. */
   async enableProcessor(
     slug: string,
-    ref?: { source: string | Expression; className: string },
+    ref?: { source: string | Expression; export: string },
   ): Promise<{ ok: true }> {
     this.#touch();
     const entry: FacetProcessorEntry = ref
-      ? { slug, ref: { source: toExpression(ref.source), className: ref.className } }
+      ? { slug, ref: { source: toExpression(ref.source), export: ref.export } }
       : { slug };
     const others = this.#facetEntries().filter((e) => e.slug !== slug);
     this.ctx.storage.kv.put("facet-processors", [...others, entry]);
-    await (await this.#facet(slug)).configure(this.#identityFor(slug));
+    await (await this.#facet(slug)).configure(this.#identityFor(slug, ref?.export));
     return { ok: true };
   }
 
@@ -259,12 +339,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     return (await this.#facet(slug)).snapshot();
   }
 
-  #identityFor(slug: string): FacetIdentity {
+  #identityFor(slug: string, exportName?: string): FacetIdentity {
     return {
       parentName: this.#doName,
       projectId: this.#name.projectId,
       path: this.#name.path,
       slug,
+      ...(exportName ? { export: exportName } : {}),
     };
   }
 

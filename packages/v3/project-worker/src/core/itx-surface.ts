@@ -160,6 +160,12 @@ export class Itx extends RpcTarget {
     return this.#host.invokeCapability(`itx.${input.path.join(".")}`, input.args ?? []);
   }
 
+  /** The GENERIC dispatch door: a FULL expression, either codec half — mid-path call args and
+   *  all (`itx.streams.get('/').append({...})`), which the dotted sugar above cannot spell. */
+  invoke(call: string | Expression): Promise<unknown> {
+    return this.#host.invoke(call);
+  }
+
   /** The client roster + fan-out door. */
   get clients(): ClientCollection {
     return new ClientCollection(this.#host);
@@ -184,7 +190,7 @@ export class Itx extends RpcTarget {
    *  configure / deliver / snapshot). */
   enableProcessor(
     slug: string,
-    ref?: { source: string | Expression; className: string },
+    ref?: { source: string | Expression; export: string },
   ): Promise<{ ok: true }> {
     return this.#host.enableProcessor(slug, ref);
   }

@@ -1,40 +1,40 @@
-// processor-facet.ts — THE FACET SPINE: stream processors hosted in a real workerd facet
-// (`ctx.facets.get`) on the Stream DO, each with its OWN isolated SQLite-backed storage and
-// independent abort/restart — the resolved architecture's "many processors as facets per stream".
-// Since increment 28 the ITERATE CONTEXT ITSELF is one of these: the parent DO is log + sockets
-// + doors only, and the routing table lives here (FACET_PROCESSORS["iterate-context"]).
+// processor-facet.ts — THE FACET SPINE: a stream processor hosted in a real workerd facet
+// (`ctx.facets.get`) on the Stream DO, with its OWN isolated SQLite-backed storage and
+// independent abort/restart. A facet hosts a DURABLE OBJECT; *stream processor* is the role its
+// object plays. Since increment 28 the ITERATE CONTEXT ITSELF is one of these: the parent DO is
+// log + sockets + doors only, and the routing table lives here.
 //
-// The parent↔facet channel is the designed one (apps/os pattern, uniform for built-in AND
-// loader-loaded facet classes):
+// The parent↔facet channel:
 //   • IDENTITY via first-contact `configure({ parentName, projectId, path, slug })` — plain data,
 //     stashed DURABLY in the facet's own kv (a facet cannot receive constructor args, and a
 //     parent-chosen env is impossible for a built-in class: it inherits the WORKER's env).
 //   • BACK-CHANNEL by NAME, never a live stub: the facet re-resolves `env.CONTEXT
 //     .getByName(parentName)` per use (stubs must not outlive their RPC turn).
-//   • DRIVE via `deliver(events, head)` — the parent calls it after each commit; the registry
-//     inside the facet enforces the same concurrency contract as everywhere else (it is
-//     host-agnostic on purpose: a processor cannot tell whether it runs in-DO or in a facet).
+//   • DELIVERY via `processEventBatch(events, window)` — the parent pushes every commit with its
+//     scan-window proof; the base class folds the fast path and gap-repairs from the log
+//     otherwise. No registry: the processor IS its own runner (core/processor.ts).
 //
 // Platform constraints carried deliberately: facets have NO alarms (workerd#6810 — the parent
 // proxies when a processor needs one; none does yet) and hold NO hibernatable sockets (the
-// parent owns all transport; workerd#6702 — which is exactly why the iterate-context facet's
-// clients view is thin RPC wrappers over the parent's stub facade). A facet also must never
-// enumerate the parent's `getWebSockets` (the #6702 prod leak).
+// parent owns all transport; workerd#6702). A facet must never enumerate the parent's
+// `getWebSockets` (the #6702 prod leak). And per workerd#6800 the PARENT aborts idle facets
+// (see the quiesce alarm in stream-durable-object.ts) — losing nothing, because every cursor
+// here is durable in the facet's own storage and rebuild is cursor-driven.
 
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import { parseAppConfig } from "./core/config.ts";
 import { errorCode } from "./core/errors.ts";
-import type { StreamEvent } from "./core/events.ts";
+import { defineProcessorContract, type StreamEvent } from "./core/events.ts";
 import { parse, toExpression, type Expression } from "./core/expression.ts";
 import { stringifyName } from "./core/names.ts";
 import {
-  createStreamProcessorRegistry,
-  defineProcessorContract,
   StreamProcessor,
   type ProcessorSnapshot,
+  type ProcessorStorage,
   type ProcessorStream,
   type ReduceArgs,
+  type ScanWindow,
 } from "./core/processor.ts";
 import { IterateContextStreamProcessor } from "./iterate-context-stream-processor.ts";
 import { buildRoots, facetClientsView, type RootsEnv } from "./roots-builder.ts";
@@ -44,12 +44,19 @@ interface Env extends RootsEnv {
   APP_CONFIG?: string;
 }
 
-/** The identity a facet is configured with — plain data, durable in the facet's own kv. */
-export type FacetIdentity = { parentName: string; projectId: string; path: string; slug: string };
+/** The identity a facet is configured with — plain data, durable in the facet's own kv.
+ *  `export` names the userspace module export for loader-hosted processors (runner.js). */
+export type FacetIdentity = {
+  parentName: string;
+  projectId: string;
+  path: string;
+  slug: string;
+  export?: string;
+};
 
 // ── the demo built-in facet processor: tally events by type ──
-// Proves the whole spine (configure → deliver → fold → snapshot-through-parent) with the
-// smallest possible processor.
+// Proves the whole spine (configure → push → fold → snapshot-through-parent) with the smallest
+// possible processor.
 const TallyContract = defineProcessorContract({
   slug: "tally",
   version: "1.0.0",
@@ -67,11 +74,12 @@ class TallyProcessor extends StreamProcessor<{ counts: Record<string, number> }>
   }
 }
 
-/** What a built-in facet-processor factory receives: the stream + identity, the worker env, and
- *  a late-bound `invoke` back into THIS facet's own dispatch (usable only after boot — it is
- *  only ever CALLED lazily, from inside resolved targets). */
+/** What a built-in facet-processor factory receives: the stream + storage + identity, the worker
+ *  env, and a late-bound `invoke` back into THIS facet's own dispatch (only ever CALLED lazily,
+ *  from inside resolved targets). */
 type FacetProcessorArgs = {
   stream: ProcessorStream;
+  storage: ProcessorStorage;
   path: string;
   projectId: string;
   identity: FacetIdentity;
@@ -80,10 +88,10 @@ type FacetProcessorArgs = {
 };
 
 /** Built-in facet-hosted processors by slug. (Loader-loaded userspace classes ride the same
- *  spine — the class arrives via the Worker Loader instead of this map.) */
+ *  spine through the injected runner.js instead of this map.) */
 const FACET_PROCESSORS: Record<
   string,
-  // `any` for the same reason as registry.register: StreamProcessor is invariant in State.
+  // `any` because StreamProcessor is invariant in State — every concrete subclass must fit.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (args: FacetProcessorArgs) => StreamProcessor<any>
 > = {
@@ -92,7 +100,7 @@ const FACET_PROCESSORS: Record<
   // loader/fallback from the inherited worker env; the own stream + sibling contexts BY NAME
   // through the parent namespace; the clients view = thin RPC wrappers over the parent's stub
   // facade (sockets live on the parent, always).
-  "iterate-context": ({ stream, path, projectId, identity, env, invoke }) => {
+  "iterate-context": ({ stream, storage, path, projectId, identity, env, invoke }) => {
     const parent = () => env.CONTEXT.getByName(identity.parentName);
     const roots = buildRoots({
       projectId,
@@ -105,6 +113,7 @@ const FACET_PROCESSORS: Record<
     });
     const processor = new IterateContextStreamProcessor({
       stream,
+      storage,
       path,
       projectId,
       seeds: parseAppConfig(env.APP_CONFIG).seeds,
@@ -118,12 +127,8 @@ const FACET_PROCESSORS: Record<
 };
 
 export class ProcessorFacet extends DurableObject<Env> {
-  #booted?: {
-    registry: ReturnType<typeof createStreamProcessorRegistry>;
-    slug: string;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    processor: StreamProcessor<any>;
-  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  #processor?: StreamProcessor<any>;
 
   /** First contact: the parent hands the facet its identity. Durable — survives facet restarts. */
   configure(identity: FacetIdentity): { ok: true } {
@@ -131,26 +136,29 @@ export class ProcessorFacet extends DurableObject<Env> {
     return { ok: true };
   }
 
-  /** The parent drives this after each commit (and for catch-up on cold reads). The batch is a
-   *  WAKE-UP only — the registry is cursor-driven; the params exist because the duck-typed facet
-   *  contract carries them (userspace processors do use them). */
-  async deliver(_events: StreamEvent[], _streamMaxOffset: number): Promise<void> {
-    await this.#boot().registry.deliver();
+  /** The parent pushes every commit here with its scan-window proof. Fire-and-forget from the
+   *  parent's side; the base class serializes, folds the fast path, gap-repairs otherwise. */
+  async processEventBatch(events: StreamEvent[], window: ScanWindow): Promise<void> {
+    await this.#p().processEventBatch(events, window);
   }
 
   /** Catch up from the parent's log, then report the fold (offset + reduced state). */
-  async snapshot(): Promise<ProcessorSnapshot<unknown>> {
-    const { registry, processor } = this.#boot();
-    return registry.reads(processor).snapshot();
+  snapshot(): Promise<ProcessorSnapshot<unknown>> {
+    return this.#p().snapshot();
+  }
+
+  /** The barrier verb, forwarded (read-your-writes for whatever builds on this fold). */
+  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void> {
+    return this.#p().waitUntilProcessed(input);
   }
 
   // ── the iterate-context surface (only valid when this facet hosts that slug) ──
 
-  /** Resolve + run one call against the CURRENT table: catch up own registry → snapshot →
-   *  resolve. This is also the facet's `resolveCurrent` — the recursion stays LOCAL. */
+  /** Resolve + run one call against the CURRENT table: catch up → snapshot → resolve. This is
+   *  also the facet's `resolveCurrent` — the recursion stays LOCAL. */
   async invoke(call: string | Expression, depth = 0): Promise<unknown> {
     const processor = this.#ictx();
-    const { state } = await this.#boot().registry.reads(processor).snapshot();
+    const { state } = await processor.snapshot();
     return processor.resolve(state, toExpression(call), undefined, depth);
   }
 
@@ -167,8 +175,7 @@ export class ProcessorFacet extends DurableObject<Env> {
   }
 
   /** THE FETCH LANE terminal: the parent forwards `x-itx-cap` requests NATIVELY
-   *  (`facet.fetch(request)`), so a 101 tunnels straight through. Parse the header exactly as
-   *  the parent's door used to, then resolveFetch against the current table. */
+   *  (`facet.fetch(request)`), so a 101 tunnels straight through. */
   async fetch(request: Request): Promise<Response> {
     const capHeader = request.headers.get("x-itx-cap");
     if (!capHeader) return new Response("processor facet: no x-itx-cap header\n", { status: 400 });
@@ -177,7 +184,7 @@ export class ProcessorFacet extends DurableObject<Env> {
         ? (JSON.parse(capHeader) as Expression)
         : parse(capHeader.startsWith("itx") ? capHeader : `itx.${capHeader}`);
       const processor = this.#ictx();
-      const { state } = await this.#boot().registry.reads(processor).snapshot();
+      const { state } = await processor.snapshot();
       const result = await processor.resolveFetch(state, expr, request);
       if (result instanceof Response) return result;
       return new Response(`fetch lane: ${JSON.stringify(result)}\n`);
@@ -190,15 +197,17 @@ export class ProcessorFacet extends DurableObject<Env> {
   }
 
   #ictx(): IterateContextStreamProcessor {
-    const { processor, slug } = this.#boot();
+    const processor = this.#p();
     if (!(processor instanceof IterateContextStreamProcessor))
-      throw new Error(`facet "${slug}" is not the iterate-context processor`);
+      throw new Error(`facet is not the iterate-context processor`);
     return processor;
   }
 
-  /** Rehydrate from the durable identity (every incarnation — facets restart independently). */
-  #boot() {
-    if (this.#booted) return this.#booted;
+  /** Rehydrate from the durable identity (every incarnation — facets restart independently,
+   *  and the parent's quiesce alarm aborts idle facets on purpose). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  #p(): StreamProcessor<any> {
+    if (this.#processor) return this.#processor;
     const identity = this.ctx.storage.kv.get("identity") as FacetIdentity | undefined;
     if (!identity) throw new Error("ProcessorFacet: not configured (call configure() first)");
     const make = FACET_PROCESSORS[identity.slug];
@@ -209,25 +218,19 @@ export class ProcessorFacet extends DurableObject<Env> {
       append: (...events) => parent().append(...events),
       read: (after, limit) => parent().read(after, limit),
     };
-    const registry = createStreamProcessorRegistry({
-      storage: {
-        get: <T>(k: string) => this.ctx.storage.kv.get(k) as T | undefined,
-        put: (k: string, v: unknown) => this.ctx.storage.kv.put(k, v),
-      },
+    const storage: ProcessorStorage = {
+      get: <T>(k: string) => this.ctx.storage.kv.get(k) as T | undefined,
+      put: (k: string, v: unknown) => this.ctx.storage.kv.put(k, v),
+    };
+    this.#processor = make({
       stream,
-      path: identity.path,
-      projectId: identity.projectId,
-    });
-    const processor = make({
-      stream,
+      storage,
       path: identity.path,
       projectId: identity.projectId,
       identity,
       env: this.env,
       invoke: (call, depth) => this.invoke(call, depth),
     });
-    registry.register(processor);
-    this.#booted = { registry, slug: identity.slug, processor };
-    return this.#booted;
+    return this.#processor;
   }
 }

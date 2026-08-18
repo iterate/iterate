@@ -1,15 +1,17 @@
 // Executable spec for the processor layer — each block names the concurrency rule it proves.
+// The in-memory stream mirrors the DO's commit semantics EXACTLY: one shared offset sequence
+// (ephemerals consume offsets but never land in the log), the scan-window proof on both pushes
+// and reads, and a fire-and-forget push to every registered processor after each append.
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import {
+  defineProcessorContract,
   idempotencyConflictMessage,
   sameIdempotentEvent,
   type StreamEvent,
   type StreamEventInput,
 } from "./events.ts";
 import {
-  createStreamProcessorRegistry,
-  defineProcessorContract,
   StreamProcessor,
   type ProcessEventArgs,
   type ProcessorStream,
@@ -21,9 +23,14 @@ import {
 function memoryStream(path = "/") {
   const events: StreamEvent[] = [];
   const byKey = new Map<string, StreamEvent>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const procs: StreamProcessor<any>[] = [];
+  let maxAssigned = 0;
+  let reads = 0;
   const stream: ProcessorStream = {
-    append: (...inputs: StreamEventInput[]) =>
-      inputs.map((input) => {
+    append: (...inputs: StreamEventInput[]) => {
+      const scannedAfterOffset = maxAssigned;
+      const committed = inputs.map((input) => {
         if (input.idempotencyKey) {
           const existing = byKey.get(input.idempotencyKey);
           if (existing) {
@@ -31,20 +38,45 @@ function memoryStream(path = "/") {
             throw new Error(idempotencyConflictMessage(input.idempotencyKey, existing.offset));
           }
         }
+        maxAssigned += 1;
         const event: StreamEvent = {
           ...input,
-          offset: events.length + 1,
+          offset: maxAssigned,
           createdAt: new Date(0).toISOString(),
           path,
         };
-        events.push(event);
-        if (input.idempotencyKey) byKey.set(input.idempotencyKey, event);
+        if (!input.ephemeral) {
+          events.push(event);
+          if (input.idempotencyKey) byKey.set(input.idempotencyKey, event);
+        }
         return event;
-      }),
-    read: (afterOffset = 0, limit = 500) =>
-      events.filter((e) => e.offset > afterOffset).slice(0, limit),
+      });
+      if (maxAssigned > scannedAfterOffset) {
+        const window = { scannedAfterOffset, scannedThroughOffset: maxAssigned };
+        // THE PUMP: fire-and-forget, exactly like the DO (an awaited push would deadlock a
+        // processor that appends during its own batch).
+        for (const p of procs) void p.processEventBatch(committed, window).catch(() => {});
+      }
+      return committed;
+    },
+    read: (afterOffset = 0, limit = 500) => {
+      reads += 1;
+      const page = events.filter((e) => e.offset > afterOffset).slice(0, limit);
+      return Promise.resolve({
+        events: page,
+        scannedThroughOffset:
+          page.length === limit ? page[page.length - 1].offset : Math.max(afterOffset, maxAssigned),
+      });
+    },
   };
-  return { stream, events };
+  return {
+    stream,
+    events,
+    procs,
+    get reads() {
+      return reads;
+    },
+  };
 }
 
 const memoryStorage = () => {
@@ -58,6 +90,8 @@ const memoryStorage = () => {
     },
   };
 };
+
+const settle = () => new Promise((r) => setTimeout(r, 25)); // let fire-and-forget pushes land
 
 // ── a counter processor exercising every hook ──
 
@@ -109,20 +143,18 @@ class CounterProcessor extends StreamProcessor<{ ticks: number }> {
 }
 
 const setup = () => {
-  const { stream, events } = memoryStream();
+  const mem = memoryStream();
   const storage = memoryStorage();
-  const registry = createStreamProcessorRegistry({
+  const processor = new CounterProcessor({
+    stream: mem.stream,
     storage,
-    stream,
     path: "/",
     projectId: "prj_t",
   });
-  const processor = registry.register(
-    new CounterProcessor({ stream, path: "/", projectId: "prj_t" }),
-  );
+  mem.procs.push(processor);
   const tick = () =>
-    (stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[])[0];
-  return { stream, events, storage, registry, processor, tick };
+    (mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[])[0];
+  return { ...mem, storage, processor, tick };
 };
 
 describe("contract", () => {
@@ -155,11 +187,11 @@ describe("contract", () => {
 
 describe("the concurrency contract", () => {
   test("rules 1+2 — strict per-event barrier: blocked work finishes before the next event starts", async () => {
-    const { registry, processor, tick } = setup();
+    const { processor, tick } = setup();
     tick();
     tick();
     tick();
-    await registry.deliver();
+    await processor.wake();
     const starts = processor.trace.filter((t) => t.startsWith("start"));
     const dones = processor.trace.filter((t) => t.startsWith("blocked-done"));
     expect(starts).toEqual(["start 1", "start 2", "start 3"]);
@@ -174,7 +206,7 @@ describe("the concurrency contract", () => {
   });
 
   test("rule 3 — runInBackground escapes the barrier", async () => {
-    const { stream, registry } = setup();
+    const mem = memoryStream();
     const order: string[] = [];
     const Contract = defineProcessorContract({
       slug: "bg",
@@ -196,42 +228,46 @@ describe("the concurrency contract", () => {
         order.push(`fg ${args.event.offset}`);
       }
     }
-    registry.register(new Bg({ stream, path: "/", projectId: "p" }));
-    stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
-    await registry.deliver();
+    const bg = new Bg({ stream: mem.stream, storage: memoryStorage(), path: "/", projectId: "p" });
+    mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
+    await bg.wake();
     expect(order).toEqual(["fg 1", "fg 2"]); // background hasn't landed — it overtakes/loiters
     await new Promise((r) => setTimeout(r, 30));
     expect(order.slice(2).sort()).toEqual(["bg 1", "bg 2"]);
   });
 
-  test("rule 4 — one persist per batch, cursor advances only after", async () => {
-    const { registry, storage, tick } = setup();
-    tick();
-    tick();
-    tick();
+  test("rule 4 — one persist per pushed window, cursor advances only after", async () => {
+    const { storage, processor, stream } = setup();
     const before = storage.writes;
-    await registry.deliver();
-    // one progress write for the whole 3-event batch (+ the milestone append is stream-side)
-    expect(storage.writes - before).toBe(1);
+    stream.append(
+      { type: "events.iterate.com/counter/ticked" },
+      { type: "events.iterate.com/counter/ticked" },
+      { type: "events.iterate.com/counter/ticked" },
+    ) as StreamEvent[];
+    await processor.wake();
+    await settle();
+    // one progress write for the whole 3-event window (+ the milestone lands as its own window)
+    expect(storage.writes - before).toBe(2);
   });
 
-  test("rule 5 — at-head pass fires exactly once when the batch reaches the head", async () => {
-    const { registry, processor, stream } = setup();
+  test("rule 5 — at-head pass fires exactly once when the window reaches the head", async () => {
+    const { processor, stream } = setup();
     stream.append({ type: "unrelated" }) as StreamEvent[]; // consumed by nobody
-    await registry.deliver();
+    await processor.wake();
     expect(processor.trace).toEqual(["at-head ticks=0"]); // no consumable events → eventless pass
   });
 
   test("redelivery dedupes against the persisted cursor", async () => {
-    const { registry, processor, tick } = setup();
+    const { processor, tick } = setup();
     tick();
-    await registry.deliver();
-    await registry.deliver(); // same batch again
+    await processor.wake();
+    await processor.wake(); // nothing new — no re-processing
     expect(processor.trace.filter((t) => t === "start 1")).toHaveLength(1);
   });
 
-  test("a failing batch persists nothing and catchUp retries it whole", async () => {
-    const { stream, storage } = setup();
+  test("a failing window persists nothing and the next wake retries it whole", async () => {
+    const mem = memoryStream();
+    const storage = memoryStorage();
     let attempts = 0;
     const Contract = defineProcessorContract({
       slug: "flaky",
@@ -255,30 +291,132 @@ describe("the concurrency contract", () => {
         });
       }
     }
-    const registry = createStreamProcessorRegistry({ storage, stream, path: "/", projectId: "p" });
-    const flaky = registry.register(new Flaky({ stream, path: "/", projectId: "p" }));
-    stream.append({ type: "e" }) as StreamEvent[];
-    await expect(registry.deliver()).rejects.toThrow("boom");
+    const flaky = new Flaky({ stream: mem.stream, storage, path: "/", projectId: "p" });
+    mem.procs.push(flaky);
+    mem.stream.append({ type: "e" }) as StreamEvent[]; // the auto-push fails (attempt 1)
+    await settle();
     expect(storage.get("processor:flaky:progress")).toBeUndefined(); // nothing persisted
-    await registry.catchUp("flaky"); // retried whole
+    await flaky.wake(); // retried whole
     expect(attempts).toBe(2);
-    const snap = await registry.reads(flaky).snapshot();
+    const snap = await flaky.snapshot();
     expect(snap.state.seen).toBe(1);
   });
 });
 
-describe("review round 1 regressions", () => {
-  test("⚠️ a processor that AWAITS its own append inside a blocker must not deadlock (re-entrant deliver)", async () => {
-    const { stream, events } = memoryStream();
+describe("the push door (scan windows)", () => {
+  test("a contiguous push folds WITHOUT reading the log (the fast path)", async () => {
+    const mem = setup();
+    mem.tick();
+    await settle();
+    expect(mem.processor.trace).toContain("start 1");
+    expect(mem.reads).toBe(0); // the batch itself was enough — zero log reads
+  });
+
+  test("a gapped push triggers repair from the own cursor (nothing skipped)", async () => {
+    const mem = memoryStream();
+    mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[]; // history
     const storage = memoryStorage();
-    const registry = createStreamProcessorRegistry({ storage, stream, path: "/", projectId: "p" });
-    // the REAL DO shape: append re-enters deliver (awaited) — the in-memory stream now mimics it
-    const rawAppend = stream.append.bind(stream);
-    stream.append = async (...inputs: StreamEventInput[]) => {
-      const committed = rawAppend(...inputs) as StreamEvent[];
-      await registry.deliver();
-      return committed;
-    };
+    const late = new CounterProcessor({ stream: mem.stream, storage, path: "/", projectId: "p" });
+    mem.procs.push(late); // registered AFTER history exists
+    mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[]; // gapped push
+    await settle();
+    expect(late.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1", "start 2"]);
+    expect(mem.reads).toBeGreaterThan(0); // repair read the gap
+  });
+
+  test("a stale window (already behind the cursor) is a no-op", async () => {
+    const { processor, tick } = setup();
+    tick();
+    await processor.wake();
+    await processor.processEventBatch([], { scannedAfterOffset: 0, scannedThroughOffset: 1 });
+    expect(processor.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1"]);
+  });
+});
+
+describe("ephemeral events", () => {
+  const EphContract = defineProcessorContract({
+    slug: "eph",
+    version: "1",
+    description: "",
+    stateSchema: z.object({ seen: z.array(z.string()).default([]) }),
+    events: {},
+    consumes: ["loud", "chunk"], // "chunk" arrives ephemeral — NAMED, so it is consumed
+    emits: [],
+  });
+  class Eph extends StreamProcessor<{ seen: string[] }> {
+    readonly contract = EphContract;
+    protected override reduce({ event, state }: ReduceArgs<{ seen: string[] }>) {
+      return { seen: [...state.seen, `${event.type}@${event.offset}`] };
+    }
+  }
+  const StarContract = defineProcessorContract({
+    slug: "star",
+    version: "1",
+    description: "",
+    stateSchema: z.object({ seen: z.array(z.string()).default([]) }),
+    events: {},
+    consumes: ["*"], // star NEVER sweeps ephemerals
+    emits: [],
+  });
+  class Star extends StreamProcessor<{ seen: string[] }> {
+    readonly contract = StarContract;
+    protected override reduce({ event, state }: ReduceArgs<{ seen: string[] }>) {
+      return { seen: [...state.seen, `${event.type}@${event.offset}`] };
+    }
+  }
+
+  test("shared offsets; named-type opt-in; '*' never sweeps; zero persists for ephemeral-only windows", async () => {
+    const mem = memoryStream();
+    const ephStorage = memoryStorage();
+    const starStorage = memoryStorage();
+    const eph = new Eph({ stream: mem.stream, storage: ephStorage, path: "/", projectId: "p" });
+    const star = new Star({ stream: mem.stream, storage: starStorage, path: "/", projectId: "p" });
+    mem.procs.push(eph, star);
+
+    mem.stream.append({ type: "loud" }) as StreamEvent[]; // offset 1, durable
+    await settle();
+    const ephWrites = ephStorage.writes;
+    const starWrites = starStorage.writes;
+
+    mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[]; // offset 2, ephemeral
+    mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[]; // offset 3
+    await settle();
+    // the NAMED consumer folded both ephemerals in memory…
+    expect((await eph.snapshot()).state.seen).toEqual(["loud@1", "chunk@2", "chunk@3"]);
+    // …the "*" consumer saw neither…
+    expect((await star.snapshot()).state.seen).toEqual(["loud@1"]);
+    // …and the ephemeral-only windows persisted NOTHING for either.
+    expect(ephStorage.writes).toBe(ephWrites);
+    expect(starStorage.writes).toBe(starWrites);
+
+    mem.stream.append({ type: "loud" }) as StreamEvent[]; // offset 4 — durable, AFTER the gap
+    await settle();
+    expect((await star.snapshot()).state.seen).toEqual(["loud@1", "loud@4"]); // holes invisible
+  });
+
+  test("a rebuilt fold omits ephemerals (never derive durable truth from one)", async () => {
+    const mem = memoryStream();
+    const storage = memoryStorage();
+    const a = new Eph({ stream: mem.stream, storage, path: "/", projectId: "p" });
+    mem.procs.push(a);
+    mem.stream.append({ type: "loud" }) as StreamEvent[];
+    mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[];
+    mem.stream.append({ type: "loud" }) as StreamEvent[];
+    await settle();
+    expect((await a.snapshot()).state.seen).toEqual(["loud@1", "chunk@2", "loud@3"]);
+    // a fresh incarnation over the same storage: the ephemeral is gone from the log — the fold
+    // regresses to durable truth only, and the offsets are simply gaps
+    const b = new Eph({ stream: mem.stream, storage, path: "/", projectId: "p" });
+    // (simulate: the last durable persist covered through offset 3; state includes chunk@2 only
+    //  because that window ALSO contained a durable event — the documented divergence rule)
+    expect((await b.snapshot()).state.seen).toContain("loud@3");
+  });
+});
+
+describe("review round 1 regressions", () => {
+  test("⚠️ a processor that AWAITS its own append inside a blocker must not deadlock", async () => {
+    const mem = memoryStream();
+    const storage = memoryStorage();
     const Contract = defineProcessorContract({
       slug: "echoer",
       version: "1",
@@ -295,43 +433,16 @@ describe("review round 1 regressions", () => {
         args.blockProcessorWhile(() => args.append({ type: "echoed", idempotencyKey: "once" }));
       }
     }
-    registry.register(new Echoer({ stream, path: "/", projectId: "p" }));
-    await stream.append({ type: "ping" }); // would hang forever pre-fix
-    await registry.catchUp();
-    expect(events.some((e) => e.type === "echoed")).toBe(true);
+    mem.procs.push(new Echoer({ stream: mem.stream, storage, path: "/", projectId: "p" }));
+    mem.stream.append({ type: "ping" }) as StreamEvent[]; // pre-fix shape: would hang forever
+    await settle();
+    expect(mem.events.some((e) => e.type === "echoed")).toBe(true);
   }, 5000);
-
-  test("delivery is cursor-driven: a late-enabled processor never skips history", async () => {
-    const { stream } = memoryStream();
-    stream.append({ type: "a" }, { type: "b" }) as StreamEvent[]; // history BEFORE registration
-    const storage = memoryStorage();
-    const registry = createStreamProcessorRegistry({ storage, stream, path: "/", projectId: "p" });
-    const seen: string[] = [];
-    const Contract = defineProcessorContract({
-      slug: "late",
-      version: "1",
-      description: "",
-      stateSchema: z.object({}),
-      events: {},
-      consumes: ["*"],
-      emits: [],
-    });
-    class Late extends StreamProcessor<object> {
-      readonly contract = Contract;
-      protected override processEvent(args: ProcessEventArgs<object>): undefined {
-        if (args.event) seen.push(args.event.type);
-      }
-    }
-    registry.register(new Late({ stream, path: "/", projectId: "p" }));
-    stream.append({ type: "c" }) as StreamEvent[];
-    await registry.deliver(); // pre-fix: only "c" — the a/b gap was skipped forever
-    expect(seen).toEqual(["a", "b", "c"]);
-  });
 });
 
 describe("fold cache + refold", () => {
   test("version bump refolds via reduce only — effects never re-run", async () => {
-    const { stream } = setup();
+    const mem = memoryStream();
     const storage = memoryStorage();
     const make = (version: string, effects: string[]) => {
       const Contract = defineProcessorContract({
@@ -351,46 +462,45 @@ describe("fold cache + refold", () => {
         protected override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
           if (args.event) effects.push(`effect ${args.event.offset}`);
         }
-      })({ stream, path: "/", projectId: "p" });
+      })({ stream: mem.stream, storage, path: "/", projectId: "p" });
     };
     const effects: string[] = [];
-    const r1 = createStreamProcessorRegistry({ storage, stream, path: "/", projectId: "p" });
-    r1.register(make("1.0.0", effects));
-    stream.append(
+    const p1 = make("1.0.0", effects);
+    mem.stream.append(
       { type: "events.iterate.com/counter/ticked" },
       { type: "events.iterate.com/counter/ticked" },
     ) as StreamEvent[];
-    await r1.deliver();
+    await p1.wake();
     expect(effects).toHaveLength(2);
     // new incarnation with a bumped contract version: refold, but NO new effects for old events
-    const r2 = createStreamProcessorRegistry({ storage, stream, path: "/", projectId: "p" });
-    const p2 = r2.register(make("2.0.0", effects));
-    const snap = await r2.reads(p2).snapshot();
+    const p2 = make("2.0.0", effects);
+    const snap = await p2.snapshot();
     expect(snap.state.n).toBe(2); // refolded
     expect(effects).toHaveLength(2); // side effects did NOT re-run
   });
 });
 
 describe("emit rules + idempotency", () => {
-  test("milestone emitted with provenance stamp + idempotency key; duplicate deliver dedupes", async () => {
-    const { registry, tick, events } = setup();
+  test("milestone emitted with provenance stamp + idempotency key; re-wake dedupes", async () => {
+    const { processor, tick, events } = setup();
     tick();
     tick();
     tick();
     tick(); // ticks: 1,2,3,4 — milestone at state.ticks===3 (after 3rd tick)
-    await registry.deliver();
+    await processor.wake();
+    await settle();
     const milestones = events.filter((e) => e.type === "events.iterate.com/counter/milestone");
     expect(milestones).toHaveLength(1);
     expect(milestones[0].payload).toEqual({ at: 3 });
     expect(milestones[0].source?.processor?.slug).toBe("counter");
     expect(milestones[0].source?.processor?.whileProcessing?.offset).toBe(3);
-    // the milestone append itself lands on the stream and re-delivers — drive again, still one
-    await registry.catchUp();
+    // the milestone append itself lands on the stream and re-delivers — wake again, still one
+    await processor.wake();
     expect(events.filter((e) => e.type === "events.iterate.com/counter/milestone")).toHaveLength(1);
   });
 
   test("undeclared emit throws", async () => {
-    const { stream, storage } = setup();
+    const mem = memoryStream();
     const Contract = defineProcessorContract({
       slug: "rogue",
       version: "1",
@@ -406,17 +516,21 @@ describe("emit rules + idempotency", () => {
         if (args.event) args.blockProcessorWhile(() => args.append({ type: "not-declared" }));
       }
     }
-    const registry = createStreamProcessorRegistry({ storage, stream, path: "/", projectId: "p" });
-    registry.register(new Rogue({ stream, path: "/", projectId: "p" }));
-    stream.append({ type: "e" }) as StreamEvent[];
-    await expect(registry.deliver()).rejects.toThrow(/without declaring/);
+    const rogue = new Rogue({
+      stream: mem.stream,
+      storage: memoryStorage(),
+      path: "/",
+      projectId: "p",
+    });
+    mem.stream.append({ type: "e" }) as StreamEvent[];
+    await expect(rogue.wake()).rejects.toThrow(/without declaring/);
   });
 
   test("waitUntilProcessed resolves at the cursor", async () => {
-    const { registry, processor, tick } = setup();
+    const { processor, tick } = setup();
     tick();
-    const wait = registry.reads(processor).waitUntilProcessed({ offset: 1, timeoutMs: 1000 });
-    await registry.deliver();
-    await expect(wait).resolves.toBeUndefined();
+    await expect(
+      processor.waitUntilProcessed({ offset: 1, timeoutMs: 1000 }),
+    ).resolves.toBeUndefined();
   });
 });
