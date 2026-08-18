@@ -540,11 +540,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
     const userModules = (await this.invoke(ref.source)) as Record<string, string>;
     const version = hashSource(JSON.stringify(userModules));
-    const v = this.env.CF_VERSION_METADATA?.id ?? "unversioned";
     const worker = confinedWorker(
-      this.env.LOADER,
-      // Deploy id in the key (the stale-isolate/DataCloneError family): see the stateful runner.
-      `procfacet:${v}:${this.#doName}:${slug}:${version}`,
+      this.env,
+      // Deploy id rides the minted key (the stale-isolate/DataCloneError family).
+      { kind: "procfacet", owner: `${this.#doName}:${slug}`, contentHash: version },
       "runner.js",
       {
         ...userModules,

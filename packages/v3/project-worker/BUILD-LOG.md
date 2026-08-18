@@ -999,3 +999,31 @@ runner's append/read all riding the entrypoint.
 
 80 unit tests green; deploy `restore-2`: full seven-suite board ALL PASS (crisp/facet/
 userspace/ephemeral/push/facet-address/restore).
+
+## Increment 41 (rich-1): rich values EVERYWHERE + the loader unification (hunt round 3, annotation 2/6)
+
+Owner: "anything workers RPC and capnweb can serialise obviously should be able to be passed
+through these capabilities and through invoke — very important."
+
+- **Measured first, on the longest path in the system:** a client callback crossed capnweb →
+  edge → Workers RPC → Stream DO → ictx facet → stub facade → pager wake → Invoker leg → relay
+  → the providing client, which called it BACK across everything (42→43). Dates arrive as
+  Dates, bytes as bytes. ALL PASS against the UNCHANGED deploy — the codec never JSON-ifies
+  (substitution passes non-JSON values through untouched); only the event LOG serializes, as it
+  must. The frames-on-the-pager transport proposal is DEAD (owner ruling) — the Workers-RPC
+  Invoker leg stays precisely because rich values must flow.
+- **The one real JSON boundary, fixed:** the stateless run lane tunneled args as a JSON fetch
+  body. CODE_CAP_RUNNER is now a WorkerEntrypoint whose `run(...args)` is a real RPC method —
+  proven live: a confined loaded isolate received a real Date and CALLED THE CLIENT'S CALLBACK
+  (7×6=42).
+- **Loader unification (the hunt's kept findings, in the same files):** run/fetch = ONE
+  wrapper, ONE isolate, ONE billed identity per source (code-fetch: key family gone); cacheKeys
+  are MINTED INSIDE confinedWorker (`kind:deploy:owner:contentHash`, kind a closed union — the
+  one audit point for the dollar lever, with the loud pricing comment); `workers.get` drops the
+  `type` discriminator (className present = durable class, absent = run/fetch; old `type:` refs
+  stay accepted-and-ignored, so existing mounts keep working).
+- "Run code in this context" documented as THE fundamental context operation (owner's
+  annotation 5) at the workers view — the crisp named API question continues in the doc.
+
+80 unit tests green; deploy `rich-1`: EIGHT-suite board ALL PASS (crisp/facet/userspace/
+ephemeral/push/facetaddr/restore/rich).

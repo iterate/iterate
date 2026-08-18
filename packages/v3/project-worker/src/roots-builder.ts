@@ -59,57 +59,40 @@ export function buildRoots(deps: BuildRootsDeps): Roots {
   const loadModules = async (source: Expression): Promise<Record<string, string>> =>
     (await deps.invoke(source)) as Record<string, string>;
 
-  /** A confined dynamic worker whose world is THIS context — via the interposition entrypoint,
-   *  never a raw DO stub (iterate-context-entrypoint.ts). */
-  const loaderWorker = (cacheKey: string, mainModule: string, modules: Record<string, string>) =>
-    confinedWorker(
-      env.LOADER,
-      cacheKey,
-      mainModule,
-      modules,
-      itxEntrypointFor(deps.hostCtx, contextName),
-    );
-
-  /** `roots.workers.get({type, source, className?})` — run code in this context.
-   *  stateless → a loader isolate: `{ run(...args), fetch(request) }`;
-   *  stateful  → the runner DO's facet: any (deep dotted) method + fetch. */
+  /** RUN CODE IN THIS CONTEXT — the fundamental context operation (owner: "one of the key,
+   *  key, key APIs"). `workers.get({source, className?})`: `className` present → the class is
+   *  hosted DURABLY (a facet of the runner DO, any deep dotted method + fetch); absent → run
+   *  the default export in a fresh confined isolate (`run(...args)` — a real RPC method, so
+   *  callbacks/Dates/bytes ride natively — plus `fetch` when the source serves one). ONE
+   *  isolate and ONE billed loader identity per source either way. The isolate's whole world
+   *  is the interposition entrypoint, never a raw DO stub (iterate-context-entrypoint.ts). */
   const workers: WorkersView = {
     get: (ref) => {
       const source = toExpression(ref.source as string | Expression);
-      if (ref.type === "stateless") {
+      const className = ref.className;
+      if (!className) {
+        const worker = async () => {
+          const modules = await loadModules(source);
+          return confinedWorker(
+            env,
+            { kind: "code", owner: contextName, contentHash: hashSource(JSON.stringify(modules)) },
+            "run.js",
+            { "run.js": CODE_CAP_RUNNER, ...modules },
+            itxEntrypointFor(deps.hostCtx, contextName),
+          );
+        };
         return {
-          run: async (...args: unknown[]) => {
-            const modules = await loadModules(source);
-            const v = env.CF_VERSION_METADATA?.id ?? "unversioned";
-            const worker = loaderWorker(
-              `code:${v}:${contextName}:${hashSource(JSON.stringify(modules))}`,
-              "run.js",
-              { "run.js": CODE_CAP_RUNNER, ...modules },
-            );
-            const resp = await worker.getEntrypoint().fetch(
-              new Request("https://code.local/", {
-                method: "POST",
-                body: JSON.stringify(args),
-              }),
-            );
-            return ((await resp.json()) as { result: unknown }).result;
-          },
-          fetch: async (request: Request) => {
-            const modules = await loadModules(source);
-            const v = env.CF_VERSION_METADATA?.id ?? "unversioned";
-            const worker = loaderWorker(
-              `code-fetch:${v}:${contextName}:${hashSource(JSON.stringify(modules))}`,
-              "cap.js",
-              modules,
-            );
-            return worker.getEntrypoint().fetch(request);
-          },
+          run: async (...args: unknown[]) =>
+            (
+              (await worker()).getEntrypoint() as unknown as {
+                run(...a: unknown[]): Promise<unknown>;
+              }
+            ).run(...args),
+          fetch: async (request: Request) => (await worker()).getEntrypoint().fetch(request),
         };
       }
-      // stateful: a method proxy onto the dedicated runner DO (deep dots ride the wire joined,
-      // the runner walks segments). A top-level `.fetch` forwards natively so a 101 passes through.
-      const className = ref.className;
-      if (!className) throw new Error("workers.get: stateful ref needs a className");
+      // Durable class: a method proxy onto the dedicated runner DO (deep dots ride the wire
+      // joined, the runner walks segments). A top-level `.fetch` forwards natively (101s pass).
       const runner = env.STATEFUL_WORKER.getByName(
         `${projectId}::${path}::${className}:${hashSource(JSON.stringify(source))}`,
       );

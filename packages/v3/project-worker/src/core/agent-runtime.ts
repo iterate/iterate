@@ -23,21 +23,25 @@ export function itxFromStub(stub) {
 }
 `;
 
-// Wraps a repo file whose default export is a capability function `(itx, ...args) => result` so the host can
-// run it confined as a STATELESS dynamic worker (target-core §4.1 — the apps/os "stateless" ref: a plain
-// function, no durable identity). The args arrive as a JSON body; the result goes back as JSON. `cap.js` is
-// the repo file; `itx.js` is the surface above.
+// Wraps a repo file so the host can run it confined as a STATELESS dynamic worker. ONE wrapper,
+// ONE isolate, ONE billed loader identity for both lanes: `run(...args)` is a real RPC method
+// (rich values — callbacks, Dates, bytes, stubs — ride Workers RPC natively; the old JSON fetch
+// tunnel silently mangled them, the owner's hard NO), and `fetch` forwards to the source's own
+// fetch when it has one. `cap.js` is the repo file; `itx.js` is the surface above.
 export const CODE_CAP_RUNNER = /* js */ `
+import { WorkerEntrypoint } from "cloudflare:workers";
 import cap from "./cap.js";
 import { itxFromStub } from "./itx.js";
-export default {
-  async fetch(request, env) {
-    const args = await request.json();
-    const itx = itxFromStub(env.ITX);
-    const result = typeof cap === "function" ? await cap(itx, ...args) : cap;
-    return Response.json({ result });
+export default class CodeCap extends WorkerEntrypoint {
+  async run(...args) {
+    if (typeof cap !== "function") throw new Error("this source has no callable default export");
+    return await cap(itxFromStub(this.env.ITX), ...args);
   }
-};
+  fetch(request) {
+    if (typeof cap?.fetch === "function") return cap.fetch(request, this.env, this.ctx);
+    return new Response("this source serves no fetch\\n", { status: 405 });
+  }
+}
 `;
 
 // (The STATEFUL dynamic-worker wrapper `statefulDoRunner` was removed: with native facet RPC
@@ -103,14 +107,18 @@ export default { fetch: () => new Response("processor facet runner\\n") };
  *  `globalOutbound`, which can die with the host's incarnation; we accept the rare
  *  re-dial failure and re-key on DEPLOY, not per use.)
  *  ═══════════════════════════════════════════════════════════════════════════════════════════ */
+/** The cacheKey is MINTED HERE — the one audit point for the dollar lever. `kind` is a CLOSED
+ *  union so a new key family is a deliberate type change; `owner` is the owning context (plus
+ *  `:{slug}` for processor facets); `contentHash` versions the source. */
 export function confinedWorker(
-  loader: WorkerLoader,
-  cacheKey: string,
+  env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } },
+  key: { kind: "code" | "procfacet" | "stateful"; owner: string; contentHash: string },
   mainModule: string,
   modules: Record<string, string>,
   host: Fetcher,
 ) {
-  return loader.get(cacheKey, () => ({
+  const deploy = env.CF_VERSION_METADATA?.id ?? "unversioned";
+  return env.LOADER.get(`${key.kind}:${deploy}:${key.owner}:${key.contentHash}`, () => ({
     compatibilityDate: "2026-07-01",
     // Chain-enable Kenton's persistent-stub machinery: a loaded worker may STORE its env.ITX
     // (a ctx.exports-minted entrypoint stub) in its own durable storage and get a replay-on-use

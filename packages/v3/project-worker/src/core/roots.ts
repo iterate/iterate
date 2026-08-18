@@ -47,8 +47,10 @@ export type ClientsView = {
   close(key: string): { ok: true } | Promise<{ ok: true }>;
 };
 
+/** Run code in this context — THE fundamental context operation. `className` present = host
+ *  that exported class durably; absent = run the default export in a fresh confined isolate. */
 export type WorkersView = {
-  get(ref: { type: "stateless" | "stateful"; source: unknown; className?: string }): unknown;
+  get(ref: { source: unknown; className?: string; type?: string }): unknown;
 };
 
 /** `roots.facets.get(slug)` → a dotted method proxy over ONE enabled facet — ANY method its

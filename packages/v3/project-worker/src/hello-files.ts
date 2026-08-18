@@ -21,6 +21,12 @@ export class Counter extends DurableObject {
   // own cursor + counts in its OWN facet storage. Drives are fire-and-forget and a delivered
   // batch is only a WAKE-UP: both deliver and snapshot catch up from the stream via env.ITX (the
   // parent stub) from the OWN cursor, so a dropped drive can never leave a gap.
+  // Rich-value probe: proves the stateless run lane carries what Workers RPC carries — a Date
+  // arrives as a Date and a client CALLBACK is callable from inside the confined isolate.
+  "/probe.js": `export default async (itx, v, cb) => ({
+  ctor: v?.constructor?.name ?? typeof v,
+  cbResult: typeof cb === "function" ? await cb(7) : null,
+});`,
   // THE RESTORE DEMO: a userspace durable object that STORES its live capability handle in its
   // own storage and uses the restored handle later — Kenton's persistent-stub machinery end to
   // end (storage.put accepts the ctx.exports-minted env.ITX because every chain member carries

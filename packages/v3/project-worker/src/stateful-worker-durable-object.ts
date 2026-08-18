@@ -90,11 +90,10 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // component a rollout leaves the runner reusing a PRIOR deployment's isolate, whose facet is
     // cross-Worker to the new parent and thus un-transferable (same DataCloneError family). Mirrors
     // apps/os's cacheKey (WORKER_SELF + workerVersion(env)). CF_VERSION_METADATA.id changes every deploy.
-    const deployVersion = this.env.CF_VERSION_METADATA?.id ?? "unversioned";
     // The confinement contract (env.ITX + globalOutbound = the owning host) is confinedWorker's.
     const worker = confinedWorker(
-      this.env.LOADER,
-      `stateful:${deployVersion}:${this.ctx.id.name}:${version}`,
+      this.env,
+      { kind: "stateful", owner: this.ctx.id.name ?? "?", contentHash: version },
       "cap.js",
       modules,
       itxEntrypointFor(this.ctx, this.#hostName()),
