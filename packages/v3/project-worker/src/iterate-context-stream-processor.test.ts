@@ -99,9 +99,9 @@ const setup = (seeds: [string, string][] = []) => {
   );
   const reads = registry.reads(host);
   // wire the recursion: `itx.…` inside a target re-enters resolve with the freshly folded state
-  host.resolveCurrent = async (call: Expression) => {
+  host.resolveCurrent = async (call: Expression, depth = 0) => {
     await registry.catchUp("iterate-context");
-    return host.resolve((await reads.snapshot()).state, call);
+    return host.resolve((await reads.snapshot()).state, call, undefined, depth);
   };
   const invoke = (call: string) => host.resolveCurrent(parse(call));
   return { stream, events, registry, host, reads, roots, invoke };
@@ -142,6 +142,12 @@ describe("seeds (config provenance)", () => {
 });
 
 describe("event mounts + the shadow stack", () => {
+  test("⚠️ a self-referential mount errors at depth, never spins", async () => {
+    const { host, invoke } = setup();
+    await host.provide({ pattern: "itx.loop", target: "itx.loop" });
+    await expect(invoke("itx.loop.go()")).rejects.toThrow(/depth 32/);
+  });
+
   test("alias mount: remainder replays through the recursive itx scope", async () => {
     const { host, invoke } = setup();
     await host.provide({ pattern: "itx.db", target: "itx.kv" });

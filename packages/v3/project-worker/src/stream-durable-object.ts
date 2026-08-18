@@ -43,6 +43,9 @@ interface Env {
   ITX_KV?: KVNamespace;
   SECRETS_KV?: KVNamespace;
   APP_CONFIG?: string;
+  /** Deploy identity — folded into loader cacheKeys so a redeploy mints fresh isolates (the
+   *  stale-isolate/DataCloneError family the stateful runner documents). */
+  CF_VERSION_METADATA?: { id: string };
   /** The shell this context's egress + `itx.os` bottom out at (a whole control plane). */
   FALLBACK: Fetcher & { invokeCapability(callPath: string, args?: unknown[]): Promise<unknown> };
 }
@@ -127,7 +130,7 @@ export class StreamDurableObject extends DurableObject<Env> {
        )`,
     );
     // wire the resolver recursion: `itx.…` inside any mount target re-enters dispatch
-    this.#capHost.resolveCurrent = (call) => this.invoke(call);
+    this.#capHost.resolveCurrent = (call, depth) => this.invoke(call, depth);
     ctx.blockConcurrencyWhile(async () => {
       this.incarnation = ((await ctx.storage.get<number>("incarnation")) ?? 0) + 1;
       await ctx.storage.put("incarnation", this.incarnation);
@@ -239,10 +242,9 @@ export class StreamDurableObject extends DurableObject<Env> {
   // ── dispatch (ONE path: the routing table) ──
 
   /** Resolve + run one call (either codec half) against the current table. */
-  async invoke(call: string | Expression): Promise<unknown> {
-    await this.#registry.catchUp("iterate-context");
-    const state = (await this.#capReads.snapshot()).state;
-    return this.#capHost.resolve(state, toExpression(call));
+  async invoke(call: string | Expression, depth = 0): Promise<unknown> {
+    const state = (await this.#capReads.snapshot()).state; // snapshot itself catches up first
+    return this.#capHost.resolve(state, toExpression(call), undefined, depth);
   }
 
   /** The dotted door — the degenerate string half. Loaded workers' `itx.js` + the runner speak
@@ -280,8 +282,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         const expr = capHeader.trimStart().startsWith("[")
           ? (JSON.parse(capHeader) as Expression)
           : parse(capHeader.startsWith("itx") ? capHeader : `itx.${capHeader}`);
-        await this.#registry.catchUp("iterate-context");
-        const state = (await this.#capReads.snapshot()).state;
+        const state = (await this.#capReads.snapshot()).state; // snapshot catches up first
         const result = await this.#capHost.resolveFetch(state, expr, request);
         if (result instanceof Response) return result;
         return new Response(`fetch lane: ${JSON.stringify(result)}\n`);
@@ -462,8 +463,9 @@ export class StreamDurableObject extends DurableObject<Env> {
           return {
             run: async (...args: unknown[]) => {
               const modules = await this.#loadModules(source);
+              const v = this.env.CF_VERSION_METADATA?.id ?? "unversioned";
               const worker = this.#worker(
-                `code:${this.ctx.id.name}:${hashSource(JSON.stringify(modules))}`,
+                `code:${v}:${this.ctx.id.name}:${hashSource(JSON.stringify(modules))}`,
                 "run.js",
                 { "run.js": CODE_CAP_RUNNER, ...modules },
               );
@@ -477,8 +479,9 @@ export class StreamDurableObject extends DurableObject<Env> {
             },
             fetch: async (request: Request) => {
               const modules = await this.#loadModules(source);
+              const v = this.env.CF_VERSION_METADATA?.id ?? "unversioned";
               const worker = this.#worker(
-                `code-fetch:${this.ctx.id.name}:${hashSource(JSON.stringify(modules))}`,
+                `code-fetch:${v}:${this.ctx.id.name}:${hashSource(JSON.stringify(modules))}`,
                 "cap.js",
                 modules,
               );

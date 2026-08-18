@@ -49,9 +49,16 @@ export class HibernatableStubs {
   // In-memory, mid-call ONLY: a live leg exists during a burst; a wake is pending until the relay attaches. Both
   // empty ⇒ the DO holds no stub ⇒ it hibernates (the surviving Pager sockets carry every parked stub).
   #legs = new Map<string, { invoker: Invoker; inFlight: number }>();
+  // One entry per socket awaiting its wake; CONCURRENT cold invokes share it (`arrived`) —
+  // a second borrower must never replace the first's resolver (it would hang forever).
   #pending = new Map<
     string,
-    { resolve(): void; reject(e: Error): void; timer: ReturnType<typeof setTimeout> }
+    {
+      resolve(): void;
+      reject(e: Error): void;
+      timer: ReturnType<typeof setTimeout>;
+      arrived: Promise<void>;
+    }
   >();
 
   constructor(hooks: Hooks) {
@@ -140,14 +147,19 @@ export class HibernatableStubs {
     if (leg === undefined) {
       const ws = pagerSocketFor(socketId, this.#hooks);
       if (ws === undefined) throw new Error("hibernatable stub offline (no pager)");
-      const arrived = new Promise<void>((resolve, reject) => {
+      let pending = this.#pending.get(socketId);
+      if (pending === undefined) {
+        let resolve!: () => void;
+        let reject!: (e: Error) => void;
+        const arrived = new Promise<void>((res, rej) => ((resolve = res), (reject = rej)));
         const timer = setTimeout(() => {
           if (this.#pending.delete(socketId)) reject(new Error("provider attach timed out"));
         }, ATTACH_TIMEOUT_MS);
-        this.#pending.set(socketId, { resolve, reject, timer });
-      });
-      sendPage(ws, { type: "wake" });
-      await arrived;
+        pending = { resolve, reject, timer, arrived };
+        this.#pending.set(socketId, pending);
+        sendPage(ws, { type: "wake" });
+      }
+      await pending.arrived;
       leg = this.#legs.get(socketId);
       if (leg === undefined) throw new Error("provider attach completed empty");
     }

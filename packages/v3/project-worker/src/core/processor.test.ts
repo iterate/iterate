@@ -267,6 +267,68 @@ describe("the concurrency contract", () => {
   });
 });
 
+describe("review round 1 regressions", () => {
+  test("⚠️ a processor that AWAITS its own append inside a blocker must not deadlock (re-entrant deliver)", async () => {
+    const { stream, events } = memoryStream();
+    const storage = memoryStorage();
+    const registry = createStreamProcessorRegistry({ storage, stream, path: "/", projectId: "p" });
+    // the REAL DO shape: append re-enters deliver (awaited) — the in-memory stream now mimics it
+    const rawAppend = stream.append.bind(stream);
+    stream.append = async (...inputs: StreamEventInput[]) => {
+      const committed = rawAppend(...inputs) as StreamEvent[];
+      await registry.deliver(committed, committed[committed.length - 1]!.offset);
+      return committed;
+    };
+    const Contract = defineProcessorContract({
+      slug: "echoer",
+      version: "1",
+      description: "",
+      stateSchema: z.object({}),
+      events: { echoed: { payloadSchema: z.object({}) } },
+      consumes: ["ping"],
+      emits: ["echoed"],
+    });
+    class Echoer extends StreamProcessor<object> {
+      readonly contract = Contract;
+      protected override processEvent(args: ProcessEventArgs<object>): undefined {
+        if (args.event?.type !== "ping") return;
+        args.blockProcessorWhile(() => args.append({ type: "echoed", idempotencyKey: "once" }));
+      }
+    }
+    registry.register(new Echoer({ stream, path: "/", projectId: "p" }));
+    await stream.append({ type: "ping" }); // would hang forever pre-fix
+    await registry.catchUp();
+    expect(events.some((e) => e.type === "echoed")).toBe(true);
+  }, 5000);
+
+  test("delivery is cursor-driven: a late-enabled processor never skips history", async () => {
+    const { stream, events } = memoryStream();
+    stream.append({ type: "a" }, { type: "b" }) as StreamEvent[]; // history BEFORE registration
+    const storage = memoryStorage();
+    const registry = createStreamProcessorRegistry({ storage, stream, path: "/", projectId: "p" });
+    const seen: string[] = [];
+    const Contract = defineProcessorContract({
+      slug: "late",
+      version: "1",
+      description: "",
+      stateSchema: z.object({}),
+      events: {},
+      consumes: ["*"],
+      emits: [],
+    });
+    class Late extends StreamProcessor<object> {
+      readonly contract = Contract;
+      protected override processEvent(args: ProcessEventArgs<object>): undefined {
+        if (args.event) seen.push(args.event.type);
+      }
+    }
+    registry.register(new Late({ stream, path: "/", projectId: "p" }));
+    const c = stream.append({ type: "c" }) as StreamEvent[];
+    await registry.deliver(c, 3); // pre-fix: only "c" — the a/b gap was skipped forever
+    expect(seen).toEqual(["a", "b", "c"]);
+  });
+});
+
 describe("fold cache + refold", () => {
   test("version bump refolds via reduce only — effects never re-run", async () => {
     const { stream, events } = setup();

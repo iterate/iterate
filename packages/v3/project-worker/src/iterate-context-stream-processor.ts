@@ -87,8 +87,6 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
   readonly #seeds: { pattern: Expression; target: Expression }[];
   /** The privileged physical-layer root, in scope only for seed targets. */
   readonly #roots: unknown;
-  /** Everything both provenances may reference (`itx`, i.e. this resolver, is added per call). */
-  readonly #scope: Record<string, unknown>;
 
   constructor(args: {
     stream: ConstructorParameters<typeof StreamProcessor>[0]["stream"];
@@ -100,7 +98,6 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
     super(args);
     this.#seeds = args.seeds;
     this.#roots = args.roots;
-    this.#scope = { itx: this.itx };
   }
 
   // The routing table is pure fold — no side effects, so no processEvent needed.
@@ -151,7 +148,16 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
    * match; equal specificity → recency (event mounts by offset; seeds oldest of all); nothing
    * matches → default-deny with a readable error naming the call.
    */
-  async resolve(state: State, call: string | Expression, extraArgs?: unknown[]): Promise<unknown> {
+  async resolve(
+    state: State,
+    call: string | Expression,
+    extraArgs?: unknown[],
+    depth = 0,
+  ): Promise<unknown> {
+    // Guard against self-referential mounts (itx.x ⇒ itx.x, or a default route whose target
+    // re-misses): unbounded async recursion never overflows a stack, it just burns the DO.
+    if (depth > 32)
+      throw new Error(`capability resolution exceeded depth 32 — self-referential mount?`);
     const expr = toExpression(call);
     const winner = this.route(state, expr);
     if (!winner)
@@ -161,7 +167,8 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
     const { row, m, provenance } = winner;
     const target = substitute(row.target, { args: m.boundaryArgs ?? [], captures: m.captures });
     // THE PROVENANCE GATE: `roots` exists in scope only for config seeds. Not policed — absent.
-    const scope = provenance === "config" ? { ...this.#scope, roots: this.#roots } : this.#scope;
+    const base = { itx: this.#itxAtDepth(depth + 1) };
+    const scope = provenance === "config" ? { ...base, roots: this.#roots } : base;
     // Holes in the target SPEND the boundary args; a hole-free target receives them as a call.
     const boundaryArgs = usesCallerArgs(row.target) ? undefined : m.boundaryArgs;
     return await apply(scope, target, { remainder: m.remainder, boundaryArgs }, extraArgs);
@@ -217,6 +224,11 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
   /** The `itx` scope symbol: dotted/called access re-enters `resolve` with the CURRENT state.
    *  This is what makes alias mounts compose and default routes forward whole calls. */
   get itx(): unknown {
+    return this.#itxAtDepth(1);
+  }
+
+  /** The `itx` scope symbol at a given recursion depth — re-enters resolve carrying the depth. */
+  #itxAtDepth(depth: number): unknown {
     const build = (steps: Expression): unknown =>
       new Proxy(function () {} as object, {
         get: (_t, p) =>
@@ -225,15 +237,15 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
           const last = steps.at(-1);
           if (typeof last !== "string") throw new Error("itx: cannot call a call result here");
           const expr: Expression = [...steps.slice(0, -1), [last, ...(args as unknown[])]];
-          return this.resolveCurrent(expr);
+          return this.resolveCurrent(expr, depth);
         },
       });
     return build(["itx"]);
   }
 
   /** Overridden by the host to hand `resolve` the current folded state. */
-  resolveCurrent(_call: Expression): Promise<unknown> {
-    throw new Error("capability-host: resolveCurrent not wired (host must bind it to its reads)");
+  resolveCurrent(_call: Expression, _depth = 0): Promise<unknown> {
+    throw new Error("iterate-context: resolveCurrent not wired (host must bind it to its reads)");
   }
 }
 

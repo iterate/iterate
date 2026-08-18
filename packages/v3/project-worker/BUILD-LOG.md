@@ -591,3 +591,20 @@ the control plane runs the same core; billing-analytics verification of hibernat
 - NEXT: userspace (loader-loaded) facet processors through the same map; moving the
   iterate-context processor itself into a facet (needs the clients-view RPC facade on the parent);
   the hibernation-with-facet e2e (the dual-mode task's required test).
+
+## Increment 25 (review-2): review round 1 findings fixed — 4 real bugs + regressions
+
+- ⚠️ **await-your-own-append deadlock** + ⚠️ **cursor-gap skipping**: delivery is now
+  CURSOR-DRIVEN (the committed batch is only a wake-up; every processor reads its own contiguous
+  batch from its persisted cursor out of the log) and `deliver` never awaits a chain that is
+  already mid-batch. Restores apps/os runner semantics (contiguity + safe self-append).
+- ⚠️ **concurrent cold invokes** on one hibernatable stub now share the pending wake (`arrived`
+  promise) — the second borrower no longer clobbers the first's resolver (which hung it forever).
+- ⚠️ **resolver recursion guard**: `itx.x ⇒ itx.x` (or a re-missing default route) errors loudly
+  at depth 32 instead of burning the DO; depth threads through the scope proxy + resolveCurrent.
+- Stateless loader cacheKeys now fold in CF_VERSION_METADATA.id (the stale-isolate family the
+  stateful runner documents); dropped the double catch-up before snapshots.
+- +3 regression tests (65 total); live re-proof green on `review-2` (facet spine + full crisp).
+- Round-1 backlog (SIMPLIFY/CLARITY, not yet applied): shared walkSteps in evaluate/apply; dedupe
+  hashSource/deepEqual; delete ItxCallPath + explicit-empty-seeds semantics; stale runner-name
+  comments; micro dead code (identical-branch ternary, #maybeWord alias, itx-surface path build).

@@ -188,6 +188,7 @@ type Registered = {
   name: string;
   hooks: ReturnType<typeof StreamProcessor.runnerHooks<unknown>>;
   chain: Promise<void>; // rule 1: the serial chain
+  running: boolean; // a batch is mid-flight — a re-entrant deliver must NOT await this chain
   progress: Progress<unknown> | null; // in-memory cache of the persisted fold
   waiters: { offset: number; resolve: () => void }[];
 };
@@ -344,8 +345,12 @@ export function createStreamProcessorRegistry(options: {
     return run;
   };
 
-  const catchUpOne = (p: Registered): Promise<void> =>
-    enqueue(p, async () => {
+  // CURSOR-DRIVEN on purpose: every drive reads from the PERSISTED cursor out of the log, so
+  // delivery is always contiguous — a failed batch, a late enable, or a partial append can never
+  // skip events (a passed-in batch is only a wake-up, never the source of truth).
+  const catchUpBody = async (p: Registered): Promise<void> => {
+    p.running = true;
+    try {
       await refoldIfNeeded(p);
       for (;;) {
         const after = loadProgress(p).reducedThroughOffset;
@@ -355,7 +360,11 @@ export function createStreamProcessorRegistry(options: {
         await processBatch(p, events, head);
         if (events.length < 500) return;
       }
-    });
+    } finally {
+      p.running = false;
+    }
+  };
+  const catchUpOne = (p: Registered): Promise<void> => enqueue(p, () => catchUpBody(p));
 
   return {
     /** Register under the contract slug (the identity doctrine: name = slug). */
@@ -366,17 +375,29 @@ export function createStreamProcessorRegistry(options: {
       const hooks = StreamProcessor.runnerHooks(processor as StreamProcessor<unknown>);
       const name = hooks.contract.slug;
       if (processors.has(name)) throw new Error(`processor "${name}" already registered`);
-      processors.set(name, { name, hooks, chain: Promise.resolve(), progress: null, waiters: [] });
+      processors.set(name, {
+        name,
+        hooks,
+        chain: Promise.resolve(),
+        running: false,
+        progress: null,
+        waiters: [],
+      });
       return processor;
     },
 
-    /** The drive door: the DO calls this after every commit with the just-committed events. */
-    deliver(events: StreamEventT[], streamMaxOffset: number): Promise<void> {
-      return Promise.all(
-        [...processors.values()].map((p) =>
-          enqueue(p, () => processBatch(p, events, streamMaxOffset)),
-        ),
-      ).then(() => undefined);
+    /** The drive door: the DO calls this after every commit. The committed events are a WAKE-UP
+     *  only — each processor reads its own contiguous batch from its persisted cursor. A chain
+     *  already mid-batch is enqueued but NOT awaited: awaiting it would deadlock a processor
+     *  that appends during its own batch (append → deliver → its own busy chain). */
+    deliver(_events: StreamEventT[], _streamMaxOffset: number): Promise<void> {
+      const waits: Promise<void>[] = [];
+      for (const p of processors.values()) {
+        const wasRunning = p.running;
+        const run = enqueue(p, () => catchUpBody(p));
+        if (!wasRunning) waits.push(run);
+      }
+      return Promise.all(waits).then(() => undefined);
     },
 
     /** Re-drive a processor from its persisted cursor (cold reads, retry after a failed batch). */
