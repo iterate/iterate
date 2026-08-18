@@ -161,13 +161,15 @@ speak: `silent` (bare WS to /api), `ping` (protocol pings), `rpc`
 (authenticated capnweb session, one RPC, then true silence), `open` (rpc +
 `openConnection` on a fresh stream + one durable append delivered back —
 the DO retaining a callback into a socket that then goes fully quiet).
-Final results: THREE bare-silent sockets and the rpc-silent socket
-SURVIVED the full 3600 s ceiling; the PING socket died at 3460 s (1006) —
-the only death in the battery was the one generating traffic. The open leg
-took a fresh at-head delivery frame at 649 s of silence (the DO can still
-call the retained callback ten minutes into quiet) and both session legs
-rode on through TWO worker deploys — in-flight WebSockets finish on the
-old isolate, so even a deploy is not an instant kill. There is NO idle
+Final results: SEVEN of eight sockets survived their full 3600 s ceiling —
+three bare-silent, the rpc-silent bare socket, and (completing later) the
+authenticated rpc leg and the open leg, the last with a DO-retained
+callback and one append, quiet the whole hour THROUGH two worker deploys.
+The PING socket died at 3460 s (1006) — the only death in the battery was
+the one generating traffic. The open leg took a fresh at-head delivery
+frame at 649 s of silence (the DO can still call the retained callback ten
+minutes into quiet); in-flight WebSockets finish on the old isolate, so
+even a deploy is not an instant kill. There is NO idle
 policy killing quiet sockets at any layer — not the edge, not the worker,
 not the DO connection machinery — and authenticated capnweb sessions are
 NOT torn down for being quiet. Death is isolate reaping, uncorrelated with
