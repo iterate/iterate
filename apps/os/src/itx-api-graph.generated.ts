@@ -1494,8 +1494,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "AgentBirthKind",
     kind: "typeAlias",
     sourceText:
-      'export type AgentBirthKind = "email" | "mcp" | "onboarding" | "slack" | "telegram" | "web";',
-    summary: "",
+      '/** Which platform-default personality `getDefaultBirthEvents` serves — the\n * web/onboarding default prompt, the MCP reply contract, or a channel prompt\n * interpolated from the birth certificate\'s channel facts. */\nexport type AgentBirthKind = "email" | "mcp" | "onboarding" | "slack" | "telegram" | "web";',
+    summary:
+      "Which platform-default personality `getDefaultBirthEvents` serves — the web/onboarding default prompt, the MCP reply contract, or a channel prompt interpolated from the birth certificate's channel facts.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

@@ -26,7 +26,6 @@ import { inferJsonType } from "../../lib/infer-json-type.ts";
 import { stringifyScriptResult, truncateScriptResult } from "../../lib/script-result-render.ts";
 import { previewJson } from "../../lib/truncate-json.ts";
 import { INLINE_RESULT_PREAMBLE_LIMIT } from "../capability-host/capability-host-preamble.ts";
-import { AGENT_KEEPER_SUBSCRIPTION_NAME } from "./agent-defaults.ts";
 import { AgentProcessorContract, type AgentProcessorState } from "./agent-processor-contract.ts";
 import { contextClearsWaitingFor } from "./agent-prompt-fold.ts";
 import { fencedTsResponseFormat, type AgentResponseFormat } from "./agent-response-format.ts";
@@ -119,17 +118,18 @@ export async function interpretAgentEvent(input: {
       // codemode script. WHAT the response means is the response format's
       // decision (agent-response-format.ts); mapping the outcome to appends
       // stays here so every side effect keeps the idempotency discipline.
-      // Two gates make only REAL keeper output executable:
-      // - the keeper's processor stamp — a raw member append of
-      //   assistant-role history (even one carrying a numeric
-      //   llmRequestOffset) never gains a path to capability execution, and
-      //   output another interpreter already handled elsewhere is theirs;
-      // - presence in the reduced contextItems — assistant output whose
-      //   request an interrupt closed reduced to nothing and must not run.
+      // Only ACCEPTED output is executable, and acceptance is the FOLD's
+      // verdict, read back through the reduced contextItems: the fold admits
+      // an assistant item only when its llmRequestOffset named the open
+      // request at reduce time — a raw append merely claiming an offset
+      // reduced to nothing and never reaches capability execution, and
+      // output whose request an interrupt closed is equally gone. (The e2e
+      // synthetic-provider lane rides exactly this: a full atomic
+      // trigger+requested+assistant+settled batch folds as a real turn and
+      // interprets as one.)
       if (
         payload.role === "assistant" &&
         typeof payload.llmRequestOffset === "number" &&
-        event.source?.processor?.slug === AGENT_KEEPER_SUBSCRIPTION_NAME &&
         state.contextItems.some((item) => item.offset === event.offset)
       ) {
         const outcome = format.parse(payload.content);

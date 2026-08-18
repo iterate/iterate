@@ -18,7 +18,7 @@ import {
   AGENT_SUMMARY_INSTRUCTION,
   DEFAULT_AGENT_SYSTEM_PROMPT,
   EMAIL_AGENT_SYSTEM_PROMPT,
-  agentCreationForPath,
+  defaultAgentBirthEvents,
   slackAgentSystemPrompt,
   telegramAgentSystemPrompt,
 } from "./agent-defaults.ts";
@@ -138,8 +138,11 @@ test("no platform prompt embeds the type surface", () => {
 });
 
 test("the boot-context input stays facts-and-pointers sized", () => {
-  const policy = agentCreationForPath({ agentPath: "/agents/test", projectId: "prj_test" });
-  const bootContext = policy.events.find(
+  const birthEvents = defaultAgentBirthEvents({
+    kind: "web",
+    coordinates: { agentPath: "/agents/test", projectId: "prj_test" },
+  });
+  const bootContext = birthEvents.find(
     (event) =>
       event.type === "events.iterate.com/agents/context-added" &&
       (event.payload as { key?: string }).key === "agent/boot-context",
@@ -154,11 +157,14 @@ test("every docs name referenced in prompts and boot context resolves", () => {
   // Dialed-by-name strings are the bug class where a rename silently strands
   // the prompt (see the #1816/#1818 incident): every `docs.get({ name: "…" })`
   // literal must resolve to a real example id or type declaration name.
-  const policy = agentCreationForPath({ agentPath: "/agents/test", projectId: "prj_test" });
-  const bootContent = policy.events
+  const birthEvents = defaultAgentBirthEvents({
+    kind: "web",
+    coordinates: { agentPath: "/agents/test", projectId: "prj_test" },
+  });
+  const bootContent = birthEvents
     .map((event) => (event.payload as { content?: string }).content ?? "")
     .join("\n");
-  const corpus = [...Object.values(CHANNEL_PROMPTS), bootContent, policy.systemPrompt].join("\n");
+  const corpus = [...Object.values(CHANNEL_PROMPTS), bootContent].join("\n");
 
   const referencedNames = [
     // Both quoted docs.get names and backtick-quoted bare example ids

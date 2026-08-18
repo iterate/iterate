@@ -1,62 +1,25 @@
 import { describe, expect, test } from "vitest";
 import {
   agentCreationForPath,
-  agentSystemPromptContextEvent,
+  defaultAgentBirthEvents,
   DEFAULT_AGENT_SYSTEM_PROMPT,
-  validateAgentBirthEvents,
-  type AgentBirthDefaults,
+  MCP_AGENT_SYSTEM_PROMPT,
 } from "./agent-defaults.ts";
 
 const PROJECT_ID = "prj_defaults_test";
 
-function defaultsFor(agentPath: string) {
+function coreFor(agentPath: string) {
   return agentCreationForPath({
     agentPath,
     projectId: PROJECT_ID,
   });
 }
 
-function createdEvent(agentPath: string) {
-  return defaultsFor(agentPath).events.find(
-    (event) => event.type === "events.iterate.com/agent/created",
-  );
-}
-
-describe("agentCreationForPath", () => {
-  test("boot context names the project when directory facts are supplied — id-only without", () => {
-    const bootContent = (project?: { name: string; slug: string; workerUrl?: string }) => {
-      const events = agentCreationForPath({
-        agentPath: "/agents/demo",
-        projectId: PROJECT_ID,
-        ...(project === undefined ? {} : { project }),
-      }).events;
-      const boot = events.find((event) =>
-        String(event.idempotencyKey).startsWith("agent/boot-system-context:"),
-      );
-      if (boot?.type !== "events.iterate.com/agents/context-added") {
-        throw new Error("agent creation batch did not contain its boot context");
-      }
-      return boot.payload.content;
-    };
-
-    const named = bootContent({
-      name: "Snake Game",
-      slug: "snake",
-      workerUrl: "https://snake.iterate.app",
-    });
-    expect(named).toContain('"Snake Game" (slug snake');
-    expect(named).toContain("https://snake.iterate.app");
-    expect(named).toContain(PROJECT_ID);
-    expect(bootContent()).toContain(`- Project id: ${PROJECT_ID}`);
-  });
-
-  test("mounts only the workspace — sandboxes are created explicitly, never granted", () => {
-    const mounts = defaultsFor("/agents/demo")
-      .events.filter(
-        (event) => event.type === "events.iterate.com/capability-host/capability-provided",
-      )
-      .map((event) => event.payload.path);
-    expect(mounts).toEqual([["workspace"]]);
+describe("agentCreationForPath — the atomic core, and nothing else", () => {
+  test("no personality rides the core: no prompt slot, no model config, no boot context", () => {
+    const types = coreFor("/agents/demo").events.map((event): string => event.type);
+    expect(types).not.toContain("events.iterate.com/agents/context-added");
+    expect(types).not.toContain("events.iterate.com/agent/configured");
   });
 
   test("does not infer agent policy or startup events from the stream path", () => {
@@ -66,96 +29,33 @@ describe("agentCreationForPath", () => {
       "/agents/repos/config/pr/7",
       "/agents/slack/main/C123/ts-99/helper",
     ];
-
     for (const path of paths) {
-      const defaults = defaultsFor(path);
-      expect(defaults.systemPrompt).toBe(DEFAULT_AGENT_SYSTEM_PROMPT);
-      expect(createdEvent(path)?.payload).toEqual({});
+      const created = coreFor(path).events.find(
+        (event) => event.type === "events.iterate.com/agent/created",
+      );
+      expect(created?.payload).toEqual({});
     }
   });
 
-  test("keeps birth empty and installs model and prompt as ordinary setup events", () => {
-    const defaults = defaultsFor("/agents/demo");
-    expect(defaults.systemPrompt).toBe(DEFAULT_AGENT_SYSTEM_PROMPT);
-    expect(
-      defaults.events.find((event) => event.type === "events.iterate.com/agent/created")?.payload,
-    ).toEqual({});
-    expect(
-      defaults.events.find((event) => event.type === "events.iterate.com/agent/configured"),
-    ).toMatchObject({
-      idempotencyKey: `agent/model-configured:v2:${PROJECT_ID}:/agents/demo`,
-      payload: { config: { llm: { model: "openai/gpt-5.6-terra" } } },
-    });
-    expect(
-      defaults.events.find(
-        (event) =>
-          event.type === "events.iterate.com/agents/context-added" &&
-          event.payload.key === "agent/system-prompt",
-      )?.payload,
-    ).toEqual({
-      role: "system",
-      key: "agent/system-prompt",
-      content: DEFAULT_AGENT_SYSTEM_PROMPT,
-      // The flat context payload defaults the policy on every role; the
-      // processor ignores it on system items.
-      llmRequestPolicy: { behaviour: "after-current-request" },
-    });
-  });
-
-  test("lets a routed agent choose one initial prompt without changing birth", () => {
-    const creation = agentCreationForPath({
-      agentPath: "/agents/slack/test",
-      projectId: PROJECT_ID,
-      systemPromptPolicy: {
-        content: "Slack execution contract",
-        id: "slack",
-        revision: "7",
-      },
-    });
-    const prompts = creation.events.filter(
-      (event) =>
-        event.type === "events.iterate.com/agents/context-added" &&
-        event.payload.key === "agent/system-prompt",
-    );
-
-    expect(creation.birthCertificate.payload).toEqual({});
-    expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toMatchObject({
-      idempotencyKey: `agent/system-prompt:slack:v7:${PROJECT_ID}:/agents/slack/test`,
-      payload: { content: "Slack execution contract" },
-    });
-  });
-
-  test("gives each shipped prompt revision its own exact occurrence", () => {
-    const promptEvent = (revision: string, content: string) =>
-      agentCreationForPath({
-        agentPath: "/agents/routed/test",
-        projectId: PROJECT_ID,
-        systemPromptPolicy: { content, id: "routed", revision },
-      }).events.find(
-        (event) =>
-          event.type === "events.iterate.com/agents/context-added" &&
-          event.payload.key === "agent/system-prompt",
-      );
-
-    const first = promptEvent("1", "first policy");
-    expect(promptEvent("1", "first policy")).toEqual(first);
-    expect(promptEvent("2", "changed policy")).toMatchObject({
-      idempotencyKey: `agent/system-prompt:routed:v2:${PROJECT_ID}:/agents/routed/test`,
-      payload: { content: "changed policy", key: "agent/system-prompt" },
-    });
+  test("mounts only the workspace — sandboxes are created explicitly, never granted", () => {
+    const mounts = coreFor("/agents/demo")
+      .events.filter(
+        (event) => event.type === "events.iterate.com/capability-host/capability-provided",
+      )
+      .map((event) => event.payload.path);
+    expect(mounts).toEqual([["workspace"]]);
   });
 
   test("births both universal processors before ordinary setup events", () => {
     expect(
-      defaultsFor("/agents/demo")
+      coreFor("/agents/demo")
         .events.slice(0, 2)
         .map((event) => event.type),
     ).toEqual(["events.iterate.com/agent/created", "events.iterate.com/capability-host/created"]);
   });
 
   test("journals the one-hop project-root capability fallback in the birth certificate", () => {
-    const birth = defaultsFor("/agents/demo").events.find(
+    const birth = coreFor("/agents/demo").events.find(
       (event) => event.type === "events.iterate.com/capability-host/created",
     );
     expect(birth?.payload).toEqual({
@@ -164,8 +64,8 @@ describe("agentCreationForPath", () => {
     });
   });
 
-  test("appends processor wake subscriptions and the narrow collection copy in the same batch", () => {
-    const subscriptions = defaultsFor("/agents/demo").events.filter(
+  test("arms the headless keeper and the narrow collection copy in the same batch", () => {
+    const subscriptions = coreFor("/agents/demo").events.filter(
       (event) => event.type === "events.iterate.com/stream/subscription-configured",
     );
     expect(
@@ -173,7 +73,7 @@ describe("agentCreationForPath", () => {
         // The subscription NAME is the contract selector (name == registered slug).
         event.payload.receiver.action === "facet-processor" ? [event.payload.name] : [],
       ),
-    ).toEqual(["agent", "capability-host"]);
+    ).toEqual(["agent-headless", "capability-host"]);
     expect(
       subscriptions.find((event) => event.payload.receiver.action === "copy-to-stream")?.payload,
     ).toMatchObject({
@@ -196,7 +96,7 @@ describe("agentCreationForPath", () => {
   });
 
   test("keys every domain event on (projectId, agentPath) so exact retries dedupe", () => {
-    for (const event of defaultsFor("/agents/demo").events) {
+    for (const event of coreFor("/agents/demo").events) {
       if (event.type === "events.iterate.com/stream/subscription-configured") {
         // Subscription wiring keys are stream-local by design under the
         // subscription-model redesign: the name is the identity, keys never
@@ -210,195 +110,122 @@ describe("agentCreationForPath", () => {
   });
 });
 
-describe("agentSystemPromptContextEvent", () => {
-  test("keeps logical context identity separate from durable policy revision", () => {
-    const first = agentSystemPromptContextEvent({
-      content: "first policy",
-      idempotencyKey: "agent/test-system-prompt:v1",
-    });
-    const retry = agentSystemPromptContextEvent({
-      content: "first policy",
-      idempotencyKey: "agent/test-system-prompt:v1",
-    });
-    const changed = agentSystemPromptContextEvent({
-      content: "changed policy",
-      idempotencyKey: "agent/test-system-prompt:v2",
-    });
+describe("defaultAgentBirthEvents — the platform-default personality as plain events", () => {
+  const coordinates = { agentPath: "/agents/demo", projectId: PROJECT_ID };
 
-    expect(retry).toEqual(first);
-    expect(first.idempotencyKey).toBe("agent/test-system-prompt:v1");
-    expect(changed.idempotencyKey).toBe("agent/test-system-prompt:v2");
-    expect(changed.payload).toMatchObject({ key: "agent/system-prompt", role: "system" });
-  });
-});
-
-describe("agent birth defaults", () => {
-  const base = { agentPath: "/agents/defaults-test", projectId: "prj_test" };
-  // A project's contribution as plain events: a driver choice, a prompt, and
-  // an allowlisted processor attachment — the codemode-template shape.
-  const defaults: AgentBirthDefaults = {
-    birthEvents: [
-      {
-        type: "events.iterate.com/agent/configured",
-        payload: { config: { driver: "agent-headless" } },
-      },
-      {
-        type: "events.iterate.com/agents/context-added",
-        payload: { role: "system", key: "agent/system-prompt", content: "You speak codemode." },
-      },
-      {
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: {
-          name: "agent-headless",
-          receiver: { action: "facet-processor", source: { kind: "builtin" } },
-        },
-      },
-    ],
-  };
-  const promptSlots = (creation: { events: { payload?: unknown }[] }) =>
-    creation.events.filter(
-      (event) => (event.payload as { key?: string })?.key === "agent/system-prompt",
-    );
-
-  test("defaults ride the birth batch: driver config, prompt slot, processor attachment", () => {
-    const creation = agentCreationForPath({ ...base, defaults });
-
-    const configured = creation.events.filter(
-      (event) => event.type === "events.iterate.com/agent/configured",
-    );
-    expect(configured.at(-1)).toMatchObject({ payload: { config: { driver: "agent-headless" } } });
-    // The project's prompt-slot event REPLACES the platform fallback — one
-    // prompt per birth.
-    expect(promptSlots(creation)).toMatchObject([{ payload: { content: "You speak codemode." } }]);
-    expect(
-      creation.events.filter(
-        (event) =>
-          event.type === "events.iterate.com/stream/subscription-configured" &&
-          (event.payload as { name?: string }).name === "agent-headless",
-      ),
-    ).toHaveLength(1);
-  });
-
-  test("an explicit systemPromptPolicy wins: the defaults' prompt-slot event is dropped", () => {
-    const creation = agentCreationForPath({
-      ...base,
-      defaults,
-      systemPromptPolicy: { content: "Channel policy.", id: "slack", revision: "1" },
-    });
-    expect(creation.systemPrompt).toBe("Channel policy.");
-    expect(promptSlots(creation)).toMatchObject([{ payload: { content: "Channel policy." } }]);
-    // The non-prompt defaults still ride.
-    expect(
-      creation.events
-        .filter((event) => event.type === "events.iterate.com/agent/configured")
-        .at(-1),
-    ).toMatchObject({ payload: { config: { driver: "agent-headless" } } });
-  });
-
-  test("changed defaults content mints different platform keys (replay-safe supersession)", () => {
-    const first = agentCreationForPath({ ...base, defaults });
-    const changed = agentCreationForPath({
-      ...base,
-      defaults: {
-        birthEvents: [
-          { type: "events.iterate.com/agent/configured", payload: { config: { driver: "agent" } } },
-        ],
-      },
-    });
-    const keysOf = (creation: typeof first) =>
-      creation.events
-        .map((event) => String(event.idempotencyKey))
-        .filter((key) => key.startsWith("agent/birth-defaults:"));
-    expect(keysOf(first)).toHaveLength(3);
-    expect(keysOf(changed)).toHaveLength(1);
-    expect(keysOf(first)).not.toContain(keysOf(changed)[0]);
-    // Deterministic: same content, same keys.
-    expect(keysOf(agentCreationForPath({ ...base, defaults }))).toEqual(keysOf(first));
-  });
-
-  test("an invalid list degrades to platform-default births — never breaks creation", () => {
-    const creation = agentCreationForPath({
-      ...base,
-      defaults: {
-        birthEvents: [
-          // Not an allowlisted agent-family processor: the whole list is dropped.
-          {
-            type: "events.iterate.com/stream/subscription-configured",
-            payload: { name: "project", receiver: { action: "facet-processor" } },
-          },
-        ],
-      },
-    });
-    expect(
-      creation.events.filter((event) =>
-        String(event.idempotencyKey).startsWith("agent/birth-defaults:"),
-      ),
-    ).toHaveLength(0);
-    expect(promptSlots(creation)).toMatchObject([
-      { payload: { content: DEFAULT_AGENT_SYSTEM_PROMPT } },
+  test("web kind: prompt slot, default model config, boot context — all content-hash keyed", () => {
+    const events = defaultAgentBirthEvents({ kind: "web", coordinates });
+    expect(events.map((event) => event.type)).toEqual([
+      "events.iterate.com/agents/context-added",
+      "events.iterate.com/agent/configured",
+      "events.iterate.com/agents/context-added",
     ]);
+    expect(events[0]).toMatchObject({
+      idempotencyKey: expect.stringMatching(/^agent\/default-birth:prompt:web:[0-9a-f]{8}$/),
+      payload: {
+        role: "system",
+        key: "agent/system-prompt",
+        content: DEFAULT_AGENT_SYSTEM_PROMPT,
+      },
+    });
+    expect(events[1]).toMatchObject({
+      payload: { config: { llm: { model: "openai/gpt-5.6-terra" } } },
+    });
+    expect(events[2]).toMatchObject({
+      payload: { role: "system", key: "agent/boot-context" },
+    });
   });
 
-  test("validateAgentBirthEvents: agent vocabulary passes, foreign vocabulary is rejected", () => {
-    expect(validateAgentBirthEvents(defaults.birthEvents)).toEqual({ ok: true });
-    expect(
-      validateAgentBirthEvents([{ type: "events.iterate.com/project/created", payload: {} }]),
-    ).toMatchObject({ ok: false, error: expect.stringContaining("project/created") });
-    // Schema-valid but the wrong receiver kind: only the facet-processor
-    // attachment lane is open to defaults.
-    expect(
-      validateAgentBirthEvents([
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            name: "agent-headless",
-            receiver: {
-              action: "copy-to-stream",
-              receivingStreamPath: "/elsewhere",
-              delivery: { start: "beginning", onFailingEvent: "halt" },
-            },
-          },
-        },
-      ]),
-    ).toMatchObject({ ok: false, error: expect.stringContaining("facet-processor") });
-    // Anything the stream's own payload schema would reject must be caught
-    // HERE (degrade to platform defaults) — inside the atomic birth append it
-    // would break every matching create(). A source-less receiver is the
-    // canonical example.
-    expect(
-      validateAgentBirthEvents([
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: { name: "agent-headless", receiver: { action: "facet-processor" } },
-        },
-      ]),
-    ).toMatchObject({ ok: false, error: expect.stringContaining("payload") });
-    // A userspace source would run arbitrary worker code under the
-    // allowlisted name — builtin only.
-    expect(
-      validateAgentBirthEvents([
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            name: "agent-headless",
-            receiver: {
-              action: "facet-processor",
-              source: {
-                kind: "userspace",
-                worker: {
-                  className: "Evil",
-                  durableWorkerKey: "evil",
-                  type: "stateful",
-                  path: "/apps/evil",
-                  source: {
-                    createApp: { files: { type: "inline", files: { "worker.ts": "export {}" } } },
-                  },
-                },
-              },
-            },
-          },
-        },
-      ]),
-    ).toMatchObject({ ok: false, error: expect.stringContaining("builtin") });
+  test("deterministic keys: two callers producing the same content converge on the same keys", () => {
+    // THIS is what makes the degraded-start / late-worker pair heal instead
+    // of conflict: identical content, identical keys, appends dedupe.
+    const first = defaultAgentBirthEvents({ kind: "web", coordinates });
+    const again = defaultAgentBirthEvents({ kind: "web", coordinates });
+    expect(again).toEqual(first);
+    // The degraded-start caller (no coordinates) produces a strict prefix
+    // with the SAME prompt/model keys — no boot context.
+    const degraded = defaultAgentBirthEvents({ kind: "web" });
+    expect(degraded.map((event) => event.idempotencyKey)).toEqual(
+      first.slice(0, 2).map((event) => event.idempotencyKey),
+    );
+  });
+
+  test("boot context names the project when directory facts are supplied — id-only without", () => {
+    const bootContent = (project?: { name: string; slug: string; workerUrl?: string }) => {
+      const events = defaultAgentBirthEvents({
+        kind: "web",
+        coordinates: { ...coordinates, ...(project === undefined ? {} : { project }) },
+      });
+      const boot = events.find(
+        (event) =>
+          event.type === "events.iterate.com/agents/context-added" &&
+          event.payload.key === "agent/boot-context",
+      );
+      if (boot?.type !== "events.iterate.com/agents/context-added") {
+        throw new Error("default birth events did not contain the boot context");
+      }
+      return boot.payload.content;
+    };
+
+    const named = bootContent({
+      name: "Snake Game",
+      slug: "snake",
+      workerUrl: "https://snake.iterate.app",
+    });
+    expect(named).toContain('"Snake Game" (slug snake');
+    expect(named).toContain("https://snake.iterate.app");
+    expect(named).toContain(PROJECT_ID);
+    expect(bootContent()).toContain(`- Project id: ${PROJECT_ID}`);
+  });
+
+  test("mcp kind layers the ask_assistant reply contract on the web prompt", () => {
+    const [prompt] = defaultAgentBirthEvents({ kind: "mcp", coordinates });
+    expect(prompt).toMatchObject({
+      payload: { key: "agent/system-prompt", content: MCP_AGENT_SYSTEM_PROMPT },
+    });
+    expect(MCP_AGENT_SYSTEM_PROMPT).toContain(DEFAULT_AGENT_SYSTEM_PROMPT);
+    expect(MCP_AGENT_SYSTEM_PROMPT).toContain("ask_assistant");
+  });
+
+  test("slack kind interpolates the connection recorded in the birth certificate", () => {
+    const [prompt] = defaultAgentBirthEvents({
+      kind: "slack",
+      coordinates: { agentPath: "/agents/slack/main/C1/ts-1", projectId: PROJECT_ID },
+      birthCertificate: {
+        channel: { type: "slack", connection: "main", channelId: "C1", threadTs: "ts-1" },
+      },
+    });
+    if (prompt?.type !== "events.iterate.com/agents/context-added") {
+      throw new Error("slack birth events did not lead with the prompt slot");
+    }
+    expect(prompt.payload.content).toContain('itx.integrations.slack.get("main").chat.postMessage');
+    expect(String(prompt.idempotencyKey)).toMatch(/^agent\/default-birth:prompt:slack:/);
+  });
+
+  test("telegram kind interpolates connection, chat id, and the agent's own path", () => {
+    const [prompt] = defaultAgentBirthEvents({
+      kind: "telegram",
+      coordinates: { agentPath: "/agents/telegram/chat-42/s-1", projectId: PROJECT_ID },
+      birthCertificate: { channel: { type: "telegram", connection: "bot", chatId: "42" } },
+    });
+    if (prompt?.type !== "events.iterate.com/agents/context-added") {
+      throw new Error("telegram birth events did not lead with the prompt slot");
+    }
+    expect(prompt.payload.content).toContain('itx.integrations.telegram.get("bot")');
+    expect(prompt.payload.content).toContain("this chat's id is 42");
+    expect(prompt.payload.content).toContain("/agents/telegram/chat-42/s-1");
+  });
+
+  test("channel kinds are LOUD about missing channel facts — never a silently wrong personality", () => {
+    expect(() => defaultAgentBirthEvents({ kind: "slack", coordinates })).toThrow(
+      /channel facts in the birth certificate/,
+    );
+    expect(() =>
+      defaultAgentBirthEvents({
+        kind: "telegram",
+        coordinates,
+        birthCertificate: { channel: { type: "slack", connection: "main" } },
+      }),
+    ).toThrow(/telegram/);
   });
 });

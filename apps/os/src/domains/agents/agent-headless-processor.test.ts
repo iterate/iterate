@@ -14,8 +14,7 @@ import {
   HeadlessAgentProcessor,
   HeadlessAgentProcessorContract,
 } from "./agent-headless-processor.ts";
-import { AgentProcessor } from "./agent-processor-implementation.ts";
-import type { AgentProcessorContract } from "./agent-processor-contract.ts";
+import { AGENT_BIRTH_FINALIZE_DEADLINE_MS } from "./agent-turn-loop.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
 
 const CONTEXT_ADDED = "events.iterate.com/agents/context-added";
@@ -146,42 +145,69 @@ it("a plain sendMessage (no llmRequestOffset) still mirrors into assistant histo
   });
 });
 
-it("the driver knob makes exactly one loop act: headless idles without it, classic idles with it", async () => {
-  // Hosted-processor subscriptions cannot be removed, so a handed-over
-  // stream stays subscribed to BOTH processors; config.driver is what makes
-  // exactly one of them act. Undriven headless: fully inert.
-  const idleHeadless = makeHeadlessHarness();
-  await idleHeadless.play(
+it("holds the first turn until the birth is finalized; the finalize releases it", async () => {
+  const h = makeHeadlessHarness();
+  await h.play(
     [
       "append",
       { type: "events.iterate.com/agent/created", payload: {} },
-      {
-        type: "events.iterate.com/agent/configured",
-        payload: { config: { llm: { model: "test-model" } } },
-      },
       {
         type: CONTEXT_ADDED,
         payload: { role: "system", key: "agent/system-prompt", content: "prompt" },
       },
       userMessage("anyone home?"),
     ],
-    ["advanceTime", 60_000],
+    // Well within the readiness deadline: the trigger stays HELD — no
+    // intent, no LLM call, and crucially no answer on a half-authored
+    // personality.
+    ["advanceTime", 5_000],
   );
-  expect(idleHeadless.llm.calls).toHaveLength(0);
-  expect(idleHeadless.events("events.iterate.com/agent/llm-request-requested")).toHaveLength(0);
+  expect(h.llm.calls).toHaveLength(0);
+  expect(h.events("events.iterate.com/agent/llm-request-requested")).toHaveLength(0);
+  expect(h.state().pendingLlmRequestTrigger).not.toBeNull();
 
-  // Classic under a headless driver: equally inert — no turn, no mirror.
-  const llm = makeScriptedLlm();
-  const classic = makeProcessorHarness<AgentProcessorContract>({
-    createProcessor: (deps) => new AgentProcessor({ ...deps, callLlm: llm.transport }),
-    path: "/agents/handed-over",
-  });
-  await classic.play(
-    ["append", ...NEW_AGENT_EVENTS, userMessage("anyone home?")],
-    ["advanceTime", 60_000],
+  // The config worker finalizes → the held trigger runs on the authored
+  // personality, and no degraded-start fact ever lands.
+  await h.play(
+    ["append", { type: "events.iterate.com/agent/birth-finalized", payload: {} }],
+    ["advanceTime", 10_000],
   );
-  expect(llm.calls).toHaveLength(0);
-  expect(classic.events("events.iterate.com/agent/llm-request-requested")).toHaveLength(0);
+  expect(h.llm.calls).toHaveLength(1);
+  expect(h.events("events.iterate.com/agent/birth-timed-out")).toHaveLength(0);
+
+  await h.play(() => h.llm.respond("hello!"));
+  expect(h.state().contextItems.at(-1)).toMatchObject({
+    payload: { role: "assistant", content: "hello!" },
+  });
+});
+
+it("degraded start: a missed readiness deadline appends the visible timed-out fact, the default personality, and finalize", async () => {
+  const h = makeHeadlessHarness();
+  await h.play([
+    "append",
+    { type: "events.iterate.com/agent/created", payload: {} },
+    userMessage("hello?"),
+  ]);
+  expect(h.llm.calls).toHaveLength(0);
+
+  // The deadline is armed at the HELD TRIGGER (the message), not at birth.
+  await h.play(["advanceTime", AGENT_BIRTH_FINALIZE_DEADLINE_MS + 60_000]);
+  expect(h.events("events.iterate.com/agent/birth-timed-out")).toHaveLength(1);
+  const prompt = h.state().contextItems.find((item) => item.payload.key === "agent/system-prompt");
+  expect(prompt).toBeDefined(); // the platform-default personality landed
+  expect(h.state().birthFinalizedAtOffset).toBeDefined();
+  // …and the held turn ran on it.
+  expect(h.llm.calls).toHaveLength(1);
+});
+
+it("an idle unborn agent waits forever for free: no deadline arms before the first held trigger", async () => {
+  const h = makeHeadlessHarness();
+  await h.play(
+    ["append", { type: "events.iterate.com/agent/created", payload: {} }],
+    ["advanceTime", 24 * 60 * 60_000],
+  );
+  expect(h.events("events.iterate.com/agent/birth-timed-out")).toHaveLength(0);
+  expect(h.llm.calls).toHaveLength(0);
 });
 
 // -----------------------------------------------------------------------------
@@ -195,7 +221,7 @@ const NEW_AGENT_EVENTS = [
   { type: "events.iterate.com/agent/created", payload: {} },
   {
     type: "events.iterate.com/agent/configured",
-    payload: { config: { llm: { model: "test-model" }, driver: "agent-headless" } },
+    payload: { config: { llm: { model: "test-model" } } },
   },
   {
     type: CONTEXT_ADDED,
@@ -205,6 +231,7 @@ const NEW_AGENT_EVENTS = [
       content: "You are a helpful headless test agent.",
     },
   },
+  { type: "events.iterate.com/agent/birth-finalized", payload: {} },
 ] satisfies AgentEventInput[];
 
 function userMessage(content: string): AgentEventInput {

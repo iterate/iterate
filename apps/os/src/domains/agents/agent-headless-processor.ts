@@ -81,7 +81,7 @@ export class HeadlessAgentProcessor extends StreamProcessor<
  * writer of this stream's recorded consequences (this keeper, the
  * interpretation service, vendored userland interpreters) dedupes on
  * identical keys instead of re-executing under a fresh prefix. */
-export function agentComponentHost(processor: object): AgentHost {
+function agentComponentHost(processor: object): AgentHost {
   const p = processor as {
     deps: AgentProcessorDeps;
     stream: { readEvents: AgentHost["readEvents"] };

@@ -83,18 +83,12 @@ describe("agent summary", () => {
 describe("agent runtime", () => {
   it("derives every runtime count from the fold's single open-request slot", () => {
     expect(
-      deriveAgentRuntime(
-        {
-          activeScriptExecutionIds: ["script-a", "script-b"],
-          contextItems: [
-            { payload: { role: "system", key: "agent/system-prompt" } },
-            { payload: { role: "user" } },
-          ],
-          openRequest: { requestedAtOffset: 4 },
-          pendingLlmRequestTrigger: { offset: 12 },
-        },
-        "agent/system-prompt",
-      ),
+      deriveAgentRuntime({
+        activeScriptExecutionIds: ["script-a", "script-b"],
+        birthFinalizedAtOffset: 3,
+        openRequest: { requestedAtOffset: 4 },
+        pendingLlmRequestTrigger: { offset: 12 },
+      }),
     ).toEqual({
       triggers: { pending: 1, runnable: 1 },
       // No scheduled/started phases in the offset-identified request model:
@@ -104,17 +98,13 @@ describe("agent runtime", () => {
     });
   });
 
-  it("keeps an unready trigger distinct from runnable work", () => {
+  it("keeps a HELD trigger (birth not finalized) distinct from runnable work", () => {
     expect(
-      deriveAgentRuntime(
-        {
-          activeScriptExecutionIds: [],
-          contextItems: [],
-          openRequest: null,
-          pendingLlmRequestTrigger: { offset: 2 },
-        },
-        "agent/system-prompt",
-      ),
+      deriveAgentRuntime({
+        activeScriptExecutionIds: [],
+        openRequest: null,
+        pendingLlmRequestTrigger: { offset: 2 },
+      }),
     ).toMatchObject({ triggers: { pending: 1, runnable: 0 } });
   });
 

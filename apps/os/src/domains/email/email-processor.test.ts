@@ -62,10 +62,7 @@ const ROUTED_CREATION_EVENT_TYPES = [
   "events.iterate.com/agent/binding-set",
   "events.iterate.com/capability-host/created",
   "events.iterate.com/email-agent/created",
-  "events.iterate.com/agent/configured",
-  "events.iterate.com/agents/context-added",
   "events.iterate.com/capability-host/capability-provided",
-  "events.iterate.com/agents/context-added",
   "events.iterate.com/stream/subscription-configured",
   "events.iterate.com/stream/subscription-configured",
   "events.iterate.com/stream/subscription-configured",
@@ -136,14 +133,11 @@ describe("EmailProcessor (thread router)", () => {
       subject: "Hello agent",
       threadId: "2",
     });
-    expect(routed[5]).toMatchObject({
-      payload: {
-        content: EMAIL_AGENT_SYSTEM_PROMPT,
-        key: "agent/system-prompt",
-        role: "system",
-      },
-    });
-    expect(routed[13]!.payload).toEqual(receivedPayload({}));
+    // The core carries NO personality: the config worker authors the email
+    // prompt (getDefaultBirthEvents({ kind: "email" })); the birth
+    // certificate records the channel facts.
+    expect(routed[0]!.payload).toEqual({ channel: { type: "email", threadId: "2" } });
+    expect(routed.at(-1)!.payload).toEqual(receivedPayload({}));
     expect(h.state().threads).toEqual({ "2": "/agents/email/t2" });
     expect(h.state().threadByMessageId).toEqual({ "msg-1@mail.example": "2" });
   });

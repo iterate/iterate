@@ -31,7 +31,7 @@ import { AgentProcessorContract } from "./agent-processor-contract.ts";
  * literal here so contracts-only consumers of this module never pull the
  * processor class and its transport into their bundles).
  */
-export const AGENT_KEEPER_SUBSCRIPTION_NAME = "agent-headless";
+const AGENT_KEEPER_SUBSCRIPTION_NAME = "agent-headless";
 
 /**
  * Deterministic, synchronous content hash (djb2, hex) — the occurrence
@@ -223,6 +223,9 @@ export type AgentCreateInput = z.input<
  * their prompts from the birth certificate's channel facts.
  */
 export const AgentBirthKind = z.enum(["web", "onboarding", "mcp", "slack", "telegram", "email"]);
+/** Which platform-default personality `getDefaultBirthEvents` serves — the
+ * web/onboarding default prompt, the MCP reply contract, or a channel prompt
+ * interpolated from the birth certificate's channel facts. */
 export type AgentBirthKind = z.infer<typeof AgentBirthKind>;
 
 /**
@@ -231,7 +234,7 @@ export type AgentBirthKind = z.infer<typeof AgentBirthKind>;
  * everything the default personality needs to interpolate a channel prompt.
  * Loose on purpose: routers may record more facts than the prompts read.
  */
-export const AgentChannelFacts = z.discriminatedUnion("type", [
+const AgentChannelFacts = z.discriminatedUnion("type", [
   z.looseObject({ type: z.literal("slack"), connection: z.string().min(1) }),
   z.looseObject({
     type: z.literal("telegram"),
@@ -240,7 +243,7 @@ export const AgentChannelFacts = z.discriminatedUnion("type", [
   }),
   z.looseObject({ type: z.literal("email") }),
 ]);
-export type AgentChannelFacts = z.infer<typeof AgentChannelFacts>;
+type AgentChannelFacts = z.infer<typeof AgentChannelFacts>;
 
 /**
  * The platform-default personality for one agent, as PLAIN KEYED EVENTS —

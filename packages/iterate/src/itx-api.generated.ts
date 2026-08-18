@@ -2943,6 +2943,9 @@ export type StreamEvent = {
  * object of caller-authored birth facts; `{}` is the norm). */
 export type AgentCreateInput = { [x: string]: unknown };
 
+/** Which platform-default personality `getDefaultBirthEvents` serves — the
+ * web/onboarding default prompt, the MCP reply contract, or a channel prompt
+ * interpolated from the birth certificate's channel facts. */
 export type AgentBirthKind = "email" | "mcp" | "onboarding" | "slack" | "telegram" | "web";
 
 /**

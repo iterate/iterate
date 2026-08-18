@@ -135,13 +135,11 @@ describe("TelegramProcessor (webhook router)", () => {
     await h.play(["append", ...NEW_ROUTER_EVENTS, webhook(humanMessageWebhookPayload({}))]);
 
     const allRouted = h.network.eventsAt(CHAT_PATH);
-    expect(allRouted.slice(0, 7).map((event) => event.type)).toEqual([
+    expect(allRouted.slice(0, 5).map((event) => event.type)).toEqual([
       "events.iterate.com/agent/created",
       "events.iterate.com/agent/binding-set",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/telegram-agent/created",
-      "events.iterate.com/agent/configured",
-      "events.iterate.com/agents/context-added",
       "events.iterate.com/capability-host/capability-provided",
     ]);
     expect(allRouted[1]!.payload).toEqual({
@@ -154,22 +152,16 @@ describe("TelegramProcessor (webhook router)", () => {
         (event) => event.type === "events.iterate.com/stream/subscription-configured",
       ),
     ).toHaveLength(4);
+    // The core carries NO personality: the config worker authors the Telegram
+    // prompt from the channel facts the birth certificate records
+    // (getDefaultBirthEvents({ kind: "telegram" })).
     expect(
-      allRouted.find(
-        (event) =>
-          event.type === "events.iterate.com/agents/context-added" &&
-          (event.payload as { key?: string }).key === "agent/system-prompt",
-      ),
-    ).toMatchObject({
-      payload: {
-        content: telegramAgentSystemPrompt({
-          agentPath: CHAT_PATH,
-          chatId: String(CHAT_ID),
-          connection: CONNECTION,
-        }),
-        key: "agent/system-prompt",
-        role: "system",
-      },
+      allRouted.some((event) => event.type === "events.iterate.com/agents/context-added"),
+    ).toBe(false);
+    expect(
+      allRouted.find((event) => event.type === "events.iterate.com/agent/created")?.payload,
+    ).toEqual({
+      channel: { type: "telegram", connection: CONNECTION, chatId: String(CHAT_ID) },
     });
     const routed = webhooksAt(h.network, CHAT_PATH);
     expect(routed).toHaveLength(1);
@@ -456,13 +448,11 @@ describe("TelegramProcessor (webhook router)", () => {
     await h.settle();
     await expect(h.runner().snapshot()).resolves.toMatchObject({ offset: 3 });
     const routedCount = routed.events.length;
-    expect(routed.events.slice(0, 7).map((event) => event.type)).toEqual([
+    expect(routed.events.slice(0, 5).map((event) => event.type)).toEqual([
       "events.iterate.com/agent/created",
       "events.iterate.com/agent/binding-set",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/telegram-agent/created",
-      "events.iterate.com/agent/configured",
-      "events.iterate.com/agents/context-added",
       "events.iterate.com/capability-host/capability-provided",
     ]);
     expect(routed.events.at(-1)?.type).toBe("events.iterate.com/telegram/webhook-received");
