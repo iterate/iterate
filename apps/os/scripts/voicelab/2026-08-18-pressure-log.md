@@ -103,3 +103,30 @@ certificate before the warm-up token, so the echo proves the fold);
 numbered clear frame IS the flush); the two declared-but-never-read
 mic-frame fields deleted. The contract is now 12 events, every one with a
 reader.
+
+**F6 (firmware sibling of F5, fixed):** the Mac C transport only ever
+ANSWERED pings; the ESP transport originates one after a quiet period —
+but the shared period was 120 s, four times the measured ~30 s edge
+closure, protecting nothing. The Darwin adapter now runs the same
+quiet-ping (same bounded control slot, one probe per quiet period) and
+ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS is 15 s. 62/63 firmware tests green
+(the odd one out is the pre-existing HAVPE XMOS assertion).
+
+## Final gauntlet — both providers, everything at once
+
+12 mixed rounds each (short / 38–50 s answers / interjections / 8 s + 30 s
+gaps), dieted agent, no app-level keepalive anywhere, WS pings carrying the
+silences. 24/24 rounds clean, one conversation per run:
+
+|             | openai            | grok             |
+| ----------- | ----------------- | ---------------- |
+| ours        | 91 ms p50, 97 p90 | 110 p50, 125 p90 |
+| marginal    | +129 ms           | +78 ms (long 0)  |
+| interject   | clear 150 ms      | clear 284 ms     |
+| degradation | 87→94 ms          | 110→110 ms       |
+
+The verdict the goal asked for: performance held (ours within 10 ms of the
+pre-diet figures on both providers, tails tighter than ever), while the
+processor lost its vestigial event machinery, the client lost two probe
+files and gained transport-owned liveness, and every remaining contract
+event has a reader.
