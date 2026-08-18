@@ -284,6 +284,42 @@ closer keyed on the request's ExecutionContext (`session-transport.ts`,
 the one seam between transport and target tree); the capability-host
 wiring closes 4901 on loss, a no-op for HTTP-batch and DO-side itx.
 
+**F13 (reported by Jonas from a real attended session; the barge only
+did half its job):** "count slowly to one hundred", space pressed
+mid-count, several seconds of speech — and it kept counting. The run's
+own wavs settle the client's side (mic.wav holds the 3.1 s interjection,
+so the press registered and captured; speaker.wav shows the count playing
+unbroken to the end), and the facet's code settles the server's: a
+`ptt-start` mid-answer emptied the speaker queue and sent the numbered
+clear frame — but NOTHING TOLD THE PROVIDER TO STOP GENERATING, and
+arriving deltas of the un-cancelled response re-filled the queue. Every
+earlier barge test passed because grok (and often gpt-realtime) bursts
+the whole answer up front, so the queue-drop killed everything; measured
+today, the same count prompt generated 90.8 s of audio over 16.6 s on one
+round and in 1.06 s on the next — whether a barge lands during generation
+is a coin toss, and Jonas's landed during it.
+
+The fix: `ptt-start` while a response is actively generating (tracked
+`response.created` → `response.output_audio.done`) now sends
+`response.cancel` and discards the cancelled answer's residue — its
+deltas AND its end marker — until the next `response.created`. Proven
+three ways: two FakeProvider tests (cancel-plus-deafness; no cancel when
+idle — 58/58); audibly, three probe runs where the barged count collapsed
+to 2.3–3.4 s answers with clears at 97–147 ms; and by the provider
+itself — the verbatim lane shows `response.done` with status
+`cancelled` for the 150 ms barge that landed mid-generation. The host
+CLI also stops voiding `mark_turn` failures (a silently lost ptt-start
+IS a lost barge-in; now it logs), and talk2 ensures the xai base secret
+whatever the provider (the either/or only worked on projects that
+already had both).
+
+Operational bycatch, worth its own eyebrow: pushing to this branch now
+triggers CI preview deploys that ERASE preview-3's data — mid-afternoon
+the slot dropped from 519 projects to 2, taking voice-test (recreated:
+prj_68295b19…), every soak stream, and — by bulldozer — F10's two zombie
+scheduler crashloops. Preview evidence has a push-bounded shelf life;
+durable claims belong in this log, committed.
+
 Proven on preview-3 with socket-lifetime's new `mount` mode (a fake
 device: `projects.connect` + live `ping()` capability, then silence):
 capability answered end-to-end ("alive at 14.3s", stamped inside the
