@@ -23,8 +23,6 @@ small set of rhyming imperative scripts in `apps/<app>/scripts/`:
 Small apps skip pieces they don't need (tunnels has a hand-written,
 committed wrangler.jsonc and no generator; streams-example-app has no
 secrets). Generated configs are gitignored — envs.ts is what you review.
-Shared policy can keep its reviewed data under `infra/` and use a state-free script; see
-`infra/cloudflare-edge-gate` for the WAF example.
 
 ## Environment selection is explicit
 

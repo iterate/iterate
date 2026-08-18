@@ -16,7 +16,6 @@ pnpm edge-gate verify --env preview_12
 
 It preserves unrelated zone rules, reads back zero drift after apply, and smoke-checks
 blocked and control paths. Production applies only on `main`; previews require local apply.
-
 The first pull request needs one `depot ci run --org 0p91s0lz49 --workflow
 .depot/workflows/cloudflare-edge-gate.yml`; Depot discovers later automatic triggers from
 `main`. There is no teardown command; removal is a separate destructive operation.

@@ -24,7 +24,7 @@ on:
 
 jobs:
   plan:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main')
     concurrency:
       group: cloudflare-edge-gate-plan-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true

@@ -128,6 +128,8 @@ describe("Depot deployment safety", () => {
     const workflow = loadWorkflow(file);
 
     expect(Object.keys(workflow.jobs).sort()).toEqual(["deploy", "plan"]);
+    expect(workflow.jobs.plan.if).toContain("github.ref != 'refs/heads/main'");
+    expect(workflow.jobs.deploy.if).toContain("github.ref == 'refs/heads/main'");
     expect(workflow.jobs.plan.concurrency).toEqual({
       group: "cloudflare-edge-gate-plan-${{ github.head_ref || github.run_id }}",
       "cancel-in-progress": true,
