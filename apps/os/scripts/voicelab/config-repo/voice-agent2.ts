@@ -745,6 +745,222 @@ const freshTurn = (): TurnTiming => ({
   reported: false,
 });
 
+/**
+ * Everything whose lifetime is ONE ANSWER from the provider.
+ *
+ * REPLACED WHOLESALE at `response.created` — the first event that can only
+ * belong to a live answer — instead of hand-reset field by field. The hand
+ * lists disagreed: `endsWhenQueueDrains` was reset by neither
+ * `response.created` nor the hang-up, and the stale flag could fire
+ * `lastFrameOfAnswer` in the middle of the next answer. An object that is
+ * swapped cannot forget a field.
+ */
+interface Answer {
+  /**
+   * The provider's identity for the answer now playing, beside the two
+   * clocks a truthful interruption needs (`receivedMs`, `sentMs`). On a
+   * barge, `conversation.item.truncate` gets heard-ms (sent minus what the
+   * clear threw out of the device's buffer) — trimming the item's audio AND
+   * transcript so the model remembers what the listener heard, not what it
+   * generated. Measured before this existed: barged eight seconds into a
+   * count, the model claimed "26" — the generated frontier, not the heard
+   * one.
+   */
+  itemId: string | null;
+  contentIndex: number;
+  /** How much of the answer was RECEIVED from the provider, in audio ms. */
+  receivedMs: number;
+  /** How much of it was actually HANDED TO THE DEVICE, in audio ms. */
+  sentMs: number;
+  /**
+   * The provider's own transcript of the answer now playing, snapshotted at
+   * the barge. Truncation deletes the item's transcript WHOLESALE (the
+   * provider's documented behaviour), and the model grounds "what did I say"
+   * in text, not in its own audio — truncated without help it swings to "I
+   * never even started". The repair is a system note carrying the transcript
+   * AS OF THE PRESS, whole: the transcript stream lags the audio stream by
+   * seconds (measured: 28 characters of transcript against 17 s of received
+   * audio at cancel), so a ratio cut over it starves the note — while the
+   * lag itself lands the snapshot naturally near the heard boundary.
+   */
+  transcript: { atAnswerAudioMs: number; text: string }[];
+  /**
+   * A response is streaming right now (between `response.created` and its
+   * `response.output_audio.done`) — the precondition for `response.cancel`
+   * meaning anything. Without the gate, every ordinary press (no answer
+   * playing, which is most of them) would draw a "nothing to cancel" error
+   * event from the provider.
+   */
+  responseActive: boolean;
+  /**
+   * A barge cancelled the active response; its remaining deltas are dead.
+   *
+   * `response.cancel` is asynchronous — audio of the cancelled answer keeps
+   * arriving until the provider processes it — and the queue-emptying in
+   * #dropAnswerInFlight only discards what has ALREADY arrived. Without this
+   * flag the residue refills the queue and the dead answer audibly resumes:
+   * measured 2026-08-18 on gpt-realtime, "count to a hundred" counted right
+   * through a barge, because openai streams near real time (grok bursts the
+   * whole answer up front, which is why the same gap never sounded on grok).
+   * Cleared by the next `response.created`, the first event that can only
+   * belong to a LIVE answer.
+   */
+  dropDeltasUntilResponseCreated: boolean;
+  /**
+   * The provider has finished this answer; say so once the queue is empty.
+   *
+   * Deliberately NOT "mark the frame that happens to be last": that rule is
+   * what made the flag losable. This is a question asked at the drain point,
+   * where the answer is always knowable.
+   */
+  endsWhenQueueDrains: boolean;
+}
+
+/** The between-answers state: nothing playing, nothing owed. */
+const freshAnswer = (): Answer => ({
+  itemId: null,
+  contentIndex: 0,
+  receivedMs: 0,
+  sentMs: 0,
+  transcript: [],
+  responseActive: false,
+  dropDeltasUntilResponseCreated: false,
+  endsWhenQueueDrains: false,
+});
+
+/**
+ * Everything whose lifetime is one provider dial.
+ *
+ * CREATED BEFORE THE AWAITED DIAL — `socket` stays null while the dial is in
+ * flight, which is what lets the mic path keep queueing during the handshake
+ * — and dropped whole when the dial fails, its socket closes, or the call is
+ * hung up. One object where the hand-maintained reset lists used to
+ * disagree: the dial block reset 19 fields, `response.created` 7, `#hangUp`
+ * 6, and the fields in nobody's intersection were exactly where the last two
+ * stale-state bug hunts ended. A hang-up is now one assignment, and it
+ * cannot forget a field.
+ */
+interface Dial {
+  /** The provider's socket, or null while the dial is still in flight. */
+  socket: WebSocket | null;
+  /** True once the provider's handshake completed and audio may flow. */
+  ready: boolean;
+  /**
+   * Paced answer audio waiting for its turn on the wire, oldest first.
+   *
+   * NOTHING IN HERE HAS A SEQUENCE NUMBER YET, and that is the point. A number
+   * is minted when a frame is HANDED TO THE STREAM, so a number existing means
+   * a frame left this machine — which is what makes a hole in the numbering
+   * mean one thing instead of two. Numbered at queue time, a barge-in that
+   * discarded the queue burned the numbers with it, and the device scored the
+   * cancelled audio as lost audio: 5 gaps and 423 absent numbers on a
+   * seven-minute call where nothing had actually gone missing.
+   */
+  speakerQueue: {
+    fromProviderDeltaSeq: number;
+    pcm16: Uint8Array;
+  }[];
+  /** Last sequence number minted on each lane, for this call. */
+  lastProviderDeltaSeq: number;
+  lastDeviceSpeakerFrameSeq: number;
+  /**
+   * How far a clear has already been declared, so a jittery detector is free.
+   *
+   * Five `speech_started` in one answer was measured on real hardware. The
+   * first moves this to the highest frame minted; the other four find nothing
+   * new below it and cost one comparison each.
+   */
+  clearedThroughDeviceSpeakerFrameSeq: number;
+  /**
+   * The next frame out must tell the device to empty its speaker first.
+   *
+   * TRUE FROM THE MOMENT THE DIAL IS DECIDED, which is what lets the
+   * sequence restart at one. The device may still be holding frames from the
+   * incarnation that died, numbered higher than the ones about to arrive.
+   * Rather than remembering how high — a durable number, written to survive
+   * a thing that cannot be survived — the first frame of the new session
+   * simply says "clear". Whatever the board was holding belonged to an
+   * answer whose socket is gone; nobody wants to hear the rest of it anyway.
+   * Consumed by the sender, so it costs nothing when there is no audio to
+   * send — an idle call never issues a clear nobody needed.
+   */
+  clearSpeakerBufferBeforeNextFrame: boolean;
+  /**
+   * When the device will run dry, on the facet clock. The only pacing state,
+   * and the whole model of its memory:
+   *
+   *   heldBytes = max(0, deviceBufferEmptyAtFacetMs - now) * PCM16_BYTES_PER_MS
+   *
+   * A deadline rather than a byte count beside a timestamp, because a deadline
+   * drains implicitly with the clock. The pair would need a decay tick to stay
+   * honest, and a decay tick that stops running is a field that silently lies.
+   */
+  deviceBufferEmptyAtFacetMs: number;
+  /**
+   * One sender at a time — PER DIAL, so a pacer that outlives its dial
+   * cannot hold the next dial's lock: the identity fence retires it, the
+   * release frees only its own dial, and the new dial's pacer starts clean.
+   */
+  sending: boolean;
+  /**
+   * The two rate converters, one per direction, minted with the dial for
+   * whatever rate its provider speaks (an identity for grok's native
+   * 16 kHz). Instances rather than calls because the conversion phase must
+   * survive the chunking: a provider flushes deltas at whatever cadence it
+   * likes, and resampling each delta as its own little signal put a seam at
+   * every boundary — see pcm.ts. The speaker side resets per answer; the
+   * mic side is one continuous capture for the whole dial.
+   */
+  micResampler: Pcm16Resampler;
+  spkResampler: Pcm16Resampler;
+  /**
+   * A truncate that must wait for the cancelled response to FINALIZE.
+   *
+   * Sent back-to-back with `response.cancel`, the truncate races the
+   * server finalizing the item — observed live: the ack and the response's
+   * `done` share a millisecond, and the model still remembered the full
+   * count. The provider processes client events in order, but the item's
+   * transcript is written at finalization; truncating a still-finalizing
+   * item is undefined in exactly the way that bit us. Held here until the
+   * `response.done` arrives, then sent against a settled item.
+   */
+  pendingTruncate: { itemId: string; contentIndex: number; audioEndMs: number } | null;
+  /**
+   * Tool calls issued by the model and not yet answered, by provider call_id.
+   * Grok documents parallel calls as "all outputs, then ONE response.create";
+   * the follow-up fires when this empties. A future Gemini listener would
+   * delete ids here on toolCallCancellation.
+   */
+  openToolCallIds: Set<string>;
+  /**
+   * The model decided the call is over; settle at the drain point, after the
+   * goodbye PLAYS. v1's instant version was measured cutting "Goodbye!"
+   * mid-word. Runtime on purpose: evicted, the 60s idle deadline backstops.
+   */
+  hangUpAfterAnswerDrains: string | null;
+  /** The answer in flight — replaced wholesale at `response.created`. */
+  answer: Answer;
+}
+
+/** A dial just decided: no socket yet, nothing sent, a clear owed first. */
+const freshDial = (providerRate: number): Dial => ({
+  socket: null,
+  ready: false,
+  speakerQueue: [],
+  lastProviderDeltaSeq: 0,
+  lastDeviceSpeakerFrameSeq: 0,
+  clearedThroughDeviceSpeakerFrameSeq: 0,
+  clearSpeakerBufferBeforeNextFrame: true,
+  deviceBufferEmptyAtFacetMs: 0,
+  sending: false,
+  micResampler: new Pcm16Resampler(16_000, providerRate),
+  spkResampler: new Pcm16Resampler(providerRate, 16_000),
+  pendingTruncate: null,
+  openToolCallIds: new Set(),
+  hangUpAfterAnswerDrains: null,
+  answer: freshAnswer(),
+});
+
 /* ========================================================================== */
 /* PROCESSOR                                                                  */
 /* ========================================================================== */
@@ -777,38 +993,36 @@ export class VoiceAgent2Processor extends StreamProcessor<
   /* Every one of these dies with the incarnation on purpose. Anything that
    * must outlive an eviction is in the fold above. */
 
-  /** Grok's socket, or null when this incarnation is not holding one. */
-  #providerSocket: WebSocket | null = null;
-  /** True once Grok's handshake completed and audio may flow. */
-  #providerReady = false;
-  /** One dial at a time: two caught-up deliveries must not open two sockets. */
-  #dialInFlight = false;
-
   /**
-   * Paced answer audio waiting for its turn on the wire, oldest first.
+   * The dial this incarnation is running, or null when there is none.
    *
-   * NOTHING IN HERE HAS A SEQUENCE NUMBER YET, and that is the point. A number
-   * is minted when a frame is HANDED TO THE STREAM, so a number existing means
-   * a frame left this machine — which is what makes a hole in the numbering
-   * mean one thing instead of two. Numbered at queue time, a barge-in that
-   * discarded the queue burned the numbers with it, and the device scored the
-   * cancelled audio as lost audio: 5 gaps and 423 absent numbers on a
-   * seven-minute call where nothing had actually gone missing.
+   * ONE DIAL AT A TIME: created synchronously the moment a dial is decided —
+   * so two caught-up deliveries cannot open two sockets — and null again
+   * when the dial fails, its socket closes, or the call is hung up.
+   * Everything scoped to the dial lives ON it (see {@link Dial}), which is
+   * what lets a hang-up be one assignment instead of a hand-reset list, and
+   * lets every closure the dial spawns fence itself with `this.#dial !==
+   * dial` — strictly stronger than the socket-identity check it replaces.
    */
-  #speakerQueue: {
-    fromProviderDeltaSeq: number;
-    pcm16: Uint8Array;
-  }[] = [];
+  #dial: Dial | null = null;
   /**
    * Capture that arrived before Grok's handshake finished, oldest first.
    *
    * Bytes and nothing else: `deviceMicFrameSeq` belongs to the device and is
    * never renumbered here, so holding a copy of it would be a field nobody
    * reads. Order in this array IS the order it was captured in.
+   *
+   * NOT ON THE DIAL, because it can start filling before one exists: a
+   * revived incarnation holds frames from deliveries that arrive before the
+   * caught-up pass re-dials, and they must survive INTO that dial's
+   * session.updated flush — which is why the dial's own reset never touched
+   * this queue either.
    */
   #micQueue: Uint8Array[] = [];
   /**
    * The device finished its turn while the handshake was still in flight.
+   * Like `#micQueue` it is NOT on the dial: the turn can end before the
+   * dial exists, and the flag must survive into it.
    *
    * THE HALF OF THE BUFFER THAT WAS MISSING. Capture arriving early was held
    * and replayed; the `ptt-end` that turns that capture into a QUESTION was
@@ -833,134 +1047,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * cannot fail in a way that costs a caller an answer.
    */
   #turn: TurnTiming = freshTurn();
-
-  /** Last sequence number minted on each lane, for this call. */
-  #lastProviderDeltaSeq = 0;
-  #lastDeviceSpeakerFrameSeq = 0;
-  /**
-   * How far a clear has already been declared, so a jittery detector is free.
-   *
-   * Five `speech_started` in one answer was measured on real hardware. The
-   * first moves this to the highest frame minted; the other four find nothing
-   * new below it and cost one comparison each.
-   */
-  #clearedThroughDeviceSpeakerFrameSeq = 0;
-  /**
-   * The next frame out must tell the device to empty its speaker first.
-   *
-   * Set when a fresh socket opens, because whatever the board is still holding
-   * belongs to an answer whose socket is gone. Consumed by the sender, so it
-   * costs nothing when there is no audio to send — an idle call never issues a
-   * clear nobody needed.
-   */
-  #clearSpeakerBufferBeforeNextFrame = false;
-  /**
-   * The provider has finished this answer; say so once the queue is empty.
-   *
-   * Deliberately NOT "mark the frame that happens to be last": that rule is
-   * what made the flag losable. This is a question asked at the drain point,
-   * where the answer is always knowable.
-   */
-  #answerEndsWhenQueueDrains = false;
-  /**
-   * A response is streaming right now (between `response.created` and its
-   * `response.output_audio.done`) — the precondition for `response.cancel`
-   * meaning anything. Without the gate, every ordinary press (no answer
-   * playing, which is most of them) would draw a "nothing to cancel" error
-   * event from the provider.
-   */
-  #responseActive = false;
-  /**
-   * The provider's identity for the answer now playing, and the two clocks a
-   * truthful interruption needs: how much of it was RECEIVED from the
-   * provider and how much was actually HANDED TO THE DEVICE. On a barge,
-   * `conversation.item.truncate` gets heard-ms (sent minus what the clear
-   * threw out of the device's buffer) — trimming the item's audio AND
-   * transcript so the model remembers what the listener heard, not what it
-   * generated. Measured before this existed: barged eight seconds into a
-   * count, the model claimed "26" — the generated frontier, not the heard
-   * one.
-   */
-  #answerItemId: string | null = null;
-  #answerContentIndex = 0;
-  #answerReceivedMs = 0;
-  #answerSentMs = 0;
-  /**
-   * A truncate that must wait for the cancelled response to FINALIZE.
-   *
-   * Sent back-to-back with `response.cancel`, the truncate races the
-   * server finalizing the item — observed live: the ack and the response's
-   * `done` share a millisecond, and the model still remembered the full
-   * count. The provider processes client events in order, but the item's
-   * transcript is written at finalization; truncating a still-finalizing
-   * item is undefined in exactly the way that bit us. Held here until the
-   * `response.done` arrives, then sent against a settled item.
-   */
-  #pendingTruncate: { itemId: string; contentIndex: number; audioEndMs: number } | null = null;
-  /**
-   * Tool calls issued by the model and not yet answered, by provider call_id.
-   * Grok documents parallel calls as "all outputs, then ONE response.create";
-   * the follow-up fires when this empties. A future Gemini listener would
-   * delete ids here on toolCallCancellation.
-   */
-  #openToolCallIds = new Set<string>();
-  /**
-   * The model decided the call is over; settle at the drain point, after the
-   * goodbye PLAYS. v1's instant version was measured cutting "Goodbye!"
-   * mid-word. Runtime on purpose: evicted, the 60s idle deadline backstops.
-   */
-  #hangUpAfterAnswerDrains: string | null = null;
-  /**
-   * The provider's own transcript of the answer now playing, snapshotted at
-   * the barge. Truncation deletes the item's transcript WHOLESALE (the
-   * provider's documented behaviour), and the model grounds "what did I say"
-   * in text, not in its own audio — truncated without help it swings to "I
-   * never even started". The repair is a system note carrying the transcript
-   * AS OF THE PRESS, whole: the transcript stream lags the audio stream by
-   * seconds (measured: 28 characters of transcript against 17 s of received
-   * audio at cancel), so a ratio cut over it starves the note — while the
-   * lag itself lands the snapshot naturally near the heard boundary.
-   */
-  #answerTranscript: { atAnswerAudioMs: number; text: string }[] = [];
-  /**
-   * A barge cancelled the active response; its remaining deltas are dead.
-   *
-   * `response.cancel` is asynchronous — audio of the cancelled answer keeps
-   * arriving until the provider processes it — and the queue-emptying in
-   * #dropAnswerInFlight only discards what has ALREADY arrived. Without this
-   * flag the residue refills the queue and the dead answer audibly resumes:
-   * measured 2026-08-18 on gpt-realtime, "count to a hundred" counted right
-   * through a barge, because openai streams near real time (grok bursts the
-   * whole answer up front, which is why the same gap never sounded on grok).
-   * Cleared by the next `response.created`, the first event that can only
-   * belong to a LIVE answer.
-   */
-  #dropDeltasUntilResponseCreated = false;
-  /**
-   * The two rate converters, one per direction, re-minted at each dial for
-   * whatever rate that dial's provider speaks (an identity for grok's
-   * native 16 kHz). Instances rather than calls because the conversion
-   * phase must survive the chunking: a provider flushes deltas at whatever
-   * cadence it likes, and resampling each delta as its own little signal
-   * put a seam at every boundary — see pcm.ts. The speaker side resets per
-   * answer; the mic side is one continuous capture for the whole dial.
-   */
-  #micResampler = new Pcm16Resampler(16_000, 16_000);
-  #spkResampler = new Pcm16Resampler(16_000, 16_000);
-
-  /**
-   * When the device will run dry, on the facet clock. The only pacing state,
-   * and the whole model of its memory:
-   *
-   *   heldBytes = max(0, #deviceBufferEmptyAtFacetMs - now) * PCM16_BYTES_PER_MS
-   *
-   * A deadline rather than a byte count beside a timestamp, because a deadline
-   * drains implicitly with the clock. The pair would need a decay tick to stay
-   * honest, and a decay tick that stops running is a field that silently lies.
-   */
-  #deviceBufferEmptyAtFacetMs = 0;
-  /** One sender at a time. */
-  #sending = false;
 
   /**
    * A call has been ASKED for, and the log has not caught up yet.
@@ -1185,7 +1271,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
         if (
           event.type === "events.iterate.com/voice-agent/ptt-end" &&
           state.clientTakesTurns &&
-          !this.#providerReady &&
+          this.#dial?.ready !== true &&
           /* Only a turn belonging to a REAL opening call may be held over
            * the handshake: a stray ptt-end with no call would leave the flag
            * latched, and the NEXT press's session.updated would commit
@@ -1251,86 +1337,100 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * active response (both providers speak it — one API is a clone of
          * the other), which is also what frees the provider to accept the
          * commit this press is about to produce. Until the cancel lands, the
-         * dead answer's residue keeps arriving — #dropDeltasUntilResponseCreated
-         * is what keeps it out of the speaker queue.
+         * dead answer's residue keeps arriving — the answer's
+         * `dropDeltasUntilResponseCreated` is what keeps it out of the
+         * speaker queue.
          */
         if (event.type === "events.iterate.com/voice-agent/ptt-start") {
-          /* A press UN-DECIDES a pending hang-up: the user talked past the
-           * goodbye. The model already heard "hanging up" as its tool
-           * output; the transcript shows what happened next — the truth. */
-          this.#hangUpAfterAnswerDrains = null;
-          /* Heard-ms must be read BEFORE the drop zeroes the pacer's
-           * schedule: sent audio minus what still sat in the device's buffer
-           * when the clear threw it away. */
-          const nowAtFacetMs = this.deps.nowAtFacetMs();
-          /* The device is the authority on what it played: a press may carry
-           * its actual buffered-ms (`spkBufferedMs`), measured at the button.
-           * The pacer schedule is only the fallback — it models the WORST
-           * CASE lead, and against a Mac draining into CoreAudio it claimed
-           * seconds sat unplayed that a listener had demonstrably heard. */
-          const reported = (event.payload as { spkBufferedMs?: unknown }).spkBufferedMs;
-          const unplayedMs =
-            typeof reported === "number" && Number.isFinite(reported) && reported >= 0
-              ? reported
-              : Math.max(0, this.#deviceBufferEmptyAtFacetMs - nowAtFacetMs);
-          const heardMs = Math.max(0, Math.floor(this.#answerSentMs - unplayedMs));
-          this.#dropAnswerInFlight(state.call.conversationId, nowAtFacetMs, append);
-          if (this.#providerReady && this.#providerSocket !== null) {
-            /*
-             * Cancel stops the SOUND; truncate fixes the MEMORY. The item
-             * still holds every millisecond the provider generated — barged,
-             * the model would claim its generated frontier rather than what
-             * anybody heard. One frame of slack so a fully-played answer is
-             * never "truncated" to its own length by rounding. An ACTIVE
-             * response's truncate is deferred until its `response.done`
-             * (see #pendingTruncate); a finished item truncates right away.
-             */
-            const wantsTruncate =
-              this.#answerItemId !== null && heardMs + 25 < this.#answerReceivedMs;
+          const dial = this.#dial;
+          /* No dial means nothing playing and nothing to cancel: a press on
+           * a revived incarnation that has not re-dialled yet changes
+           * nothing until the caught-up pass opens the connection. */
+          if (dial !== null) {
+            /* A press UN-DECIDES a pending hang-up: the user talked past the
+             * goodbye. The model already heard "hanging up" as its tool
+             * output; the transcript shows what happened next — the truth. */
+            dial.hangUpAfterAnswerDrains = null;
+            /* Heard-ms must be read BEFORE the drop zeroes the pacer's
+             * schedule: sent audio minus what still sat in the device's buffer
+             * when the clear threw it away. */
+            const nowAtFacetMs = this.deps.nowAtFacetMs();
+            /* The device is the authority on what it played: a press may carry
+             * its actual buffered-ms (`spkBufferedMs`), measured at the button.
+             * The pacer schedule is only the fallback — it models the WORST
+             * CASE lead, and against a Mac draining into CoreAudio it claimed
+             * seconds sat unplayed that a listener had demonstrably heard. */
+            const reported = (event.payload as { spkBufferedMs?: unknown }).spkBufferedMs;
+            const unplayedMs =
+              typeof reported === "number" && Number.isFinite(reported) && reported >= 0
+                ? reported
+                : Math.max(0, dial.deviceBufferEmptyAtFacetMs - nowAtFacetMs);
+            const heardMs = Math.max(0, Math.floor(dial.answer.sentMs - unplayedMs));
+            this.#dropAnswerInFlight(dial, state.call.conversationId, nowAtFacetMs, append);
+            if (dial.ready && dial.socket !== null) {
+              /*
+               * Cancel stops the SOUND; truncate fixes the MEMORY. The item
+               * still holds every millisecond the provider generated — barged,
+               * the model would claim its generated frontier rather than what
+               * anybody heard. One frame of slack so a fully-played answer is
+               * never "truncated" to its own length by rounding. An ACTIVE
+               * response's truncate is deferred until its `response.done`
+               * (see Dial.pendingTruncate); a finished item truncates right
+               * away.
+               */
+              const wantsTruncate =
+                dial.answer.itemId !== null && heardMs + 25 < dial.answer.receivedMs;
 
-            if (this.#responseActive) {
-              this.#responseActive = false;
-              this.#dropDeltasUntilResponseCreated = true;
-              if (wantsTruncate) {
-                this.#pendingTruncate = {
-                  itemId: this.#answerItemId!,
-                  contentIndex: this.#answerContentIndex,
-                  audioEndMs: heardMs,
-                };
-                this.#answerItemId = null;
+              if (dial.answer.responseActive) {
+                dial.answer.responseActive = false;
+                dial.answer.dropDeltasUntilResponseCreated = true;
+                if (wantsTruncate) {
+                  dial.pendingTruncate = {
+                    itemId: dial.answer.itemId!,
+                    contentIndex: dial.answer.contentIndex,
+                    audioEndMs: heardMs,
+                  };
+                  dial.answer.itemId = null;
+                }
+                this.#sendControl(
+                  dial,
+                  { type: "response.cancel" },
+                  state.call.conversationId,
+                  append,
+                );
+              } else if (wantsTruncate) {
+                this.#sendControl(
+                  dial,
+                  {
+                    type: "conversation.item.truncate",
+                    item_id: dial.answer.itemId,
+                    content_index: dial.answer.contentIndex,
+                    audio_end_ms: heardMs,
+                  },
+                  state.call.conversationId,
+                  append,
+                );
+                dial.answer.itemId = null;
+                this.#sendHeardPrefixNote(dial, heardMs, state.call.conversationId, append);
               }
-              this.#sendControl({ type: "response.cancel" }, state.call.conversationId, append);
-            } else if (wantsTruncate) {
-              this.#sendControl(
-                {
-                  type: "conversation.item.truncate",
-                  item_id: this.#answerItemId,
-                  content_index: this.#answerContentIndex,
-                  audio_end_ms: heardMs,
-                },
-                state.call.conversationId,
-                append,
-              );
-              this.#answerItemId = null;
-              this.#sendHeardPrefixNote(heardMs, state.call.conversationId, append);
             }
           }
         }
 
         if (micPcm16 !== null) {
-          const pcm = micPcm16;
-          if (this.#providerReady && this.#providerSocket !== null) {
+          const dial = this.#dial;
+          if (dial !== null && dial.ready && dial.socket !== null) {
             /* Held frames resample at the flush; live ones resample here.
              * The queue itself stays 16 kHz so a re-dial to a DIFFERENT
              * provider never replays audio at the wrong rate. */
-            this.#providerSocket.send(
+            dial.socket.send(
               JSON.stringify({
                 type: "input_audio_buffer.append",
-                audio: bytesToBase64(this.#micResampler.push(pcm)),
+                audio: bytesToBase64(dial.micResampler.push(micPcm16)),
               }),
             );
           } else if (this.#micQueue.length < MAX_HELD_MIC_FRAMES) {
-            this.#micQueue.push(pcm);
+            this.#micQueue.push(micPcm16);
           }
           return;
         }
@@ -1338,8 +1438,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * its buttons — if it has any — say nothing, because server VAD on top
          * of a button answers halfway through a sentence. */
         if (event.type === "events.iterate.com/voice-agent/ptt-end" && state.clientTakesTurns) {
-          if (this.#providerReady && this.#providerSocket !== null) {
-            this.#askForAnswer(this.#providerSocket);
+          const dial = this.#dial;
+          if (dial !== null && dial.ready && dial.socket !== null) {
+            this.#askForAnswer(dial.socket);
           } else {
             /* HELD, EXACTLY LIKE THE AUDIO IT BELONGS TO. This arm used to be
              * `&& this.#providerReady` on the condition above, so a turn that
@@ -1387,8 +1488,8 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * incarnation something it already knew.
    *
    * The caught-up path is still here and still needed — it is how a REVIVED
-   * incarnation learns it owes a call nobody is dialling. `#dialInFlight`
-   * and the socket check are what make the two callers safe together.
+   * incarnation learns it owes a call nobody is dialling. The dial object's
+   * synchronous creation is what makes the two callers safe together.
    */
   #openProviderConnection(
     conversationId: string,
@@ -1396,8 +1497,13 @@ export class VoiceAgent2Processor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgent2Contract>["runInBackground"],
   ): void {
-    if (this.#providerSocket !== null || this.#dialInFlight) return;
-    this.#dialInFlight = true;
+    if (this.#dial !== null) return;
+    const provider = PROVIDERS[state.provider];
+    /* CREATED BEFORE THE AWAITED DIAL, so a second caller finds `#dial`
+     * taken and the mic path queues for the whole handshake. The socket
+     * arrives below; everything else the dial owns starts fresh here. */
+    const dial = freshDial(provider.rate);
+    this.#dial = dial;
     const dialStartedAtFacetMs = this.deps.nowAtFacetMs();
     /* THIS DIAL'S OWN IDENTITY, for keys that must not collide with the
      * previous dial of the SAME call. A timestamp is not enough: a re-dial
@@ -1405,23 +1511,19 @@ export class VoiceAgent2Processor extends StreamProcessor<
      * not move on its own — reuses it. */
     const dialId = crypto.randomUUID();
     runInBackground(async () => {
-      const provider = PROVIDERS[state.provider];
       /* A dial can REJECT (DNS, TLS), not just refuse — and an uncaught
        * throw here was measured as sixty seconds of dead air: the runner
        * logs it, nothing appends, nothing re-dials, and the user's whole
        * held sentence waits out the idle deadline. A throw IS a refusal. */
       let socket: WebSocket | null;
       try {
-        socket = await this.deps
-          .dialProvider(
-            state.provider,
-            state.providerBaseUrl,
-            state.providerModel ?? provider.model,
-          )
-          .finally(() => (this.#dialInFlight = false));
+        socket = await this.deps.dialProvider(
+          state.provider,
+          state.providerBaseUrl,
+          state.providerModel ?? provider.model,
+        );
       } catch (error) {
-        this.#dialInFlight = false;
-        socket = null;
+        if (this.#dial === dial) this.#dial = null;
         await append({
           type: "events.iterate.com/voice-agent/conversation-end-requested",
           idempotencyKey: this.idempotencyKey(`dial-failed:${conversationId}`),
@@ -1433,6 +1535,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
         return;
       }
       if (socket === null) {
+        if (this.#dial === dial) this.#dial = null;
         await append({
           type: "events.iterate.com/voice-agent/conversation-end-requested",
           idempotencyKey: this.idempotencyKey(`dial-failed:${conversationId}`),
@@ -1440,38 +1543,17 @@ export class VoiceAgent2Processor extends StreamProcessor<
         });
         return;
       }
-      this.#providerSocket = socket;
-      this.#providerReady = false;
-      this.#speakerQueue = [];
-      this.#lastProviderDeltaSeq = 0;
-      this.#deviceBufferEmptyAtFacetMs = 0;
-      this.#clearedThroughDeviceSpeakerFrameSeq = 0;
-      this.#lastDeviceSpeakerFrameSeq = 0;
-      /*
-       * A FRESH SOCKET STARTS BY EMPTYING THE DEVICE, which is what lets the
-       * sequence restart at one.
-       *
-       * The device may still be holding frames from the incarnation that
-       * died, numbered higher than the ones about to arrive. Rather than
-       * remembering how high — a durable number, written to survive a thing
-       * that cannot be survived — the first frame of the new session simply
-       * says "clear". Whatever the board was holding belonged to an answer
-       * whose socket is gone; nobody wants to hear the rest of it anyway.
-       */
-      this.#clearSpeakerBufferBeforeNextFrame = true;
-      this.#answerEndsWhenQueueDrains = false;
-      this.#responseActive = false;
-      this.#dropDeltasUntilResponseCreated = false;
-      this.#answerItemId = null;
-      this.#answerContentIndex = 0;
-      this.#answerReceivedMs = 0;
-      this.#answerSentMs = 0;
-      this.#pendingTruncate = null;
-      this.#answerTranscript = [];
-      this.#openToolCallIds = new Set();
-      this.#hangUpAfterAnswerDrains = null;
-      this.#micResampler = new Pcm16Resampler(16_000, provider.rate);
-      this.#spkResampler = new Pcm16Resampler(provider.rate, 16_000);
+      if (this.#dial !== dial) {
+        /* Hung up while dialling: the call this socket was for is already
+         * over, and adopting it would resurrect a buried conversation. */
+        try {
+          socket.close();
+        } catch {
+          /* Already gone. */
+        }
+        return;
+      }
+      dial.socket = socket;
 
       /*
        * THE THIRD SWITCH, AND WHY IT IS NOT A STREAM EVENT.
@@ -1494,9 +1576,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * microphone queue into a dead connection, and — because the dial
          * guard reads the same field — let a SECOND socket be opened while
          * the first was still delivering. The close listener has always had
-         * this check; the message listener is the one that needed it.
+         * this check; the message listener is the one that needed it. The
+         * fence is the DIAL's identity rather than the socket's — strictly
+         * stronger: it also retires a listener whose call was hung up while
+         * its socket lingered.
          */
-        if (this.#providerSocket !== socket) return;
+        if (this.#dial !== dial) return;
         if (typeof message.data !== "string") return;
         let grok: Record<string, unknown>;
         try {
@@ -1553,13 +1638,13 @@ export class VoiceAgent2Processor extends StreamProcessor<
 
           case "session.updated": {
             /* Usable. Everything the handshake made us hold goes now. */
-            this.#providerReady = true;
+            dial.ready = true;
             const heldMicFrames = this.#micQueue.length;
             for (const held of this.#micQueue) {
               socket.send(
                 JSON.stringify({
                   type: "input_audio_buffer.append",
-                  audio: bytesToBase64(this.#micResampler.push(held)),
+                  audio: bytesToBase64(dial.micResampler.push(held)),
                 }),
               );
             }
@@ -1603,20 +1688,17 @@ export class VoiceAgent2Processor extends StreamProcessor<
           case "response.created":
             /* A created event can only belong to a LIVE answer, so it is
              * what ends a barge's residue-discard window — and it is where
-             * the per-answer identity and clocks start from zero. */
+             * the per-answer state is replaced WHOLESALE, identity and
+             * clocks included. */
             if (grok.type === "response.created") {
-              this.#dropDeltasUntilResponseCreated = false;
-              this.#responseActive = true;
-              this.#answerItemId = null;
-              this.#answerReceivedMs = 0;
-              this.#answerSentMs = 0;
-              this.#answerTranscript = [];
+              dial.answer = freshAnswer();
+              dial.answer.responseActive = true;
               /* A new answer is a new signal; without this, the filter's
                * held tail of a CANCELLED answer would smear its first
                * milliseconds. */
-              this.#spkResampler.reset();
+              dial.spkResampler.reset();
             }
-            this.#dropAnswerInFlight(conversationId, receivedAtFacetMs, append);
+            this.#dropAnswerInFlight(dial, conversationId, receivedAtFacetMs, append);
             return;
 
           case "response.output_audio_transcript.delta":
@@ -1628,8 +1710,8 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * heard twelve numbers that they heard four. Residue still
              * accumulates — the note is sent after the cancel. */
             if (typeof grok.delta === "string") {
-              this.#answerTranscript.push({
-                atAnswerAudioMs: this.#answerReceivedMs,
+              dial.answer.transcript.push({
+                atAnswerAudioMs: dial.answer.receivedMs,
                 text: grok.delta,
               });
             }
@@ -1640,12 +1722,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
             /* Residue of a cancelled answer: dead on arrival. Returning
              * before #reportTurnTiming matters as much as before the queue —
              * a dead delta must not stamp the NEXT turn's first-delta time. */
-            if (this.#dropDeltasUntilResponseCreated) return;
+            if (dial.answer.dropDeltasUntilResponseCreated) return;
             /* The turn is over the moment its first byte exists, so the report
              * goes out before this delta is cut up and paced — which can take
              * as long as the answer is. */
             this.#reportTurnTiming(conversationId, receivedAtFacetMs, append);
-            const fromProviderDeltaSeq = ++this.#lastProviderDeltaSeq;
+            const fromProviderDeltaSeq = ++dial.lastProviderDeltaSeq;
             /*
              * CUT ONLY TO FIT THE DEVICE'S RECEIVE BUFFER. A delta is audio
              * of no particular length — measured against the real provider,
@@ -1656,21 +1738,21 @@ export class VoiceAgent2Processor extends StreamProcessor<
              */
             /* The item identity rides every delta; remembering it here is
              * what lets a barge name the thing it truncates. */
-            if (typeof grok.item_id === "string") this.#answerItemId = grok.item_id;
+            if (typeof grok.item_id === "string") dial.answer.itemId = grok.item_id;
             if (typeof grok.content_index === "number") {
-              this.#answerContentIndex = grok.content_index;
+              dial.answer.contentIndex = grok.content_index;
             }
             /* The pipeline is 16 kHz from here to the speaker; a provider
              * that talks faster gets resampled at the door. */
-            const pcm16 = this.#spkResampler.push(base64ToBytes(grok.delta));
-            this.#answerReceivedMs += pcm16.length / PCM16_BYTES_PER_MS;
+            const pcm16 = dial.spkResampler.push(base64ToBytes(grok.delta));
+            dial.answer.receivedMs += pcm16.length / PCM16_BYTES_PER_MS;
             for (let cut = 0; cut < pcm16.length; cut += MAX_SPEAKER_PAYLOAD_BYTES) {
-              this.#speakerQueue.push({
+              dial.speakerQueue.push({
                 fromProviderDeltaSeq,
                 pcm16: pcm16.subarray(cut, Math.min(cut + MAX_SPEAKER_PAYLOAD_BYTES, pcm16.length)),
               });
             }
-            this.#sendSpeakerAudio(conversationId, append, runInBackground);
+            this.#sendSpeakerAudio(dial, conversationId, append, runInBackground);
             return;
           }
 
@@ -1697,23 +1779,24 @@ export class VoiceAgent2Processor extends StreamProcessor<
             /* The cancelled answer's own done is residue like its deltas:
              * marking end-of-answer for audio nobody heard would tell the
              * device a turn finished that the press already erased. */
-            if (this.#dropDeltasUntilResponseCreated) return;
-            this.#responseActive = false;
-            this.#answerEndsWhenQueueDrains = true;
-            this.#sendSpeakerAudio(conversationId, append, runInBackground);
+            if (dial.answer.dropDeltasUntilResponseCreated) return;
+            dial.answer.responseActive = false;
+            dial.answer.endsWhenQueueDrains = true;
+            this.#sendSpeakerAudio(dial, conversationId, append, runInBackground);
             return;
 
           case "response.done": {
             /* Every response ends here, audio or not — a pure function-call
              * response never sends output_audio.done, so without this the
              * NEXT press would cancel a response that no longer exists. */
-            this.#responseActive = false;
+            dial.answer.responseActive = false;
             /* The cancelled response is now FINAL — the deferred truncate
              * can no longer race the item's own finalization. */
-            const pending = this.#pendingTruncate;
-            if (pending !== null && this.#providerReady && this.#providerSocket !== null) {
-              this.#pendingTruncate = null;
+            const pending = dial.pendingTruncate;
+            if (pending !== null && dial.ready && dial.socket !== null) {
+              dial.pendingTruncate = null;
               this.#sendControl(
+                dial,
                 {
                   type: "conversation.item.truncate",
                   item_id: pending.itemId,
@@ -1723,10 +1806,10 @@ export class VoiceAgent2Processor extends StreamProcessor<
                 conversationId,
                 append,
               );
-              this.#sendHeardPrefixNote(pending.audioEndMs, conversationId, append);
+              this.#sendHeardPrefixNote(dial, pending.audioEndMs, conversationId, append);
             }
             /* The floor is free; a hang-up waiting on the drain settles now. */
-            this.#sendSpeakerAudio(conversationId, append, runInBackground);
+            this.#sendSpeakerAudio(dial, conversationId, append, runInBackground);
             return;
           }
 
@@ -1734,7 +1817,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
             /* Residue discipline, same as audio: a cancelled response's tool
              * call is an intent the user erased, and running it anyway is the
              * barge failing at the worst altitude — a side effect. */
-            if (this.#dropDeltasUntilResponseCreated) return;
+            if (dial.answer.dropDeltasUntilResponseCreated) return;
             if (typeof grok.call_id !== "string") return;
             /* Unparseable arguments go through raw; the capability decides
              * what that means. */
@@ -1745,11 +1828,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
               /* Raw it is. */
             }
             this.#runTool(
+              dial,
               grok.call_id,
               state.tools.find((tool) => tool.name === grok.name),
               modelArgs,
               conversationId,
-              socket,
               append,
               runInBackground,
             );
@@ -1771,9 +1854,8 @@ export class VoiceAgent2Processor extends StreamProcessor<
       });
 
       socket.addEventListener("close", () => {
-        if (this.#providerSocket !== socket) return;
-        this.#providerSocket = null;
-        this.#providerReady = false;
+        if (this.#dial !== dial) return;
+        this.#dial = null;
         this.runInBackground(() =>
           append({
             type: "events.iterate.com/voice-agent/conversation-end-requested",
@@ -1793,7 +1875,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
        */
       for (;;) {
         await this.deps.sleep(IDLE_TICK_MS);
-        if (this.#providerSocket !== socket) return;
+        if (this.#dial !== dial) return;
         const nowAtFacetMs = this.deps.nowAtFacetMs();
         /*
          * IDLE SINCE THE LAST THING THAT HAPPENED, whichever end it happened
@@ -1810,7 +1892,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * turns, with the listener about to speak.
          *
          * Finishing an answer is an event on this call as much as hearing one
-         * is. `#deviceBufferEmptyAtFacetMs` is when the device runs dry, so
+         * is. `deviceBufferEmptyAtFacetMs` is when the device runs dry, so
          * while it is in the future this end is still talking, and once it
          * passes it is the moment this end stopped. Both readings are what
          * the deadline wants.
@@ -1823,12 +1905,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
          */
         const lastActivityAtFacetMs = Math.max(
           this.#lastDeviceInputAtStreamMsMirror,
-          this.#deviceBufferEmptyAtFacetMs,
+          dial.deviceBufferEmptyAtFacetMs,
         );
         if (nowAtFacetMs - lastActivityAtFacetMs < IDLE_TIMEOUT_MS) continue;
         /* Still holding audio it has not handed over yet: not idle by any
          * reading, whatever the clocks say. */
-        if (this.#speakerQueue.length > 0) continue;
+        if (dial.speakerQueue.length > 0) continue;
         await append({
           type: "events.iterate.com/voice-agent/conversation-end-requested",
           idempotencyKey: this.idempotencyKey(`idle:${conversationId}`),
@@ -2005,15 +2087,15 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * one function_call_output. Silence is the one forbidden result.
    */
   #runTool(
+    dial: Dial,
     callId: string,
     tool: z.infer<typeof VoiceTool> | undefined,
     modelArgs: unknown,
     conversationId: string,
-    socket: WebSocket,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgent2Contract>["runInBackground"],
   ): void {
-    this.#openToolCallIds.add(callId);
+    dial.openToolCallIds.add(callId);
     runInBackground(async () => {
       let output: string;
       if (tool === undefined) {
@@ -2022,7 +2104,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
         /* THE BASE CASE, NOT A REGISTRY: hanging up is one atomic append of
          * conversation-end-requested, deferred to the drain point so the
          * goodbye being spoken right now gets PLAYED, not cut. */
-        this.#hangUpAfterAnswerDrains = "the model hung up";
+        dial.hangUpAfterAnswerDrains = "the model hung up";
         output = JSON.stringify({ status: "hanging up once this answer finishes playing" });
       } else {
         const expression = tool.expression;
@@ -2079,9 +2161,10 @@ export class VoiceAgent2Processor extends StreamProcessor<
       }
       /* The fence every provider-lane completion wears: a re-dialed call is
        * a NEW session that never issued this call_id. */
-      if (this.#providerSocket !== socket) return;
-      this.#openToolCallIds.delete(callId);
+      if (this.#dial !== dial) return;
+      dial.openToolCallIds.delete(callId);
       this.#sendControl(
+        dial,
         {
           type: "conversation.item.create",
           item: { type: "function_call_output", call_id: callId, output },
@@ -2095,11 +2178,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
        * it is something the assistant DID, not something to talk about. */
       if (
         tool?.expression !== undefined &&
-        this.#openToolCallIds.size === 0 &&
-        !this.#responseActive &&
-        !this.#dropDeltasUntilResponseCreated
+        dial.openToolCallIds.size === 0 &&
+        !dial.answer.responseActive &&
+        !dial.answer.dropDeltasUntilResponseCreated
       ) {
-        this.#sendControl({ type: "response.create" }, conversationId, append);
+        this.#sendControl(dial, { type: "response.create" }, conversationId, append);
       }
     });
   }
@@ -2110,12 +2193,13 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * that hears only one direction cannot explain an interruption gone wrong.
    */
   #sendControl(
+    dial: Dial,
     message: Record<string, unknown>,
     conversationId: string,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
-    if (this.#providerSocket === null) return;
-    this.#providerSocket.send(JSON.stringify(message));
+    if (dial.socket === null) return;
+    dial.socket.send(JSON.stringify(message));
     const { item, ...rest } = message;
     this.runInBackground(() =>
       append({
@@ -2132,13 +2216,14 @@ export class VoiceAgent2Processor extends StreamProcessor<
   }
 
   #sendHeardPrefixNote(
+    dial: Dial,
     heardMs: number,
     conversationId: string,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
-    if (this.#providerSocket === null || !this.#providerReady) return;
-    const segments = this.#answerTranscript;
-    this.#answerTranscript = [];
+    if (dial.socket === null || !dial.ready) return;
+    const segments = dial.answer.transcript;
+    dial.answer.transcript = [];
     const heardPrefix = segments
       .filter((segment) => segment.atAnswerAudioMs <= heardMs)
       .map((segment) => segment.text)
@@ -2146,6 +2231,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
       .trim();
     if (heardPrefix === "") return;
     this.#sendControl(
+      dial,
       {
         type: "conversation.item.create",
         item: {
@@ -2167,22 +2253,23 @@ export class VoiceAgent2Processor extends StreamProcessor<
   }
 
   #dropAnswerInFlight(
+    dial: Dial,
     conversationId: string,
     decidedAtFacetMs: number,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
-    const clearedThroughDeviceSpeakerFrameSeq = this.#lastDeviceSpeakerFrameSeq;
-    this.#speakerQueue = [];
-    this.#deviceBufferEmptyAtFacetMs = 0;
+    const clearedThroughDeviceSpeakerFrameSeq = dial.lastDeviceSpeakerFrameSeq;
+    dial.speakerQueue = [];
+    dial.deviceBufferEmptyAtFacetMs = 0;
     /* Nothing minted since the last clear means nothing to clear: the repeat
      * blips of a jittery detector cost one append each, and this is where they
      * stop costing anything at all. */
-    if (clearedThroughDeviceSpeakerFrameSeq <= this.#clearedThroughDeviceSpeakerFrameSeq) return;
+    if (clearedThroughDeviceSpeakerFrameSeq <= dial.clearedThroughDeviceSpeakerFrameSeq) return;
     /* The clear frame gets a number of its own, and the watermark moves PAST
      * it — otherwise the next blip sees the clear frame as something new to
      * clear and the guard never closes. */
-    const clearFrameSeq = ++this.#lastDeviceSpeakerFrameSeq;
-    this.#clearedThroughDeviceSpeakerFrameSeq = clearFrameSeq;
+    const clearFrameSeq = ++dial.lastDeviceSpeakerFrameSeq;
+    dial.clearedThroughDeviceSpeakerFrameSeq = clearFrameSeq;
     /* There used to be a durable speaker-flush record appended beside this —
      * "when was I interrupted" surviving the ephemeral lane. Nothing ever
      * read it: not a device, not a probe, not a debugging session. The
@@ -2193,7 +2280,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
         payload: {
           conversationId,
           deviceSpeakerFrameSeq: clearFrameSeq,
-          fromProviderDeltaSeq: this.#lastProviderDeltaSeq,
+          fromProviderDeltaSeq: dial.lastProviderDeltaSeq,
           pcm: "",
           clearSpeakerBufferBeforeFrame: true,
           sentAtFacetMs: decidedAtFacetMs,
@@ -2218,8 +2305,8 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * each frame's duration and correcting it whenever it fell behind. That is a
    * model of memory on another machine, on a clock we do not share, and it can
    * only ever be wrong in a direction nobody can measure. There is no model
-   * here: `#deviceBufferEmptyAtFacetMs` is a schedule this processor invented and
-   * controls, and the device is never mentioned.
+   * here: `deviceBufferEmptyAtFacetMs` is a schedule this processor invented
+   * and controls, and the device is never mentioned.
    *
    * The schedule is a DEADLINE rather than `sleep(FRAME_MS)` between sends,
    * because the append itself takes time — a fixed sleep would run slower than
@@ -2227,132 +2314,152 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * little more with every frame.
    */
   #sendSpeakerAudio(
+    dial: Dial,
     conversationId: string,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgent2Contract>["runInBackground"],
   ): void {
-    if (this.#sending) return;
-    this.#sending = true;
+    if (dial.sending) return;
+    dial.sending = true;
     runInBackground(async () => {
       try {
-        while (this.#speakerQueue.length > 0) {
-          const nowAtFacetMs = this.deps.nowAtFacetMs();
-          /*
-           * A DEADLINE IN THE PAST MEANS THE DEVICE RAN DRY WHILE WE WERE AWAY,
-           * and the backlog cannot be less than nothing.
-           *
-           * Without this the model banks credit for silence the device never
-           * had to play: thirty seconds between answers would "earn" 480 KB of
-           * headroom, which is the firehose this whole lane exists to prevent.
-           */
-          if (this.#deviceBufferEmptyAtFacetMs < nowAtFacetMs) {
-            this.#deviceBufferEmptyAtFacetMs = nowAtFacetMs;
-          }
-          /* PEEK, never shift: a clear arriving during the sleep below has to
-           * be able to filter this frame out of the queue. */
-          const frame = this.#speakerQueue[0]!;
-          /*
-           * THE WHOLE SAFETY PROOF, IN ONE INEQUALITY. A frame goes only when
-           * what the device already holds, plus this frame, fits the budget —
-           * so the backlog is never above it. Bytes rather than a frame count
-           * because the tail of a Grok delta is a partial frame, and a count
-           * would mis-size exactly that one.
-           */
-          const overflowBytes =
-            (this.#deviceBufferEmptyAtFacetMs - nowAtFacetMs) * PCM16_BYTES_PER_MS +
-            frame.pcm16.length -
-            MAX_DEVICE_SPEAKER_BACKLOG_BYTES;
-          if (overflowBytes > 0) {
-            /* Full. Wait exactly long enough for the overflow to play off, then
-             * look again — the queue may be gone and the clock must be reread. */
-            await this.deps.sleep(Math.ceil(overflowBytes / PCM16_BYTES_PER_MS));
+        /*
+         * ONE LOOP, THREE JOBS, AND IT EXITS ONLY WHEN NONE REMAINS. The
+         * straight-line version — drain, then maybe mark, then maybe hang up
+         * — had a window: while it awaited the end-marker append, `sending`
+         * was still held, so a delta landing there queued with no pacer to
+         * come, and a second `output_audio.done` re-raised the marker flag
+         * with nobody left to consume it. The audio was stranded and the
+         * stale flag fired `lastFrameOfAnswer` in the middle of the NEXT
+         * answer. Looping back after every await is the fix: nothing lands
+         * during an await that the next iteration does not see.
+         */
+        for (;;) {
+          /* The dial this pacer belongs to is gone — a hang-up or a re-dial
+           * owns the wire now, and its queue died with it. Stop, so the
+           * release below frees only this dial's lock and the new dial's own
+           * pacer runs unimpeded. */
+          if (this.#dial !== dial) return;
+          if (dial.speakerQueue.length > 0) {
+            const nowAtFacetMs = this.deps.nowAtFacetMs();
+            /*
+             * A DEADLINE IN THE PAST MEANS THE DEVICE RAN DRY WHILE WE WERE
+             * AWAY, and the backlog cannot be less than nothing.
+             *
+             * Without this the model banks credit for silence the device never
+             * had to play: thirty seconds between answers would "earn" 480 KB of
+             * headroom, which is the firehose this whole lane exists to prevent.
+             */
+            if (dial.deviceBufferEmptyAtFacetMs < nowAtFacetMs) {
+              dial.deviceBufferEmptyAtFacetMs = nowAtFacetMs;
+            }
+            /* PEEK, never shift: a clear arriving during the sleep below has to
+             * be able to filter this frame out of the queue. */
+            const frame = dial.speakerQueue[0]!;
+            /*
+             * THE WHOLE SAFETY PROOF, IN ONE INEQUALITY. A frame goes only when
+             * what the device already holds, plus this frame, fits the budget —
+             * so the backlog is never above it. Bytes rather than a frame count
+             * because the tail of a Grok delta is a partial frame, and a count
+             * would mis-size exactly that one.
+             */
+            const overflowBytes =
+              (dial.deviceBufferEmptyAtFacetMs - nowAtFacetMs) * PCM16_BYTES_PER_MS +
+              frame.pcm16.length -
+              MAX_DEVICE_SPEAKER_BACKLOG_BYTES;
+            if (overflowBytes > 0) {
+              /* Full. Wait exactly long enough for the overflow to play off, then
+               * look again — the queue may be gone and the clock must be reread. */
+              await this.deps.sleep(Math.ceil(overflowBytes / PCM16_BYTES_PER_MS));
+              continue;
+            }
+            dial.speakerQueue.shift();
+            /* The device runs dry this much later. Advanced from the DEADLINE
+             * rather than from now, so the cost of an append is absorbed and the
+             * average send rate equals the play rate. */
+            dial.deviceBufferEmptyAtFacetMs += frame.pcm16.length / PCM16_BYTES_PER_MS;
+            dial.answer.sentMs += frame.pcm16.length / PCM16_BYTES_PER_MS;
+            const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
+            dial.clearSpeakerBufferBeforeNextFrame = false;
+            await append({
+              type: "events.iterate.com/voice-agent/spk-frame",
+              payload: {
+                conversationId,
+                deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
+                fromProviderDeltaSeq: frame.fromProviderDeltaSeq,
+                pcm: bytesToBase64(frame.pcm16),
+                ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
+                sentAtFacetMs: nowAtFacetMs,
+              },
+            });
             continue;
           }
-          this.#speakerQueue.shift();
-          /* The device runs dry this much later. Advanced from the DEADLINE
-           * rather than from now, so the cost of an append is absorbed and the
-           * average send rate equals the play rate. */
-          this.#deviceBufferEmptyAtFacetMs += frame.pcm16.length / PCM16_BYTES_PER_MS;
-          this.#answerSentMs += frame.pcm16.length / PCM16_BYTES_PER_MS;
-          const clearFirst = this.#clearSpeakerBufferBeforeNextFrame;
-          this.#clearSpeakerBufferBeforeNextFrame = false;
-          await append({
-            type: "events.iterate.com/voice-agent/spk-frame",
-            payload: {
-              conversationId,
-              deviceSpeakerFrameSeq: ++this.#lastDeviceSpeakerFrameSeq,
-              fromProviderDeltaSeq: frame.fromProviderDeltaSeq,
-              pcm: bytesToBase64(frame.pcm16),
-              ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
-              sentAtFacetMs: nowAtFacetMs,
-            },
-          });
-        }
-        /*
-         * THE QUEUE IS EMPTY, so if the provider has finished, the device now
-         * holds the whole answer and can be told so. After the loop rather than
-         * inside it: that ordering is the guarantee — the marker cannot overtake
-         * audio it is about, because there is none left.
-         */
-        if (this.#answerEndsWhenQueueDrains) {
-          this.#answerEndsWhenQueueDrains = false;
-          this.#lastDeviceSpeakerFrameSeq += 1;
-          const clearFirst = this.#clearSpeakerBufferBeforeNextFrame;
-          this.#clearSpeakerBufferBeforeNextFrame = false;
-          await append({
-            type: "events.iterate.com/voice-agent/spk-frame",
-            payload: {
-              conversationId,
-              deviceSpeakerFrameSeq: this.#lastDeviceSpeakerFrameSeq,
-              fromProviderDeltaSeq: this.#lastProviderDeltaSeq,
-              pcm: "",
-              ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
-              lastFrameOfAnswer: true,
-              sentAtFacetMs: this.deps.nowAtFacetMs(),
-            },
-          });
-        }
-        /* THE MODEL HUNG UP, and the drain point is where that settles — the
-         * same place lastFrameOfAnswer is decided, for the same reason: it is
-         * where the answer is knowable. The device holds the whole goodbye;
-         * the pacer's own deadline says when it finishes PLAYING. Sleep that
-         * off, re-check (a press during playout un-decides it), then one
-         * atomic append; the ordinary end-requested machinery does the rest. */
-        if (
-          this.#hangUpAfterAnswerDrains !== null &&
-          this.#speakerQueue.length === 0 &&
-          !this.#responseActive
-        ) {
-          await this.deps.sleep(
-            Math.max(0, this.#deviceBufferEmptyAtFacetMs - this.deps.nowAtFacetMs()),
-          );
-          const reason = this.#hangUpAfterAnswerDrains;
-          if (reason !== null && this.#speakerQueue.length === 0) {
-            this.#hangUpAfterAnswerDrains = null;
+          /*
+           * THE QUEUE IS EMPTY, so if the provider has finished, the device now
+           * holds the whole answer and can be told so. Behind the drain rather
+           * than beside it: that ordering is the guarantee — the marker cannot
+           * overtake audio it is about, because there is none left.
+           */
+          if (dial.answer.endsWhenQueueDrains) {
+            dial.answer.endsWhenQueueDrains = false;
+            dial.lastDeviceSpeakerFrameSeq += 1;
+            const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
+            dial.clearSpeakerBufferBeforeNextFrame = false;
             await append({
-              type: "events.iterate.com/voice-agent/conversation-end-requested",
-              idempotencyKey: this.idempotencyKey(`hang-up:${conversationId}`),
-              payload: { conversationId, reason },
+              type: "events.iterate.com/voice-agent/spk-frame",
+              payload: {
+                conversationId,
+                deviceSpeakerFrameSeq: dial.lastDeviceSpeakerFrameSeq,
+                fromProviderDeltaSeq: dial.lastProviderDeltaSeq,
+                pcm: "",
+                ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
+                lastFrameOfAnswer: true,
+                sentAtFacetMs: this.deps.nowAtFacetMs(),
+              },
             });
+            continue;
           }
+          /* THE MODEL HUNG UP, and the drain point is where that settles — the
+           * same place lastFrameOfAnswer is decided, for the same reason: it is
+           * where the answer is knowable. The device holds the whole goodbye;
+           * the pacer's own deadline says when it finishes PLAYING. Sleep that
+           * off, re-check (a press during playout un-decides it), then one
+           * atomic append; the ordinary end-requested machinery does the rest.
+           * A hang-up behind a still-ACTIVE response is not settleable yet —
+           * `response.done` re-triggers the pacer and it settles then. */
+          if (dial.hangUpAfterAnswerDrains !== null && !dial.answer.responseActive) {
+            await this.deps.sleep(
+              Math.max(0, dial.deviceBufferEmptyAtFacetMs - this.deps.nowAtFacetMs()),
+            );
+            if (this.#dial !== dial) return;
+            const reason = dial.hangUpAfterAnswerDrains;
+            if (reason !== null && dial.speakerQueue.length === 0) {
+              dial.hangUpAfterAnswerDrains = null;
+              await append({
+                type: "events.iterate.com/voice-agent/conversation-end-requested",
+                idempotencyKey: this.idempotencyKey(`hang-up:${conversationId}`),
+                payload: { conversationId, reason },
+              });
+            }
+            continue;
+          }
+          return;
         }
       } finally {
-        this.#sending = false;
+        dial.sending = false;
       }
     });
   }
 
-  /** Let the socket and everything hanging off it go. Safe to call twice. */
+  /** Let the dial and everything hanging off it go. Safe to call twice. */
   #hangUp(): void {
-    this.#providerReady = false;
-    this.#speakerQueue = [];
     this.#micQueue = [];
     this.#turnEndedDuringHandshake = false;
     this.#turn = freshTurn();
-    const socket = this.#providerSocket;
-    this.#providerSocket = null;
+    const dial = this.#dial;
+    this.#dial = null;
     try {
-      socket?.close();
+      dial?.socket?.close();
     } catch {
       /* Already gone. */
     }
