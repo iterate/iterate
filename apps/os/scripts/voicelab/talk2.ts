@@ -137,10 +137,13 @@ export async function talk2(options: Talk2Options = {}) {
       : `voice-agent2.ts already current (${install.commitOid.slice(0, 8)})`,
   );
 
+  // The xai secret is the agent's unconditional base requirement (setup's
+  // health check demands it whatever the provider); openai is additive. The
+  // old either/or here only ever worked because long-lived projects already
+  // carried both — a fresh project with --provider openai failed setup.
+  console.log(`xai secret ${await ensureXaiSecret(itx)}`);
   if (options.provider === "openai") {
     console.log(`openai secret ${await ensureOpenaiSecret(itx)}`);
-  } else {
-    console.log(`xai secret ${await ensureXaiSecret(itx)}`);
   }
 
   using voiceAgent = itx.workers.get(
