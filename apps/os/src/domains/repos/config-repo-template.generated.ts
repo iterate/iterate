@@ -725,11 +725,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { MediaApp } from \"iterate/starter-apps/media\";\n" +
       "import { NotesApp } from \"iterate/starter-apps/notes\";\n" +
-      "import {\n" +
-      "  IterateWorkerEntrypoint,\n" +
-      "  type AgentBirthDefaultsValue,\n" +
-      "  type StreamEvent,\n" +
-      "} from \"iterate/sdk\";\n" +
+      "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
       "import { TodoApp } from \"iterate/starter-apps/todo\";\n" +
       "\n" +
       "// An iterate project is, in the abstract, just a fetch function.\n" +
@@ -834,63 +830,43 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "\n" +
       "  /**\n" +
-      "   * THE PROJECT'S PROMPT, published as data: the project root's generic\n" +
-      "   * defaults store (`project/defaults-configured`, latest occurrence wins\n" +
-      "   * per key) holds this repo's birth events under the \"agents/birth-defaults\"\n" +
-      "   * key, and the platform's agent-creation door folds them into every agent\n" +
-      "   * birth batch — so agents in this project are BORN with this repo's\n" +
-      "   * prompts/agent-system-prompt.md as their system prompt. Edit that file\n" +
-      "   * and commit to change it — the content-hash key re-publishes and the\n" +
-      "   * newest event wins; no platform deploy. Deleting the file publishes an\n" +
-      "   * EMPTY list, which restores the platform's embedded fallback prompt\n" +
-      "   * (identical text until you fork the file). Rough token budget: prompts\n" +
-      "   * ride every LLM request, so a much larger file mostly buys latency and\n" +
-      "   * cost — keep it lean.\n" +
+      "   * THE BIRTH JOB — this project authors every agent's personality. The\n" +
+      "   * platform's create() commits only the mechanism (the agent core); it then\n" +
+      "   * HOLDS the agent's first turn until this handler appends the personality\n" +
+      "   * and declares the birth finalized. Start from the platform defaults\n" +
+      "   * (`getDefaultBirthEvents` — prompt, model, boot context; the channel\n" +
+      "   * kinds interpolate the facts the router recorded in the birth\n" +
+      "   * certificate), layer this project's own tweaks, then finalize. Every\n" +
+      "   * event here is idempotency-keyed, so a redelivered agent/created converges\n" +
+      "   * instead of conflicting. Miss the platform's ~10s deadline (e.g. during\n" +
+      "   * this worker's first build) and the agent starts degraded on the bare\n" +
+      "   * platform defaults — visibly, via agent/birth-timed-out.\n" +
       "   */\n" +
-      "  async #publishAgentBirthDefaults(): Promise<void> {\n" +
-      "    const itx = this.itx;\n" +
-      "    const file = await itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
-      "    const birthEvents: AgentBirthDefaultsValue[\"birthEvents\"] =\n" +
-      "      file === null\n" +
-      "        ? []\n" +
-      "        : [\n" +
-      "            {\n" +
-      "              type: \"events.iterate.com/agents/context-added\",\n" +
-      "              payload: {\n" +
-      "                // The platform's embedded copy of this file is newline-stripped;\n" +
-      "                // publishing the same normalization keeps \"unchanged file\" a\n" +
-      "                // byte-identical no-op.\n" +
-      "                content: file.content.replace(/\\n$/, \"\"),\n" +
-      "                key: \"agent/system-prompt\",\n" +
-      "                role: \"system\",\n" +
-      "              },\n" +
-      "            },\n" +
-      "          ];\n" +
-      "    // Best-effort size guard (~4 chars/token): the platform's own default\n" +
-      "    // prompt is budget-tested at ~4.3k tokens; warn well before a fork's\n" +
-      "    // edits silently double every request's cost.\n" +
-      "    if (file !== null && file.content.length > 6_000 * 4) {\n" +
-      "      console.warn(\n" +
-      "        `prompts/agent-system-prompt.md is ~${Math.round(file.content.length / 4)} tokens; ` +\n" +
-      "          \"it rides every LLM request of every agent — consider trimming.\",\n" +
-      "      );\n" +
-      "    }\n" +
-      "    const encoded = new TextEncoder().encode(JSON.stringify(birthEvents));\n" +
-      "    const digest = await crypto.subtle.digest(\"SHA-256\", encoded);\n" +
-      "    const hash = [...new Uint8Array(digest).slice(0, 8)]\n" +
-      "      .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
-      "      .join(\"\");\n" +
-      "    await itx.streams.get(\"/\").append({\n" +
-      "      type: \"events.iterate.com/project/defaults-configured\",\n" +
-      "      // New prefix on purpose: the stream rejects same-key-different-body\n" +
-      "      // appends, so the generic event must not reuse the legacy\n" +
-      "      // `iterate/config/agent-birth-defaults:` keys.\n" +
-      "      idempotencyKey: `iterate/config/defaults:agents/birth-defaults:${hash}`,\n" +
-      "      payload: {\n" +
-      "        key: \"agents/birth-defaults\",\n" +
-      "        value: { birthEvents } satisfies AgentBirthDefaultsValue,\n" +
+      "  async #authorAgentBirth(agentPath: string): Promise<void> {\n" +
+      "    const agent = this.itx.agents.get(agentPath);\n" +
+      "    const defaults = await agent.getDefaultBirthEvents({ kind: birthKindForAgentPath(agentPath) });\n" +
+      "    await agent.append(\n" +
+      "      ...defaults,\n" +
+      "      {\n" +
+      "        // The one illustrative project tweak — living documentation of how a\n" +
+      "        // config repo shapes its agents: a standing keyed context item. Edit\n" +
+      "        // or delete it freely; the key is the logical slot, the versioned\n" +
+      "        // idempotency key the occurrence.\n" +
+      "        type: \"events.iterate.com/agents/context-added\",\n" +
+      "        idempotencyKey: \"iterate/config/house-style:v1\",\n" +
+      "        payload: {\n" +
+      "          role: \"system\",\n" +
+      "          key: \"config/house-style\",\n" +
+      "          content: \"all responses should be in all-lowercase\",\n" +
+      "          llmRequestPolicy: { behaviour: \"dont-trigger-request\" },\n" +
+      "        },\n" +
       "      },\n" +
-      "    });\n" +
+      "      {\n" +
+      "        type: \"events.iterate.com/agent/birth-finalized\",\n" +
+      "        idempotencyKey: \"iterate/config/birth-finalized:v1\",\n" +
+      "        payload: {},\n" +
+      "      },\n" +
+      "    );\n" +
       "  }\n" +
       "\n" +
       "  // The base class delivers committed events on ANY stream here at least once and in\n" +
@@ -962,7 +938,26 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        // The birth event on the agent's own stream (copies carry\n" +
       "        // source.copiedFrom and must not re-target the collection stream).\n" +
       "        if (event.source?.copiedFrom !== undefined) break;\n" +
+      "        await this.#authorAgentBirth(event.path);\n" +
       "        await this.#syncAgentsMdContext([event.path]);\n" +
+      "        break;\n" +
+      "      }\n" +
+      "      case \"events.iterate.com/capability-host/script-run-settled\":\n" +
+      "      case \"events.iterate.com/capability-host/preamble-set\":\n" +
+      "      case \"events.iterate.com/capability-host/preamble-removed\":\n" +
+      "      case \"events.iterate.com/stream/error-occurred\":\n" +
+      "      case \"events.iterate.com/agents/context-added\": {\n" +
+      "        // THE INTERPRETATION JOB — the platform never decides what an\n" +
+      "        // agent's output MEANS; this project does, per event. Delegating to\n" +
+      "        // the platform's interpreter keeps classic behavior (```ts script\n" +
+      "        // extraction, slash commands, script-result rendering, error\n" +
+      "        // transcription) and live-updates with the platform; a project\n" +
+      "        // wanting its own response grammar vendors its own interpreter\n" +
+      "        // instead (see the codemode-tag template). Safe to call on every\n" +
+      "        // event here: irrelevant ones interpret to nothing, and repeated\n" +
+      "        // calls converge on idempotency keys.\n" +
+      "        if (!event.path.startsWith(\"/agents/\")) break;\n" +
+      "        await this.itx.agents.get(event.path).interpretResponse(event);\n" +
       "        break;\n" +
       "      }\n" +
       "      case \"events.iterate.com/repo/commit-completed\": {\n" +
@@ -1003,9 +998,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "            });\n" +
       "          }`,\n" +
       "        });\n" +
-      "        // Any commit MAY have changed the prompt file; unchanged content\n" +
-      "        // dedupes on the content-hash key.\n" +
-      "        await this.#publishAgentBirthDefaults();\n" +
       "        break;\n" +
       "      }\n" +
       "      default:\n" +
@@ -1055,6 +1047,20 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      { headers: { \"content-type\": \"text/html; charset=utf-8\" } },\n" +
       "    );\n" +
       "  }\n" +
+      "}\n" +
+      "\n" +
+      "/** Which platform-default personality an agent path gets: the integration\n" +
+      " * routers park their agents under well-known prefixes, and the onboarding\n" +
+      " * agent is the one this worker creates itself on project/created. */\n" +
+      "function birthKindForAgentPath(\n" +
+      "  agentPath: string,\n" +
+      "): \"web\" | \"onboarding\" | \"mcp\" | \"slack\" | \"telegram\" | \"email\" {\n" +
+      "  if (agentPath === \"/agents/onboarding\") return \"onboarding\";\n" +
+      "  if (agentPath.startsWith(\"/agents/mcp/\")) return \"mcp\";\n" +
+      "  if (agentPath.startsWith(\"/agents/slack/\")) return \"slack\";\n" +
+      "  if (agentPath.startsWith(\"/agents/telegram/\")) return \"telegram\";\n" +
+      "  if (agentPath.startsWith(\"/agents/email/\")) return \"email\";\n" +
+      "  return \"web\";\n" +
       "}\n",
   },
 ];

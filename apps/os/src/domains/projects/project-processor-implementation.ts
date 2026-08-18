@@ -649,15 +649,6 @@ export class ProjectProcessor extends StreamProcessor<
           ? { ...state, birthCertificate: terminal.payload }
           : { ...state, createFailure: terminal.payload };
       }
-      case "events.iterate.com/project/defaults-configured":
-        // Latest occurrence wins per key, stored RAW: the project never
-        // interprets a value. Whichever domain reads a key validates there
-        // and degrades to its own defaults on a malformed value — never to
-        // the stale predecessor, because the raw latest always replaces it.
-        return {
-          ...state,
-          defaults: { ...state.defaults, [event.payload.key]: event.payload.value },
-        };
       case "events.iterate.com/notification/created":
         return { ...state, notificationReady: true };
       case "events.iterate.com/stream/created":

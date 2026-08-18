@@ -1,7 +1,12 @@
 // Generic agent creation policy: an existence-only birth plus the ordinary
-// setup events every agent receives. Transport processors choose their own
-// system-context policy explicitly; the path never decides what kind of
-// processor exists on a stream.
+// setup MECHANISM every agent receives (capability host, workspace,
+// subscriptions). Personality — prompt, model choice, standing context — is
+// authored by the project's config worker AFTER birth, reacting to
+// `agent/created` in processEvent and appending `agent/birth-finalized` when
+// done; `defaultAgentBirthEvents` below is the platform-default personality
+// it can start from (served as plain events through
+// itx.agents.get(path).getDefaultBirthEvents). The path never decides what
+// kind of processor exists on a stream.
 
 import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import { z } from "zod";
@@ -21,8 +26,16 @@ import {
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 
 /**
+ * The one built-in agent keeper's subscription name (the headless agent
+ * processor's contract slug — see agent-headless-processor.ts; spelled as a
+ * literal here so contracts-only consumers of this module never pull the
+ * processor class and its transport into their bundles).
+ */
+export const AGENT_KEEPER_SUBSCRIPTION_NAME = "agent-headless";
+
+/**
  * Deterministic, synchronous content hash (djb2, hex) — the occurrence
- * identity for every shipped prompt and for birth-defaults idempotency keys.
+ * identity for every shipped prompt and platform-default birth event.
  * Collision-tolerant because the full content also rides the keyed event and
  * same-key-different-body appends are rejected.
  */
@@ -119,54 +132,24 @@ export const AGENT_SUMMARY_INSTRUCTION = [
  * and session agents build on it), sourced from the
  * config-repo template file `prompts/agent-system-prompt.md` — the ONE home
  * for its text. The platform reads the build-time embedded copy here (the
- * birth-batch fallback); the template's own worker.ts publishes the same file
- * as a project birth default at runtime, so a project edits its prompt with a
- * git commit and no platform deploy. Deliberately small: it teaches the ACT
- * contract, the turn loop, the config repo, how to FIND working code, and
- * then SHOWS the surface as one annotated tour script — terse incantations
- * are safe because every call is expandable through `itx.docs` and
- * `__describe()`. agent-prompt-budgets.test.ts enforces the size ceiling.
+ * getDefaultBirthEvents / degraded-start fallback); a project edits its
+ * prompt by having its config worker author a different keyed prompt event
+ * at birth — a git commit, no platform deploy. Deliberately small: it
+ * teaches the ACT contract, the turn loop, the config repo, how to FIND
+ * working code, and then SHOWS the surface as one annotated tour script —
+ * terse incantations are safe because every call is expandable through
+ * `itx.docs` and `__describe()`. agent-prompt-budgets.test.ts enforces the
+ * size ceiling.
  */
 export const DEFAULT_AGENT_SYSTEM_PROMPT = embeddedTemplateFile("prompts/agent-system-prompt.md");
-
-/**
- * Occurrence identity for every shipped prompt is its CONTENT HASH — change
- * the template file and the revision moves with it; no manual bumping, no
- * silent key collisions. The remaining numeric revisions identify exact,
- * retryable non-prompt setup occurrences: bump one whenever its shipped
- * event payload changes; the logical context key still owns supersession
- * inside the Agent projection.
- */
-const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = contentHash(DEFAULT_AGENT_SYSTEM_PROMPT);
-const AGENT_MODEL_POLICY_REVISION = "2";
-const AGENT_WORKSPACE_POLICY_REVISION = "3";
-const AGENT_BOOT_CONTEXT_REVISION = "3";
-
-export const SLACK_AGENT_SYSTEM_PROMPT_REVISION = contentHash(
-  embeddedTemplateFile("prompts/slack.md"),
-);
-export const TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION = contentHash(
-  embeddedTemplateFile("prompts/telegram.md"),
-);
-export const EMAIL_AGENT_SYSTEM_PROMPT_REVISION = contentHash(
-  embeddedTemplateFile("prompts/email.md"),
-);
-
-type AgentSystemPromptPolicy = {
-  content: string;
-  /** Stable policy identity, distinct from the context slot it updates. */
-  id: string;
-  /** Exact shipped payload revision; bump it when `content` changes. */
-  revision: string;
-};
 
 /**
  * Agents under `/agents/slack/**` are Slack-thread agents: the slack webhook
  * router forwards raw thread webhooks to their stream, the `slack-agent`
  * processor transcribes them, and replies go out through the named Slack
  * connection's itx.integrations.slack.get(connection) Web API capability instead
- * of web chat. The router passes that connection explicitly when it creates
- * the Slack facet; the path is only the stream's address.
+ * of web chat. The router records that connection in the birth certificate's
+ * channel facts; the path is only the stream's address.
  */
 export function slackAgentSystemPrompt(connection: string): string {
   return interpolatePromptTemplate(embeddedTemplateFile("prompts/slack.md"), {
@@ -182,8 +165,8 @@ export function slackAgentSystemPrompt(connection: string): string {
  * processor transcribes them, and replies go out through the journaled send
  * pair (`telegram/send-requested` appended to the session stream → the
  * processor delivers it and marks `telegram/message-sent`) instead of web
- * chat. The router passes the connection and chat id explicitly when it
- * creates the Telegram facet; the path is only the stream's address.
+ * chat. The router records the connection and chat id in the birth
+ * certificate's channel facts; the path is only the stream's address.
  */
 export function telegramAgentSystemPrompt(input: {
   agentPath: string;
@@ -221,27 +204,6 @@ export const MCP_AGENT_SYSTEM_PROMPT = [
   "You are serving this project's MCP server. Your messages come from an AI agent (an MCP client) acting on behalf of the project owner, through the ask_assistant MCP tool. That tool call blocks until your next itx.chat.sendMessage reply and returns it verbatim to the asking agent.",
   "This overrides the multi-message chat and every-turn progress-update guidance above: send NO acknowledgements or progress updates — the first sendMessage ends the caller's wait, so it must BE the complete answer. Reply exactly once per request with await itx.chat.sendMessage(message). Do the requested work directly with your capabilities; only ask a clarifying question when the request is genuinely ambiguous.",
 ].join("\n");
-export const MCP_AGENT_SYSTEM_PROMPT_REVISION = contentHash(MCP_AGENT_SYSTEM_PROMPT);
-
-/**
- * One exact, retryable occurrence updating the agent runtime's keyed
- * system-context slot. `idempotencyKey` identifies this payload occurrence;
- * the context key identifies the logical slot and makes a later revision
- * supersede it. Never reuse an idempotency key after changing `content`.
- */
-export function agentSystemPromptContextEvent(input: { content: string; idempotencyKey: string }) {
-  return AgentProcessorContract.buildEvent({
-    type: "events.iterate.com/agents/context-added",
-    idempotencyKey: input.idempotencyKey,
-    payload: {
-      role: "system",
-      // The one logical system-context slot whose presence makes an agent
-      // ready — the processor holds LLM triggers until it exists.
-      key: "agent/system-prompt",
-      content: input.content,
-    },
-  });
-}
 
 /** The `agent/created` payload — the agent's birth certificate (a loose
  * object of caller-authored birth facts; `{}` is the norm). */
@@ -249,147 +211,212 @@ export type AgentCreateInput = z.input<
   (typeof AgentProcessorContract.events)["events.iterate.com/agent/created"]["payloadSchema"]
 >;
 
+// -----------------------------------------------------------------------------
+// The platform-default personality, as plain events.
+// -----------------------------------------------------------------------------
+
 /**
- * Build the complete creation batch for one agent stream. Every agent has the
- * same agent + capability-host pair; a router may add one explicitly named
- * sibling processor and its birth certificate. The stream path remains only
- * an address and never selects a processor.
+ * Which platform-default personality `getDefaultBirthEvents` serves. `web`
+ * and `onboarding` share the default web-chat prompt (onboarding's extra
+ * instructions are the template worker's own context appends); `mcp` layers
+ * the ask_assistant reply contract on top; the channel kinds interpolate
+ * their prompts from the birth certificate's channel facts.
+ */
+export const AgentBirthKind = z.enum(["web", "onboarding", "mcp", "slack", "telegram", "email"]);
+export type AgentBirthKind = z.infer<typeof AgentBirthKind>;
+
+/**
+ * Channel facts an integration router records in the `agent/created` birth
+ * certificate (under the `channel` key) when it creates the agent core —
+ * everything the default personality needs to interpolate a channel prompt.
+ * Loose on purpose: routers may record more facts than the prompts read.
+ */
+export const AgentChannelFacts = z.discriminatedUnion("type", [
+  z.looseObject({ type: z.literal("slack"), connection: z.string().min(1) }),
+  z.looseObject({
+    type: z.literal("telegram"),
+    connection: z.string().min(1),
+    chatId: z.string().min(1).optional(),
+  }),
+  z.looseObject({ type: z.literal("email") }),
+]);
+export type AgentChannelFacts = z.infer<typeof AgentChannelFacts>;
+
+/**
+ * The platform-default personality for one agent, as PLAIN KEYED EVENTS —
+ * the implementation behind `itx.agents.get(path).getDefaultBirthEvents({kind})`,
+ * and (kind `web`, coordinates omitted) the degraded-start batch the turn
+ * loop appends when a project's config worker misses the readiness deadline.
+ *
+ * Every event's idempotency key embeds a content hash, so the two callers
+ * converge: a late worker appending the same default events after a degraded
+ * start dedupes on identical keys instead of conflicting, and a worker
+ * shipping DIFFERENT content lands a superseding occurrence in the same
+ * logical context slot (`key`). The events deliberately do NOT include
+ * `agent/birth-finalized` — finalizing is the author's own statement that it
+ * is done.
+ */
+export function defaultAgentBirthEvents(input: {
+  kind: AgentBirthKind;
+  /**
+   * The agent's own coordinates — the rpc service passes them (plus
+   * directory-derived project facts) and gets the boot-context item too; the
+   * degraded-start turn loop lacks them and gets personality-only events.
+   */
+  coordinates?: {
+    agentPath: string;
+    projectId: string;
+    project?: { name: string; slug: string; workerUrl?: string };
+  };
+  /** The agent/created birth certificate payload (channel facts for the
+   * channel kinds). */
+  birthCertificate?: Record<string, unknown>;
+}) {
+  const systemPrompt = defaultSystemPromptForKind(input);
+  // The platform default model IS the contract's config default — parsing the
+  // empty config surfaces it without a second constant that could drift.
+  const model = AgentProcessorContract.stateSchema.shape.config.parse({}).llm.model;
+  const promptEvent = AgentProcessorContract.buildEvent({
+    type: "events.iterate.com/agents/context-added",
+    idempotencyKey: `agent/default-birth:prompt:${input.kind}:${contentHash(systemPrompt)}`,
+    payload: {
+      role: "system",
+      // The one logical system-prompt slot: a worker's own prompt event with
+      // the same key supersedes this occurrence in place (or appends a newer
+      // occurrence once a request covered it).
+      key: "agent/system-prompt",
+      content: systemPrompt,
+    },
+  });
+  const modelEvent = AgentProcessorContract.buildEvent({
+    type: "events.iterate.com/agent/configured",
+    idempotencyKey: `agent/default-birth:model:${contentHash(model)}`,
+    payload: { config: { llm: { model } } },
+  });
+  const coordinates = input.coordinates;
+  if (coordinates === undefined) return [promptEvent, modelEvent];
+  const bootContent = agentBootContextContent(coordinates);
+  const bootContextEvent = AgentProcessorContract.buildEvent({
+    // Per-agent boot context as a second durable system item: ids and paths
+    // differ per agent but must survive history compaction. Facts and pointers
+    // only — everything per-capability is discoverable through itx.docs /
+    // __describe, so this must not grow back into a capability tour (the
+    // prompt budget test holds the line). System context never wakes the LLM
+    // by itself.
+    type: "events.iterate.com/agents/context-added",
+    idempotencyKey: `agent/default-birth:boot-context:${contentHash(bootContent)}`,
+    payload: {
+      role: "system",
+      key: "agent/boot-context",
+      content: bootContent,
+    },
+  });
+  return [promptEvent, modelEvent, bootContextEvent];
+}
+
+/** The kind → prompt selection, interpolating channel facts where the kind
+ * needs them. Loud when a channel kind lacks its facts: the caller (the
+ * config worker's birth job) should fail visibly and let the platform's
+ * degraded-start deadline cover the held turn, never ship a silently
+ * mis-addressed personality. */
+function defaultSystemPromptForKind(input: {
+  kind: AgentBirthKind;
+  coordinates?: { agentPath: string };
+  birthCertificate?: Record<string, unknown>;
+}): string {
+  switch (input.kind) {
+    case "web":
+    case "onboarding":
+      return DEFAULT_AGENT_SYSTEM_PROMPT;
+    case "mcp":
+      return MCP_AGENT_SYSTEM_PROMPT;
+    case "email":
+      return EMAIL_AGENT_SYSTEM_PROMPT;
+    case "slack": {
+      const facts = parseChannelFacts(input.birthCertificate, "slack");
+      return slackAgentSystemPrompt(facts.connection);
+    }
+    case "telegram": {
+      const facts = parseChannelFacts(input.birthCertificate, "telegram");
+      if (input.coordinates === undefined) {
+        throw new Error("telegram default birth events need the agent's coordinates");
+      }
+      return telegramAgentSystemPrompt({
+        agentPath: input.coordinates.agentPath,
+        chatId: facts.chatId ?? null,
+        connection: facts.connection,
+      });
+    }
+  }
+}
+
+function parseChannelFacts<Kind extends AgentChannelFacts["type"]>(
+  birthCertificate: Record<string, unknown> | undefined,
+  kind: Kind,
+): Extract<AgentChannelFacts, { type: Kind }> {
+  const parsed = AgentChannelFacts.safeParse(birthCertificate?.channel);
+  if (!parsed.success || parsed.data.type !== kind) {
+    throw new Error(
+      `${kind} default birth events need channel facts in the birth certificate: ` +
+        `agent/created payload { channel: { type: ${JSON.stringify(kind)}, ... } }` +
+        (parsed.success ? ` (found ${JSON.stringify(parsed.data.type)})` : ""),
+    );
+  }
+  return parsed.data as Extract<AgentChannelFacts, { type: Kind }>;
+}
+
+/** The boot-context system item's content: which project this is, where the
+ * agent lives, and the handful of standing pointers every agent needs. */
+function agentBootContextContent(coordinates: {
+  agentPath: string;
+  projectId: string;
+  project?: { name: string; slug: string; workerUrl?: string };
+}): string {
+  const { agentPath, projectId, project } = coordinates;
+  return [
+    "Context for this agent:",
+    project === undefined
+      ? `- Project id: ${projectId}`
+      : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.workerUrl === undefined ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
+    `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
+    `- Your workspace directory: ${agentWorkspacePath(agentPath)} — private scratch; relative workspace paths resolve there. Every project repo is mounted in your workspace at its own path.`,
+    // One seed list, marked non-exhaustive, and ONE rule for choosing
+    // between the two write doors — the model was repeating this line
+    // verbatim to users as the repo's full contents.
+    '- The project config repo is at "/repos/config" (itx.repo), seeded with worker.ts (the project worker + website), AGENTS.md, package.json, and more. On a brand-new project it may still be seeding on your first turn — if repo or worker calls say it is missing or not ready, retry shortly instead of treating that as fatal.',
+    '- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) (repo-relative paths) for a small direct edit; your private workspace (itx.workspace — workspace paths like "/repos/config/worker.ts": readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message, scope: "/repos/config" }). Both land straight on main and redeploy the project worker/website — no branches, no push.',
+    "- Delegate explicitly: const child = itx.agents.get('researcher'); await child.create(); await child.message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
+    // Deliberate reinforcement of the prompt's FIND WORKING CODE
+    // section — repetition is the one thing small prompts buy back.
+    '- FIRST MOVE for an unfamiliar API: await itx.docs.search({ q: "several related words" }) — working example scripts, type declarations, and this project\'s mounted capabilities; each hit carries a fetchCall string, the ready-made itx.docs.get call that fetches its full doc. await itx.__describe() lists everything at your scope.',
+  ].join("\n");
+}
+
+// -----------------------------------------------------------------------------
+// The creation core.
+// -----------------------------------------------------------------------------
+
+/** Exact, retryable occurrence identity for the workspace capability mount:
+ * bump it whenever the shipped event payload changes. */
+const AGENT_WORKSPACE_POLICY_REVISION = "3";
+
+/**
+ * Build the complete creation batch for one agent stream — the atomic CORE
+ * and nothing else: the `agent/created` birth certificate, the capability
+ * host pair, the workspace capability, the keeper subscription
+ * (`agent-headless`), the collection copy, and any explicitly named sibling.
+ * No prompt, no model choice, no boot context: personality is authored by
+ * the project's config worker reacting to `agent/created` (finalized with
+ * `agent/birth-finalized`), and the keeper holds LLM triggers until it does.
  *
  * The created event's idempotency key is payload-free on purpose: a repeated
  * create with the identical payload dedupes and resolves, while a create over
  * an EXISTING agent with a different payload is rejected by the stream's
  * same-key-different-body rule — the loud duplicate-create failure.
  */
-/**
- * PROJECT-LEVEL AGENT BIRTH DEFAULTS — the format-agnostic door that makes
- * the agent processor swappable in userland WITHOUT a race: a project
- * publishes this value under the AGENT_BIRTH_DEFAULTS_KEY of its generic
- * defaults store (`project/defaults-configured`, latest occurrence wins per
- * key), and the agent-creation door folds it into every birth batch — so an
- * agent is BORN with the chosen driver, prompt, and processor subscriptions
- * instead of being converted a delivery-hop after its first turn already
- * started. The project stores the value opaquely; THIS schema and the
- * vocabulary check run at the door's read site, and the platform never
- * learns what any of it means. Explicit per-call policies (integration
- * routers' systemPromptPolicy) always win over project defaults.
- */
-/** The agents domain's key in the project's generic defaults store
- * (`project/defaults-configured` → `state.defaults[key]`). The project holds
- * the value opaquely; THIS domain parses it (AgentBirthDefaults +
- * validateAgentBirthEvents) at the creation door's read site. */
-export const AGENT_BIRTH_DEFAULTS_KEY = "agents/birth-defaults";
-
-export const AgentBirthDefaults = z.object({
-  /** Which agents these defaults apply to. Absent = every agent born through
-   * the generic creation door. */
-  matches: z.object({ pathPrefix: z.string().trim().min(1) }).optional(),
-  /**
-   * The project's contribution to every matching birth batch, as PLAIN
-   * EVENTS: a prompt is a keyed `agents/context-added`, a driver choice an
-   * `agent/configured`, a processor attachment a
-   * `stream/subscription-configured`. No per-field plumbing — the next
-   * defaultable thing needs zero platform changes. Validated by
-   * `validateAgentBirthEvents` (agent-consumed vocabulary plus a tight
-   * platform-lane allowlist); idempotency keys are platform-minted with the
-   * content in the key, so changed defaults supersede replay-safely and a
-   * project can never wedge creates with hand-rolled keys.
-   */
-  birthEvents: z
-    .array(
-      z.object({
-        type: z.string().trim().min(1),
-        payload: z.record(z.string(), z.unknown()).optional(),
-      }),
-    )
-    .max(20),
-});
-export type AgentBirthDefaults = z.infer<typeof AgentBirthDefaults>;
-
-/** Platform-lane items a project may include beyond the agent-consumed
- * vocabulary: attaching a registered agent-family processor. Everything else
- * platform-lane stays platform-authored. */
-const BIRTH_DEFAULTS_SUBSCRIPTION_ALLOWLIST = new Set<string>(["agent-headless"]);
-
-/**
- * Validate one defaults value's birth events. Returns ok or an error string —
- * the caller (the creation door's read of the project's generic defaults
- * store) treats any error as "no defaults", never as a creation failure:
- * malformed userland data must degrade to platform-default births.
- */
-export function validateAgentBirthEvents(
-  birthEvents: AgentBirthDefaults["birthEvents"],
-): { ok: true } | { ok: false; error: string } {
-  for (const [index, event] of birthEvents.entries()) {
-    if (event.type === "events.iterate.com/stream/subscription-configured") {
-      // The FULL payload schema first: anything that would fail the stream's
-      // own validation must be rejected HERE, where it degrades to
-      // platform-default births — inside the atomic birth append it would
-      // break every matching create() instead.
-      const payloadCheck = CoreProcessorContract.events[
-        "events.iterate.com/stream/subscription-configured"
-      ].payloadSchema.safeParse(event.payload);
-      if (!payloadCheck.success) {
-        return {
-          ok: false,
-          error: `birthEvents[${index}]: invalid subscription-configured payload: ${payloadCheck.error.message}`,
-        };
-      }
-      // Then the gate: a BUILTIN facet processor under an allowlisted
-      // agent-family name — a userspace source would run arbitrary worker
-      // code under the allowlisted name.
-      const subscription = z
-        .looseObject({
-          name: z.string(),
-          receiver: z.looseObject({
-            action: z.literal("facet-processor"),
-            source: z.looseObject({ kind: z.literal("builtin") }),
-          }),
-        })
-        .safeParse(event.payload);
-      if (!subscription.success) {
-        return {
-          ok: false,
-          error: `birthEvents[${index}]: only builtin facet-processor subscriptions may ride a birth batch`,
-        };
-      }
-      if (!BIRTH_DEFAULTS_SUBSCRIPTION_ALLOWLIST.has(subscription.data.name)) {
-        return {
-          ok: false,
-          error: `birthEvents[${index}]: subscription name ${JSON.stringify(subscription.data.name)} is not an allowlisted agent-family processor`,
-        };
-      }
-      continue;
-    }
-    try {
-      // parseConsumedInput's input type is the typed consumed-event union so
-      // AUTHORED appends catch typos at compile time; this callsite is the
-      // other use — runtime validation of untrusted data, where the cast
-      // exists purely to hand the parser something to accept or reject.
-      AgentProcessorContract.parseConsumedInput({
-        type: event.type,
-        ...(event.payload === undefined ? {} : { payload: event.payload }),
-      } as never);
-    } catch (error) {
-      return {
-        ok: false,
-        error: `birthEvents[${index}] (${event.type}): ${error instanceof Error ? error.message : String(error)}`,
-      };
-    }
-  }
-  return { ok: true };
-}
-
-/** Deterministic, synchronous content hash for defaults idempotency keys —
- * djb2 over the JSON form; collision-tolerant because the full content also
- * rides the batch and same-key-different-body appends are rejected. */
-function hashAgentBirthDefaults(birthEvents: AgentBirthDefaults["birthEvents"]): string {
-  return contentHash(JSON.stringify(birthEvents));
-}
-
 export function agentCreationForPath<
   const SiblingBirthCertificate extends StreamEventInput = never,
   const InitialEvent extends StreamEventInput = never,
-  const Defaults extends AgentBirthDefaults | undefined = undefined,
 >(input: {
   agentPath: string;
   projectId: string;
@@ -397,73 +424,13 @@ export function agentCreationForPath<
   payload?: AgentCreateInput;
   /** Events that must commit in the same creation batch. */
   initialEvents?: readonly InitialEvent[];
-  /**
-   * Human-facing project facts from the directory, when the caller has them:
-   * the very first question a real user asked their agent was "which project
-   * is this?", and an opaque prj_ hex id was the only answer the boot
-   * context could give. Optional because some hosts (tests, bare births)
-   * have no directory at hand — the id-only line still works.
-   */
-  project?: { name: string; slug: string; workerUrl?: string };
-  /** Initial execution policy for a routed agent. */
-  systemPromptPolicy?: AgentSystemPromptPolicy;
-  /** Project-level birth defaults (see AgentBirthDefaults): validated plain
-   * events folded into the batch. An explicit systemPromptPolicy wins over
-   * any prompt-slot event in the list. */
-  defaults?: Defaults;
   sibling?: {
     birthCertificate: SiblingBirthCertificate;
     /** The sibling's subscription name — the sibling contract's slug. */
     name: string;
   };
 }) {
-  const { agentPath, projectId, project } = input;
-  // The platform default model IS the contract's config default — parsing the
-  // empty config surfaces it without a second constant that could drift.
-  const model = AgentProcessorContract.stateSchema.shape.config.parse({}).llm.model;
-  const systemPromptPolicy: AgentSystemPromptPolicy = input.systemPromptPolicy ?? {
-    content: DEFAULT_AGENT_SYSTEM_PROMPT,
-    id: "default",
-    revision: DEFAULT_AGENT_SYSTEM_PROMPT_REVISION,
-  };
-  const systemPrompt = systemPromptPolicy.content;
-  // Project birth defaults: validated plain events appended into the batch
-  // with platform-minted content-hash keys. Invalid lists degrade to
-  // platform-default births (warn, never fail creation). An explicit
-  // systemPromptPolicy outranks the project: prompt-slot events are dropped
-  // from the list; otherwise a project prompt-slot event REPLACES the
-  // platform fallback below.
-  const rawBirthEvents = input.defaults?.birthEvents ?? [];
-  const birthEventsCheck =
-    rawBirthEvents.length === 0
-      ? ({ ok: true } as const)
-      : validateAgentBirthEvents(rawBirthEvents);
-  if (!birthEventsCheck.ok) {
-    console.warn("[agent] ignoring invalid agent birth defaults", {
-      agentPath,
-      error: birthEventsCheck.error,
-    });
-  }
-  const isPromptSlotEvent = (candidate: { type: string; payload?: Record<string, unknown> }) =>
-    candidate.type === "events.iterate.com/agents/context-added" &&
-    candidate.payload?.role === "system" &&
-    candidate.payload?.key === "agent/system-prompt";
-  const birthEvents = (birthEventsCheck.ok ? rawBirthEvents : []).filter(
-    (candidate) => input.systemPromptPolicy === undefined || !isPromptSlotEvent(candidate),
-  );
-  const defaultsCarryPrompt = birthEvents.some(isPromptSlotEvent);
-  const birthEventsHash = hashAgentBirthDefaults(birthEvents);
-  // Userland events cannot carry static types — but callers that never pass
-  // `defaults` (the integration routers, whose creation events must satisfy
-  // their contracts' emit vocabularies) should not have their events union
-  // widened by a branch that is empty for them. `never[]` when no defaults
-  // were passed; plain StreamEventInput otherwise (runtime-validated above).
-  const defaultsEvents = birthEvents.map((candidate, index) => ({
-    type: candidate.type,
-    payload: candidate.payload ?? {},
-    idempotencyKey: `agent/birth-defaults:${birthEventsHash}:${index}:${projectId}:${agentPath}`,
-  })) as unknown as [Defaults] extends [undefined] ? never[] : StreamEventInput[];
-
+  const { agentPath, projectId } = input;
   const birthCertificate = AgentProcessorContract.buildEvent({
     type: "events.iterate.com/agent/created",
     idempotencyKey: `agent/created:${projectId}:${agentPath}`,
@@ -494,59 +461,9 @@ export function agentCreationForPath<
         'To ship changes: await itx.workspace.git.commit({ message, scope: "/repos/<name>" }) — ONE repo\'s changes become a commit straight on ITS main branch (config-repo commits redeploy the project worker/website automatically; no branches, no push). scope is required whenever more than one repo is dirty. Deviate a mount via getConfig/configure (e.g. { policy: "read-only" } on reference clones).',
     },
   });
-  const configured = AgentProcessorContract.buildEvent({
-    type: "events.iterate.com/agent/configured",
-    idempotencyKey: `agent/model-configured:v${AGENT_MODEL_POLICY_REVISION}:${projectId}:${agentPath}`,
-    payload: { config: { llm: { model } } },
-  });
-  const systemPromptContext = agentSystemPromptContextEvent({
-    content: systemPrompt,
-    idempotencyKey: `agent/system-prompt:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
-  });
-  const bootContext = AgentProcessorContract.buildEvent({
-    // Per-agent boot context as a second durable system item: ids and paths
-    // differ per agent but must survive history compaction. Facts and pointers
-    // only — everything per-capability is discoverable through itx.docs /
-    // __describe, so this must not grow back into a capability tour (the
-    // prompt budget test holds the line). System context never wakes the LLM
-    // by itself.
-    type: "events.iterate.com/agents/context-added",
-    // The body embeds directory-derived project facts, so the occurrence
-    // identity must carry them too: a create replayed after the directory
-    // record changed (or with facts where a router birth had none) appends a
-    // fresh superseding occurrence in the same keyed slot instead of tripping
-    // the stream's same-key-different-body rejection. Fact-less births keep
-    // the bare key, so router replays dedupe exactly as before.
-    idempotencyKey: `agent/boot-system-context:v${AGENT_BOOT_CONTEXT_REVISION}:${projectId}:${agentPath}${
-      project === undefined
-        ? ""
-        : `:${JSON.stringify([project.name, project.slug, project.workerUrl ?? null])}`
-    }`,
-    payload: {
-      role: "system",
-      key: "agent/boot-context",
-      content: [
-        "Context for this agent:",
-        project === undefined
-          ? `- Project id: ${projectId}`
-          : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.workerUrl === undefined ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
-        `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
-        `- Your workspace directory: ${agentWorkspacePath(agentPath)} — private scratch; relative workspace paths resolve there. Every project repo is mounted in your workspace at its own path.`,
-        // One seed list, marked non-exhaustive, and ONE rule for choosing
-        // between the two write doors — the model was repeating this line
-        // verbatim to users as the repo's full contents.
-        '- The project config repo is at "/repos/config" (itx.repo), seeded with worker.ts (the project worker + website), AGENTS.md, package.json, and more. On a brand-new project it may still be seeding on your first turn — if repo or worker calls say it is missing or not ready, retry shortly instead of treating that as fatal.',
-        '- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) (repo-relative paths) for a small direct edit; your private workspace (itx.workspace — workspace paths like "/repos/config/worker.ts": readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message, scope: "/repos/config" }). Both land straight on main and redeploy the project worker/website — no branches, no push.',
-        "- Delegate explicitly: const child = itx.agents.get('researcher'); await child.create(); await child.message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
-        // Deliberate reinforcement of the prompt's FIND WORKING CODE
-        // section — repetition is the one thing small prompts buy back.
-        '- FIRST MOVE for an unfamiliar API: await itx.docs.search({ q: "several related words" }) — working example scripts, type declarations, and this project\'s mounted capabilities; each hit carries a fetchCall string, the ready-made itx.docs.get call that fetches its full doc. await itx.__describe() lists everything at your scope.',
-      ].join("\n"),
-    },
-  });
-  const agentSubscription = buildFacetProcessorSubscriptionConfiguredEvent({
-    idempotencyKey: `stream/subscription-configured:${AgentProcessorContract.slug}`,
-    name: AgentProcessorContract.slug,
+  const keeperSubscription = buildFacetProcessorSubscriptionConfiguredEvent({
+    idempotencyKey: `stream/subscription-configured:${AGENT_KEEPER_SUBSCRIPTION_NAME}`,
+    name: AGENT_KEEPER_SUBSCRIPTION_NAME,
   });
   const collectionSubscription = CoreProcessorContract.buildEvent({
     type: "events.iterate.com/stream/subscription-configured",
@@ -582,26 +499,16 @@ export function agentCreationForPath<
 
   return {
     birthCertificate,
-    systemPrompt,
-    model,
     events: [
       birthCertificate,
       ...(input.initialEvents ?? []),
       capabilityHostBirthCertificate,
       ...siblingBirthCertificates,
-      configured,
-      // The fallback prompt slot is skipped when the project's defaults carry
-      // their own prompt-slot event (single prompt per birth); an explicit
-      // systemPromptPolicy already filtered those out above.
-      ...(defaultsCarryPrompt ? [] : [systemPromptContext]),
       workspaceProvided,
-      bootContext,
-      agentSubscription,
+      keeperSubscription,
       capabilityHostSubscription,
       collectionSubscription,
       ...siblingSubscriptions,
-      // Project defaults LAST: keyed occurrences supersede platform slots.
-      ...defaultsEvents,
     ],
   };
 }

@@ -1,10 +1,6 @@
 import { StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
-import {
-  agentCreationForPath,
-  telegramAgentSystemPrompt,
-  TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION,
-} from "../agents/agent-defaults.ts";
+import { agentCreationForPath } from "../agents/agent-defaults.ts";
 import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
 import {
   coerceTelegramId,
@@ -330,6 +326,18 @@ function telegramAgentCreationEvents(input: {
   const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
+    // Channel facts in the birth certificate: the project's config worker
+    // authors the personality from them
+    // (itx.agents.get(path).getDefaultBirthEvents({ kind: "telegram" })
+    // interpolates the Telegram prompt from the recorded connection/chat).
+    payload: {
+      channel: {
+        type: "telegram",
+        connection: input.connection,
+        chatId: input.chatId,
+        ...(input.messageThreadId === undefined ? {} : { messageThreadId: input.messageThreadId }),
+      },
+    },
     initialEvents: [
       {
         type: "events.iterate.com/agent/binding-set",
@@ -344,15 +352,6 @@ function telegramAgentCreationEvents(input: {
         },
       },
     ],
-    systemPromptPolicy: {
-      content: telegramAgentSystemPrompt({
-        agentPath: input.path,
-        chatId: input.chatId,
-        connection: input.connection,
-      }),
-      id: "telegram",
-      revision: TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION,
-    },
     sibling: {
       birthCertificate: TelegramAgentProcessorContract.buildEvent({
         type: "events.iterate.com/telegram-agent/created",

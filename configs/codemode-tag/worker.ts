@@ -1,55 +1,71 @@
 import { DocsApp } from "@iterate-com/docs";
-import {
-  IterateWorkerEntrypoint,
-  type AgentBirthDefaultsValue,
-  type StreamEvent,
-} from "iterate/sdk";
+import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 import { isIdempotencyConflict } from "iterate/processors";
 import { parseCodemodeResponse } from "./codemode-format.ts";
 
-// THE CODEMODE-TAG EXPERIMENT — this project's agents respond with markdown
-// plus one embedded <codemode status="..."> tag instead of a bare ```ts
-// fence, and THIS FILE is the interpreter. The platform runs each agent under
-// its HEADLESS processor (turn scheduling + the LLM call, no response
-// interpretation — see the retarget below), and this worker plays the part
-// the platform's codemode component plays for ordinary projects:
+// THE CODEMODE-TAG EXPERIMENT — this project's web agents respond with
+// markdown plus one embedded <codemode status="..."> tag instead of a bare
+// ```ts fence, and THIS FILE is the interpreter. Like every project, this
+// worker authors its agents' births (the platform creates only the agent
+// core, then holds the first turn until `agent/birth-finalized`); unlike the
+// default template, its web agents get the codemode prompt from this repo
+// and their responses are parsed by the VENDORED parser below — the platform
+// interpreter (itx...interpretResponse) is never consulted for them. That is
+// the point: pinning interpretation = vendoring it.
 //
-//   assistant output event  → parse the tag → append script-run-requested,
-//                             the prose as a chat message, the status as the
-//                             live activity label (or corrective feedback)
-//   script-run-settled      → append the rendered result as developer
-//                             context, which drives the agent's next turn
+//   agent/created            → default birth events + THIS repo's prompt
+//                              (superseding the default prompt slot) + finalize
+//   assistant context-added  → parse the tag → append script-run-requested,
+//                              the prose as a chat message, the status as the
+//                              live activity label (or corrective feedback)
+//   script-run-settled       → append the rendered result as developer
+//                              context, which drives the agent's next turn
 //
 // Everything happens through public stream events any project member could
 // append — no platform privileges involved. The prompt teaching the grammar
 // lives at prompts/agent-system-prompt.md in this repo; the parser at
 // codemode-format.ts. Editing either is a commit — no platform deploy.
 //
-// Idempotency keys deliberately mirror the platform component's keys (the
-// fixed `agent/` namespace): if an agent is ever switched back to the classic
-// processor (or raced it at birth), replays dedupe against each other instead
-// of double-executing scripts.
+// Integration agents (slack/telegram/email), MCP sessions, and onboarding
+// keep the platform-default personalities and the platform interpreter: the
+// codemode grammar is a WEB experiment, and their channel prompts teach a
+// different reply mechanism.
 //
-// KNOWN LIMITS (this is an experiment): delivery to this worker is
-// observation-grade — an event this handler fails on is SKIPPED, not
-// retried forever, so a dropped delivery quietly kills that turn (send a new
-// message to start fresh). Slash commands (/example, /script) are platform
-// interpretation and therefore inert here. Slack/Telegram/email agents keep
-// the classic processor untouched — the retarget below only fires for
-// plain `/agents/…` web agents.
+// Idempotency keys deliberately mirror the platform interpreter's keys (the
+// fixed `agent/` namespace): replays and historical streams interpreted by
+// both dedupe against each other instead of double-executing scripts.
+//
+// KNOWN LIMITS (this is an experiment): slash commands (/example, /script)
+// are platform interpretation and therefore inert on web agents here, and
+// stream errors are not transcribed into web agents' model context.
 
-const HEADLESS_PROCESSOR_SLUG = "agent-headless";
 const SYSTEM_PROMPT_KEY = "agent/system-prompt";
 const SCRIPT_EXPIRY_MS = 10 * 60_000;
 const RESULT_HISTORY_LIMIT = 30_000;
 /** Inline budget once the full copy is spilled — the inline copy is a map of
  * the data, not the data. */
 const RESULT_SPILL_PREVIEW_CHARS = 10_000;
+/** The platform keeper's processor slug — the stamp on assistant output it
+ * committed for an accepted request. */
+const KEEPER_PROCESSOR_SLUG = "agent-headless";
 
 /** The agent's own workspace path: /workspaces + the agent stream path (the
  * platform's agentWorkspacePath convention). */
 function itxWorkspacePathForAgent(agentPath: string): string {
   return `/workspaces${agentPath}`;
+}
+
+/** Web agents run the codemode experiment; everything else (integration
+ * channels, MCP sessions, onboarding) keeps platform-default behavior. */
+function birthKindForAgentPath(
+  agentPath: string,
+): "web" | "onboarding" | "mcp" | "slack" | "telegram" | "email" {
+  if (agentPath === "/agents/onboarding") return "onboarding";
+  if (agentPath.startsWith("/agents/mcp/")) return "mcp";
+  if (agentPath.startsWith("/agents/slack/")) return "slack";
+  if (agentPath.startsWith("/agents/telegram/")) return "telegram";
+  if (agentPath.startsWith("/agents/email/")) return "email";
+  return "web";
 }
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
@@ -75,34 +91,15 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // The birth event on the agent's own stream (copies carry
         // source.copiedFrom and must not re-target the collection stream).
         if (event.source?.copiedFrom !== undefined) break;
-        // Agents are normally BORN converted (the birth defaults below);
-        // these syncs only matter for agents created in the window before the
-        // defaults event existed, and no-op otherwise.
-        await this.#handoverToHeadless([event.path]);
-        await this.#syncSystemPromptContext([event.path]);
+        await this.#authorAgentBirth(event.path);
         await this.#syncAgentsMdContext([event.path]);
-        break;
-      }
-      case "events.iterate.com/project/worker-updated": {
-        // Runs after every config deploy — including the FIRST deploy after a
-        // project switches its config repo to this template wholesale.
-        // Publish the birth defaults (so NEW agents are BORN headless with
-        // the codemode prompt — no race), then sweep every existing agent
-        // (idempotent per agent, so later deploys no-op).
-        if (event.path !== "/") break;
-        await this.#publishAgentBirthDefaults();
-        const itx = this.itx;
-        const agents = await itx.agents.list();
-        await this.#handoverToHeadless(agents.map((agent) => agent.path));
-        await this.#syncSystemPromptContext(agents.map((agent) => agent.path));
-        await this.#syncAgentsMdContext(agents.map((agent) => agent.path));
         break;
       }
       case "events.iterate.com/repo/commit-completed": {
         // Any config-repo commit MAY have changed the prompt — the sync's
         // read-compare step turns the ones that didn't into no-ops. THIS is
         // the iteration loop: edit prompts/agent-system-prompt.md, commit,
-        // and every agent picks it up.
+        // and every web agent picks it up.
         if (event.path !== "/repos/config") break;
         const itx = this.itx;
         const agents = await itx.agents.list();
@@ -111,26 +108,32 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         break;
       }
       case "events.iterate.com/agents/context-added": {
-        await this.#interpretAssistantResponse(event);
+        if (!event.path.startsWith("/agents/")) break;
+        if (birthKindForAgentPath(event.path) === "web") {
+          await this.#interpretAssistantResponse(event);
+        } else {
+          // Non-web agents keep classic behavior via the platform interpreter.
+          await this.itx.agents.get(event.path).interpretResponse(event);
+        }
         break;
       }
       case "events.iterate.com/capability-host/script-run-settled": {
-        await this.#renderScriptSettlement(event);
-        // A settle is when a busy agent may have gone idle — retry the
-        // deferred driver flip, and sync the prompt right behind it (the
-        // prompt sync is gated on the flipped driver, so ordering is safe).
-        if (event.path.startsWith("/agents/")) {
-          await this.#handoverToHeadless([event.path]);
-          await this.#syncSystemPromptContext([event.path]);
+        if (!event.path.startsWith("/agents/")) break;
+        if (birthKindForAgentPath(event.path) === "web") {
+          await this.#renderScriptSettlement(event);
+        } else {
+          await this.itx.agents.get(event.path).interpretResponse(event);
         }
         break;
       }
-      case "events.iterate.com/agent/llm-request-settled": {
-        // Same idle-retry lane for turns that produced no script.
-        if (event.path.startsWith("/agents/")) {
-          await this.#handoverToHeadless([event.path]);
-          await this.#syncSystemPromptContext([event.path]);
-        }
+      case "events.iterate.com/capability-host/preamble-set":
+      case "events.iterate.com/capability-host/preamble-removed":
+      case "events.iterate.com/stream/error-occurred": {
+        // Grammar-neutral transcription, delegated for the agents that keep
+        // platform behavior; web agents live without it (see KNOWN LIMITS).
+        if (!event.path.startsWith("/agents/")) break;
+        if (birthKindForAgentPath(event.path) === "web") break;
+        await this.itx.agents.get(event.path).interpretResponse(event);
         break;
       }
       default:
@@ -139,141 +142,68 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   }
 
   /**
-   * THE OPT-IN. Hosted-processor subscriptions cannot be removed, so the
-   * handover to the headless processor is ADDITIVE: subscribe the
-   * `agent-headless` name (a public subscription-configured append) and flip
-   * the agent's `config.driver` knob — the platform guarantees exactly one
-   * of the two subscribed processors acts, selected by that knob. Reversible
-   * by flipping the knob back. Gated to plain web agents: integration agents
-   * (slack/telegram/email) keep the fenced format their channel prompts
-   * teach.
-   *
-   * The DRIVER FLIP WAITS FOR IDLE: flipping while a request is open would
-   * make the headless processor adopt and re-dial the classic processor's
-   * in-flight call (isExecuting is per-instance), and whichever settlement
-   * wins, a classic-stamped assistant item would be interpreted by nobody —
-   * the turn dies quietly. So a busy agent is left alone here, and the
-   * settle-event retries below flip it the moment its current turn chain
-   * finishes. (A message landing in the gap between the idle check and the
-   * flip commit can still recreate the race — accepted as an experiment
-   * caveat; closing it fully needs a platform-side adopt guard.)
+   * THE BIRTH JOB. Start from the platform defaults (prompt, model, boot
+   * context — channel kinds interpolate the router-recorded facts), then for
+   * WEB agents supersede the default prompt slot with this repo's codemode
+   * prompt in the same batch, then finalize. Content-hash keys make
+   * redelivered births converge, and a prompt edit lands via the
+   * commit-completed sync below rather than re-running births.
    */
-  async #handoverToHeadless(agentPaths: string[]): Promise<void> {
+  async #authorAgentBirth(agentPath: string): Promise<void> {
     const itx = this.itx;
-    for (const path of agentPaths) {
-      if (!path.startsWith("/agents/")) continue;
-      if (/^\/agents\/(slack|telegram|email)\//.test(path)) continue;
-      await this.#appendUnlessAlreadyRecorded(() =>
-        itx.streams.get(path).append({
-          type: "events.iterate.com/stream/subscription-configured",
-          idempotencyKey: `codemode-tag/handover-subscribe:${path}`,
-          payload: {
-            name: HEADLESS_PROCESSOR_SLUG,
-            receiver: { action: "facet-processor", source: { kind: "builtin" } },
-          },
-        }),
-      );
-      const snapshot = await itx.agents.get(path).processor.snapshot();
-      if (snapshot.state.config.driver === HEADLESS_PROCESSOR_SLUG) continue;
-      const busy =
-        snapshot.state.openRequest !== null ||
-        snapshot.state.activeScriptExecutionIds.length > 0 ||
-        snapshot.state.pendingLlmRequestTrigger !== null;
-      if (busy) continue;
-      await this.#appendUnlessAlreadyRecorded(() =>
-        itx.agents.get(path).append({
-          type: "events.iterate.com/agent/configured",
-          idempotencyKey: `codemode-tag/handover-driver:${path}`,
-          payload: { config: { driver: HEADLESS_PROCESSOR_SLUG } },
-        }),
-      );
+    const agent = itx.agents.get(agentPath);
+    const kind = birthKindForAgentPath(agentPath);
+    const defaults = await agent.getDefaultBirthEvents({ kind });
+    const finalize = {
+      type: "events.iterate.com/agent/birth-finalized" as const,
+      idempotencyKey: "codemode-tag/birth-finalized:v1",
+      payload: {},
+    };
+    if (kind !== "web") {
+      await this.#appendUnlessAlreadyRecorded(() => agent.append(...defaults, finalize));
+      return;
     }
-  }
-
-  /**
-   * THE OPT-IN, made constitutive: the platform's generic agent-creation
-   * door reads the "agents/birth-defaults" key of the project's generic
-   * defaults store (`project/defaults-configured`, latest occurrence wins
-   * per key) and folds it into every birth batch — so new agents are BORN
-   * under the headless driver with the codemode prompt and subscription,
-   * and there is no first-turn race at all. Content-hash keyed: editing the
-   * prompt file and committing re-publishes, and the newest event wins at
-   * read.
-   */
-  async #publishAgentBirthDefaults(): Promise<void> {
-    const itx = this.itx;
+    // A missing prompt file leaves the platform prompt standing — this
+    // experiment degrades to fenced-ts prompting, never to no prompt at all.
     const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
-    if (file === null) return;
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(file.content));
-    const hash = [...new Uint8Array(digest).slice(0, 8)]
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    const promptEvents =
+      file === null
+        ? []
+        : [
+            {
+              type: "events.iterate.com/agents/context-added" as const,
+              idempotencyKey: `codemode-tag/system-prompt:${await sha256Hex(file.content)}:birth`,
+              payload: {
+                role: "system" as const,
+                key: SYSTEM_PROMPT_KEY,
+                content: file.content,
+              },
+            },
+          ];
     await this.#appendUnlessAlreadyRecorded(() =>
-      itx.streams.get("/").append({
-        type: "events.iterate.com/project/defaults-configured",
-        // New prefix on purpose: the stream rejects same-key-different-body
-        // appends, so the generic event must not reuse the legacy
-        // `codemode-tag/agent-birth-defaults:` keys.
-        idempotencyKey: `codemode-tag/defaults:agents/birth-defaults:${hash}`,
-        // Plain birth events — the creation door validates each against the
-        // agent vocabulary when it reads this key and mints per-event
-        // content-hash keys, so this list needs no keys of its own. The
-        // prompt-slot event replaces the platform's fallback prompt in the
-        // same keyed slot.
-        payload: {
-          key: "agents/birth-defaults",
-          value: {
-            birthEvents: [
-              {
-                type: "events.iterate.com/agent/configured",
-                payload: { config: { driver: HEADLESS_PROCESSOR_SLUG } },
-              },
-              {
-                type: "events.iterate.com/agents/context-added",
-                payload: { role: "system", key: SYSTEM_PROMPT_KEY, content: file.content },
-              },
-              {
-                type: "events.iterate.com/stream/subscription-configured",
-                payload: {
-                  name: HEADLESS_PROCESSOR_SLUG,
-                  receiver: { action: "facet-processor", source: { kind: "builtin" } },
-                },
-              },
-            ],
-          } satisfies AgentBirthDefaultsValue,
-        },
-      }),
+      agent.append(...defaults, ...promptEvents, finalize),
     );
   }
 
   /**
-   * The codemode-tag prompt supersedes the platform's keyed system-prompt
-   * slot (same pattern as the AGENTS.md sync in the default template: keyed
-   * system context, per-transition idempotency keys, appends only on a real
-   * change, dont-trigger-request).
+   * The codemode-tag prompt supersedes the keyed system-prompt slot on later
+   * prompt edits (same pattern as the AGENTS.md sync: keyed system context,
+   * per-transition idempotency keys, appends only on a real change,
+   * dont-trigger-request). Web agents only — everyone else keeps the
+   * platform personality.
    */
   async #syncSystemPromptContext(agentPaths: string[]): Promise<void> {
-    if (agentPaths.length === 0) return;
+    const webAgentPaths = agentPaths.filter((path) => birthKindForAgentPath(path) === "web");
+    if (webAgentPaths.length === 0) return;
     const itx = this.itx;
     const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
-    // A deleted prompt file leaves the platform prompt standing — this
-    // experiment degrades to fenced-ts prompting, never to no prompt at all.
     if (file === null) return;
     const content = file.content;
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
-    const hash = [...new Uint8Array(digest).slice(0, 8)]
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    const hash = await sha256Hex(content);
     const results = await Promise.allSettled(
-      agentPaths.map(async (path) => {
+      webAgentPaths.map(async (path) => {
         const agent = itx.agents.get(path);
         const snapshot = await agent.processor.snapshot();
-        // COUPLED TO THE DRIVER FLIP: an agent still driven by the classic
-        // processor keeps the fenced prompt — teaching it <codemode> while
-        // the fenced parser still interprets its output would break every
-        // turn until the deferred flip lands. The settle-event retry lane
-        // calls this again right after the flip, so the prompt follows it.
-        if (snapshot.state.config.driver !== HEADLESS_PROCESSOR_SLUG) return;
         const slot = snapshot.state.contextItems.findLast(
           (item) => item.payload.key === SYSTEM_PROMPT_KEY,
         );
@@ -307,10 +237,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       file === null
         ? "(AGENTS.md was deleted from /repos/config — no standing project notes.)"
         : `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\n\n${file.content}`;
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
-    const hash = [...new Uint8Array(digest).slice(0, 8)]
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    const hash = await sha256Hex(content);
     const results = await Promise.allSettled(
       agentPaths.map(async (path) => {
         const agent = itx.agents.get(path);
@@ -336,21 +263,18 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   }
 
   /**
-   * The userland twin of the platform's codemode component: parse one
-   * accepted assistant output and append its consequences as ONE batch —
-   * status first (the code step is born with its activity label), then the
-   * prose as a chat message, then the script request. The prose message
-   * carries llmRequestOffset so the platform's mirror skips it (the raw
-   * assistant text is already in history).
+   * The vendored interpreter: parse one accepted assistant output and append
+   * its consequences as ONE batch — status first (the code step is born with
+   * its activity label), then the script request, then the prose as a chat
+   * message. The prose message carries llmRequestOffset so the platform's
+   * mirror skips it (the raw assistant text is already in history).
    */
   async #interpretAssistantResponse(event: StreamEvent): Promise<void> {
-    if (!event.path.startsWith("/agents/")) return;
-    // Only interpret output the HEADLESS processor produced: its stamp means
-    // the LLM component authored this event for an accepted request on a
-    // stream that opted in. Classic-processed output (slug "agent") was
-    // already interpreted platform-side, and a raw member append carries no
-    // platform stamp at all — neither may gain a second interpretation here.
-    if (event.source?.processor?.slug !== HEADLESS_PROCESSOR_SLUG) return;
+    // Only interpret output the platform keeper produced: its stamp means
+    // the LLM component authored this event for an accepted request. A raw
+    // member append carries no platform stamp and must never gain a path to
+    // capability execution here.
+    if (event.source?.processor?.slug !== KEEPER_PROCESSOR_SLUG) return;
     const payload = event.payload as {
       role?: string;
       content?: string;
@@ -439,12 +363,9 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    * The "tool result" half of the loop: a settled execution renders back as
    * developer context with after-current-request — which is what drives the
    * agent's next turn. A script that returned undefined (and didn't throw)
-   * renders nothing: returning no value is how an agent ends its turn. A
-   * settlement the classic processor already rendered (the birth race)
-   * dedupes on the shared key.
+   * renders nothing: returning no value is how an agent ends its turn.
    */
   async #renderScriptSettlement(event: StreamEvent): Promise<void> {
-    if (!event.path.startsWith("/agents/")) return;
     const payload = event.payload as {
       executionId?: string;
       settlement?: {
@@ -500,7 +421,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 
   /**
    * An oversized result SPILLS to the agent's own workspace (mirroring the
-   * platform codemode component): the inline copy becomes a preview plus a
+   * platform interpreter): the inline copy becomes a preview plus a
    * read-it-back recipe, and the model pages through the file with plain
    * TypeScript instead of re-running the expensive fetch. Best-effort — a
    * workspace that cannot write falls back to inline truncation.
@@ -545,7 +466,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   }
 
   /** An idempotency conflict means another writer (a redelivery of ourselves,
-   * or the classic processor during the birth race) already recorded this
+   * or the platform interpreter on a historical stream) already recorded this
    * consequence — losing that race is success. */
   async #appendUnlessAlreadyRecorded(append: () => Promise<unknown>): Promise<void> {
     try {
@@ -579,4 +500,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 function truncate(text: string): string {
   if (text.length <= RESULT_HISTORY_LIMIT) return text;
   return `${text.slice(0, RESULT_HISTORY_LIMIT)}\n… truncated (${text.length} chars total — return less: slice arrays, pick fields)`;
+}
+
+async function sha256Hex(content: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
+  return [...new Uint8Array(digest).slice(0, 8)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }

@@ -41,7 +41,6 @@ import { readProjectById } from "../project-directory.ts";
 import { facetProcessorFamilyForPath } from "./processor-facet-families.ts";
 import type { CapabilityDescription } from "./itx/describe.ts";
 import { DurableObjectNameCodec } from "./durable-object-names.ts";
-import { AgentProcessor } from "./agents/agent-processor-implementation.ts";
 import { HeadlessAgentProcessor } from "./agents/agent-headless-processor.ts";
 import {
   type AgentFileAttachment,
@@ -580,36 +579,17 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         return { absolutePath };
       },
     };
+    // The one built-in agent keeper (agent-headless-processor.ts).
     // Registered WITH recovery: LLM turns are consequential `runInBackground`
     // work (stream-committed requested/started obligations whose OUTCOME
     // matters). An incarnation that dies owing either must be revived.
-    const agentProcessor = registry.register(new AgentProcessor(agentArgs), { recovery: true });
-    // The headless variant (same wiring minus the codemode component; see
-    // agent-headless-processor.ts). Registered on every agent facet host,
-    // woken only on streams subscribed to its name — an agent runs under
-    // exactly ONE of the two, so shared `agent/` idempotency keys make a
-    // handover dedupe instead of double-executing.
     const headlessProcessor = registry.register(new HeadlessAgentProcessor(agentArgs), {
       recovery: true,
     });
-    const agentReads = registry.reads(agentProcessor);
     const headlessReads = registry.reads(headlessProcessor);
-    this.#getLiveState = (): AgentLiveState => {
-      // An agent runs under the classic OR the headless processor. After a
-      // handover the retired processor's fold stays FROZEN at its last
-      // transition, so precedence must go to the newer stamp — a
-      // classic-first fallback would mask every headless update behind the
-      // frozen classic fold on opted-in agents.
-      const classic = agentReads.currentState.runtimeChange;
-      const headless = headlessReads.currentState.runtimeChange;
-      const newer =
-        classic === undefined
-          ? headless
-          : headless === undefined || classic.sinceOffset >= headless.sinceOffset
-            ? classic
-            : headless;
-      return { runtimeChange: newer };
-    };
+    this.#getLiveState = (): AgentLiveState => ({
+      runtimeChange: headlessReads.currentState.runtimeChange,
+    });
 
     // The Slack presentation processor — see the retired agent DO's block
     // comment. Its cross-processor `present()` wiring is split across sibling
@@ -678,8 +658,8 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     // slack-agent subscription exists). In the facet whose own name is
     // "slack-agent" the slack runner drives: present the latest pushed
     // transition whenever the slack fold changes.
-    registry.observeStateChanges(agentProcessor, () => {
-      const transition = agentReads.currentState.runtimeChange;
+    registry.observeStateChanges(headlessProcessor, () => {
+      const transition = headlessReads.currentState.runtimeChange;
       if (transition === undefined) return;
       void Promise.resolve(this.#parentStub(identity).presentAgentRuntimeTransition({ transition }))
         .then(disposeIgnoredRpcResult)
