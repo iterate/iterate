@@ -238,14 +238,15 @@ function speakerFrames(h: Harness) {
     );
 }
 
-/** Every flush decision, oldest first. */
-function speakerFlushes(h: Harness) {
-  return h
-    .events()
-    .filter((event) => event.type === "events.iterate.com/voice-agent/speaker-flush")
-    .map(
-      (event) => event.payload as { clearedThroughDeviceSpeakerFrameSeq: number; reason: string },
-    );
+/**
+ * Every clear the device was told about, oldest first — the empty frames
+ * carrying `clearSpeakerBufferBeforeFrame`. (A durable speaker-flush record
+ * used to exist beside these; nothing read it, so the frames ARE the record.)
+ */
+function speakerClears(h: Harness) {
+  return speakerFrames(h).filter(
+    (frame) => frame.clearSpeakerBufferBeforeFrame === true && frame.pcm === "",
+  );
 }
 
 function eventsOfType(h: Harness, type: string) {
@@ -316,22 +317,12 @@ afterEach(() => {
 /* ========================================================================== */
 
 describe("warm-up", () => {
-  it("says nothing until it knows its brief", async () => {
+  it("echoes the token", async () => {
+    /* Being delivered is the whole proof: ordering guarantees everything
+     * setup appended before the token — the birth certificate included —
+     * has already been folded. There used to be a brief-current event gating
+     * this; the ordering was always the guarantee, so the gate said nothing. */
     const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/warmup",
-      payload: { token: "tok-1" },
-    });
-    await h.settle();
-    expect(eventsOfType(h, "warmup-ready")).toHaveLength(0);
-  });
-
-  it("echoes the token once the brief is current", async () => {
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/brief-current",
-      payload: { setupId: "setup-1", briefKey: "brief-1", contentHash: "abc" },
-    });
     await h.append({
       type: "events.iterate.com/voice-agent/warmup",
       payload: { token: "tok-1" },
@@ -955,7 +946,7 @@ describe("a flush names a sequence number", () => {
       h.provider.speechStarted();
       await h.settle();
     }
-    expect(speakerFlushes(h)).toHaveLength(1);
+    expect(speakerClears(h)).toHaveLength(1);
 
     /* The answer continues — the provider never cancelled it — and every
      * millisecond after the flush still reaches the device. */
@@ -975,9 +966,9 @@ describe("a flush names a sequence number", () => {
 
     h.provider.speechStarted();
     await h.settle();
-    const flush = speakerFlushes(h)[0]!;
-    expect(flush.clearedThroughDeviceSpeakerFrameSeq).toBeGreaterThanOrEqual(mintedBefore);
-    expect(flush.reason).toBe("input_audio_buffer.speech_started");
+    const clear = speakerClears(h)[0]!;
+    /* The clear frame's own number sits above everything it cancels. */
+    expect(clear.deviceSpeakerFrameSeq).toBeGreaterThan(mintedBefore);
 
     /* Everything the device is sent from now on is beyond the watermark, so
      * nothing it plays was ever declared dead. */
@@ -985,15 +976,10 @@ describe("a flush names a sequence number", () => {
     h.provider.answerAudio(1_000);
     h.provider.answerComplete();
     await playOutEverything(h, 3_000);
-    const afterFlush = speakerFrames(h).filter(
-      (frame) => frame.deviceSpeakerFrameSeq > flush.clearedThroughDeviceSpeakerFrameSeq,
+    const afterClear = speakerFrames(h).filter(
+      (frame) => frame.deviceSpeakerFrameSeq > clear.deviceSpeakerFrameSeq,
     );
-    expect(afterFlush.length).toBeGreaterThan(0);
-    for (const frame of afterFlush) {
-      expect(frame.deviceSpeakerFrameSeq).toBeGreaterThan(
-        flush.clearedThroughDeviceSpeakerFrameSeq,
-      );
-    }
+    expect(afterClear.length).toBeGreaterThan(0);
   });
 
   it("drops the queued tail of the answer that was interrupted", async () => {
@@ -1031,18 +1017,13 @@ describe("a flush names a sequence number", () => {
 
     await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     await h.settle();
-    expect(speakerFlushes(h).map((flush) => flush.reason)).toEqual([
-      "events.iterate.com/voice-agent/ptt-start",
-    ]);
     /*
      * THE CLEAR RIDES A FRAME, so the device learns about it in sequence order
      * rather than on a lane that could arrive behind the audio it cancels.
      * Filtered to the empty ones: the session's opening frame also carries a
      * clear, and that one has audio on it.
      */
-    const clearing = speakerFrames(h).filter(
-      (frame) => frame.clearSpeakerBufferBeforeFrame && frame.pcm === "",
-    );
+    const clearing = speakerClears(h);
     expect(clearing).toHaveLength(1);
     expect(clearing[0]!.deviceSpeakerFrameSeq).toBeGreaterThan(0);
 
@@ -1059,7 +1040,7 @@ describe("a flush names a sequence number", () => {
       await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
       await h.settle();
     }
-    expect(speakerFlushes(h)).toHaveLength(0);
+    expect(speakerClears(h)).toHaveLength(0);
     expect(speakerFrames(h)).toHaveLength(0);
   });
 
@@ -1070,7 +1051,7 @@ describe("a flush names a sequence number", () => {
     await playOutEverything(h, 400);
     h.provider.responseCreated();
     await h.settle();
-    expect(speakerFlushes(h).map((flush) => flush.reason)).toEqual(["response.created"]);
+    expect(speakerClears(h)).toHaveLength(1);
   });
 });
 

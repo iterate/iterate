@@ -381,11 +381,6 @@ const VoiceState = z.object({
   providerVoice: z.string().nullable().default(null),
   /** What the model is told it is. Empty means Grok's own default. */
   instructions: z.string().default(""),
-  /** Which brief setup last marked current; the warm-up handshake answers it. */
-  briefCurrent: z
-    .strictObject({ setupId: z.string(), briefKey: z.string(), contentHash: z.string() })
-    .nullable()
-    .default(null),
   /**
    * The call, as an obligation rather than a closure.
    *
@@ -466,14 +461,6 @@ export const VoiceAgent2Contract = defineProcessorContract({
         clientTakesTurns: z.boolean().optional(),
       }),
     },
-    "events.iterate.com/voice-agent/brief-current": {
-      description: "Setup's statement of which brief is current.",
-      payloadSchema: z.looseObject({
-        setupId: z.string(),
-        briefKey: z.string(),
-        contentHash: z.string(),
-      }),
-    },
     "events.iterate.com/voice-agent/warmup": {
       description: "A readiness probe for this stream's processor. Starts nothing.",
       payloadSchema: z.looseObject({ token: z.string() }),
@@ -498,12 +485,10 @@ export const VoiceAgent2Contract = defineProcessorContract({
       description: "One capture frame, numbered by the device that captured it.",
       ...EPH,
       payloadSchema: z.looseObject({
-        /** The DEVICE's counter. The facet never renumbers it. */
-        deviceMicFrameSeq: z.number().optional(),
-        /** 16 kHz mono PCM16, base64. The only encoding this lane carries. */
+        /** 16 kHz mono PCM16, base64. The only encoding this lane carries.
+         * The loose object is deliberate: devices decorate frames with their
+         * own counters and clocks, and the facet reads none of it. */
         pcm: z.string(),
-        /** The board's own uptime clock when it captured this frame. */
-        capturedAtDeviceMs: z.number().optional(),
       }),
     },
     "events.iterate.com/voice-agent/ptt-end": {
@@ -605,24 +590,6 @@ export const VoiceAgent2Contract = defineProcessorContract({
         sentAtFacetMs: z.number(),
       }),
     },
-    /**
-     * DURABLE, and it is the only part of the audio path that is.
-     *
-     * One per interruption rather than one per frame, so the volume is nothing;
-     * and worth keeping because a revived incarnation that could not see this
-     * would replay an answer the listener already talked over.
-     */
-    "events.iterate.com/voice-agent/speaker-flush": {
-      description: "Every speaker frame at or below this sequence number is dead.",
-      payloadSchema: z.looseObject({
-        conversationId: z.string(),
-        clearedThroughDeviceSpeakerFrameSeq: z.number(),
-        /** What took the floor: a Grok event type, or the device's own button. */
-        reason: z.string(),
-        /** Facet clock, at the moment the flush was decided. */
-        decidedAtFacetMs: z.number(),
-      }),
-    },
     "events.iterate.com/voice-agent/grok-event": {
       description:
         "Grok's own events for instruments — verbatim, except an audio delta's bytes become `deltaBytes`.",
@@ -683,7 +650,6 @@ export const VoiceAgent2Contract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/voice-agent/created",
-    "events.iterate.com/voice-agent/brief-current",
     "events.iterate.com/voice-agent/warmup",
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/conversation-end-requested",
@@ -702,7 +668,6 @@ export const VoiceAgent2Contract = defineProcessorContract({
     "events.iterate.com/voice-agent/conversation-ended",
     "events.iterate.com/voice-agent/provider-error",
     "events.iterate.com/voice-agent/spk-frame",
-    "events.iterate.com/voice-agent/speaker-flush",
     "events.iterate.com/voice-agent/grok-event",
     "events.iterate.com/voice-agent/turn-timing",
   ],
@@ -901,16 +866,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
           clientTakesTurns: event.payload.clientTakesTurns ?? false,
         };
 
-      case "events.iterate.com/voice-agent/brief-current":
-        return {
-          ...state,
-          briefCurrent: {
-            setupId: event.payload.setupId,
-            briefKey: event.payload.briefKey,
-            contentHash: event.payload.contentHash,
-          },
-        };
-
       case "events.iterate.com/voice-agent/call-started":
         /* The id was minted INTO the event rather than here, so this is
          * deterministic under replay. The deadline starts here too: opening a
@@ -1016,11 +971,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
       case "events.iterate.com/voice-agent/warmup": {
         /*
          * BEING HERE IS THE PROOF. A delivered warm-up means this class is
-         * loaded and running in the stream's own Durable Object, so the only
-         * thing left that can be missing is the brief — and that arrives on
-         * this same subscription, in order, ahead of the token it answers.
+         * loaded and running in the stream's own Durable Object — and because
+         * delivery is ordered, everything setup appended before the token
+         * (the birth certificate included) has already been folded. There
+         * used to be a separate brief-current event gating this; ordering
+         * was always the guarantee, and the event said nothing it added.
          */
-        if (state.briefCurrent === null) return;
         const warmupToken = event.payload.token;
         /*
          * AND WHERE THIS PROCESS PHYSICALLY RUNS, because nothing else can
@@ -1130,12 +1086,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * the entire press and only stops when the NEXT answer begins.
          */
         if (event.type === "events.iterate.com/voice-agent/ptt-start") {
-          this.#dropAnswerInFlight(
-            state.call.conversationId,
-            event.type,
-            this.deps.nowAtFacetMs(),
-            append,
-          );
+          this.#dropAnswerInFlight(state.call.conversationId, this.deps.nowAtFacetMs(), append);
         }
 
         if (micPcm16 !== null) {
@@ -1382,7 +1333,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
 
           case "input_audio_buffer.speech_started":
           case "response.created":
-            this.#dropAnswerInFlight(conversationId, providerEventType, receivedAtFacetMs, append);
+            this.#dropAnswerInFlight(conversationId, receivedAtFacetMs, append);
             return;
 
           case "response.output_audio.delta": {
@@ -1665,7 +1616,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
    */
   #dropAnswerInFlight(
     conversationId: string,
-    reason: string,
     decidedAtFacetMs: number,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
@@ -1681,34 +1631,21 @@ export class VoiceAgent2Processor extends StreamProcessor<
      * clear and the guard never closes. */
     const clearFrameSeq = ++this.#lastDeviceSpeakerFrameSeq;
     this.#clearedThroughDeviceSpeakerFrameSeq = clearFrameSeq;
-    void append(
-      {
-        type: "events.iterate.com/voice-agent/spk-frame",
-        payload: {
-          conversationId,
-          deviceSpeakerFrameSeq: clearFrameSeq,
-          fromProviderDeltaSeq: this.#lastProviderDeltaSeq,
-          pcm: "",
-          clearSpeakerBufferBeforeFrame: true,
-          sentAtFacetMs: decidedAtFacetMs,
-        },
+    /* There used to be a durable speaker-flush record appended beside this —
+     * "when was I interrupted" surviving the ephemeral lane. Nothing ever
+     * read it: not a device, not a probe, not a debugging session. The
+     * numbered clear frame IS the flush. */
+    void append({
+      type: "events.iterate.com/voice-agent/spk-frame",
+      payload: {
+        conversationId,
+        deviceSpeakerFrameSeq: clearFrameSeq,
+        fromProviderDeltaSeq: this.#lastProviderDeltaSeq,
+        pcm: "",
+        clearSpeakerBufferBeforeFrame: true,
+        sentAtFacetMs: decidedAtFacetMs,
       },
-      {
-        /* THE DURABLE RECORD, and it is only that. The device never reads
-         * this; the frame above is the instruction. This is so "when was I
-         * interrupted" survives the ephemeral lane, which forgets. */
-        type: "events.iterate.com/voice-agent/speaker-flush",
-        idempotencyKey: this.idempotencyKey(
-          `flush:${conversationId}:${clearedThroughDeviceSpeakerFrameSeq}`,
-        ),
-        payload: {
-          conversationId,
-          clearedThroughDeviceSpeakerFrameSeq,
-          reason,
-          decidedAtFacetMs,
-        },
-      },
-    );
+    });
   }
 
   /**
@@ -2095,25 +2032,6 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
             ? `${subscriptionKeyPrefix}:reinstall:${crypto.randomUUID()}`
             : `${subscriptionKeyPrefix}:${contentHash(subscriptionPayload)}`,
           payload: subscriptionPayload,
-        },
-        /*
-         * WHICH INSTRUCTIONS ARE IN FORCE, and it is the readiness gate.
-         *
-         * The processor will not answer a warm-up token until it has folded one
-         * of these, which is what makes the handshake prove more than "the class
-         * loaded": delivery is ordered, so an echo means this event was folded
-         * first. It is the same marker the first cut uses to name an agent
-         * brief; here there is no brief, and the honest content is a digest of
-         * the instructions this call just installed.
-         */
-        {
-          type: "events.iterate.com/voice-agent/brief-current",
-          idempotencyKey: `voice-agent2/brief-current:${setupId}`,
-          payload: {
-            setupId,
-            briefKey: `voice-agent2/instructions:${contentHash(options.instructions ?? "")}`,
-            contentHash: contentHash(options.instructions ?? ""),
-          },
         },
       );
       disposeRpcStub(events, "setup stream append result");

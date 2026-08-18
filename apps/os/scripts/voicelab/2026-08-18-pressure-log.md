@@ -75,3 +75,31 @@ breaks EVERY CLI command with `ERR_UNSUPPORTED_ESM_URL_SCHEME
 ('cloudflare:')` — config-repo is worker code. The resample dedupe is
 reverted with a comment naming the boundary; thirteen duplicated lines are
 the fee for two runtimes.
+
+**F1+F5 resolved into two findings, one ours, one theirs.**
+The "openai never answers" run (3 calls accepted then silent, warm-up
+TIMEOUT, every round failed): the DIRECT half — laptop straight to
+api.openai.com, none of our infrastructure — also drew silence in all 12
+rounds. gpt-realtime had an outage window (~01:34–01:55Z); the same
+cold-call held-turn path answered in 593 ms once it lifted. Server-side
+handling gets a PASS: three accepted-then-dead calls were each idled at
+their 60 s deadline and buried with clean obituaries, and the stream
+recovered without intervention. F1's 0.6 s NOEND answer was the same
+provider wobble.
+
+**F5 (ours, the real defect):** a fully quiet client WebSocket dies at
+~30 s (1006) and nothing reconnects — the grok soak ran five perfect rounds
+(ours 75–94 ms, barge clear 115 ms, LONG marginal −375 ms on the renamed
+4.0.0 agent) and died exactly across the cycle's 30 s silence gap.
+Yesterday's identical gaps survived only because the (now deleted)
+keepalive event was accidentally traffic. A push-to-talk client between
+turns IS that silence. Fix: transport-level liveness in the client, not an
+app event.
+
+**S2 (contract diet, this commit):** `brief-current` deleted (its gate
+restated what ordered delivery already guarantees — setup appends the birth
+certificate before the warm-up token, so the echo proves the fold);
+`speaker-flush` deleted (durable record with zero readers anywhere — the
+numbered clear frame IS the flush); the two declared-but-never-read
+mic-frame fields deleted. The contract is now 12 events, every one with a
+reader.
