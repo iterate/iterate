@@ -574,3 +574,20 @@ the control plane runs the same core; billing-analytics verification of hibernat
   shadow stack override/restore/deny, mounted worker HTML + WS 101 via /cap, stateful deep
   dotted + env.ITX callback, clients fan-out). Live-only bugs: private-field declaration order;
   missing files/repo seeds; fetch-lane errors now surfaced with status.
+
+## Increment 24 (facet-1): THE FACET SPINE — processors in real workerd facets
+
+- `processor-facet.ts`: generic `ProcessorFacet` DO class hosted via `ctx.facets.get` on the
+  Stream DO — identity via durable first-contact `configure({parentName, projectId, path, slug})`
+  (plain data in the facet's own kv; survives restarts), back-channel BY NAME re-resolved per call,
+  drive via `deliver(events, head)`; the SAME host-agnostic registry runs inside the facet.
+  Demo built-in: `tally` (counts events by type, consumes "\*").
+- Stream DO: `enableProcessor(slug)` (idempotent, durable slug list), post-commit drive of every
+  enabled facet (FIRE-AND-FORGET on purpose — an awaited drive deadlocks if a facet processor
+  appends; reads stay correct because `facetSnapshot` catches up from the log first),
+  `facetSnapshot(slug)`, `/state.facetProcessors`.
+- Proven live (prj_facet\*): cold catch-up of a pre-enable event; 3 provided + 1 revoked folded at
+  offset 4; /state lists the facet; DO dormant. Deploy `facet-1`.
+- NEXT: userspace (loader-loaded) facet processors through the same map; moving the
+  iterate-context processor itself into a facet (needs the clients-view RPC facade on the parent);
+  the hibernation-with-facet e2e (the dual-mode task's required test).

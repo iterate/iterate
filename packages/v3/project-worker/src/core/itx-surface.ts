@@ -184,6 +184,16 @@ export class Itx extends RpcTarget {
     return this.#host.revokeCapability(input);
   }
 
+  /** Enable a facet-hosted processor on this context's stream (the facet spine). */
+  enableProcessor(slug: string): Promise<{ ok: true }> {
+    return this.#host.enableProcessor(slug);
+  }
+
+  /** A facet processor's fold (offset + reduced state), served through the parent. */
+  facetSnapshot(slug: string): Promise<{ offset: number; state: unknown }> {
+    return this.#host.facetSnapshot(slug);
+  }
+
   /** Provide an ADDITIONAL live capability (beyond the ones a client provides by connecting).
    *  The R13 desugar, done here in two calls: PARK the stub (transport), then MOUNT the alias
    *  `pattern ⇒ itx.clients.get(socketId)` (an ordinary routing-table row, shadowable/revocable). */

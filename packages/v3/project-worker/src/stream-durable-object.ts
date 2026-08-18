@@ -172,9 +172,53 @@ export class StreamDurableObject extends DurableObject<Env> {
       const offset = Number(this.ctx.storage.sql.exec("SELECT last_insert_rowid() AS o").one().o);
       committed.push({ ...body, offset, path: this.#name.path } as StreamEvent);
     }
-    if (committed.length)
-      await this.#registry.deliver(committed, committed[committed.length - 1].offset);
+    if (committed.length) {
+      const head = committed[committed.length - 1].offset;
+      await this.#registry.deliver(committed, head);
+      // THE FACET SPINE: drive every enabled facet-hosted processor too (each an isolated
+      // workerd facet with its own storage — see processor-facet.ts). Fire-and-forget ON
+      // PURPOSE: an awaited drive would deadlock if a facet processor APPENDS during its
+      // batch (append → this method → await the same facet's busy chain). Reads stay correct
+      // because facetSnapshot() always catches up from the log first.
+      for (const slug of this.#facetSlugs())
+        void this.#facet(slug)
+          .deliver(committed, head)
+          .catch((e) => console.error(`facet "${slug}" deliver failed`, e));
+    }
     return committed;
+  }
+
+  // ── facet-hosted processors (processor-facet.ts) ──
+
+  #facetSlugs(): string[] {
+    return (this.ctx.storage.kv.get("facet-processors") as string[] | undefined) ?? [];
+  }
+
+  /** Materialize (or reuse) the facet hosting `slug`, configured with this stream's identity. */
+  #facet(slug: string) {
+    const exports = (this.ctx as unknown as { exports: Record<string, unknown> }).exports;
+    return this.ctx.facets.get(`proc:${slug}`, () => ({
+      class: exports.ProcessorFacet as DurableObjectClass,
+    })) as unknown as import("./processor-facet.ts").ProcessorFacet;
+  }
+
+  /** Enable a facet-hosted processor on this stream (idempotent; identity configured durably). */
+  async enableProcessor(slug: string): Promise<{ ok: true }> {
+    const slugs = this.#facetSlugs();
+    if (!slugs.includes(slug)) this.ctx.storage.kv.put("facet-processors", [...slugs, slug]);
+    await this.#facet(slug).configure({
+      parentName: this.ctx.id.name ?? "?",
+      projectId: this.#name.projectId,
+      path: this.#name.path,
+      slug,
+    });
+    return { ok: true };
+  }
+
+  /** A facet processor's fold, served through the parent (catches up first). */
+  facetSnapshot(slug: string): Promise<{ offset: number; state: unknown }> {
+    if (!this.#facetSlugs().includes(slug)) throw new Error(`no facet processor "${slug}" enabled`);
+    return this.#facet(slug).snapshot();
   }
 
   read(afterOffset = 0, limit = 500): StreamEvent[] {
@@ -253,6 +297,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       return Response.json({
         incarnation: this.incarnation,
         processors: this.#registry.names,
+        facetProcessors: this.#facetSlugs(),
         ...this.#stubs.state(),
       });
 
