@@ -83,21 +83,6 @@ function createSocket(
   // upgrade lands in a few seconds — 15s is headroom, not a hang budget.
   const socket = new WebSocket(url, { handshakeTimeout: 15_000, headers });
 
-  // PROTOCOL-LEVEL LIVENESS, because a genuinely quiet session dies. A
-  // push-to-talk client between turns sends nothing for half a minute, and a
-  // fully idle WebSocket through Cloudflare's edge was measured closing at
-  // ~30s (1006) — which killed every round after the gap and, worse, let a
-  // reconnecting session replay a stale press later. Ping frames are the
-  // transport saying "still here" without one byte of application traffic;
-  // the runtime answers them itself. Unref'd so an idle CLI still exits.
-  socket.on("open", () => {
-    const heartbeat = setInterval(() => {
-      if (socket.readyState === WebSocket.OPEN) socket.ping();
-    }, 15_000);
-    heartbeat.unref?.();
-    socket.once("close", () => clearInterval(heartbeat));
-  });
-
   if (onWebSocketMessage) {
     const start = Date.now();
     const record = (direction: "in" | "out", data: unknown) => {

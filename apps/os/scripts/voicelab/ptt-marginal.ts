@@ -512,8 +512,17 @@ export async function pttMarginal(options: PttMarginalOptions) {
       `${options.micWav}, ${rounds} rounds, alternating stream and direct\n`,
   );
 
-  using itx = await connectProject(options);
-  const stream = itx.streams.get(streamPath);
+  /*
+   * THE SESSION IS ALLOWED TO DIE. A quiet /api socket gets closed from the
+   * far side after ~30 s of true silence (1006) — and rather than pinning it
+   * open with artificial traffic, this probe does what a real push-to-talk
+   * client must do: treat the session as ephemeral, redial on the next use,
+   * and REPORT what that redial costs. The number is the point: it is the
+   * latency a person pays on the first press after a long pause.
+   */
+  let itx = await connectProject(options);
+  let stream = itx.streams.get(streamPath);
+  const redialMs: number[] = [];
 
   /*
    * ONLY WHAT A DEVICE SUBSCRIBES TO. The provider's verbatim `grok-event`
@@ -535,77 +544,103 @@ export async function pttMarginal(options: PttMarginalOptions) {
   let faultThisTurn = false;
   /* Lifetime counts, so "no answer" can be told apart from "no delivery". */
   const delivered = new Map<string, number>();
-  const connection = await stream.openConnection({
-    connectionKey: `ptt-marginal-${Date.now()}`,
-    eventTypes: [
-      "events.iterate.com/voice-agent/spk-frame",
-      "events.iterate.com/voice-agent/turn-timing",
-      "events.iterate.com/voice-agent/call-started",
-      "events.iterate.com/voice-agent/provider-error",
-      "events.iterate.com/voice-agent/conversation-ended",
-    ],
-    processEventBatch: (payloadBatch: { events?: { type: string; payload?: unknown }[] }) => {
-      const atDeviceMs = Date.now();
-      for (const event of payloadBatch.events ?? []) {
-        const payload = (event.payload ?? {}) as Record<string, unknown>;
-        delivered.set(event.type, (delivered.get(event.type) ?? 0) + 1);
-        if (event.type === "events.iterate.com/voice-agent/spk-frame") {
-          lastSpkAtDeviceMs = atDeviceMs;
-          const pcm = typeof payload.pcm === "string" ? payload.pcm : "";
-          const frame: HeardFrame = {
-            atDeviceMs,
-            sentAtFacetMs:
-              typeof payload.sentAtFacetMs === "number" ? payload.sentAtFacetMs : Number.NaN,
-            conversationId: String(payload.conversationId ?? ""),
-            fromProviderDeltaSeq: Number(payload.fromProviderDeltaSeq ?? 0),
-            hasAudio: pcm !== "",
-            clearsBuffer: payload.clearSpeakerBufferBeforeFrame === true,
-            lastOfAnswer: payload.lastFrameOfAnswer === true,
-            /* base64 -> bytes -> ms of 16 kHz PCM16 (32 bytes/ms). */
-            pcmMs:
-              pcm === ""
-                ? 0
-                : (Math.floor(pcm.length / 4) * 3 -
-                    (pcm.endsWith("==") ? 2 : pcm.endsWith("=") ? 1 : 0)) /
-                  32,
-          };
-          spkAt.push(frame);
-          if (frame.hasAudio) answersSeen.add(answerKey(frame));
-          continue;
+  async function openProbeConnection() {
+    return await stream.openConnection({
+      connectionKey: `ptt-marginal-${Date.now()}`,
+      eventTypes: [
+        "events.iterate.com/voice-agent/spk-frame",
+        "events.iterate.com/voice-agent/turn-timing",
+        "events.iterate.com/voice-agent/call-started",
+        "events.iterate.com/voice-agent/provider-error",
+        "events.iterate.com/voice-agent/conversation-ended",
+      ],
+      processEventBatch: (payloadBatch: { events?: { type: string; payload?: unknown }[] }) => {
+        const atDeviceMs = Date.now();
+        for (const event of payloadBatch.events ?? []) {
+          const payload = (event.payload ?? {}) as Record<string, unknown>;
+          delivered.set(event.type, (delivered.get(event.type) ?? 0) + 1);
+          if (event.type === "events.iterate.com/voice-agent/spk-frame") {
+            lastSpkAtDeviceMs = atDeviceMs;
+            const pcm = typeof payload.pcm === "string" ? payload.pcm : "";
+            const frame: HeardFrame = {
+              atDeviceMs,
+              sentAtFacetMs:
+                typeof payload.sentAtFacetMs === "number" ? payload.sentAtFacetMs : Number.NaN,
+              conversationId: String(payload.conversationId ?? ""),
+              fromProviderDeltaSeq: Number(payload.fromProviderDeltaSeq ?? 0),
+              hasAudio: pcm !== "",
+              clearsBuffer: payload.clearSpeakerBufferBeforeFrame === true,
+              lastOfAnswer: payload.lastFrameOfAnswer === true,
+              /* base64 -> bytes -> ms of 16 kHz PCM16 (32 bytes/ms). */
+              pcmMs:
+                pcm === ""
+                  ? 0
+                  : (Math.floor(pcm.length / 4) * 3 -
+                      (pcm.endsWith("==") ? 2 : pcm.endsWith("=") ? 1 : 0)) /
+                    32,
+            };
+            spkAt.push(frame);
+            if (frame.hasAudio) answersSeen.add(answerKey(frame));
+            continue;
+          }
+          if (event.type === "events.iterate.com/voice-agent/provider-error") {
+            console.log(`  provider error: ${String(payload.message).slice(0, 200)}`);
+            faultThisTurn = true;
+            continue;
+          }
+          if (event.type === "events.iterate.com/voice-agent/turn-timing") {
+            timing.push({
+              endSeenAtFacetMs: Number(payload.endSeenAtFacetMs),
+              commitSentAtFacetMs:
+                payload.commitSentAtFacetMs === null ? null : Number(payload.commitSentAtFacetMs),
+              committedAckAtFacetMs:
+                payload.committedAckAtFacetMs === null
+                  ? null
+                  : Number(payload.committedAckAtFacetMs),
+              firstDeltaAtFacetMs: Number(payload.firstDeltaAtFacetMs),
+              firstMicFrameAtFacetMs:
+                payload.firstMicFrameAtFacetMs === null
+                  ? null
+                  : Number(payload.firstMicFrameAtFacetMs),
+              micFrames: Number(payload.micFrames ?? 0),
+              maxMicFrameGapMs: Number(payload.maxMicFrameGapMs ?? 0),
+              maxMicFrameGapAfterFrames: Number(payload.maxMicFrameGapAfterFrames ?? 0),
+            });
+            continue;
+          }
+          /*
+           * `call-started` and `conversation-ended` land here to be COUNTED, not
+           * to condemn a round: one call-started for a whole run is the healthy
+           * shape (a conversation is one call across many presses) and the count
+           * is reported at the end. Only the stream saying the call went wrong
+           * makes a round unusable.
+           */
         }
-        if (event.type === "events.iterate.com/voice-agent/provider-error") {
-          console.log(`  provider error: ${String(payload.message).slice(0, 200)}`);
-          faultThisTurn = true;
-          continue;
-        }
-        if (event.type === "events.iterate.com/voice-agent/turn-timing") {
-          timing.push({
-            endSeenAtFacetMs: Number(payload.endSeenAtFacetMs),
-            commitSentAtFacetMs:
-              payload.commitSentAtFacetMs === null ? null : Number(payload.commitSentAtFacetMs),
-            committedAckAtFacetMs:
-              payload.committedAckAtFacetMs === null ? null : Number(payload.committedAckAtFacetMs),
-            firstDeltaAtFacetMs: Number(payload.firstDeltaAtFacetMs),
-            firstMicFrameAtFacetMs:
-              payload.firstMicFrameAtFacetMs === null
-                ? null
-                : Number(payload.firstMicFrameAtFacetMs),
-            micFrames: Number(payload.micFrames ?? 0),
-            maxMicFrameGapMs: Number(payload.maxMicFrameGapMs ?? 0),
-            maxMicFrameGapAfterFrames: Number(payload.maxMicFrameGapAfterFrames ?? 0),
-          });
-          continue;
-        }
-        /*
-         * `call-started` and `conversation-ended` land here to be COUNTED, not
-         * to condemn a round: one call-started for a whole run is the healthy
-         * shape (a conversation is one call across many presses) and the count
-         * is reported at the end. Only the stream saying the call went wrong
-         * makes a round unusable.
-         */
-      }
-    },
-  });
+      },
+    });
+  }
+  let connection = await openProbeConnection();
+
+  /** Bury the dead session, dial a fresh one, and say what it cost. */
+  async function redial(reason: string): Promise<void> {
+    const startedAt = Date.now();
+    try {
+      closeAndDisposeRpcHandle(connection);
+    } catch {
+      /* Already dead — that is why we are here. */
+    }
+    try {
+      (itx as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+    } catch {
+      /* Same. */
+    }
+    itx = await connectProject(options);
+    stream = itx.streams.get(streamPath);
+    connection = await openProbeConnection();
+    const tookMs = Date.now() - startedAt;
+    redialMs.push(tookMs);
+    console.log(`  session redialed in ${tookMs}ms after: ${reason.slice(0, 90)}`);
+  }
 
   /**
    * What a round trip to the Durable Object costs, and nothing else.
@@ -965,9 +1000,30 @@ export async function pttMarginal(options: PttMarginalOptions) {
       try {
         viaStream = await streamTurn(plan.kind, await probeAppendRtt());
       } catch (error) {
-        /* A dead session fails the ROUND and says so; the loop carries on so
-         * one blip cannot silently discard every round after it. */
-        console.log(`  round ${round + 1} FAILED: ${String(error).slice(0, 120)}`);
+        /*
+         * A DEAD SESSION IS THE EXPECTED SHAPE OF A LONG PAUSE, not a
+         * failure of the run: bury it, redial, and press again — which is
+         * exactly what a device does. The retry's own timing is honest (a
+         * fresh press on a fresh session) and the redial cost is reported
+         * on its own line and in the summary.
+         */
+        try {
+          await redial(String(error));
+          viaStream = await streamTurn(plan.kind, null);
+          streamTurns.push(viaStream);
+          await settle();
+          const viaDirect = await directTurn(
+            direct,
+            toDirect(framesByKind[plan.kind === "barge" ? "long" : plan.kind]),
+          );
+          directTurns.push(viaDirect);
+          if (round + 1 < rounds) await settle();
+          continue;
+        } catch (retryError) {
+          console.log(
+            `  round ${round + 1} FAILED after redial: ${String(retryError).slice(0, 100)}`,
+          );
+        }
         viaStream = {
           kind: plan.kind,
           totalMs: null,
@@ -1029,6 +1085,11 @@ export async function pttMarginal(options: PttMarginalOptions) {
       }`,
     );
     closeAndDisposeRpcHandle(connection);
+    try {
+      (itx as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+    } catch {
+      /* Session already gone. */
+    }
     direct.socket.close();
   }
 
@@ -1104,6 +1165,11 @@ export async function pttMarginal(options: PttMarginalOptions) {
     backlogMs: summarize(
       cleanStream.map((t) => t.backlogMs).filter((v): v is number => v !== null),
     ),
+    /**
+     * What a press after a long pause pays to stand the session back up.
+     * Zero entries is a run whose gaps never outlived the socket.
+     */
+    redialMs: summarize(redialMs),
     /** Just reaching the Durable Object and back, with no delivery lane in it. */
     appendRttMs: summarize(
       cleanStream.map((t) => t.appendRttMs).filter((v): v is number => v !== null),
@@ -1225,6 +1291,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
   line("  mac→xAI→mac", report.providerRttFromHereMs);
   line("  model thinking", report.providerThinkMs);
   line("  append to DO only", report.appendRttMs);
+  line("session redial", report.redialMs);
   if (report.marginalMs !== null) {
     console.log(`\n  MARGINAL OVERHEAD  ${report.marginalMs > 0 ? "+" : ""}${report.marginalMs}ms`);
   }

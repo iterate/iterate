@@ -235,12 +235,13 @@ enum {
    * THESE TWO MOVE TOGETHER, which is why the one below moved with it.
    */
   /*
-   * A fully quiet hop was MEASURED being closed by the edge after ~30
-   * seconds (1006), which is shorter than a push-to-talk pause between
-   * turns. The probe must land well inside that window; two minutes — the
-   * old value — protected nothing that actually needed protecting.
+   * A liveness PROBE for a hop silent both ways this long — deliberately
+   * NOT a keepalive racing anybody's idle policy. A quiet session is
+   * allowed to die; a client's job is to redial on its next use. The probe
+   * exists to DETECT a dead hop before minutes of capture are spoken into
+   * it.
    */
-  ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS = 15000,
+  ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS = 120000,
   /*
    * Last resort: no PONG for this long on a READY transport and the chip
    * restarts, because a half-open TCP connection looks perfectly healthy from
