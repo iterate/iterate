@@ -165,3 +165,103 @@ codec half). v4's call-by-value idea dies: the receiver _wants the name_, not th
 3. Ephemeral opt-in for processors: apps/os requires NAMING the type in `consumes` (`"*"`
    never sweeps ephemerals). Keep that rule verbatim?
 4. `waitUntilProcessed` kept as the one barrier verb (split by mode, as apps/os) — confirm?
+
+---
+
+# Appendix A — where the whole clean room stands (comment here on the plan)
+
+Deploy `lessons-1`, 74/74 tests, all three live proofs green, 32 build-log increments pushed.
+**3,412 lines of product code in 18 files** (+1,007 test lines): expression codec 629, the
+Stream DO 450, processor layer 446 (~276 of it the registry scheduled to die), capnweb edge
+311, routing table 263, facet spine 231, don't-pin transport 284, the rest ~800. For scale:
+apps/os's delivery machinery alone (`stream-event-sender.ts`) is 2,485 lines.
+
+**The build plan** (from this jam; sizes are estimates):
+
+| #   | increment                          | net lines      | content                                                                                                             |
+| --- | ---------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------- |
+| 1   | Collapse + SDK                     | ~−150          | registry → base class; TS SDK prebuilt + injected; user-tally 17→8 lines; −3 concepts                               |
+| 2   | Pump + processor mode + ephemerals | ~+300          | ephemeral ring + the one metadata write; scan-window pushes into facets; uninsured/coalesced/pipelined from day one |
+| 3   | Push mode                          | ~+250          | stream-held cursor rows + retry/skip/halt; the stateless `processEvent` worker; per-push disposal                   |
+| 4   | The facet address                  | ~+70           | `facetInvoke` + `roots.facets` + one seed                                                                           |
+| —   | Remote wake connections            | +~150 deferred | built when a real remote processor exists                                                                           |
+
+Recommended sequencing: 1+2 together (same files, renames once), then 3; 4 anytime.
+End state ≈ 4.0–4.3k lines with ephemerals, push subscriptions, facet addressing, and the SDK.
+
+# Appendix B — the Kenton cross-reference DISCUSS list (7 owner calls; comment inline)
+
+From `packages/v3/project-worker/research/kentonv/lessons-for-clean-room.md` (28 lessons; 19
+already aligned, 2 applied in `lessons-1`). Each item below needs a verdict from you.
+
+## B1. The `?ctx=` front door is designation without introduction
+
+Anyone can mint a session for any project by naming it in a query param — the
+CORBA-global-namespace shape Kenton's five-reasons critique attacks. Everything BEHIND the door
+is ocap-clean. Acknowledged clean-room scaffolding.
+**Decision:** record as a hard productionizing invariant (project id must arrive as an
+unforgeable introduction — minted key / control-plane token; his `authenticate()` shape fits
+`/api` exactly)? Or gate the clean room itself now?
+
+## B2. A facet's fold could outrun the parent's durability
+
+If parent→facet replies are not covered by the parent's output gate, a facet could durably
+persist a cursor past a parent commit that later FAILS to flush — and SQLite's autoincrement
+rollback means the reused offset's different event is silently skipped. Rare (a failed durable
+flush), but it violates "a cursor is only ever behind durable truth."
+**Decision:** (a) verify empirically whether facet-bound replies wait on the parent's gate,
+(b) `ctx.storage.sync()` before driving facets, or (c) epoch-stamp reads so a facet detects
+divergence. Recommend (a) first — it may already be safe.
+
+## B3. Attenuation is per-context, not per-client
+
+Every holder of a project session sees the project's whole table; narrowing happens by giving a
+subordinate its own context (cheap here), not per-session views of one context. This is exactly
+where Kenton honestly scores his own bindings ("not a complete capability system") — plus the
+audit/revocation log he wished for.
+**Decision:** is context-granularity attenuation the doctrine (recommend: yes, until two
+differently-trusted clients must share one context path), or do we need per-session narrowing?
+
+## B4. Per-context loader cacheKeys multiply ~5MB isolates
+
+Confinement bakes the owning host into each isolate (`env.ITX` + `globalOutbound`), so N
+contexts running the same source hold N isolates at ~5MB each. Kenton's platform hit the same
+tension and solved it with parameterized entrypoints (authority in per-call props, one isolate
+serves many principals).
+**Decision:** accept the budget line for now (recommend: yes — contexts × sources is small) and
+note ctx.props as the shape to steal when it grows?
+
+## B5. Depth budgets: mount recursion capped at 32, the JSON walks are not
+
+substitute/hole-scan/jsonEqual/parser recurse without a cap. Cycles are impossible (parsed
+JSON, no custom serializers), so the only exposure is stack exhaustion from deeply-nested input
+by an authenticated project client; JSON.parse and workerd RPC bound much of it upstream.
+**Decision:** add one small shared non-resetting depth counter as defense-in-depth (his rule:
+never reset at argument boundaries), or trust transport limits? Mild recommend: add it — ~10
+lines.
+
+## B6. Error classification by message regex
+
+The fetch lane maps `/no capability matches/` → 404; greppable message text is house doctrine —
+but that 404 silently depends on a sentence someone may innocently reword. capnweb 0.8.0 drops
+`error.name` in transit, so typed errors would not survive the client hop anyway.
+**Decision:** bless message-prefix-as-contract (name the stable prefixes in ONE module both
+ends import — recommend), or an error-code convention inside the message?
+
+## B7. Hibernation vs eviction — and what idle facets may bill
+
+Our incarnation counter detects reconstruction (hibernation and eviction indistinguishably);
+increment-29 growth was eviction-scale (~300s+). workerd #6800 says SQLite-backed facets can
+hold the parent "idle, non-hibernatable" — converting idle sockets into billed duration until
+the evictor arrives. The bill is the observable.
+**Decision:** two cheap follow-ups — a probe distinguishing the two states, and watching
+duration billing on a facet-enabled context with zero traffic. Do them now or after increment 2?
+
+# Appendix C — other open naming/identity calls (restated so everything is in one doc)
+
+- **The word `roots`** — behavior settled (host-only vocabulary, unspellable from event
+  provenance); you remain unsure about the name.
+- **ITX vs STREAM** — one concept or two from a caller's perspective; v5 spells addresses
+  `itx.facets…` (one context = one stream) until decided.
+- **REVIEW-KENTON leftover:** `ClientsView` reads return `unknown[]` (weakly typed for in-DO
+  callers; a shared row shape would touch the Roots surface). Minor; annotate if you care.
