@@ -503,12 +503,30 @@ export const VoiceAgent2Contract = defineProcessorContract({
   /* 5.0.0: the birth certificate carries `tools` — itx expressions the model
    * may call, plus the well-known hang_up. Clean break like every bump before
    * it: the major re-reduces any persisted older fold. */
-  version: "5.0.0",
+  /* 6.0.0: the mutable birth certificate splits. `created` becomes
+   * existence-only under a stable per-stream key — a second birth is
+   * corruption, not an update — and the whole provider configuration moves to
+   * a new `configured` event under the content-hash+setupId key `created`
+   * used to wear. Config-after-birth is an ordinary event now, which is what
+   * the explicit-birth doctrine always said it was. The major re-reduces any
+   * persisted older fold; old streams re-fold their historical `created`
+   * payloads into nothing (existence) and are reconfigured by the next
+   * setup run. */
+  version: "6.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
     "events.iterate.com/voice-agent/created": {
-      description: "The voice agent exists on this stream.",
+      description:
+        "The voice agent exists on this stream. Existence and nothing else — appended once, " +
+        "under a stable key; configuration rides `configured`.",
+      payloadSchema: z.strictObject({}),
+    },
+    "events.iterate.com/voice-agent/configured": {
+      description:
+        "The agent's whole provider configuration, REPLACED WHOLESALE: an absent field means " +
+        "its default, never 'keep the old value'. Appended by every setup run whose content " +
+        "differs.",
       payloadSchema: z.strictObject({
         providerBaseUrl: z.string().optional(),
         provider: z.enum(["grok", "openai"]).optional(),
@@ -650,6 +668,7 @@ export const VoiceAgent2Contract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/voice-agent/created",
+    "events.iterate.com/voice-agent/configured",
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/conversation-end-requested",
     "events.iterate.com/voice-agent/conversation-ended",
@@ -1024,6 +1043,16 @@ export class VoiceAgent2Processor extends StreamProcessor<
     const committedAtStreamMs = Date.parse(event.createdAt);
     switch (event.type) {
       case "events.iterate.com/voice-agent/created":
+        /* Existence is the event's whole content, and the fold's defaults
+         * already ARE the unconfigured agent — an existence flag beside them
+         * would be a field nothing reads. Returning state unchanged is the
+         * honest arm. */
+        return state;
+
+      case "events.iterate.com/voice-agent/configured":
+        /* REPLACED WHOLESALE, defaults and all: an absent field resets rather
+         * than survives, so a rerun of setup with a shorter config cannot
+         * leave last week's tools armed. */
         return {
           ...state,
           providerBaseUrl: event.payload.providerBaseUrl ?? null,
@@ -2670,17 +2699,22 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
     const stream = project.streams.get(streamPath);
     try {
       /*
-       * THE BIRTH CERTIFICATE, keyed on its own content.
+       * BIRTH AND CONFIGURATION, SPLIT — the explicit-birth doctrine applied
+       * to this agent at last. `created` is existence only, under a key with
+       * nothing but the stream path in it: appended once for the life of the
+       * stream, and a second setup run finds the key taken and appends
+       * nothing, because a second birth is corruption rather than an update.
        *
-       * Which provider to dial and what to say the model is are per-stream
-       * configuration, and they belong in an event because they have to survive
-       * the eviction that a per-call argument would not. Keyed on content so a
-       * morning that alternates mock, real, mock, real applies each switch —
-       * the first cut keyed this on content ALONE and by the second `real` the
-       * key was taken, nothing was appended, and the fold still named a tunnel
-       * that had closed an hour before.
+       * The configuration is an ordinary event. Which provider to dial and
+       * what to say the model is are per-stream settings that must survive
+       * the eviction a per-call argument would not, so they ride `configured`
+       * — keyed on content so a morning that alternates mock, real, mock,
+       * real applies each switch. The first cut keyed its config on content
+       * ALONE and by the second `real` the key was taken, nothing was
+       * appended, and the fold still named a tunnel that had closed an hour
+       * before.
        */
-      const birthPayload = {
+      const configPayload = {
         ...(options.providerBaseUrl === undefined
           ? {}
           : { providerBaseUrl: options.providerBaseUrl }),
@@ -2694,9 +2728,9 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
         ...(options.tools === undefined ? {} : { tools: options.tools }),
       };
       /*
-       * ONE IDENTITY FOR THIS SETUP, so the birth certificate is re-applied when
-       * an earlier run already used its content key. The setup id is what makes
-       * this an OCCURRENCE rather than a value.
+       * ONE IDENTITY FOR THIS SETUP, so the configuration is re-applied when
+       * an earlier run already used its content key. The setup id is what
+       * makes this an OCCURRENCE rather than a value.
        */
       const setupId = crypto.randomUUID();
       const subscriptionPayload = {
@@ -2716,8 +2750,13 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
       const committed = await stream.append(
         {
           type: "events.iterate.com/voice-agent/created",
-          idempotencyKey: `voice-agent2/created:${streamPath}:${contentHash(birthPayload)}:setup:${setupId}`,
-          payload: birthPayload,
+          idempotencyKey: `voice-agent2/created:${streamPath}`,
+          payload: {},
+        },
+        {
+          type: "events.iterate.com/voice-agent/configured",
+          idempotencyKey: `voice-agent2/configured:${streamPath}:${contentHash(configPayload)}:setup:${setupId}`,
+          payload: configPayload,
         },
         {
           type: "events.iterate.com/stream/subscription-configured",

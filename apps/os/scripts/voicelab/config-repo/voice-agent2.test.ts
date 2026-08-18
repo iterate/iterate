@@ -302,11 +302,13 @@ function micFrame(deviceMicFrameSeq: number) {
 
 /**
  * Get to "a live call with a usable provider session", which almost every test
- * needs and none of them is about.
+ * needs and none of them is about. Appends `configured` alone: existence is
+ * the fold's default state, so `created` (an empty strict payload under a
+ * stable key, setup's job) adds nothing a unit test could observe.
  */
 async function callIsLive(h: Harness, clientTakesTurns = GROK_LISTENS): Promise<string> {
   await h.append({
-    type: "events.iterate.com/voice-agent/created",
+    type: "events.iterate.com/voice-agent/configured",
     payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime", clientTakesTurns },
   });
   await h.append(micFrame(1));
@@ -378,7 +380,7 @@ describe("opening a call", () => {
   it("holds the end of the turn through the handshake too, and then asks", async () => {
     const h = makeHarness();
     await h.append({
-      type: "events.iterate.com/voice-agent/created",
+      type: "events.iterate.com/voice-agent/configured",
       payload: { clientTakesTurns: CLIENT_TAKES_TURNS },
     });
     await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
@@ -404,7 +406,7 @@ describe("opening a call", () => {
   it("does not commit a held turn when the provider owns the turns", async () => {
     const h = makeHarness();
     await h.append({
-      type: "events.iterate.com/voice-agent/created",
+      type: "events.iterate.com/voice-agent/configured",
       payload: { clientTakesTurns: GROK_LISTENS },
     });
     await h.append(micFrame(1));
@@ -455,7 +457,7 @@ describe("opening a call", () => {
   it("hands the device's PCM16 to Grok untouched", async () => {
     const h = makeHarness();
     await h.append({
-      type: "events.iterate.com/voice-agent/created",
+      type: "events.iterate.com/voice-agent/configured",
       payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime" },
     });
     const pcmBytes = 320;
@@ -578,7 +580,7 @@ describe("the openai provider", () => {
   /** A live call whose birth certificate names OpenAI. */
   async function openaiCallIsLive(h: Harness): Promise<void> {
     await h.append({
-      type: "events.iterate.com/voice-agent/created",
+      type: "events.iterate.com/voice-agent/configured",
       payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime", provider: "openai" },
     });
     await h.append(micFrame(1));
@@ -662,7 +664,7 @@ describe("tools on the birth certificate", () => {
     }[],
   ): Promise<string> {
     await h.append({
-      type: "events.iterate.com/voice-agent/created",
+      type: "events.iterate.com/voice-agent/configured",
       payload: {
         providerBaseUrl: "https://fake.provider.test/v1/realtime",
         clientTakesTurns: CLIENT_TAKES_TURNS,
