@@ -681,3 +681,33 @@ the control plane runs the same core; billing-analytics verification of hibernat
   park+alias, shadow stack, don't-pin dormant), facet spine cold catch-up, userspace + built-in
   tally side by side. 70 unit tests untouched (the processor is host-agnostic — that was the
   point). `/state` drops the in-DO `processors` list (facetProcessors + stubs remain).
+
+## Increment 29 (ictx-facet-1, no code change): hibernation-with-facets e2e — proven, with a platform finding about long-idle relays
+
+The required test (prove_hibernate.mjs / prove_hibernate3.mjs): fresh ctx → 2-3 capnweb clients
+connect WITH capabilities (pagers parked) → enable tally + user-tally (+ iterate-context, the
+capability host itself) → one provide → hold with sockets open and ZERO traffic → the DO must
+evict + reconstruct (incarnation grows) → stubs still parked → cross-client invoke works.
+**8 runs, ~70 min of holds. Every assertion PROVEN — but never all in one run**, and the reason
+is a real workers.dev property, not a bug in the spine:
+
+- **HIBERNATION WITH FACETS: PROVEN, 4 times.** incarnation grew 1→2 (480s hold), 2→3 (2×330s),
+  1→2 (340s), 1→2 (2×340s) with `facetProcessors: [tally, user-tally, iterate-context]` listed,
+  pagers parked, `dormant:true` throughout. Post-eviction, EVERYTHING rebuilds: facetSnapshot
+  folds correctly from durable identity + the log in every run; dispatch through the rebuilt
+  iterate-context facet works (surviving clients' calls executed the fan-out).
+- **Stubs survive eviction:** runs with an eviction ended with a stub still parked (stubs=1) and
+  readable — consistent with increment 19's 1050-pager × 7-eviction proof (that machinery is
+  unchanged; sockets never left the parent).
+- **Cross-client invoke after a LONG hold: PROVEN** (echo through wake→leg→invoke after 8-11 min
+  holds, 3 runs) — but in those runs the eviction happened not to fire.
+- **The platform finding (why the conjunction never landed in one run):** on workers.dev, actor
+  eviction and STATELESS-EDGE-ISOLATE recycling are coupled — the same process idleness that
+  evicts the DO also reclaims the `/api` isolate holding the capnweb relays, killing that
+  relay's client socket AND its Pager (peer close 1006, observed ~5-8 min idle, ~50%/window).
+  Relay gone → its parked stubs vanish (working as designed; a real client reconnects and
+  parkClient replaces by connectionKey). And the mirror finding: ANY client→edge traffic — even
+  a pure-addressing `session.get()` that never RPCs the DO — kept the actor WARM: 0 evictions
+  in 4 keepalive windows vs 5 in 8 no-keepalive windows ≥300s. Controls (bare ctx + sockets-only
+  ctx, no facets) both evicted at 300s, so facets do NOT prevent hibernation; 240s windows are
+  simply shorter than today's eviction latency (the spec's 240s hold never saw one).
