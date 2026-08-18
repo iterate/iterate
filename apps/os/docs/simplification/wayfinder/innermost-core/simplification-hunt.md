@@ -1,228 +1,222 @@
-# The simplification hunt
+# The simplification hunt — v2, in plain language
 
-23 agents (5 subsystem lenses, 5 concept collapses held seriously, 3 source mines over
-cloudflare-os / capnweb / workerd), every simplify/collapse report adversarially verified
-against the actual code before anything below survived. Framing was yours: _not whether it's
-required — whether there's a simpler, better way; hold the problem every which way._ Security
-out of scope by your order. Line anchors were checked by the verifiers; ~40% of raw findings
-were killed.
+v2 after your 15 annotations. Rewritten to talk normally; your verdicts are folded in and
+marked. (Background: 23 agents hunted, every finding was adversarially re-checked against the
+code, ~40% died in verification.)
 
-## 1. Bugs the hunt found (fix regardless of any other decision)
+## 1. Bugs (status per your notes)
 
-1. **`print` unwraps `$`-escapes** — `print(["itx",["f",{$:{"?":0}}]])` yields `itx.f(?0)`,
-   which re-parses to a LIVE hole where the mount had frozen data — the exact inversion `$`
-   exists to prevent. Fix = delete the three-line literal arm; `{ $: ?0 }` then round-trips
-   verbatim (probe-verified). The parse⇄print suite has no `$` case, which is why it survived.
-2. **`skipsSinceSuccess` never resets on success** — "3 consecutive skips" is actually "3 skips
-   ever since subscribe": skip, months of clean deliveries, skip, skip → HALT.
-3. **The push ladder conflates poison with outage** — a plain 5-minute target outage on a
-   `skip` row burns ~9 calls, sacrifices 2 innocent events, and halts in minutes, while a
-   `halt` row rides the full 15-attempt ladder. The code contradicts its own header comment
-   (which describes the intended SEQUENTIAL shape). Fix: ONE retry ladder to maxAttempts, and
-   only at exhaustion consult `onFailingEvent`.
-4. **`resolveFetch` silently drops JSON args on a call-step fetch terminal** — the exact
-   silent-arg-drop `apply` exists to loudly reject. One guard line.
-5. **Userspace facet source re-resolves on EVERY commit** — `#facet` runs
-   `await this.invoke(ref.source)` + full module re-hash per push, even though the warm-facet
-   callback is never invoked. Resolve at enable time, store modules under a per-slug key (and/or
-   move resolution inside the `facets.get` callback, which workerd skips when warm).
-6. **Alarm-woken cold DOs can throw in `#doName`** — `ctx.id.name` is undefined in alarm-woken
-   DOs on runtimes before workerd's 2026-07-02 fix, and our push-retry alarm path reaches
-   `#name.path` via `read()`. Fix: persist the name in `#touch()`, fall back to it.
-7. **`#running` is dead state** — written twice, readable by no one (it's `#`-private).
-8. **`assertMustUse` plumbs numeric holes it then ignores** — collect named captures only.
+1. **Printing a stored mount can un-freeze frozen data.** If a mount's target contains
+   `{$: {"?": 0}}` — meaning "this is literal data, do NOT treat it as a hole" — then printing
+   it as a string produces `?0`, and parsing that string back produces a real hole. So
+   print-then-parse turns protected data into caller-controlled input. The fix is deleting
+   three lines (the printer stops unwrapping `$`), after which `{ $: ?0 }` round-trips exactly.
+   _(Your note here was bigger than the bug — "make the whole codec simpler" — see §2.)_
+2. **DONE-when-simpler (your condition, and it is simpler): the push-retry ladder.** Two bugs,
+   one restructure. Today a "skip bad events" subscription halts after 3 skips _ever_ (the
+   counter never resets on success), and a plain 5-minute outage of the target gets treated
+   like a poison event — it burns a few retries, sacrifices two innocent events, and halts,
+   while a "halt" subscription would have retried for hours. The restructure that fixes both is
+   genuinely easier to reason about: **retry every failure with backoff up to the limit; only
+   when retries are exhausted look at the policy** — "halt" stops the subscription, "skip"
+   drops that one event (with an audit event) and moves on. One ladder, then one policy
+   decision at the end. No interleaved counters.
+3. **APPROVED + your addition: the fetch lane.** Writing `itx.web.fetch('/path')` in an
+   expression silently throws away `'/path'` today (the real Request rides in separately, and
+   the args just vanish). Fix is one loud error. Your addition — "make sure all the different
+   shapes of fetch are supported" — turned into a checklist we verified: bare terminal
+   `itx.site` on the fetch lane (works — normalized to `.fetch`), explicit `itx.site.fetch`
+   (works), WebSocket upgrades through it (works, proven), fetch on a facet address (works),
+   fetch on a stateful worker (works, native 101), and fetch with expression args (now a loud
+   error instead of silent drop).
+4. **Userspace processor code is re-fetched on every single commit.** The facet is warm and
+   ignores the result, but we still resolve the source expression and re-hash all modules per
+   event batch. **Your note: plan this carefully** — agreed; anything touching dynamic-worker
+   warm paths has burned us before. Proposed careful shape: resolve modules once at
+   enable-time, store them durably per slug; the hot path reads the stored hash only; source
+   changes go through an explicit re-enable (which is also when the version-marker abort
+   already runs). No behavior change on the warm path at all — it just stops doing wasted work.
+5. **DROPPED per your note** (we don't support older workerd runtimes): the alarm-woken-DO
+   name bug. We'll note the runtime floor (workerd ≥ 2026-07-02) in the build log and move on.
+6. **APPROVED (your "ok"):** delete the dead `#running` field; stop collecting numeric holes
+   the must-use check then ignores. Both done.
+7. **APPROVED (your "fix this then"): the stalled-batch gap.** If the DO is evicted mid-batch
+   and no new event ever arrives, delivery stalls until the next append — nothing resumes it.
+   Fix (cloudflare-os's pattern): whenever any cursor is behind the head, make sure ONE alarm
+   is armed; the alarm handler re-drives everything behind. We get the "is there unfinished
+   work" marker for free (cursor < highest offset). Done.
 
-## 2. Verified simplifications (adversarially confirmed simpler-better)
+## 2. Your new ask: make the codec itself smaller
 
-**Codec.** Merge `usesCallerArgs` into `substitute` as a returned `spentArgs` flag (deletes the
-THIRD hole-walker and its third spread-detection spelling — the drift class that already
-shipped one bug). Make rest-splice explicit (`...?n` = `args.slice(n)`; bare `...?` legal only
-with no numeric holes in the list — kills the inference the increment-26 bug lived in, and the
-`...?1`-parses-but-means-object-copy overload). **Owner memo:** specificity could collapse from
-per-step arrays to ONE integer ("binds the most wins; ties newest") — every shipped mount picks
-the same winner, but there is a real divergence class (a newer hole-y alias can tie a literal
-mount under sum where lex strictly orders them) — your call, documented either way.
+You're right that it's the biggest single piece (641 lines — parser, printer, matcher,
+substituter, evaluator). Nothing else is 200+ lines of load-bearing cleverness. Three concrete
+directions, smallest first — they compose:
 
-**Wire.** `invokeCapability` leaves the wire entirely: it is a 4-line client-side desugar into
-the ONE dispatch verb (`invoke`), the codebase already desugars exactly this way in two other
-places, and the name currently puns across three incompatible contracts. The four edge client
-classes (ClientCollection/Client/ClientConnection) are server-hosted expression builders —
-replace with client-side typed builders (~−70 lines; latency is a wash, capnweb already
-pipelines). `parkClient`/`parkCapability` = one `park` verb (and `connect()` without
-capabilities is today a silent presence no-op contradicting the file's own header).
+- **(a) Delete the third walker (~30 lines, no behavior change).** Three separate functions
+  walk expression trees looking for holes, each with its own slightly-different detection code
+  — that's how the last two codec bugs happened. `substitute` can just _report_ whether it
+  consumed the caller's args while doing its normal work; the standalone checker dies.
+- **(b) Make "rest" explicit (~20 lines + kills a bug class).** Today `...?` guesses where to
+  start splicing by scanning the whole arg list for the highest-numbered hole — that guess has
+  already shipped one bug. Writing `...?2` ("everything from arg 2") makes the author say what
+  they mean, and bare `...?` stays legal in the common case (no numbered holes around it).
+- **(c) The parser question — the real size win.** Half the file is a hand-rolled string
+  parser/printer. The mine found capnweb's recording trick: instead of _parsing_
+  `"itx.grok.chat({model:'grok-4', messages:?})"`, let authors write real code against a
+  recording proxy — `expr((itx, hole) => itx.grok.chat({model: 'grok-4', messages: hole()}))`
+  — and capture the expression from what the code _did_. Typed, autocompleted, no grammar. The
+  string form then only needs _printing_ (for display/debug) plus parsing for config seeds and
+  humans who prefer strings. We can't delete the parser while "the string half is first-class"
+  stands (your earlier call) — but if authoring shifts to `expr()` + structured, the parser
+  stops growing and could eventually shrink to the seed-file subset. **Decision for you:** keep
+  the string half as the primary authoring surface, or demote it to display/config while
+  `expr()` becomes how code authors expressions?
 
-**Transport (the strongest structural cut).** Carry the call ON the pager socket — delete the
-wake→activate→borrowed-Invoker-leg handshake entirely: the pending map only ever has entries
-while an inbound call is in flight (which already blocks hibernation), so the three-phase dance
-buys nothing the socket itself can't carry; UUID callIds make stale frames harmless. Stamp stub
-meta on the pager UPGRADE request (park-as-a-phase dies; today's `parkCapability` visibility
-literally depends on structured-clone preserving an undefined-valued key). The five-verb stub
-facade is a FOSSIL of the increment-21→22 migration (its semantics moved into the ictx facet
-but the verbs stayed parent-side); it shrinks to 3-4 primitives. `dup()`'s `?? invoker`
-fallback silently converts a missing dup into retain-after-dispose — dies with the handshake.
+## 3. Answers to your direct questions
 
-**Loaders.** Fold the stateful-worker runner INTO the Stream DO as a facet — one DO class total
-(every duplicated pattern verified line-for-line, and the runner currently escapes the #6800
-quiesce). Merge stateless run/fetch into one wrapper/one isolate/one billed identity. Mint
-cacheKeys INSIDE `confinedWorker` with a closed kind union — one audit point for the dollar
-lever. Drop `workers.get`'s `type` discriminator (`className` presence already decides; both
-invalid states become unrepresentable). Generate the injected runner from real TS via
-build-sdk (the hand-mirrored duck contract is exactly the drift this repo's history punishes).
+**"How can we carry the call on the pager socket — what about data types WebSocket frames
+can't carry?"** Fair challenge, and it's the real cost of that proposal, so here's the honest
+picture. Today the invoke path is: DO sends "wake" over the socket → relay calls back over
+Workers RPC → DO gets a short-lived RPC leg → the call goes over that leg. The leg is real
+Workers RPC, so it _could_ carry stubs, Requests, streams. But what actually crosses it today
+is only expression data — JSON args in, JSON results out (events, snapshots, strings). The
+proposal says: since it's JSON anyway, put `{callId, path, args}` frames on the socket and
+skip the three-phase dance. If a provider one day wants to _return a capability_ from a call,
+frames can't carry that — but note our doctrine already answers it: capabilities travel as
+NAMES (you mount something and hand back its name), not as live return values. So the choice
+is really: **(i)** keep the RPC leg and its handshake to preserve "results may someday be rich
+types," or **(ii)** adopt frames and make "invocation payloads are plain data; capabilities
+move by mounting" an explicit rule. I lean (ii) because it matches the names-not-authority
+doctrine we already live by — but it does close a door, so it's yours to call.
 
-**Storage.** The kv high-water mark is transactionally authoritative — delete
-`#eventsTableExists` and the SQL leg of `#maxAssigned`. `storage.kv.list({prefix})` exists now:
-per-name `sub:*` / `proc:*` rows instead of whole-array rewrites.
+**"Why fold the stateful runner into the Stream DO?" + your "home path" idea.** The narrow
+reason: the runner DO duplicates ~80 lines of the stream's machinery (loader wiring, version
+markers, the method-walk) and escapes the idle-quiesce sweep. But your instinct is the better
+frame: apps/os "apps" are DO classes exported from config repos — and if **every app instance
+has a home stream path**, then "the app IS a facet of its home stream" gives it an address
+(`itx.contexts.get('/apps/crm')`), an event log it can append to, processors beside it, and
+the stream's lifecycle (quiesce, migration, deletion) for free. The stateful runner then isn't
+a special DO class at all — it's just "a facet whose class came from userspace code." One DO
+class in the whole system. Proposed: adopt with the home-path framing.
 
-## 3. The concept collapses — your open questions, answered
+**"wtf - talk normal" (the routing-breakage rule).** Plainly: if someone mounts a bad
+capability — say a default route that swallows every call — you need working tools to see
+what's mounted and remove it. If those repair tools themselves went through the routing table,
+the bad mount could swallow _them_ too and you'd be locked out. So the handful of repair verbs
+(revoke a mount, read the raw log, dump the table) talk straight to the DO and never route.
+That's the whole rule.
 
-**ITX vs STREAM: ONE concept. Adopt the rename.** (Verdict: holds.) The machine already
-believes it — the binding is named CONTEXT, roots.ts says "a stream IS a context", and the
-runtime hands back a FULL DO stub that expressions can already walk. Kill `itx.streams`; add
-`itx.log` (own log — the commonest write becomes dotted-door spellable, which is exactly why
-`Itx.invoke` had to exist) and `itx.contexts` (siblings as full ROUTED contexts — which makes
-your closed B3 attenuation doctrine _spellable_: `provide({pattern:'itx.bot',
-target:"itx.contexts.get('/agents/bot')"})` is a named, shadowable, revocable whole-agent
-handle). One new rule surfaced by the reframe, worth writing on the wall: **doors you need when
-routing is broken must not route** — revoke-by-offset, unrouted log read, unrouted table
-snapshot stay native forever. (The "make every edge verb a seed" extension was killed:
-complexity moved, not removed.)
+**"Should `itx.log` be `itx.stream`?" Yes — renamed.** Your own stream's door is
+`itx.stream.append(...)` / `itx.stream.read(...)`; other contexts are
+`itx.contexts.get('/path')`. (Singular "stream" = mine; "contexts" = everyone's, and each of
+those is a whole context, not just a log.)
 
-**Four tables or one: NEITHER — two kinds of truth.** (Verdict: one-STORAGE reading killed —
-including by a bootstrap impossibility: iterate-context is itself on the fan-out list a
-fold-held table would put inside iterate-context. One-CONCEPT reading adopted.) The rule the
-code already follows everywhere: **CLAIMS (immutable, expression-shaped, event-worthy) vs
-PROGRESS (mutable registers), and a progress register lives in the storage of the engine that
-advances it.** The five stores are claims × engines, not duplication. Corollary insight: a push
-subscription and a facet processor are the SAME concept — a standing delivery — differing only
-in cursor CUSTODY; the ladder and gap-repair are the same at-least-once obligation seen from
-the two custodians. And the acceptance test for any future "one table" pitch: a store resists
-unification exactly when its truth is not expressible as an expression (socket liveness,
-cursor position, config text).
+## 4. The four questions you "???"d, asked properly this time
 
-**roots: DELETE THE OBJECT — the naming debate deletes itself.** (Verdict: holds.) The
-RpcTarget shell has been vestigial since increment 28 (never crosses a hop; the tests fake it
-with object literals). Replace `Roots`/`buildRoots` with a plain record whose KEYS are the
-expression roots, spread into config-provenance scope (`{...hostScope, itx}` — itx LAST, plus
-a builder assert that `itx` is never a key). `provide`'s check becomes `target[0] !== "itx"`;
-seeds read `kv`, `log`, `bindings.get('FALLBACK')`; tighten `evaluate`'s root lookup to
-`Object.hasOwn` in the same commit. The provenance gate was never an object — it is a
-scope-KEY-SET decision, and it must live at evaluation (the smuggled-event test passes
-literally unchanged). Net ≈ −80-100 lines, one framework noun, and the whole naming question.
+**Q1 — picking a winner between two matching mounts (was: "specificity").** When a call
+matches several mounts, we score each pattern and the highest score wins. Today the score is a
+per-step list compared like version numbers — correct but nobody can predict it without
+reading the matcher. The proposal: one number — _how many things did the pattern pin down_
+(steps named + literal args matched) — ties broken by newest-wins, same as the shadow stack.
+Every mount ever written in this repo picks the same winner either way. The one difference:
+today a pattern with a literal arg (`itx.f('a')`) beats a longer pattern with a hole
+(`itx.f(?x).g`) _always_; under the sum they tie and the newer one wins. **Question: is
+"count what it pinned down, newest breaks ties" the rule you want, or keep the subtle
+version-number compare?**
 
-**capnweb-in-the-DO: DEAD (your ruling; the hunt strengthens it).** The session-killing event
-isn't eviction — it's the **10-second hibernation timer** (increment 19 measured ~one
-reconstruction per 26s on an idle kilo-client DO); DO-tier sessions die ~30×+ more often than
-edge sessions. But the rule should be REWRITTEN so it stops inviting this attack: not "capnweb
-never terminates in a DO" but **"capnweb session state is live JS; it may only live in the
-CPU-billed, freely-reconnectable tier, never a duration-billed evictable one."** And label
-hibernatable-pager/stub as a **capnweb #36 polyfill, scheduled for deletion by upstream** —
-when workerd ships Kenton's plan, ~290 lines delete for free in the CURRENT architecture,
-which strictly dominates the reframe.
+**Q2 — do we even want a generic call-anything door on the client?** cloudflare-os has no
+equivalent of `invokeCapability("itx.a.b", args)` — a session hands you a small _typed_ object
+(their version of `{stream, clients, facets}`), you call real methods on it, and chained calls
+still cost one round trip because capnweb pipelines. Strings/expressions exist only where
+config and agents live. For us that would mean: the TypeScript client SDK gets a typed
+surface (autocomplete, type errors), and `invoke(expression)` remains for agents, config, and
+dynamic callers. **Question: want a prototype of the typed client surface, or is
+expressions-everywhere the identity of the product?**
 
-**Subscribing IS providing — adopt the storage half, refuse the broadcast half.** (Verdict:
-partial.) A subscription = a mount at `itx.subscribers.<name>` (the capability-provided event
-carries the delivery policy in its payload) + **the irreducible residue: the cursor** — which
-is why `resumeSubscription`, the one cursor-surgery verb, survives verbatim. This fixes a real
-divergence: push rows are today silent-kv config in a system that event-sources every other
-claim. Cursors keyed by `providedAtOffset` give **freeze-and-fork wiretap semantics** for free
-(shadow a subscriber → original's cursor freezes; revoke → it resumes exactly where it
-stopped; revoke doubles as cursor GC). Two hard corrections from verification: the parent
-folds its fan-out projection INLINE in `append` (it sees every event body at the commit
-point — no facet round trip, no cache), and the pump delivers **by row identity, never by
-name through the table** (a broad default route must not intercept deliveries). Facet rows and
-parked clients stay out, for the recorded circularity/transport reasons.
+**Q3 — the routing table is doing two different jobs.** Job one: agents and humans mounting,
+shadowing, and revoking capabilities by pattern — the table with its shadow stack is _great_
+at this. Job two: boring wiring — "this loaded worker should see SLACK and KV" — where
+patterns, specificity, and shadowing buy nothing; a plain `{SLACK: …, KV: …}` map on that
+worker's row would be simpler and more direct (that's how cloudflare-os wires everything).
+**Question: keep using one table for both jobs (uniformity), or give loaded workers a plain
+bindings map and reserve the table for the agent-facing namespace?**
 
-## 4. What we're not considering (the mines)
+**Q4 — who remembers where a live subscriber is up to?** For a browser/device connected over a
+socket, today's design keeps a durable cursor row on the stream. cloudflare-os keeps NOTHING
+for consumers that can re-ask: the client remembers its own position ("give me everything
+after 75"), and a dead socket just dies — reconnect re-asks. Durable stream-side cursors exist
+only for consumers that _can't_ re-ask (a webhook target can't call you back). We already
+decided browsers hold their own cursor; this extends that to every live-socket subscription.
+**Question: adopt "durable cursors only for targets that can't re-ask" as the rule?**
 
-**From workerd — the platform moved under us (biggest items):**
+## 5. Everything else the hunt found (unchanged from v1, condensed)
 
-- **`ctx.props` / per-entrypoint props are usable TODAY** — `confinedWorker` can stop baking
-  `env.ITX` per context: `loader.get('shared:${deploy}:${contentHash}')` +
-  `getDurableObjectClass('Runner', {props})`. Loader cacheKeys collapse to deploy × content:
-  ONE isolate serves every context — the PR-2504 "shape to steal", shipped.
-- **`ctx.exports.ProcessorFacet({props})` deletes `configure()`/`FacetIdentity` entirely** —
-  the header comment "a facet cannot receive constructor args" is now FALSE. Facets read
-  `this.ctx.props`; the first-contact handshake, the durable identity kv, and the
-  enable-ordering constraint all die.
-- **`unsafe.evict(stub, {webSockets:'hibernate'})`** — deterministic CI proof of don't-pin,
-  attachment-derived stubs, and cursor gap-repair. Every death-related invariant currently
-  proven by _waiting_ becomes a fast local test lane.
-- **`facets.delete` / `facets.clone`** — `disableProcessor` (currently MISSING: the only
-  off-switch for a misbehaving userspace processor is hand-editing kv) and pre-upgrade
-  fold backup/rollback.
-- **`setWebSocketAutoResponse` pairs + per-socket timestamps** — pager liveness with zero DO
-  wakes; `/state` gains honest `lastSeen` per stub.
-- **`ctx.exports` loopback** — SOLO mode loses its self-referential FALLBACK service binding
-  (config-free), and the `(ctx as {exports})` cast dies via `wrangler types`.
+- **Platform features that delete our code:** workerd's `ctx.props` lets ONE loaded isolate
+  serve every context (cacheKeys become deploy × content — the $7.8k lesson's endgame), and
+  facets can now receive constructor props — which deletes the whole `configure()` first-
+  contact handshake. `facets.delete` gives us the missing `disableProcessor`. `unsafe.evict`
+  lets CI kill a DO on demand — every invariant we currently prove by _waiting_ becomes a fast
+  test. `kv.list({prefix})` replaces our rewrite-the-whole-array row storage.
+- **capnweb features we ignore:** one line makes `/api` accept plain HTTP one-shot calls (no
+  WebSocket handshake for a CLI script); `Symbol.dispose`/`onRpcBroken` make dead clients
+  clean up instantly (today the roster lies until a 10s timeout); the Upgrade-over-RPC fork
+  feature WE commissioned is installed and unused (`/cap` could collapse into `/api`); its
+  stream serialization is the right transport for voice firehoses; `serialize()` would stop
+  `JSON.stringify` silently mangling Dates/bytes/Errors at the commit point.
+- **Adopted concept answers (from v1, your open questions):** ITX and STREAM are ONE concept
+  (rename shipped as `itx.stream` + `itx.contexts`); the four-tables question resolves to
+  "claims vs progress — a progress register lives with the engine that advances it"; `roots`
+  stops being an object (a plain record of host functions spread into config-seed scope — the
+  naming debate disappears because there's nothing left to name); capnweb still terminates at
+  the edge only (your ruling; the rule now stated as "session state is live JS — it lives in
+  the CPU-billed tier"); subscriptions become event-sourced mounts at `itx.subscribers.<name>`
+  with cursors keyed by mount identity (shadow a subscriber and its cursor freezes; revoke
+  and it resumes where it stopped — wiretaps for free).
 
-**From capnweb — the library does things we hand-roll or ignore:**
+## 6. How much code all of this saves
 
-- **`newWorkersRpcResponse` serves BOTH WebSocket and one-shot HTTP batch** — today every CLI
-  script/cron/webhook must do a WS handshake for one call. One-line change at `/api` (batch
-  sessions just can't `connect`/provide-live — throw clearly).
-- **`Symbol.dispose` on ProjectSession + `onRpcBroken` on retained providers** — today when a
-  client's socket drops, the relay's parked stubs persist and the roster LIES until an invoke
-  hits the 10s attach timeout. Two small edits delete our hand-rolled staleness discovery.
-- **The commissioned Upgrade-Response-over-RPC fork feature is installed and UNUSED** — `/cap`
-  can collapse into `/api` for capnweb clients (`Itx.fetchCap(cap, request)`, 101 rides the
-  session).
-- **Flow-controlled stream serialization** (`WritableStream` over the wire) — the voice/board
-  firehose lane (`Itx.appendStream`) instead of an awaited RPC per ephemeral append; the
-  entire PTT-overhead saga was symptoms of per-call framing.
-- **`expr((itx, hole) => itx.grok.chat({model:'grok-4', messages: hole()}))`** — record a
-  lambda against a capturing proxy (capnweb's MapBuilder pattern) → emit our canonical
-  Expression. Typed, IDE-completed expression authoring; the string half becomes display
-  format rather than the only authoring surface.
-- **`serialize()/deserialize()` for event bodies** — `JSON.stringify` at the commit point
-  silently mangles Dates/bytes/Errors arriving rich through capnweb. Minimum: validate loudly.
-- Verdict on `.map()` remap vs our codec: NOT a reinvention — remap is a per-element lambda,
-  ours is a routing table. Steal the two mechanisms above, keep the codec.
+Baseline, measured now: **3,976 product lines** (all of src/ excluding tests; an earlier "4.7k"
+figure in chat was a counting mistake). Per-item, from the verifiers' own numbers — net (code
+deleted minus code the replacement adds):
 
-**From cloudflare-os — Kenton's own platform, structurally different choices:**
+| change                                                       | net lines    | notes                                                      |
+| ------------------------------------------------------------ | ------------ | ---------------------------------------------------------- |
+| Bug fixes (§1, done)                                         | ~0           | fixes, not deletions                                       |
+| Codec: merge the third hole-walker                           | −27          |                                                            |
+| Codec: explicit `...?n` rest                                 | −20          |                                                            |
+| Winner-picking as one number (Q1, if yes)                    | −25          |                                                            |
+| `invokeCapability` off the wire + client classes client-side | −80          |                                                            |
+| Transport: frames on the pager (§3, if yes)                  | −80          | deletes wake/activate/borrow ~120, adds frame dispatch ~40 |
+| Transport: meta-on-upgrade + facade 5→3 verbs                | −55          |                                                            |
+| `roots` flatten (adopted)                                    | −90          | the class + builder plumbing                               |
+| `itx.stream`/`itx.contexts` rename (adopted)                 | −15          | mostly a rename                                            |
+| Subscriptions-as-mounts (adopted)                            | −30          | deletes rows/verbs ~75, adds the inline projection ~45     |
+| Stateful runner into the stream (§3, if yes)                 | −100         | the 149-line DO class folds into existing facet machinery  |
+| `ctx.props` facets: delete `configure()`/identity handshake  | −60          |                                                            |
+| cacheKey minted in one place + run/fetch merge + drop `type` | −48          |                                                            |
+| `kv.list` per-name rows                                      | −20          |                                                            |
+| NEW capability: `disableProcessor` + rollback                | +25          | an add — it's missing today                                |
+| NEW capability: stalled-batch alarm (done)                   | +15          | an add — closes the gap                                    |
+| Edge: HTTP one-shot `/api`, dispose/onRpcBroken, fetchCap    | +20          | small adds that delete behavior-bugs, not lines            |
+| **Total, everything above adopted**                          | **≈ −590**   | **3,976 → ≈ 3,400**                                        |
+| Codec parser demotion (§2c, your call)                       | −200 to −250 | parser+printer shrink to the seed/display subset           |
+| workerd ships the capnweb #36 runtime pieces (future, free)  | −290         | the pager/stub polyfill deletes                            |
 
-- **Capability handles are loopback WorkerEntrypoints with props sealed in** — the stub IS the
-  address; no routing table for plain wiring. His shape for "this worker sees SLACK" is an
-  embedded `bindings: Record<name, ref>` per consumer — patterns buy nothing there. Our table
-  earns rent ONLY for the agent-facing namespace (override/shadow/revoke) — worth splitting
-  the two jobs.
-- **`ctx.restore` + storing restore-params validates our mounts-as-expressions design** — his
-  platform stores the capability, but by storing _how to rebuild it_ (target-chosen params) —
-  we store the same thing with a central grammar. Convergent; ammunition, not a change.
-- **Durable delivery state only for consumers that cannot re-pull** — browsers/facets that can
-  re-read get ZERO rows (client-held resume tokens + a streamGeneration stamp). Matches our
-  browser doctrine; suggests pager-fed subscriptions shouldn't hold stream-side cursors either.
-- **One-alarm resurrection: a REAL GAP of ours** — a batch interrupted by eviction with no
-  subsequent traffic resumes only when the next event arrives. His pattern: in-flight work ⇒
-  one alarm + durable marker ⇒ constructor/alarm scans behind-cursor rows and resumes. We get
-  the marker free (cursor < maxAssigned).
-- **The 2×-amortized snapshot rule** — snapshot when log-since-snapshot exceeds the last
-  snapshot's size: self-tuning, zero knobs, bounded storage and replay. Answers a cadence
-  policy we still owe.
-- **No generic dispatch door exists at all** in cloudflare-os — small typed capability trees +
-  "code is the only composition language" (our config-worker escape hatch, elevated to the
-  whole answer). Evidence for trialing a typed `{log, clients, facets}` root where `invoke`
-  is the config/agent path, not the everyday path.
+So the realistic landing zones: **~3,400 lines** with everything currently on the table,
+**~3,150** if you also demote the string half to display/config, and **~2,900** the day
+upstream ships Kenton's #36 plan — versus 3,976 today, while _gaining_ disable/rollback,
+one-shot HTTP clients, wiretap subscriptions, instant dead-client cleanup, and a deterministic
+eviction test lane. For scale: apps/os's delivery file alone is 2,485 lines.
 
-## 5. Proposed sequencing (if you bless the lot)
+## 7. What I'll build once you annotate (proposed order)
 
-1. **Bug sweep** (§1, all eight — small, no design decisions).
-2. **The three adopted collapses as one arc:** no-roots flatten → stream-is-itx rename
-   (itx.log/itx.contexts + the recovery-kit carve-out) → subscribe-as-provide (event-sourced
-   subscriptions, providedAtOffset cursors, identity-addressed delivery). Each is small; each
-   deletes a concept AND an open question.
-3. **Transport cut** (call-on-the-pager + meta-on-upgrade + facade shrink).
-4. **Loader unification** (runner-into-stream facet, one wrapper, cacheKey mint, ctx.props
-   spike — the props change also deletes configure()).
-5. **Edge adoption pass** (newWorkersRpcResponse, Symbol.dispose/onRpcBroken, fetchCap,
-   kv.list rows, disableProcessor via facets.delete, auto-response liveness).
-6. **The `unsafe.evict` test lane** (turns every waiting-proof into CI).
-7. Deferred flavors: appendStream firehose, expr() authoring helper, snapshot cadence rule,
-   one-alarm resurrection, serialize-at-commit.
-
-## 6. Decisions only you can make
-
-1. Specificity: collapse to one integer (with the documented tie-widening change) or keep lex?
-2. The typed-root trial (cloudflare-os's zero-generic-door evidence) — explore or park?
-3. Split the table's two jobs (agent namespace vs plain consumer wiring via embedded bindings)?
-4. Pager-fed subscriptions: drop stream-side cursors (client-held resume) per cloudflare-os?
-5. Bless increments 1–6 as specced?
+1. Approved fixes: DONE this round (ladder restructure, fetch-lane guard, #running,
+   must-use, stalled-batch alarm, print/$-escape).
+2. The three adopted collapses: roots-flatten → `itx.stream`/`itx.contexts` rename →
+   subscriptions-as-mounts.
+3. Transport: your call on frames-vs-RPC-leg (question in §3).
+4. Loaders: runner-into-stream with the home-path framing (§3), `ctx.props` spike, cacheKey
+   mint, `disableProcessor`.
+5. Edge adoption: HTTP one-shot `/api`, dispose/onRpcBroken, fetchCap, kv.list rows.
+6. The `unsafe.evict` CI lane.
+7. The codec direction (§2c) once you pick.
