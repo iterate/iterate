@@ -241,17 +241,28 @@ deleted minus code the replacement adds):
 | Edge: HTTP one-shot `/api`, dispose/onRpcBroken, fetchCap    | +20          | small adds that delete behavior-bugs, not lines            |
 | **Total, everything above adopted**                          | **≈ −590**   | **3,976 → ≈ 3,400**                                        |
 | Codec parser demotion (§2c, your call)                       | −200 to −250 | parser+printer shrink to the seed/display subset           |
-| workerd ships the capnweb #36 runtime pieces (future, free)  | −290         | the pager/stub polyfill deletes                            |
+| ~~workerd ships #36, pager deletes~~ — CORRECTED, see below  | ~~−290~~ 0   | upstream shipped its version and it CANNOT cover our case  |
 
-**Your question on the −290 ("how confident are we the upstream #36 shape slots into our
-pager seam?"):** a research agent is comparing our park/wake/attachment API shape against
-Kenton's actual #36 plan (and any 2026 movement on it) right now — report lands at
-`research/pager-vs-upstream-36.md` with a slot-in confidence rating and any cheap seam
-adjustments we should make today.
+**Your question on the −290 — ANSWERED, and the premise inverted** (full report:
+`research/pager-vs-upstream-36.md`). Kenton already shipped his version, June–July 2026:
+`ctx.restore()` + persistent stub tokens (a stored stub is a token that REPLAYS its
+restore-chain against a fresh instance of an addressable target on every use). And it
+**deliberately cannot cover our case**: plain retained stubs — like a browser's live capnweb
+capability — are rejected from storage, and a restore on a fresh relay isolate cannot summon a
+browser socket. His own motivating example ("a list of subscriber callbacks") is, for
+browser-origin callbacks, exactly what his mechanism can't express. So the pager is NOT a
+polyfill waiting for upstream to delete it — it covers the half upstream explicitly rejects,
+and our close-to-revoke semantics are _stronger_ than his irrevocable-stub stopgap (whose own
+doc says it WILL be retracted once a grants table exists — which is what our mount table
+already is). Where upstream DOES apply (re-derivable targets), confidence it slots into our
+seam is HIGH and **zero seam changes are needed now** — the two properties that make adoption
+cheap already hold (park meta is pure storable data; every consumer goes through the facade).
+The one discipline to keep: presence only ever derives from sockets, never from stored rows.
 
 So the realistic landing zones: **~3,400 lines** with everything currently on the table,
-**~3,150** if you also demote the string half to display/config, and **~2,900** the day
-upstream ships Kenton's #36 plan — versus 3,976 today, while _gaining_ disable/rollback,
+and **~3,150** if you also demote the string half to display/config — versus 3,976 today
+(the earlier "another −290 when upstream ships #36" is withdrawn per the research above),
+while _gaining_ disable/rollback,
 one-shot HTTP clients, wiretap subscriptions, instant dead-client cleanup, and a deterministic
 eviction test lane. For scale: apps/os's delivery file alone is 2,485 lines.
 
