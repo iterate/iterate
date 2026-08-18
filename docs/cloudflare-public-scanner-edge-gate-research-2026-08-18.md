@@ -1,12 +1,24 @@
 # Public-scanner traffic: Cloudflare edge-gate research
 
-Researched 2026-08-18. Scope: whether common public-internet probes (for example WordPress, exposed-environment, VCS, or PHP-admin paths) can be stopped before they invoke Iterate Workers. This is a research note only; it does not change any Cloudflare configuration.
+Researched and proved in preview on 2026-08-18. Scope: whether common public-internet probes (for example WordPress, exposed-environment, VCS, or PHP-admin paths) can be stopped before they invoke Iterate Workers, and the minimal infrastructure used to manage that policy.
 
 ## Conclusion
 
 Yes. The direct Cloudflare-native control is a **WAF Custom Rule** with a terminating `Block` action, matching a deliberately narrow set of request paths. Custom rules run in `http_request_firewall_custom`; a terminating action stops the request from proceeding to later phases. Cloudflare's Workers metrics documentation explicitly says requests blocked by WAF or other security features do not count as Worker requests. This should remove both Worker invocation cost and Worker-side request/log/trace noise for each matched probe, rather than merely classifying it after the fact.
 
 Sources: [WAF feature interoperability](https://developers.cloudflare.com/waf/feature-interoperability/), [WAF Custom Rules](https://developers.cloudflare.com/waf/custom-rules/), and [Workers metrics and analytics](https://developers.cloudflare.com/workers/observability/metrics-and-analytics/).
+
+## Implemented preview proof
+
+Pull request [#2505](https://github.com/iterate/iterate/pull/2505) implements the deliberately isolated Alchemy stack under `infra/cloudflare-edge-gate`. The first policy blocks only `/.env`, `/.git/config`, and `/.git/HEAD` (case-insensitively); these are disclosure probes rather than broad framework prefixes.
+
+The stack was applied to the PR-owned `iterate-preview-12.app` zone at 2026-08-18 13:58 UTC. Cloudflare API read-back returned one enabled `block` rule in the zone `http_request_firewall_custom` entrypoint with the exact compiled expression and ruleset ID `dc4043a12be04a24aeebb1ff8ac5ff34`. Against the same project-ingress hostname:
+
+- `/.env?proof=2505-20260818` returned Cloudflare HTTP 403 (`cf-ray: a2d16f51280cfc4d-LHR`);
+- `/__edge-gate-control__?proof=2505-20260818` reached `os-preview-12` and returned its HTTP 404 (`cf-ray: a2d16f519fcb438f-LHR`); and
+- a bounded Workers Observability query for that service and hostname returned exactly one invocation, the control path. It returned no invocation for `/.env`, proving the terminating WAF action ran before the Worker.
+
+The immediately repeated Alchemy plan reported both preview resources as `noop`. Production was not applied: its authenticated plan contains exactly two creates, the account custom ruleset and its zone-scoped deployment entrypoint.
 
 ## Scope at Iterate
 
@@ -130,7 +142,7 @@ The daily totals used this Workers Observability request, once with only the ser
 
 The host, path, ingress-lane, response-status, and method breakdowns used the same request with one `groupBys` entry for, respectively, `$workers.event.request.headers.host`, `$workers.event.request.path`, `ingress.lane`, `$workers.event.response.status`, or `$workers.event.request.method`.
 
-## Suggested policy shape (not yet a proposed deployment)
+## Broader measurement candidates (not implemented)
 
 Use exact paths and narrow prefixes, normalized with `lower(http.request.uri.path)`. A starter expression shape is:
 
@@ -211,9 +223,9 @@ The deployment tokens now have the corresponding Zone WAF access for per-zone ma
 
 Source: [Alchemy Ruleset ownership semantics](https://github.com/alchemy-run/alchemy/blob/33ce5f4f63c02644b5371e4ce0af383e0ea649b9/packages/alchemy/src/Cloudflare/Ruleset/Ruleset.ts), [AccountEntrypoint ownership semantics](https://github.com/alchemy-run/alchemy/blob/33ce5f4f63c02644b5371e4ce0af383e0ea649b9/packages/alchemy/src/Cloudflare/Ruleset/AccountEntrypoint.ts), and [Cloudflare API-token permission catalog](https://github.com/alchemy-run/alchemy/blob/33ce5f4f63c02644b5371e4ce0af383e0ea649b9/packages/alchemy/src/Cloudflare/ApiToken/PermissionGroups.ts).
 
-### State and application workflow
+### Direct-adapter alternative (not implemented)
 
-No separate state store is required for the recommended adapter. It should discover the owned ruleset by its immutable unique name and the deployment rule by an owned marker, fail if either is ambiguous, and use Cloudflare's returned IDs only for the duration of the reconciliation. The `prd` Doppler configuration supplies the existing account-scoped credentials, and `resolveEnvContext` supplies the repo's existing wrong-account guard and typed `cf`/`cfV4` API seam.
+No separate state store would be required for the direct adapter considered during research. It would discover the owned ruleset by its immutable unique name and the deployment rule by an owned marker, fail if either is ambiguous, and use Cloudflare's returned IDs only for the duration of the reconciliation. The implemented Alchemy stack instead uses `Cloudflare.state()` because the user preferred Alchemy's plan and state lifecycle.
 
 The intended workflow is:
 

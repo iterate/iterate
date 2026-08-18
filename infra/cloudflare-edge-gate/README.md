@@ -51,7 +51,7 @@ EDGE_GATE_ENV=preview_19 CI=true \
 EDGE_GATE_ENV=preview_19 CI=true \
   doppler run --project _shared --config preview \
   --preserve-env=EDGE_GATE_ENV,CI -- \
-  pnpm --dir infra/cloudflare-edge-gate deploy \
+  pnpm --dir infra/cloudflare-edge-gate run deploy \
   --stage preview_19 --profile iterate-preview --yes
 
 # Production is the same shape with _shared/prd, EDGE_GATE_ENV=prd,

@@ -99,4 +99,5 @@ jobs:
           EDGE_GATE_ENV: prd
         run: |-
           doppler run --project _shared --config prd --preserve-env=CI,EDGE_GATE_ENV -- \
-            pnpm --dir infra/cloudflare-edge-gate deploy --stage prd --profile iterate-prd --yes
+            pnpm --dir infra/cloudflare-edge-gate run deploy \
+            --stage prd --profile iterate-prd --yes
