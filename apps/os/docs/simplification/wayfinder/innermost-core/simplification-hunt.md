@@ -144,16 +144,20 @@ and it's a small change to the edge's connect()).
 
 ## 4. The four questions you "???"d, asked properly this time
 
-**Q1 — picking a winner between two matching mounts (was: "specificity").** When a call
-matches several mounts, we score each pattern and the highest score wins. Today the score is a
-per-step list compared like version numbers — correct but nobody can predict it without
-reading the matcher. The proposal: one number — _how many things did the pattern pin down_
-(steps named + literal args matched) — ties broken by newest-wins, same as the shadow stack.
-Every mount ever written in this repo picks the same winner either way. The one difference:
-today a pattern with a literal arg (`itx.f('a')`) beats a longer pattern with a hole
-(`itx.f(?x).g`) _always_; under the sum they tie and the newer one wins. **Question: is
-"count what it pinned down, newest breaks ties" the rule you want, or keep the subtle
-version-number compare?**
+**Q1 — RESOLVED harder, per your note ("just matched prefix length… apps/os really just
+matches an array of strings — we don't want to go much more complicated").** The new proposal,
+bigger than the one-integer idea: **a pattern is a dotted path — an array of strings — plus at
+most a terminal call that binds the caller's args.** Matching is element by element; the score
+is the matched prefix length; ties go to the newest mount (the shadow stack you already have).
+What this deletes: literal-arg patterns (`itx.f('a')` as a _pattern_ stops being a thing — if
+you want per-argument behavior, that's a real function in the config worker, which was always
+the escape hatch), the per-step specificity algebra, `compareSpecificity`, and most of the
+matcher's argument walking. What survives: named captures in the terminal call
+(`itx.agents.get(?name)` still binds `name`), boundary args (calling at the mount itself), and
+frozen-arg TARGETS (`itx.grok ⇒ itx.openai.chat({model:'grok-4', messages:?})` — that
+machinery is substitution, not matching, and is untouched). Estimated ~120–150 more codec
+lines gone, and the matcher becomes explainable in one line: _longest matching path wins;
+newest breaks ties._ **Confirm and I'll build it.**
 
 **Q2 — do we even want a generic call-anything door on the client?** cloudflare-os has no
 equivalent of `invokeCapability("itx.a.b", args)` — a session hands you a small _typed_ object
