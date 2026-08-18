@@ -35,6 +35,8 @@
 // replayed on the evaluated target — which is how a bare default route `itx ⇒ itx.cd('/')`
 // forwards a whole missed call with zero special machinery.
 
+import { jsonEqual } from "./events.ts";
+
 /** One step: a property read (string) or a call (`[method, ...args]`). Args are plain JSON. */
 export type Step = string | [method: string, ...args: unknown[]];
 export type Expression = Step[];
@@ -143,7 +145,7 @@ class Parser {
     this.#expect("?");
     const n = this.#number();
     if (n !== null) return { "?": n }; // ?0 ordinal
-    const name = this.#maybeWord();
+    const name = this.#word();
     if (name) return { "?": name }; // ?name capture
     return { "?": this.#autoArg++ }; // ? positional (auto-numbered)
   }
@@ -238,9 +240,6 @@ class Parser {
     this.#i += m[0].length;
     return m[0];
   }
-  #maybeWord(): string {
-    return this.#word();
-  }
 
   #ws() {
     while (this.#i < this.#s.length && /\s/.test(this.#s[this.#i])) this.#i++;
@@ -286,10 +285,8 @@ export function print(expr: Expression): string {
 
 function printValue(v: unknown): string {
   switch (holeKind(v)) {
-    case "arg": {
-      const h = (v as { "?": number | string })["?"];
-      return typeof h === "number" ? `?${h}` : `?${h}`;
-    }
+    case "arg":
+      return `?${(v as { "?": number | string })["?"]}`;
     case "rest": {
       const n = (v as { "...": true | number })["..."];
       return n === true ? "...?" : `...?${n}`;
@@ -362,7 +359,7 @@ export function match(pattern: Expression, call: Expression): Match | null {
         if (kind === "arg") {
           const h = (pargs[j] as { "?": number | string })["?"];
           if (typeof h === "string") captures[h] = cargs[j];
-        } else if (deepEqual(unliteral(pargs[j]), cargs[j])) {
+        } else if (jsonEqual(unliteral(pargs[j]), cargs[j])) {
           score += 1;
         } else return null;
       }
@@ -383,17 +380,6 @@ export function compareSpecificity(a: number[], b: number[]): number {
 
 const unliteral = (v: unknown): unknown =>
   holeKind(v) === "literal" ? (v as { $: unknown }).$ : v;
-
-function deepEqual(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) return true;
-  if (Array.isArray(a) && Array.isArray(b))
-    return a.length === b.length && a.every((x, i) => deepEqual(x, b[i]));
-  if (isPlainObject(a) && isPlainObject(b)) {
-    const ka = Object.keys(a);
-    return ka.length === Object.keys(b).length && ka.every((k) => deepEqual(a[k], b[k]));
-  }
-  return false;
-}
 
 // ────────────────────────────────────────────── substitute ──────────────────────────────────────────────
 
@@ -420,13 +406,22 @@ function substituteArgList(
   list: unknown[],
   ctx: { args: unknown[]; captures: Record<string, unknown> },
 ): unknown[] {
+  // The highest numbered `?n` ANYWHERE in the list (nested in objects/arrays too — a hole inside
+  // `{ a: ?0 }` spends args[0] just as a top-level one does; scanning only the top level would
+  // make `f({ a: ?0 }, ...?)` splice args[0] twice). `$`-escaped data is not a hole.
   let highest = -1;
-  for (const v of list) {
-    if (holeKind(v) === "arg") {
+  const scan = (v: unknown): void => {
+    if (typeof v !== "object" || v === null) return;
+    const kind = holeKind(v);
+    if (kind === "arg") {
       const h = (v as { "?": number | string })["?"];
       if (typeof h === "number") highest = Math.max(highest, h);
+      return;
     }
-  }
+    if (kind === "literal" || kind === "rest") return;
+    for (const inner of Object.values(v)) scan(inner);
+  };
+  for (const v of list) scan(v);
   const out: unknown[] = [];
   for (const v of list) {
     if (holeKind(v) === "rest" && (v as { "...": true | number })["..."] === true) {
@@ -474,12 +469,39 @@ function substituteValue(
 // ─────────────────────────────────────────────── evaluate ───────────────────────────────────────────────
 
 /**
+ * THE step walk (shared by `evaluate` and `apply`): property steps `Reflect.get` with the
+ * receiver carried; call steps `Reflect.apply` ON that receiver (detaching a method from a
+ * Workers-RPC receiver breaks it); every step is awaited so stub-returning calls pipeline
+ * naturally. `where` names the walk in errors (`expression` / `remainder`).
+ */
+async function walkSteps(
+  start: { value: unknown; receiver: unknown },
+  steps: Expression,
+  where: string,
+): Promise<{ value: unknown; receiver: unknown }> {
+  let { value, receiver } = start;
+  for (const step of steps) {
+    value = await value;
+    if (value == null) throw new Error(`${where} hit ${String(value)} at ${JSON.stringify(step)}`);
+    if (typeof step === "string") {
+      receiver = value;
+      value = Reflect.get(value as object, step);
+    } else {
+      const [method, ...args] = step;
+      const fn = Reflect.get(value as object, method);
+      if (typeof fn !== "function")
+        throw new Error(`${where}: ${JSON.stringify(method)} is not a method`);
+      receiver = undefined;
+      value = await Reflect.apply(fn, value, args);
+    }
+  }
+  return { value: await value, receiver };
+}
+
+/**
  * Walk a CONCRETE expression (no holes — `substitute` first) against named scope roots. The first
  * step names a root (`itx`, and `roots` for config-provenance expressions — evaluation for event
- * provenance simply does not have `roots` in scope: unspellable, not policed). Property steps
- * `Reflect.get` with the receiver carried; call steps `Reflect.apply` ON that receiver (detaching
- * a method from a Workers-RPC receiver breaks it); every step is awaited so stub-returning calls
- * pipeline naturally.
+ * provenance simply does not have `roots` in scope: unspellable, not policed).
  */
 export async function evaluate(
   scope: Record<string, unknown>,
@@ -488,25 +510,7 @@ export async function evaluate(
   const [root, ...steps] = expr;
   if (typeof root !== "string" || !(root in scope))
     throw new Error(`expression root ${JSON.stringify(root)} is not in scope`);
-  let value: unknown = scope[root];
-  let receiver: unknown = undefined;
-  for (const step of steps) {
-    value = await value;
-    if (value == null)
-      throw new Error(`expression hit ${String(value)} before ${JSON.stringify(step)}`);
-    if (typeof step === "string") {
-      receiver = value;
-      value = Reflect.get(value as object, step);
-    } else {
-      const [method, ...args] = step;
-      const fn = Reflect.get(value as object, method);
-      if (typeof fn !== "function")
-        throw new Error(`expression: ${JSON.stringify(method)} is not a method`);
-      receiver = undefined;
-      value = await Reflect.apply(fn, value, args);
-    }
-  }
-  return { value: await value, receiver };
+  return walkSteps({ value: scope[root], receiver: undefined }, steps, "expression");
 }
 
 /**
@@ -533,22 +537,7 @@ export async function apply(
       );
     value = await Reflect.apply(value, receiver, m.boundaryArgs);
   }
-  for (const step of m.remainder) {
-    value = await value;
-    if (value == null) throw new Error(`remainder hit ${String(value)} at ${JSON.stringify(step)}`);
-    if (typeof step === "string") {
-      receiver = value;
-      value = Reflect.get(value as object, step);
-    } else {
-      const [method, ...args] = step;
-      const fn = Reflect.get(value as object, method);
-      if (typeof fn !== "function")
-        throw new Error(`remainder: ${JSON.stringify(method)} is not a method`);
-      receiver = undefined;
-      value = await Reflect.apply(fn, value, args);
-    }
-  }
-  value = await value;
+  ({ value, receiver } = await walkSteps({ value, receiver }, m.remainder, "remainder"));
   if (extraArgs) {
     if (typeof value !== "function")
       throw new Error(

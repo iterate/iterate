@@ -29,6 +29,7 @@ import {
   type StreamEventInput,
 } from "./core/events.ts";
 import { parse, toExpression, type Expression } from "./core/expression.ts";
+import { hashSource } from "./core/hash.ts";
 import { PAGER_HEADER } from "./core/hibernatable-pager.ts";
 import { HibernatableStubs, type Invoker, type Stub } from "./core/hibernatable-stub.ts";
 import { parseName, stringifyName } from "./core/names.ts";
@@ -48,13 +49,6 @@ interface Env {
   CF_VERSION_METADATA?: { id: string };
   /** The shell this context's egress + `itx.os` bottom out at (a whole control plane). */
   FALLBACK: Fetcher & { invokeCapability(callPath: string, args?: unknown[]): Promise<unknown> };
-}
-
-/** djb2 — a stable content hash so loader cache keys change when source changes. */
-function hashSource(s: string): string {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(36);
 }
 
 // The v1 "file reader" behind `itx.files.read` — provides hello modules (no repo/bundler yet).

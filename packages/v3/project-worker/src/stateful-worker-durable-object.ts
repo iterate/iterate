@@ -1,7 +1,8 @@
 // The StatefulWorkerDurableObject — a dedicated "durable object runner" for stateful dynamic workers (mirrors
 // apps/os's StatefulWorkerDurableObject + DynamicWorkerRunner). ONE instance per stateful capability, named
-// `{projectId}::{path}::{callPath}`, each hosting the user's `DurableObject` class DIRECTLY as a single facet
-// "target" with its OWN isolated SQLite. The capability host reaches it by NAME (a namespace binding).
+// `{projectId}::{path}::{className}:{sourceHash}` (set by StreamDurableObject's #workersView), each hosting
+// the user's `DurableObject` class DIRECTLY as a single facet "target" with its OWN isolated SQLite. The
+// capability host reaches it by NAME (a namespace binding).
 //
 // Facet method calls are NATIVE (`replayPath` = `await facet.method(args)`), exactly like apps/os — no fetch
 // tunnel. Two things make native work; both are apps/os patterns we now mirror:
@@ -15,8 +16,8 @@
 //      durable, so a facet built from a prior deployment's isolate is cross-Worker to the new parent — and thus
 //      un-transferable. Folding CF_VERSION_METADATA.id into the key mints a fresh isolate each rollout.
 //
-// Every hosted DO class gets `env.ITX` = a stub to its OWNING capability host (the ItxDurableObject for this
-// runner's {projectId, path}), plus `globalOutbound` = that same host — IDENTICAL to what a stateless `code`
+// Every hosted DO class gets `env.ITX` = a stub to its OWNING capability host (the StreamDurableObject for
+// this runner's {projectId, path}), plus `globalOutbound` = that same host — IDENTICAL to what a stateless `code`
 // cap gets. So a stateful worker calls sibling capabilities with `this.env.ITX.invokeCapability("itx.x", [..])`
 // (or imports `itxFromStub` from the injected `itx.js` for the dotted `itx.x.y(..)` surface), and a plain
 // `fetch()` inside the class routes out through the host's egress. Mirrors apps/os, whose loaded stateful
@@ -27,6 +28,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { ITX_SURFACE_MODULE } from "./core/agent-runtime.ts";
 import type { Expression } from "./core/expression.ts";
+import { hashSource } from "./core/hash.ts";
 import { stringifyName } from "./core/names.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 
@@ -45,13 +47,6 @@ interface Env {
   CF_VERSION_METADATA?: { id: string; tag?: string };
 }
 
-/** djb2 — a stable content hash so the loader cache key + facet version change when the source changes. */
-function hashSource(s: string): string {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(36);
-}
-
 /** The RPC-lane payload the capability host forwards (mirrors apps/os's StatefulWorkerDurableObject input). */
 export interface StatefulInvoke {
   source: Expression; // a source EXPRESSION resolved (via the host) to the facet's modules — not a file path
@@ -68,8 +63,8 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   }
 
   /** A stub to the OWNING capability host — the `env.ITX` every hosted DO class gets (like a stateless code
-   *  cap). Reconstructed from this runner's name `{projectId}::{path}::{callPath}`, which the host sets in
-   *  ItxDurableObject#statefulRunner; the first two `::`-segments are the context {projectId, path}. */
+   *  cap). Reconstructed from this runner's name `{projectId}::{path}::{className}:{sourceHash}`, which
+   *  StreamDurableObject's #workersView sets; the first two `::`-segments are the context {projectId, path}. */
   #hostStub(): DurableObjectStub<StreamDurableObject> {
     const [projectId, path] = (this.ctx.id.name ?? "").split("::");
     return this.env.CONTEXT.getByName(

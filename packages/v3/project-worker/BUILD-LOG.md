@@ -608,3 +608,25 @@ the control plane runs the same core; billing-analytics verification of hibernat
 - Round-1 backlog (SIMPLIFY/CLARITY, not yet applied): shared walkSteps in evaluate/apply; dedupe
   hashSource/deepEqual; delete ItxCallPath + explicit-empty-seeds semantics; stale runner-name
   comments; micro dead code (identical-branch ternary, #maybeWord alias, itx-surface path build).
+
+## Increment 26 (polish-3): round-3 polish — the logged SIMPLIFY/CLARITY backlog applied
+
+- `expression.ts`: ONE shared `walkSteps` (the receiver-carrying step walk) now backs both
+  `evaluate` and `apply`'s remainder replay (the loop existed twice, verbatim); and a REAL BUG:
+  `substituteArgList`'s `highest` scan now finds numbered `?n` holes RECURSIVELY (nested in
+  objects/arrays) — `f({ a: ?0 }, ...?)` used to splice args[0] twice because the top-level-only
+  scan never saw the nested hole (`$`-escapes stay inert). Micro: printValue's identical-arm
+  ternary collapsed; `#maybeWord` (a pure alias of `#word`) inlined.
+- Dedupe: ONE `hashSource` (new `core/hash.ts`; the Stream DO + the stateful runner import it);
+  ONE structural deep-equal — `jsonEqual` exported from `core/events.ts` is now also the
+  literal-arg matcher in expression.ts (its private `deepEqual` twin deleted).
+- `core/config.ts`: dead `@deprecated ItxCallPath` deleted; DEFAULT_SEEDS now apply ONLY when
+  APP_CONFIG is entirely absent — an explicit `{"seeds": []}` is DENY-ALL (previously it silently
+  re-granted every default, which inverted the operator's intent).
+- `stateful-worker-durable-object.ts`: stale header comments fixed — the runner name is
+  `{projectId}::{path}::{className}:{sourceHash}`, set by StreamDurableObject's `#workersView`
+  (the `{callPath}` suffix + `ItxDurableObject` mentions were pre-crisp-1 fossils).
+- `itx-surface.ts` ClientConnection.invokeCapability: the head/rest/mid/last contortion is now
+  `[...path.slice(0,-1), [path.at(-1), ...args]]`, with a loud guard for an empty path.
+- +5 tests (70 total: nested-hole rest scan, config seed semantics). No deploy — rides
+  increment 27.

@@ -156,6 +156,20 @@ describe("substitute", () => {
     expect(substitute(target, { args: [1, 2, 3], captures: {} })).toEqual(["itx", ["f", 1, 2, 3]]);
   });
 
+  test("rest scan finds NESTED numbered holes — f({ a: ?0 }, ...?) never splices args[0] twice", () => {
+    const target = parse("itx.f({ a: ?0 }, ...?)");
+    expect(substitute(target, { args: ["first", "second"], captures: {} })).toEqual([
+      "itx",
+      ["f", { a: "first" }, "second"],
+    ]);
+    // $-escaped data that merely LOOKS like a hole must not shift the splice point
+    const escaped: Expression = ["itx", ["f", { $: { "?": 7 } }, { "...": true }]];
+    expect(substitute(escaped, { args: ["a", "b"], captures: {} })).toEqual([
+      "itx",
+      ["f", { "?": 7 }, "a", "b"],
+    ]);
+  });
+
   test("$ literal escape passes tagged-looking data through verbatim", () => {
     const target: Expression = ["itx", ["f", { $: { "?": 0 } }]];
     expect(substitute(target, { args: ["ignored"], captures: {} })).toEqual([

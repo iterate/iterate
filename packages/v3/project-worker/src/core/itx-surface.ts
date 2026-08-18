@@ -263,14 +263,13 @@ export class ClientConnection extends RpcTarget {
     this.#connectionKey = connectionKey;
   }
   invokeCapability(input: { path: string[]; args?: unknown[] }): Promise<unknown> {
-    const [head, ...rest] = input.path;
-    const last = rest.length ? rest[rest.length - 1] : head;
-    const mid = rest.length ? [head, ...rest.slice(0, -1)] : [];
+    const last = input.path.at(-1);
+    if (last === undefined) throw new Error("invokeCapability: path must be non-empty");
     return this.#host.invoke([
       "itx",
       "clients",
       ["get", this.#connectionKey],
-      ...mid,
+      ...input.path.slice(0, -1),
       [last, ...(input.args ?? [])],
     ]);
   }

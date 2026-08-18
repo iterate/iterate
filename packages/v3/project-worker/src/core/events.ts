@@ -59,7 +59,9 @@ export function sameIdempotentEvent(
   );
 }
 
-function jsonEqual(a: unknown, b: unknown): boolean {
+/** Structural deep-equal over plain JSON values — THE one deep-equal in this package (idempotency
+ *  bodies here, literal-arg matching in core/expression.ts). Object key ORDER is insignificant. */
+export function jsonEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (Array.isArray(a) && Array.isArray(b))
     return a.length === b.length && a.every((x, i) => jsonEqual(x, b[i]));

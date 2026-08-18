@@ -14,9 +14,6 @@
 import { z } from "zod";
 import { parse, type Expression } from "./expression.ts";
 
-/** @deprecated dotted callPath addressing — dies with the old ItxDurableObject's Mount union. */
-export type ItxCallPath = `itx.${string}`;
-
 const ExpressionInput = z.union([
   z.string().transform((s) => parse(s)),
   z.array(z.union([z.string(), z.tuple([z.string()]).rest(z.unknown())])) as z.ZodType<Expression>,
@@ -46,13 +43,15 @@ export const DEFAULT_SEEDS: { pattern: string; target: string }[] = [
 ];
 
 /** Parse env.APP_CONFIG (fail-loud on malformed config — a typo must not boot a mis-wired
- *  project) and return the seed mounts. An absent APP_CONFIG is the solo default. */
+ *  project) and return the seed mounts. DEFAULT_SEEDS apply ONLY when APP_CONFIG is entirely
+ *  absent (the solo default); a present config's seeds are taken verbatim — an explicit
+ *  `{"seeds": []}` means DENY-ALL, not "give me the defaults". */
 export function parseAppConfig(raw: string | undefined): {
   seeds: { pattern: Expression; target: Expression }[];
 } {
-  const parsed = AppConfig.parse(raw ? JSON.parse(raw) : {});
-  const seeds = parsed.seeds.length
-    ? parsed.seeds
-    : DEFAULT_SEEDS.map((s) => ({ pattern: parse(s.pattern), target: parse(s.target) }));
-  return { seeds };
+  if (!raw)
+    return {
+      seeds: DEFAULT_SEEDS.map((s) => ({ pattern: parse(s.pattern), target: parse(s.target) })),
+    };
+  return { seeds: AppConfig.parse(JSON.parse(raw)).seeds };
 }
