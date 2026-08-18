@@ -79,6 +79,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
     const runner = new DynamicWorkerRunner({
       streamContext,
       exports: this.ctx.exports,
+      loaderScope: "shared",
       projectId,
       scopePath: taken.dispatch.ref.path,
     });

@@ -31,6 +31,16 @@ export type DynamicWorkerTraceRole = "project_config" | "run_script" | "schedule
 const WORKERS_RPC_CLONE_VERSION_ERROR =
   "Unable to deserialize cloned data due to invalid or unsupported version.";
 
+// Recovery nonce for the shared-scope lanes in this parent isolate. Undefined
+// in steady state ON PURPOSE: shared-scope loads then ride the bare loader
+// identity, so parent isolates coming and going mint NO new billable Dynamic
+// Workers (a per-runner nonce turned every project-host request and every
+// stream delivery into a new identity and a cold isolate — 2026-08: ~3.9M
+// identities ≈ $7.8k). Set only when a clone-version skew proves the cached
+// isolate stale; every shared-scope load in this parent isolate then abandons
+// it for the replacement.
+let sharedLoaderRecoveryNonce: string | undefined;
+
 // Structural shadow of StatefulWorkerDurableObject.invokeCapability instead
 // of the DO's own type: the DO imports this module (cycle), and a typed
 // DurableObjectStub of it deep-instantiates the stub's self-referential type
@@ -60,7 +70,8 @@ type StatefulWorkerRpc = {
 export class DynamicWorkerRunner {
   readonly #bindings: WorkerBindings;
   readonly #globalOutbound: Fetcher;
-  #loaderInstanceNonce: string = crypto.randomUUID();
+  #loaderInstanceNonce: string | undefined;
+  readonly #loaderScope: "shared" | "runner";
   readonly #projectId: string;
   readonly #scopePath: string;
   readonly #streamContext: StreamContext;
@@ -70,6 +81,23 @@ export class DynamicWorkerRunner {
     /** The hosting context's `ctx.exports` — loopback entrypoints are minted
      * from it, so the isolate's authority is the host's, never the ref's. */
     exports: ExecutionContext["exports"];
+    /**
+     * Which lifetime keys this runner's loaded isolates in the Worker Loader
+     * cache. Every distinct key is a billable Dynamic Worker per day, so the
+     * choice is a dollar cost, not bookkeeping. "shared" loads under the bare
+     * content-and-scope identity — no nonce at all in steady state, so warm
+     * isolates are reused across requests, deliveries, and parent isolates
+     * alike; the request-scoped lanes (ingress, itx dispatch, stream
+     * delivery) use it, because a per-runner key minted a new billable
+     * identity and a cold isolate per request. A shared isolate can outlive
+     * the lifetime that minted its captured loopback bindings; the
+     * clone-version retry then moves this parent isolate's shared loads onto
+     * a recovery nonce. "runner" (default) keys loads to this runner alone —
+     * Durable Object hosts keep it so a fresh incarnation never reuses a
+     * facet isolate holding the previous incarnation's bindings (that lane
+     * has no clone-skew retry).
+     */
+    loaderScope?: "shared" | "runner";
     projectId: string;
     /** The itx scope the loaded code runs in (its `env.ITX` answers here). */
     scopePath: string;
@@ -86,6 +114,7 @@ export class DynamicWorkerRunner {
       props.projectId,
       props.streamContext,
     );
+    this.#loaderScope = props.loaderScope ?? "runner";
     this.#projectId = props.projectId;
     this.#scopePath = props.scopePath;
     this.#streamContext = props.streamContext;
@@ -430,12 +459,23 @@ export class DynamicWorkerRunner {
     freshInstanceNonce?: string,
   ): WorkerStub {
     if (freshInstanceNonce !== undefined) {
-      this.#loaderInstanceNonce = freshInstanceNonce;
+      // A clone-skew replacement must retire the stale isolate for every load
+      // that would have shared it, not just this runner's — going back to a
+      // known-stale shared key re-fails every later call.
+      if (this.#loaderScope === "shared") {
+        sharedLoaderRecoveryNonce = freshInstanceNonce;
+      } else {
+        this.#loaderInstanceNonce = freshInstanceNonce;
+      }
     }
     return loadResolvedWorker({
       bindings: this.#bindings,
       globalOutbound: this.#globalOutbound,
-      loaderInstanceNonce: this.#loaderInstanceNonce,
+      // Shared scope: usually undefined — the bare identity IS the key.
+      loaderInstanceNonce:
+        this.#loaderScope === "shared"
+          ? sharedLoaderRecoveryNonce
+          : (this.#loaderInstanceNonce ??= crypto.randomUUID()),
       mode,
       projectId: this.#projectId,
       resolved,

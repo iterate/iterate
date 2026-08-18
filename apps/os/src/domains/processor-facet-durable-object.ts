@@ -464,6 +464,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
           new DynamicWorkerRunner({
             streamContext: { kind: "scope", scopePath: "/" },
             exports: this.ctx.exports,
+            loaderScope: "shared",
             projectId,
             scopePath: "/",
           }).fetch({
