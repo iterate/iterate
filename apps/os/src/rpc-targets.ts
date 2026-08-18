@@ -5838,12 +5838,14 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         // The mount invariant: mounts died server-side, so the session dies
         // with them — the client's reconnect re-dials and re-mounts. Sessions
         // with no client transport (HTTP batch, Durable-Object-side itx) have
-        // no registration and this is a no-op.
+        // no registration and this is a no-op. The reason names the actual
+        // failure and MUST stay ≤123 UTF-8 bytes: a longer close reason makes
+        // close() THROW, and an unsent close is a silently broken invariant.
         onPagerLost: () => {
           closeItxSessionTransport(
             this.#props.ctx,
             4901,
-            "live capability mounts lost; reconnect and connect() again",
+            "hibernatable pager WebSocket to the scope's Durable Object failed; live mounts lost; reconnect and connect() again",
           );
         },
       });
