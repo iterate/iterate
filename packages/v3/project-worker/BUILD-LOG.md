@@ -1144,3 +1144,11 @@ window)` → the processor's `deliverTo` finds the mount in its fold and runs th
 
 87 unit tests; deploy `subs-1`: board re-proven (crisp/ephemeral/facetaddr/edge/userfacet/
 restore/push/rich) ALL PASS.
+
+## Increment 47 (tsrunner-1): the injected runner is real TypeScript
+
+`src/runner-entry.ts` typechecks against the SAME StreamProcessor/FacetIdentity types the host
+compiles; build-sdk.mjs bundles it (cap.js/processor.js/cloudflare:workers external, 0.9 KiB)
+into `generated/processor-runner.ts`. The hand-written template string in agent-runtime — the
+drift class where the injected duck quietly diverges from the host contract — is deleted.
+Loader-touching suites re-proven live (userfacet/ephemeral/push/restore ALL PASS).

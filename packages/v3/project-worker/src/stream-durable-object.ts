@@ -24,7 +24,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import { confinedWorker, PROCESSOR_RUNNER_MODULE } from "./core/agent-runtime.ts";
+import { confinedWorker } from "./core/agent-runtime.ts";
 import { codedError } from "./core/errors.ts";
 import {
   idempotencyConflictMessage,
@@ -39,6 +39,7 @@ import { HibernatableStubs, type Invoker, type Stub } from "./core/hibernatable-
 import { parseName } from "./core/names.ts";
 import { itxEntrypointFor } from "./iterate-context-entrypoint.ts";
 import type { ScanWindow } from "./core/processor.ts";
+import { PROCESSOR_RUNNER_MODULE } from "./generated/processor-runner.ts";
 import { PROCESSOR_SDK_MODULE } from "./generated/processor-sdk.ts";
 import type { FacetIdentity, ProcessorFacet } from "./processor-facet.ts";
 
