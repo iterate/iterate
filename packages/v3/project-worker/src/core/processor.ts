@@ -4,7 +4,8 @@
 // that runs it are one object (the registry-of-N this replaced was bookkeeping for a
 // multi-tenancy that never occurred: every facet hosts exactly one processor).
 //
-// THIS FILE IS THE HEART OF THE USERSPACE SDK: it keeps zero runtime imports (types only) and
+// THIS FILE IS THE HEART OF THE USERSPACE SDK: its only runtime import is the dependency-free
+// diff in core/patch.ts (everything else is types) and it
 // is bundled — together with the zod contract helper from core/events.ts and zod itself, via
 // src/sdk.ts — into every loaded processor isolate as `processor.js` (build-sdk.mjs). Userspace
 // authors write exactly what built-ins write: `defineProcessorContract` with real schemas
@@ -38,6 +39,7 @@
 // never be derived from an ephemeral event.
 
 import type { z } from "zod";
+import { diff } from "./patch.ts";
 import type {
   StreamEvent as StreamEventT,
   StreamEventInput as StreamEventInputT,
@@ -102,11 +104,13 @@ export type ProcessEventArgs<State> = {
 
 export type ProcessorSnapshot<State> = { offset: number; state: State };
 
-/** THE one live-state nudge type — ephemeral, payload {key}. HARD RULE: no processor can ever
- *  consume it (#consumes refuses it before contracts are even consulted), so state-change
- *  notifications can never feed a fold — the feedback-loop class is unspellable, not merely
- *  discouraged. State is read through the seed door (snapshot / the row's `get` expression),
- *  never through these events. */
+/** THE one live-state change type — ephemeral, payload `{key, from, to, patch}`: the delta
+ *  patch itself rides the event (LiveView-style), chained by producer-owned revisions (`from` =
+ *  the previous emission's `to`). HARD RULE: no processor can ever consume it (#consumes
+ *  refuses it before contracts are even consulted), so state-change notifications can never
+ *  feed a fold — the feedback-loop class is unspellable, not merely discouraged. The CLIENT
+ *  owns the chain: seed through the producer's door ({rev, state}), apply a payload whose
+ *  `from` matches the held rev, re-read the door on any mismatch — never replay these events. */
 export const LIVE_STATE_CHANGED = "events.iterate.com/live-state/changed";
 
 type Progress<State> = {
@@ -147,10 +151,28 @@ export abstract class StreamProcessor<State> {
   /** Side-effect hook. Synchronous by design: register async work via the two helpers. */
   protected processEvent(_args: ProcessEventArgs<State>): undefined {}
 
-  /** OPTIONAL live-state projection: define it and every batch whose fold CHANGED state
-   *  publishes a nudge (key = the contract slug); subscribers re-pull through this method.
-   *  Redact/trim here — this is the shape clients see. */
+  /** OPTIONAL live-state projection: define it and every batch whose fold CHANGED the projected
+   *  shape emits ONE change event carrying the delta patch (key = the contract slug). Redact/
+   *  trim here — this is the shape clients see, and the shape the diffs are computed over. */
   liveState?(state: State): unknown;
+
+  // The live-state revision chain, in-memory ON PURPOSE: minted at the first liveSnapshot of an
+  // incarnation (from the fold cursor — monotonic across incarnations), advanced to `to` on
+  // every emission. Losing it with an eviction just breaks the chain, and a broken chain is the
+  // subscriber-side signal to re-seed — never a correctness hazard.
+  #liveStateRev?: number;
+
+  /** THE SEED DOOR for live-state clients: `{rev, state}` — the revision and the projection
+   *  read together (single-threaded, so atomically), which is what lets a client chain patches
+   *  exactly instead of guessing which changes its snapshot already contains. */
+  async liveSnapshot(): Promise<{ rev: number; state: unknown }> {
+    if (typeof this.liveState !== "function")
+      throw new Error(`processor "${this.contract.slug}" defines no liveState projection`);
+    await this.wake();
+    const progress = this.#loadProgress();
+    this.#liveStateRev ??= progress.reducedThroughOffset;
+    return { rev: this.#liveStateRev, state: this.liveState(progress.state) };
+  }
 
   /** Stable idempotency key namespaced by slug; add `whileProcessing` for per-event keys. */
   protected idempotencyKey(key: string, whileProcessing?: StreamEventT): string {
@@ -377,6 +399,28 @@ export abstract class StreamProcessor<State> {
     for (const w of this.#waiters.splice(0)) {
       if (next.reducedThroughOffset >= w.offset) w.resolve();
       else this.#waiters.push(w);
+    }
+
+    // LIVE STATE: if this window changed the PROJECTED shape, emit the delta — persist first,
+    // emit second, so a crash between the two loses only a notification (healed by the chain
+    // mismatch on the next change), never state. The revision advances even if the append
+    // fails, for the same reason: a hole in the chain is a re-seed, a lie in it is corruption.
+    if (typeof this.liveState === "function" && state !== progress.state) {
+      const patch = diff(this.liveState(progress.state), this.liveState(state));
+      if (patch) {
+        const from = this.#liveStateRev ?? progress.reducedThroughOffset;
+        const to = window.scannedThroughOffset;
+        this.#liveStateRev = to;
+        try {
+          await this.stream.append({
+            type: LIVE_STATE_CHANGED,
+            ephemeral: true,
+            payload: { key: this.contract.slug, from, to, patch },
+          });
+        } catch (error) {
+          console.error(`processor "${this.contract.slug}" live-state emission failed`, error);
+        }
+      }
     }
   }
 }

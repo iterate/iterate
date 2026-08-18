@@ -84,8 +84,9 @@ type PushRow = {
   onFailingEvent: "halt" | "skip";
   maxAttempts?: number;
   start?: "beginning" | "now";
-  /** LIVE STATE row: no cursor, no ladder — latest-wins flush of `get` on the key's nudge. */
-  liveState?: { key: string; get: string };
+  /** LIVE STATE row: no cursor, no ladder — the key's change events (which carry their own
+   *  delta patch) are forwarded as they commit; the CLIENT owns the revision chain. */
+  liveState?: { key: string };
 };
 /** The stream-held cursor + failure ladder state for one push row. */
 type PushCursor = {
@@ -234,7 +235,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           .catch((e) => console.error(`facet "${slug}" drive failed`, e));
       this.#foldSubscriptionProjection(committed); // parent sees every body at the commit point
       this.#drivePushRows(); // push rows read durable rows themselves — also never awaited
-      this.#driveStateRows(committed); // live-state flushes for nudged keys — never awaited
+      this.#forwardLiveState(committed); // patch frames onto state rows — never awaited
     }
     this.#noteActivity();
     return committed;
@@ -266,7 +267,9 @@ export class StreamDurableObject extends DurableObject<Env> {
             onFailingEvent: delivery?.onFailingEvent ?? "halt",
           });
           this.ctx.storage.kv.put("push-subscriptions", rows);
-          if (!this.#pushCursor(e.offset))
+          // State rows are cursorless by design — only event rows mint one. (No mount seed
+          // either: the CLIENT seeds itself through the producer's door before subscribing.)
+          if (!delivery?.liveState && !this.#pushCursor(e.offset))
             this.#putPushCursor(e.offset, {
               confirmedOffset: delivery?.start === "beginning" ? 0 : e.offset,
               attempt: 0,
@@ -341,7 +344,9 @@ export class StreamDurableObject extends DurableObject<Env> {
         void this.#facet(slug)
           .then((f) => f.snapshot())
           .catch((e) => console.error(`facet "${slug}" resurrection failed`, e));
-      this.#driveStateRows(null); // re-seed every live-state subscriber after an eviction
+      // (State rows need no resurrection pass: the stream holds no live-state delivery state
+      // at all — a change whose forward died with the incarnation surfaces as a chain gap at
+      // the client on the NEXT change, and the client re-reads the producer's door.)
       await this.#armAlarmNoLaterThan(Date.now() + 60_000);
     } else if (Date.now() - this.#lastActivityMs >= 60_000) {
       // workerd #6800: a live facet client holds this actor idle-but-non-hibernatable,
@@ -408,7 +413,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     onFailingEvent?: "halt" | "skip";
     maxAttempts?: number;
     start?: "beginning" | "now";
-    liveState?: { key: string; get: string };
+    liveState?: { key: string };
   }): Promise<{ name: string; providedAtOffset: number }> {
     this.#touch();
     const target = toExpression(input.target);
@@ -445,6 +450,10 @@ export class StreamDurableObject extends DurableObject<Env> {
   resumeSubscription(input: { name: string; afterOffset?: number }): { ok: true } {
     const winner = this.#activePushRows().find((r) => r.name === input.name);
     if (!winner) throw new Error(`no push subscription "${input.name}"`);
+    if (winner.liveState)
+      throw new Error(
+        `"${input.name}" is a live-state subscription — it has no cursor to move (re-read the producer's door instead)`,
+      );
     const cursor = this.#pushCursor(winner.providedAtOffset);
     this.#putPushCursor(winner.providedAtOffset, {
       confirmedOffset: input.afterOffset ?? cursor?.confirmedOffset ?? winner.providedAtOffset,
@@ -461,73 +470,25 @@ export class StreamDurableObject extends DurableObject<Env> {
         void this.#pumpPush(row).catch((e) => console.error(`push "${row.name}" pump failed`, e));
   }
 
-  // ── LIVE STATE (the third delivery mode): latest-wins, cursorless, ladderless ──
-  // A state row never replays: recovery is RE-SEED (evaluate `get` — the row is the
-  // restore-param). Flushes are debounced + single-flight per row; a failed flush is healed by
-  // the next nudge or the resurrection pass. Wire v1 = snapshot frames {type, revision, state};
-  // the patch arm ({from,to,patch} — LiveView-style deltas per subscriber) is reserved in the
-  // shape and lands with a diff engine later, with no wire break.
-  #stateFlushPending = new Map<
-    number,
-    { timer?: ReturnType<typeof setTimeout>; inFlight: boolean; again: boolean }
-  >();
-
-  /** Flush state rows whose key was nudged in this batch (or all rows, for seeds/resurrection). */
-  #driveStateRows(committed: StreamEvent[] | null): void {
-    const nudged =
-      committed === null
-        ? null
-        : new Set(
-            committed
-              .filter((e) => e.type === "events.iterate.com/live-state/changed")
-              .map((e) => (e.payload as { key?: string } | undefined)?.key),
+  // ── LIVE STATE (the third delivery mode): cursorless, ladderless, LiveView-style ──
+  // The change event carries its own delta (`{key, from, to, patch}` — see LIVE_STATE_CHANGED
+  // in core/processor.ts) on a producer-owned revision chain, so the stream is a PURE
+  // FORWARDER: it pushes each committed change payload at every row watching the key and keeps
+  // NO per-row state — the CLIENT owns the chain (seed through the producer's door, apply a
+  // patch when `from` matches the held rev, re-read the door on any mismatch). Deliveries are
+  // fire-and-forget and NOT mutually ordered; a reordered or dropped frame is just a chain
+  // mismatch at the client, which is the same one recovery path as everything else.
+  #forwardLiveState(committed: StreamEvent[]): void {
+    for (const e of committed) {
+      if (e.type !== "events.iterate.com/live-state/changed") continue;
+      const { key } = e.payload as { key: string };
+      for (const row of this.#activePushRows()) {
+        if (row.liveState?.key !== key) continue;
+        void this.#ictx()
+          .then((f) => f.deliverSubscription(row.providedAtOffset, [e.payload]))
+          .catch((err) =>
+            console.error(`live-state "${row.name}" forward failed (client re-seeds on gap)`, err),
           );
-    for (const row of this.#activePushRows()) {
-      if (!row.liveState) continue;
-      // a freshly provided row in THIS batch gets its seed flush regardless of nudges
-      const isNew = committed?.some((e) => e.offset === row.providedAtOffset && !e.ephemeral);
-      if (nudged !== null && !nudged.has(row.liveState.key) && !isNew) continue;
-      this.#scheduleStateFlush(row);
-    }
-  }
-
-  #scheduleStateFlush(row: PushRow): void {
-    let p = this.#stateFlushPending.get(row.providedAtOffset);
-    if (!p) {
-      p = { inFlight: false, again: false };
-      this.#stateFlushPending.set(row.providedAtOffset, p);
-    }
-    if (p.inFlight) {
-      p.again = true; // latest-wins: one more flush after the current one lands
-      return;
-    }
-    if (p.timer) return; // already debouncing — this change rides the pending flush
-    p.timer = setTimeout(() => {
-      p.timer = undefined;
-      void this.#flushState(row);
-    }, 50);
-  }
-
-  async #flushState(row: PushRow): Promise<void> {
-    const p = this.#stateFlushPending.get(row.providedAtOffset);
-    if (!p || p.inFlight) return;
-    p.inFlight = true;
-    try {
-      const state = await this.invoke(row.liveState!.get); // THE SEED DOOR — always current
-      const update = { type: "snapshot", revision: this.#maxAssigned(), state };
-      await Promise.race([
-        (await this.#ictx()).deliverSubscription(row.providedAtOffset, [update]),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`live-state "${row.name}": flush timed out`)), 20_000),
-        ),
-      ]);
-    } catch (e) {
-      console.error(`live-state "${row.name}" flush failed (healed by next nudge/alarm)`, e);
-    } finally {
-      p.inFlight = false;
-      if (p.again) {
-        p.again = false;
-        this.#scheduleStateFlush(row);
       }
     }
   }

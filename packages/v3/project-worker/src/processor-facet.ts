@@ -157,6 +157,11 @@ export class ProcessorFacet extends DurableObject<Env> {
     return this.#p().snapshot();
   }
 
+  /** The live-state seed door ({rev, state: projection}), forwarded. */
+  liveSnapshot(): Promise<{ rev: number; state: unknown }> {
+    return this.#p().liveSnapshot();
+  }
+
   /** The barrier verb, forwarded (read-your-writes for whatever builds on this fold). */
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void> {
     return this.#p().waitUntilProcessed(input);

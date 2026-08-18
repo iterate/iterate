@@ -22,7 +22,8 @@ export class Counter extends DurableObject {
   // batch is only a WAKE-UP: both deliver and snapshot catch up from the stream via env.ITX (the
   // parent stub) from the OWN cursor, so a dropped drive can never leave a gap.
   // THE LIVE-STATE CHATROOM — a mini-app durable-object class, NOT a stream processor: the SDK
-  // helper makes mutation and notification inseparable; state() is the seed door.
+  // helper makes mutation and notification inseparable (set() emits the delta patch on the
+  // holder's own revision chain); state() exposes the {rev, state} seed door.
   "/chatroom.js": `import { DurableObject } from "cloudflare:workers";
 import { liveState } from "./processor.js";
 export class Chatroom extends DurableObject {
@@ -31,7 +32,7 @@ export class Chatroom extends DurableObject {
     this.#chat.set({ messages: [...this.#chat.get().messages, { from, text }] });
     return { ok: true };
   }
-  state() { return this.#chat.get(); }
+  state() { return this.#chat.snapshot(); }
 }`,
   // Rich-value probe: proves the stateless run lane carries what Workers RPC carries — a Date
   // arrives as a Date and a client CALLBACK is callable from inside the confined isolate.

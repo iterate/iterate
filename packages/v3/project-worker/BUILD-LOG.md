@@ -1180,3 +1180,54 @@ Loader-touching suites re-proven live (userfacet/ephemeral/push/restore ALL PASS
 - Live proof (`prove_livestate.mjs`, ALL PASS): chatroom mini-app seed→mutate→latest-wins,
   monotonic offset revisions, the processor flavor via `itx.facets.get('chunky').snapshot()`,
   and the no-loop assertion. Full eight-suite regression board ALL PASS.
+
+## Increment 49 (live-6): live state carries the DELTA — LiveView patches, client-chained
+
+The owner rejected increment 48's nudge + re-pull design ("move on to the one where the
+ephemeral events carry the delta patch (and offset of reduced state they are relative to) —
+elixir liveview style"), then mid-build simplified it further: no server-side chain tracking at
+all — "each ephemeral event says I am the diff relative to offset X; each client reads the
+snapshot to get offset+state, then consumes patches going forward." A 31-agent adversarial
+review of the intermediate (server-chained) build independently confirmed both of its real
+protocol bugs — a late timed-out frame breaking the per-row order promise, and an un-raced seed
+invoke wedging a row's chain behind a hung facet — and both lived exactly in the machinery the
+owner's version deletes. The flush engine AND the forwarder's bookkeeping are gone.
+
+- **The change event carries its own patch:** `live-state/changed` payload is
+  `{key, from, to, patch}` — an RFC 6902 subset (add/replace/remove, JSON-Pointer paths) from
+  the new `core/patch.ts` (~110 lines diff+apply, dependency-free, exported through the SDK).
+  Diffs are computed AT THE PRODUCER; both sides are JSON-normalized first (the wire is JSON:
+  undefined keys vanish, Dates become ISO strings, array holes become null — diffing what you
+  didn't normalize is how a Date change goes silent). Arrays get the chat-log fast paths (pure
+  append → `add …/-` ops, tail truncate → removes) and wholesale replace on middle divergence.
+  applyPatch traverses own-properties only and refuses `__proto__` paths (patches arrive over
+  the wire; the review proved the naive version was a prototype-pollution sink).
+- **Producer-owned revision chains:** each emission's `from` is the previous emission's `to`.
+  Processors chain on in-memory `#liveStateRev` (minted from the fold cursor at the first
+  `liveSnapshot()`, advanced per emission — silent batches can't break the chain; emission at
+  the end of `#processBatch`, persist-first-emit-second). The mini-app helper chains a local
+  counter and diffs in `set()`. The two refuted review findings were both attacks on this
+  chain — it held.
+- **The stream is a PURE FORWARDER (~15 lines):** each committed change payload is pushed,
+  fire-and-forget, at every row watching the key. NO per-row server state, no mount seed, no
+  `get` in the subscription (`liveState: {key}` is the whole policy), no ordering guarantee —
+  the CLIENT owns the chain: seed through the producer's door (`liveSnapshot()` /
+  the helper-backed `state()`, both answering `{rev, state}` read atomically), apply a payload
+  whose `from` matches the held rev, drop `to ≤ rev` duplicates, re-read the door on any
+  mismatch. Every failure mode — reorder, drop, eviction anywhere, producer rebirth — is that
+  ONE client-side case. `resumeSubscription` now refuses state rows (no cursor to move).
+- Review fixes that survive the pivot: patch.ts hardening (JSON-normalize; `Object.hasOwn`
+  instead of `in`, so keys named like Object.prototype members diff correctly; the `__proto__`
+  refusal), the resumeSubscription guard, stale docstrings (Itx.subscribe's flush-era pair,
+  the SDK helper's eviction claim, processor.ts's zero-imports header).
+- Unit: `patch.test.ts` (roundtrip invariant, promised op shapes, JSON semantics, prototype
+  safety) + a live-state describe block in `processor.test.ts` (one emission per changed
+  window, chain-across-silent-batches, liveSnapshot minting, no-change no-emit, the loop guard
+  even when NAMED in consumes) — 102 tests.
+- Live proof (`prove_livestate.mjs`, ALL PASS on live-6): the ~20-line client loop seeds
+  itself, applies two chat posts as two `add …/messages/-` patches with ZERO re-reads, ends
+  byte-identical with the door; an injected duplicate frame is dropped by rev and an injected
+  gapped frame triggers exactly one healing re-read; processor flavor chains 5→6→8 off the
+  `liveSnapshot()` door; loop guard holds. Regression: push/ephemeral/crisp1/userfacet ALL
+  PASS (ephemeral proof's pinned absolute offsets re-anchored to the shared-sequence
+  invariant — change events now interleave).

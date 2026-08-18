@@ -238,14 +238,14 @@ export class Itx extends RpcTarget {
     }>;
   }
 
-  /** PUSH subscription (stream-held cursor + retry/skip/halt): the stream calls `target`'s
-   *  terminal path segment with `(events, window)` per durable batch — for consumers that
-   *  cannot hold a cursor (webhooks, stateless `processEvent`-style workers). */
-  /** Subscribe. `target` may be an itx expression — or a LIVE CALLBACK (any capnweb
-   *  function/RpcTarget): the sugar parks it via the ordinary live-capability machinery and
-   *  targets the parked stub, so event windows or live-state snapshots flow straight into the
-   *  client's function. Add `liveState: {key, get}` for state mode (no cursor; latest-wins
-   *  snapshots re-pulled through `get` on every change to `key`). */
+  /** Subscribe — a PUSH subscription (stream-held cursor + retry/skip/halt): the stream calls
+   *  `target`'s terminal path segment with `(events, window)` per durable batch — for consumers
+   *  that cannot hold a cursor (webhooks, stateless `processEvent`-style workers). `target` may
+   *  be an itx expression — or a LIVE CALLBACK (any capnweb function/RpcTarget): the sugar
+   *  parks it via the ordinary live-capability machinery and targets the parked stub. Add
+   *  `liveState: {key}` for state mode: no cursor, no ladder — the target receives each of the
+   *  key's change payloads `{key, from, to, patch}` as it commits; the CLIENT chains revisions
+   *  (seed through the producer's own door, re-read it on any gap). */
   async subscribe(input: {
     name?: string;
     target: string | Expression | ((...args: never[]) => unknown) | object;
@@ -253,7 +253,7 @@ export class Itx extends RpcTarget {
     onFailingEvent?: "halt" | "skip";
     maxAttempts?: number;
     start?: "beginning" | "now";
-    liveState?: { key: string; get: string };
+    liveState?: { key: string };
   }): Promise<{ name: string; providedAtOffset: number }> {
     let target = input.target as string | Expression;
     if (

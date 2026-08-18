@@ -65,6 +65,9 @@ export class ProcessorFacetRunner extends DurableObject<RunnerEnv> {
   snapshot() {
     return this.#processor().snapshot();
   }
+  liveSnapshot() {
+    return this.#processor().liveSnapshot();
+  }
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void> {
     return this.#processor().waitUntilProcessed(input);
   }

@@ -22,6 +22,7 @@ import {
 
 function memoryStream(path = "/") {
   const events: StreamEvent[] = [];
+  const pushed: StreamEvent[] = []; // every committed event, ephemerals included (the pump's view)
   const byKey = new Map<string, StreamEvent>();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const procs: StreamProcessor<any>[] = [];
@@ -51,6 +52,7 @@ function memoryStream(path = "/") {
         }
         return event;
       });
+      pushed.push(...committed);
       if (maxAssigned > scannedAfterOffset) {
         const window = { scannedAfterOffset, scannedThroughOffset: maxAssigned };
         // THE PUMP: fire-and-forget, exactly like the DO (an awaited push would deadlock a
@@ -72,6 +74,7 @@ function memoryStream(path = "/") {
   return {
     stream,
     events,
+    pushed,
     procs,
     get reads() {
       return reads;
@@ -532,5 +535,151 @@ describe("emit rules + idempotency", () => {
     await expect(
       processor.waitUntilProcessed({ offset: 1, timeoutMs: 1000 }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("live state (the delta patches on the wire)", () => {
+  const contract = defineProcessorContract({
+    slug: "tally",
+    version: "1.0.0",
+    description: "counts events; projects a trimmed live shape",
+    stateSchema: z.object({ count: z.number().default(0), secret: z.string().default("hidden") }),
+    events: {},
+    consumes: ["tick"],
+    emits: [],
+  });
+  class Tally extends StreamProcessor<z.infer<typeof contract.stateSchema>> {
+    contract = contract;
+    reduce({ event, state }: ReduceArgs<z.infer<typeof contract.stateSchema>>) {
+      if (event.type === "tick") return { ...state, count: state.count + 1 };
+      return undefined;
+    }
+    liveState(state: z.infer<typeof contract.stateSchema>) {
+      return { count: state.count }; // the projection REDACTS — diffs never see `secret`
+    }
+  }
+
+  const changes = (mem: ReturnType<typeof memoryStream>) =>
+    mem.pushed.filter((e) => e.type === "events.iterate.com/live-state/changed");
+
+  test("a fold that changes the projection emits ONE ephemeral change event carrying the patch", async () => {
+    const mem = memoryStream();
+    const p = new Tally({
+      stream: mem.stream,
+      storage: memoryStorage(),
+      path: "/",
+      projectId: "p",
+    });
+    mem.procs.push(p);
+    mem.stream.append({ type: "tick" }) as StreamEvent[];
+    await settle();
+    expect(changes(mem)).toHaveLength(1); // ONE change event per changed window, not per event
+    const [c] = changes(mem);
+    expect(c.ephemeral).toBe(true);
+    expect(c.payload).toMatchObject({
+      key: "tally",
+      patch: [{ op: "replace", path: "/count", value: 1 }],
+    });
+  });
+
+  test("revisions chain: each emission's `from` equals the previous emission's `to`", async () => {
+    const mem = memoryStream();
+    const p = new Tally({
+      stream: mem.stream,
+      storage: memoryStorage(),
+      path: "/",
+      projectId: "p",
+    });
+    mem.procs.push(p);
+    mem.stream.append({ type: "tick" }) as StreamEvent[];
+    await settle();
+    mem.stream.append({ type: "other" }) as StreamEvent[]; // not consumed — a silent batch
+    await settle();
+    mem.stream.append({ type: "tick" }) as StreamEvent[];
+    await settle();
+    const [c1, c2] = changes(mem).map((e) => e.payload as { from: number; to: number });
+    expect(c2.from).toBe(c1.to); // the silent batch did NOT break the chain
+  });
+
+  test("liveSnapshot() mints the rev the next emission chains from ({rev,state} atomically)", async () => {
+    const mem = memoryStream();
+    const p = new Tally({
+      stream: mem.stream,
+      storage: memoryStorage(),
+      path: "/",
+      projectId: "p",
+    });
+    mem.procs.push(p);
+    mem.stream.append({ type: "other" }) as StreamEvent[]; // advance the cursor, no projection change
+    await settle();
+    const seed = await p.liveSnapshot();
+    expect(seed.state).toEqual({ count: 0 });
+    mem.stream.append({ type: "tick" }) as StreamEvent[];
+    await settle();
+    const [c] = changes(mem).map((e) => e.payload as { from: number });
+    expect(c.from).toBe(seed.rev); // seed → first patch, no re-seed needed
+  });
+
+  test("no emission when consumed events leave the projection unchanged", async () => {
+    const contract2 = defineProcessorContract({
+      slug: "flat",
+      version: "1.0.0",
+      description: "consumes but never changes its projection",
+      stateSchema: z.object({ seen: z.number().default(0) }),
+      events: {},
+      consumes: ["tick"],
+      emits: [],
+    });
+    class Flat extends StreamProcessor<z.infer<typeof contract2.stateSchema>> {
+      contract = contract2;
+      reduce({ state }: ReduceArgs<z.infer<typeof contract2.stateSchema>>) {
+        return { seen: state.seen + 1 };
+      }
+      liveState() {
+        return { steady: true };
+      }
+    }
+    const mem = memoryStream();
+    const p = new Flat({ stream: mem.stream, storage: memoryStorage(), path: "/", projectId: "p" });
+    mem.procs.push(p);
+    mem.stream.append({ type: "tick" }, { type: "tick" }) as StreamEvent[];
+    await settle();
+    expect(changes(mem)).toHaveLength(0);
+  });
+
+  test("the loop guard: live-state change events are unconsumable, even named", async () => {
+    const contract3 = defineProcessorContract({
+      slug: "sneaky",
+      version: "1.0.0",
+      description: "tries to consume the platform live-state type",
+      stateSchema: z.object({ seen: z.number().default(0) }),
+      events: {},
+      consumes: ["*", "events.iterate.com/live-state/changed"],
+      emits: [],
+    });
+    class Sneaky extends StreamProcessor<z.infer<typeof contract3.stateSchema>> {
+      contract = contract3;
+      reduce({ state }: ReduceArgs<z.infer<typeof contract3.stateSchema>>) {
+        return { seen: state.seen + 1 };
+      }
+    }
+    const mem = memoryStream();
+    const tally = new Tally({
+      stream: mem.stream,
+      storage: memoryStorage(),
+      path: "/",
+      projectId: "p",
+    });
+    const sneaky = new Sneaky({
+      stream: mem.stream,
+      storage: memoryStorage(),
+      path: "/",
+      projectId: "p",
+    });
+    mem.procs.push(tally, sneaky);
+    mem.stream.append({ type: "tick" }) as StreamEvent[]; // tally emits a change event
+    await settle();
+    expect(changes(mem)).toHaveLength(1);
+    expect((await sneaky.snapshot()).state.seen).toBe(1); // the tick — NOT the change event
   });
 });

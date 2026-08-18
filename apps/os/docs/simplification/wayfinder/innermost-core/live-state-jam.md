@@ -1,7 +1,43 @@
 # Live state — the three-kinds answer (converged design, judged from two independent attempts)
 
-Two designers (one told to unify hard, one told to steal from apps/os production) + two
-research passes. They CONVERGED on everything structural; one real fork remains for the owner.
+## SHIPPED VERDICT (2026-08-18, owner's calls — supersedes the fork below)
+
+Two owner rejections got this to its final shape. First build (increment 48): nudge + re-pull
+flush engine — rejected ("the ephemeral events carry the delta patch… elixir liveview style").
+Second build: patches on the wire but with the STREAM tracking each row's revision chain and
+re-seeding through a row-held `get` door — simplified away mid-review ("why not just say in
+each ephemeral event 'i am the diff relative to offset x'; each client reads the snapshot to
+get offset and state, then consumes patches going forward"). A 31-agent adversarial review of
+the intermediate confirmed its only two real protocol bugs (late-abandoned frame breaking the
+promised order; un-raced seed invoke wedging a row) — both in exactly the machinery the final
+design deletes. What shipped (increment 49, live-6):
+
+- `events.iterate.com/live-state/changed` payload = `{key, from, to, patch}`: an RFC 6902
+  subset (add/replace/remove, `core/patch.ts`, ~110 dependency-free lines diff+apply, both
+  sides JSON-normalized, own-property traversal, `__proto__` refused). Arrays: pure append →
+  `add …/-`, tail truncate → removes, wholesale replace otherwise — the LiveView trade.
+- Revisions are PRODUCER-OWNED: a processor chains an in-memory `#liveStateRev` seeded from its
+  fold cursor (minted at first `liveSnapshot()`, advanced per emission — so `from`/`to` ARE
+  fold offsets and silent batches can't break the chain); the mini-app helper chains a local
+  counter. Persist-first-emit-second; the rev advances even on append failure (a hole in the
+  chain is a re-seed, a lie in it is corruption).
+- The stream is a PURE FORWARDER (~15 lines): each committed change payload is pushed
+  fire-and-forget at every row watching the key. `liveState: {key}` is the ENTIRE delivery
+  policy — no `get`, no cursor, no ladder, no mount seed, no per-row server state, no ordering
+  promise, nothing to resurrect.
+- THE CLIENT owns the chain (~20 lines, proven in prove_livestate.mjs): subscribe (buffer),
+  read the producer's door — `liveSnapshot()` / a helper-backed accessor, both answering
+  `{rev, state}` atomically — then per payload: `to ≤ rev` → drop (duplicate), `from === rev` →
+  applyPatch + advance, else → re-read the door. Reorder, drop, any eviction, producer rebirth:
+  all the SAME client-side case. This is LiveView's own shape (desync → full re-render), moved
+  to where the state actually lives.
+- Loop guard unchanged and load-bearing: the type is unconsumable before contracts are
+  consulted, so patch-carrying events can never feed a fold.
+
+Accepted residue: a crash between a processor's persist and its emit loses one notification —
+clients heal on the NEXT change, so a key that never changes again can stay stale (documented);
+mini-app state is as durable as its holder (a reborn holder restarts at rev 0/initial — clients
+past rev 0 see the chain break and re-read, making the loss visible rather than papered over).
 
 ## Are the three kinds the same thing? Yes at three layers, no at one — and the "no" is load-bearing.
 

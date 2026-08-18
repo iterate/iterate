@@ -65,9 +65,10 @@ export const IterateContextContract = defineProcessorContract({
             onFailingEvent: z.enum(["halt", "skip"]).optional(),
             maxAttempts: z.number().int().positive().optional(),
             start: z.enum(["beginning", "now"]).optional(),
-            /** LIVE STATE mode: no cursor, no ladder — latest-wins flushes of `get` (an itx
-             *  expression answering current state), re-pulled on the key's nudge. */
-            liveState: z.object({ key: z.string(), get: z.string() }).optional(),
+            /** LIVE STATE mode: no cursor, no ladder — the key's change payloads
+             *  ({key, from, to, patch}) are forwarded as they commit; the CLIENT chains
+             *  revisions and re-reads the producer's door on any gap. */
+            liveState: z.object({ key: z.string() }).optional(),
           })
           .optional(),
       }),
@@ -134,7 +135,7 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
       onFailingEvent?: "halt" | "skip";
       maxAttempts?: number;
       start?: "beginning" | "now";
-      liveState?: { key: string; get: string };
+      liveState?: { key: string };
     };
   }): Promise<{ providedAtOffset: number }> {
     const pattern = toExpression(input.pattern);
