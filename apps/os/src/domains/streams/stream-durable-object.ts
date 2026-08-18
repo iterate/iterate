@@ -976,6 +976,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.#refreshLiveState();
       },
       runtimeChanged: () => this.#refreshLiveState(),
+      workerVersion: () => workerVersion(this.env),
       now: () => Date.now(),
       random: () => Math.random(),
       armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
