@@ -1,7 +1,7 @@
 ---
 status: in-progress
 size: large
-blocked-by: worker-delivery-obligations
+blocked-by: ~~worker-delivery-obligations~~ (merged in #2506)
 ---
 
 # Agent birth moves to the config worker; headless-only; one-shot
